@@ -23,6 +23,10 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::EVENT_STATE, false, false),
             (P::PRIORITY_ARRAY, false, false),
             (P::RELINQUISH_DEFAULT, false, true),
+            (P::DOOR_PULSE_TIME, false, true),
+            (P::DOOR_EXTENDED_PULSE_TIME, false, true),
+            (P::DOOR_OPEN_TOO_LONG_TIME, false, true),
+            (P::CURRENT_COMMAND_PRIORITY, false, false),
             (P::PROPERTY_LIST, false, false),
         ],
         ObjectType::ACCESS_POINT => vec![

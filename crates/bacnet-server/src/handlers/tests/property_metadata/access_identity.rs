@@ -14,9 +14,10 @@ fn access_objects(configured: bool) -> [Box<dyn BACnetObject>; 4] {
     let mut rights = AccessRightsObject::new(7, "AR-7").unwrap();
     let cdi = CredentialDataInputObject::new(7, "CDI-7").unwrap();
     if configured {
+        // Credential_Status is derived (#1073); Credential_Disable drives it.
         credential
             .write_property(
-                P::CREDENTIAL_STATUS,
+                P::CREDENTIAL_DISABLE,
                 None,
                 PropertyValue::Enumerated(1),
                 None,
@@ -76,8 +77,8 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
     // PICS corrections vs the historical heuristic: Object_Name is required
     // and read-only (the heuristic called it writable); CDI Present_Value is
     // required and read-only (the heuristic called every Present_Value
-    // writable); Credential_Status, User_Type, and the rights
-    // Global_Identifier are required and writable (the heuristic called only
+    // writable); User_Type and the rights and credential Global_Identifier
+    // are required and writable (the heuristic called only
     // Description/Out_Of_Service/Present_Value writable).
     let middle: &[P] = match kind {
         // Table 12-40 has no Present_Value row (#979).
@@ -106,6 +107,16 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
         all.extend_from_slice(&[P::STATUS_FLAGS, P::OUT_OF_SERVICE, P::RELIABILITY]);
     } else {
         all.extend_from_slice(&[P::STATUS_FLAGS, P::RELIABILITY]);
+    }
+    // The Table 12-40 required rows #1073 added follow the status rows.
+    if kind == ObjectType::ACCESS_CREDENTIAL {
+        all.extend_from_slice(&[
+            P::GLOBAL_IDENTIFIER,
+            P::REASON_FOR_DISABLE,
+            P::ACTIVATION_TIME,
+            P::EXPIRATION_TIME,
+            P::CREDENTIAL_DISABLE,
+        ]);
     }
     let optional: &[P] = match kind {
         ObjectType::ACCESS_CREDENTIAL => &[P::DESCRIPTION],

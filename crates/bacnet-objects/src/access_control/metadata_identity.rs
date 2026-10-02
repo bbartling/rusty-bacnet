@@ -19,9 +19,8 @@ use crate::property_metadata::{
 // Order preserves each legacy projection; Property_List is appended so the
 // projection helper omits it while required_properties keeps it. Only
 // implemented rows are described: table rows the objects do not serve stay
-// absent until dispatch exists (credential/user Global_Identifier W,
-// credential Reason_For_Disable/Activation_Time/Expiration_Time R, user
-// Members R, rights Accompaniment O, CDI event/intrinsic rows). Shared
+// absent until dispatch exists (user Global_Identifier W, user Members R,
+// rights Accompaniment O, CDI event/intrinsic rows). Shared
 // conventions match metadata_topology.rs (Slice A): OI/ON/OT
 // RequiredRead/ReadOnly with the explicit Object_Name denial, Description
 // Optional/Always, Out_Of_Service RequiredRead/Always on Credential Data
@@ -29,12 +28,19 @@ use crate::property_metadata::{
 // the 0.1.0 import carried), Status_Flags/Reliability RequiredRead/ReadOnly
 // (table R on all four quartet tables), Always-never-WhenOutOfService
 // writability mirroring dispatch, presence None, not createable but
-// deleteable with no overrides, and Property_List as the only array-gated row.
+// deleteable with no overrides, and Property_List as the only array-gated row
+// apart from the credential's two arrays.
 // Table 12-40 has no Present_Value row, so the credential serves none (#979
 // removed the implementation-extra row the 0.1.0 import carried).
 // Credential_Status/Assigned_Access_Rights/Authentication_Factors carry the
-// table R code; the BACnetBinaryPV status arm makes CREDENTIAL_STATUS
-// RequiredRead/Always while the count/list stay RequiredRead/ReadOnly.
+// table R code with no write arm: the status is derived from
+// Reason_For_Disable (#1073) and the two BACnetARRAYs are provisioned by the
+// application, so all three are RequiredRead/ReadOnly. The rows #1073 added
+// follow them, before Property_List: Global_Identifier carries the table W
+// code with the routed Unsigned32 arm, so RequiredWrite/Always;
+// Reason_For_Disable carries R with no arm, so RequiredRead/ReadOnly; and
+// Activation_Time, Expiration_Time and Credential_Disable carry R with routed
+// arms, so RequiredRead/Always.
 // Table 12-38 has neither Present_Value nor Assigned_Access_Rights, so the
 // user serves neither (#1064 removed the implementation-extra rows the 0.1.0
 // import carried). User_Type/Credentials carry the table R code; the
@@ -54,11 +60,16 @@ const ACCESS_CREDENTIAL_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::CREDENTIAL_STATUS, RequiredRead, None, Always),
+    PropertyMetadata::new(P::CREDENTIAL_STATUS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::ASSIGNED_ACCESS_RIGHTS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::AUTHENTICATION_FACTORS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::GLOBAL_IDENTIFIER, RequiredWrite, None, Always),
+    PropertyMetadata::new(P::REASON_FOR_DISABLE, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::ACTIVATION_TIME, RequiredRead, None, Always),
+    PropertyMetadata::new(P::EXPIRATION_TIME, RequiredRead, None, Always),
+    PropertyMetadata::new(P::CREDENTIAL_DISABLE, RequiredRead, None, Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -159,7 +170,11 @@ mod tests {
         );
         assert!(!object.is_createable());
         assert!(object.is_deleteable());
-        let required_write = object.object_identifier().object_type() == ObjectType::ACCESS_RIGHTS;
+        // Global_Identifier is the W row of Tables 12-39 and 12-40.
+        let required_write = matches!(
+            object.object_identifier().object_type(),
+            ObjectType::ACCESS_RIGHTS | ObjectType::ACCESS_CREDENTIAL
+        );
         for row in metadata.iter() {
             assert_eq!(row.presence_condition, None);
             let expected = if required_write && row.property_identifier == P::GLOBAL_IDENTIFIER {
@@ -220,6 +235,11 @@ mod tests {
             P::AUTHENTICATION_FACTORS,
             P::STATUS_FLAGS,
             P::RELIABILITY,
+            P::GLOBAL_IDENTIFIER,
+            P::REASON_FOR_DISABLE,
+            P::ACTIVATION_TIME,
+            P::EXPIRATION_TIME,
+            P::CREDENTIAL_DISABLE,
         ];
         let required = [
             P::OBJECT_IDENTIFIER,
@@ -230,6 +250,11 @@ mod tests {
             P::AUTHENTICATION_FACTORS,
             P::STATUS_FLAGS,
             P::RELIABILITY,
+            P::GLOBAL_IDENTIFIER,
+            P::REASON_FOR_DISABLE,
+            P::ACTIVATION_TIME,
+            P::EXPIRATION_TIME,
+            P::CREDENTIAL_DISABLE,
             P::PROPERTY_LIST,
         ];
         assert_exact_sets(&object, &all, &required);
@@ -242,23 +267,27 @@ mod tests {
                 ErrorCode::UNKNOWN_PROPERTY,
             );
         }
+        // No disable reason holds, so the derived status is ACTIVE (#1073).
         assert_eq!(
             object.read_property(P::CREDENTIAL_STATUS, None).unwrap(),
-            PropertyValue::Enumerated(0)
+            PropertyValue::Enumerated(1)
         );
-        assert_eq!(
-            object
-                .read_property(P::ASSIGNED_ACCESS_RIGHTS, None)
-                .unwrap(),
-            PropertyValue::Unsigned(0)
-        );
-        assert_eq!(
-            object
-                .read_property(P::AUTHENTICATION_FACTORS, None)
-                .unwrap(),
-            PropertyValue::List(vec![])
-        );
-        assert!(!object.is_array_property(P::AUTHENTICATION_FACTORS));
+        for p in [
+            P::ASSIGNED_ACCESS_RIGHTS,
+            P::AUTHENTICATION_FACTORS,
+            P::REASON_FOR_DISABLE,
+        ] {
+            assert_eq!(
+                object.read_property(p, None).unwrap(),
+                PropertyValue::List(vec![])
+            );
+        }
+        // Table 12-40 types the two as BACnetARRAY[N]; Reason_For_Disable is
+        // a BACnetLIST.
+        assert!(object.is_array_property(P::AUTHENTICATION_FACTORS));
+        assert!(object.is_array_property(P::ASSIGNED_ACCESS_RIGHTS));
+        assert!(!object.is_array_property(P::REASON_FOR_DISABLE));
+        assert!(object.is_list_property(P::REASON_FOR_DISABLE));
         assert!(!object.is_array_property(P::CREDENTIAL_STATUS));
     }
 
@@ -424,7 +453,13 @@ mod tests {
         let cases: [WriteCase; 4] = [
             (
                 || Box::new(AccessCredentialObject::new(1, "CRED-1").unwrap()),
-                &[P::DESCRIPTION, P::CREDENTIAL_STATUS],
+                &[
+                    P::DESCRIPTION,
+                    P::GLOBAL_IDENTIFIER,
+                    P::ACTIVATION_TIME,
+                    P::EXPIRATION_TIME,
+                    P::CREDENTIAL_DISABLE,
+                ],
             ),
             (
                 || Box::new(AccessUserObject::new(1, "USER-1").unwrap()),
@@ -501,7 +536,7 @@ mod tests {
             let mut credential = AccessCredentialObject::new(1, "CRED-1").unwrap();
             credential
                 .write_property(
-                    P::CREDENTIAL_STATUS,
+                    P::CREDENTIAL_DISABLE,
                     None,
                     PropertyValue::Enumerated(1),
                     None,
@@ -511,10 +546,12 @@ mod tests {
                 credential
                     .read_property(P::CREDENTIAL_STATUS, None)
                     .unwrap(),
-                PropertyValue::Enumerated(1)
+                PropertyValue::Enumerated(0)
             );
             for (p, value) in [
-                (P::CREDENTIAL_STATUS, PropertyValue::Real(1.0)),
+                (P::CREDENTIAL_DISABLE, PropertyValue::Real(1.0)),
+                (P::GLOBAL_IDENTIFIER, PropertyValue::Enumerated(1)),
+                (P::ACTIVATION_TIME, PropertyValue::Unsigned(1)),
                 (P::DESCRIPTION, PropertyValue::Unsigned(1)),
             ] {
                 assert_error(
@@ -523,6 +560,8 @@ mod tests {
                 );
             }
             for p in [
+                P::CREDENTIAL_STATUS,
+                P::REASON_FOR_DISABLE,
                 P::ASSIGNED_ACCESS_RIGHTS,
                 P::AUTHENTICATION_FACTORS,
                 P::STATUS_FLAGS,
@@ -648,13 +687,12 @@ mod tests {
             );
         }
 
-        // Global_Identifier is the Table 12-40 W row with no read arm;
-        // Activation_Time is the Table 12-40 R row with no read arm;
-        // Present_Value (#979) and Out_Of_Service (#1064) are no Table 12-40
-        // rows at all.
+        // Days_Remaining and Trace_Flag are Table 12-40 O rows with no read
+        // arm; Present_Value (#979) and Out_Of_Service (#1064) are no Table
+        // 12-40 rows at all.
         let mut credential = AccessCredentialObject::new(1, "CRED-1").unwrap();
-        assert_unserved(&mut credential, P::GLOBAL_IDENTIFIER);
-        assert_unserved(&mut credential, P::ACTIVATION_TIME);
+        assert_unserved(&mut credential, P::DAYS_REMAINING);
+        assert_unserved(&mut credential, P::TRACE_FLAG);
         assert_unserved(&mut credential, P::PRESENT_VALUE);
         assert_unserved(&mut credential, P::OUT_OF_SERVICE);
         // Global_Identifier is the Table 12-38 W row with no read arm;

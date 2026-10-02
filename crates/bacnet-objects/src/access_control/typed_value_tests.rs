@@ -1,11 +1,12 @@
 //! Access Door's BACnetDoorValue properties and Access Credential's
-//! BACnetBinaryPV Credential_Status (#979).
+//! BACnetBinaryPV Credential_Status (#979, #1073).
 //!
 //! Table 12-30 types the door's Present_Value, Priority_Array slots and
-//! Relinquish_Default as BACnetDoorValue, a closed set of four. Table 12-40
-//! types Credential_Status as BACnetBinaryPV, a closed set of two, and has
-//! no Present_Value row. A value outside the set is refused with
-//! VALUE_OUT_OF_RANGE and nothing is stored.
+//! Relinquish_Default as BACnetDoorValue, a closed set of four, and Clause
+//! 12.26.11 narrows Relinquish_Default to LOCK and UNLOCK. A value outside
+//! the set is refused with VALUE_OUT_OF_RANGE and nothing is stored. Table
+//! 12-40 types Credential_Status as BACnetBinaryPV, derived from
+//! Reason_For_Disable and so read-only, and has no Present_Value row.
 
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -119,66 +120,48 @@ fn access_door_present_value_refuses_values_outside_door_value_atomically() {
 }
 
 #[test]
-fn access_door_set_relinquish_default_takes_a_door_value() {
+fn access_door_set_relinquish_default_takes_lock_or_unlock() {
     let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
     assert_eq!(read(&door, RD), PropertyValue::Enumerated(0));
-    for &(name, value) in DoorValue::ALL_NAMED {
-        door.set_relinquish_default(value)
-            .unwrap_or_else(|e| panic!("{name} must be accepted: {e:?}"));
+    for value in [DoorValue::UNLOCK, DoorValue::LOCK, DoorValue::UNLOCK] {
+        door.set_relinquish_default(value).unwrap();
         assert_eq!(read(&door, RD), PropertyValue::Enumerated(value.to_raw()));
         assert_eq!(read(&door, P), PropertyValue::Enumerated(value.to_raw()));
     }
-    // `from_raw` can build a DoorValue outside the production; the setter
-    // refuses it and keeps the stored default.
-    for raw in OUTSIDE_DOOR_VALUE {
+    // Clause 12.26.11 keeps the pulses out of Relinquish_Default (#1073),
+    // and `from_raw` can build a DoorValue outside the production; the
+    // setter refuses both and keeps the stored default.
+    for raw in [2, 3].into_iter().chain(OUTSIDE_DOOR_VALUE) {
         assert_property_error(
             door.set_relinquish_default(DoorValue::from_raw(raw)),
             ErrorCode::VALUE_OUT_OF_RANGE,
         );
-        assert_eq!(read(&door, RD), PropertyValue::Enumerated(3));
-        assert_eq!(read(&door, P), PropertyValue::Enumerated(3));
+        assert_eq!(read(&door, RD), PropertyValue::Enumerated(1));
+        assert_eq!(read(&door, P), PropertyValue::Enumerated(1));
     }
 }
 
 #[test]
-fn access_credential_status_accepts_inactive_and_active() {
+fn access_credential_status_is_read_only() {
     let mut credential = AccessCredentialObject::new(1, "CRED-1").unwrap();
-    assert_eq!(
-        read(&credential, CS),
-        PropertyValue::Enumerated(BinaryPV::INACTIVE.to_raw())
-    );
-    for value in [BinaryPV::ACTIVE, BinaryPV::INACTIVE, BinaryPV::ACTIVE] {
-        let raw = PropertyValue::Enumerated(value.to_raw());
-        credential
-            .write_property(CS, None, raw.clone(), None)
-            .unwrap();
-        assert_eq!(read(&credential, CS), raw);
-    }
-}
-
-#[test]
-fn access_credential_status_refuses_values_outside_binary_pv_atomically() {
-    let mut credential = AccessCredentialObject::new(1, "CRED-1").unwrap();
-    credential
-        .write_property(CS, None, PropertyValue::Enumerated(1), None)
-        .unwrap();
-    for raw in [2, 3].into_iter().chain(OUTSIDE_DOOR_VALUE) {
-        assert_property_error(
-            credential.write_property(CS, None, PropertyValue::Enumerated(raw), None),
-            ErrorCode::VALUE_OUT_OF_RANGE,
-        );
-        assert_eq!(read(&credential, CS), PropertyValue::Enumerated(1));
-    }
+    // Nothing disables a new credential, so the derived status is ACTIVE;
+    // no write reaches it, whatever the value or type (#1073).
+    assert!(!credential.is_writable_property(CS));
     for value in [
+        PropertyValue::Enumerated(BinaryPV::INACTIVE.to_raw()),
+        PropertyValue::Enumerated(BinaryPV::ACTIVE.to_raw()),
+        PropertyValue::Enumerated(2),
         PropertyValue::Unsigned(0),
-        PropertyValue::Boolean(false),
         PropertyValue::Null,
     ] {
         assert_property_error(
             credential.write_property(CS, None, value, None),
-            ErrorCode::INVALID_DATA_TYPE,
+            ErrorCode::WRITE_ACCESS_DENIED,
         );
-        assert_eq!(read(&credential, CS), PropertyValue::Enumerated(1));
+        assert_eq!(
+            read(&credential, CS),
+            PropertyValue::Enumerated(BinaryPV::ACTIVE.to_raw())
+        );
     }
 }
 
@@ -206,5 +189,5 @@ fn access_credential_has_no_present_value() {
         );
     }
     // A Present_Value write never reaches Credential_Status.
-    assert_eq!(read(&credential, CS), PropertyValue::Enumerated(0));
+    assert_eq!(read(&credential, CS), PropertyValue::Enumerated(1));
 }

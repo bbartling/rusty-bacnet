@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -66,6 +67,72 @@ impl CovPolicy {
             max_notification_bytes_per_event: usize::MAX,
             max_confirmed_in_flight_per_peer: usize::MAX,
         }
+    }
+
+    /// Reject a policy that would refuse all COV work or reserve capacity for
+    /// a peer that can never be matched. The server runs this before it
+    /// starts a transport.
+    ///
+    /// The subscription caps, the per-event notification and byte budgets
+    /// and the confirmed in-flight limit must be positive. `reserved_capacity`
+    /// and `max_indefinite_per_peer` may be zero, and a value larger than the
+    /// cap it shares is clamped by [`sanitized`](Self::sanitized), not
+    /// refused. Reserved entries follow the DCC source restriction rule: a
+    /// MAC of 1..=255 octets, and for a routed recipient a network in
+    /// 1..=65534. NPDU decoding drops any other routed source, so such an
+    /// entry could never match a subscriber.
+    pub fn validate(&self) -> Result<(), Error> {
+        for (name, value) in [
+            ("max_subscriptions_global", self.max_subscriptions_global),
+            (
+                "max_subscriptions_per_peer",
+                self.max_subscriptions_per_peer,
+            ),
+            (
+                "max_notifications_per_event",
+                self.max_notifications_per_event,
+            ),
+            (
+                "max_notification_bytes_per_event",
+                self.max_notification_bytes_per_event,
+            ),
+            (
+                "max_confirmed_in_flight_per_peer",
+                self.max_confirmed_in_flight_per_peer,
+            ),
+        ] {
+            if value == 0 {
+                return Err(Error::Encoding(format!(
+                    "COV policy {name} must be positive"
+                )));
+            }
+        }
+        let mac_length = |field: &str, mac: &MacAddr| {
+            if (1..=255).contains(&mac.len()) {
+                Ok(())
+            } else {
+                Err(Error::Encoding(format!(
+                    "COV policy {field} entries need a MAC of 1..=255 octets"
+                )))
+            }
+        };
+        for mac in &self.reserved_peers {
+            mac_length("reserved_peers", mac)?;
+        }
+        for recipient in &self.reserved_recipients {
+            match recipient {
+                CovRecipient::Direct(mac) => mac_length("reserved_recipients", mac)?,
+                CovRecipient::Routed(source) => {
+                    if !(1..=65534).contains(&source.network) {
+                        return Err(Error::Encoding(
+                            "COV policy reserved_recipients networks must be 1..=65534".into(),
+                        ));
+                    }
+                    mac_length("reserved_recipients", &source.mac_address)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Return a sanitized copy with valid bounds.

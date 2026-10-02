@@ -211,7 +211,8 @@ impl ScServerBuilder {
         self
     }
 
-    /// Set the COV quota and notification work budget policy.
+    /// Set the COV quota and notification work budget policy, checked by
+    /// [`CovPolicy::validate`] before SC dialing.
     pub fn cov_policy(mut self, policy: CovPolicy) -> Self {
         self.config.cov_policy = policy;
         self
@@ -255,6 +256,7 @@ impl ScServerBuilder {
         self.config.atomic_write_file_budget.validate()?;
         self.config.read_range_budget.validate()?;
         self.config.get_event_information_budget.validate()?;
+        self.config.cov_policy.validate()?;
 
         let ws = bacnet_transport::sc_tls::TlsWebSocket::connect(&self.hub_url, tls_config.clone())
             .await?;
@@ -470,6 +472,23 @@ mod tests {
         };
         let builder = BACnetServer::sc_builder().cov_policy(policy.clone());
         assert_eq!(builder.config.cov_policy, policy);
+    }
+
+    #[tokio::test]
+    async fn sc_invalid_cov_policy_precedes_dial() {
+        let error = BACnetServer::sc_builder()
+            .hub_url("not-a-websocket-url")
+            .tls_config(test_tls_config())
+            .device_uuid(TEST_DEVICE_UUID)
+            .cov_policy(CovPolicy {
+                max_subscriptions_global: 0,
+                ..CovPolicy::default()
+            })
+            .build()
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(error, Error::Encoding(m) if m.contains("max_subscriptions_global")));
     }
 
     #[tokio::test]

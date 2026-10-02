@@ -54,7 +54,8 @@ impl BACnetServer {
         event_information_max_returned_summaries=256,
         event_information_max_service_ack_bytes=16384,
         sc_device_uuid=None,
-        registered_network_port=None
+        registered_network_port=None,
+        cov_policy=None
     ))]
     fn new(
         device_instance: u32,
@@ -107,6 +108,7 @@ impl BACnetServer {
         event_information_max_service_ack_bytes: usize,
         sc_device_uuid: Option<Vec<u8>>,
         registered_network_port: Option<u32>,
+        cov_policy: Option<&Bound<'_, pyo3::types::PyDict>>,
     ) -> PyResult<Self> {
         if registered_network_port.is_some_and(|instance| !(1..=255).contains(&instance)) {
             return Err(pyo3::exceptions::PyValueError::new_err(
@@ -231,6 +233,7 @@ impl BACnetServer {
         get_event_information_budget
             .validate()
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        let cov_policy = super::cov_policy::cov_policy(cov_policy)?;
         if transport == "sc" {
             crate::tls::required_sc_credentials(
                 sc_ca_cert.as_deref(),
@@ -277,6 +280,7 @@ impl BACnetServer {
             atomic_write_file_budget,
             read_range_budget,
             get_event_information_budget,
+            cov_policy,
             audit_notification_sink: None,
             audit_reporters: None,
             audit_recipient: std::sync::Mutex::new(None),

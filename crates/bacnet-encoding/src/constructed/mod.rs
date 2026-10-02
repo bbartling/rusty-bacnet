@@ -32,6 +32,7 @@ use bytes::BytesMut;
 use crate::primitives;
 use crate::tags::{self, TagClass};
 
+pub mod access_credential;
 pub mod assigned_landing_calls;
 mod audit_notification;
 mod audit_record;
@@ -50,6 +51,11 @@ pub mod schedule;
 pub mod staging;
 mod value_source;
 
+pub use access_credential::{
+    decode_assigned_access_rights, decode_authentication_factor,
+    decode_credential_authentication_factor, encode_assigned_access_rights,
+    encode_authentication_factor, encode_credential_authentication_factor,
+};
 pub use assigned_landing_calls::{decode_assigned_landing_calls, encode_assigned_landing_calls};
 pub use audit_notification::{decode_audit_notification_at, encode_audit_notification};
 pub use audit_record::{
