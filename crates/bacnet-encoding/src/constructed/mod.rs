@@ -83,8 +83,8 @@ pub use object_property_reference::{
     encode_setpoint_reference,
 };
 pub use recipient::{
-    decode_destination, decode_destination_list, decode_recipient, encode_destination,
-    encode_destination_list, encode_recipient,
+    decode_configured_recipient, decode_destination, decode_destination_list, decode_recipient,
+    encode_destination, encode_destination_list, encode_recipient,
 };
 pub use schedule::{
     decode_daily_schedule, decode_exception_schedule, decode_special_event,

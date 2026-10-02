@@ -22,6 +22,13 @@
 //! address as an OCTET STRING, both application-tagged), so `address [1]` is
 //! an opening tag 1 / application-tagged Unsigned16 + OCTET STRING / closing
 //! tag 1.
+//!
+//! A recipient a device is configured to notify, a Recipient_List destination
+//! or the Audit_Notification_Recipient, carries a MAC of at most
+//! [`BACnetAddress::MAX_MAC_LEN`] octets (#1124); see
+//! [`decode_configured_recipient`]. [`decode_recipient`] itself takes any
+//! length, because the stack also reports recipients built from source
+//! addresses it learned off the network, and those it must read back.
 
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
@@ -76,8 +83,32 @@ pub fn encode_recipient(buf: &mut BytesMut, recipient: &BACnetRecipient) {
     }
 }
 
-/// Decode one [`BACnetRecipient`] at `offset`.
+/// Decode one [`BACnetRecipient`] at `offset`, with an address MAC of any
+/// length: COV subscription lists and audit records carry the source
+/// addresses the stack learned from the network.
 pub fn decode_recipient(data: &[u8], offset: usize) -> Result<(BACnetRecipient, usize), Error> {
+    decode_recipient_within(data, offset, usize::MAX)
+}
+
+/// Decode one [`BACnetRecipient`] that a device is configured to notify: a
+/// Recipient_List destination's recipient or the Audit_Notification_Recipient
+/// (#1124). An address whose MAC is longer than
+/// [`BACnetAddress::MAX_MAC_LEN`] octets names no node this stack reaches, so
+/// it is a decode error, raised before the MAC is copied.
+pub fn decode_configured_recipient(
+    data: &[u8],
+    offset: usize,
+) -> Result<(BACnetRecipient, usize), Error> {
+    decode_recipient_within(data, offset, BACnetAddress::MAX_MAC_LEN)
+}
+
+/// Decode one [`BACnetRecipient`] whose address MAC is at most `max_mac`
+/// octets.
+fn decode_recipient_within(
+    data: &[u8],
+    offset: usize,
+    max_mac: usize,
+) -> Result<(BACnetRecipient, usize), Error> {
     let what = "BACnetRecipient";
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if tag.is_context(0) {
@@ -107,7 +138,7 @@ pub fn decode_recipient(data: &[u8], offset: usize) -> Result<(BACnetRecipient, 
             Error::decoding(pos, format!("{what}: network-number exceeds Unsigned16"))
         })?;
         // mac-address OCTET STRING (a zero-length string is a broadcast)
-        let (mac_address, pos) = decode_app_octet_string(data, pos, what)?;
+        let (mac_address, pos) = decode_app_mac_address(data, pos, what, max_mac)?;
         let (close, close_pos) = tags::decode_tag(data, pos)?;
         if !close.is_closing_tag(1) {
             return Err(Error::decoding(
@@ -142,7 +173,9 @@ pub fn decode_recipient(data: &[u8], offset: usize) -> Result<(BACnetRecipient, 
 }
 
 /// Decode one [`BACnetDestination`] at `offset`; returns it and the offset
-/// past the last member.
+/// past the last member. Its recipient decodes as a
+/// [configured recipient](decode_configured_recipient), so an address MAC past
+/// [`BACnetAddress::MAX_MAC_LEN`] octets is refused (#1124).
 pub fn decode_destination(data: &[u8], offset: usize) -> Result<(BACnetDestination, usize), Error> {
     let what = "BACnetDestination";
     // valid-days: BACnetDaysOfWeek (bit 0 = Monday, MSB-first on the wire).
@@ -157,8 +190,8 @@ pub fn decode_destination(data: &[u8], offset: usize) -> Result<(BACnetDestinati
     // from-time / to-time.
     let (from_time, pos) = decode_app_time(data, pos, what)?;
     let (to_time, pos) = decode_app_time(data, pos, what)?;
-    // recipient CHOICE.
-    let (recipient, pos) = decode_recipient(data, pos)?;
+    // recipient CHOICE: a destination is configuration, so its MAC is bounded.
+    let (recipient, pos) = decode_configured_recipient(data, pos)?;
     // process-identifier Unsigned32.
     let (process_identifier, pos) = decode_app_unsigned(data, pos, what)?;
     let process_identifier = u32::try_from(process_identifier).map_err(|_| {
@@ -252,11 +285,31 @@ pub(super) fn decode_app_octet_string(
     offset: usize,
     what: &str,
 ) -> Result<(MacAddr, usize), Error> {
+    decode_app_mac_address(data, offset, what, usize::MAX)
+}
+
+/// Decode the application-tagged OCTET STRING of a `BACnetAddress` MAC,
+/// refusing one longer than `max_mac` octets before copying it.
+fn decode_app_mac_address(
+    data: &[u8],
+    offset: usize,
+    what: &str,
+    max_mac: usize,
+) -> Result<(MacAddr, usize), Error> {
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if tag.class != TagClass::Application || tag.number != tags::app_tag::OCTET_STRING {
         return Err(Error::decoding(
             offset,
             format!("{what}: expected application-tagged OCTET STRING"),
+        ));
+    }
+    if tag.length as usize > max_mac {
+        return Err(Error::decoding(
+            offset,
+            format!(
+                "{what}: mac-address of {} octets exceeds the {max_mac}-octet limit",
+                tag.length
+            ),
         ));
     }
     let end = pos

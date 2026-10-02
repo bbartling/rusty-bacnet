@@ -376,8 +376,11 @@ pub(crate) fn decode_write_property_value(
                 return Ok(PropertyValue::Null);
             }
         }
-        let (recipient, consumed) = bacnet_encoding::constructed::decode_recipient(bytes, 0)
-            .map_err(|_| invalid_data_encoding_error())?;
+        // A configured recipient: an address MAC past the bound is refused
+        // with the other undecodable values (#1124).
+        let (recipient, consumed) =
+            bacnet_encoding::constructed::decode_configured_recipient(bytes, 0)
+                .map_err(|_| invalid_data_encoding_error())?;
         if consumed != bytes.len() {
             return Err(invalid_data_encoding_error());
         }

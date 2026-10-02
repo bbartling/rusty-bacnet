@@ -1,61 +1,30 @@
 //! Observe cache boundaries through terminal dispatch and subsequent sends.
 
 use super::*;
-use std::borrow::Cow;
+use bacnet_objects::notification_class::MAX_RECIPIENT_LIST_DESTINATIONS;
 
 const ROUTER_B: &[u8] = &[10, 0, 0, 2, 0xBA, 0xC0];
 
-/// A custom Notification Class 0 serving any number of destinations. The
-/// built-in class holds at most `MAX_RECIPIENT_LIST_DESTINATIONS` (#1098),
-/// and the fan-out routes whatever list the class serves.
-struct WideClass(Vec<BACnetDestination>);
-
-impl BACnetObject for WideClass {
-    fn object_identifier(&self) -> ObjectIdentifier {
-        ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, 0).unwrap()
-    }
-
-    fn object_name(&self) -> &str {
-        "NC-0"
-    }
-
-    fn read_property(
-        &self,
-        property: PropertyIdentifier,
-        _array_index: Option<u32>,
-    ) -> Result<PropertyValue, Error> {
-        match property {
-            PropertyIdentifier::NOTIFICATION_CLASS => Ok(PropertyValue::Unsigned(0)),
-            PropertyIdentifier::RECIPIENT_LIST => {
-                let mut list = BytesMut::new();
-                bacnet_encoding::constructed::encode_destination_list(&mut list, &self.0);
-                Ok(PropertyValue::ApplicationData(list.to_vec()))
+/// Route one transition per chunk of at most `MAX_RECIPIENT_LIST_DESTINATIONS`
+/// DNETs, one confirmed destination per DNET in `networks`, in order. Routing
+/// refuses any class past the cap (#1124), so a span wider than the cap takes
+/// several transitions; Notification Class 0 is swapped for one holding each
+/// chunk before its transition.
+async fn distribute_to_networks(harness: &Harness, networks: std::ops::Range<u16>) {
+    let networks: Vec<u16> = networks.collect();
+    let class = ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, 0).unwrap();
+    for chunk in networks.chunks(MAX_RECIPIENT_LIST_DESTINATIONS) {
+        {
+            let mut nc = NotificationClass::new(0, "NC-0").unwrap();
+            for &network in chunk {
+                nc.add_destination(destination_for(address_recipient(network, RECIPIENT), true))
+                    .unwrap();
             }
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
-            }),
+            let mut db = harness.db.write().await;
+            db.remove(&class).unwrap();
+            db.add(Box::new(nc)).unwrap();
         }
-    }
-
-    fn write_property(
-        &mut self,
-        _property: PropertyIdentifier,
-        _array_index: Option<u32>,
-        _value: PropertyValue,
-        _priority: Option<u8>,
-    ) -> Result<(), Error> {
-        Err(Error::Protocol {
-            class: ErrorClass::PROPERTY.to_raw() as u32,
-            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
-        })
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        Cow::Borrowed(&[
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::RECIPIENT_LIST,
-        ])
+        harness.distribute().await;
     }
 }
 
@@ -77,19 +46,9 @@ async fn wait_for_frames(harness: &Harness, expected: usize) {
 #[tokio::test]
 async fn admitted_routes_stop_at_64_but_existing_network_updates_at_capacity() {
     // One destination per DNET, one more than the cache holds.
+    const DNETS: std::ops::Range<u16> = 1000..1065;
     let harness = Harness::new(Vec::new(), 60_000).await;
-    {
-        let mut db = harness.db.write().await;
-        let class = ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, 0).unwrap();
-        db.remove(&class).unwrap();
-        db.add(Box::new(WideClass(
-            (1000..1065)
-                .map(|network| destination_for(address_recipient(network, RECIPIENT), true))
-                .collect(),
-        )))
-        .unwrap();
-    }
-    harness.distribute().await;
+    distribute_to_networks(&harness, DNETS).await;
     wait_for_frames(&harness, 65).await;
     assert!(harness.unicast_frames().is_empty());
     let mut first = harness.broadcast_frames();
@@ -109,7 +68,7 @@ async fn admitted_routes_stop_at_64_but_existing_network_updates_at_capacity() {
     }
     assert_eq!(harness.notification_transactions.active_count(), 0);
 
-    harness.distribute().await;
+    distribute_to_networks(&harness, DNETS).await;
     wait_for_frames(&harness, 130).await;
     let unicasts = harness.unicast_frames();
     assert_eq!(unicasts.len(), 64, "exactly 64 admitted routes were cached");
@@ -136,7 +95,7 @@ async fn admitted_routes_stop_at_64_but_existing_network_updates_at_capacity() {
             .await
     );
 
-    harness.distribute().await;
+    distribute_to_networks(&harness, DNETS).await;
     wait_for_frames(&harness, 195).await;
     let unicasts = harness.unicast_frames();
     assert_eq!(unicasts.len(), 128);
