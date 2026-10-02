@@ -21,7 +21,7 @@ use bacnet_types::enums::{EventState, EventType};
 /// Time_Delay=2 on a one-second evaluation interval: the first pass of the
 /// out-of-range condition seeds the countdown, and the transition fires on
 /// the pass where it reaches zero (~2s later) — before that the observable
-/// `Event_State` holds NORMAL (Clause 13.2.4), after that HIGH_LIMIT.
+/// `Event_State` holds NORMAL (Clause 13.3), after that HIGH_LIMIT.
 ///
 /// Wall-clock assertions use margins around the interval boundary: at 1.4s
 /// exactly two passes have run (tokio's interval ticks immediately, then at
@@ -98,7 +98,7 @@ async fn spawned_task_advances_and_fires_the_time_delay_countdown() {
     assert_eq!(
         read_state(&*server.database().read().await),
         EventState::NORMAL,
-        "delay not yet elapsed: NORMAL holds (13.2.4)"
+        "delay not yet elapsed: NORMAL holds (13.3)"
     );
 
     // t≈2.6s: the t=2s tick counted down to zero and fired HIGH_LIMIT.

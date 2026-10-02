@@ -507,9 +507,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// This is the per-write entry point: it seeds (or cancels) a pending
     /// delayed transition and fires immediately only when `Time_Delay == 0`.
     /// It never advances the `Time_Delay` countdown — repeated writes to the
-    /// same value do not shorten the delay (per ASHRAE 135-2020 §13.2.4 the
-    /// countdown advances once per elapsed second via
-    /// [`tick_intrinsic_reporting`](Self::tick_intrinsic_reporting)).
+    /// same value do not shorten the delay (ASHRAE 135-2020 Clause 13.3 counts
+    /// the delay in seconds, so the countdown advances once per elapsed second
+    /// via [`tick_intrinsic_reporting`](Self::tick_intrinsic_reporting)).
     ///
     /// Returns `Some(TransitionOutcome)` whenever a transition is ready to be
     /// committed, or

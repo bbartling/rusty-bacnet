@@ -183,7 +183,7 @@ pub enum EventTransitionCommitError {
 /// Pending (delayed) intrinsic-reporting transition state, shared by every
 /// detector that honors [`OutOfRangeDetector::time_delay`] and its peers.
 ///
-/// Per ASHRAE 135-2020 Clause 13.2.4, a transition to a new `EventState` is
+/// Per ASHRAE 135-2020 Clause 13.3, a transition to a new `EventState` is
 /// delayed by `Time_Delay` seconds. While the delay counts down the
 /// observable `event_state` stays at the *old* (confirmed) state; if the
 /// triggering condition clears before the delay elapses the pending
@@ -486,9 +486,10 @@ impl OutOfRangeDetector {
         }
         // Nonzero delay: seed a pending transition only when there is none to
         // the same target. A redundant write of the same qualifying value must
-        // NOT restart the countdown (ASHRAE 135-2020 §13.2.4 — Time_Delay is a
-        // debounce timer); re-seeding here would let writes faster than the
-        // 1s tick pin the transition forever. The periodic `tick` advances it.
+        // NOT restart the countdown (ASHRAE 135-2020 Clause 13.3 times the
+        // delay from when the condition began to hold); re-seeding here would
+        // let writes faster than the 1s tick pin the transition forever. The
+        // periodic `tick` advances it.
         if self.pending.as_ref().is_none_or(|p| p.state != desired) {
             self.pending = Some(PendingTransition::seed(desired, delay));
         }

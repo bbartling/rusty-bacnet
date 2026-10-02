@@ -436,7 +436,7 @@ fn cmdfail_match_restores_normal() {
     assert_eq!(change.to, EventState::NORMAL);
 }
 
-// --- Time_Delay tests (AS-HRAE 135-2020 §13.2.4) ---
+// --- Time_Delay tests (ASHRAE 135-2020 Clause 13.3) ---
 //
 // `probe` is the per-write entry; `tick` is the 1 Hz periodic entry. The
 // invariant under test: the countdown advances per tick (elapsed second),
@@ -492,9 +492,10 @@ fn time_delay_redundant_probe_does_not_reset_countdown() {
     // Regression for the symmetric bug class: a redundant write of the SAME
     // qualifying value while a pending transition already exists must NOT
     // re-seed (which would reset `remaining` to the full delay). Per
-    // ASHRAE 135-2020 §13.2.4 Time_Delay is a debounce timer — writes faster
-    // than the 1s tick must not pin the transition forever. Interleave probe
-    // and tick to prove the elapsed countdown survives a redundant probe.
+    // ASHRAE 135-2020 Clause 13.3 the delay runs from when the condition
+    // began to hold — writes faster than the 1s tick must not pin the
+    // transition forever. Interleave probe and tick to prove the elapsed
+    // countdown survives a redundant probe.
     let mut det = make_delayed_detector(3);
     det.probe(81.0, NO_FAULT); // seed HIGH_LIMIT, remaining = 3
     assert!(det.tick(81.0, NO_FAULT).is_none()); // remaining 2
