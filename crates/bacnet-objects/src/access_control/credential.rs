@@ -6,13 +6,13 @@ use super::*;
 /// BACnet Access Credential object (type 32).
 ///
 /// Represents a credential (card, fob, biometric, etc.) used for access control.
-/// Present value indicates active/inactive status (BinaryPV).
+/// Its active/inactive state lives in Credential_Status, a BACnetBinaryPV.
+/// Table 12-40 has no Present_Value row, so the object serves none (#979).
 pub struct AccessCredentialObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: u32, // BinaryPV: 0=inactive, 1=active
-    credential_status: u32,
+    credential_status: BinaryPV,
     assigned_access_rights_count: u32,
     authentication_factors: Vec<Vec<u8>>,
     status_flags: StatusFlags,
@@ -28,8 +28,7 @@ impl AccessCredentialObject {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0, // inactive
-            credential_status: 0,
+            credential_status: BinaryPV::INACTIVE,
             assigned_access_rights_count: 0,
             authentication_factors: Vec::new(),
             status_flags: StatusFlags::empty(),
@@ -60,11 +59,8 @@ impl BACnetObject for AccessCredentialObject {
             p if p == PropertyIdentifier::OBJECT_TYPE => Ok(PropertyValue::Enumerated(
                 ObjectType::ACCESS_CREDENTIAL.to_raw(),
             )),
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value))
-            }
             p if p == PropertyIdentifier::CREDENTIAL_STATUS => {
-                Ok(PropertyValue::Enumerated(self.credential_status))
+                Ok(PropertyValue::Enumerated(self.credential_status.to_raw()))
             }
             p if p == PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS => Ok(PropertyValue::Unsigned(
                 self.assigned_access_rights_count as u64,
@@ -95,21 +91,17 @@ impl BACnetObject for AccessCredentialObject {
             return result;
         }
         match property {
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                if let PropertyValue::Enumerated(v) = value {
-                    self.present_value = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
+            // BACnetBinaryPV has two members, INACTIVE (0) and ACTIVE (1);
+            // anything else is refused and the stored status kept.
             p if p == PropertyIdentifier::CREDENTIAL_STATUS => {
-                if let PropertyValue::Enumerated(v) = value {
-                    self.credential_status = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
+                let PropertyValue::Enumerated(raw) = value else {
+                    return Err(common::invalid_data_type_error());
+                };
+                if raw > BinaryPV::ACTIVE.to_raw() {
+                    return Err(common::value_out_of_range_error());
                 }
+                self.credential_status = BinaryPV::from_raw(raw);
+                Ok(())
             }
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),

@@ -17,7 +17,7 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::OBJECT_NAME, false, false),
             (P::DESCRIPTION, true, true),
             (P::OBJECT_TYPE, false, false),
-            (P::PRESENT_VALUE, true, true),
+            // Table 12-40 has no Present_Value row (#979).
             (P::CREDENTIAL_STATUS, false, true),
             (P::ASSIGNED_ACCESS_RIGHTS, false, false),
             (P::AUTHENTICATION_FACTORS, false, false),

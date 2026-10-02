@@ -12,7 +12,7 @@ pub struct AccessDoorObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: u32, // BACnetDoorValue: 0=lock, 1=unlock
+    present_value: DoorValue,
     door_status: DoorStatus,
     lock_status: LockStatus,
     secured_status: DoorSecuredStatus,
@@ -24,8 +24,8 @@ pub struct AccessDoorObject {
     out_of_service: bool,
     reliability: Reliability,
     /// 16-level priority array for commandable Present_Value.
-    priority_array: [Option<u32>; 16],
-    relinquish_default: u32,
+    priority_array: [Option<DoorValue>; 16],
+    relinquish_default: DoorValue,
 }
 
 impl AccessDoorObject {
@@ -36,7 +36,7 @@ impl AccessDoorObject {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0, // lock
+            present_value: DoorValue::LOCK,
             door_status: DoorStatus::CLOSED,
             lock_status: LockStatus::LOCKED,
             secured_status: DoorSecuredStatus::SECURED,
@@ -47,23 +47,23 @@ impl AccessDoorObject {
             out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
             priority_array: Default::default(),
-            relinquish_default: 0, // lock
+            relinquish_default: DoorValue::LOCK,
         })
     }
 
     /// Set the Relinquish_Default (#270).
     ///
     /// Table 12-30 types both Present_Value and Relinquish_Default as
-    /// BACnetDoorValue, whose Clause 21 production is a closed set of four:
-    /// the accepted domain is `DoorValue::LOCK..=DoorValue::EXTENDED_PULSE_UNLOCK`
-    /// (0..=3), matching what the priority-slot Present_Value arm accepts
-    /// for value 3. The bacnet-types test `door_value_values_match_clause_21`
-    /// pins the production's closed-set length, so this derivation cannot
-    /// silently drift from the enum. After the store, Present_Value is
-    /// resolved anew from the priority array so an empty array falls back
-    /// to the new default immediately.
-    pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
-        if value > DoorValue::EXTENDED_PULSE_UNLOCK.to_raw() {
+    /// BACnetDoorValue, whose Clause 21 production is a closed set of four
+    /// (`DoorValue::LOCK..=DoorValue::EXTENDED_PULSE_UNLOCK`, 0..=3). A
+    /// `DoorValue` made with `from_raw` can carry any number, so a value
+    /// outside that set is refused with VALUE_OUT_OF_RANGE and the stored
+    /// default is left unchanged; a commanded Present_Value is checked the
+    /// same way (#979). After the store, Present_Value is resolved anew from
+    /// the priority array so an empty array falls back to the new default
+    /// immediately.
+    pub fn set_relinquish_default(&mut self, value: DoorValue) -> Result<(), Error> {
+        if !is_door_value(value) {
             return Err(common::value_out_of_range_error());
         }
         self.relinquish_default = value;
@@ -72,14 +72,28 @@ impl AccessDoorObject {
     }
 
     fn recalculate_present_value(&mut self) {
-        self.present_value = self
-            .priority_array
-            .iter()
-            .flatten()
-            .next()
-            .copied()
-            .unwrap_or(self.relinquish_default);
+        self.present_value =
+            common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
     }
+}
+
+/// Whether `value` is one of the four BACnetDoorValue members. The
+/// bacnet-types test `door_value_values_match_clause_21` pins the
+/// production's closed-set length, so this bound cannot drift from the enum.
+fn is_door_value(value: DoorValue) -> bool {
+    value.to_raw() <= DoorValue::EXTENDED_PULSE_UNLOCK.to_raw()
+}
+
+/// Decode a BACnetDoorValue write: an Enumerated within the closed set.
+fn checked_door_value(value: PropertyValue) -> Result<DoorValue, Error> {
+    let PropertyValue::Enumerated(raw) = value else {
+        return Err(common::invalid_data_type_error());
+    };
+    let value = DoorValue::from_raw(raw);
+    if !is_door_value(value) {
+        return Err(common::value_out_of_range_error());
+    }
+    Ok(value)
 }
 
 impl BACnetObject for AccessDoorObject {
@@ -104,7 +118,7 @@ impl BACnetObject for AccessDoorObject {
                 Ok(PropertyValue::Enumerated(ObjectType::ACCESS_DOOR.to_raw()))
             }
             p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value))
+                Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
             }
             p if p == PropertyIdentifier::DOOR_STATUS => {
                 Ok(PropertyValue::Enumerated(self.door_status.to_raw()))
@@ -128,10 +142,12 @@ impl BACnetObject for AccessDoorObject {
                 Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             p if p == PropertyIdentifier::PRIORITY_ARRAY => {
-                common::read_priority_array!(self, array_index, PropertyValue::Enumerated)
+                common::read_priority_array!(self, array_index, |v: DoorValue| {
+                    PropertyValue::Enumerated(v.to_raw())
+                })
             }
             p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
-                Ok(PropertyValue::Enumerated(self.relinquish_default))
+                Ok(PropertyValue::Enumerated(self.relinquish_default.to_raw()))
             }
             _ => Err(common::unknown_property_error()),
         }
@@ -153,34 +169,15 @@ impl BACnetObject for AccessDoorObject {
             return result;
         }
         match property {
+            // A command (or a NULL relinquish) at the write priority, 16 when
+            // absent; Present_Value is then resolved from the priority array.
             p if p == PropertyIdentifier::PRESENT_VALUE => {
-                let slot = priority.unwrap_or(16).clamp(1, 16) as usize - 1;
-                if let PropertyValue::Null = value {
-                    // Relinquish command at this priority
-                    self.priority_array[slot] = None;
-                } else if let PropertyValue::Enumerated(v) = value {
-                    self.priority_array[slot] = Some(v);
-                } else if self.out_of_service {
-                    // When OOS, accept direct writes without priority
-                    if let PropertyValue::Enumerated(v) = value {
-                        self.present_value = v;
-                        return Ok(());
-                    }
-                    return Err(common::invalid_data_type_error());
-                } else {
-                    return Err(common::invalid_data_type_error());
-                }
-                // Recalculate PV from priority array
-                self.recalculate_present_value();
-                Ok(())
+                common::write_priority_array!(self, value, priority, checked_door_value)
             }
             // Table 12-30 carries Relinquish_Default R (BACnetDoorValue) for
             // the commandable Access Door; the standard permits writability.
             p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
-                if let PropertyValue::Enumerated(v) = value {
-                    return self.set_relinquish_default(v);
-                }
-                Err(common::invalid_data_type_error())
+                self.set_relinquish_default(checked_door_value(value)?)
             }
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),

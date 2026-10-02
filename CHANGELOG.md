@@ -221,6 +221,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same enumerated values on the wire, proprietary and unnamed values still
   round-trip, and the Python API is unchanged (#932).
 
+- **Breaking Access Door and Access Credential value checks (Rust API and wire
+  behaviour):** the Access Door stores Present_Value, its Priority_Array slots
+  and Relinquish_Default as `DoorValue`, and
+  `AccessDoorObject::set_relinquish_default` takes a `DoorValue` instead of a
+  `u32` (#979). BACnetDoorValue has exactly four values, so a Present_Value
+  command outside LOCK (0) to EXTENDED_PULSE_UNLOCK (3) now fails with
+  VALUE_OUT_OF_RANGE and leaves the priority array as it was; before, any
+  Enumerated was stored. Relinquish_Default already refused such values, and
+  the setter still does, including a `DoorValue::from_raw` outside the four.
+  The Access Credential stores Credential_Status, a BACnetBinaryPV, as a
+  `BinaryPV`, and a write other than INACTIVE (0) or ACTIVE (1) now fails with
+  VALUE_OUT_OF_RANGE and leaves the status as it was; before, any Enumerated
+  was stored. Values in range read back on the wire exactly as before, and
+  `ResolvedEnum::from_property` now names a Credential_Status value as a
+  `BinaryPV`. The Python API is unchanged.
+
 - Optional dependencies are no longer published as features. Feature lists now
   enable them with `dep:`, so Cargo stops creating an implicit feature for each
   one, such as `bacnet-transport/rustls` or `bacnet-cli/tokio-rustls`, none of
@@ -718,6 +734,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read-only over the network, so a WriteProperty fails with
   WRITE_ACCESS_DENIED. Group_ID, an Unsigned8, now refuses a write above 255
   with VALUE_OUT_OF_RANGE and keeps its value; before, it stored any Unsigned.
+
+- **Breaking Access Credential property set (wire):** the Access Credential no
+  longer serves Present_Value (#979), so a client that read it now gets an
+  error. Its property table (Clause 12.35, Table 12-40) has no Present_Value
+  row. The property arrived with the 0.1.0 import, which described it as the
+  credential's active or inactive state, but that is Credential_Status, and
+  nothing kept the two in step; the property metadata then listed it as an
+  optional writable row. It is gone from the Property_List, the property
+  metadata, RPM ALL and OPTIONAL, and the PICS rows, and ReadProperty or
+  WriteProperty on it fails with PROPERTY / UNKNOWN_PROPERTY. Read
+  Credential_Status instead.
 
 - The Lift object's Car_Moving_Direction now accepts every
   BACnetLiftCarDirection value (#998). Its write check admitted only 0 to 3,
