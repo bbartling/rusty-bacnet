@@ -636,9 +636,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 // segment count, e.g. a duplicated ack from
                                 // an earlier transfer aliased onto a reused
                                 // invoke ID — is 5.4.4.2
-                                // DuplicateACK_Received: reset SegmentTimer
-                                // and resume waiting for an acknowledgment
-                                // in SEGMENTED_REQUEST — discard and keep
+                                // DuplicateACK_Received: SegmentTimer starts
+                                // over and the transfer stays in
+                                // SEGMENTED_REQUEST — discard and keep
                                 // waiting, never a failure (#368). The
                                 // `continue` below re-enters the timeout
                                 // call, which is the SegmentTimer restart.

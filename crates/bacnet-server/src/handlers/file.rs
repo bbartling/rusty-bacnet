@@ -8,9 +8,9 @@ use bacnet_types::enums::FileAccessMethod as ObjectFileAccessMethod;
 /// back as the Clause 21 `BACnetFileAccessMethod` production.
 ///
 /// Clauses 14.1 and 14.2 require SERVICES / INVALID_FILE_ACCESS_METHOD for
-/// an access-method mismatch. Clause 18 applies this code when an
-/// AtomicReadFile or AtomicWriteFile request uses a method the target file
-/// cannot support. Reading fails
+/// an access-method mismatch, and Clause 18 defines the code for exactly
+/// that case: a read or write request naming the stream or record method
+/// when the File object declares the other one. Reading fails
 /// closed: a missing, undecodable, or out-of-production property value is
 /// treated as a mismatch rather than defaulting to stream or record access.
 fn invalid_file_access_method() -> Error {
