@@ -173,16 +173,19 @@ where
     Ok(())
 }
 
-/// Handle a ReadRange request.
+/// Handle a ReadRange request against standalone object data.
 ///
 /// By Position uses the list's exact one-based order. By Sequence and By Time
 /// use aligned resident identities supplied for `LOG_BUFFER` by the object.
+/// Like [`handle_read_property`], this low-level helper has no executor
+/// context: a built-in Device's COV subscription lists read as the object
+/// holds them, empty. Running server reads page the live subscription table.
 pub fn handle_read_range(
     db: &ObjectDatabase,
     service_data: &[u8],
     response: &mut BytesMut,
 ) -> Result<(), Error> {
-    let selected = prepare_read_range(db, ReadRangeRequest::decode(service_data)?)?;
+    let selected = prepare_read_range(db, None, ReadRangeRequest::decode(service_data)?)?;
     append_read_range_ack_with(
         &selected.request,
         &selected.items,
@@ -200,23 +203,28 @@ pub(crate) fn handle_read_range_budgeted(
     response: &mut BytesMut,
     budget: crate::server::ReadRangeBudget,
 ) -> Result<(), ReadRangeFailure> {
-    handle_read_range_observed(db, service_data, response, budget, |_, _, _, _| {})
+    let request = ReadRangeRequest::decode(service_data).map_err(ReadRangeFailure::Service)?;
+    read_range_request_observed(db, None, request, response, budget, |_, _, _, _| {})
 }
 
-/// Observe one decoded request outcome, never a decode or page-budget failure.
-/// The hook captures identity/result only; delivery must follow guard release.
-pub(crate) fn handle_read_range_observed(
+/// ReadRange evaluator over one decoded request. `view` carries the
+/// executor-owned Device definitions and the request-local COV lists that
+/// ReadProperty serves, so both services read the same value.
+///
+/// Observe one request outcome, never a page-budget failure. The hook
+/// captures identity/result only; delivery must follow guard release.
+pub(crate) fn read_range_request_observed(
     db: &ObjectDatabase,
-    service_data: &[u8],
+    view: Option<&DeviceReadContext<'_>>,
+    request: ReadRangeRequest,
     response: &mut BytesMut,
     budget: crate::server::ReadRangeBudget,
     completed: impl FnOnce(ObjectIdentifier, PropertyIdentifier, Option<u32>, &Result<(), Error>),
 ) -> Result<(), ReadRangeFailure> {
-    let request = ReadRangeRequest::decode(service_data).map_err(ReadRangeFailure::Service)?;
     let target = request.object_identifier;
     let property = request.property_identifier;
     let index = request.property_array_index;
-    let result = prepare_read_range(db, request)
+    let result = prepare_read_range(db, view, request)
         .map_err(ReadRangeFailure::Service)
         .and_then(|selected| {
             page::append_page_with(&selected, response, budget, encode_property_value)
@@ -240,18 +248,15 @@ struct PreparedReadRange {
 
 /// Resolve the ReadRange target to its list items, in the order the service
 /// procedure of Clause 15.8 implies and #999 follows for the list services:
-/// the object, the property, a supplied array index, and then whether the
-/// target is a BACnetLIST at all. The last check follows the property's
-/// datatype, never the shape of the value read: a whole array also reads as
-/// a list, and a constructed single value can read as framed bytes.
-fn read_range_items<'db>(
-    db: &'db ObjectDatabase,
+/// the object (which the caller has found), the property, a supplied array
+/// index, and then whether the target is a BACnetLIST at all. The last check
+/// follows the property's datatype, never the shape of the value read: a
+/// whole array also reads as a list, and a constructed single value can read
+/// as framed bytes.
+fn read_range_items(
+    object: &dyn BACnetObject,
     request: &ReadRangeRequest,
-) -> Result<(&'db dyn BACnetObject, Vec<PropertyValue>), Error> {
-    let object = db.get(&request.object_identifier).ok_or(Error::Protocol {
-        class: ErrorClass::OBJECT.to_raw() as u32,
-        code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-    })?;
+) -> Result<Vec<PropertyValue>, Error> {
     let property = request.property_identifier;
     let index = request.property_array_index;
     if index.is_some() && !object.is_array_property(property) {
@@ -271,15 +276,25 @@ fn read_range_items<'db>(
             code: ErrorCode::PROPERTY_IS_NOT_A_LIST.to_raw() as u32,
         });
     }
-    let items = items::list_items(request.object_identifier.object_type(), property, value)?;
-    Ok((object, items))
+    items::list_items(request.object_identifier.object_type(), property, value)
 }
 
+/// Select the request's page from one read of the target list. A running
+/// server's `view` serves the Device's COV subscription lists from the
+/// snapshot it took for this request, so every item, flag and count comes
+/// from the same instant.
 fn prepare_read_range(
     db: &ObjectDatabase,
+    view: Option<&DeviceReadContext<'_>>,
     request: ReadRangeRequest,
 ) -> Result<PreparedReadRange, Error> {
-    let (object, items) = read_range_items(db, &request)?;
+    let stored = db.get(&request.object_identifier).ok_or(Error::Protocol {
+        class: ErrorClass::OBJECT.to_raw() as u32,
+        code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+    })?;
+    let served = view.map(|view| view.object(stored));
+    let object: &dyn BACnetObject = served.as_ref().map_or(stored, |served| served);
+    let items = read_range_items(object, &request)?;
 
     let mut resident_identities = None;
     let (selection, first_sequence_number) = match &request.range {
