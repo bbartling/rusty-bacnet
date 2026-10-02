@@ -112,24 +112,75 @@ fn landing_door_status_rejects_malformed_values() {
         (&[0x0E, 0x08, 0x19, 0x00, 0x0F], "empty floor-number"),
         (&[0x0E, 0x09, 0x03, 0x18, 0x0F], "empty door-status"),
         (
-            &[0x0E, 0x0A, 0x01, 0x00, 0x19, 0x00, 0x0F],
-            "floor-number 256",
-        ),
-        (
-            &[
-                0x0E, 0x09, 0x03, 0x1D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00, 0x0F,
-            ],
-            "door-status over 32 bits",
-        ),
-        (
             &[0x0E, 0x09, 0x03, 0x1A, 0x00, 0x0F],
             "door-status overruns the data",
         ),
         (&[0x0E, 0x91, 0x00, 0x0F], "application-tagged member"),
     ] {
+        let error = decode_landing_door_status(wire, 0).unwrap_err();
         assert!(
-            decode_landing_door_status(wire, 0).is_err(),
-            "{context}: {wire:02X?} must not decode"
+            !matches!(error, Error::OutOfRange(_)),
+            "{context}: {wire:02X?} is malformed, not out of range: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn landing_door_status_reports_oversized_members_as_range_errors() {
+    // Well-formed members whose values don't fit their types are a range
+    // error, distinct from a malformed encoding. Each case names the member
+    // the error must report.
+    let cases: &[(&str, &[u8], &str)] = &[
+        (
+            "floor 256",
+            &[0x0E, 0x0A, 0x01, 0x00, 0x19, 0x00, 0x0F],
+            "floor-number",
+        ),
+        (
+            "door-status 2^32",
+            &[
+                0x0E, 0x09, 0x03, 0x1D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00, 0x0F,
+            ],
+            "door-status",
+        ),
+        (
+            "floor 256 on the second landing door",
+            &[
+                0x0E, 0x09, 0x01, 0x19, 0x00, 0x0A, 0x01, 0x00, 0x19, 0x00, 0x0F,
+            ],
+            "floor-number",
+        ),
+        (
+            "floor 300 before door-status 2^32",
+            &[
+                0x0E, 0x0A, 0x01, 0x2C, 0x1D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00, 0x0F,
+            ],
+            "floor-number",
+        ),
+    ];
+    for &(context, wire, member) in cases {
+        match decode_landing_door_status(wire, 0) {
+            Err(Error::OutOfRange(message)) => {
+                assert!(message.contains(member), "{context}: {message}")
+            }
+            other => panic!("{context}: expected OutOfRange, got {other:?}"),
+        }
+    }
+    // A malformed member anywhere takes precedence over an oversized one.
+    for (context, wire) in [
+        (
+            "floor 256, then a truncated frame",
+            &[0x0E, 0x0A, 0x01, 0x00, 0x19, 0x00][..],
+        ),
+        (
+            "floor 256, then a door without door-status",
+            &[0x0E, 0x0A, 0x01, 0x00, 0x19, 0x00, 0x09, 0x01, 0x0F],
+        ),
+    ] {
+        let error = decode_landing_door_status(wire, 0).unwrap_err();
+        assert!(
+            !matches!(error, Error::OutOfRange(_)),
+            "{context}: expected a malformed-value error, got {error:?}"
         );
     }
 }

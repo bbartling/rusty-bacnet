@@ -1,7 +1,7 @@
 //! The Lift object (type 59, Clause 12.59).
 
 use bacnet_encoding::constructed::encode_landing_door_status;
-use bacnet_types::constructed::BACnetLandingDoorStatus;
+use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetLandingDoorStatus};
 use bacnet_types::enums::{
     DoorStatus, EngineeringUnits, LiftCarDirection, LiftFault, ObjectType, PropertyIdentifier,
     Reliability,
@@ -11,6 +11,8 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 use std::borrow::Cow;
 
+use super::doors;
+use super::energy_meter::{energy_meter_accessors, EnergyMeter};
 use super::membership::{group_membership_accessors, GroupMembership};
 use super::{decode_fault_signals, metadata, named_or_proprietary};
 use crate::common::{self, read_common_properties};
@@ -21,7 +23,8 @@ use crate::traits::BACnetObject;
 /// The object serves the rows of its table (Clause 12.59, Table 12-77) that
 /// it implements, each with its table datatype. Car_Door_Status and
 /// Landing_Door_Status hold one element per car door and always have the
-/// same size, as Clause 12.59 requires of the per-door arrays.
+/// same size, as Clause 12.59 requires of the per-door arrays. Both take
+/// WriteProperty only while Out_Of_Service is TRUE.
 pub struct LiftObject {
     oid: ObjectIdentifier,
     name: String,
@@ -43,8 +46,8 @@ pub struct LiftObject {
     car_load_units: EngineeringUnits,
     /// Passenger alarm state (Boolean).
     passenger_alarm: bool,
-    /// Energy meter reading in kilowatt-hours (Real).
-    energy_meter: f32,
+    /// Energy_Meter and Energy_Meter_Ref.
+    energy_meter: EnergyMeter,
     status_flags: StatusFlags,
     out_of_service: bool,
     reliability: Reliability,
@@ -76,7 +79,7 @@ impl LiftObject {
             car_load: 0.0,
             car_load_units: EngineeringUnits::PERCENT,
             passenger_alarm: false,
-            energy_meter: 0.0,
+            energy_meter: EnergyMeter::new()?,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
@@ -86,6 +89,7 @@ impl LiftObject {
     }
 
     group_membership_accessors!("lift");
+    energy_meter_accessors!("lift");
 
     /// The status of each car door, served as Car_Door_Status.
     pub fn car_door_status(&self) -> &[DoorStatus] {
@@ -94,14 +98,15 @@ impl LiftObject {
 
     /// Set the status of each car door, one element per door.
     ///
-    /// Car_Door_Status is read-only over the network. Its size is the number
-    /// of car doors, so a list of a different size changes that number, and
-    /// Landing_Door_Status follows: a removed door's landing doors are
-    /// dropped and an added door starts with none. A status outside
+    /// Its size is the number of car doors, so a list of a different size
+    /// changes that number, and Landing_Door_Status follows: a removed door's
+    /// landing doors are dropped and an added door starts with none. A
+    /// WriteProperty, accepted only while Out_Of_Service is TRUE, can't
+    /// change the size, so this is the only way to. A status outside
     /// BACnetDoorStatus (a reserved value, or one above 65535) is refused
     /// with VALUE_OUT_OF_RANGE and both properties are left unchanged.
     pub fn set_car_door_status(&mut self, status: Vec<DoorStatus>) -> Result<(), Error> {
-        if !status.iter().all(|&door| door_status_in_range(door)) {
+        if !status.iter().all(|&door| doors::door_status_in_range(door)) {
             return Err(common::value_out_of_range_error());
         }
         self.landing_door_status
@@ -117,20 +122,15 @@ impl LiftObject {
 
     /// Set the landing doors of each car door, one element per car door.
     ///
-    /// Landing_Door_Status is read-only over the network. A list whose size
-    /// differs from Car_Door_Status, or a landing door status outside
-    /// BACnetDoorStatus, is refused with VALUE_OUT_OF_RANGE and the property
-    /// is left unchanged.
+    /// A list whose size differs from Car_Door_Status, or a landing door
+    /// status outside BACnetDoorStatus, is refused with VALUE_OUT_OF_RANGE
+    /// and the property is left unchanged. A WriteProperty, accepted only
+    /// while Out_Of_Service is TRUE, follows the same rules.
     pub fn set_landing_door_status(
         &mut self,
         status: Vec<BACnetLandingDoorStatus>,
     ) -> Result<(), Error> {
-        let in_range = status.iter().all(|car_door| {
-            car_door
-                .landing_doors
-                .iter()
-                .all(|landing| door_status_in_range(landing.door_status))
-        });
+        let in_range = status.iter().all(doors::landing_doors_in_range);
         if status.len() != self.car_door_status.len() || !in_range {
             return Err(common::value_out_of_range_error());
         }
@@ -157,12 +157,6 @@ impl LiftObject {
     }
 }
 
-/// Whether `status` is in BACnetDoorStatus: a named value, or the
-/// proprietary range 1024..=65535 (Clause 23.1).
-fn door_status_in_range(status: DoorStatus) -> bool {
-    named_or_proprietary(DoorStatus::ALL_NAMED, status, status.to_raw())
-}
-
 impl BACnetObject for LiftObject {
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
@@ -181,6 +175,9 @@ impl BACnetObject for LiftObject {
             return result;
         }
         if let Some(value) = self.membership.read(property) {
+            return Ok(value);
+        }
+        if let Some(value) = self.energy_meter.read(property) {
             return Ok(value);
         }
         match property {
@@ -215,9 +212,6 @@ impl BACnetObject for LiftObject {
             p if p == PropertyIdentifier::PASSENGER_ALARM => {
                 Ok(PropertyValue::Boolean(self.passenger_alarm))
             }
-            p if p == PropertyIdentifier::ENERGY_METER => {
-                Ok(PropertyValue::Real(self.energy_meter))
-            }
             p if p == PropertyIdentifier::FAULT_SIGNALS => Ok(PropertyValue::List(
                 self.fault_signals
                     .iter()
@@ -242,7 +236,7 @@ impl BACnetObject for LiftObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
@@ -254,7 +248,37 @@ impl BACnetObject for LiftObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
+        if let Some(result) = self.energy_meter.write(property, &value) {
+            return result;
+        }
         match property {
+            // Simulation writes (item (c) of the Out_Of_Service description).
+            // Neither can change the car door count, so the two arrays keep
+            // the same size.
+            p if p == PropertyIdentifier::CAR_DOOR_STATUS => {
+                if !self.out_of_service {
+                    return Err(common::write_access_denied_error());
+                }
+                self.car_door_status = doors::written_array(
+                    &self.car_door_status,
+                    array_index,
+                    value,
+                    doors::decode_car_door,
+                )?;
+                Ok(())
+            }
+            p if p == PropertyIdentifier::LANDING_DOOR_STATUS => {
+                if !self.out_of_service {
+                    return Err(common::write_access_denied_error());
+                }
+                self.landing_door_status = doors::written_array(
+                    &self.landing_door_status,
+                    array_index,
+                    value,
+                    doors::decode_landing_doors,
+                )?;
+                Ok(())
+            }
             p if p == PropertyIdentifier::CAR_POSITION => {
                 if let PropertyValue::Unsigned(v) = value {
                     // Car_Position is an Unsigned8 (Table 12-77).
@@ -294,15 +318,6 @@ impl BACnetObject for LiftObject {
                     Err(common::invalid_data_type_error())
                 }
             }
-            p if p == PropertyIdentifier::ENERGY_METER => {
-                if let PropertyValue::Real(v) = value {
-                    common::reject_non_finite(v)?;
-                    self.energy_meter = v;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
             p if p == PropertyIdentifier::FAULT_SIGNALS => {
                 self.fault_signals =
                     decode_fault_signals(value, LiftFault::ALL_NAMED, LiftFault::from_raw)?;
@@ -311,7 +326,7 @@ impl BACnetObject for LiftObject {
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                _array_index,
+                array_index,
             )),
         }
     }

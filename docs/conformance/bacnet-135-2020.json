@@ -815,7 +815,7 @@
    ],
    "benchmarks": [],
    "public_claims": [],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#401). Passenger_Alarm is modeled as Boolean with FALSE default. Fault_Signals uses typed EscalatorFault storage and reads as a List of Enumerated raw values; the write arm accepts the empty List, the wire decoder's singleton Enumerated shape, and multi-element Lists. A zero-element propertyValue is admitted only for Fault_Signals and Calendar Date_List (#996); the generic decoder still rejects empty payloads for other properties. Runtime dispatch and PICS use the same exact Escalator is_writable_property set: Description, Out_Of_Service, and the six status properties; Object_Name is not advertised because no arm accepts it. The served property set, including Elevator_Group, Group_ID, Installation_ID and the Energy_Meter_Ref datatype, is BACNET-12-ESCALATOR-PROPERTY-SET (#1022). Reliability simulation, an initialized Energy_Meter_Ref, intrinsic reporting and physical-device arbitration remain outside this row, which is not a complete Escalator-object conformance claim."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#401). Passenger_Alarm is modeled as Boolean with FALSE default. Fault_Signals uses typed EscalatorFault storage and reads as a List of Enumerated raw values; the write arm accepts the empty List, the wire decoder's singleton Enumerated shape, and multi-element Lists. A zero-element propertyValue is admitted only for Fault_Signals and Calendar Date_List (#996); the generic decoder still rejects empty payloads for other properties. Runtime dispatch and PICS use the same exact Escalator is_writable_property set: Description, Out_Of_Service, and the six status properties; Object_Name is not advertised because no arm accepts it. The served property set, including Elevator_Group, Group_ID, Installation_ID and Energy_Meter_Ref, is BACNET-12-ESCALATOR-PROPERTY-SET (#1022); while the application has set Energy_Meter_Ref, Energy_Meter takes only 0.0 and refuses other values with VALUE_OUT_OF_RANGE (#1036, covered there). Reliability simulation, intrinsic reporting and physical-device arbitration remain outside this row, which is not a complete Escalator-object conformance claim."
   },
   {
    "id": "BACNET-12-ELEVATOR-GROUP-LANDING-CALLS",
@@ -862,7 +862,7 @@
    "id": "BACNET-12-ELEVATOR-GROUP-PROPERTY-SET",
    "standard_anchor": "Clause 12.58 and Table 12-76; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
    "priority": "P1",
-   "requirement_summary": "The Elevator Group serves the rows Table 12-76 defines. Machine_Room_ID is a required BACnetObjectIdentifier naming the Positive Integer Value object that holds the number of the group's machine room, or instance 4194303 when the room has no number; it is readable, and a network write is refused with PROPERTY / WRITE_ACCESS_DENIED. Group_ID is a required Unsigned8, and a write above 255 is refused with PROPERTY / VALUE_OUT_OF_RANGE without changing the stored value. Status_Flags, Out_Of_Service and Reliability are not Table 12-76 rows, so they are absent from Property_List, the property metadata, RPM ALL and OPTIONAL, and the PICS rows, and ReadProperty, ReadPropertyMultiple and WriteProperty on any of them fail with PROPERTY / UNKNOWN_PROPERTY.",
+   "requirement_summary": "The Elevator Group serves the rows Table 12-76 defines. Machine_Room_ID is a required BACnetObjectIdentifier naming the Positive Integer Value object that holds the number of the group's machine room, or instance 4194303 when the room has no number; it is readable, and a network write is refused with PROPERTY / WRITE_ACCESS_DENIED. Group_ID is a required Unsigned8, and a write above 255 is refused with PROPERTY / VALUE_OUT_OF_RANGE without changing the stored value. Group_Members is a BACnetARRAY of BACnetObjectIdentifier: read without an index it is the whole array, at index 0 the member count, at index n the n-th member, and past the last member PROPERTY / INVALID_ARRAY_INDEX; it is read-only over the network. Status_Flags, Out_Of_Service and Reliability are not Table 12-76 rows, so they are absent from Property_List, the property metadata, RPM ALL and OPTIONAL, and the PICS rows, and ReadProperty, ReadPropertyMultiple and WriteProperty on any of them fail with PROPERTY / UNKNOWN_PROPERTY.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/elevator.rs::ElevatorGroupObject",
@@ -871,9 +871,11 @@
    "positive_tests": [
     "crates/bacnet-objects/src/elevator/tests/group_properties.rs::elevator_group_machine_room_id_starts_as_the_no_number_reference",
     "crates/bacnet-objects/src/elevator/tests/group_properties.rs::elevator_group_group_id_accepts_the_unsigned8_range",
+    "crates/bacnet-objects/src/elevator/tests/group_properties.rs::elevator_group_group_members_reads_by_array_index",
     "crates/bacnet-objects/src/elevator/metadata.rs::tests::property_metadata_elevator_group_exact_sets_readable_rows_and_indexed_list",
     "crates/bacnet-objects/src/elevator/metadata.rs::tests::property_metadata_elevator_trio_write_capabilities_match_dispatch",
     "crates/bacnet-server/src/handlers/tests/read_rpm/elevator.rs::rpm_elevator_group_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::rp_elevator_group_group_members_takes_an_array_index",
     "crates/bacnet-server/src/handlers/tests/property_metadata/elevator.rs::rpm_elevator_metadata_selectors_preserve_bytes_and_budgets",
     "crates/bacnet-server/src/pics/property_metadata_tests/elevator.rs::pics_elevator_property_metadata_is_exact"
    ],
@@ -889,9 +891,10 @@
    ],
    "benchmarks": [],
    "public_claims": [
-    "CHANGELOG.md Unreleased Fixed entry for #997"
+    "CHANGELOG.md Unreleased Fixed entry for #997",
+    "CHANGELOG.md Unreleased Fixed entry for #1034"
    ],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#997). Breaking pre-1.0 removal: Elevator Group used to serve Status_Flags, Out_Of_Service and Reliability through the shared common read arms, all three listed as required, with a routed Out_Of_Service write; now they are unknown properties. The object has no COV support, event state or intrinsic reporting, and the server's COV flag capture, event-notification payloads, GetAlarmSummary, GetEventInformation and GetEnrollmentSummary already treat an object without these properties as absent, so none needs an Elevator Group case. Local policies: the application sets Machine_Room_ID through set_machine_room_id, which refuses a reference to any object type other than Positive Integer Value with VALUE_OUT_OF_RANGE, as set_landing_calls does for a reserved direction; Group_ID stays network-writable, since an R row leaves writability to the implementation, and is stored as a u8, so neither the constructor (which starts it at 0) nor any local path can hold a larger value. This row covers the served property set only. It makes no claim that the Machine_Room_ID object exists in the device, nor for the footnote that limits Group_Mode and both landing-call properties to groups of lifts, the audit, tag and profile rows, or any dispatching behavior."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#997). Breaking pre-1.0 removal: Elevator Group used to serve Status_Flags, Out_Of_Service and Reliability through the shared common read arms, all three listed as required, with a routed Out_Of_Service write; now they are unknown properties. The object has no COV support, event state or intrinsic reporting, and the server's COV flag capture, event-notification payloads, GetAlarmSummary, GetEventInformation and GetEnrollmentSummary already treat an object without these properties as absent, so none needs an Elevator Group case. Local policies: the application sets Machine_Room_ID through set_machine_room_id, which refuses a reference to any object type other than Positive Integer Value with VALUE_OUT_OF_RANGE, as set_landing_calls does for a reserved direction; Group_ID stays network-writable, since an R row leaves writability to the implementation, and is stored as a u8, so neither the constructor (which starts it at 0) nor any local path can hold a larger value. Group_Members used to answer every array index with the whole list (#1034); it now goes through the shared BACnetARRAY reader the Lift's arrays use, and stays application-owned through add_member. This row covers the served property set only. It makes no claim that the Machine_Room_ID object exists in the device, nor for the footnote that limits Group_Mode and both landing-call properties to groups of lifts, the audit, tag and profile rows, or any dispatching behavior."
   },
   {
    "id": "BACNET-12-LIFT-CAR-MOVING-DIRECTION",
@@ -907,7 +910,7 @@
     "crates/bacnet-objects/src/elevator/tests/lift_car_moving_direction.rs::lift_car_moving_direction_accepts_every_named_value",
     "crates/bacnet-objects/src/elevator/tests/lift_car_moving_direction.rs::lift_car_moving_direction_keeps_proprietary_values",
     "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_lift_car_moving_direction_accepts_the_bacnet_lift_car_direction_domain",
-    "crates/bacnet-server/src/handlers/tests/read_rpm/elevator.rs::rpm_lift_indexed_reads_and_bytes_are_unchanged"
+    "crates/bacnet-server/src/handlers/tests/read_rpm/elevator/lift.rs::rpm_lift_indexed_reads_and_bytes_are_unchanged"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/elevator/tests/lift_car_moving_direction.rs::lift_car_moving_direction_refuses_reserved_values_atomically",
@@ -923,13 +926,15 @@
   },
   {
    "id": "BACNET-12-LIFT-PROPERTY-SET",
-   "standard_anchor": "Clause 12.59 and Table 12-77; Clause 21 BACnetDoorStatus, BACnetLandingDoorStatus, BACnetLiftFault and BACnetEngineeringUnits; Clause 23.1; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
+   "standard_anchor": "Clause 12.59 and Table 12-77, including Out_Of_Service, Energy_Meter and Energy_Meter_Ref; Clause 12.1.5.1; Clause 21 BACnetDoorStatus, BACnetLandingDoorStatus, BACnetLiftFault, BACnetEngineeringUnits and BACnetDeviceObjectReference; Clause 23.1; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
    "priority": "P1",
-   "requirement_summary": "The Lift serves only rows Table 12-77 defines, each with its table datatype. The required Elevator_Group (BACnetObjectIdentifier, Elevator Group instance 4194303 when no group lists the lift), Group_ID and Installation_ID (Unsigned8), Passenger_Alarm (BOOLEAN) and Fault_Signals (BACnetLIST of BACnetLiftFault) are present. Car_Position is an Unsigned8, and a write above 255 is refused with PROPERTY / VALUE_OUT_OF_RANGE without changing the stored value. Car_Load is a REAL, served together with Car_Load_Units as the table's presence footnote requires. Car_Door_Status is a BACnetARRAY of BACnetDoorStatus and Landing_Door_Status a BACnetARRAY of BACnetLandingDoorStatus, both with one element per car door, and Floor_Text is a BACnetARRAY of CharacterString; all three take an array index. Fault_Signals takes named faults and the Clause 23.1 proprietary range without repeats. Tracking_Value and Floor_Number are not Table 12-77 rows, so they are absent from Property_List, the property metadata, RPM ALL and OPTIONAL and the PICS rows, and ReadProperty, ReadPropertyMultiple and WriteProperty on them fail with PROPERTY / UNKNOWN_PROPERTY.",
+   "requirement_summary": "The Lift serves only rows Table 12-77 defines, each with its table datatype. The required Elevator_Group (BACnetObjectIdentifier, Elevator Group instance 4194303 when no group lists the lift), Group_ID and Installation_ID (Unsigned8), Passenger_Alarm (BOOLEAN) and Fault_Signals (BACnetLIST of BACnetLiftFault) are present. Car_Position is an Unsigned8, and a write above 255 is refused with PROPERTY / VALUE_OUT_OF_RANGE without changing the stored value. Car_Load is a REAL, served together with Car_Load_Units as the table's presence footnote requires. Car_Door_Status is a BACnetARRAY of BACnetDoorStatus and Landing_Door_Status a BACnetARRAY of BACnetLandingDoorStatus, both with one element per car door, and Floor_Text is a BACnetARRAY of CharacterString; all three take an array index. While Out_Of_Service is TRUE, Car_Door_Status and Landing_Door_Status take WriteProperty of the whole array or one element, as item (c) of the Out_Of_Service description requires; the size stays the car door count, so a write of index 0 is refused with PROPERTY / WRITE_ACCESS_DENIED, a whole array of another size with VALUE_OUT_OF_RANGE and an index past the last door with INVALID_ARRAY_INDEX. A door status outside BACnetDoorStatus or a floor number above 255 is VALUE_OUT_OF_RANGE, a value of the wrong datatype INVALID_DATA_TYPE and an undecodable landing-doors frame INVALID_DATA_ENCODING, none changing either array; in service both refuse writes with WRITE_ACCESS_DENIED. Fault_Signals takes named faults and the Clause 23.1 proprietary range without repeats. Energy_Meter_Ref is a BACnetDeviceObjectReference, read-only over the network, and while it names an instance other than 4194303 Energy_Meter reads 0.0 and refuses any other value with VALUE_OUT_OF_RANGE. Tracking_Value and Floor_Number are not Table 12-77 rows, so they are absent from Property_List, the property metadata, RPM ALL and OPTIONAL and the PICS rows, and ReadProperty, ReadPropertyMultiple and WriteProperty on them fail with PROPERTY / UNKNOWN_PROPERTY.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/elevator/lift.rs::LiftObject",
     "crates/bacnet-objects/src/elevator/membership.rs",
+    "crates/bacnet-objects/src/elevator/doors.rs",
+    "crates/bacnet-objects/src/elevator/energy_meter.rs",
     "crates/bacnet-objects/src/elevator/metadata.rs",
     "crates/bacnet-types/src/constructed/lift.rs::BACnetLandingDoorStatus",
     "crates/bacnet-encoding/src/constructed/landing_door_status.rs"
@@ -944,6 +949,10 @@
     "crates/bacnet-objects/src/elevator/tests/lift_properties.rs::lift_floor_text_is_an_array_indexed_by_floor",
     "crates/bacnet-objects/src/elevator/tests/lift_properties.rs::lift_passenger_alarm_is_a_writable_boolean",
     "crates/bacnet-objects/src/elevator/tests/lift_properties.rs::lift_fault_signals_accepts_sets_of_lift_faults",
+    "crates/bacnet-objects/src/elevator/tests/lift_door_simulation.rs::lift_car_door_status_takes_whole_and_element_writes_out_of_service",
+    "crates/bacnet-objects/src/elevator/tests/lift_door_simulation.rs::lift_landing_door_status_takes_whole_and_element_writes_out_of_service",
+    "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::set_energy_meter_ref_takes_local_and_remote_meter_objects",
+    "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::energy_meter_reads_zero_while_a_reference_is_set",
     "crates/bacnet-objects/src/elevator/tests/group_membership.rs::membership_rows_are_required_and_start_ungrouped",
     "crates/bacnet-objects/src/elevator/tests/group_membership.rs::membership_setters_store_the_unsigned8_range_and_elevator_groups",
     "crates/bacnet-objects/src/elevator/metadata.rs::tests::property_metadata_lift_exact_sets_readable_rows_and_indexed_list",
@@ -953,7 +962,8 @@
     "crates/bacnet-encoding/src/constructed/tests/landing_door_status.rs::landing_door_status_keeps_reserved_and_proprietary_door_statuses",
     "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_lift_car_load_is_a_real_in_car_load_units",
     "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_lift_passenger_alarm_and_fault_signals_take_their_table_datatypes",
-    "crates/bacnet-server/src/handlers/tests/read_rpm/elevator.rs::rpm_lift_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_lift_door_arrays_take_simulation_writes_only_out_of_service",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/elevator/lift.rs::rpm_lift_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/handlers/tests/property_metadata/elevator.rs::rpm_elevator_metadata_selectors_preserve_bytes_and_budgets",
     "crates/bacnet-server/src/pics/property_metadata_tests/elevator.rs::pics_elevator_property_metadata_is_exact"
    ],
@@ -963,39 +973,51 @@
     "crates/bacnet-objects/src/elevator/tests/lift_properties.rs::lift_car_load_refuses_non_finite_and_non_real_values_atomically",
     "crates/bacnet-objects/src/elevator/tests/lift_properties.rs::lift_set_car_door_status_refuses_statuses_outside_door_status_atomically",
     "crates/bacnet-objects/src/elevator/tests/lift_properties.rs::lift_set_landing_door_status_refuses_mismatches_atomically",
-    "crates/bacnet-objects/src/elevator/tests/lift_properties.rs::lift_door_arrays_and_floor_text_are_read_only_over_the_network",
+    "crates/bacnet-objects/src/elevator/tests/lift_properties.rs::lift_floor_text_and_in_service_door_arrays_refuse_writes",
     "crates/bacnet-objects/src/elevator/tests/lift_properties.rs::lift_fault_signals_refuses_bad_sets_atomically",
+    "crates/bacnet-objects/src/elevator/tests/lift_door_simulation.rs::lift_door_array_writes_cannot_change_the_door_count",
+    "crates/bacnet-objects/src/elevator/tests/lift_door_simulation.rs::lift_door_array_writes_refuse_bad_values_atomically",
+    "crates/bacnet-objects/src/elevator/tests/lift_door_simulation.rs::lift_door_simulation_ends_when_the_lift_returns_to_service",
+    "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::energy_meter_ref_starts_uninitialized_and_is_read_only_over_the_network",
+    "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::set_energy_meter_ref_refuses_objects_that_are_not_meters_atomically",
     "crates/bacnet-objects/src/elevator/tests/group_membership.rs::set_elevator_group_takes_only_elevator_group_objects",
     "crates/bacnet-objects/src/elevator/tests/group_membership.rs::membership_rows_are_read_only_over_the_network",
     "crates/bacnet-objects/src/elevator/metadata.rs::tests::property_metadata_lift_writes_store_verbatim_with_range_gates",
     "crates/bacnet-objects/src/elevator/metadata.rs::tests::property_metadata_elevator_trio_unserved_rows_stay_unknown",
     "crates/bacnet-encoding/src/constructed/tests/landing_door_status.rs::landing_door_status_rejects_malformed_values",
     "crates/bacnet-encoding/src/constructed/tests/landing_door_status.rs::landing_door_status_rejects_more_than_the_item_limit",
+    "crates/bacnet-encoding/src/constructed/tests/landing_door_status.rs::landing_door_status_reports_oversized_members_as_range_errors",
     "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_lift_and_escalator_membership_rows_read_but_refuse_writes",
     "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_lift_car_position_holds_to_unsigned8",
-    "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_lift_rows_outside_table_12_77_and_read_only_rows"
+    "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_lift_rows_outside_table_12_77_and_read_only_rows",
+    "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_lift_and_escalator_energy_meter_ref_is_read_only_and_holds_energy_meter_at_zero"
    ],
    "benchmarks": [],
    "public_claims": [
-    "CHANGELOG.md Unreleased Fixed entry for #1021"
+    "CHANGELOG.md Unreleased Fixed entry for #1021",
+    "CHANGELOG.md Unreleased Fixed entry for #1035",
+    "CHANGELOG.md Unreleased Added entry for #1036"
    ],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#1021). Breaking pre-1.0 wire changes: Car_Position stored any Unsigned, Car_Load was an Unsigned percentage capped at 100, Car_Door_Status an empty list of Unsigned and Landing_Door_Status an Unsigned floor count; Tracking_Value and Floor_Number (an alias of it) were served and Tracking_Value took writes; the five required rows and Car_Load_Units were missing. Rows are listed in table order. Local policies: the table gives no row a W code, so writability is the implementation's choice. Elevator_Group, Group_ID and Installation_ID (shared with the Escalator through one membership model), Car_Load_Units, Car_Door_Status, Landing_Door_Status and Floor_Text are read-only over the network; the application sets the first six with LiftObject setters, which refuse an Elevator_Group of another object type, units above 65535, a door status outside BACnetDoorStatus, or a Landing_Door_Status whose size differs from Car_Door_Status, with VALUE_OUT_OF_RANGE and no change. set_car_door_status sets the car door count and resizes Landing_Door_Status to match, so the two arrays always have the same size. Car_Position, Car_Moving_Direction, Car_Load, Passenger_Alarm, Energy_Meter and Fault_Signals take writes in service and out of service, like the Escalator status family. A new Lift has one car door with status UNKNOWN and no landing doors reported, Car_Load 0.0 in PERCENT, Passenger_Alarm FALSE and no faults. Not covered: the Out_Of_Service writability of Car_Door_Status and Landing_Door_Status that item (c) of the Out_Of_Service description asks for, the unserved optional rows (Car_Door_Text, the call and door-command rows, Car_Mode, Next_Stopping_Floor, Energy_Meter_Ref, Car_Drive_Status, the deck rows), the Floor_Text size rule, Elevator_Group consistency with the group's Group_Members, intrinsic reporting, and dispatching."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#1021). Breaking pre-1.0 wire changes: Car_Position stored any Unsigned, Car_Load was an Unsigned percentage capped at 100, Car_Door_Status an empty list of Unsigned and Landing_Door_Status an Unsigned floor count; Tracking_Value and Floor_Number (an alias of it) were served and Tracking_Value took writes; the five required rows and Car_Load_Units were missing. Rows are listed in table order. Local policies: the table gives no row a W code, so writability is the implementation's choice. Elevator_Group, Group_ID and Installation_ID (shared with the Escalator through one membership model), Car_Load_Units, Energy_Meter_Ref and Floor_Text are read-only over the network; the application sets the first five with LiftObject setters, which refuse an Elevator_Group of another object type or units above 65535 with VALUE_OUT_OF_RANGE and no change. Car_Door_Status and Landing_Door_Status are application-owned in service, set with set_car_door_status and set_landing_door_status, which refuse a door status outside BACnetDoorStatus or a Landing_Door_Status whose size differs from Car_Door_Status; set_car_door_status sets the car door count and resizes Landing_Door_Status to match. While Out_Of_Service is TRUE both also take simulation writes (#1035, metadata WhenOutOfService, PICS writable); the array size isn't network-writable (Clause 12.1.5.1 leaves that to the implementation), as for the Staging arrays, so the two arrays always have the same size. An element arrives as one Enumerated or one landing-doors frame, and a one-door car's whole array as that bare element; the landing-door codec reports a well-formed floor number above 255 or door status above 32 bits as a local Error::OutOfRange, which the object maps to VALUE_OUT_OF_RANGE, as the landing-call codec does. Car_Position, Car_Moving_Direction, Car_Load, Passenger_Alarm, Energy_Meter and Fault_Signals take writes in service and out of service, like the Escalator status family. Energy_Meter_Ref (#1036, shared with the Escalator in energy_meter.rs) has the O code and no write requirement and records how the installation is metered, so it is application-owned: set_energy_meter_ref takes an Accumulator, Pulse Converter, Analog Input, Analog Value, Large Analog Value, Integer Value, Positive Integer Value or proprietary object type (128-1023, vendor meters), local or with a Device identifier, and refuses other object types or a non-Device device with VALUE_OUT_OF_RANGE (the clause names no types; this is the set whose Present_Value is a measured number in engineering units). A reference to instance 4194303 clears it. Setting a reference zeroes Energy_Meter, and a write of anything but 0.0 is refused while it is set. A new Lift has one car door with status UNKNOWN and no landing doors reported, Car_Load 0.0 in PERCENT, Passenger_Alarm FALSE, no faults and an uninitialized Energy_Meter_Ref (Accumulator 4194303, no device). Not covered: the unserved optional rows (Car_Door_Text, the call and door-command rows, Car_Mode, Next_Stopping_Floor, Car_Drive_Status, Car_Assigned_Direction, Car_Door_Zone, the deck rows), including the ones item (c) or (d) of the Out_Of_Service description would make writable, the Floor_Text size rule, Elevator_Group consistency with the group's Group_Members, that Energy_Meter_Ref names an object that exists, intrinsic reporting, and dispatching."
   },
   {
    "id": "BACNET-12-ESCALATOR-PROPERTY-SET",
-   "standard_anchor": "Clause 12.60 and Table 12-78; Clause 21 BACnetDeviceObjectReference; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
+   "standard_anchor": "Clause 12.60 and Table 12-78, including Energy_Meter and Energy_Meter_Ref; Clause 21 BACnetDeviceObjectReference; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
    "priority": "P1",
-   "requirement_summary": "The Escalator serves its Table 12-78 rows with their table datatypes. The required Elevator_Group is a BACnetObjectIdentifier naming Elevator Group instance 4194303 when no group lists the escalator, and the required Group_ID and Installation_ID are Unsigned8. All three read over ReadProperty and ReadPropertyMultiple, and a WriteProperty on any of them is refused with PROPERTY / WRITE_ACCESS_DENIED. Energy_Meter_Ref is a BACnetDeviceObjectReference. Property_List, the property metadata, RPM ALL, REQUIRED and OPTIONAL and the PICS rows list exactly the served rows.",
+   "requirement_summary": "The Escalator serves its Table 12-78 rows with their table datatypes. The required Elevator_Group is a BACnetObjectIdentifier naming Elevator Group instance 4194303 when no group lists the escalator, and the required Group_ID and Installation_ID are Unsigned8. All three read over ReadProperty and ReadPropertyMultiple, and a WriteProperty on any of them is refused with PROPERTY / WRITE_ACCESS_DENIED. Energy_Meter_Ref is a BACnetDeviceObjectReference, read-only over the network (WriteProperty is refused with WRITE_ACCESS_DENIED), and while it names an instance other than 4194303 Energy_Meter reads 0.0 and refuses any other value with VALUE_OUT_OF_RANGE. Property_List, the property metadata, RPM ALL, REQUIRED and OPTIONAL and the PICS rows list exactly the served rows.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/elevator/escalator.rs::EscalatorObject",
     "crates/bacnet-objects/src/elevator/membership.rs",
+    "crates/bacnet-objects/src/elevator/energy_meter.rs",
     "crates/bacnet-objects/src/elevator/metadata.rs"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/elevator/tests/group_membership.rs::membership_rows_are_required_and_start_ungrouped",
     "crates/bacnet-objects/src/elevator/tests/group_membership.rs::membership_setters_store_the_unsigned8_range_and_elevator_groups",
     "crates/bacnet-objects/src/elevator/metadata.rs::tests::property_metadata_escalator_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::set_energy_meter_ref_takes_local_and_remote_meter_objects",
+    "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::energy_meter_reads_zero_while_a_reference_is_set",
     "crates/bacnet-server/src/handlers/tests/read_rpm/elevator.rs::rpm_escalator_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/handlers/tests/property_metadata/elevator.rs::rpm_elevator_metadata_selectors_preserve_bytes_and_budgets",
     "crates/bacnet-server/src/pics/property_metadata_tests/elevator.rs::pics_elevator_property_metadata_is_exact"
@@ -1005,13 +1027,17 @@
     "crates/bacnet-objects/src/elevator/tests/group_membership.rs::membership_rows_are_read_only_over_the_network",
     "crates/bacnet-objects/src/elevator/metadata.rs::tests::property_metadata_escalator_domain_validation_matches_dispatch",
     "crates/bacnet-objects/src/elevator/metadata.rs::tests::property_metadata_elevator_trio_unserved_rows_stay_unknown",
-    "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_lift_and_escalator_membership_rows_read_but_refuse_writes"
+    "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::energy_meter_ref_starts_uninitialized_and_is_read_only_over_the_network",
+    "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::set_energy_meter_ref_refuses_objects_that_are_not_meters_atomically",
+    "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_lift_and_escalator_membership_rows_read_but_refuse_writes",
+    "crates/bacnet-server/src/handlers/tests/elevator_properties.rs::wp_lift_and_escalator_energy_meter_ref_is_read_only_and_holds_energy_meter_at_zero"
    ],
    "benchmarks": [],
    "public_claims": [
-    "CHANGELOG.md Unreleased Fixed entry for #1022"
+    "CHANGELOG.md Unreleased Fixed entry for #1022",
+    "CHANGELOG.md Unreleased Added entry for #1036"
    ],
-   "notes": "Split child of BACNET-12-OBJECT-MODEL (#1022). Breaking pre-1.0 wire changes: the three required rows were missing, Energy_Meter_Ref read as an empty OctetString, and Property_List now lists the rows in table order. Local policies: the table gives the three membership rows the R code, so they are application-owned and read-only over the network, set through EscalatorObject::set_elevator_group (which refuses any object type but Elevator Group with VALUE_OUT_OF_RANGE), set_group_id and set_installation_id; both identification numbers start at 0. Energy_Meter_Ref has no setter and stays uninitialized, naming Accumulator instance 4194303 with no device, so the rule that an initialized reference forces Energy_Meter to 0.0 never applies. Not covered: an initialized Energy_Meter_Ref, Elevator_Group consistency with the group's Group_Members, the event, intrinsic-reporting, audit, tag and profile rows, and dispatching."
+   "notes": "Split child of BACNET-12-OBJECT-MODEL (#1022). Breaking pre-1.0 wire changes: the three required rows were missing, Energy_Meter_Ref read as an empty OctetString, and Property_List now lists the rows in table order. Local policies: the table gives the three membership rows the R code, so they are application-owned and read-only over the network, set through EscalatorObject::set_elevator_group (which refuses any object type but Elevator Group with VALUE_OUT_OF_RANGE), set_group_id and set_installation_id; both identification numbers start at 0. Energy_Meter_Ref (#1036, shared with the Lift in energy_meter.rs) starts uninitialized, naming Accumulator instance 4194303 with no device. Table 12-78 gives it the O code with no write requirement, and it records how the installation is metered, so it stays read-only over the network and the application sets it with EscalatorObject::set_energy_meter_ref. That setter takes an Accumulator, Pulse Converter, Analog Input, Analog Value, Large Analog Value, Integer Value, Positive Integer Value or proprietary object type (128-1023, vendor meters), local or with a Device identifier, and refuses other object types or a non-Device device with VALUE_OUT_OF_RANGE; the clause names no types, so this is the set whose Present_Value is a measured number in engineering units. A reference to instance 4194303 clears it. While a reference is set, Energy_Meter holds 0.0: setting one zeroes the reading, a write of anything but 0.0 (either sign) is refused with VALUE_OUT_OF_RANGE, in service or out, and clearing the reference lets the reading restart from 0.0. Not covered: that Energy_Meter_Ref names an object that exists, Elevator_Group consistency with the group's Group_Members, the event, intrinsic-reporting, audit, tag and profile rows, and dispatching."
   },
   {
    "id": "BACNET-12-DEVICE-MAX-SEGMENTS",

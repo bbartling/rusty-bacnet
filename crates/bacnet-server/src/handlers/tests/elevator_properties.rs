@@ -1,11 +1,14 @@
 //! Elevator Group, Lift and Escalator properties over WriteProperty and
-//! ReadProperty: the Elevator Group's Table 12-76 property set (#997), the
-//! Lift's Car_Moving_Direction domain (#998), and the Lift and Escalator
-//! Table 12-77 / 12-78 rows and datatypes (#1021, #1022).
+//! ReadProperty: the Elevator Group's Table 12-76 property set (#997) and
+//! indexed Group_Members (#1034), the Lift's Car_Moving_Direction domain
+//! (#998), the Lift and Escalator Table 12-77 / 12-78 rows and datatypes
+//! (#1021, #1022), the Lift's out-of-service door simulation (#1035), and
+//! Energy_Meter_Ref (#1036).
 
 use super::*;
 use bacnet_objects::elevator::{ElevatorGroupObject, EscalatorObject, LiftObject};
-use bacnet_types::enums::{LiftCarDirection, LiftFault};
+use bacnet_types::constructed::BACnetDeviceObjectReference;
+use bacnet_types::enums::{DoorStatus, LiftCarDirection, LiftFault};
 
 fn db_with(object: Box<dyn BACnetObject>) -> (ObjectDatabase, ObjectIdentifier) {
     let oid = object.object_identifier();
@@ -22,11 +25,22 @@ fn write(
 ) -> Result<(), Error> {
     let mut property_value = BytesMut::new();
     encode_property_value(&mut property_value, &value).unwrap();
+    write_at(db, oid, property, None, &property_value)
+}
+
+/// A WriteProperty carrying `property_value` verbatim.
+fn write_at(
+    db: &mut ObjectDatabase,
+    oid: ObjectIdentifier,
+    property: PropertyIdentifier,
+    array_index: Option<u32>,
+    property_value: &[u8],
+) -> Result<(), Error> {
     let mut request = BytesMut::new();
     WritePropertyRequest {
         object_identifier: oid,
         property_identifier: property,
-        property_array_index: None,
+        property_array_index: array_index,
         property_value: property_value.to_vec(),
         priority: None,
     }
@@ -37,16 +51,25 @@ fn write(
 
 /// The raw propertyValue a ReadProperty ACK carries.
 fn read_wire(db: &ObjectDatabase, oid: ObjectIdentifier, property: PropertyIdentifier) -> Vec<u8> {
+    read_wire_at(db, oid, property, None).unwrap()
+}
+
+fn read_wire_at(
+    db: &ObjectDatabase,
+    oid: ObjectIdentifier,
+    property: PropertyIdentifier,
+    array_index: Option<u32>,
+) -> Result<Vec<u8>, Error> {
     let mut request = BytesMut::new();
     ReadPropertyRequest {
         object_identifier: oid,
         property_identifier: property,
-        property_array_index: None,
+        property_array_index: array_index,
     }
     .encode(&mut request);
     let mut response = BytesMut::new();
-    handle_read_property(db, &request, &mut response).unwrap();
-    ReadPropertyACK::decode(&response).unwrap().property_value
+    handle_read_property(db, &request, &mut response)?;
+    Ok(ReadPropertyACK::decode(&response).unwrap().property_value)
 }
 
 fn assert_property_error(result: Result<(), Error>, expected: ErrorCode, context: &str) {
@@ -320,7 +343,7 @@ fn wp_lift_rows_outside_table_12_77_and_read_only_rows() {
             &format!("{property:?}"),
         );
     }
-    // Served rows the application owns.
+    // Served rows the application owns while the lift is in service.
     for (property, value) in [
         (
             PropertyIdentifier::CAR_DOOR_STATUS,
@@ -351,4 +374,209 @@ fn wp_lift_rows_outside_table_12_77_and_read_only_rows() {
         read_wire(&db, oid, PropertyIdentifier::PROPERTY_LIST),
         before
     );
+}
+
+#[test]
+fn rp_elevator_group_group_members_takes_an_array_index() {
+    let mut group = ElevatorGroupObject::new(1, "EG-1").unwrap();
+    group.add_member(ObjectIdentifier::new(ObjectType::LIFT, 1).unwrap());
+    group.add_member(ObjectIdentifier::new(ObjectType::ESCALATOR, 4).unwrap());
+    let (mut db, oid) = db_with(Box::new(group));
+    let members = PropertyIdentifier::GROUP_MEMBERS;
+    // LIFT is object type 59 (0x0EC00000) and ESCALATOR type 58 (0x0E800000).
+    let lift = [0xC4, 0x0E, 0xC0, 0x00, 0x01];
+    let escalator = [0xC4, 0x0E, 0x80, 0x00, 0x04];
+    assert_eq!(read_wire(&db, oid, members), [lift, escalator].concat());
+    for (index, wire) in [(0, &[0x21, 0x02][..]), (1, &lift), (2, &escalator)] {
+        assert_eq!(
+            read_wire_at(&db, oid, members, Some(index)).unwrap(),
+            wire,
+            "[{index}]"
+        );
+    }
+    for index in [3, u32::MAX] {
+        assert_property_error(
+            read_wire_at(&db, oid, members, Some(index)).map(|_| ()),
+            ErrorCode::INVALID_ARRAY_INDEX,
+            &format!("Group_Members [{index}]"),
+        );
+    }
+    // Still read-only, whole or one element.
+    for index in [None, Some(1)] {
+        assert_property_error(
+            write_at(&mut db, oid, members, index, &lift),
+            ErrorCode::WRITE_ACCESS_DENIED,
+            &format!("Group_Members write {index:?}"),
+        );
+    }
+    assert_eq!(read_wire(&db, oid, members), [lift, escalator].concat());
+}
+
+#[test]
+fn wp_lift_door_arrays_take_simulation_writes_only_out_of_service() {
+    let mut lift = LiftObject::new(1, "LIFT-1", 3).unwrap();
+    lift.set_car_door_status(vec![DoorStatus::CLOSED, DoorStatus::CLOSED])
+        .unwrap();
+    let (mut db, oid) = db_with(Box::new(lift));
+    let car = PropertyIdentifier::CAR_DOOR_STATUS;
+    let landing = PropertyIdentifier::LANDING_DOOR_STATUS;
+    // OPENED (1) and SAFETY_LOCKED (8); car door 1 pairs with floor 1
+    // CLOSED, car door 2 with no landing door.
+    let doors = [0x91, 0x01, 0x91, 0x08];
+    let frames = [0x0E, 0x09, 0x01, 0x19, 0x00, 0x0F, 0x0E, 0x0F];
+    for (property, index, value) in [
+        (car, None, &doors[..]),
+        (car, Some(1), &doors[..2]),
+        (landing, None, &frames[..]),
+        (landing, Some(1), &frames[..6]),
+    ] {
+        assert_property_error(
+            write_at(&mut db, oid, property, index, value),
+            ErrorCode::WRITE_ACCESS_DENIED,
+            &format!("in service {property:?} {index:?}"),
+        );
+    }
+    assert_eq!(read_wire(&db, oid, car), [0x91, 0x00, 0x91, 0x00]);
+    assert_eq!(read_wire(&db, oid, landing), [0x0E, 0x0F, 0x0E, 0x0F]);
+
+    write(
+        &mut db,
+        oid,
+        PropertyIdentifier::OUT_OF_SERVICE,
+        PropertyValue::Boolean(true),
+    )
+    .unwrap();
+    write_at(&mut db, oid, car, None, &doors).unwrap();
+    assert_eq!(read_wire(&db, oid, car), doors);
+    // CLOSING (6) on car door 1.
+    write_at(&mut db, oid, car, Some(1), &[0x91, 0x06]).unwrap();
+    assert_eq!(read_wire(&db, oid, car), [0x91, 0x06, 0x91, 0x08]);
+    write_at(&mut db, oid, landing, None, &frames).unwrap();
+    assert_eq!(read_wire(&db, oid, landing), frames);
+    // Car door 2 now pairs with floor 3, proprietary status 1024.
+    let second = [0x0E, 0x09, 0x03, 0x1A, 0x04, 0x00, 0x0F];
+    write_at(&mut db, oid, landing, Some(2), &second).unwrap();
+    assert_eq!(read_wire_at(&db, oid, landing, Some(2)).unwrap(), second);
+
+    // Refusals leave both arrays, and their shared size, as they were.
+    let car_before = read_wire(&db, oid, car);
+    let landing_before = read_wire(&db, oid, landing);
+    for (property, index, value, expected, context) in [
+        (
+            car,
+            None,
+            &[0x91, 0x01][..],
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            "one car door for two",
+        ),
+        (
+            car,
+            Some(0),
+            &[0x21, 0x03],
+            ErrorCode::WRITE_ACCESS_DENIED,
+            "size",
+        ),
+        (
+            car,
+            Some(3),
+            &[0x91, 0x01],
+            ErrorCode::INVALID_ARRAY_INDEX,
+            "door 3",
+        ),
+        (
+            car,
+            Some(1),
+            &[0x91, 0x0A],
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            "reserved status 10",
+        ),
+        (
+            car,
+            Some(1),
+            &[0x21, 0x01],
+            ErrorCode::INVALID_DATA_TYPE,
+            "Unsigned",
+        ),
+        (
+            landing,
+            None,
+            &[0x0E, 0x0F],
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            "one element for two car doors",
+        ),
+        (
+            landing,
+            Some(1),
+            &[0x0E, 0x0A, 0x01, 0x00, 0x19, 0x00, 0x0F],
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            "floor 256",
+        ),
+        (
+            landing,
+            Some(1),
+            &[0x0E, 0x09, 0x01, 0x19, 0x0A, 0x0F],
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            "reserved landing door status 10",
+        ),
+        (
+            landing,
+            Some(1),
+            &[0x0E, 0x09, 0x01, 0x0F],
+            ErrorCode::INVALID_DATA_ENCODING,
+            "no door-status",
+        ),
+        (
+            landing,
+            Some(1),
+            &[0x0E, 0x19, 0x00, 0x09, 0x01, 0x0F],
+            ErrorCode::INVALID_DATA_ENCODING,
+            "members out of order",
+        ),
+    ] {
+        assert_property_error(
+            write_at(&mut db, oid, property, index, value),
+            expected,
+            &format!("{property:?} {index:?} {context}"),
+        );
+        assert_eq!(read_wire(&db, oid, car), car_before, "{context}");
+        assert_eq!(read_wire(&db, oid, landing), landing_before, "{context}");
+    }
+}
+
+#[test]
+fn wp_lift_and_escalator_energy_meter_ref_is_read_only_and_holds_energy_meter_at_zero() {
+    let meter = BACnetDeviceObjectReference {
+        device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap()),
+        object_identifier: ObjectIdentifier::new(ObjectType::ACCUMULATOR, 3).unwrap(),
+    };
+    let mut lift = LiftObject::new(1, "LIFT-1", 3).unwrap();
+    lift.set_energy_meter_ref(meter.clone()).unwrap();
+    let mut escalator = EscalatorObject::new(1, "ESC-1").unwrap();
+    escalator.set_energy_meter_ref(meter).unwrap();
+    let objects: [Box<dyn BACnetObject>; 2] = [Box::new(lift), Box::new(escalator)];
+    for object in objects {
+        let (mut db, oid) = db_with(object);
+        // device [0] Device 9 (type 8), object [1] Accumulator (type 23) 3.
+        let wire = [0x0C, 0x02, 0x00, 0x00, 0x09, 0x1C, 0x05, 0xC0, 0x00, 0x03];
+        let reference = PropertyIdentifier::ENERGY_METER_REF;
+        assert_eq!(read_wire(&db, oid, reference), wire, "{oid:?}");
+        for value in [&wire[..], &[0x1C, 0x05, 0xFF, 0xFF, 0xFF]] {
+            assert_property_error(
+                write_at(&mut db, oid, reference, None, value),
+                ErrorCode::WRITE_ACCESS_DENIED,
+                &format!("{oid:?} Energy_Meter_Ref {value:02X?}"),
+            );
+        }
+        assert_eq!(read_wire(&db, oid, reference), wire, "{oid:?}");
+
+        let energy = PropertyIdentifier::ENERGY_METER;
+        assert_eq!(read_wire(&db, oid, energy), [0x44, 0, 0, 0, 0], "{oid:?}");
+        assert_property_error(
+            write(&mut db, oid, energy, PropertyValue::Real(5.0)),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            &format!("{oid:?} Energy_Meter 5.0"),
+        );
+        write(&mut db, oid, energy, PropertyValue::Real(0.0)).unwrap();
+        assert_eq!(read_wire(&db, oid, energy), [0x44, 0, 0, 0, 0], "{oid:?}");
+    }
 }

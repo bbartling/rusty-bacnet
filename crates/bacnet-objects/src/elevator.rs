@@ -13,6 +13,8 @@ use std::{borrow::Cow, collections::HashSet, hash::Hash};
 use crate::common;
 use crate::traits::BACnetObject;
 
+mod doors;
+mod energy_meter;
 mod escalator;
 mod landing_calls;
 mod lift;
@@ -197,14 +199,16 @@ impl BACnetObject for ElevatorGroupObject {
             p if p == PropertyIdentifier::GROUP_ID => {
                 Ok(PropertyValue::Unsigned(u64::from(self.group_id)))
             }
-            p if p == PropertyIdentifier::GROUP_MEMBERS => {
-                let items: Vec<PropertyValue> = self
-                    .group_members
+            // A BACnetARRAY (Table 12-76): the whole array, its size at
+            // index 0, or one member.
+            p if p == PropertyIdentifier::GROUP_MEMBERS => common::read_array(
+                self.group_members
                     .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                    .collect();
-                Ok(PropertyValue::List(items))
-            }
+                    .copied()
+                    .map(PropertyValue::ObjectIdentifier)
+                    .collect(),
+                array_index,
+            ),
             p if p == PropertyIdentifier::GROUP_MODE => {
                 Ok(PropertyValue::Enumerated(self.group_mode.to_raw()))
             }
