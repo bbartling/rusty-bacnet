@@ -55,31 +55,18 @@ pub(super) fn decode_write(value: PropertyValue) -> Result<BACnetLandingCallStat
         }
         _ => return Err(common::invalid_data_type_error()),
     };
-    // The codec reports an oversized but well-formed member as PROPERTY /
-    // VALUE_OUT_OF_RANGE; every other failure is a malformed encoding.
-    let out_of_range = common::value_out_of_range_error();
-    let (status, consumed) = decode_landing_call_status(&bytes, 0).map_err(|error| {
-        if is_same_protocol_error(&error, &out_of_range) {
-            out_of_range
-        } else {
-            common::invalid_data_encoding_error()
-        }
-    })?;
+    // The codec reports a well-formed but oversized member as a local
+    // OutOfRange error; every other failure is a malformed encoding.
+    let (status, consumed) =
+        decode_landing_call_status(&bytes, 0).map_err(|error| match error {
+            Error::OutOfRange(_) => common::value_out_of_range_error(),
+            _ => common::invalid_data_encoding_error(),
+        })?;
     if consumed != bytes.len() {
         return Err(common::invalid_data_encoding_error());
     }
     validate(&status)?;
     Ok(status)
-}
-
-fn is_same_protocol_error(error: &Error, expected: &Error) -> bool {
-    matches!(
-        (error, expected),
-        (
-            Error::Protocol { class, code },
-            Error::Protocol { class: expected_class, code: expected_code },
-        ) if class == expected_class && code == expected_code
-    )
 }
 
 /// Refuse a direction outside BACnetLiftCarDirection: its named values, or

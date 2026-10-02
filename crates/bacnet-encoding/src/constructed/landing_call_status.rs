@@ -10,7 +10,7 @@
 //! plain concatenation of its elements.
 
 use bacnet_types::constructed::{BACnetLandingCallStatus, LandingCallCommand};
-use bacnet_types::enums::{ErrorClass, ErrorCode, LiftCarDirection};
+use bacnet_types::enums::LiftCarDirection;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
@@ -69,16 +69,16 @@ pub fn encode_landing_call_status_list(
 /// truncated or misplaced member, or an undecodable floor-text) fails with
 /// [`Error::Decoding`] or [`Error::BufferTooShort`]. A value whose members are
 /// all well formed, but where floor-number or destination exceeds an
-/// Unsigned8 or the direction exceeds 32 bits, fails with [`Error::Protocol`]
-/// carrying PROPERTY / VALUE_OUT_OF_RANGE. A malformed member anywhere in the
-/// value takes precedence over an oversized one. Within 32 bits the direction
-/// is kept as received, reserved and proprietary values included, for the
-/// receiver to judge.
+/// Unsigned8 or the direction exceeds 32 bits, fails with
+/// [`Error::OutOfRange`] naming the first oversized member. A malformed member
+/// anywhere in the value takes precedence over an oversized one. Within 32
+/// bits the direction is kept as received, reserved and proprietary values
+/// included, for the receiver to judge.
 pub fn decode_landing_call_status(
     data: &[u8],
     offset: usize,
 ) -> Result<(BACnetLandingCallStatus, usize), Error> {
-    let mut in_range = true;
+    let mut oversized = None;
 
     let (tag, content) = tags::decode_tag(data, offset)?;
     if !tag.is_context(0) {
@@ -88,19 +88,31 @@ pub fn decode_landing_call_status(
         ));
     }
     let (floor, offset) = member_content(data, content, tag.length)?;
-    let floor_number = narrow(unsigned_member(floor, content)?, &mut in_range);
+    let floor_number = narrow(
+        unsigned_member(floor, content)?,
+        "floor-number [0] exceeds an Unsigned8",
+        &mut oversized,
+    );
 
     let (tag, content) = tags::decode_tag(data, offset)?;
     let (command, mut offset) = if tag.is_context(1) {
         let (raw, end) = member_content(data, content, tag.length)?;
-        let direction: u32 = narrow(unsigned_member(raw, content)?, &mut in_range);
+        let direction: u32 = narrow(
+            unsigned_member(raw, content)?,
+            "direction [1] exceeds 32 bits",
+            &mut oversized,
+        );
         (
             LandingCallCommand::Direction(LiftCarDirection::from_raw(direction)),
             end,
         )
     } else if tag.is_context(2) {
         let (raw, end) = member_content(data, content, tag.length)?;
-        let destination = narrow(unsigned_member(raw, content)?, &mut in_range);
+        let destination = narrow(
+            unsigned_member(raw, content)?,
+            "destination [2] exceeds an Unsigned8",
+            &mut oversized,
+        );
         (LandingCallCommand::Destination(destination), end)
     } else {
         return Err(Error::decoding(
@@ -119,8 +131,8 @@ pub fn decode_landing_call_status(
         }
     }
 
-    if !in_range {
-        return Err(value_out_of_range_error());
+    if let Some(member) = oversized {
+        return Err(Error::OutOfRange(format!("landing call status {member}")));
     }
     Ok((
         BACnetLandingCallStatus {
@@ -130,14 +142,6 @@ pub fn decode_landing_call_status(
         },
         offset,
     ))
-}
-
-/// The error for a well-formed value with an oversized member.
-fn value_out_of_range_error() -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
-    }
 }
 
 /// Decode a complete BACnetLIST of `BACnetLandingCallStatus`.
@@ -176,13 +180,18 @@ fn unsigned_member(content: &[u8], at: usize) -> Result<Option<u64>, Error> {
     ))
 }
 
-/// Narrow a decoded Unsigned to its member type, clearing `in_range` (and
-/// yielding a placeholder) when it doesn't fit.
-fn narrow<T: TryFrom<u64> + Default>(value: Option<u64>, in_range: &mut bool) -> T {
+/// Narrow a decoded Unsigned to its member type. When it doesn't fit, record
+/// `what` as the first oversized member (if none is recorded yet) and yield a
+/// placeholder, so decoding can still check the rest of the structure.
+fn narrow<T: TryFrom<u64> + Default>(
+    value: Option<u64>,
+    what: &'static str,
+    oversized: &mut Option<&'static str>,
+) -> T {
     match value.map(T::try_from) {
         Some(Ok(value)) => value,
         _ => {
-            *in_range = false;
+            oversized.get_or_insert(what);
             T::default()
         }
     }

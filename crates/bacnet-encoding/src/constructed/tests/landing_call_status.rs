@@ -1,6 +1,6 @@
 use super::*;
 use bacnet_types::constructed::{BACnetLandingCallStatus, LandingCallCommand};
-use bacnet_types::enums::{ErrorClass, ErrorCode, LiftCarDirection};
+use bacnet_types::enums::LiftCarDirection;
 
 fn call(
     floor_number: u8,
@@ -14,11 +14,11 @@ fn call(
     }
 }
 
-/// The codec's error for a well-formed value with an oversized member.
+/// The codec's error for a well-formed value with an oversized member. It
+/// is a local range error, never a Protocol error that would read as a
+/// remote device's Error-PDU.
 fn is_out_of_range(error: &Error) -> bool {
-    matches!(error, Error::Protocol { class, code }
-        if *class == ErrorClass::PROPERTY.to_raw() as u32
-            && *code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32)
+    matches!(error, Error::OutOfRange(_))
 }
 
 fn encode(value: &BACnetLandingCallStatus) -> Vec<u8> {
@@ -148,30 +148,46 @@ fn landing_call_status_rejects_malformed_members() {
 fn landing_call_status_reports_oversized_members_as_range_errors() {
     // Well-formed members whose values don't fit their types are a range
     // error, distinct from a malformed encoding.
-    let cases: &[(&str, &[u8])] = &[
-        ("floor 256", &[0x0A, 0x01, 0x00, 0x19, 0x03]),
-        ("floor 300", &[0x0A, 0x01, 0x2C, 0x19, 0x03]),
+    // Each case names the member the error must report.
+    let cases: &[(&str, &[u8], &str)] = &[
+        ("floor 256", &[0x0A, 0x01, 0x00, 0x19, 0x03], "floor-number"),
+        ("floor 300", &[0x0A, 0x01, 0x2C, 0x19, 0x03], "floor-number"),
         (
             "floor 300 with floor-text",
             &[0x0A, 0x01, 0x2C, 0x19, 0x03, 0x3A, 0x00, 0x4C],
+            "floor-number",
         ),
-        ("destination 256", &[0x09, 0x01, 0x2A, 0x01, 0x00]),
+        (
+            "floor 300 and destination 256",
+            &[0x0A, 0x01, 0x2C, 0x2A, 0x01, 0x00],
+            "floor-number",
+        ),
+        (
+            "destination 256",
+            &[0x09, 0x01, 0x2A, 0x01, 0x00],
+            "destination",
+        ),
         (
             "direction 2^32",
             &[0x09, 0x01, 0x1D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00],
+            "direction",
         ),
         (
             "direction wider than 64 bits",
             &[
                 0x09, 0x01, 0x1D, 0x09, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             ],
+            "direction",
         ),
     ];
-    for (what, data) in cases {
-        let error = decode_landing_call_status(data, 0).expect_err(what);
-        assert!(is_out_of_range(&error), "{what}: {error:?}");
-        let error = decode_landing_call_status_list(data).expect_err(what);
-        assert!(is_out_of_range(&error), "{what} as a list: {error:?}");
+    for (what, data, member) in cases {
+        for error in [
+            decode_landing_call_status(data, 0).expect_err(what),
+            decode_landing_call_status_list(data).expect_err(what),
+        ] {
+            assert!(is_out_of_range(&error), "{what}: {error:?}");
+            assert!(error.to_string().contains(member), "{what}: {error}");
+        }
     }
     // A list fails on its first oversized element.
     let error =
