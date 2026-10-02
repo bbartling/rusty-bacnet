@@ -317,7 +317,7 @@ fn device_object_property_references_decode_one_list_element_at_a_time() {
     };
     let mut list = BytesMut::new();
     for reference in [&indexed, &full] {
-        encode_dopr_body(&mut list, reference);
+        encode_device_object_property_reference(&mut list, reference);
     }
     let (first, next) = decode_device_object_property_reference(&list, 0).unwrap();
     assert_eq!(first, indexed);

@@ -197,12 +197,15 @@ fn reference_list_refusals_leave_it_unchanged() {
     // [3] Device 9: an object in another device.
     remote.extend([0x3C, 0x02, 0x00, 0x00, 0x09]);
     let local_then_remote = [encoded(&[a()]), remote.clone()].concat();
+    // A refusal of one member names its position in the list, from 1
+    // (#1121); a refusal of the whole value names none.
     let cases = [
         (
             None,
             PropertyValue::ApplicationData(local_then_remote),
             ErrorClass::PROPERTY,
             ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+            Some(2),
             "a member in another device",
         ),
         (
@@ -210,20 +213,26 @@ fn reference_list_refusals_leave_it_unchanged() {
             PropertyValue::ApplicationData(vec![0x44, 0x41, 0xA8, 0, 0]),
             ErrorClass::PROPERTY,
             ErrorCode::INVALID_DATA_TYPE,
+            Some(1),
             "an application Real",
         ),
         (
             None,
-            PropertyValue::ApplicationData(encoded(&[a()])[..4].to_vec()),
+            PropertyValue::List(vec![
+                PropertyValue::ApplicationData(encoded(&[a()])),
+                PropertyValue::ApplicationData(encoded(&[b()])[..4].to_vec()),
+            ]),
             ErrorClass::PROPERTY,
             ErrorCode::INVALID_DATA_ENCODING,
-            "a truncated member",
+            Some(2),
+            "a truncated member in the second element",
         ),
         (
             None,
             PropertyValue::Real(1.0),
             ErrorClass::PROPERTY,
             ErrorCode::INVALID_DATA_TYPE,
+            None,
             "a Real value",
         ),
         (
@@ -231,6 +240,7 @@ fn reference_list_refusals_leave_it_unchanged() {
             PropertyValue::ApplicationData(encoded(&[b()])),
             ErrorClass::PROPERTY,
             ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+            None,
             "an array index",
         ),
         (
@@ -238,16 +248,19 @@ fn reference_list_refusals_leave_it_unchanged() {
             PropertyValue::ApplicationData(encoded(&vec![b(); targets::MAX_REFERENCES + 1])),
             ErrorClass::RESOURCES,
             ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+            Some(1025),
             "past the cap",
         ),
     ];
-    for (index, value, class, code, what) in cases {
-        assert_code(
-            sched.write_property(P::LIST_OF_OBJECT_PROPERTY_REFERENCES, index, value, None),
-            class,
-            code,
-            what,
-        );
+    for (index, value, class, code, member, what) in cases {
+        let result =
+            sched.write_property(P::LIST_OF_OBJECT_PROPERTY_REFERENCES, index, value, None);
+        match member {
+            Some(position) => {
+                common::assert_list_element_refused(result, class, code, position, what)
+            }
+            None => assert_code(result, class, code, what),
+        }
         assert_eq!(sched.list_of_object_property_references, before, "{what}");
     }
     // The local setters share the cap.

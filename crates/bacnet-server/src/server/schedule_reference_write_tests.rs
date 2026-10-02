@@ -22,20 +22,20 @@ use bacnet_objects::binary::BinaryValueObject;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ObjectType, Reliability};
 
-const LIST: PropertyIdentifier = PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES;
+pub(super) const LIST: PropertyIdentifier = PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES;
 const PRIORITY: PropertyIdentifier = PropertyIdentifier::PRIORITY_FOR_WRITING;
 const WEEKLY: PropertyIdentifier = PropertyIdentifier::WEEKLY_SCHEDULE;
 
-fn av2() -> ObjectIdentifier {
+pub(super) fn av2() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap()
 }
 
-fn bv2() -> ObjectIdentifier {
+pub(super) fn bv2() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::BINARY_VALUE, 2).unwrap()
 }
 
 /// The encoded list of references to each object's Present_Value.
-fn present_values(objects: &[ObjectIdentifier]) -> Vec<u8> {
+pub(super) fn present_values(objects: &[ObjectIdentifier]) -> Vec<u8> {
     let mut bytes = BytesMut::new();
     for object in objects {
         encode_object_property_reference(
@@ -64,7 +64,7 @@ async fn start() -> Harness {
 }
 
 /// One slot of a target's Priority_Array.
-async fn slot(h: &Harness, oid: ObjectIdentifier, priority: u32) -> PropertyValue {
+pub(super) async fn slot(h: &Harness, oid: ObjectIdentifier, priority: u32) -> PropertyValue {
     h.server
         .database()
         .read()
