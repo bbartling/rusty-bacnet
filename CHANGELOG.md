@@ -621,15 +621,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   List_Of_Object_Property_References. Those two are now split into their
   elements, so By Position counts destinations and references. A list the
   server can't split returns SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-  and ReadProperty still reads it whole. That covers a vendor list held framed
-  and the standalone Device's COV subscription lists, whose live contents only
-  ReadProperty sees. An array index on a property that doesn't exist now
+  and ReadProperty still reads it whole. That covers a vendor list held framed;
+  the Device's COV subscription lists are paged since #1046, below. An array
+  index on a property that doesn't exist now
   reports UNKNOWN_PROPERTY instead of PROPERTY_IS_NOT_AN_ARRAY. By Sequence
   Number or By Time on a target that isn't a list now reports
   PROPERTY_IS_NOT_A_LIST instead of the range-type error. Log_Buffer reads and
   Calendar's Date_List are unchanged. The new
   `bacnet_encoding::constructed::decode_device_object_property_reference`
   decodes one element of a BACnetLIST of BACnetDeviceObjectPropertyReference.
+
+- ReadRange on the Device's Active_COV_Subscriptions and
+  Active_COV_Multiple_Subscriptions now pages the live subscriptions (#1046).
+  A running server answered SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+  because ReadRange read the Device object's empty placeholder while
+  ReadProperty read the server's COV table. ReadRange now reads through the
+  same Device view as ReadProperty, samples the COV table once per request
+  (after the database lock, in the server's lock order) and splits each list
+  into its BACnetCOVSubscription or BACnetCOVMultipleSubscription elements.
+  A page's items joined in order are a run of the ReadProperty value, also when
+  the byte cap shortens the page, and subscriptions that change during a
+  request don't tear it. The standalone `handle_read_range` pages the Device
+  object's empty lists as no items, as standalone `handle_read_property` reads
+  them. The new `bacnet_encoding::constructed::decode_cov_subscription` and
+  `decode_cov_multiple_subscription` decode one element of each list.
 
 - **Breaking Rust `subscribe_multiple` argument:** timestamped COV-multiple
   history that one notification cannot carry now goes out in several

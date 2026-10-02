@@ -57,8 +57,8 @@ pub use calendar::{
     encode_calendar_entry_list, encode_date_range,
 };
 pub use cov_subscription::{
-    encode_cov_multiple_subscription, encode_cov_multiple_subscription_list,
-    encode_cov_subscription, encode_cov_subscription_list,
+    decode_cov_multiple_subscription, decode_cov_subscription, encode_cov_multiple_subscription,
+    encode_cov_multiple_subscription_list, encode_cov_subscription, encode_cov_subscription_list,
 };
 pub use event_parameter::{decode_event_parameter, encode_event_parameter};
 pub use fault_parameter::{decode_fault_parameters, encode_fault_parameters};
