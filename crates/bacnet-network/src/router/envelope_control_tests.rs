@@ -2,7 +2,7 @@
 //!
 //! Clause map (ASHRAE 135-2020, supplied PDF): 6.2 (envelope rules), 6.4
 //! (per-message data formats), 6.2.4/6.5.4 (proprietary opacity in relay),
-//! 6.4.14/6.4.15 + 6.6.3.12 (What-Is/Number-Is non-routed restrictions).
+//! 6.4.19/6.4.20 (What-Is/Number-Is non-routed restrictions).
 //!
 //! Shares [`super::envelope_harness`] with the discovery module.
 
