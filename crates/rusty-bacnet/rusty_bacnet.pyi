@@ -2359,6 +2359,19 @@ class CovCounters(TypedDict):
     timed_changes_dropped: int
     untimed_references_oversized: int
 
+class CovPolicy(TypedDict, total=False):
+    """BACnetServer(cov_policy=...) COV limits, checked at construction; omitted keys keep their defaults."""
+    max_subscriptions_global: int
+    max_subscriptions_per_peer: int
+    reserved_capacity: int
+    reserved_peers: list[bytes]
+    reserved_recipients: list[tuple[int | None, bytes]]
+    allow_indefinite_subscriptions: bool
+    max_indefinite_per_peer: int
+    max_notifications_per_event: int
+    max_notification_bytes_per_event: int
+    max_confirmed_in_flight_per_peer: int
+
 class DccOutcomeCounters(TypedDict):
     """Independent u64 lifetime totals, saturating at 2**64-1; not an audit log."""
     accepted_total: int
@@ -2467,6 +2480,7 @@ class BACnetServer:
         event_information_max_service_ack_bytes: int = 16384,
         sc_device_uuid: Optional[bytes | bytearray] = None,
         registered_network_port: Optional[int] = None,
+        cov_policy: CovPolicy | None = None,
     ) -> None: ...
 
     # --- Analog objects ---

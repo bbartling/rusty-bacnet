@@ -42,6 +42,8 @@ pub use policy::*;
 #[cfg(test)]
 mod identity_tests;
 #[cfg(test)]
+mod policy_tests;
+#[cfg(test)]
 mod tests;
 
 /// Largest B/IP APDU; the default history bound until a server sets its own.
