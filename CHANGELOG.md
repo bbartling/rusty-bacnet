@@ -155,6 +155,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   address back, the benchmarks hub-restart test retries on a lost bind instead
   of probing the old address, and the BBMD several-own-rows test reruns on a
   lost port. The macOS limit of the BBMD probe retry is documented (#1068).
+- Test-only: the BBMD restart tests, and the endpoint and benchmarks tests that
+  bind a stopped node's address to prove it was released, run again on fresh
+  ports when another socket takes the port between the stop and the bind. A
+  node that really keeps its port fails every run. A restart rebinds a port the
+  OS chose, without SO_REUSEADDR, and every OS refuses that bind while another
+  socket holds the port, so the macOS limit of the BBMD probe retry does not
+  apply to it (#1070).
 - The workspace uses Cargo's `resolver = "3"`, so updating the lock file
   prefers dependency versions that support the declared MSRV (1.93). Feature
   resolution is unchanged, and the MSRV CI job still checks the lock file

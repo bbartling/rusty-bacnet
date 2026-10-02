@@ -244,30 +244,34 @@ async fn files_der_ca_and_key_match_fail_before_bind_or_dial() {
 async fn non_sc_bip_starts_without_credentials_and_panic_reaps_child() {
     use futures_util::FutureExt;
     use std::panic::AssertUnwindSafe;
-    let files = Files::new();
-    let mut cmd = Command::new(DEVICE);
-    cmd.args([
-        "--interface=127.0.0.1",
-        "--broadcast=127.0.0.1",
-        "--port=0",
-        "--objects=1",
-    ]);
-    let mut process = Process::start(&mut cmd, &files);
-    let line = process.ready("BIP device ").await;
-    let mac = line.split_whitespace().nth(2).unwrap();
-    let bytes: Vec<u8> = mac
-        .split(':')
-        .map(|v| u8::from_str_radix(v, 16).unwrap())
-        .collect();
-    let port = u16::from_be_bytes([bytes[4], bytes[5]]);
-    assert!(std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_err());
-    let result = AssertUnwindSafe(async move {
-        let _owned = process;
-        panic!("injected child cleanup failure");
+    // The closing release probe can lose the port to another process (#1070).
+    crate::port_retry::rerun_on_lost_port(async || {
+        let files = Files::new();
+        let mut cmd = Command::new(DEVICE);
+        cmd.args([
+            "--interface=127.0.0.1",
+            "--broadcast=127.0.0.1",
+            "--port=0",
+            "--objects=1",
+        ]);
+        let mut process = Process::start(&mut cmd, &files);
+        let line = process.ready("BIP device ").await;
+        let mac = line.split_whitespace().nth(2).unwrap();
+        let bytes: Vec<u8> = mac
+            .split(':')
+            .map(|v| u8::from_str_radix(v, 16).unwrap())
+            .collect();
+        let port = u16::from_be_bytes([bytes[4], bytes[5]]);
+        assert!(std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_err());
+        let result = AssertUnwindSafe(async move {
+            let _owned = process;
+            panic!("injected child cleanup failure");
+        })
+        .catch_unwind()
+        .await;
+        assert!(result.is_err());
+        // UDP has no TIME_WAIT: a successful bind proves child teardown, not a sleep.
+        std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, port)).map(drop)
     })
-    .catch_unwind()
     .await;
-    assert!(result.is_err());
-    // UDP has no TIME_WAIT: a successful bind proves child teardown, not a sleep.
-    std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, port)).unwrap();
 }
