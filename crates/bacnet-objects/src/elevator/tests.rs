@@ -2,6 +2,7 @@ use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EscalatorMode, EscalatorOperationDirection};
 
 mod escalator_status_writability;
+mod landing_calls;
 
 /// Escalator write-domain tests run with Out_Of_Service enabled so they do not
 /// set policy for writes while the object is in service.
@@ -125,11 +126,12 @@ fn elevator_group_add_members() {
 
 #[test]
 fn elevator_group_read_landing_calls() {
+    // An empty BACnetLIST, not a count (#980).
     let eg = ElevatorGroupObject::new(1, "EG-1").unwrap();
     assert_eq!(
         eg.read_property(PropertyIdentifier::LANDING_CALLS, None)
             .unwrap(),
-        PropertyValue::Unsigned(0)
+        PropertyValue::List(vec![])
     );
 }
 

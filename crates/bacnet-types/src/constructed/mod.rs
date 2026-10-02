@@ -19,6 +19,8 @@ pub use audit::{
     BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification,
     BACnetObjectSelector,
 };
+mod lift;
+pub use lift::{BACnetLandingCallStatus, LandingCallCommand};
 mod staging;
 pub use staging::BACnetStageLimitValue;
 
@@ -539,19 +541,6 @@ pub struct BACnetAssignedAccessRights {
     pub assigned_access_rights: ObjectIdentifier,
     /// Whether these access rights are currently enabled.
     pub enable: bool,
-}
-
-// ---------------------------------------------------------------------------
-// BACnetAssignedLandingCalls (Clause 12 -- used by ElevatorGroup)
-// ---------------------------------------------------------------------------
-
-/// BACnet Assigned Landing Calls for elevator group.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BACnetAssignedLandingCalls {
-    /// The floor number for this landing call.
-    pub floor_number: u8,
-    /// Direction: 0=up, 1=down, 2=unknown.
-    pub direction: u32,
 }
 
 // ---------------------------------------------------------------------------
