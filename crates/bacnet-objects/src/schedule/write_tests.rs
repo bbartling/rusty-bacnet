@@ -7,6 +7,9 @@ use bacnet_types::constructed::SpecialEventPeriod;
 
 type P = PropertyIdentifier;
 
+/// The documented cap on Exception_Schedule events.
+const EXCEPTION_CAP: usize = 1024;
+
 /// A refused write: array index, value, then the error class and code it
 /// draws, and what the case is.
 type Refusal<V> = (Option<u32>, V, ErrorClass, ErrorCode, &'static str);
@@ -387,7 +390,7 @@ fn exception_schedule_index_zero_resizes_with_empty_events() {
     );
     for (value, class, code) in [
         (
-            PropertyValue::Unsigned(writes::MAX_EXCEPTIONS as u64 + 1),
+            PropertyValue::Unsigned(EXCEPTION_CAP as u64 + 1),
             ErrorClass::RESOURCES,
             ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
         ),
@@ -428,7 +431,7 @@ fn exception_schedule_refused_writes_leave_it_unchanged() {
     );
     // Month 15 is outside a calendar date's range.
     let month_15 = event(&[0x0E, 0x0C, 126, 15, 1, 0xFF, 0x0F], &[], 3);
-    let too_many = christmas().repeat(writes::MAX_EXCEPTIONS + 1);
+    let too_many = christmas().repeat(EXCEPTION_CAP + 1);
     let cases: &[Refusal<Vec<u8>>] = &[
         (
             Some(1),
@@ -519,7 +522,7 @@ fn add_exception_refuses_an_event_past_the_cap() {
         list_of_time_values: vec![],
         event_priority: 8,
     };
-    for _ in 0..writes::MAX_EXCEPTIONS {
+    for _ in 0..EXCEPTION_CAP {
         sched.add_exception(event()).unwrap();
     }
     assert_code(
