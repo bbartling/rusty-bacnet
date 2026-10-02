@@ -63,7 +63,7 @@ impl PyEndpointClient {
         let handle = self.inner.clone();
         let oid = object_id.to_rust();
         let pid = property_id.to_rust();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let ack = handle
                 .read_property(&mac, oid, pid, array_index)
@@ -118,12 +118,12 @@ impl PyEndpointClient {
             .map_err(invalid)?;
         let mac = parse_address(&address)?;
         let handle = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             handle
                 .write_property(&mac, request, commandability)
                 .await
                 .map_err(to_py_err)?;
-            Ok(Python::attach(|py| py.None()))
+            crate::py_async::attach(|py| Ok(py.None()))
         })
     }
 
@@ -150,13 +150,13 @@ impl PyEndpointClient {
         };
         let specs = request.list_of_read_access_specs;
         let handle = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let ack = handle
                 .read_property_multiple(&mac, specs)
                 .await
                 .map_err(to_py_err)?;
-            Python::attach(|py| crate::types::rpm_ack_to_py(py, ack))
+            crate::py_async::attach(|py| crate::types::rpm_ack_to_py(py, ack))
         })
     }
 
@@ -185,7 +185,7 @@ impl PyEndpointClient {
             count,
         )?;
         let handle = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let ack = handle
                 .read_range(
@@ -197,7 +197,7 @@ impl PyEndpointClient {
                 )
                 .await
                 .map_err(to_py_err)?;
-            Python::attach(|py| crate::read_range::ack_to_dict(py, ack))
+            crate::py_async::attach(|py| crate::read_range::ack_to_dict(py, ack))
         })
     }
 

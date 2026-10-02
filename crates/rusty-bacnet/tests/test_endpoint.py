@@ -41,10 +41,14 @@ from rusty_bacnet import (
 )
 
 
-def free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+def address_port(address: str) -> int:
+    """The port of a started endpoint's "host:port" local address.
+
+    Endpoints bind port 0 and report the port they got: B/IP binds the
+    wildcard address, so a port probed free beforehand can be taken by the
+    time it binds (#993).
+    """
+    return int(address.rsplit(":", 1)[1])
 
 
 def bip_kwargs(**overrides):
@@ -88,41 +92,41 @@ class BipConstructorTests(unittest.TestCase):
 
     def test_queue_capacity_zero_rejected(self):
         with self.assertRaisesRegex(ValueError, "queue_capacity"):
-            BipEndpoint(**bip_kwargs(port=free_port(), queue_capacity=0))
+            BipEndpoint(**bip_kwargs(port=0, queue_capacity=0))
 
     def test_invalid_interface_rejected_before_bind(self):
         with self.assertRaises(ValueError):
-            BipEndpoint(**bip_kwargs(port=free_port(), interface="not-an-ip"))
+            BipEndpoint(**bip_kwargs(port=0, interface="not-an-ip"))
 
     def test_invalid_broadcast_rejected_before_bind(self):
         with self.assertRaises(ValueError):
-            BipEndpoint(**bip_kwargs(port=free_port(), broadcast_address="bogus"))
+            BipEndpoint(**bip_kwargs(port=0, broadcast_address="bogus"))
 
     def test_invalid_instance_rejected(self):
         with self.assertRaises(ValueError):
-            BipEndpoint(**bip_kwargs(port=free_port(), device_instance=4_194_304))
+            BipEndpoint(**bip_kwargs(port=0, device_instance=4_194_304))
 
     def test_invalid_max_apdu_rejected(self):
         with self.assertRaisesRegex(ValueError, "max-APDU|APDU|apdu|invalid"):
-            BipEndpoint(**bip_kwargs(port=free_port(), max_apdu=999))
+            BipEndpoint(**bip_kwargs(port=0, max_apdu=999))
 
     def test_bad_uuid_length_rejected(self):
         with self.assertRaisesRegex(ValueError, "16 bytes"):
-            BipEndpoint(**bip_kwargs(port=free_port(), device_uuid=b"\x01\x02"))
+            BipEndpoint(**bip_kwargs(port=0, device_uuid=b"\x01\x02"))
 
     def test_negative_vendor_raises_overflow(self):
         with self.assertRaises(OverflowError):
-            BipEndpoint(**bip_kwargs(port=free_port(), vendor_id=-1))
+            BipEndpoint(**bip_kwargs(port=0, vendor_id=-1))
 
     def test_default_vendor_preserves_compat_through_single_identity(self):
         # Old BACnetServer hardcoded 555; the endpoint default preserves it
         # through the single DeviceIdentity (no second identity).
-        endpoint = BipEndpoint(device_instance=1234, port=free_port())
+        endpoint = BipEndpoint(device_instance=1234, port=0)
         self.assertEqual(endpoint.vendor_id, 555)
         self.assertEqual(endpoint.device_instance, 1234)
 
     def test_pending_registrations_available_before_start(self):
-        endpoint = BipEndpoint(**bip_kwargs(port=free_port()))
+        endpoint = BipEndpoint(**bip_kwargs(port=0))
         pending = getattr(endpoint, "_pending_registration_count")
         self.assertEqual(pending(), 0)
         endpoint.add_analog_input(instance=1, name="Zone", present_value=1.0)
@@ -222,12 +226,12 @@ class ScConstructorTests(unittest.TestCase):
 
 class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_concurrent_start_context_and_none_cleanup(self):
-        port = free_port()
-        endpoint = BipEndpoint(**bip_kwargs(port=port))
+        endpoint = BipEndpoint(**bip_kwargs(port=0))
         results = await asyncio.gather(endpoint.start(), endpoint.start(), return_exceptions=True)
         self.assertEqual(sum(result is None for result in results), 1)
         self.assertEqual(sum(isinstance(result, BacnetError) for result in results), 1)
         try:
+            port = address_port(await endpoint.local_address())
             self.assertIs(await endpoint.__aenter__(), endpoint)
             self.assertTrue((await endpoint.status())["is_running"])
         finally:
@@ -240,7 +244,7 @@ class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await endpoint.close())
 
     async def test_context_exit_preserves_body_exception(self):
-        endpoint = BipEndpoint(**bip_kwargs(port=free_port()))
+        endpoint = BipEndpoint(**bip_kwargs(port=0))
         with self.assertRaisesRegex(ValueError, "body failure"):
             async with endpoint:
                 raise ValueError("body failure")
@@ -248,7 +252,7 @@ class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await endpoint.status()
 
     async def test_pre_start_accessors_fail_and_close_idempotent(self):
-        endpoint = BipEndpoint(**bip_kwargs(port=free_port()))
+        endpoint = BipEndpoint(**bip_kwargs(port=0))
         with self.assertRaisesRegex(RuntimeError, "not started"):
             await endpoint.status()
         with self.assertRaisesRegex(RuntimeError, "not started"):
@@ -262,7 +266,7 @@ class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(endpoint.close(), 5)
 
     async def test_second_start_raises_without_rebinding(self):
-        endpoint = BipEndpoint(**bip_kwargs(port=free_port()))
+        endpoint = BipEndpoint(**bip_kwargs(port=0))
         await asyncio.wait_for(endpoint.start(), 10)
         try:
             with self.assertRaises(BacnetError):
@@ -271,7 +275,7 @@ class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(endpoint.close(), 5)
 
     async def test_add_after_start_rejected_and_pending_drained(self):
-        endpoint = BipEndpoint(**bip_kwargs(port=free_port()))
+        endpoint = BipEndpoint(**bip_kwargs(port=0))
         endpoint.add_analog_input(instance=1, name="Zone", present_value=1.0)
         pending = getattr(endpoint, "_pending_registration_count")
         self.assertEqual(pending(), 1)
@@ -284,7 +288,7 @@ class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(endpoint.close(), 5)
 
     async def test_context_manager_double_exit_safe(self):
-        endpoint = BipEndpoint(**bip_kwargs(port=free_port()))
+        endpoint = BipEndpoint(**bip_kwargs(port=0))
         async with endpoint:
             status = await endpoint.status()
             self.assertTrue(status["is_running"])
@@ -295,7 +299,7 @@ class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_status_snapshot_keys_and_redaction(self):
         endpoint = BipEndpoint(
-            **bip_kwargs(port=free_port(), device_instance=5555, vendor_id=99)
+            **bip_kwargs(port=0, device_instance=5555, vendor_id=99)
         )
         endpoint.add_analog_input(instance=1, name="Zone", present_value=3.0)
         await asyncio.wait_for(endpoint.start(), 10)
@@ -334,22 +338,19 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
     """One endpoint receives + initiates; single-bind assertion via conflict."""
 
     async def test_single_transport_receives_and_initiates(self):
-        port_a, port_b = free_port(), free_port()
-        self.assertNotEqual(port_a, port_b)
         first = BipEndpoint(
-            **bip_kwargs(port=port_a, device_instance=1001, device_name="Endpoint A")
+            **bip_kwargs(port=0, device_instance=1001, device_name="Endpoint A")
         )
         first.add_analog_input(instance=1, name="A-Temp", units=62, present_value=21.5)
         second = BipEndpoint(
-            **bip_kwargs(port=port_b, device_instance=1002, device_name="Endpoint B")
+            **bip_kwargs(port=0, device_instance=1002, device_name="Endpoint B")
         )
         second.add_analog_input(instance=1, name="B-Temp", units=62, present_value=99.0)
         async with first:
             async with second:
                 addr_a = await first.local_address()
                 addr_b = await second.local_address()
-                self.assertIn(str(port_a), addr_a)
-                self.assertIn(str(port_b), addr_b)
+                self.assertNotEqual(addr_a, addr_b)
                 self.assertIsNone(await first.broadcast_i_am())
                 first_client = await first.client()
                 second_client = await second.client()
@@ -357,7 +358,7 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                 a_reads_b, b_reads_a = await asyncio.gather(
                     asyncio.wait_for(
                         first_client.read_property(
-                            f"127.0.0.1:{port_b}",
+                            addr_b,
                             oid,
                             PropertyIdentifier.PRESENT_VALUE,
                         ),
@@ -365,7 +366,7 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                     ),
                     asyncio.wait_for(
                         second_client.read_property(
-                            f"127.0.0.1:{port_a}",
+                            addr_a,
                             oid,
                             PropertyIdentifier.PRESENT_VALUE,
                         ),
@@ -429,14 +430,13 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(await first.close())
 
     async def test_identity_agreement_iam_device(self):
-        port_a, port_b = free_port(), free_port()
         first = BipEndpoint(
-            **bip_kwargs(port=port_a, device_instance=3001, vendor_id=77)
+            **bip_kwargs(port=0, device_instance=3001, vendor_id=77)
         )
         first.add_analog_input(instance=1, name="A", present_value=1.0)
         second = BipEndpoint(
             **bip_kwargs(
-                port=port_b,
+                port=0,
                 device_instance=3002,
                 device_name="Identity B",
                 vendor_id=78,
@@ -445,17 +445,18 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
         second.add_analog_input(instance=7, name="B-Point", units=62, present_value=42.0)
         async with first:
             async with second:
+                addr_b = await second.local_address()
                 client = await first.client()
                 device_b = ObjectIdentifier(ObjectType.DEVICE, 3002)
                 name = await asyncio.wait_for(
                     client.read_property(
-                        f"127.0.0.1:{port_b}", device_b, PropertyIdentifier.OBJECT_NAME
+                        addr_b, device_b, PropertyIdentifier.OBJECT_NAME
                     ),
                     10,
                 )
                 vendor = await asyncio.wait_for(
                     client.read_property(
-                        f"127.0.0.1:{port_b}",
+                        addr_b,
                         device_b,
                         PropertyIdentifier.VENDOR_IDENTIFIER,
                     ),
@@ -466,7 +467,7 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                 point = ObjectIdentifier(ObjectType.ANALOG_INPUT, 7)
                 present = await asyncio.wait_for(
                     client.read_property(
-                        f"127.0.0.1:{port_b}",
+                        addr_b,
                         point,
                         PropertyIdentifier.PRESENT_VALUE,
                     ),
@@ -477,13 +478,14 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(second.broadcast_i_am(), 10)
 
     async def test_concurrent_client_server_use(self):
-        port_a, port_b = free_port(), free_port()
-        first = BipEndpoint(**bip_kwargs(port=port_a, device_instance=4001))
+        first = BipEndpoint(**bip_kwargs(port=0, device_instance=4001))
         first.add_analog_input(instance=1, name="A", present_value=5.0)
-        second = BipEndpoint(**bip_kwargs(port=port_b, device_instance=4002))
+        second = BipEndpoint(**bip_kwargs(port=0, device_instance=4002))
         second.add_analog_input(instance=1, name="B", present_value=6.0)
         async with first:
             async with second:
+                addr_a = await first.local_address()
+                addr_b = await second.local_address()
                 self.assertIsNone(await first.broadcast_i_am())
                 first_client = await first.client()
                 second_client = await second.client()
@@ -492,12 +494,12 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
 
                 async def read_a_to_b():
                     return await first_client.read_property(
-                        f"127.0.0.1:{port_b}", oid, PropertyIdentifier.PRESENT_VALUE
+                        addr_b, oid, PropertyIdentifier.PRESENT_VALUE
                     )
 
                 async def read_b_to_a():
                     return await second_client.read_property(
-                        f"127.0.0.1:{port_a}", oid, PropertyIdentifier.PRESENT_VALUE
+                        addr_a, oid, PropertyIdentifier.PRESENT_VALUE
                     )
 
                 async def poll_liveness():
@@ -516,14 +518,14 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(alive)
 
     async def test_owner_close_with_live_handles_fails_closed(self):
-        port_a, port_b = free_port(), free_port()
-        first = BipEndpoint(**bip_kwargs(port=port_a, device_instance=5001))
+        first = BipEndpoint(**bip_kwargs(port=0, device_instance=5001))
         first.add_analog_input(instance=1, name="A", present_value=1.0)
-        second = BipEndpoint(**bip_kwargs(port=port_b, device_instance=5002))
+        second = BipEndpoint(**bip_kwargs(port=0, device_instance=5002))
         second.add_analog_input(instance=1, name="B", present_value=2.0)
         await asyncio.wait_for(first.start(), 10)
         await asyncio.wait_for(second.start(), 10)
         try:
+            addr_b = await second.local_address()
             live_client = await first.client()
             live_server = await first.server()
             self.assertTrue(live_server.is_session_alive())
@@ -533,7 +535,7 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(BacnetError):
                 await asyncio.wait_for(
                     live_client.read_property(
-                        f"127.0.0.1:{port_b}", oid, PropertyIdentifier.PRESENT_VALUE
+                        addr_b, oid, PropertyIdentifier.PRESENT_VALUE
                     ),
                     10,
                 )
@@ -547,15 +549,15 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(second.close(), 5)
 
     async def test_in_flight_cancellation_leaves_endpoint_usable(self):
-        port_a, port_b = free_port(), free_port()
         first = BipEndpoint(
-            **bip_kwargs(port=port_a, device_instance=6001, apdu_timeout_ms=5000)
+            **bip_kwargs(port=0, device_instance=6001, apdu_timeout_ms=5000)
         )
         first.add_analog_input(instance=1, name="A", present_value=1.0)
-        second = BipEndpoint(**bip_kwargs(port=port_b, device_instance=6002))
+        second = BipEndpoint(**bip_kwargs(port=0, device_instance=6002))
         second.add_analog_input(instance=1, name="B", present_value=2.0)
         async with first:
             async with second:
+                addr_b = await second.local_address()
                 client = await first.client()
                 oid = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
 
@@ -572,26 +574,26 @@ class BipFunctionalTests(unittest.IsolatedAsyncioTestCase):
                 # Lease released via RAII; endpoint still usable.
                 value = await asyncio.wait_for(
                     client.read_property(
-                        f"127.0.0.1:{port_b}", oid, PropertyIdentifier.PRESENT_VALUE
+                        addr_b, oid, PropertyIdentifier.PRESENT_VALUE
                     ),
                     10,
                 )
                 self.assertEqual(value.value, 2.0)
 
     async def test_error_propagation_protocol_attributes(self):
-        port_a, port_b = free_port(), free_port()
-        first = BipEndpoint(**bip_kwargs(port=port_a, device_instance=7001))
+        first = BipEndpoint(**bip_kwargs(port=0, device_instance=7001))
         first.add_analog_input(instance=1, name="A", present_value=1.0)
-        second = BipEndpoint(**bip_kwargs(port=port_b, device_instance=7002))
+        second = BipEndpoint(**bip_kwargs(port=0, device_instance=7002))
         second.add_analog_input(instance=1, name="B", present_value=2.0)
         async with first:
             async with second:
+                addr_b = await second.local_address()
                 client = await first.client()
                 missing = ObjectIdentifier(ObjectType.ANALOG_INPUT, 999)
                 with self.assertRaises(BacnetProtocolError) as ctx:
                     await asyncio.wait_for(
                         client.read_property(
-                            f"127.0.0.1:{port_b}",
+                            addr_b,
                             missing,
                             PropertyIdentifier.PRESENT_VALUE,
                         ),
@@ -610,9 +612,9 @@ class FailedStartPreservationTests(unittest.IsolatedAsyncioTestCase):
     """
 
     async def test_bind_conflict_preserves_pending_and_retry_serves(self):
-        port = free_port()
-        holder = BipEndpoint(**bip_kwargs(port=port, device_instance=9101))
+        holder = BipEndpoint(**bip_kwargs(port=0, device_instance=9101))
         await asyncio.wait_for(holder.start(), 10)
+        port = address_port(await holder.local_address())
         try:
             endpoint = BipEndpoint(**bip_kwargs(port=port, device_instance=9102))
             endpoint.add_analog_input(
@@ -629,7 +631,7 @@ class FailedStartPreservationTests(unittest.IsolatedAsyncioTestCase):
             try:
                 self.assertEqual(pending(), 0)
                 reader = BipEndpoint(
-                    **bip_kwargs(port=free_port(), device_instance=9103)
+                    **bip_kwargs(port=0, device_instance=9103)
                 )
                 await asyncio.wait_for(reader.start(), 10)
                 try:
@@ -652,7 +654,7 @@ class FailedStartPreservationTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(holder.close(), 5)
 
     async def test_duplicate_name_raises_value_error_and_preserves_pending(self):
-        endpoint = BipEndpoint(**bip_kwargs(port=free_port(), device_instance=9201))
+        endpoint = BipEndpoint(**bip_kwargs(port=0, device_instance=9201))
         endpoint.add_analog_input(instance=1, name="Dupe", present_value=1.0)
         endpoint.add_analog_value(instance=2, name="Dupe")
         pending = getattr(endpoint, "_pending_registration_count")
@@ -668,9 +670,9 @@ class FailedStartPreservationTests(unittest.IsolatedAsyncioTestCase):
         # on a held port: the start fails at the pre-drain bind pre-check
         # (or the cancel lands first) — either outcome must preserve pending
         # without depending on future-drop timing.
-        port = free_port()
-        holder = BipEndpoint(**bip_kwargs(port=port, device_instance=9300))
+        holder = BipEndpoint(**bip_kwargs(port=0, device_instance=9300))
         await asyncio.wait_for(holder.start(), 10)
+        port = address_port(await holder.local_address())
         try:
             endpoint = BipEndpoint(**bip_kwargs(port=port, device_instance=9301))
             endpoint.add_analog_input(
@@ -696,7 +698,7 @@ class FailedStartPreservationTests(unittest.IsolatedAsyncioTestCase):
             try:
                 self.assertEqual(pending(), 0)
                 reader = BipEndpoint(
-                    **bip_kwargs(port=free_port(), device_instance=9302)
+                    **bip_kwargs(port=0, device_instance=9302)
                 )
                 await asyncio.wait_for(reader.start(), 10)
                 try:

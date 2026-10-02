@@ -26,7 +26,7 @@ def native_future_exports(sources):
         for method in re.finditer(r"^    fn (\w+).*?^    }", source, re.M | re.S):
             methods[method.group(1)] = method.group()
     native = {name for name, body in methods.items()
-              if "pyo3_async_runtimes::tokio::future_into_py" in body}
+              if "crate::py_async::future_into_py" in body}
     forwards = {}
     for name, body in methods.items():
         target = re.search(r"\n        self\.(\w+)\(py\)\n    }$", body)
@@ -174,7 +174,7 @@ class NativeFutureForwardingInventoryTests(unittest.TestCase):
     def test_only_forwarding_to_a_proven_bridge_counts(self):
         source = """
     fn close(&self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
-        pyo3_async_runtimes::tokio::future_into_py(py, async { Ok(()) })
+        crate::py_async::future_into_py(py, async { Ok(()) })
     }
     fn exit(&self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         self.close(py)

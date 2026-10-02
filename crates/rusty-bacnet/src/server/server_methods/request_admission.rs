@@ -6,7 +6,7 @@ impl BACnetServer {
     /// Like comm_state(), raises RuntimeError before start and after stop.
     fn request_admission_counters<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let counters = {
                 let guard = inner.lock().await;
                 guard

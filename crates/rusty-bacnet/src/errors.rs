@@ -15,33 +15,37 @@ create_exception!(rusty_bacnet, BacnetAbortError, BacnetError);
 ///
 /// Protocol errors, rejects, and aborts carry structured integer attributes
 /// (`error_class`/`error_code` or `reason`) so Python callers can inspect them
-/// programmatically without parsing the message string.
+/// programmatically without parsing the message string. Futures call this on
+/// binding threads, so the attributes are set through the exit gate (#1002).
 pub fn to_py_err(err: Error) -> PyErr {
     match err {
         Error::Protocol { class, code } => {
             let py_err =
                 BacnetProtocolError::new_err(format!("BACnet error: class={class} code={code}"));
-            Python::attach(|py| {
+            let _ = crate::py_async::attach(|py| {
                 let val = py_err.value(py);
                 let _ = val.setattr("error_class", class);
                 let _ = val.setattr("error_code", code);
+                Ok(())
             });
             py_err
         }
         Error::Timeout(_) => BacnetTimeoutError::new_err(err.to_string()),
         Error::Reject { reason } => {
             let py_err = BacnetRejectError::new_err(format!("BACnet reject: reason={reason}"));
-            Python::attach(|py| {
+            let _ = crate::py_async::attach(|py| {
                 let val = py_err.value(py);
                 let _ = val.setattr("reason", reason);
+                Ok(())
             });
             py_err
         }
         Error::Abort { reason } => {
             let py_err = BacnetAbortError::new_err(format!("BACnet abort: reason={reason}"));
-            Python::attach(|py| {
+            let _ = crate::py_async::attach(|py| {
                 let val = py_err.value(py);
                 let _ = val.setattr("reason", reason);
+                Ok(())
             });
             py_err
         }

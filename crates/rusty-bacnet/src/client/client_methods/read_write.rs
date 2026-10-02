@@ -26,7 +26,7 @@ impl BACnetClient {
         let oid = object_id.to_rust();
         let pid = property_id.to_rust();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -95,7 +95,7 @@ impl BACnetClient {
 
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Send a WhoIs broadcast to discover devices.
@@ -118,7 +118,7 @@ impl BACnetClient {
             c.who_is(low_limit, high_limit).await.map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     /// Convenience: send WhoIs, wait for `timeout_ms` (default 3000), return discovered devices.
@@ -133,7 +133,7 @@ impl BACnetClient {
         high_limit: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -165,7 +165,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
         let rust_specs = py_to_rpm_specs(specs);
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let mac = parse_address(&address)?;
             let c = {
                 let guard = inner.lock().await;
@@ -177,7 +177,7 @@ impl BACnetClient {
                 .read_property_multiple(&mac, rust_specs)
                 .await
                 .map_err(to_py_err)?;
-            Python::attach(|py| rpm_ack_to_py(py, ack))
+            crate::py_async::attach(|py| rpm_ack_to_py(py, ack))
         })
     }
 
@@ -205,7 +205,7 @@ impl BACnetClient {
                 .map_err(to_py_err)?;
             Ok(())
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, crate::unit_result(future))
+        crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
     // -----------------------------------------------------------------------
@@ -244,7 +244,7 @@ impl BACnetClient {
             )
             .collect();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -256,7 +256,7 @@ impl BACnetClient {
                 .read_property_from_devices(rust_requests, max_concurrent)
                 .await;
 
-            Python::attach(|py| {
+            crate::py_async::attach(|py| {
                 results
                     .into_iter()
                     .map(|r| {
@@ -332,7 +332,7 @@ impl BACnetClient {
             })
             .collect();
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -344,7 +344,7 @@ impl BACnetClient {
                 .read_property_multiple_from_devices(rust_requests, max_concurrent)
                 .await;
 
-            Python::attach(|py| {
+            crate::py_async::attach(|py| {
                 results
                     .into_iter()
                     .map(|r| {
@@ -411,7 +411,7 @@ impl BACnetClient {
             .collect();
         let rust_requests = rust_requests?;
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::py_async::future_into_py(py, async move {
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
@@ -423,7 +423,7 @@ impl BACnetClient {
                 .write_property_to_devices(rust_requests, max_concurrent)
                 .await;
 
-            Python::attach(|py| {
+            crate::py_async::attach(|py| {
                 results
                     .into_iter()
                     .map(|r| {
