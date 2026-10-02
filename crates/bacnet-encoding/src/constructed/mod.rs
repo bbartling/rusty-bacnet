@@ -40,6 +40,7 @@ pub mod event_parameter;
 pub mod fault_parameter;
 pub mod landing_call_status;
 pub mod landing_door_status;
+mod members;
 pub mod object_property_reference;
 pub mod recipient;
 pub mod schedule;

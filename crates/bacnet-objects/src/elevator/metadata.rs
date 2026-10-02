@@ -6,7 +6,7 @@ use bacnet_types::enums::PropertyIdentifier as P;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
-    PropertyWriteCapability::{Always, ReadOnly},
+    PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
 // Canonical effective rows for the Elevator trio (ASHRAE 135-2020; PDF = printed + 2):
@@ -20,8 +20,9 @@ use crate::property_metadata::{
 // it. Only implemented rows are described: table rows the objects do not
 // serve (ElevatorGroup audit/tag/profile rows; Escalator event, intrinsic,
 // audit, tag and profile rows; Lift Car_Door_Text, call, door-command,
-// Car_Mode, Next_Stopping_Floor, Energy_Meter_Ref, drive, deck, event,
-// intrinsic, audit, tag and profile rows) stay absent until dispatch exists.
+// Car_Mode, Next_Stopping_Floor, drive, deck, event, intrinsic, audit, tag
+// and profile rows) stay absent until dispatch exists. The Lift serves
+// Energy_Meter_Ref after Energy_Meter, its Table 12-77 neighbour (#1036).
 // Every Lift and Escalator row the objects serve is a table row: the Lift's
 // former Tracking_Value and Floor_Number are gone (#1021).
 // Object_Identifier, Object_Name, and Object_Type carry the table R code and
@@ -35,20 +36,24 @@ use crate::property_metadata::{
 // Elevator_Group, Group_ID and Installation_ID are R rows of both Tables
 // 12-77 and 12-78. They are application-owned and read-only over the
 // network (membership.rs), unlike the Elevator Group's own writable Group_ID.
-// The Lift's Car_Load_Units (O, present exactly when Car_Load is) and its
-// per-door arrays Car_Door_Status and Landing_Door_Status are likewise set
-// through Rust setters only.
+// The Lift's Car_Load_Units (O, present exactly when Car_Load is) and both
+// objects' Energy_Meter_Ref (O, energy_meter.rs) are likewise set through
+// Rust setters only.
 // Table 12-76 has no Status_Flags, Out_Of_Service, or Reliability row, so
 // ElevatorGroup serves none of them (#997, as #984 did for Calendar). Lift and
 // Escalator Tables 12-77/12-78 do list them (Status_Flags R, Out_Of_Service
 // R, Reliability O): Status_Flags and Reliability are RequiredRead/ReadOnly
 // and Optional/ReadOnly, and Out_Of_Service is RequiredRead/Always through
 // its routed Boolean arm.
-// Writability is Always, never WhenOutOfService: the Lift §12.59 and
-// Escalator §12.60 Out_Of_Service descriptions gate simulation writes behind
-// Out_Of_Service TRUE (items (c)-(e)), but dispatch routes every write arm
-// unconditionally and the writability suites pin in-service writes, so the
-// metadata mirrors dispatch rather than the OOS-gate paragraph.
+// Item (c) of the Lift §12.59 and Escalator §12.60 Out_Of_Service
+// descriptions makes their status rows writable while Out_Of_Service is TRUE.
+// The status rows that dispatch already routes in service (Car_Position,
+// Car_Moving_Direction, Car_Load, Passenger_Alarm, Energy_Meter,
+// Fault_Signals, and the Escalator family of #401) stay Always, since the
+// writability suites pin in-service writes. The Lift's per-door arrays
+// Car_Door_Status and Landing_Door_Status are application-owned in service
+// and take simulation writes only while out of service (doors.rs), so they
+// are WhenOutOfService (#1035).
 // Presence is None throughout: the implementation models no
 // lift-group-conditional, intrinsic-reporting, or paired-text gating on this
 // family, and Car_Load and Car_Load_Units are always served together. The
@@ -57,7 +62,8 @@ use crate::property_metadata::{
 // is_createable=false default holds) and remains deleteable (delete denies
 // only Device and NetworkPort, so the is_deleteable=true default holds);
 // neither needs an override. COV keeps its default. Group_Members admits an
-// index through the array default (BACnetARRAY per Table 12-76); the Lift
+// index through the array default (BACnetARRAY per Table 12-76) and serves
+// it through common::read_array (#1034); the Lift
 // overrides is_array_property so Floor_Text, Car_Door_Status and
 // Landing_Door_Status (BACnetARRAYs of Table 12-77) admit one too. Every
 // other served row rejects an index.
@@ -108,15 +114,16 @@ const LIFT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::FLOOR_TEXT, Optional, None, ReadOnly),
     PropertyMetadata::new(P::CAR_POSITION, RequiredRead, None, Always),
     PropertyMetadata::new(P::CAR_MOVING_DIRECTION, RequiredRead, None, Always),
-    PropertyMetadata::new(P::CAR_DOOR_STATUS, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::CAR_DOOR_STATUS, RequiredRead, None, WhenOutOfService),
     PropertyMetadata::new(P::CAR_LOAD, Optional, None, Always),
     PropertyMetadata::new(P::CAR_LOAD_UNITS, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PASSENGER_ALARM, RequiredRead, None, Always),
     PropertyMetadata::new(P::ENERGY_METER, Optional, None, Always),
+    PropertyMetadata::new(P::ENERGY_METER_REF, Optional, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
     PropertyMetadata::new(P::FAULT_SIGNALS, RequiredRead, None, Always),
-    PropertyMetadata::new(P::LANDING_DOOR_STATUS, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::LANDING_DOOR_STATUS, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -329,6 +336,7 @@ mod tests {
             P::CAR_LOAD_UNITS,
             P::PASSENGER_ALARM,
             P::ENERGY_METER,
+            P::ENERGY_METER_REF,
             P::RELIABILITY,
             P::OUT_OF_SERVICE,
             P::FAULT_SIGNALS,
@@ -369,8 +377,9 @@ mod tests {
 
     #[test]
     fn property_metadata_elevator_trio_write_capabilities_match_dispatch() {
-        // Constructor paired with the properties it must accept writes for.
-        type WriteCase = (fn() -> Box<dyn BACnetObject>, &'static [P]);
+        // Constructor paired with the properties it must accept writes for,
+        // always and only while Out_Of_Service is TRUE.
+        type WriteCase = (fn() -> Box<dyn BACnetObject>, &'static [P], &'static [P]);
         let cases: [WriteCase; 3] = [
             (
                 || Box::new(ElevatorGroupObject::new(1, "EG-1").unwrap()),
@@ -380,6 +389,7 @@ mod tests {
                     P::GROUP_MODE,
                     P::LANDING_CALL_CONTROL,
                 ],
+                &[],
             ),
             (
                 || Box::new(EscalatorObject::new(1, "ESC-1").unwrap()),
@@ -393,6 +403,7 @@ mod tests {
                     P::FAULT_SIGNALS,
                     P::PASSENGER_ALARM,
                 ],
+                &[],
             ),
             (
                 || Box::new(LiftObject::new(1, "LIFT-1", 3).unwrap()),
@@ -406,9 +417,11 @@ mod tests {
                     P::ENERGY_METER,
                     P::FAULT_SIGNALS,
                 ],
+                // Item (c) of the Lift's Out_Of_Service description (#1035).
+                &[P::CAR_DOOR_STATUS, P::LANDING_DOOR_STATUS],
             ),
         ];
-        for (make, writable) in cases {
+        for (make, writable, out_of_service_only) in cases {
             for out_of_service in [false, true] {
                 let mut object = make();
                 // Elevator Group has no Out_Of_Service (Table 12-76).
@@ -425,10 +438,12 @@ mod tests {
                 let original = object.property_metadata().into_owned();
                 for row in &original {
                     let p = row.property_identifier;
-                    let capability = if writable.contains(&p) {
-                        PropertyWriteCapability::Always
+                    let (capability, accepted) = if writable.contains(&p) {
+                        (PropertyWriteCapability::Always, true)
+                    } else if out_of_service_only.contains(&p) {
+                        (PropertyWriteCapability::WhenOutOfService, out_of_service)
                     } else {
-                        PropertyWriteCapability::ReadOnly
+                        (PropertyWriteCapability::ReadOnly, false)
                     };
                     assert_eq!(row.write_capability, capability, "{p:?}");
                     assert_eq!(
@@ -438,7 +453,7 @@ mod tests {
                     );
                     let value = object.read_property(p, None).unwrap();
                     let result = object.write_property(p, None, value, None);
-                    if capability.is_writable() {
+                    if accepted {
                         result.unwrap();
                     } else {
                         assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
@@ -723,17 +738,16 @@ mod tests {
                 );
                 assert_eq!(object.read_property(p, None).unwrap(), before, "{p:?}");
             }
-            // The membership rows, Floor_Text, the door arrays and
-            // Car_Load_Units have no network write route: even their
+            // The membership rows, Floor_Text, Car_Load_Units and
+            // Energy_Meter_Ref have no network write route: even their
             // read-back values are denied.
             for p in [
                 P::ELEVATOR_GROUP,
                 P::GROUP_ID,
                 P::INSTALLATION_ID,
                 P::FLOOR_TEXT,
-                P::CAR_DOOR_STATUS,
                 P::CAR_LOAD_UNITS,
-                P::LANDING_DOOR_STATUS,
+                P::ENERGY_METER_REF,
             ] {
                 let value = object.read_property(p, None).unwrap();
                 assert_error(
@@ -741,6 +755,18 @@ mod tests {
                     ErrorCode::WRITE_ACCESS_DENIED,
                 );
                 assert!(!object.is_writable_property(p));
+            }
+            // The door arrays take their read-back values only out of
+            // service.
+            for p in [P::CAR_DOOR_STATUS, P::LANDING_DOOR_STATUS] {
+                let value = object.read_property(p, None).unwrap();
+                let result = object.write_property(p, None, value, None);
+                if out_of_service {
+                    result.unwrap();
+                } else {
+                    assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
+                }
+                assert!(object.is_writable_property(p));
             }
         }
     }
@@ -772,14 +798,14 @@ mod tests {
             assert_unserved(&mut escalator, p);
         }
         // Lift: Tracking_Value and Floor_Number aren't Table 12-77 rows
-        // (#1021), and Car_Mode and Energy_Meter_Ref are optional rows it
+        // (#1021), and Car_Mode and Car_Drive_Status are optional rows it
         // doesn't serve.
         let mut lift = LiftObject::new(1, "LIFT-1", 3).unwrap();
         for p in [
             P::TRACKING_VALUE,
             P::FLOOR_NUMBER,
             P::CAR_MODE,
-            P::ENERGY_METER_REF,
+            P::CAR_DRIVE_STATUS,
         ] {
             assert_unserved(&mut lift, p);
         }

@@ -2368,9 +2368,25 @@ so splitting a confirmed report is local policy: it sends only its oldest part a
 returns the rest to the queue once it holds the context, the Ack's follow-up sends
 the next part, and a part that fails goes out again first after the hold-off. A
 change that does not fit a notification even alone, a reference's latest
-included, is dropped and counted, since every attempt to send it would fail. Only
-the untimestamped values, which always travel together in the last notification,
-can still exceed the limit; that is logged as a warning.
+included, is dropped and counted, since every attempt to send it would fail.
+
+Untimestamped values that alone exceed one notification, as in the initial report
+of a SubscribeCOVPropertyMultiple request over many objects, go out after every
+timestamped change, in as few notifications as fit (#1038): runs of whole object
+items, with one object's references apart only where its item alone does not fit.
+Each of those notifications completes only the references it carries, and a
+reference whose values fit no notification on their own is left out with a
+warning, not sent over the limit; it is evaluated again at its next fanout.
+Untimestamped values have no queue: a report that began going out owes the
+untimestamped references of the parts it did not deliver, those left after an
+unconfirmed report stopped, or those a confirmed report deferred once it holds the
+context. The backstop below treats an owed reference like a pending change of its
+context, from when it was first owed, and the report that next evaluates it reads
+its value afresh, so a newer change goes in place of the value first prepared. A
+confirmed report puts owed references ahead of newer changes, so a split report
+cannot keep deferring them. A report none of whose parts went out owes nothing
+new, as before. An unconfirmed context without timestamped references holds its
+one-report turn only while a report of several parts goes out.
 
 As a local bound, one context's pending changes are limited to an estimate of what
 four notifications of that size can carry. Each change counts its encoding, one

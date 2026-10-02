@@ -1,6 +1,7 @@
 //! The Elevator Group serves the rows of its table (Clause 12.58,
 //! Table 12-76; #997): no Status_Flags, Out_Of_Service or Reliability, a
-//! read-only Machine_Room_ID, and a Group_ID held to Unsigned8.
+//! read-only Machine_Room_ID, a Group_ID held to Unsigned8, and a
+//! Group_Members array that takes an array index (#1034).
 
 use super::super::*;
 use super::assert_value_out_of_range;
@@ -135,4 +136,45 @@ fn elevator_group_group_id_refuses_values_above_255_atomically() {
             PropertyValue::Unsigned(47)
         );
     }
+}
+
+#[test]
+fn elevator_group_group_members_reads_by_array_index() {
+    // Group_Members is a BACnetARRAY (Table 12-76; #1034): index 0 is the
+    // member count and index n the n-th member.
+    let mut group = ElevatorGroupObject::new(1, "EG-1").unwrap();
+    let members = PropertyIdentifier::GROUP_MEMBERS;
+    assert!(group.is_array_property(members));
+    assert_eq!(
+        group.read_property(members, Some(0)).unwrap(),
+        PropertyValue::Unsigned(0)
+    );
+    assert_property_error(
+        group.read_property(members, Some(1)),
+        ErrorCode::INVALID_ARRAY_INDEX,
+    );
+    let lift = ObjectIdentifier::new(ObjectType::LIFT, 1).unwrap();
+    let escalator = ObjectIdentifier::new(ObjectType::ESCALATOR, 2).unwrap();
+    group.add_member(lift);
+    group.add_member(escalator);
+    for (index, expected) in [
+        (0, PropertyValue::Unsigned(2)),
+        (1, PropertyValue::ObjectIdentifier(lift)),
+        (2, PropertyValue::ObjectIdentifier(escalator)),
+    ] {
+        assert_eq!(group.read_property(members, Some(index)).unwrap(), expected);
+    }
+    for index in [3, u32::MAX] {
+        assert_property_error(
+            group.read_property(members, Some(index)),
+            ErrorCode::INVALID_ARRAY_INDEX,
+        );
+    }
+    assert_eq!(
+        group.read_property(members, None).unwrap(),
+        PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(lift),
+            PropertyValue::ObjectIdentifier(escalator),
+        ])
+    );
 }
