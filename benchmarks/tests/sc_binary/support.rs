@@ -189,6 +189,40 @@ impl Process {
         }
     }
 
+    /// Like [`hub_url`](Self::hub_url), but `None` when the hub exited because
+    /// another socket held its listen address (EADDRINUSE, or Windows'
+    /// WSAEACCES for a port without SO_REUSEADDR); any other exit still fails.
+    pub async fn hub_url_unless_bind_lost(&mut self) -> Option<String> {
+        let end = Instant::now() + DEADLINE;
+        loop {
+            let (_, stderr) = self.output();
+            if let Some(line) = stderr
+                .split_inclusive('\n')
+                .find(|line| line.ends_with('\n') && line.contains("BACnet/SC hub listening on "))
+            {
+                let address = line.split("listening on ").nth(1).unwrap().trim_end();
+                return Some(format!("wss://{address}"));
+            }
+            if self.child.try_wait().unwrap().is_some() {
+                let (_, stderr) = self.output();
+                let lost = stderr.contains("Hub bind failed")
+                    && [
+                        "in use",
+                        "os error 98",
+                        "os error 48",
+                        "os error 10048",
+                        "os error 10013",
+                    ]
+                    .iter()
+                    .any(|marker| stderr.contains(marker));
+                assert!(lost, "hub exited: {stderr}");
+                return None;
+            }
+            assert!(Instant::now() < end, "no readiness barrier: {stderr}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     pub async fn hub_url(&mut self) -> String {
         let line = self.ready("BACnet/SC hub listening on ").await;
         format!("wss://{}", line.split("listening on ").nth(1).unwrap())

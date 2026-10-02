@@ -1591,6 +1591,29 @@ above; there is no alternate immediate-commit path. Standalone detector
 `probe`/`tick` methods retain their own detector-local behavior. Executed evidence
 is recorded in `BACNET-13-INTRINSIC-PROPOSAL-COMMIT` in the conformance ledger.
 
+### Constructed property framing
+
+Built-in objects read and write three constructed values in their Clause 21
+framing, through the shared `bacnet-encoding` codecs.
+
+- **Notification Class `Recipient_List`** is a BACnetLIST of BACnetDestination
+  (Clause 12.21). Each element is a seven-member sequence in the Clause 21
+  order: a days-of-week set and a time window, then the recipient, process
+  identifier, confirmation flag and event transitions. The recipient is a
+  CHOICE: a device identifier or a network address. Decoding is strict, and a
+  malformed stored list fails closed with no partial delivery. Indexed writes
+  are refused. The codec is not a Notification
+  Forwarder object, which is unsupported.
+- **`Event_Parameters` and `Fault_Parameters`** (Clause 12.12) use the
+  BACnetEventParameter and BACnetFaultParameter CHOICE framing. Modeled
+  alternatives round-trip. An alternative the stack does not model is kept as
+  opaque bytes, and omitted, deprecated and reserved choices, or trailing bytes
+  after a framed element, are rejected.
+- **BACnetTimeStamp** (Clause 21) has one codec for every producer and consumer.
+  The time form is a primitive tag holding raw Time octets, the sequence number
+  must fit 0..=65535 on both encode and decode, and the date-and-time form is an
+  opening and closing tag pair around an application-tagged Date and Time.
+
 ### ObjectDatabase
 
 ```rust

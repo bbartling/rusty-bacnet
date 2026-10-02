@@ -386,12 +386,9 @@ async fn device_write_rejects_device_shaped_custom_object_without_authority() {
 
 #[tokio::test]
 async fn bip_device_write_authorized_round_trip_and_service_readback() {
-    use std::net::{Ipv4Addr, UdpSocket};
-    let reservation = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let port = reservation.local_addr().unwrap().port();
-    drop(reservation);
+    use std::net::Ipv4Addr;
     let mut session =
-        crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::BROADCAST)
+        crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .role(SessionRole::ServerOnly)
             .database(database(&[123]))
             .device_writes(Arc::new(|context| {
@@ -401,6 +398,8 @@ async fn bip_device_write_authorized_round_trip_and_service_readback() {
             .build_session()
             .unwrap();
     session.start().await.unwrap();
+    // The endpoint bound port 0; the client talks to the port it actually got.
+    let port = session.bip_local_address().unwrap().port();
     let mut client = bacnet_client::client::BACnetClient::bip_builder()
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
