@@ -159,8 +159,12 @@ pub fn builder() -> BipEndpointBuilder {
 pub fn builder_on(port: u16) -> BipEndpointBuilder {
     BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, port, BROADCAST).client_timers(2000, 0)
 }
-pub async fn stopped(mut endpoint: Endpoint, local: SocketAddrV4) {
+/// Stops the endpoint and binds its address, which only succeeds once the
+/// endpoint has closed its wildcard socket. The bind's result goes back to
+/// [`rerun_on_lost_port`](crate::port_retry::rerun_on_lost_port), since another
+/// process can take the port between the stop and the bind (#1070).
+pub async fn stopped(mut endpoint: Endpoint, local: SocketAddrV4) -> std::io::Result<()> {
     bounded(endpoint.stop()).await.unwrap();
     drop(endpoint);
-    let _rebound = std::net::UdpSocket::bind(local).expect("endpoint released wildcard socket");
+    std::net::UdpSocket::bind(local).map(drop)
 }

@@ -32,13 +32,14 @@ pub(super) fn cov_reported_properties_default(
 ///   PRIORITY_ARRAY (the commandable family), TAGS (Annex Y),
 ///   SUBORDINATE_LIST / SUBORDINATE_ANNOTATIONS (Table 12-34),
 ///   GROUP_MEMBERS / GROUP_MEMBER_NAMES (Table 12-57; Elevator/Lift also type
-///   GROUP_MEMBERS BACnetARRAY), ACTION (Table 12-12), and STAGES /
-///   STAGE_NAMES / TARGET_REFERENCES (Table 12-80), and MONITORED_OBJECTS
-///   (Table 12-82).
-/// - **Type-dependent** identifiers classify by `object_type`: ALARM_VALUES /
-///   FAULT_VALUES are BACnetARRAY[N] on CharacterString Value (Table 12-44)
-///   and BitString Value (Table 12-47) but BACnetLIST on the multi-state,
-///   life-safety, and access families; LIST_OF_OBJECT_PROPERTY_REFERENCES is
+///   GROUP_MEMBERS BACnetARRAY), STAGES / STAGE_NAMES / TARGET_REFERENCES
+///   (Table 12-80), and MONITORED_OBJECTS (Table 12-82).
+/// - **Type-dependent** identifiers classify by `object_type`: ACTION is
+///   BACnetARRAY[N] on Command (Table 12-12) but a single BACnetAction on Loop
+///   (Table 12-20); ALARM_VALUES / FAULT_VALUES are BACnetARRAY[N] on
+///   CharacterString Value (Table 12-44) and BitString Value (Table 12-47) but
+///   BACnetLIST on the multi-state, life-safety, and access families;
+///   LIST_OF_OBJECT_PROPERTY_REFERENCES is
 ///   BACnetARRAY[N] on Channel (Table 12-62) but BACnetLIST on Schedule
 ///   (Table 12-28) and Timer (Table 12-75); PRESENT_VALUE is
 ///   BACnetARRAY[N] of BACnetPropertyAccessResult on Global Group
@@ -77,11 +78,11 @@ pub(super) fn array_property_default(
         | PropertyIdentifier::SUBORDINATE_ANNOTATIONS
         | PropertyIdentifier::GROUP_MEMBERS
         | PropertyIdentifier::GROUP_MEMBER_NAMES
-        | PropertyIdentifier::ACTION
         | PropertyIdentifier::STAGES
         | PropertyIdentifier::STAGE_NAMES
         | PropertyIdentifier::MONITORED_OBJECTS
         | PropertyIdentifier::TARGET_REFERENCES => true,
+        PropertyIdentifier::ACTION => object_type == ObjectType::COMMAND,
         PropertyIdentifier::ALARM_VALUES | PropertyIdentifier::FAULT_VALUES => matches!(
             object_type,
             ObjectType::CHARACTERSTRING_VALUE | ObjectType::BITSTRING_VALUE

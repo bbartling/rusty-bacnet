@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A running server's application can now update a Loop's
+  Controlled_Variable_Value (#1063). Before, only
+  `LoopObject::set_controlled_variable_value` could set it, and nothing could
+  reach a Loop's concrete type once the server held it. The application that
+  runs the loop's algorithm calls
+  `BACnetServer::set_controlled_variable_value_local` (Python:
+  `BACnetServer.set_controlled_variable_value_local`), which goes through the
+  new `BACnetObject::set_controlled_variable_value_internal` hook. It takes a
+  finite REAL. Another datatype fails with INVALID_DATA_TYPE, and NaN or an
+  infinity with VALUE_OUT_OF_RANGE. An unknown object fails with
+  UNKNOWN_OBJECT, and any object other than a Loop with
+  OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, as with `set_present_value_local`.
+  The route is accepted while Out_Of_Service is TRUE, which decouples only
+  the output and Reliability. The change goes through the server's COV path:
+  a SubscribeCOVProperty on Controlled_Variable_Value is notified. A
+  SubscribeCOV on the Loop is not, since the COV criteria table (Clause 13.1,
+  Table 13-1) carries the value without making it a trigger, so the next
+  report carries the new value. The property stays read-only over the
+  network. The server doesn't follow Controlled_Variable_Reference itself.
+
 - **Schedule network writes and Reliability (wire):** a Schedule now accepts
   writes of Weekly_Schedule, Exception_Schedule and Effective_Period, and
   evaluates its own Reliability (#1057, #1056).
@@ -192,10 +212,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they have no stable headings. 82 bare entries now point at specific
   headings, and Recipient_List, Event_Parameters and BACnetTimeStamp framing
   have a short public statement in `docs/rust-api.md` (#1041).
+- `docs/python-api.md` gives configured Network Port snapshots, the SC
+  heartbeat settings and accepted-direct SC identity and responses their own
+  headings, and `docs/rust-api.md` the Audit Reporter configuration and send
+  delay. The ledger claims for them now point at those sections instead of the
+  nearest one (#1071).
 - Test-only: the endpoint Device-write tests bind port 0 and read the real
   address back, the benchmarks hub-restart test retries on a lost bind instead
   of probing the old address, and the BBMD several-own-rows test reruns on a
   lost port. The macOS limit of the BBMD probe retry is documented (#1068).
+- Test-only: the BBMD restart tests, and the endpoint and benchmarks tests that
+  bind a stopped node's address to prove it was released, run again on fresh
+  ports when another socket takes the port between the stop and the bind. A
+  node that really keeps its port fails every run. A restart rebinds a port the
+  OS chose, without SO_REUSEADDR, and every OS refuses that bind while another
+  socket holds the port, so the macOS limit of the BBMD probe retry does not
+  apply to it (#1070).
 - The workspace uses Cargo's `resolver = "3"`, so updating the lock file
   prefers dependency versions that support the declared MSRV (1.93). Feature
   resolution is unchanged, and the MSRV CI job still checks the lock file
@@ -576,6 +608,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The date rules live in one place, `bacnet_types::calendar`
     (`SpecificDate`, plus `matches`, `contains` and `is_valid` on the calendar
     types), which `ClockFrame::is_valid_actual_datetime` now uses too.
+
+- **Breaking Loop property set (wire):** the Loop now serves the three rows
+  its property table (Clause 12.17, Table 12-20) requires and it left out:
+  Controlled_Variable_Units, Action and Priority_For_Writing (#1062). It also
+  serves Proportional_Constant_Units, Integral_Constant_Units and
+  Derivative_Constant_Units, which the table requires alongside the gain
+  constants the Loop already served. Action is a writable BACnetAction,
+  DIRECT (0) until written; a write other than DIRECT or REVERSE (1) fails
+  with VALUE_OUT_OF_RANGE and leaves it as it was. The four units rows
+  (NO_UNITS until set) and Priority_For_Writing (16 until set) are read-only
+  over the network. The application sets them before adding the Loop with
+  the new `LoopObject` setters, which refuse units above 65535 or a priority
+  outside 1 to 16 with VALUE_OUT_OF_RANGE. The new rows appear in
+  Property_List, the property metadata, RPM ALL, REQUIRED and OPTIONAL, and
+  the PICS, and Property_List now lists the Loop's rows in the table's order.
+  A Loop's Action is a single value, so an array index on it fails with
+  PROPERTY_IS_NOT_AN_ARRAY; Command's Action array still takes one. The Loop
+  doesn't run its control algorithm or command the property its
+  Manipulated_Variable_Reference names, so Action and Priority_For_Writing
+  describe the application's algorithm and change nothing in the object.
+  Python's `add_loop` takes the read-only rows as keyword-only arguments
+  (`controlled_variable_units`, `proportional_constant_units`,
+  `integral_constant_units`, `derivative_constant_units`,
+  `priority_for_writing`), checked like the Rust setters; omitted ones keep
+  the defaults.
 
 - **Loop COV notifications carry Setpoint and Controlled_Variable_Value
   (wire):** a Loop's SubscribeCOV notification now reports Present_Value,

@@ -2560,7 +2560,27 @@ class BACnetServer:
         ...
 
     # --- Control/PID ---
-    def add_loop(self, instance: int, name: str, output_units: int = 62) -> None: ...
+    def add_loop(
+        self,
+        instance: int,
+        name: str,
+        output_units: int = 62,
+        *,
+        controlled_variable_units: Optional[int] = None,
+        proportional_constant_units: Optional[int] = None,
+        integral_constant_units: Optional[int] = None,
+        derivative_constant_units: Optional[int] = None,
+        priority_for_writing: Optional[int] = None,
+    ) -> None:
+        """Add a Loop (PID) object to the server (before starting).
+
+        The keyword arguments set rows that are read-only over the network:
+        Controlled_Variable_Units and the three gain units rows (NO_UNITS when
+        omitted) and Priority_For_Writing (16 when omitted). Units above 65535
+        or a priority outside 1..=16 raise BacnetProtocolError with
+        VALUE_OUT_OF_RANGE. Peers can write Action (DIRECT until written).
+        """
+        ...
     def add_command(self, instance: int, name: str) -> None: ...
     def add_timer(self, instance: int, name: str) -> None: ...
     def add_load_control(self, instance: int, name: str) -> None: ...
@@ -2728,6 +2748,24 @@ class BACnetServer:
         An object with Out_Of_Service set rejects this update to preserve
         network simulation ownership. Other object types are not writable
         through this method.
+        """
+        ...
+
+    def set_controlled_variable_value_local(
+        self,
+        object_id: ObjectIdentifier,
+        value: PropertyValue,
+    ) -> Awaitable[None]:
+        """Feed a Loop's measured Controlled_Variable_Value while the application runs its algorithm.
+
+        The value must be a finite REAL: another datatype raises
+        INVALID_DATA_TYPE and NaN or an infinity VALUE_OUT_OF_RANGE. An unknown
+        object raises UNKNOWN_OBJECT and any object other than a Loop
+        OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Unlike Present_Value, the update
+        is accepted while Out_Of_Service is set. A SubscribeCOVProperty on the
+        property is notified of the change; a SubscribeCOV on the Loop is not,
+        and its next notification carries the new value. The property stays
+        read-only over the network.
         """
         ...
 

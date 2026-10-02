@@ -99,6 +99,7 @@ mod life_safety_reset;
 mod list_element_edits;
 mod list_element_recipients;
 mod list_element_targets;
+mod loop_properties;
 mod multi_element_writes;
 mod passwords;
 mod property_metadata;
