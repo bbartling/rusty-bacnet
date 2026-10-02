@@ -53,15 +53,23 @@ impl Drop for SignalOnDrop<'_> {
         self.0.add_permits(1);
     }
 }
+/// Signals `serial_dropped` as the last field of [`ObservedSerial`]. Fields drop
+/// in declaration order, so the simulated wire and frame observer are already
+/// closed when a waiter sees the permit. A `Drop` on `ObservedSerial` itself runs
+/// before its fields drop: in DedicatedThread mode the test thread could then
+/// still write to the peer end in that window.
+struct ReleaseSignal(Arc<Gates>);
+impl Drop for ReleaseSignal {
+    fn drop(&mut self) {
+        self.0.serial_dropped.add_permits(1);
+    }
+}
 pub struct ObservedSerial {
     inner: LoopbackSerial,
     writes: mpsc::UnboundedSender<MstpFrame>,
     gates: Arc<Gates>,
-}
-impl Drop for ObservedSerial {
-    fn drop(&mut self) {
-        self.gates.serial_dropped.add_permits(1);
-    }
+    /// Keep last; see [`ReleaseSignal`].
+    _released: ReleaseSignal,
 }
 impl SerialPort for ObservedSerial {
     async fn write(&self, data: &[u8]) -> Result<(), Error> {
@@ -274,6 +282,7 @@ pub async fn transport(mode: MstpExecutionMode, gates: Arc<Gates>) -> (GatedTran
             inner: serial,
             writes: tx,
             gates: gates.clone(),
+            _released: ReleaseSignal(gates.clone()),
         },
         MstpConfig {
             this_station: NODE,
