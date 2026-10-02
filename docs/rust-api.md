@@ -2066,10 +2066,24 @@ Door_Alarm_State; a Door_Alarm_State change sends one. An Access Point has no
 Present_Value, so its report starts with Access_Event, then Status_Flags,
 Access_Event_Tag and Access_Event_Time, and only an Access_Event_Time or
 Status_Flags change sends one. A Credential Data Input report carries
-Update_Time, whose change sends one. These values are read-only over the
-network; set them before adding the object with
-`AccessDoorObject::set_door_alarm_state`, `AccessPointObject::set_access_event`
-and `CredentialDataInputObject::set_update_time`.
+Update_Time, whose change sends one. The application sets these values before
+adding the object with `AccessDoorObject::set_door_alarm_state`,
+`AccessPointObject::set_access_event` and
+`CredentialDataInputObject::set_update_time`, and a door's Door_Status and
+Lock_Status with `set_door_status` and `set_lock_status`.
+
+Over the network the Access Point and Credential Data Input values stay
+read-only. A door's Door_Status, Lock_Status and Door_Alarm_State, the rows
+footnote 1 of Table 12-30 marks, take WriteProperty and WritePropertyMultiple
+while Out_Of_Service is TRUE, so a client can simulate the door; in service
+they refuse writes with WRITE_ACCESS_DENIED. A write must be an Enumerated in
+the property's production: a named BACnetDoorStatus or one from 1024 to 65535,
+a named BACnetLockStatus (no proprietary range), or a named
+BACnetDoorAlarmState or one from 256 to 65535. Entering out of service puts the
+door's own three values aside, a value the application sets meanwhile replaces
+the one put aside, and the return to service serves them again, dropping the
+simulation. A simulated Door_Alarm_State sends the COV report as a real change
+does. The pulse relock runs on its timer whatever the simulated values say.
 
 #### Transportation (3)
 
