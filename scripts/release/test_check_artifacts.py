@@ -308,6 +308,14 @@ class PeTests(unittest.TestCase):
         errors = self.check(good, "python313.dll")
         self.assertEqual(errors, ["x imports ['python312.dll'], expected python313.dll"])
 
+    def test_serial_listing_dlls_only_in_an_extension(self):
+        serial = ["SETUPAPI.dll", "CFGMGR32.dll"]
+        ext = pe_text(dll=True, imports=SYSTEM + CRT + serial + ["python312.dll"])
+        self.assertEqual(self.check(ext, "python312.dll"), [])
+        errors = self.check(pe_text(imports=SYSTEM + serial))
+        self.assertEqual(errors, ["x imports cfgmgr32.dll, which the release doesn't expect",
+                                  "x imports setupapi.dll, which the release doesn't expect"])
+
     def test_unparsed_imports_fail(self):
         for imports in ((), ["ntdll.dll", "ws2_32.dll"]):
             with self.subTest(imports=imports):

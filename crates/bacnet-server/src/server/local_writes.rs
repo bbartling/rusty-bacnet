@@ -49,7 +49,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
             })?;
             object.set_life_safety_operation_expected_internal(operation)?;
-            snapshots.changes(&db, std::slice::from_ref(oid))
+            let changes = snapshots.changes(&db, std::slice::from_ref(oid));
+            let capture = self.cov_table.read().await.timed_capture_exact(&changes);
+            capture.run(&db);
+            changes
         };
         for change in changes {
             Self::fire_life_safety_cov_notifications(
@@ -260,12 +263,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 db.update_name_index(oid);
             }
             let staging_plans = Self::take_staging_plans(&mut db, std::slice::from_ref(oid));
-            let capture = self.cov_table.read().await.timed_capture(*oid);
+            let changes = snapshots.changes(&db, std::slice::from_ref(oid));
+            let capture = {
+                let table = self.cov_table.read().await;
+                if life_safety {
+                    table.timed_capture_exact(&changes)
+                } else {
+                    table.timed_capture(*oid)
+                }
+            };
             capture.run(&db);
-            (
-                snapshots.changes(&db, std::slice::from_ref(oid)),
-                staging_plans,
-            )
+            (changes, staging_plans)
         };
 
         Self::fire_event_notifications_with_bindings(
@@ -411,7 +419,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 Some(plan.priority),
                                 origin.as_ref(),
                             ) {
-                                Ok(()) => TargetResult::Applied,
+                                Ok(()) => {
+                                    // Timestamped references capture the
+                                    // target change under this guard (#856).
+                                    let capture = cov
+                                        .cov_table
+                                        .read()
+                                        .await
+                                        .timed_capture(target.object_identifier);
+                                    capture.run(&database);
+                                    TargetResult::Applied
+                                }
                                 Err(_) => TargetResult::Failed,
                             },
                             None => TargetResult::Failed,
@@ -436,9 +454,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
             let reliability_changed = {
                 let mut database = db.write().await;
-                database.get_mut(&plan.source).is_some_and(|source| {
+                let changed = database.get_mut(&plan.source).is_some_and(|source| {
                     source.complete_staging_write_plan_internal(plan.generation, all_succeeded)
-                })
+                });
+                if changed {
+                    let capture = cov.cov_table.read().await.timed_capture(plan.source);
+                    capture.run(&database);
+                }
+                changed
             };
             if reliability_changed {
                 Self::fire_event_notifications_with_bindings(delivery, cov.cov_table, &plan.source)

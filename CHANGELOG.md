@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing admission policy remains conjunctive. No-map CA-valid admission remains
   an intentional profile; no downstream leaf-authentication claim is made (#800).
 
+- `rusty_bacnet.list_serial_ports()` returns the names of the serial ports the
+  operating system reports, to pass as `serial_port=` for MS/TP, and
+  `bacnet_transport::mstp_serial::available_ports()` is its Rust counterpart.
+  macOS lists them through IOKit, Windows through SetupAPI and the registry, and
+  Linux from sysfs. The release smoke test calls it on every platform, which on
+  macOS proves the wheels' IOKit and CoreFoundation links at run time (#951).
+
 ### Changed
 
 - Alarm and event service types use the enumerations and bit strings that
@@ -219,6 +226,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   statically; and each release has a `SHA256SUMS` file and a
   `THIRD-PARTY-NOTICES` file, which the wheels and the sdist also carry.
   CPython 3.14 wheels ship once the release pipeline publishes (#943).
+  Before anything is published, GitHub-hosted runners now run the macOS
+  (Apple Silicon and Intel) and Windows artifacts: each CPython 3.11 to 3.14
+  wheel in a fresh virtual environment, with an import, the serial port
+  listing and a loopback client/server round trip, and each CLI binary's
+  `--version`, `--help` and quickstart read against a local server. The files
+  reach GitHub on the release's GitHub draft, which the release copy later
+  publishes unchanged; a failure or timeout stops the release, and a dry run
+  smoke-tests a throwaway draft and deletes it. The old manual-only GitHub
+  release workflow is gone (#951).
 
 - The test suites also run natively on macOS (Apple Silicon) and Windows
   (x86_64, MSVC): a GitHub Actions workflow on the mirror runs the tests,
@@ -296,20 +312,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   addresses cannot be listed, with the OS error's kind, or when none is
   usable, and the error suggests binding an explicit interface address.
 
-- Loop, Schedule, Calendar, Trend Log and Trend Log Multiple now compute
-  Status_Flags as the other objects do (#978). They used to return the flags
-  they were built with, so Status_Flags read all FALSE forever: a Loop or
-  Schedule whose Reliability was evaluated or simulated as a fault still
-  reported FAULT FALSE, and neither set OUT_OF_SERVICE when Out_Of_Service was
-  TRUE. Loop and Schedule now derive FAULT from Reliability, OUT_OF_SERVICE from
-  Out_Of_Service and IN_ALARM from Event_State. Trend Log and Trend Log Multiple
-  derive only FAULT and IN_ALARM, and keep OVERRIDDEN and OUT_OF_SERVICE FALSE
-  as their object types require, so Trend Log's non-standard Out_Of_Service
-  property doesn't reach its flags. Calendar's Status_Flags, which the standard
-  doesn't define for it, always reads all FALSE. A Loop's COV subscribers now
-  get a notification when a write to Reliability or Out_Of_Service changes its
-  Status_Flags, carrying the new flags; before, they never heard of either
-  change.
+- Loop, Schedule, Trend Log and Trend Log Multiple now compute Status_Flags
+  as the other objects do (#978). They used to return the flags they were
+  built with, so Status_Flags read all FALSE forever: a Loop or Schedule whose
+  Reliability was evaluated or simulated as a fault still reported FAULT
+  FALSE, and neither set OUT_OF_SERVICE when Out_Of_Service was TRUE. Loop and
+  Schedule now derive FAULT from Reliability, OUT_OF_SERVICE from
+  Out_Of_Service and IN_ALARM from Event_State. Trend Log and Trend Log
+  Multiple derive only FAULT and IN_ALARM, and keep OVERRIDDEN and
+  OUT_OF_SERVICE FALSE as their object types require, so Trend Log's
+  non-standard Out_Of_Service property doesn't reach its flags. Calendar,
+  which the standard gives no Status_Flags, no longer serves one (see the
+  #984 entry below). A Loop's COV subscribers now get a notification when a
+  write to Reliability or Out_Of_Service changes its Status_Flags, carrying the
+  new flags; before, they never heard of either change.
+
+- **Breaking Calendar property set (wire):** Calendar no longer serves
+  Status_Flags, Event_State or Out_Of_Service (#984), so a client that read
+  them from a Calendar now gets an error. Its property table (Clause 12.9,
+  Table 12-11) defines none of them, yet Calendar listed all three as
+  optional and returned fixed values: flags all FALSE, NORMAL and FALSE. They
+  are gone from its Property_List, its property metadata, RPM ALL and
+  OPTIONAL, and its PICS rows, and ReadProperty or WriteProperty on any of
+  them now fails with PROPERTY / UNKNOWN_PROPERTY, as it does for
+  Reliability.
 
 - On Windows, a B/IP or B/IPv6 transport on an ephemeral port now owns the
   port (#950). It binds the wildcard address without SO_REUSEADDR, and
@@ -323,6 +349,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#950). `#[tokio::main]` polled its large command futures on the main
   thread, whose stack is 1 MiB on Windows, and a debug build aborted on its
   first BACnet/SC command. The command futures now live on the heap.
+
+- Starting a server, a client or a BACnet/SC connection, and running the
+  `bacnet` CLI, take much less stack in a debug build (#953). The native
+  Windows tests (#950) found debug-build futures close to the 1 MiB that
+  Windows gives a main thread and the 2 MiB a test thread gets. Server startup
+  (every builder's `build()` and `BACnetServer::start*`), the TLS WebSocket
+  dial (`TlsWebSocket::connect` and `connect_direct`), and the per-connection
+  handshakes of the SC hub and the direct-connection listener now create
+  their large inner futures on the heap, and the long-lived tasks a server
+  starts (dispatch, timers, the network-number worker) are spawned boxed, so
+  the public futures stay small without callers boxing them. The invoke-ID
+  coordinator that every server, client and endpoint creates keeps its two
+  256-entry tables on the heap: built inline, they took about 110 KB of stack
+  in a debug build. On macOS, a debug build's `build()` needed 212 KiB of the
+  calling thread's stack for a B/IP server and now needs 80 KiB; a B/IP
+  client needed 148 and now 60, and a BACnet/SC server 330 and now 197, about
+  145 KiB of which is tokio-tungstenite's handshake. The SC DCC mTLS server
+  tests and the SC reconnect benchmark tests, whose fixtures now box their
+  steps too, needed about 1 to 1.2 MiB of test-thread stack and now need
+  about 0.25 MiB. On Linux x86_64, 13 tests overflowed a 1 MiB test-thread
+  stack and 38 a 768 KiB one; none does now. The CLI now parses its command
+  line on a thread with an 8 MiB stack: clap's derived parser alone took
+  about 860 KiB of a debug build's main thread, and a `read` now needs about
+  240 KiB of it. Startup makes a few more allocations, no per-request or
+  per-packet path makes any (the `bip_latency` benchmark is unchanged), and
+  no public signature changed. The native macOS and Windows jobs rerun the
+  server, client, endpoint, integration, CLI and BACnet/SC transport tests
+  with 1 MiB thread stacks, and on macOS give the CLI's processes a 1 MiB
+  main thread, so a regression fails on both of those OSes rather than only
+  on Windows.
 
 - A BACnet/SC dial to a host name with several addresses no longer waits for
   each address in turn (#950). It races them, RFC 8305 style: address
@@ -507,22 +563,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Timestamped COV-multiple reports now carry each change's actual commit time
   instead of the time the notification was prepared. Changes are kept until a
   notification carrying them is transmitted.
-  - **Capture points:** network WriteProperty, `write_local`, Binary Lighting
+  - **Capture points:** network WriteProperty and WritePropertyMultiple,
+    `write_local`, Staging target writes and source completion, Binary Lighting
     terminal transitions and committed intrinsic transitions capture under the
-    database write guard.
+    database write guard. WritePropertyMultiple captures every successful
+    attempt as it commits, so a request that writes a value out and back, or
+    fails after a committed prefix, conveys each change. Life Safety objects
+    capture exactly the properties each mutation changed, on every path that
+    fans them out, and LifeSafetyOperation changes do too.
   - **Delivery:** any notification to a context also carries that context's other
     pending timestamped changes, earlier changes first, per reference (for example
-    A→B→A). The header timestamp names the latest timestamped change conveyed.
+    A→B→A, also within one clock tick). The header timestamp names the latest
+    timestamped change conveyed. An explicit untimestamped selector keeps its
+    coordinate untimestamped even when it did not qualify in that round.
+  - **Max_Notification_Delay:** changes still queued because their notification
+    failed or was held back (a failed send, an unacknowledged confirmed report,
+    DISABLE_INITIATION) go out once the context's delay has passed since the
+    earliest of them, without waiting for another change (§13.1, §13.16.1.1.4).
+    Overdue changes go out as soon as nothing blocks them: when communication is
+    re-enabled (by request or timer), when a renewal shortens the delay, at the
+    end of a confirmed hold-off, or on the Ack of an outstanding report. The
+    backstop acts no sooner than one second after the change and otherwise
+    retries a blocked context at most once per delay. The delay and the
+    backstop's wait are kept only for contexts with timestamped references.
   - **Initial report:** the report after admission is stamped with the admission
-    time. A renewal keeps unconveyed changes.
+    time, taken from the same clock sample the admission check validated. A
+    renewal keeps unconveyed changes.
   - **Local bounds:** pending history is capped at an estimate of one notification
     APDU per context, and queued history is trimmed, oldest first, to fit each
     request into the local maximum APDU (latest changes are always sent). This deviates from the Standard's
     additional-notification expectation until splitting lands. Drops are counted
     in the new `CovCounters::timed_changes_dropped` field, which breaks exhaustive
     struct literals.
-  - **Not yet captured:** WritePropertyMultiple, staging and Life Safety producers
-    still use preparation time.
   - **API:** `CovSubscriptionTable::with_max_apdu_length` is new (#856).
 
 - Return `PROPERTY/UNKNOWN_PROPERTY` for absent unindexed properties at built-in

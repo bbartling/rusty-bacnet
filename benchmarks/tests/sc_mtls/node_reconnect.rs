@@ -16,7 +16,7 @@ use bacnet_types::{
     primitives::ObjectIdentifier,
 };
 use futures_util::FutureExt;
-use std::{future::Future, net::SocketAddr, panic::AssertUnwindSafe, time::Duration};
+use std::{future::Future, net::SocketAddr, panic::AssertUnwindSafe, pin::Pin, time::Duration};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::mpsc,
@@ -32,6 +32,14 @@ const SERVER_UUID: [u8; 16] = [
 const CLIENT_UUID: [u8; 16] = [
     0x95, 0xdf, 0xe4, 0xef, 0x97, 0xf6, 0x49, 0x0d, 0x9a, 0x2c, 0xf2, 0xb4, 0xb0, 0xc0, 0xe6, 0x82,
 ];
+
+// `#[tokio::test]` polls on the test thread, whose stack is 2 MiB. Each
+// fixture step boxes the futures it awaits, so a test body's debug-build poll
+// frame holds pointers rather than every step's whole future: unboxed, these
+// tests needed about 1.1 MiB of stack in a macOS debug build (#953).
+fn boxed<F: Future>(make: impl FnOnce() -> F) -> Pin<Box<F>> {
+    Box::pin(make())
+}
 
 async fn bounded<T>(f: impl Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(5), f)
@@ -100,12 +108,14 @@ struct Fixture {
 
 impl Fixture {
     async fn hub(&mut self, certs: &CertMaterial, id: u8) -> String {
-        let hub = bounded(ScHub::start_with_uuid(
-            "127.0.0.1:0",
-            try_make_hub_tls_config(certs).unwrap(),
-            [id; 6],
-            [id; 16],
-        ))
+        let hub = bounded(boxed(|| {
+            ScHub::start_with_uuid(
+                "127.0.0.1:0",
+                try_make_hub_tls_config(certs).unwrap(),
+                [id; 6],
+                [id; 16],
+            )
+        }))
         .await
         .unwrap();
         let url = format!("wss://localhost:{}", hub.local_addr().unwrap().port());
@@ -123,72 +133,59 @@ impl Fixture {
             .unwrap(),
         ))
         .unwrap();
-        self.server = Some(
-            bounded(
-                BACnetServer::sc_builder()
-                    .hub_url(url)
-                    .tls_config(try_make_node_tls_config(certs).unwrap())
-                    .vmac(SERVER)
-                    .device_uuid(SERVER_UUID)
-                    .database(db)
-                    .reconnect(reconnect())
-                    .build(),
-            )
-            .await
-            .unwrap(),
-        );
+        let builder = BACnetServer::sc_builder()
+            .hub_url(url)
+            .tls_config(try_make_node_tls_config(certs).unwrap())
+            .vmac(SERVER)
+            .device_uuid(SERVER_UUID)
+            .database(db)
+            .reconnect(reconnect());
+        self.server = Some(bounded(boxed(|| builder.build())).await.unwrap());
     }
 
     async fn client(&mut self, url: &str, certs: &CertMaterial) {
-        self.client = Some(
-            bounded(
-                BACnetClient::sc_builder()
-                    .hub_url(url)
-                    .tls_config(try_make_node_tls_config(certs).unwrap())
-                    .vmac([2; 6])
-                    .device_uuid(CLIENT_UUID)
-                    .apdu_timeout_ms(100)
-                    .apdu_retries(0)
-                    .reconnect(reconnect())
-                    .build(),
-            )
-            .await
-            .unwrap(),
-        );
+        let builder = BACnetClient::sc_builder()
+            .hub_url(url)
+            .tls_config(try_make_node_tls_config(certs).unwrap())
+            .vmac([2; 6])
+            .device_uuid(CLIENT_UUID)
+            .apdu_timeout_ms(100)
+            .apdu_retries(0)
+            .reconnect(reconnect());
+        self.client = Some(bounded(boxed(|| builder.build())).await.unwrap());
     }
 
     async fn read(&self) -> Result<(), bacnet_types::error::Error> {
         let oid = ObjectIdentifier::new(ObjectType::DEVICE, 123).unwrap();
-        let ack = self
-            .client
-            .as_ref()
-            .unwrap()
-            .read_property(&SERVER, oid, PropertyIdentifier::OBJECT_IDENTIFIER, None)
-            .await?;
+        let client = self.client.as_ref().unwrap();
+        let ack = boxed(|| {
+            client.read_property(&SERVER, oid, PropertyIdentifier::OBJECT_IDENTIFIER, None)
+        })
+        .await?;
         assert_eq!(ack.object_identifier, oid);
         assert_eq!(ack.property_value, vec![0xc4, 0x02, 0, 0, 123]);
         Ok(())
     }
 
     async fn reads_after_reconnect(&self) {
-        bounded(async {
+        bounded(boxed(|| async {
             loop {
-                if self.read().await.is_ok() {
+                if boxed(|| self.read()).await.is_ok() {
                     break;
                 }
                 tokio::task::yield_now().await;
             }
-        })
+        }))
         .await;
     }
 
     async fn stop(&mut self) {
         if let Some(client) = &mut self.client {
-            bounded(client.stop()).await.unwrap();
+            bounded(boxed(|| client.stop())).await.unwrap();
         }
         self.client = None;
         if let Some(server) = &mut self.server {
-            bounded(server.stop()).await.unwrap();
+            bounded(boxed(|| server.stop())).await.unwrap();
         }
         self.server = None;
         if let Some(mut proxy) = self.proxy.take() {
@@ -202,7 +199,7 @@ impl Fixture {
             assert!(result.is_ok() || result.unwrap_err().is_cancelled());
         }
         for hub in &mut self.hubs {
-            bounded(hub.stop()).await;
+            bounded(boxed(|| hub.stop())).await;
         }
     }
 }
@@ -217,8 +214,11 @@ impl Drop for Fixture {
 
 async fn run(test: impl AsyncFnOnce(&mut Fixture)) {
     let mut f = Fixture::default();
-    let result = AssertUnwindSafe(test(&mut f)).catch_unwind().await;
-    f.stop().await;
+    let body = &mut f;
+    let result = AssertUnwindSafe(boxed(move || test(body)))
+        .catch_unwind()
+        .await;
+    boxed(|| f.stop()).await;
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
@@ -241,10 +241,8 @@ async fn builder_redial(f: &mut Fixture, client_subject: bool) {
     f.proxy = Some(Proxy::new(vec![good, good, bad]).await);
     let proxy_url = f.proxy.as_ref().unwrap().url.clone();
     // Independently provisioned node UUIDs survive each builder's redial.
-    f.server(if client_subject { &url } else { &proxy_url }, &certs)
-        .await;
-    f.client(if client_subject { &proxy_url } else { &url }, &certs)
-        .await;
+    boxed(|| f.server(if client_subject { &url } else { &proxy_url }, &certs)).await;
+    boxed(|| f.client(if client_subject { &proxy_url } else { &url }, &certs)).await;
     assert_eq!(
         bounded(f.proxy.as_mut().unwrap().accepted.recv()).await,
         Some(0)

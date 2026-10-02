@@ -1,11 +1,11 @@
 //! Helpers for constructing MS/TP transports from Python kwargs.
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use pyo3::PyResult;
+use pyo3::prelude::*;
 
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::mstp::{MstpConfig, MstpTransport};
-use bacnet_transport::mstp_serial::{SerialConfig, TokioSerialPort};
+use bacnet_transport::mstp_serial::{self, SerialConfig, TokioSerialPort};
 use bacnet_types::error::Error;
 
 /// Serial port type used by the Python bindings' [`AnyTransport`] parameter.
@@ -68,13 +68,7 @@ pub fn build_mstp_transport(
         port_name: path.to_string(),
         baud_rate: mstp_baud,
     })
-    .map_err(|error| {
-        let message = match error {
-            Error::Encoding(message) => message,
-            other => other.to_string(),
-        };
-        PyRuntimeError::new_err(message)
-    })?;
+    .map_err(serial_error)?;
     let config = MstpConfig {
         this_station: mstp_mac,
         max_master: mstp_max_master,
@@ -82,6 +76,30 @@ pub fn build_mstp_transport(
         baud_rate: mstp_baud,
     };
     Ok(AnyTransport::Mstp(MstpTransport::new(serial, config)))
+}
+
+/// A serial failure as RuntimeError, with the serial layer's own message.
+fn serial_error(error: Error) -> PyErr {
+    let message = match error {
+        Error::Encoding(message) => message,
+        other => other.to_string(),
+    };
+    PyRuntimeError::new_err(message)
+}
+
+/// List the serial ports the operating system reports, as names to pass as
+/// `serial_port=` for `transport="mstp"`.
+///
+/// macOS lists them through IOKit, Windows through SetupAPI and the registry,
+/// and Linux from sysfs. Raises OSError (or the subclass for the failure's
+/// kind) if the operating system can't be asked.
+#[pyfunction]
+pub fn list_serial_ports(py: Python<'_>) -> PyResult<Vec<String>> {
+    py.detach(mstp_serial::available_ports)
+        .map_err(|error| match error {
+            Error::Transport(io) => PyErr::from(io),
+            other => serial_error(other),
+        })
 }
 
 #[cfg(test)]
