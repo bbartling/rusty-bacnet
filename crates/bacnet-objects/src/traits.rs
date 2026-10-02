@@ -503,14 +503,27 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     }
 
     /// Properties a whole-object (SubscribeCOV) notification reports after
-    /// Present_Value and Status_Flags, in report order.
+    /// its leading value and Status_Flags, in report order.
     ///
-    /// The default follows the object type's Table 13-1 row: Loop reports
-    /// Setpoint and Controlled_Variable_Value, Pulse Converter reports
-    /// Update_Time, and Staging reports Present_Stage, whose changes also
-    /// trigger a notification. Every other type reports nothing more. The server leaves out a listed property the
-    /// object's Property_List lacks. Property subscriptions (SubscribeCOVProperty
-    /// and SubscribeCOVPropertyMultiple) report their own property instead.
+    /// The leading value is Present_Value, except on Access Point, whose
+    /// Table 13-1 row leads with Access_Event; the server chooses it by object
+    /// type. The default follows the object type's Table 13-1 row:
+    ///
+    /// - Access Door: Door_Alarm_State, a trigger.
+    /// - Access Point: Access_Event_Tag, Access_Event_Time (a trigger),
+    ///   Access_Event_Credential and Access_Event_Authentication_Factor.
+    /// - Credential Data Input: Update_Time, a trigger.
+    /// - Load Control: Requested_Shed_Level, Start_Time, Shed_Duration and
+    ///   Duty_Window, all triggers.
+    /// - Loop: Setpoint and Controlled_Variable_Value.
+    /// - Pulse Converter: Update_Time.
+    /// - Staging: Present_Stage, a trigger.
+    ///
+    /// A trigger's change sends a notification by itself; any other listed
+    /// value only rides along. Every other type reports nothing more. The
+    /// server leaves out a listed property the object's Property_List lacks.
+    /// Property subscriptions (SubscribeCOVProperty and
+    /// SubscribeCOVPropertyMultiple) report their own property instead.
     fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
         cov_reported_properties_default(self.object_identifier().object_type())
     }

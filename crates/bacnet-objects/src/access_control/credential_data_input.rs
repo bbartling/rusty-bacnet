@@ -41,6 +41,17 @@ impl CredentialDataInputObject {
             reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
+
+    /// Set Update_Time, the moment the reader last updated Present_Value.
+    ///
+    /// A change of it triggers a SubscribeCOV notification (Table 13-1).
+    /// Over the network the property stays read-only.
+    pub fn set_update_time(&mut self, date: Date, time: Time) {
+        self.update_time = (
+            [date.year, date.month, date.day, date.day_of_week],
+            [time.hour, time.minute, time.second, time.hundredths],
+        );
+    }
 }
 
 impl BACnetObject for CredentialDataInputObject {
@@ -129,6 +140,11 @@ impl BACnetObject for CredentialDataInputObject {
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
+    }
+
+    /// Table 13-1 lists Credential Data Input, so it takes SubscribeCOV.
+    fn supports_cov(&self) -> bool {
+        true
     }
 }
 

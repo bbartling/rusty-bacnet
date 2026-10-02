@@ -40,6 +40,21 @@ impl AccessPointObject {
             reliability: Reliability::NO_FAULT_DETECTED,
         })
     }
+
+    /// Record the most recent access event: Access_Event, Access_Event_Tag
+    /// and Access_Event_Time, which the application's access logic produces.
+    ///
+    /// A change of Access_Event_Time triggers a SubscribeCOV notification;
+    /// the event and its tag only ride along (Table 13-1). Over the network
+    /// all three stay read-only.
+    pub fn set_access_event(&mut self, event: AccessEvent, tag: u64, date: Date, time: Time) {
+        self.access_event = event;
+        self.access_event_tag = tag;
+        self.access_event_time = (
+            [date.year, date.month, date.day, date.day_of_week],
+            [time.hour, time.minute, time.second, time.hundredths],
+        );
+    }
 }
 
 impl BACnetObject for AccessPointObject {
@@ -127,6 +142,12 @@ impl BACnetObject for AccessPointObject {
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
+    }
+
+    /// Table 13-1 lists Access Point, so it takes SubscribeCOV; its report
+    /// leads with Access_Event, as the point has no Present_Value.
+    fn supports_cov(&self) -> bool {
+        true
     }
 }
 
