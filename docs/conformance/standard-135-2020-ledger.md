@@ -164,9 +164,9 @@ broadcast; Clause 6.4.20 lets only a local broadcast teach.
 
 | Link | Owners | Logical broadcast on ingress | Reply egress | Evidence label |
 |---|---|---|---|---|
-| B/IP NORMAL | server, endpoint, client | Original-Broadcast, Forwarded-NPDU | Original-Broadcast | real UDP loopback; a registered port supplies the configured number |
+| B/IP NORMAL | server, endpoint, client | Original-Broadcast; Forwarded-NPDU from any UDP sender (compatibility policy) | Original-Broadcast | real UDP loopback; a registered port supplies the configured number |
 | B/IP BBMD | server, endpoint, client | Original-Broadcast, Forwarded-NPDU from a BDT peer, DBTN from a registered foreign device | Original-Broadcast, also forwarded to BDT/FDT (#937) | real UDP loopback; broadcast capture on Linux |
-| B/IP foreign device | server, endpoint, client | Forwarded-NPDU | DBTN to the configured BBMD | real UDP loopback |
+| B/IP foreign device | server, endpoint, client | Forwarded-NPDU from any UDP sender (compatibility policy) | DBTN to the configured BBMD | real UDP loopback |
 | B/IPv6 normal | server, client | multicast Original-Broadcast or Forwarded-NPDU | multicast Original-Broadcast on the selected link | isolated Linux IPv6 link, ignored in ordinary CI; installed Python qualification |
 | B/IPv6 foreign device | server, client | Forwarded-NPDU from the configured BBMD | DBTN to that BBMD | isolated Linux IPv6 link, ignored in ordinary CI |
 | BACnet/SC | server, endpoint, client | Hub-relayed broadcast VMAC only | Hub broadcast, including for direct queries | real constrained-TLS Hub and direct peers |

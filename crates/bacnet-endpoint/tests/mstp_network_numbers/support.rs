@@ -53,23 +53,28 @@ impl Drop for SignalOnDrop<'_> {
         self.0.add_permits(1);
     }
 }
-/// Signals `serial_dropped` as the last field of [`ObservedSerial`]. Fields drop
-/// in declaration order, so the simulated wire and frame observer are already
-/// closed when a waiter sees the permit. A `Drop` on `ObservedSerial` itself runs
-/// before its fields drop: in DedicatedThread mode the test thread could then
-/// still write to the peer end in that window.
-struct ReleaseSignal(Arc<Gates>);
-impl Drop for ReleaseSignal {
-    fn drop(&mut self) {
-        self.0.serial_dropped.add_permits(1);
+pub struct ObservedSerial {
+    /// Live until drop, which takes it before signalling `serial_dropped`.
+    inner: Option<LoopbackSerial>,
+    /// Live until drop, as for `inner`.
+    writes: Option<mpsc::UnboundedSender<MstpFrame>>,
+    gates: Arc<Gates>,
+}
+impl ObservedSerial {
+    fn wire(&self) -> &LoopbackSerial {
+        self.inner.as_ref().expect("serial wire is live until drop")
     }
 }
-pub struct ObservedSerial {
-    inner: LoopbackSerial,
-    writes: mpsc::UnboundedSender<MstpFrame>,
-    gates: Arc<Gates>,
-    /// Keep last; see [`ReleaseSignal`].
-    _released: ReleaseSignal,
+impl Drop for ObservedSerial {
+    fn drop(&mut self) {
+        // A Drop body runs before the struct's fields drop. Close the simulated
+        // wire and the frame observer explicitly first, so a waiter that sees the
+        // permit also sees peer writes fail; in DedicatedThread mode that waiter
+        // runs on another thread.
+        drop(self.inner.take());
+        drop(self.writes.take());
+        self.gates.serial_dropped.add_permits(1);
+    }
 }
 impl SerialPort for ObservedSerial {
     async fn write(&self, data: &[u8]) -> Result<(), Error> {
@@ -83,12 +88,16 @@ impl SerialPort for ObservedSerial {
             // Cancellation may stop a write before any simulated bytes complete.
             std::future::pending::<()>().await;
         }
-        self.inner.write(data).await?;
-        self.writes.send(frame).expect("observer stays attached");
+        self.wire().write(data).await?;
+        self.writes
+            .as_ref()
+            .expect("observer is live until drop")
+            .send(frame)
+            .expect("observer stays attached");
         Ok(())
     }
     async fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
-        self.inner.read(buf).await
+        self.wire().read(buf).await
     }
 }
 
@@ -279,10 +288,9 @@ pub async fn transport(mode: MstpExecutionMode, gates: Arc<Gates>) -> (GatedTran
     let (tx, writes) = mpsc::unbounded_channel();
     let transport = MstpTransport::new(
         ObservedSerial {
-            inner: serial,
-            writes: tx,
+            inner: Some(serial),
+            writes: Some(tx),
             gates: gates.clone(),
-            _released: ReleaseSignal(gates.clone()),
         },
         MstpConfig {
             this_station: NODE,

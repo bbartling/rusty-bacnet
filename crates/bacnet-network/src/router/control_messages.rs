@@ -738,13 +738,14 @@ pub(super) async fn handle_network_message(
         if !ctx.link_layer_group {
             return;
         }
-        // Clause 6.4.20 recommends reporting a conflict with a configured number.
         if npdu.payload.len() != 3 {
             return;
         }
         let net = u16::from_be_bytes([npdu.payload[0], npdu.payload[1]]);
         let configured = npdu.payload[2];
         if net != port_network {
+            // Clause 6.4.20 recommends reporting a peer's configured number
+            // that conflicts with this port's configured one.
             if configured == 1 {
                 warn!(
                     local_network = port_network,
