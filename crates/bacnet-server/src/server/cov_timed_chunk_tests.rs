@@ -3,9 +3,10 @@
 //!
 //! Each notification fits the smaller of the local maximum APDU and the one
 //! the subscriber advertised in its SubscribeCOVPropertyMultiple request.
-//! Older history goes first, and the last notification carries each
-//! reference's latest change with the untimestamped values. Every envelope
-//! names the last change its notification carries. Time is paused.
+//! Older changes go first, and the last notification carries the newest with
+//! the untimestamped values; `cov_timed_capture_order_tests` covers latest
+//! changes that do not fit it (#1008). Every envelope names the last change
+//! its notification carries. Time is paused.
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::analog::AnalogValueObject;
@@ -168,7 +169,7 @@ fn av2() -> ObjectIdentifier {
 }
 
 #[tokio::test(start_paused = true)]
-async fn untimestamped_values_and_latest_changes_go_in_the_last_notification() {
+async fn untimestamped_values_go_in_the_last_notification() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
         db.add(Box::new(AnalogValueObject::new(2, "AV-2", 62).unwrap()))
             .unwrap();
@@ -615,9 +616,13 @@ async fn a_change_too_large_for_any_notification_is_dropped_and_counted() {
     h.server.comm_state.store(0, Ordering::Release);
     h.set_clock(2);
     write("b".repeat(200)).await;
-    // The earlier change could never be sent, so it is dropped and counted.
-    // The latest is never dropped: it goes out, over the limit, as an
-    // unsplit report would.
+    // Neither could ever be sent, the latest no more than the earlier one,
+    // so both are dropped and counted, and nothing goes over the limit (#1008).
+    h.no_notification().await;
+    assert_eq!(h.server.cov_counters().timed_changes_dropped, 2);
+    // Nothing is left to hold the context back.
+    h.set_clock(3);
+    write("c".into()).await;
     let report = h.notification().await;
     let rows: Vec<_> = report.list_of_cov_notifications[0]
         .list_of_values
@@ -625,8 +630,8 @@ async fn a_change_too_large_for_any_notification_is_dropped_and_counted() {
         .filter(|value| value.property_identifier == PV)
         .map(|value| value.time_of_change)
         .collect();
-    assert_eq!(rows, vec![Some(time(2))]);
-    assert_eq!(h.server.cov_counters().timed_changes_dropped, 1);
+    assert_eq!(rows, vec![Some(time(3))]);
+    assert_eq!(h.server.cov_counters().timed_changes_dropped, 2);
     h.no_notification().await;
     h.server.stop().await.unwrap();
 }

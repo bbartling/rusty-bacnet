@@ -2284,30 +2284,36 @@ re-subscription is stamped with the Device time of admission; this is a local
 convention, since no change has been observed yet. A renewal keeps changes not yet
 conveyed, including those of a notification that fails during the renewal.
 
-History that one notification cannot carry goes out in several (§13.1,
-§13.18.1.1). Each notification fits the smaller of the server's `max_apdu_length`
-and the max-APDU-length-accepted from the header of the subscriber's latest
-SubscribeCOVPropertyMultiple request (`subscribe_multiple` takes it as
-`subscriber_max_apdu`; `None`, unknown, keeps the value advertised before). The
-oldest history goes first, as many changes per notification as fit, and the last
-notification carries each reference's latest change, the untimestamped values and
-whatever newer history still fits. Each notification's header timestamp names the
-last change it carries. An unconfirmed report sends every part, each retired once
-transmitted. One such report goes out per context at a time: another fanout of the
-context meanwhile leaves its changes queued, and the report hands the context to
-one follow-up once done, so no newer change reaches the subscriber ahead of older
-parts. A send failure, an exhausted event budget, or communication being disabled
-before a part (Clause 16.1) stops the rest, which the `Max_Notification_Delay`
-backstop below retries once nothing blocks it. Clause 13.18 expects several
-unconfirmed notifications when the changes do not fit one; the confirmed service
-(Clause 13.17) says nothing about splitting, so splitting a confirmed report is
-local policy: it sends only its oldest part and returns the rest to the queue once
-it holds the context, the Ack's follow-up sends the next part, and a part that
-fails goes out again first after the hold-off. A history change that does not fit
-a notification even alone is dropped and counted, since every attempt to send it
-would fail. Latest changes are never split or dropped, so the last notification
-can still exceed the limit when the latest changes and untimestamped values alone
-do; that is logged as a warning (#1008 tracks splitting them too).
+Changes that one notification cannot carry go out in several (§13.1,
+§13.18.1.1), strictly in capture order (#1008). Each notification fits the smaller
+of the server's `max_apdu_length` and the max-APDU-length-accepted from the header
+of the subscriber's latest SubscribeCOVPropertyMultiple request
+(`subscribe_multiple` takes it as `subscriber_max_apdu`; `None`, unknown, keeps the
+value advertised before). The oldest changes go first, as many per notification as
+fit, with no exception for a reference's latest change, and the last notification
+carries the untimestamped values with the newest changes that still fit. So every
+change in one notification is older than every change in the next, and each
+notification's header timestamp names the last change it carries. A reference
+whose latest change went out in an earlier notification conveys no change in the
+last one; a sibling there that carries its coordinate times it as for any
+timestamped selector that conveys no change, described above. Its observation
+completes when the notification carrying its latest change is sent, for an
+unconfirmed context, or acknowledged, for a confirmed one. An unconfirmed report
+sends every part, each retired once transmitted. One such report goes out per
+context at a time: another fanout of the context meanwhile leaves its changes
+queued, and the report hands the context to one follow-up once done, so no newer
+change reaches the subscriber ahead of older parts. A send failure, an exhausted
+event budget, or communication being disabled before a part (Clause 16.1) stops
+the rest, which the `Max_Notification_Delay` backstop below retries once nothing
+blocks it. Clause 13.18 expects several unconfirmed notifications when the changes
+do not fit one; the confirmed service (Clause 13.17) says nothing about splitting,
+so splitting a confirmed report is local policy: it sends only its oldest part and
+returns the rest to the queue once it holds the context, the Ack's follow-up sends
+the next part, and a part that fails goes out again first after the hold-off. A
+change that does not fit a notification even alone, a reference's latest
+included, is dropped and counted, since every attempt to send it would fail. Only
+the untimestamped values, which always travel together in the last notification,
+can still exceed the limit; that is logged as a warning.
 
 As a local bound, one context's pending changes are limited to an estimate of what
 four notifications of that size can carry. Each change counts its encoding, one

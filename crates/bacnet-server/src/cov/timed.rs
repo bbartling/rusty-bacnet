@@ -29,12 +29,12 @@
 //! Delays and waits live only with timestamped histories, so a context
 //! without one costs nothing here.
 //!
-//! History that one notification cannot carry goes out in several (§13.1,
-//! §13.18.1.1): [`TimedClaim::split_earliest`] moves the oldest history into
-//! earlier notifications, and each reference's latest change stays with the
-//! last one. An unconfirmed context sends one such report at a time
-//! ([`SendTurn`]), so a later report cannot overtake the parts of an earlier
-//! one.
+//! Changes that one notification cannot carry go out in several (§13.1,
+//! §13.18.1.1), strictly in capture order: [`TimedClaim::split_oldest`] moves
+//! the oldest changes, a reference's latest included, into earlier
+//! notifications (#1008). An unconfirmed context sends one such report at a
+//! time ([`SendTurn`]), so a later report cannot overtake the parts of an
+//! earlier one.
 //!
 //! Local bound policy: the pending changes of one COV-multiple context are
 //! limited to an estimate of what [`HISTORY_NOTIFICATIONS`] notifications can
@@ -48,7 +48,7 @@
 //! therefore cannot grow this state without limit. Only on overflow, the last
 //! resort, is a change dropped: the oldest of the same reference first, then
 //! the oldest in the context. A reference's newest change is never evicted, so
-//! every reference's current state is always conveyed. Each discarded change
+//! the bound never hides a reference's current state. Each discarded change
 //! is counted in [`AtomicCovCounters::timed_changes_dropped`].
 
 use std::collections::{HashMap, VecDeque};
@@ -138,6 +138,12 @@ impl TimedChange {
             observation,
             cost,
         }
+    }
+
+    /// Capture sequence of the change: its place in capture order across the
+    /// whole table.
+    pub(crate) fn seq(&self) -> u64 {
+        self.seq
     }
 
     /// Device clock frame of the change.
