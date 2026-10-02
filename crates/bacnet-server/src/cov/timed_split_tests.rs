@@ -226,7 +226,7 @@ fn deferred_parts_return_without_eviction_and_discarded_ones_are_counted() {
     assert_eq!(seconds(&drained), [1, 2, 3]);
     let mut claim = TimedClaim::new(store.clone());
     claim.add(k.clone(), incarnation, drained);
-    claim.split_oldest(1).discard("too large");
+    claim.split_oldest(1).discard();
     assert_eq!(dropped(&counters), 1);
     drop(claim);
     assert_eq!(seconds(&store.lock().drain(&k, 1).1), [2, 3]);

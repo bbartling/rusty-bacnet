@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tokio::time::Instant;
 
-use super::{CovSubscriptionKey, MultipleContextKey, TimedChange, TimedStore};
+use super::{CovSubscriptionKey, DropReason, MultipleContextKey, TimedChange, TimedStore};
 use crate::cov::CovRevisits;
 
 /// Changes drained into one notification, and the untimestamped references
@@ -110,10 +110,11 @@ impl TimedClaim {
 
     /// Give these changes up, counting each as dropped: one of them alone
     /// does not fit a notification, so every attempt to send it would fail.
-    pub(crate) fn discard(mut self, reason: &str) {
-        let store = self.store.lock();
+    /// The context warns about this once until it is admitted afresh (#1039).
+    pub(crate) fn discard(mut self) {
+        let mut store = self.store.lock();
         for (key, _, changes) in self.changes.drain(..) {
-            store.dropped(&key, changes.len(), reason);
+            store.dropped(&key, changes.len(), DropReason::TooLarge);
         }
     }
 

@@ -57,10 +57,12 @@
 //! resort, is a change dropped: the oldest of the same reference first, then
 //! the oldest in the context. A reference's newest change is never evicted, so
 //! the bound never hides a reference's current state. Each discarded change
-//! is counted in [`AtomicCovCounters::timed_changes_dropped`].
+//! is counted in [`AtomicCovCounters::timed_changes_dropped`]; the log gets
+//! one warning per context and cause until the context is admitted afresh
+//! (#1039), so a subscriber too small for any timestamped change does not
+//! flood it.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -68,7 +70,6 @@ use bacnet_objects::clock::ClockFrame;
 use bacnet_services::cov_multiple::COVNotificationValue;
 use tokio::sync::Notify;
 use tokio::time::Instant;
-use tracing::warn;
 
 use super::{AtomicCovCounters, CovObservation, CovSubscriptionKey, MultipleContextKey};
 
@@ -223,6 +224,8 @@ struct ContextTerms {
     /// report since the context was last admitted or lost a reference, at
     /// most one notification's worth.
     reserve: usize,
+    /// Causes of dropped changes the context has warned about (#1039).
+    warned: DropWarnings,
 }
 
 impl ContextTerms {
@@ -338,6 +341,11 @@ impl TimedHistories {
             self.local_apdu.min(usize::from(subscriber))
         });
         if let Some(terms) = self.terms.get_mut(context) {
+            // Changes that fit no notification before may fit now, or the
+            // other way round: warn afresh about drops (#1039).
+            if terms.apdu != apdu {
+                terms.warned = DropWarnings::default();
+            }
             terms.apdu = apdu;
             terms.reserve = 0;
         }
@@ -478,9 +486,13 @@ impl TimedHistories {
         let incarnation = self.next_incarnation;
         if let Some(context) = key.multiple_context() {
             let apdu = self.local_apdu;
-            self.terms
-                .entry(context.clone())
-                .or_insert(ContextTerms { apdu, reserve: 0 });
+            let terms = self.terms.entry(context.clone()).or_insert(ContextTerms {
+                apdu,
+                reserve: 0,
+                warned: DropWarnings::default(),
+            });
+            // A (re)admitted reference warns afresh about drops (#1039).
+            terms.warned = DropWarnings::default();
         }
         let history = self
             .histories
@@ -703,7 +715,7 @@ impl TimedHistories {
         if !removed.is_empty() {
             let bytes = removed.iter().map(|change| change.cost).sum();
             self.release_bytes(key, bytes);
-            self.dropped(key, removed.len(), "superseded by a delivered newer change");
+            self.dropped(key, removed.len(), DropReason::Superseded);
         }
     }
 
@@ -727,7 +739,7 @@ impl TimedHistories {
             .into_iter()
             .partition(|change| change.seq > committed);
         if !stale.is_empty() {
-            self.dropped(key, stale.len(), "superseded by a delivered newer change");
+            self.dropped(key, stale.len(), DropReason::Superseded);
         }
         self.insert_ordered(key, generation, keep, evict);
     }
@@ -791,20 +803,8 @@ impl TimedHistories {
                 .and_then(|h| h.entries.pop_front())
                 .expect("victim has an older pending change");
             self.release_bytes(&victim, evicted.cost);
-            self.dropped(&victim, 1, "context history full");
+            self.dropped(&victim, 1, DropReason::HistoryFull);
         }
-    }
-
-    fn dropped(&self, key: &CovSubscriptionKey, count: usize, reason: &str) {
-        self.counters
-            .timed_changes_dropped
-            .fetch_add(count as u64, Ordering::Relaxed);
-        warn!(
-            object = ?key.object(),
-            count,
-            reason,
-            "Dropped pending timestamped COV-multiple changes"
-        );
     }
 
     fn release_bytes(&mut self, key: &CovSubscriptionKey, bytes: usize) {
@@ -906,8 +906,12 @@ impl TimedStore {
 }
 
 mod claim;
+mod drops;
 mod owed;
 pub(crate) use claim::{SendTurn, TimedClaim};
+#[cfg(test)]
+pub(crate) use drops::DropWarningCount;
+use drops::{DropReason, DropWarnings};
 
 #[cfg(test)]
 #[path = "timed_split_tests.rs"]

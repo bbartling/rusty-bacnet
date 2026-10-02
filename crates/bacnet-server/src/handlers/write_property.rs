@@ -341,8 +341,21 @@ pub(crate) fn decode_write_property_value(
     }
     if matches!(
         property,
-        PropertyIdentifier::RECIPIENT_LIST | PropertyIdentifier::VALUE_SOURCE
+        PropertyIdentifier::RECIPIENT_LIST
+            | PropertyIdentifier::VALUE_SOURCE
+            | PropertyIdentifier::EFFECTIVE_PERIOD
     ) {
+        return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
+    }
+    // The Schedule's arrays of constructed elements reach the object as raw
+    // bytes, which it splits and decodes with the shared codecs; index 0, the
+    // array size, stays an Unsigned (#1057).
+    if array_index != Some(0)
+        && matches!(
+            property,
+            PropertyIdentifier::WEEKLY_SCHEDULE | PropertyIdentifier::EXCEPTION_SCHEDULE
+        )
+    {
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
     if property == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
