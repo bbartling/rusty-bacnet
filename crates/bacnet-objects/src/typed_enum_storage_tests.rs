@@ -15,8 +15,8 @@ use crate::staging::{StagingConfig, StagingObject};
 use crate::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, LifeSafetyOperation, LifeSafetyState, ObjectType, PropertyIdentifier,
-    Reliability, SilencedState,
+    ErrorClass, ErrorCode, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState, ObjectType,
+    PropertyIdentifier, Reliability, SilencedState,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
@@ -267,15 +267,16 @@ fn vendor_reliability_is_saved_and_restored_across_out_of_service() {
 }
 
 #[test]
-fn life_safety_mode_write_stores_any_enumerated() {
-    assert_unchecked_enumerated_round_trip(
-        &mut LifeSafetyPointObject::new(1, "LSP-1").unwrap(),
-        PropertyIdentifier::MODE,
-    );
-    assert_unchecked_enumerated_round_trip(
-        &mut LifeSafetyZoneObject::new(1, "LSZ-1").unwrap(),
-        PropertyIdentifier::MODE,
-    );
+fn life_safety_listed_mode_writes_store_any_enumerated() {
+    // A Mode write must name a mode in Accepted_Modes (#1092); once the
+    // application lists these values, Mode stores each one verbatim.
+    let listed = UNCHECKED_ENUMERATED.map(LifeSafetyMode::from_raw);
+    let mut point = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
+    point.set_accepted_modes(listed);
+    assert_unchecked_enumerated_round_trip(&mut point, PropertyIdentifier::MODE);
+    let mut zone = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
+    zone.set_accepted_modes(listed);
+    assert_unchecked_enumerated_round_trip(&mut zone, PropertyIdentifier::MODE);
 }
 
 #[test]
@@ -297,9 +298,11 @@ fn life_safety_proprietary_states_read_back_verbatim() {
 
     let mut zone = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
     zone.set_present_value(proprietary);
+    zone.set_tracking_value(proprietary);
     zone.set_silenced(SilencedState::from_raw(300));
     for property in [
         PropertyIdentifier::PRESENT_VALUE,
+        PropertyIdentifier::TRACKING_VALUE,
         PropertyIdentifier::SILENCED,
     ] {
         assert_eq!(read(&zone, property), PropertyValue::Enumerated(300));

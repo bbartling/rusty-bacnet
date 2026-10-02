@@ -5,9 +5,27 @@ use bacnet_objects::{
 };
 use bacnet_services::common::PropertyReference;
 use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::enums::{LifeSafetyMode, LifeSafetyState};
 use PropertyIdentifier as P;
 
 type ExpectedRead = Result<&'static [u8], ErrorCode>;
+
+/// Accepted_Modes as built: every standard mode, 0 through 19, in order.
+const STANDARD_MODES: &[u8] = &[
+    0x91, 0, 0x91, 1, 0x91, 2, 0x91, 3, 0x91, 4, 0x91, 5, 0x91, 6, 0x91, 7, 0x91, 8, 0x91, 9, 0x91,
+    10, 0x91, 11, 0x91, 12, 0x91, 13, 0x91, 14, 0x91, 15, 0x91, 16, 0x91, 17, 0x91, 18, 0x91, 19,
+];
+
+/// Accepted_Modes narrowed to OFF, ON and TEST.
+const NARROWED_MODES: &[u8] = &[0x91, 0, 0x91, 1, 0x91, 2];
+
+fn narrowed() -> [LifeSafetyMode; 3] {
+    [
+        LifeSafetyMode::OFF,
+        LifeSafetyMode::ON,
+        LifeSafetyMode::TEST,
+    ]
+}
 
 #[test]
 fn rpm_life_safety_point_indexed_reads_and_list_bytes_are_unchanged() {
@@ -16,6 +34,7 @@ fn rpm_life_safety_point_indexed_reads_and_list_bytes_are_unchanged() {
         if configured {
             object.set_direct_reading(42.5);
             object.add_member(ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 9).unwrap());
+            object.set_accepted_modes(narrowed());
         }
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
@@ -30,6 +49,20 @@ fn rpm_life_safety_point_indexed_reads_and_list_bytes_are_unchanged() {
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
             (P::MODE, None, Ok(&[0x91, 0])),
+            (
+                P::ACCEPTED_MODES,
+                None,
+                Ok(if configured {
+                    NARROWED_MODES
+                } else {
+                    STANDARD_MODES
+                }),
+            ),
+            (
+                P::ACCEPTED_MODES,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
             (P::SILENCED, None, Ok(&[0x91, 0])),
             (P::OPERATION_EXPECTED, None, Ok(&[0x91, 0])),
             (P::TRACKING_VALUE, None, Ok(&[0x91, 0])),
@@ -75,16 +108,17 @@ fn rpm_life_safety_point_indexed_reads_and_list_bytes_are_unchanged() {
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
-                    0x91, 28, 0x91, 85, 0x91, 160, 0x91, 163, 0x91, 161, 0x91, 164, 0x91, 159,
-                    0x91, 156, 0x91, 158, 0x91, 36, 0x91, 111, 0x91, 81, 0x91, 103,
+                    0x91, 28, 0x91, 85, 0x91, 160, 0x91, 175, 0x91, 163, 0x91, 161, 0x91, 164,
+                    0x91, 159, 0x91, 156, 0x91, 158, 0x91, 36, 0x91, 111, 0x91, 81, 0x91, 103,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 13])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 14])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
-            (P::PROPERTY_LIST, Some(13), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 175])),
+            (P::PROPERTY_LIST, Some(14), Ok(&[0x91, 103])),
             (
                 P::PROPERTY_LIST,
-                Some(14),
+                Some(15),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -92,7 +126,6 @@ fn rpm_life_safety_point_indexed_reads_and_list_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            (P::ACCEPTED_MODES, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::RELIABILITY_EVALUATION_INHIBIT,
                 None,
@@ -110,6 +143,8 @@ fn rpm_life_safety_zone_indexed_reads_and_list_bytes_are_unchanged() {
         if configured {
             object
                 .add_zone_member(ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 3).unwrap());
+            object.set_accepted_modes(narrowed());
+            object.set_tracking_value(LifeSafetyState::ALARM);
         }
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
@@ -117,8 +152,32 @@ fn rpm_life_safety_zone_indexed_reads_and_list_bytes_are_unchanged() {
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             (P::PRESENT_VALUE, None, Ok(&[0x91, 0])),
             (P::MODE, None, Ok(&[0x91, 0])),
+            (
+                P::ACCEPTED_MODES,
+                None,
+                Ok(if configured {
+                    NARROWED_MODES
+                } else {
+                    STANDARD_MODES
+                }),
+            ),
+            (
+                P::ACCEPTED_MODES,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
             (P::SILENCED, None, Ok(&[0x91, 0])),
             (P::OPERATION_EXPECTED, None, Ok(&[0x91, 0])),
+            (
+                P::TRACKING_VALUE,
+                None,
+                Ok(if configured { &[0x91, 2] } else { &[0x91, 0] }),
+            ),
+            (
+                P::TRACKING_VALUE,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
             (
                 P::ZONE_MEMBERS,
                 None,
@@ -141,16 +200,18 @@ fn rpm_life_safety_zone_indexed_reads_and_list_bytes_are_unchanged() {
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
-                    0x91, 28, 0x91, 85, 0x91, 160, 0x91, 163, 0x91, 161, 0x91, 165, 0x91, 36, 0x91,
-                    111, 0x91, 81, 0x91, 103,
+                    0x91, 28, 0x91, 85, 0x91, 160, 0x91, 175, 0x91, 163, 0x91, 161, 0x91, 164,
+                    0x91, 165, 0x91, 36, 0x91, 111, 0x91, 81, 0x91, 103,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 10])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 12])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
-            (P::PROPERTY_LIST, Some(10), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 175])),
+            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 164])),
+            (P::PROPERTY_LIST, Some(12), Ok(&[0x91, 103])),
             (
                 P::PROPERTY_LIST,
-                Some(11),
+                Some(13),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -158,10 +219,8 @@ fn rpm_life_safety_zone_indexed_reads_and_list_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            // The zone serves no Tracking_Value or Member_Of; both stay unknown.
-            (P::TRACKING_VALUE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            // The optional Member_Of is not served on the zone.
             (P::MEMBER_OF, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-            (P::ACCEPTED_MODES, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
         ];
         assert_indexed_cases(&db, oid, cases);
     }

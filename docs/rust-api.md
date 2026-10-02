@@ -3276,23 +3276,30 @@ The bundled server uses those deltas, trusted rearm readback, and exact WP/WPM/
 unlocking and after the service ACK where applicable.
 Whole-object reports are exactly `Present_Value` plus `Status_Flags` and trigger
 only when either changes. Property reports are the subscribed property plus one
-`Status_Flags` and trigger when either changes. Point property COV supports
-`Present_Value`, `Status_Flags`, `Tracking_Value`, `Silenced`, and
-`Operation_Expected`; Zone supports the same set without its unmodeled
-`Tracking_Value`, which is rejected with `PROPERTY / NOT_COV_PROPERTY`.
+`Status_Flags` and trigger when either changes. Point and Zone property COV
+both support `Present_Value`, `Status_Flags`, `Tracking_Value`, `Silenced`, and
+`Operation_Expected`; a Zone reset commit carries `tracking_value` the way a
+Point commit does.
 Low-level object setters still bypass server notification ownership. They take
 the typed enums: `set_present_value` and `set_tracking_value` a
 `LifeSafetyState`, `set_mode` a `LifeSafetyMode`, `set_silenced` a
 `SilencedState` and `set_operation_expected` a `LifeSafetyOperation`. Each stores
 the value as given, so a proprietary value reads back unchanged.
 
+`Accepted_Modes` lists the modes a WriteProperty or WritePropertyMultiple of
+`Mode` may select. It starts as every standard `LifeSafetyMode`, and
+`set_accepted_modes` replaces it (each mode kept once, in the order given). A
+network `Mode` write naming an unlisted value fails with
+`PROPERTY / VALUE_OUT_OF_RANGE` and leaves `Mode` unchanged; the local
+`set_mode` is not checked against the list.
+
 This is a bounded operational-state slice with pinned partial metadata (Point
-`POINT_BASE` 17 rows, Zone `ZONE_BASE` 14 rows; exact PICS projection tests) and
-network read-only `Silenced`/`Operation_Expected`; not complete Life Safety
-Point/Zone tables, formal PICS/BIBB/profile/device-advertisement,
-`Accepted_Modes`/mode validation, out-of-service tracking/`Reliability`
-writability, or intrinsic `CHANGE_OF_LIFE_SAFETY` event-algorithm conformance
-(`Event_State` intrinsic-only, `IN_ALARM` latent with no setter).
+`POINT_BASE` 18 rows, Zone `ZONE_BASE` 16 rows; exact PICS projection tests) and
+network read-only `Silenced`/`Operation_Expected`/`Accepted_Modes`; not complete
+Life Safety Point/Zone tables, formal PICS/BIBB/profile/device-advertisement,
+out-of-service tracking/`Reliability` writability, or intrinsic
+`CHANGE_OF_LIFE_SAFETY` event-algorithm conformance (`Event_State`
+intrinsic-only, `IN_ALARM` latent with no setter).
 
 ### Handled Services
 

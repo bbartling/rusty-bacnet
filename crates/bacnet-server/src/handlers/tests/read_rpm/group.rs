@@ -317,25 +317,42 @@ fn rpm_global_group_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
+            // Event_State stays NORMAL without intrinsic reporting, and no
+            // member here references Status_Flags, so Member_Status_Flags is
+            // all clear (#1092).
+            (P::EVENT_STATE, None, Ok(&[0x91, 0])),
+            (
+                P::EVENT_STATE,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (P::MEMBER_STATUS_FLAGS, None, Ok(&[0x82, 4, 0])),
+            (
+                P::MEMBER_STATUS_FLAGS,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
             (
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
-                    0x91, 28, 0x92, 0x01, 0x59, 0x91, 85, 0x92, 0x01, 0x5A, 0x91, 111, 0x91, 81,
-                    0x91, 103,
+                    0x91, 28, 0x92, 0x01, 0x59, 0x91, 85, 0x92, 0x01, 0x5A, 0x91, 111, 0x91, 36,
+                    0x92, 0x01, 0x5B, 0x91, 81, 0x91, 103,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 7])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 9])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x92, 0x01, 0x59])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 85])),
             (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x5A])),
             (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 81])),
-            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 36])),
+            (P::PROPERTY_LIST, Some(7), Ok(&[0x92, 0x01, 0x5B])),
+            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 81])),
+            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 103])),
             (
                 P::PROPERTY_LIST,
-                Some(8),
+                Some(10),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -343,22 +360,51 @@ fn rpm_global_group_indexed_reads_and_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            // Unserved GlobalGroup table rows stay unknown: Event_State and
-            // Member_Status_Flags have no read arm.
-            (P::EVENT_STATE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-            (
-                P::EVENT_STATE,
-                Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (
-                P::MEMBER_STATUS_FLAGS,
-                None,
-                Err(ErrorCode::UNKNOWN_PROPERTY),
-            ),
+            // The COVU rows stay unknown: the object sends no unsubscribed
+            // COV.
+            (P::COVU_PERIOD, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
         ];
         assert_cases(&db, oid, cases);
     }
+}
+
+#[test]
+fn rp_and_rpm_global_group_member_status_flags_combine_status_flags_members() {
+    // Two members reference Status_Flags and one Present_Value; only the two
+    // Status_Flags values combine (Clause 12.50.10, #1092).
+    let mut object = GlobalGroupObject::new(7, "GG-7").unwrap();
+    for (instance, property) in [
+        (1, P::STATUS_FLAGS),
+        (2, P::PRESENT_VALUE),
+        (3, P::STATUS_FLAGS),
+    ] {
+        object
+            .group_members
+            .push(BACnetDeviceObjectPropertyReference {
+                object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance)
+                    .unwrap(),
+                property_identifier: property.to_raw(),
+                property_array_index: None,
+                device_identifier: None,
+            });
+    }
+    let flags = |octet| PropertyValue::BitString {
+        unused_bits: 4,
+        data: vec![octet],
+    };
+    // IN_ALARM on the first member, OVERRIDDEN on the Present_Value member
+    // (ignored) and FAULT on the third.
+    object.present_value = vec![flags(0x80), flags(0x20), flags(0x40)];
+    let oid = object.object_identifier();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(object)).unwrap();
+    let cases: &[(P, Option<u32>, ExpectedRead)] = &[
+        (P::MEMBER_STATUS_FLAGS, None, Ok(&[0x82, 4, 0xC0])),
+        (P::EVENT_STATE, None, Ok(&[0x91, 0])),
+        // The group's own IN_ALARM follows its NORMAL Event_State.
+        (P::STATUS_FLAGS, None, Ok(&[0x82, 4, 0])),
+    ];
+    assert_cases(&db, oid, cases);
 }
 
 #[test]

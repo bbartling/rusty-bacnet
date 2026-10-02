@@ -1,13 +1,14 @@
 use super::*;
 
-use bacnet_types::enums::SilencedState;
+use bacnet_types::enums::{LifeSafetyState, SilencedState};
 
 // ---------------------------------------------------------------------------
 // PR-0803 sub-slice 1 (R1 outcome b): operation -> property -> COV pins.
 // Event_State is intrinsic-only, so LSO dispatches fan out exactly the
 // Silenced / Operation_Expected / Present_Value / Tracking_Value deltas with
 // one appended Status_Flags each — no coarse PV blast, no duplicated
-// Status_Flags, no Event_State payload, and no invented Zone Tracking_Value.
+// Status_Flags and no Event_State payload. The Zone's Tracking_Value (#1092)
+// notifies only when a reset commit changes it.
 // ---------------------------------------------------------------------------
 
 /// Decode one unconfirmed COV notification, keeping the subscriber handle so
@@ -278,8 +279,15 @@ async fn reset_dispatch_fans_out_exact_pv_delta_without_event_state_blast() {
     }
 }
 
+fn zone_subscription(property: Option<PropertyIdentifier>, process_id: u32) -> CovSubscription {
+    let mut sub = subscription(property, CovNotificationKind::Single, process_id);
+    sub.monitored_object_identifier =
+        ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 1).unwrap();
+    sub
+}
+
 #[tokio::test]
-async fn zone_silence_dispatch_never_invents_tracking_value() {
+async fn zone_silence_dispatch_leaves_the_tracking_value_subscription_silent() {
     use bacnet_types::enums::LifeSafetyOperation;
 
     let zone_oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 1).unwrap();
@@ -288,16 +296,15 @@ async fn zone_silence_dispatch_never_invents_tracking_value() {
     zone.set_operation_expected(LifeSafetyOperation::SILENCE);
     let mut db = clocked_test_database();
     db.add(Box::new(zone)).unwrap();
-
-    let mut silenced_sub = subscription(
-        Some(PropertyIdentifier::SILENCED),
-        CovNotificationKind::Single,
-        1,
-    );
-    silenced_sub.monitored_object_identifier = zone_oid;
-    let mut whole_sub = subscription(None, CovNotificationKind::Single, 2);
-    whole_sub.monitored_object_identifier = zone_oid;
-    let fixture = DispatchFixture::new(db, [silenced_sub, whole_sub]).await;
+    let fixture = DispatchFixture::new(
+        db,
+        [
+            zone_subscription(Some(PropertyIdentifier::SILENCED), 1),
+            zone_subscription(None, 2),
+            zone_subscription(Some(PropertyIdentifier::TRACKING_VALUE), 3),
+        ],
+    )
+    .await;
 
     fixture
         .dispatch(
@@ -323,11 +330,11 @@ async fn zone_silence_dispatch_never_invents_tracking_value() {
                 .unwrap(),
             PropertyValue::Enumerated(0)
         );
-        assert!(
+        assert_eq!(
             object
                 .read_property(PropertyIdentifier::TRACKING_VALUE, None)
-                .is_err(),
-            "zone must not expose an invented Tracking_Value"
+                .unwrap(),
+            PropertyValue::Enumerated(LifeSafetyState::QUIET.to_raw())
         );
     }
 
@@ -340,11 +347,67 @@ async fn zone_silence_dispatch_never_invents_tracking_value() {
     );
     assert_eq!(notifications[0].subscriber_process_identifier, 1);
     assert_exact_single_payload(&notifications[0], PropertyIdentifier::SILENCED);
-    assert!(
-        !notifications[0]
-            .list_of_values
-            .iter()
-            .any(|value| value.property_identifier == PropertyIdentifier::TRACKING_VALUE),
-        "zone COV must never carry an invented Tracking_Value"
-    );
+}
+
+#[tokio::test]
+async fn zone_reset_dispatch_notifies_a_committed_tracking_value_change() {
+    use bacnet_objects::life_safety::LifeSafetyZoneResetCommit;
+    use bacnet_types::enums::LifeSafetyOperation;
+
+    let zone_oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 1).unwrap();
+    let mut zone = bacnet_objects::life_safety::LifeSafetyZoneObject::new(1, "zone").unwrap();
+    zone.set_present_value(LifeSafetyState::ALARM);
+    zone.set_tracking_value(LifeSafetyState::ALARM);
+    zone.set_operation_expected(LifeSafetyOperation::RESET);
+    zone.set_reset_executor(Arc::new(|_| {
+        Ok(LifeSafetyZoneResetCommit {
+            tracking_value: Some(LifeSafetyState::QUIET),
+            ..Default::default()
+        })
+    }));
+    let mut db = clocked_test_database();
+    db.add(Box::new(zone)).unwrap();
+    let fixture = DispatchFixture::new(
+        db,
+        [
+            zone_subscription(Some(PropertyIdentifier::TRACKING_VALUE), 1),
+            zone_subscription(None, 2),
+            zone_subscription(Some(PropertyIdentifier::SILENCED), 3),
+        ],
+    )
+    .await;
+
+    fixture
+        .dispatch(
+            0x43,
+            ConfirmedServiceChoice::LIFE_SAFETY_OPERATION,
+            encode_life_safety_operation(LifeSafetyOperation::RESET, zone_oid),
+        )
+        .await;
+    let apdus = fixture.take_apdus();
+
+    {
+        let db = fixture.db.read().await;
+        let object = db.get(&zone_oid).unwrap();
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::TRACKING_VALUE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(LifeSafetyState::QUIET.to_raw())
+        );
+        // The latched Present_Value was not part of the commit.
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+                .unwrap(),
+            PropertyValue::Enumerated(LifeSafetyState::ALARM.to_raw())
+        );
+    }
+
+    assert!(matches!(apdus[0], Apdu::SimpleAck(_)));
+    let notifications: Vec<_> = apdus[1..].iter().map(decode_cov_notification).collect();
+    // Only the Tracking_Value sub fires: Present_Value and Silenced held.
+    assert_eq!(notifications.len(), 1, "{notifications:?}");
+    assert_eq!(notifications[0].subscriber_process_identifier, 1);
+    assert_exact_single_payload(&notifications[0], PropertyIdentifier::TRACKING_VALUE);
 }

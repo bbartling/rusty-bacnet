@@ -40,8 +40,16 @@
 //! service printed pp. 701-702 (PDF pp. 703-704), CHANGE_OF_LIFE_SAFETY
 //! printed pp. 657-658 (PDF pp. 659-660). Refs #177 (no claim change here).
 //!
-//! The built-in Zone object intentionally carries no Tracking_Value, and no
-//! reset or COV path fabricates one.
+//! Point and Zone both serve Tracking_Value (Clauses 12.15.5 and 12.16.5): the
+//! application keeps it current through `set_tracking_value` or a reset
+//! commit, and both objects offer it for property COV.
+//!
+//! Accepted_Modes (Clauses 12.15.13 and 12.16.13) is the configured set of
+//! modes a network write of Mode may select. It starts as every standard
+//! LifeSafetyMode and an application narrows it with `set_accepted_modes`. A
+//! Mode write naming any other value fails with PROPERTY / VALUE_OUT_OF_RANGE
+//! and leaves the object unchanged. The local `set_mode` ignores the list,
+//! because the object's own logic may move Mode outside it.
 
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState,
@@ -112,7 +120,9 @@ fn apply_silenced_operation(
     Ok(LifeSafetyOperationEffect::Applied)
 }
 
-const POINT_COV_PROPERTIES: [PropertyIdentifier; 5] = [
+/// Properties a Point or Zone offers for property COV, in the order an
+/// operation outcome reports their deltas.
+const COV_PROPERTIES: [PropertyIdentifier; 5] = [
     PropertyIdentifier::PRESENT_VALUE,
     PropertyIdentifier::TRACKING_VALUE,
     PropertyIdentifier::SILENCED,
@@ -120,12 +130,52 @@ const POINT_COV_PROPERTIES: [PropertyIdentifier; 5] = [
     PropertyIdentifier::STATUS_FLAGS,
 ];
 
-const ZONE_COV_PROPERTIES: [PropertyIdentifier; 4] = [
-    PropertyIdentifier::PRESENT_VALUE,
-    PropertyIdentifier::SILENCED,
-    PropertyIdentifier::OPERATION_EXPECTED,
-    PropertyIdentifier::STATUS_FLAGS,
-];
+/// The Accepted_Modes a new Point or Zone starts with: every standard mode.
+fn standard_life_safety_modes() -> Vec<LifeSafetyMode> {
+    LifeSafetyMode::ALL_NAMED
+        .iter()
+        .map(|&(_, mode)| mode)
+        .collect()
+}
+
+/// Keep each mode once, in the caller's order.
+fn distinct_modes(modes: impl IntoIterator<Item = LifeSafetyMode>) -> Vec<LifeSafetyMode> {
+    let mut distinct = Vec::new();
+    for mode in modes {
+        if !distinct.contains(&mode) {
+            distinct.push(mode);
+        }
+    }
+    distinct
+}
+
+fn read_accepted_modes(accepted_modes: &[LifeSafetyMode]) -> PropertyValue {
+    PropertyValue::List(
+        accepted_modes
+            .iter()
+            .map(|mode| PropertyValue::Enumerated(mode.to_raw()))
+            .collect(),
+    )
+}
+
+/// Apply a network write of Mode. A mode missing from Accepted_Modes is
+/// refused with PROPERTY / VALUE_OUT_OF_RANGE (Clauses 12.15.13 and 12.16.13)
+/// and Mode keeps its value.
+fn write_mode(
+    mode: &mut LifeSafetyMode,
+    accepted_modes: &[LifeSafetyMode],
+    value: &PropertyValue,
+) -> Result<(), Error> {
+    let PropertyValue::Enumerated(raw) = value else {
+        return Err(common::invalid_data_type_error());
+    };
+    let requested = LifeSafetyMode::from_raw(*raw);
+    if !accepted_modes.contains(&requested) {
+        return Err(common::value_out_of_range_error());
+    }
+    *mode = requested;
+    Ok(())
+}
 
 fn operation_outcome(
     object: &dyn BACnetObject,
@@ -164,6 +214,8 @@ pub struct LifeSafetyPointObject {
     present_value: LifeSafetyState,
     /// Operating mode.
     mode: LifeSafetyMode,
+    /// Modes a network write of Mode may select.
+    accepted_modes: Vec<LifeSafetyMode>,
     /// Silenced state.
     silenced: SilencedState,
     /// Expected operation.
@@ -189,8 +241,9 @@ pub struct LifeSafetyPointObject {
 impl LifeSafetyPointObject {
     /// Create a new Life Safety Point object.
     ///
-    /// Defaults: present_value = QUIET, mode = OFF, silenced = UNSILENCED,
-    /// operation_expected = NONE, tracking_value = QUIET.
+    /// Defaults: present_value = QUIET, mode = OFF, accepted_modes = every
+    /// standard mode, silenced = UNSILENCED, operation_expected = NONE,
+    /// tracking_value = QUIET.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, instance)?;
         Ok(Self {
@@ -199,6 +252,7 @@ impl LifeSafetyPointObject {
             description: String::new(),
             present_value: LifeSafetyState::QUIET,
             mode: LifeSafetyMode::OFF,
+            accepted_modes: standard_life_safety_modes(),
             silenced: SilencedState::UNSILENCED,
             operation_expected: LifeSafetyOperation::NONE,
             tracking_value: LifeSafetyState::QUIET,
@@ -218,9 +272,18 @@ impl LifeSafetyPointObject {
         self.present_value = state;
     }
 
-    /// Set the operating mode.
+    /// Set the operating mode from local logic, which Accepted_Modes does not
+    /// constrain.
     pub fn set_mode(&mut self, mode: LifeSafetyMode) {
         self.mode = mode;
+    }
+
+    /// Configure Accepted_Modes, the modes a network write of Mode may select.
+    ///
+    /// A repeated mode is kept once. The current Mode stays as it is even when
+    /// the new list leaves it out.
+    pub fn set_accepted_modes(&mut self, modes: impl IntoIterator<Item = LifeSafetyMode>) {
+        self.accepted_modes = distinct_modes(modes);
     }
 
     /// Set the tracking value.
@@ -293,6 +356,9 @@ impl BACnetObject for LifeSafetyPointObject {
                 Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
             }
             p if p == PropertyIdentifier::MODE => Ok(PropertyValue::Enumerated(self.mode.to_raw())),
+            p if p == PropertyIdentifier::ACCEPTED_MODES => {
+                Ok(read_accepted_modes(&self.accepted_modes))
+            }
             p if p == PropertyIdentifier::SILENCED => {
                 Ok(PropertyValue::Enumerated(self.silenced.to_raw()))
             }
@@ -333,11 +399,7 @@ impl BACnetObject for LifeSafetyPointObject {
             return Err(common::write_access_denied_error());
         }
         if property == PropertyIdentifier::MODE {
-            if let PropertyValue::Enumerated(v) = value {
-                self.mode = LifeSafetyMode::from_raw(v);
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+            return write_mode(&mut self.mode, &self.accepted_modes, &value);
         }
         if property == PropertyIdentifier::SILENCED
             || property == PropertyIdentifier::OPERATION_EXPECTED
@@ -387,14 +449,14 @@ impl BACnetObject for LifeSafetyPointObject {
     }
 
     fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
-        POINT_COV_PROPERTIES.contains(&property)
+        COV_PROPERTIES.contains(&property)
     }
 
     fn apply_life_safety_operation(
         &mut self,
         operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationOutcome, Error> {
-        let before = POINT_COV_PROPERTIES
+        let before = COV_PROPERTIES
             .into_iter()
             .filter_map(|property| {
                 self.read_property(property, None)
@@ -436,10 +498,14 @@ pub struct LifeSafetyZoneObject {
     present_value: LifeSafetyState,
     /// Operating mode.
     mode: LifeSafetyMode,
+    /// Modes a network write of Mode may select.
+    accepted_modes: Vec<LifeSafetyMode>,
     /// Silenced state.
     silenced: SilencedState,
     /// Expected operation.
     operation_expected: LifeSafetyOperation,
+    /// Tracking value.
+    tracking_value: LifeSafetyState,
     /// Points belonging to this zone.
     zone_members: Vec<ObjectIdentifier>,
     /// Event_State.
@@ -455,8 +521,9 @@ pub struct LifeSafetyZoneObject {
 impl LifeSafetyZoneObject {
     /// Create a new Life Safety Zone object.
     ///
-    /// Defaults: present_value = QUIET, mode = OFF, silenced = UNSILENCED,
-    /// operation_expected = NONE.
+    /// Defaults: present_value = QUIET, mode = OFF, accepted_modes = every
+    /// standard mode, silenced = UNSILENCED, operation_expected = NONE,
+    /// tracking_value = QUIET.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, instance)?;
         Ok(Self {
@@ -465,8 +532,10 @@ impl LifeSafetyZoneObject {
             description: String::new(),
             present_value: LifeSafetyState::QUIET,
             mode: LifeSafetyMode::OFF,
+            accepted_modes: standard_life_safety_modes(),
             silenced: SilencedState::UNSILENCED,
             operation_expected: LifeSafetyOperation::NONE,
+            tracking_value: LifeSafetyState::QUIET,
             zone_members: Vec::new(),
             event_state: EventState::NORMAL,
             status_flags: StatusFlags::empty(),
@@ -481,9 +550,23 @@ impl LifeSafetyZoneObject {
         self.present_value = state;
     }
 
-    /// Set the operating mode.
+    /// Set the operating mode from local logic, which Accepted_Modes does not
+    /// constrain.
     pub fn set_mode(&mut self, mode: LifeSafetyMode) {
         self.mode = mode;
+    }
+
+    /// Configure Accepted_Modes, the modes a network write of Mode may select.
+    ///
+    /// A repeated mode is kept once. The current Mode stays as it is even when
+    /// the new list leaves it out.
+    pub fn set_accepted_modes(&mut self, modes: impl IntoIterator<Item = LifeSafetyMode>) {
+        self.accepted_modes = distinct_modes(modes);
+    }
+
+    /// Set the tracking value.
+    pub fn set_tracking_value(&mut self, state: LifeSafetyState) {
+        self.tracking_value = state;
     }
 
     /// Set the locally determined silenced state.
@@ -546,11 +629,17 @@ impl BACnetObject for LifeSafetyZoneObject {
                 Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
             }
             p if p == PropertyIdentifier::MODE => Ok(PropertyValue::Enumerated(self.mode.to_raw())),
+            p if p == PropertyIdentifier::ACCEPTED_MODES => {
+                Ok(read_accepted_modes(&self.accepted_modes))
+            }
             p if p == PropertyIdentifier::SILENCED => {
                 Ok(PropertyValue::Enumerated(self.silenced.to_raw()))
             }
             p if p == PropertyIdentifier::OPERATION_EXPECTED => {
                 Ok(PropertyValue::Enumerated(self.operation_expected.to_raw()))
+            }
+            p if p == PropertyIdentifier::TRACKING_VALUE => {
+                Ok(PropertyValue::Enumerated(self.tracking_value.to_raw()))
             }
             p if p == PropertyIdentifier::ZONE_MEMBERS => Ok(PropertyValue::List(
                 self.zone_members
@@ -577,11 +666,7 @@ impl BACnetObject for LifeSafetyZoneObject {
             return Err(common::write_access_denied_error());
         }
         if property == PropertyIdentifier::MODE {
-            if let PropertyValue::Enumerated(v) = value {
-                self.mode = LifeSafetyMode::from_raw(v);
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+            return write_mode(&mut self.mode, &self.accepted_modes, &value);
         }
         if property == PropertyIdentifier::SILENCED
             || property == PropertyIdentifier::OPERATION_EXPECTED
@@ -616,14 +701,14 @@ impl BACnetObject for LifeSafetyZoneObject {
     }
 
     fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
-        ZONE_COV_PROPERTIES.contains(&property)
+        COV_PROPERTIES.contains(&property)
     }
 
     fn apply_life_safety_operation(
         &mut self,
         operation: LifeSafetyOperation,
     ) -> Result<LifeSafetyOperationOutcome, Error> {
-        let before = ZONE_COV_PROPERTIES
+        let before = COV_PROPERTIES
             .into_iter()
             .filter_map(|property| {
                 self.read_property(property, None)
@@ -660,3 +745,6 @@ mod reset_tests;
 
 #[cfg(test)]
 mod event_state_tests;
+
+#[cfg(test)]
+mod accepted_modes_tests;
