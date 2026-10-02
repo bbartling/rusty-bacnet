@@ -401,13 +401,6 @@ impl BACnetServer {
         self.push_pending(Box::new(tl))
     }
 
-    /// Add a Loop (PID) object to the server (before starting).
-    #[pyo3(signature = (instance, name, output_units=62))]
-    fn add_loop(&self, instance: u32, name: &str, output_units: u32) -> PyResult<()> {
-        let lp = LoopObject::new(instance, name, output_units).map_err(to_py_err)?;
-        self.push_pending(Box::new(lp))
-    }
-
     /// Add an Audit Log object to the server (before starting).
     #[pyo3(signature = (instance, name, storage_path, buffer_size=100))]
     fn add_audit_log(

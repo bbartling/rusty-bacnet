@@ -164,6 +164,7 @@ mod server_methods {
     mod dcc_outcomes;
     mod file_configuration;
     mod lifecycle;
+    mod loop_methods;
     mod network_port;
     mod registration;
     mod request_admission;

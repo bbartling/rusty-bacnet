@@ -1876,7 +1876,13 @@ for the interpretation, WPM/local-write behavior, and bounded lifecycle support.
 #### Building Control
 
 ```python
-server.add_loop(instance=1, name="PID Loop", output_units=62)
+server.add_loop(
+    instance=1,
+    name="PID Loop",
+    output_units=98,  # percent
+    controlled_variable_units=62,  # degrees Celsius
+    priority_for_writing=10,
+)
 server.add_command(instance=1, name="Command")
 server.add_timer(instance=1, name="Timer")
 server.add_load_control(instance=1, name="Load Control")
@@ -1914,6 +1920,21 @@ Controlled_Variable_Value and fires on a `COV_Increment` move of Present_Value
 or a Status_Flags change. Loop Present_Value is network-writable only while
 Out_Of_Service is TRUE; in service the application supplies it with
 `set_present_value_local`.
+
+The application that runs the loop's algorithm also feeds its measurement:
+`await server.set_controlled_variable_value_local(loop_id,
+PropertyValue.real(21.5))` sets Controlled_Variable_Value, which stays
+read-only over the network. It takes a finite REAL, rejects other objects with
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and is accepted while Out_Of_Service is
+TRUE. A SubscribeCOVProperty on the property is notified of the change; a
+SubscribeCOV on the Loop is not, and its next notification carries the new
+value. The server doesn't follow Controlled_Variable_Reference itself.
+`add_loop`'s keyword-only `controlled_variable_units`,
+`proportional_constant_units`, `integral_constant_units`,
+`derivative_constant_units` (NO_UNITS when omitted) and `priority_for_writing`
+(16 when omitted) set rows that are read-only over the network; units above
+65535 or a priority outside 1 to 16 raise VALUE_OUT_OF_RANGE. Peers can write
+the Loop's Action (DIRECT until written).
 
 #### Lighting
 
