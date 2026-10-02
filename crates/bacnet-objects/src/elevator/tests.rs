@@ -9,6 +9,8 @@ mod landing_calls;
 mod lift_car_moving_direction;
 mod lift_door_simulation;
 mod lift_properties;
+mod metadata;
+mod metadata_writes;
 
 /// Escalator write-domain tests run with Out_Of_Service enabled so they do not
 /// set policy for writes while the object is in service.
