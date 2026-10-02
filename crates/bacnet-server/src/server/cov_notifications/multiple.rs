@@ -99,9 +99,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        // The context's send turn, if it is unconfirmed (#986). Declared before
-        // the claim so that, on any early return, the claim's changes are back
-        // in their queue before the turn hands the context to a follow-up.
+        // The context's send turn, if it is unconfirmed (#986, #1038). Declared
+        // before the claim so that, on any early return, the claim's changes
+        // are back in their queue before the turn hands the context to a
+        // follow-up.
         let mut turn: Option<SendTurn> = None;
         // Timestamped changes drained for this notification; dropping the claim
         // without commit (any early return, failed send) requeues them.
@@ -152,6 +153,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // Untimestamped references qualify now; timestamped ones are decided
             // under the table guard below, against their captured history.
             let mut candidates = Vec::new();
+            // Untimestamped references read now, qualifying or not: this
+            // fanout takes any owed mark they hold (#1038).
+            let mut evaluated = Vec::new();
             for sub in subscriptions {
                 let Some(object) = object_of(sub) else {
                     continue;
@@ -166,6 +170,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     candidates.push((sub, Err(current)));
                     continue;
                 }
+                evaluated.push(sub);
                 let Some(prepared) =
                     reads.prepare(object, sub, sub.last_notified_observation.as_ref(), force)
                 else {
@@ -186,7 +191,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .multiple_context()
                 .expect("Multiple snapshot")
                 .clone();
-            let (retained, untimed, subscriber_max_apdu, owners, store) = {
+            let (retained, untimed, subscriber_max_apdu, owners, store, any_timestamped) = {
                 let table = cov_table.read().await;
                 // A confirmed context has at most one outstanding report, and
                 // the next one has to batch everything held meanwhile (#896).
@@ -215,15 +220,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let now = Instant::now();
                 let store = table.timed().clone();
                 // An unconfirmed context sends one report at a time, so no later
-                // report overtakes the parts of this one (#986); a confirmed
-                // context is held by its outstanding report instead. A fanout
-                // that finds a report going out leaves its changes queued, and
-                // that report hands the context to a follow-up when done.
-                if !context.confirmed
-                    && table
-                        .multiple_context_references(&context)
-                        .any(|sub| sub.timestamped)
-                {
+                // report overtakes the parts of this one (#986, #1038); a
+                // confirmed context is held by its outstanding report instead. A
+                // fanout that finds a report going out leaves its changes
+                // queued, and that report hands the context to a follow-up when
+                // done. A context without timestamped references keeps the
+                // turn only for a report of several parts, below.
+                let any_timestamped = table
+                    .multiple_context_references(&context)
+                    .any(|sub| sub.timestamped);
+                if !context.confirmed {
                     let keys = table
                         .multiple_context_references(&context)
                         .map(|sub| sub.key().clone())
@@ -234,6 +240,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                 }
                 let claim = claim.insert(TimedClaim::new(store.clone()));
+                // Since when each evaluated untimestamped reference is owed. A
+                // mark taken here without a report to carry it is settled: the
+                // reference had nothing left to report.
+                let owed: HashMap<_, _> = {
+                    let mut timed = store.lock();
+                    evaluated
+                        .iter()
+                        .filter_map(|sub| {
+                            Some((sub.key(), timed.take_owed(sub.key(), sub.generation())?))
+                        })
+                        .collect()
+                };
                 let mut retained = Vec::new();
                 for (sub, prepared) in candidates {
                     let Some(remaining) = table
@@ -244,6 +262,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     };
                     let current = match prepared {
                         Ok((values, baseline, completion)) => {
+                            claim.add_untimed(
+                                sub.key().clone(),
+                                sub.generation(),
+                                owed.get(sub.key()).copied(),
+                            );
                             retained.push((sub.clone(), values, baseline, completion, remaining));
                             continue;
                         }
@@ -362,7 +385,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         )
                     })
                     .collect();
-                (retained, untimed, subscriber_max_apdu, owners, store)
+                // References an earlier report left owed go first, so a
+                // split report cannot keep deferring them (#1038).
+                retained.sort_by_key(|(sub, ..)| !owed.contains_key(sub.key()));
+                (
+                    retained,
+                    untimed,
+                    subscriber_max_apdu,
+                    owners,
+                    store,
+                    any_timestamped,
+                )
             };
             let Some((representative, _, _, _, time_remaining)) = retained.first() else {
                 return;
@@ -413,6 +446,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             };
             let claim = claim.take().expect("claim created under the table guard");
             let parts = split(&content, claim, limit);
+            // Untimestamped values a single notification carries need no
+            // turn; reports of them may go out side by side, as before.
+            if !any_timestamped && parts.len() < 2 {
+                turn = None;
+            }
             let last_notified: Vec<_> = retained
                 .into_iter()
                 .map(|(sub, _, baseline, completion, _)| (sub, baseline, completion))
@@ -440,7 +478,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // uncounted, once this report holds the context, and the Ack's
             // follow-up sends the next part (#986). Deferred, not dropped:
             // requeueing them must not let the bound evict what this report
-            // planned to send.
+            // planned to send. Untimestamped references of later parts are
+            // owed meanwhile, and the follow-up reads their values afresh, so
+            // a newer change to one goes in their place (#1038).
             let deferred = parts.map(|part| part.claim.without_eviction()).collect();
             let observations = carried(&first, &last_notified, true);
             let notification = first.notification;
@@ -478,17 +518,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // it is sent. A failure or an exhausted budget stops the rest,
             // which returns to its queue for a later notification (#986).
             let mut delivered = Vec::new();
-            for part in parts {
+            let mut parts = parts.into_iter();
+            let (mut stopped, mut sent) = (None, false);
+            for part in parts.by_ref() {
                 // Communication may have been restricted since the fanout began
                 // (Clause 16.1). Stop; re-enabling it rearms the backstop, which
                 // sends the parts left queued.
                 if handles.ctx.comm_state.load(Ordering::Acquire) >= 1 {
+                    stopped = Some(part);
                     break;
                 }
                 let buf = match Self::encode_unconfirmed_cov_multiple_apdu(&part.notification) {
                     Ok(buf) => buf,
                     Err(e) => {
                         warn!(error = %e, "Failed to encode unconfirmed COVNotificationMultiple");
+                        stopped = Some(part);
                         break;
                     }
                 };
@@ -497,6 +541,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     counters
                         .notifications_throttled_fanout
                         .fetch_add(1, Ordering::Relaxed);
+                    stopped = Some(part);
                     break;
                 }
 
@@ -510,13 +555,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 if let Err(e) = Self::send_cov_apdu(network, &buf, &representative, false).await {
                     warn!(error = %e, "Failed to send COVNotificationMultiple");
+                    stopped = Some(part);
                     break;
                 }
-                // A reference whose latest change this part carried is
-                // complete once it is sent, whatever becomes of the parts
-                // after it (#1008).
+                // A reference whose latest change, or untimestamped values,
+                // this part carried is complete once it is sent, whatever
+                // becomes of the parts after it (#1008, #1038).
                 delivered.extend(carried(&part, &last_notified, false));
                 part.claim.commit();
+                sent = true;
+            }
+            // A report that began going out owes the untimestamped values of
+            // the parts it did not send, for the backstop (#1038).
+            if sent {
+                for part in stopped.into_iter().chain(parts) {
+                    drop(part.claim.owing());
+                }
             }
             if !delivered.is_empty() {
                 let mut table = cov_table.write().await;

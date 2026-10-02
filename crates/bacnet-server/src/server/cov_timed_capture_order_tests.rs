@@ -5,8 +5,10 @@
 //! Each notification fits the subscriber's maximum APDU even when the latest
 //! changes alone would not, and carries a contiguous run of the report's
 //! changes: every change in one notification is older than every change in
-//! the next. The untimestamped values stay together in the last notification.
-//! A reference whose latest change went out in an earlier part completes its
+//! the next. The untimestamped values go in the last notification, or, when
+//! they alone do not fit one, after every change in as many as they need
+//! (#1038). A reference whose latest change went out in an earlier part
+//! completes its
 //! observation when that part is sent, or, when confirmed, acknowledged. A
 //! change too large for any notification is dropped and counted, latest or
 //! not, so it never stalls the context. Time is paused.
@@ -337,45 +339,56 @@ async fn untimestamped_values_go_last_with_the_newest_changes_that_still_fit() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn untimestamped_values_too_large_for_one_apdu_go_last_and_together() {
+async fn untimestamped_values_too_large_for_one_apdu_follow_every_change_in_parts_that_fit() {
     // Nine untimestamped references take more than one notification on their
     // own. The initial report carries them all with the timestamped ones:
     // the timestamped changes go first, in parts that fit, and the
-    // untimestamped values go together, over the limit, as decided for #1008.
+    // untimestamped values follow, split by object item into parts that fit
+    // too (#1038).
     let untimed = 9;
     let mut h = many_object_harness(false, untimed, 10).await;
     let mut taken = Vec::new();
-    loop {
+    let mut untimed_rows = 0;
+    while untimed_rows < untimed as usize {
         let notification = h.notification().await;
-        let done = notification
-            .list_of_cov_notifications
+        check(&notification, false);
+        untimed_rows += pv_rows_by_time(&notification)
             .iter()
-            .any(|item| item.monitored_object_identifier.instance_number() > OBJECTS);
+            .filter(|(object, _, _)| object.instance_number() > OBJECTS)
+            .count();
         taken.push(notification);
-        if done {
-            break;
-        }
     }
     h.no_notification().await;
-    let (last, earlier) = taken.split_last().unwrap();
-    assert!(!earlier.is_empty(), "{} notifications", taken.len());
-    for notification in earlier {
-        check(notification, false);
-    }
-    let timed_rows: usize = earlier.iter().map(|n| pv_rows_by_time(n).len()).sum();
+    let carries_untimed = |notification: &COVNotificationMultipleRequest| {
+        notification
+            .list_of_cov_notifications
+            .iter()
+            .any(|item| item.monitored_object_identifier.instance_number() > OBJECTS)
+    };
+    let first_untimed = taken.iter().position(carries_untimed).unwrap();
+    let (timed, untimed_parts) = taken.split_at(first_untimed);
+    let timed_rows: usize = timed.iter().map(|n| pv_rows_by_time(n).len()).sum();
     assert_eq!(
         timed_rows, OBJECTS as usize,
         "every timestamped change first"
     );
-    assert!(apdu_len(last, false) > usize::from(SMALL_APDU));
-    let last_rows = pv_rows_by_time(last);
-    assert_eq!(
-        last_rows.len(),
-        untimed as usize,
-        "only the untimestamped values"
+    assert!(
+        untimed_parts.len() >= 2,
+        "{} untimestamped parts",
+        untimed_parts.len()
     );
-    assert!(last_rows.iter().all(|(_, _, time)| time.is_none()));
-    assert_eq!(last.timestamp, None, "nothing in it is timestamped");
+    let mut objects = Vec::new();
+    for notification in untimed_parts {
+        let rows = pv_rows_by_time(notification);
+        assert!(rows
+            .iter()
+            .all(|(object, _, time)| { object.instance_number() > OBJECTS && time.is_none() }));
+        assert_eq!(notification.timestamp, None, "nothing in it is timestamped");
+        objects.extend(rows.into_iter().map(|(object, _, _)| object));
+    }
+    objects.sort_by_key(|object| object.instance_number());
+    let expected: Vec<_> = (OBJECTS + 1..=OBJECTS + untimed).map(av).collect();
+    assert_eq!(objects, expected, "each untimestamped value once");
     h.server.stop().await.unwrap();
 }
 

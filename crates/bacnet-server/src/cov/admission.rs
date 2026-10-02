@@ -202,14 +202,11 @@ impl CovSubscriptionTable {
         };
         {
             let mut timed = self.timed.lock();
-            if sub.timestamped && snapshot.key.multiple_context().is_some() {
-                timed.reset(
-                    &snapshot.key,
-                    generation,
-                    max_notification_delay.unwrap_or_default(),
-                );
-            } else {
-                timed.remove(&snapshot.key);
+            let delay = max_notification_delay.unwrap_or_default();
+            match (snapshot.key.multiple_context(), sub.timestamped) {
+                (Some(_), true) => timed.reset(&snapshot.key, generation, delay),
+                (Some(_), false) => timed.reset_untimed(&snapshot.key, generation, delay),
+                (None, _) => timed.remove(&snapshot.key),
             }
         }
         let peer = sub.recipient();

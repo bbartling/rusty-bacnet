@@ -1,5 +1,5 @@
 //! Splitting claims, the per-context bound, send turns and the subscriber's
-//! maximum APDU (#986).
+//! maximum APDU (#986), and owed untimestamped references (#1038).
 use super::tests::{
     apdu_for, change, change_len, context, dropped, frame, histories, key, seconds, store,
     timed_reference,
@@ -262,4 +262,85 @@ fn an_admission_without_a_known_maximum_apdu_keeps_the_one_advertised_before() {
         .subscribe_multiple(&context(1), &route, expires, 10, Some(480), Vec::new())
         .unwrap();
     assert_eq!(advertised(&table), Some(480), "a known one replaces it");
+}
+
+#[test]
+fn an_undelivered_untimestamped_reference_is_owed_once_its_report_began() {
+    let (store, _) = store(8, 4);
+    let (a, b) = (key(1, 1), key(1, 2));
+    store.lock().reset_untimed(&a, 1, 10);
+    store.lock().reset_untimed(&b, 1, 10);
+    let claim_of = |entries: &[(&CovSubscriptionKey, u64, Option<Instant>)]| {
+        let mut claim = TimedClaim::new(store.clone());
+        for &(key, generation, owed) in entries {
+            claim.add_untimed(key.clone(), generation, owed);
+        }
+        claim
+    };
+    // A report none of which went out owes nothing: like any lost
+    // notification, the reference's next fanout reports it.
+    drop(claim_of(&[(&a, 1, None)]));
+    assert_eq!(store.lock().take_owed(&a, 1), None);
+    // A part deferred behind a delivered one owes its references.
+    let start = Instant::now();
+    let mut claim = claim_of(&[(&a, 1, None), (&b, 1, None)]);
+    let deferred = claim.split_untimed(&std::collections::HashSet::from([b.clone()]));
+    claim.commit();
+    drop(deferred.owing());
+    assert_eq!(store.lock().take_owed(&a, 1), None, "delivered");
+    let since = store.lock().take_owed(&b, 1).expect("owed");
+    assert!(since >= start);
+    assert_eq!(store.lock().take_owed(&b, 1), None, "taking settles it");
+    // Once owed, a reference stays owed from when it first was until a part
+    // carrying it is delivered, whichever report takes it.
+    drop(claim_of(&[(&b, 1, Some(since))]));
+    assert_eq!(store.lock().take_owed(&b, 1), Some(since));
+    // Values that fit no notification are given up, not owed.
+    let mut claim = claim_of(&[(&b, 1, Some(since))]);
+    claim.forgo_untimed();
+    drop(claim.owing());
+    assert_eq!(store.lock().take_owed(&b, 1), None);
+    // A renewed or cancelled reference owes nothing.
+    let claim = claim_of(&[(&a, 1, None), (&b, 1, Some(since))]);
+    store.lock().reset_untimed(&b, 2, 10);
+    store.lock().remove(&a);
+    drop(claim.owing());
+    assert_eq!(store.lock().take_owed(&b, 2), None);
+    assert_eq!(store.lock().held(), (1, 0), "only the renewed reference");
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_owed_reference_makes_its_context_due_like_a_pending_change() {
+    let (mut h, _) = histories(8, 4);
+    let k = key(1, 1);
+    h.reset_untimed(&k, 1, 10);
+    assert_eq!(h.take_due(Instant::now()), (Vec::new(), None));
+    let start = Instant::now();
+    h.owe(&k, 1, start);
+    let delay = Duration::from_secs(10);
+    assert_eq!(
+        h.take_due(Instant::now()),
+        (Vec::new(), Some(start + delay))
+    );
+    tokio::time::advance(delay).await;
+    assert_eq!(h.take_due(Instant::now()).0, std::slice::from_ref(&k));
+    // Blocked again: a hold-off moves the next attempt, and re-enabled
+    // communication ends the wait.
+    let until = Instant::now() + Duration::from_secs(3);
+    h.hold_until(&context(1), until);
+    assert_eq!(h.take_due(Instant::now()), (Vec::new(), Some(until)));
+    h.rearm();
+    assert_eq!(h.take_due(Instant::now()).0, std::slice::from_ref(&k));
+    // A later mark keeps the earlier one, and taking the mark settles it.
+    h.owe(&k, 1, Instant::now());
+    assert_eq!(h.take_owed(&k, 1), Some(start));
+    assert_eq!(h.take_due(Instant::now()), (Vec::new(), None));
+    assert_eq!(h.held(), (1, 0), "a settled reference holds no wait");
+    h.owe(&k, 1, start);
+    h.remove(&k);
+    assert_eq!(
+        h.held(),
+        (0, 0),
+        "removal takes the mark and the wait along"
+    );
 }
