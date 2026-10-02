@@ -1,6 +1,7 @@
 //! Socket options the B/IP transport sets at start.
 
 use super::*;
+use crate::port_ownership::{restart, ATTEMPTS};
 
 #[tokio::test]
 async fn socket_is_broadcast_capable_and_binds_inaddr_any() {
@@ -71,12 +72,19 @@ fn only_an_explicitly_requested_port_opts_into_address_reuse() {
 #[tokio::test]
 async fn an_ephemeral_port_stays_private_across_restart() {
     // A restart rebinds the remembered actual port, which must not opt the
-    // socket into sharing it.
-    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
-    let _rx = transport.start().await.unwrap();
-    assert!(!reuses_address(&transport));
-    transport.stop().await.unwrap();
-    let _rx = transport.start().await.unwrap();
-    assert!(!reuses_address(&transport));
-    transport.stop().await.unwrap();
+    // socket into sharing it. Each run starts on a fresh port; see `restart`
+    // for why it can lose it.
+    for attempt in 1..=ATTEMPTS {
+        let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        let _rx = transport.start().await.unwrap();
+        assert!(!reuses_address(&transport));
+        transport.stop().await.unwrap();
+        let Some(started) = restart(&mut transport, attempt).await else {
+            continue;
+        };
+        let _rx = started.unwrap();
+        assert!(!reuses_address(&transport));
+        transport.stop().await.unwrap();
+        return;
+    }
 }

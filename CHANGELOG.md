@@ -187,6 +187,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   address back, the benchmarks hub-restart test retries on a lost bind instead
   of probing the old address, and the BBMD several-own-rows test reruns on a
   lost port. The macOS limit of the BBMD probe retry is documented (#1068).
+- Test-only: the SC hub shutdown and graceful-shutdown tests that bind a
+  stopped hub's address to prove it closed its listener, and the B/IP
+  own-broadcast and ephemeral-port restart tests, run again on fresh ports
+  when another socket takes the port between the stop and the bind. A node
+  that really keeps its port fails every run. The run limit, the lost-port
+  check and the restart helper are shared in `bacnet-transport`'s test-only
+  `port_ownership` code. The hub probe binds with SO_REUSEADDR on Unix, so it
+  shows the listener closed, not each connection, and on macOS a holder on
+  the wildcard address goes unnoticed; that is documented (#1095).
 - The workspace uses Cargo's `resolver = "3"`, so updating the lock file
   prefers dependency versions that support the declared MSRV (1.93). Feature
   resolution is unchanged, and the MSRV CI job still checks the lock file
