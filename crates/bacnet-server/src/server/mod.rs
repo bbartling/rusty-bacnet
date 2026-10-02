@@ -272,7 +272,8 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         self
     }
 
-    /// Set the COV quota and notification work budget policy.
+    /// Set the COV quota and notification work budget policy, checked by
+    /// [`CovPolicy::validate`] before transport startup.
     pub fn cov_policy(mut self, policy: CovPolicy) -> Self {
         self.config.cov_policy = policy;
         self
@@ -419,7 +420,8 @@ impl BipServerBuilder {
         self
     }
 
-    /// Set the COV quota and notification work budget policy.
+    /// Set the COV quota and notification work budget policy, checked by
+    /// [`CovPolicy::validate`] before transport startup.
     pub fn cov_policy(mut self, policy: CovPolicy) -> Self {
         self.config.cov_policy = policy;
         self

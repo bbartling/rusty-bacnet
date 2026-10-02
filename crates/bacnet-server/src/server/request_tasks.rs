@@ -67,6 +67,7 @@ impl RequestTasks {
         config.atomic_write_file_budget.validate()?;
         config.read_range_budget.validate()?;
         config.get_event_information_budget.validate()?;
+        config.cov_policy.validate()?;
         tasks.2 = config
             .dcc_disable_rate_limit
             .map(super::dcc_disable_rate::Bucket::new)
