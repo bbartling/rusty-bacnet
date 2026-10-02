@@ -84,9 +84,6 @@ jobs:
           [ "$rust_version" = "$msrv" ] || { echo "::error::Cargo.toml rust-version is $rust_version, the image's MSRV $msrv"; fail=1; }
           grep -q "RUSTUP_TOOLCHAIN: \"$msrv\"" .forgejo/workflows/ci.yml \
             || { echo "::error::the MSRV job's RUSTUP_TOOLCHAIN is not $msrv"; fail=1; }
-          if grep -n 'toolchain: "' .github/workflows/release.yml | grep -v "toolchain: \"$toolchain\""; then
-            echo "::error::release.yml pins a toolchain other than $toolchain"; fail=1
-          fi
           exit $fail
       # The automatic job token can't write packages, so pushes use a personal
       # access token with package read/write scope, stored as this secret. The

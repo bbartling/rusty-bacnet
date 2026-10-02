@@ -3,9 +3,14 @@
 
     release_api.py forgejo --tag v0.12.0 --commit SHA --notes notes.md --assets DIR [--dry-run]
     release_api.py github --tag v0.12.0 --commit SHA --notes notes.md --assets DIR \
-        [--wait-tag SECONDS] [--dry-run]
+        [--wait-tag SECONDS] (--dry-run | --staged-release ID --staged-sums SHA256)
     release_api.py forgejo|github --preflight --tag v0.12.0 --commit SHA \
         [--wait-tag SECONDS] [--dry-run]
+
+On GitHub, release_smoke.py does steps 1 to 4 below for the smoke test (#951),
+with stage(). The GitHub copy then publishes only that draft: a GitHub publish
+needs --staged-release and --staged-sums, both non-empty, and allows no change
+to the draft (see publish()). Forgejo's release does all five steps here.
 
 GitHub releases in this repository are immutable once published: their assets
 can't be added, replaced or deleted, and the tag can't be reused. So a release
@@ -58,8 +63,8 @@ Environment (values are never printed):
 - forgejo: FORGEJO_TOKEN, plus GITHUB_SERVER_URL and GITHUB_REPOSITORY, which
   Forgejo Actions sets for every job;
 - github: GH_RELEASE_TOKEN, a fine-grained token with Contents read and write
-  on GITHUB_REPO (default jscott3201/rusty-bacnet). A preflight dry run
-  without it checks only the tag.
+  on GITHUB_REPO (default jscott3201/rusty-bacnet), and Actions read and write
+  for release_smoke.py. A preflight dry run without it checks only the tag.
 
 For github, --wait-tag polls until the push mirror has the tag, and the tag
 must point at --commit.
@@ -87,6 +92,9 @@ USER_AGENT = "rusty-bacnet-release (+https://github.com/jscott3201/rusty-bacnet)
 RETRY_DELAY = 5  # seconds, times the attempt number; tests set it to 0
 GITHUB_REPO = "jscott3201/rusty-bacnet"
 PROBE_PREFIX = "release-preflight-"
+# A dry run's smoke test (#951) runs against a throwaway GitHub draft named
+# release-smoke-<run id>, which release_smoke.py deletes again.
+SMOKE_PREFIX = "release-smoke-"
 # The preflight's write check uploads one file of each kind a release has, named
 # like it, so the host's allowed attachment types are proven: an extension-less
 # file (the Linux and macOS CLI binaries, SHA256SUMS, THIRD-PARTY-NOTICES), the
@@ -258,6 +266,7 @@ class Forgejo:
     # The job token can't read attachments on Forgejo's web routes, which are
     # the only way to download them, for a private repository.
     can_read_assets = False
+    staged_only = False
     published_hint = (
         "This workflow never changes a published release. Fix it on Forgejo by hand, or delete"
         " the release so that the next run builds it again as a draft."
@@ -328,6 +337,8 @@ class Forgejo:
 class GitHub:
     label = "GitHub"
     can_read_assets = True
+    # A publish needs the smoke-tested draft (#951); see publish().
+    staged_only = True
     API = "https://api.github.com"
     UPLOADS = "https://uploads.github.com"
     published_hint = (
@@ -505,10 +516,12 @@ def stale_draft(host, release, tag, commit):
             f" not {commit}, so this run won't add to it. Delete that draft, then re-run the release.")
 
 
-def unwanted(host, release, local):
+def unwanted(host, release, local, exact=False):
     """[(asset, reason)] for what a resumed draft holds that this run won't publish:
     assets that aren't part of the release, every copy of a duplicated name and, on
-    a host that can't checksum assets, everything (this run's copies replace it)."""
+    a host that can't checksum assets, everything (this run's copies replace it).
+    With exact (the smoke test's staging), also every asset that differs from this
+    run's file, so the draft ends up holding exactly the local files."""
     allowed = set(local) | {SUMS}
     raw = sorted(host.raw_assets(release), key=lambda a: (a["name"], a["id"]))
     dupes = set(duplicate_names(raw))
@@ -520,6 +533,8 @@ def unwanted(host, release, local):
             found.append((item, "the draft has several assets of this name"))
         elif not host.can_read_assets:
             found.append((item, "this job can't checksum it, so this run's copy replaces it"))
+        elif exact and item["name"] != SUMS and host.asset_digest(release, item) != local[item["name"]]:
+            found.append((item, "it differs from this run's file, which replaces it"))
     return found
 
 
@@ -615,9 +630,26 @@ def plan(host, release, tag, commit, local):
     print(f"would upload {SUMS} for {len(final)} assets, check them all, then publish the draft")
 
 
-def publish(host, tag, notes, assets_dir, commit, dry_run):
+def publish(host, tag, notes, assets_dir, commit, dry_run, staged=None):
+    """Publish the release for tag.
+
+    On GitHub (host.staged_only), a publish needs staged, the (release id,
+    SHA256SUMS sha256) of the draft the smoke test ran against (#951): the
+    release must be that draft, holding exactly this run's files and that
+    SHA256SUMS, and the only write is the publish. Without it nothing happens.
+    On Forgejo the draft is made, filled, checked and published here."""
+    if not dry_run and staged is None and host.staged_only:
+        raise ReleaseError(f"{host.label} publishes only the draft the smoke test ran against, and no staged draft"
+                           " was given (--staged-release, --staged-sums), so nothing is published")
     local = local_assets(assets_dir)
     release = host.find_release(tag)
+    if staged is not None:
+        staged_id, staged_sums = staged
+        if release is None or str(release["id"]) != str(staged_id):
+            found = "none" if release is None else f"id {release['id']}"
+            raise ReleaseError(f"{host.label}'s release {tag} ({found}) isn't the draft the smoke test ran against"
+                               f" (id {staged_id}), so it isn't published. Delete the stray release, then re-run"
+                               " the release.")
 
     if release is not None and not release.get("draft"):
         print(f"{host.label} release {tag} is already published; checking it, read only")
@@ -640,6 +672,23 @@ def publish(host, tag, notes, assets_dir, commit, dry_run):
             probe_download(host, release)
         return
 
+    if staged is not None:
+        print(f"publishing the draft the smoke test ran against (id {staged_id}), unchanged")
+        data = sums_text(local).encode()
+        if sha256_bytes(data) != staged_sums:
+            raise ReleaseError(f"this run's files aren't the ones the smoke test ran against: their {SUMS} has"
+                               f" sha256 {sha256_bytes(data)}, the smoke test's {staged_sums}")
+        expected = {name: (digest, (assets_dir / name).stat().st_size) for name, digest in local.items()}
+        expected[SUMS] = (staged_sums, len(data))
+        verify_final(host, host.refresh(release), expected)
+        print(f"publishing {tag}")
+        release = host.publish_release(release)
+        if release.get("draft"):
+            raise ReleaseError(f"{host.label} still shows {tag} as a draft after publishing it")
+        print(f"done: the smoke-tested draft is public as {tag}")
+        return
+
+    # Forgejo's own draft: GitHub's was staged and smoke-tested before this.
     if release is None:
         print(f"creating draft release {tag} at {commit}")
         release = create_draft(host, tag, notes, commit)
@@ -657,13 +706,14 @@ def publish(host, tag, notes, assets_dir, commit, dry_run):
     print(f"done: {len(uploaded)} assets uploaded, {len(local) - len(uploaded)} already there; {tag} is public")
 
 
-def fill_draft(host, release, tag, assets_dir, local):
+def fill_draft(host, release, tag, assets_dir, local, exact=False):
     """Upload the missing assets, then SHA256SUMS over the final set. Returns
     ({name: sha256} of the assets this run uploaded, {name: (sha256, size)} of
-    everything the draft must now hold, SHA256SUMS included)."""
+    everything the draft must now hold, SHA256SUMS included). With exact, an
+    asset that differs from this run's file is replaced, not kept."""
     for name in host.drop_incomplete(release):
         print(f"deleted the incomplete upload of {name}")
-    for item, why in unwanted(host, host.refresh(release), local):
+    for item, why in unwanted(host, host.refresh(release), local, exact):
         print(f"delete {item['name']}: {why}")
         host.delete_asset(release, item)
     existing = host.assets(host.refresh(release))
@@ -711,6 +761,54 @@ def upload_sums(host, release, current, digests):
     return expected
 
 
+def stage(host, tag, notes, assets_dir, commit, throwaway=None):
+    """Put this run's files on a GitHub draft for the smoke test (#951), without
+    publishing it. Returns (release, sha256 of its SHA256SUMS).
+
+    A release run uses the draft for tag, which the GitHub copy later publishes
+    unchanged: created at commit if there is none, otherwise resumed (a draft for
+    another commit stops the run) and made to hold exactly this run's files, so
+    the smoke test runs what PyPI and both releases get. A release that is
+    already published is only checked, and its files are smoke-tested. A dry run
+    passes throwaway, a release-smoke-* name: a draft of that name is created
+    instead (one left by an earlier attempt of the run is deleted first) and
+    release_smoke.py deletes it after the smoke test.
+    """
+    local = local_assets(assets_dir)
+    if throwaway is not None:
+        if not throwaway.startswith(SMOKE_PREFIX):
+            raise ReleaseError(f"refusing to use {throwaway} for a throwaway draft; it must start with {SMOKE_PREFIX}")
+        left = [r for r in host.list_releases() if r.get("tag_name") == throwaway]
+        if left:
+            remove_draft(host, throwaway, left, "smoke test")
+        print(f"creating throwaway draft {throwaway} at {commit}")
+        release = create_draft(host, throwaway, f"Temporary draft for a release dry run's smoke test ({throwaway});"
+                               " the run deletes it again. Safe to delete.", commit,
+                               title=f"Release smoke test {throwaway}", prerelease=True)
+    else:
+        release = host.find_release(tag)
+        if release is not None and not release.get("draft"):
+            print(f"{host.label} release {tag} is already published; smoke-testing its files")
+            problems = verify_published(host, release, tag, local)
+            if problems:
+                listed = "".join(f"\n  - {p}" for p in problems)
+                raise ReleaseError(f"{host.label} release {tag} is published but incomplete:{listed}\n"
+                                   f"{host.published_hint}")
+            return release, host.asset_digest(release, host.assets(release)[SUMS])
+        if release is None:
+            print(f"creating draft release {tag} at {commit}")
+            release = create_draft(host, tag, notes, commit)
+        elif problem := stale_draft(host, release, tag, commit):
+            raise ReleaseError(problem)
+        else:
+            print(f"resuming draft release {tag} (id {release['id']}); keeping its notes")
+    _, expected = fill_draft(host, release, release["tag_name"], assets_dir, local, exact=True)
+    verify_final(host, host.refresh(release), expected)
+    print(f"staged: {host.label} draft {release['tag_name']} (id {release['id']}) holds this run's"
+          f" {len(local)} files and {SUMS} (sha256 {expected[SUMS][0]})")
+    return release, expected[SUMS][0]
+
+
 def preflight(host, tag, commit, probe, read_only, tags=None, wait_tag=0):
     """Check, before anything is built, that the release can be published.
 
@@ -736,10 +834,10 @@ def preflight(host, tag, commit, probe, read_only, tags=None, wait_tag=0):
         print(f"::warning::{problem} A real run would stop here.")
     else:
         print(f"{host.label} has a draft release {tag} for {commit}; the publish job will resume it")
-    stale = sorted(r["tag_name"] for r in releases if str(r.get("tag_name")).startswith(PROBE_PREFIX))
+    stale = sorted(r["tag_name"] for r in releases if str(r.get("tag_name")).startswith((PROBE_PREFIX, SMOKE_PREFIX)))
     if stale:
-        print(f"::warning::{host.label} still has preflight drafts from earlier runs, which"
-              f" their runs couldn't delete: {', '.join(stale)}. Delete them by hand.")
+        print(f"::warning::{host.label} has preflight or smoke test drafts of other runs: {', '.join(stale)}."
+              " Unless such a run is still going, it couldn't delete its draft; delete it by hand.")
     if read_only:
         print(f"read only: the {host.label} write check runs only when publishing")
         return
@@ -787,7 +885,7 @@ def write_check(host, name, commit):
         passed = True
     finally:
         try:
-            remove_probe(host, name, made)
+            remove_draft(host, name, made, "write check")
         except ReleaseError as err:
             message = (f"the preflight's draft release {name} may still be on {host.label}: {err}."
                        " Delete it by hand.")
@@ -796,14 +894,25 @@ def write_check(host, name, commit):
             print(f"::error::{message}", file=sys.stderr)  # the check's own failure follows
 
 
-def remove_probe(host, name, made):
-    """Delete the write check's draft: those in made, by id, and any release
-    listed as name (a create whose response was lost). Then check that none is
-    left and that the host has no tag name."""
+def remove_draft(host, name, made, label):
+    """Delete a disposable draft (the write check's, or a dry run's smoke test
+    draft): those in made, by id, and any release listed as name (a create whose
+    response was lost). Then check that none is left and that the host has no
+    tag name. label prefixes the messages. It deletes only drafts, and only
+    those named like the preflight's or the smoke test's."""
+    if not name.startswith((PROBE_PREFIX, SMOKE_PREFIX)):
+        raise ReleaseError(f"refusing to delete release {name}: only {PROBE_PREFIX}* and {SMOKE_PREFIX}* drafts"
+                           " are disposable")
+
+    def delete(release):
+        if not release.get("draft"):
+            raise ReleaseError(f"refusing to delete release {name} (id {release['id']}): it isn't a draft")
+        host.delete_release(release)
+        print(f"{label}: deleted draft {name} (id {release['id']})")
+
     try:
         for release in made:
-            host.delete_release(release)
-            print(f"write check: deleted draft {name} (id {release['id']})")
+            delete(release)
         for attempt in range(1, 5):
             left = [r for r in host.list_releases() if r.get("tag_name") == name]
             left += [r for r in made if host.exists(r) and r["id"] not in {x["id"] for x in left}]
@@ -814,14 +923,13 @@ def remove_probe(host, name, made):
                 raise ReleaseError(f"{host.label} still has release {name} (id {ids}) after deleting it")
             time.sleep(RETRY_DELAY * (attempt - 1))
             for release in left:
-                host.delete_release(release)
-                print(f"write check: deleted draft {name} (id {release['id']})")
+                delete(release)
         if host.tag_exists(name):
             raise ReleaseError(f"{host.label} now has a tag {name}, though a draft shouldn't create one;"
                                " delete that tag by hand too")
     except HttpFailure as err:
         raise ReleaseError(f"couldn't check that it's gone ({err})") from err
-    print(f"write check: no release or tag {name} is left")
+    print(f"{label}: no release or tag {name} is left")
 
 
 def require_env(name, hint):
@@ -832,7 +940,8 @@ def require_env(name, hint):
 
 
 TOKEN_HINT = ("Add it as a Forgejo repository secret: a fine-grained GitHub token for"
-              f" {GITHUB_REPO} with Contents read and write. Then re-run the release.")
+              f" {GITHUB_REPO} with Contents read and write, and Actions read and write for the smoke"
+              " test. Then re-run the release.")
 
 
 def main(argv=None):
@@ -846,9 +955,22 @@ def main(argv=None):
     parser.add_argument("--preflight", action="store_true",
                         help="check that the release can be published; with --dry-run, read only")
     parser.add_argument("--dry-run", action="store_true", help="read only; print what would change")
+    parser.add_argument("--staged-release", help="github: publish only this draft, the smoke-tested one (#951)")
+    parser.add_argument("--staged-sums", help="github: the sha256 of the smoke-tested draft's SHA256SUMS")
     args = parser.parse_args(argv)
     if not args.preflight and (args.notes is None or args.assets is None):
         parser.error("--notes and --assets are required, except with --preflight")
+    # A GitHub publish only ever publishes the smoke-tested draft (#951), so it
+    # fails closed: both values must be given and non-empty. Other modes take none.
+    staged = None
+    github_publish = args.host == "github" and not (args.preflight or args.dry_run)
+    if github_publish:
+        if not (args.staged_release and args.staged_sums):
+            parser.error("a github publish needs --staged-release and --staged-sums, both non-empty: the draft the"
+                         " smoke test ran against (release_smoke.py's outputs)")
+        staged = (args.staged_release, args.staged_sums)
+    elif args.staged_release is not None or args.staged_sums is not None:
+        parser.error("--staged-release and --staged-sums are only for a github publish")
     if hasattr(sys.stdout, "reconfigure"):  # not when tests capture it
         sys.stdout.reconfigure(line_buffering=True)
     try:
@@ -875,7 +997,7 @@ def main(argv=None):
             check_tag(host, args.tag, args.commit, args.wait_tag, args.dry_run)
         if args.dry_run:
             print("dry run: no writes")
-        publish(host, args.tag, notes, args.assets, args.commit, args.dry_run)
+        publish(host, args.tag, notes, args.assets, args.commit, args.dry_run, staged)
     except (ReleaseError, OSError) as err:
         if args.preflight:
             print(f"::error::preflight: {err}\nNothing has been built or published. Fix this, then re-run"
