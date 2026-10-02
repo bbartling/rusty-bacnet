@@ -73,24 +73,19 @@ fn rpm_calendar_indexed_reads_and_date_list_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::STATUS_FLAGS, None, Ok(&[0x82, 4, 0])),
-            (P::EVENT_STATE, None, Ok(&[0x91, 0])),
-            (P::OUT_OF_SERVICE, None, Ok(&[0x10])),
-            (
-                P::PROPERTY_LIST,
-                None,
-                Ok(&[0x91, 28, 0x91, 85, 0x91, 23, 0x91, 111, 0x91, 36, 0x91, 81]),
-            ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 6])),
+            // Table 12-11 defines none of these, so Calendar doesn't serve them
+            // (#984).
+            (P::STATUS_FLAGS, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (P::EVENT_STATE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (P::OUT_OF_SERVICE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (P::PROPERTY_LIST, None, Ok(&[0x91, 28, 0x91, 85, 0x91, 23])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 3])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 23])),
-            (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 111])),
-            (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 36])),
-            (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 81])),
             (
                 P::PROPERTY_LIST,
-                Some(7),
+                Some(4),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (

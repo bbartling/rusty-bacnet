@@ -28,6 +28,10 @@ mod metadata;
 /// Present_Value is Boolean — true when today matches one of the date_list
 /// entries. The application is responsible for evaluating the date_list and
 /// calling `set_present_value()`.
+///
+/// The object serves only properties its table (Clause 12.9, Table 12-11)
+/// defines. That table has no Status_Flags, Event_State, Out_Of_Service or
+/// Reliability, so reads and writes of those return UNKNOWN_PROPERTY.
 pub struct CalendarObject {
     oid: ObjectIdentifier,
     name: String,
@@ -100,20 +104,6 @@ impl BACnetObject for CalendarObject {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Boolean(self.present_value))
             }
-            // Status_Flags is a non-standard extension on Calendar (Table 12-11
-            // lists none) and always reads all FALSE: there is no Reliability,
-            // Out_Of_Service is fixed FALSE and nothing can override it. #984
-            // tracks whether Calendar should expose it at all.
-            p if p == PropertyIdentifier::STATUS_FLAGS => Ok(common::compute_status_flags(
-                StatusFlags::empty(),
-                Reliability::NO_FAULT_DETECTED,
-                false,
-                EventState::NORMAL,
-            )),
-            p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
-            }
-            p if p == PropertyIdentifier::OUT_OF_SERVICE => Ok(PropertyValue::Boolean(false)),
             p if p == PropertyIdentifier::DATE_LIST => Ok(PropertyValue::List(
                 self.date_list
                     .iter()
