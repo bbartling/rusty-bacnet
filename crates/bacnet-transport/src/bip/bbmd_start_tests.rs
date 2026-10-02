@@ -7,6 +7,7 @@ use super::own_broadcast_tests::{
     assert_no_bvll, assert_own_forwarded, port_of, recv_bvll, udp, NPDU,
 };
 use super::*;
+use crate::port_ownership::{lost_port, restart, ATTEMPTS};
 
 const PORT: u16 = 47808;
 /// Stand-ins for the host's LAN addresses; tests only inject them.
@@ -28,18 +29,6 @@ fn select(
     route: Option<Ipv4Addr>,
 ) -> Result<Ipv4Addr, Error> {
     select_wildcard_bbmd_ip(rows, PORT, local, route, BdtSource::Configured)
-}
-
-/// How many times a test that can lose its port to another socket runs, each
-/// time on a fresh port.
-const ATTEMPTS: usize = 8;
-
-/// Whether `err`, from run `attempt` of such a test, is a bind that another
-/// socket beat to the port, so the test may go again on a fresh one (#1032,
-/// #1068, #1070). Never on the last run: a transport that really kept its port
-/// fails every run, and the last one reports it.
-fn lost_port(attempt: usize, err: &std::io::Error) -> bool {
-    attempt < ATTEMPTS && crate::port_ownership::lost_to_another_socket(err)
 }
 
 /// A UDP port that was free a moment ago.
@@ -84,26 +73,6 @@ async fn start_on_free_port(
             Err(Error::Transport(ref err)) if lost_port(attempt, err) => attempt += 1,
             started => return (transport, port, started),
         }
-    }
-}
-
-/// Starts a stopped `bbmd` again, for the restart tests. The restart rebinds
-/// the port the first start was given, and another process can take it while
-/// the BBMD is stopped (#1070). `None` means it did, and the test goes again
-/// from its first start, which binds a fresh port; the last run keeps the
-/// bind's error, so a BBMD that really kept its port fails every run.
-///
-/// The OS chose that port, so the restart binds it without SO_REUSEADDR, and
-/// every OS refuses such a bind while another socket holds the port. The macOS
-/// gap that [`start_on_free_port`] describes needs a SO_REUSEADDR bind, so it
-/// does not apply here.
-async fn restart(
-    bbmd: &mut BipTransport,
-    attempt: usize,
-) -> Option<Result<mpsc::Receiver<ReceivedNpdu>, Error>> {
-    match bbmd.start().await {
-        Err(Error::Transport(ref err)) if lost_port(attempt, err) => None,
-        started => Some(started),
     }
 }
 
