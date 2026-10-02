@@ -10,7 +10,7 @@ fn access_door_create_and_read_defaults() {
     assert_eq!(
         door.read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
-        PropertyValue::Enumerated(0) // closed
+        PropertyValue::Enumerated(DoorValue::LOCK.to_raw())
     );
 }
 
@@ -128,9 +128,9 @@ fn access_credential_create_and_read_defaults() {
     let cred = AccessCredentialObject::new(1, "CRED-1").unwrap();
     assert_eq!(cred.object_name(), "CRED-1");
     assert_eq!(
-        cred.read_property(PropertyIdentifier::PRESENT_VALUE, None)
+        cred.read_property(PropertyIdentifier::CREDENTIAL_STATUS, None)
             .unwrap(),
-        PropertyValue::Enumerated(0) // inactive
+        PropertyValue::Enumerated(BinaryPV::INACTIVE.to_raw())
     );
 }
 
@@ -148,7 +148,7 @@ fn access_credential_object_type() {
 fn access_credential_property_list() {
     let cred = AccessCredentialObject::new(1, "CRED-1").unwrap();
     let list = cred.property_list();
-    assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
+    assert!(!list.contains(&PropertyIdentifier::PRESENT_VALUE));
     assert!(list.contains(&PropertyIdentifier::CREDENTIAL_STATUS));
     assert!(list.contains(&PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS));
     assert!(list.contains(&PropertyIdentifier::AUTHENTICATION_FACTORS));
@@ -572,7 +572,7 @@ fn access_door_relinquish_default_write_recaptures_present_value() {
             PropertyValue::Enumerated(named)
         );
     }
-    door.set_relinquish_default(1).unwrap();
+    door.set_relinquish_default(DoorValue::UNLOCK).unwrap();
 
     // 4 is out of the production; so are large values; so are wrong types.
     // Each refuses PROPERTY / VALUE_OUT_OF_RANGE (or INVALID_DATA_TYPE) and
@@ -609,8 +609,9 @@ fn access_door_relinquish_default_write_recaptures_present_value() {
     }
 
     // The local setter shares the validation domain.
-    assert!(door.set_relinquish_default(4).is_err());
-    door.set_relinquish_default(3).unwrap();
+    assert!(door.set_relinquish_default(DoorValue::from_raw(4)).is_err());
+    door.set_relinquish_default(DoorValue::EXTENDED_PULSE_UNLOCK)
+        .unwrap();
     assert_eq!(
         door.read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),

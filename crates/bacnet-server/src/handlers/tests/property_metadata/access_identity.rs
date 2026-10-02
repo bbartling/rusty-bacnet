@@ -15,13 +15,10 @@ fn access_objects(configured: bool) -> [Box<dyn BACnetObject>; 4] {
     let cdi = CredentialDataInputObject::new(7, "CDI-7").unwrap();
     if configured {
         credential
-            .write_property(P::PRESENT_VALUE, None, PropertyValue::Enumerated(1), None)
-            .unwrap();
-        credential
             .write_property(
                 P::CREDENTIAL_STATUS,
                 None,
-                PropertyValue::Enumerated(2),
+                PropertyValue::Enumerated(1),
                 None,
             )
             .unwrap();
@@ -82,8 +79,8 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
     // Global_Identifier are required and writable (the heuristic called only
     // Description/Out_Of_Service/Present_Value writable).
     let middle: &[P] = match kind {
+        // Table 12-40 has no Present_Value row (#979).
         ObjectType::ACCESS_CREDENTIAL => &[
-            P::PRESENT_VALUE,
             P::CREDENTIAL_STATUS,
             P::ASSIGNED_ACCESS_RIGHTS,
             P::AUTHENTICATION_FACTORS,
@@ -109,7 +106,7 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
     all.extend_from_slice(middle);
     all.extend_from_slice(&[P::STATUS_FLAGS, P::OUT_OF_SERVICE, P::RELIABILITY]);
     let optional: &[P] = match kind {
-        ObjectType::ACCESS_CREDENTIAL => &[P::DESCRIPTION, P::PRESENT_VALUE],
+        ObjectType::ACCESS_CREDENTIAL => &[P::DESCRIPTION],
         ObjectType::ACCESS_USER => &[P::DESCRIPTION, P::PRESENT_VALUE, P::ASSIGNED_ACCESS_RIGHTS],
         ObjectType::ACCESS_RIGHTS => &[P::DESCRIPTION],
         _ => &[P::DESCRIPTION, P::SUPPORTED_FORMAT_CLASSES],
