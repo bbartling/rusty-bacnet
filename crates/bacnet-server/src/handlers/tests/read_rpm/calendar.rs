@@ -17,20 +17,28 @@ fn rpm_calendar_indexed_reads_and_date_list_wire_bytes() {
                 day: 14,
                 day_of_week: 1,
             };
-            object.add_date_entry(BACnetCalendarEntry::Date(date));
-            object.add_date_entry(BACnetCalendarEntry::DateRange(BACnetDateRange {
-                start_date: date,
-                end_date: date,
-            }));
-            object.add_date_entry(BACnetCalendarEntry::WeekNDay(BACnetWeekNDay {
-                month: 255,
-                week_of_month: 255,
-                day_of_week: 1,
-            }));
-            object.set_present_value(true);
+            for entry in [
+                BACnetCalendarEntry::Date(date),
+                BACnetCalendarEntry::DateRange(BACnetDateRange {
+                    start_date: date,
+                    end_date: date,
+                }),
+                BACnetCalendarEntry::WeekNDay(BACnetWeekNDay {
+                    month: 255,
+                    week_of_month: 255,
+                    day_of_week: 1,
+                }),
+            ] {
+                object.add_date_entry(entry).unwrap();
+            }
         }
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
+        // Monday 14 September 2026 matches every configured entry, so
+        // Present_Value is TRUE exactly when Date_List holds them (#1029).
+        db.set_clock_reader(Some(crate::schedule::tests::SettableClock::at(
+            2026, 9, 14, 12, 0,
+        )));
         db.add(Box::new(object)).unwrap();
         // Independent bytes pin each entry under its Clause 21 CHOICE tag
         // (#996): date [0] (0x0C), the date-range [1] frame (0x1E ... 0x1F)

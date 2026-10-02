@@ -69,15 +69,27 @@ async fn hub_identity_is_explicit_and_stable_across_binary_restart() {
     let vmac = [0xff, 0, 0, 0, 0, 0x51];
     let mut address = "127.0.0.1:0".to_owned();
     for _ in 0..3 {
-        let base = replace(
-            &files.secure_hub(),
-            "--device-uuid",
-            "000102030405000700090A0B0C0D0E0F",
-        );
-        let mut cmd = replace(&base, "--listen", &address);
-        cmd.args(["--vmac", "FF0000000051"]);
-        let mut hub = Process::start(&mut cmd, &files);
-        let url = hub.hub_url().await;
+        // A restart asks for the old address back. Between the old hub's death
+        // and the new hub's bind another process can take that port; the test
+        // checks identity, not the address, so a hub that lost its bind goes
+        // again on a fresh port, a bounded number of times.
+        let mut attempts = 0;
+        let (mut hub, url) = loop {
+            attempts += 1;
+            let base = replace(
+                &files.secure_hub(),
+                "--device-uuid",
+                "000102030405000700090A0B0C0D0E0F",
+            );
+            let mut cmd = replace(&base, "--listen", &address);
+            cmd.args(["--vmac", "FF0000000051"]);
+            let mut hub = Process::start(&mut cmd, &files);
+            match hub.hub_url_unless_bind_lost().await {
+                Some(url) => break (hub, url),
+                None if attempts < 8 => address = "127.0.0.1:0".to_owned(),
+                None => panic!("hub lost its bind {attempts} times: {:?}", hub.output()),
+            }
+        };
         address = url.trim_start_matches("wss://").to_owned();
         let mut device = Process::start(&mut files.device(&url), &files);
         device.ready("SC device connected").await;
@@ -95,8 +107,9 @@ async fn hub_identity_is_explicit_and_stable_across_binary_restart() {
         // Kill-and-wait is explicit child reaping, not a timeout-only oracle.
         hub.child.kill().unwrap();
         assert!(!hub.wait().await.success());
+        // The next iteration binds this address again; a probe bind here would
+        // only add a window for another process to take it.
         drop(hub);
-        drop(tokio::net::TcpListener::bind(&address).await.unwrap());
     }
 }
 

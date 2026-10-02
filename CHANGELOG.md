@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Staging objects support COV (#988). A SubscribeCOV notification carries
+  Present_Value, Status_Flags and Present_Stage, and goes out when
+  Present_Value moves by at least COV_Increment, when Status_Flags changes, or
+  when Present_Stage changes, as the COV criteria table (Clause 13.1, Table
+  13-1) lists for Staging. Staging gains the COV_Increment property that table
+  calls for: a writable REAL, default 0 (any change), where a negative or
+  non-finite value fails with VALUE_OUT_OF_RANGE. SubscribeCOVProperty works
+  for Present_Value (which inherits COV_Increment), Status_Flags and
+  Present_Stage, each reported with Status_Flags. When a target plan's
+  completion changes Reliability, subscribers get the Status_Flags change. A
+  WriteProperty that changes the stage runs the stage's target writes before
+  its own COV fanout, so one notification can carry both the new stage and
+  the completion's flags; `write_local` reports the stage first. The new
+  `BACnetObject::cov_reported_properties` hook, with `CovReportedProperty`,
+  lists the values a SubscribeCOV notification carries after Present_Value and
+  Status_Flags, and which of them also trigger one; the default follows the
+  table for Loop and Staging, and the server leaves out any the object's
+  Property_List lacks.
+
 - `bacnet tui` opens a full-screen terminal UI (ratatui 0.30, crossterm 0.29)
   on the transport the global flags choose: BACnet/IP, BACnet/IPv6 or
   BACnet/SC. Its first screen is a live device table fed by the client's I-Am
@@ -116,6 +135,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The conformance ledger check now requires every Markdown `public_claims`
+  entry to name a heading (`docs/rust-api.md#heading-slug`), so a renamed or
+  removed section is caught. Source files and `CHANGELOG.md` stay bare, since
+  they have no stable headings. 82 bare entries now point at specific
+  headings, and Recipient_List, Event_Parameters and BACnetTimeStamp framing
+  have a short public statement in `docs/rust-api.md` (#1041).
+- Test-only: the endpoint Device-write tests bind port 0 and read the real
+  address back, the benchmarks hub-restart test retries on a lost bind instead
+  of probing the old address, and the BBMD several-own-rows test reruns on a
+  lost port. The macOS limit of the BBMD probe retry is documented (#1068).
 - The workspace uses Cargo's `resolver = "3"`, so updating the lock file
   prefers dependency versions that support the declared MSRV (1.93). Feature
   resolution is unchanged, and the MSRV CI job still checks the lock file
@@ -403,6 +432,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `diagnostics()` (#956).
 
 ### Fixed
+
+- **Breaking Calendar and Schedule evaluation (and Rust API):** Calendar's
+  Present_Value now follows the device's local date, and a Schedule now
+  calculates its value in the Clause 12.24.4 order and writes it in its own
+  datatype (#1029, #1028).
+  - Calendar: Present_Value is TRUE when the Device clock's local date matches
+    a Date_List entry. It is read from the clock on every read, so it changes
+    with the date; before, it stayed whatever the application set. Entries
+    match octet by octet: wildcards, odd and even months, the last, odd and
+    even day values, open-ended date ranges and every week-of-month form,
+    including weeks 6 to 9 counted back from the month's end. A Date_List
+    write (WriteProperty, WritePropertyMultiple, AddListElement) with an entry
+    out of its Clause 21 range is refused with VALUE_OUT_OF_RANGE and leaves
+    the list unchanged; before, it was stored. AddListElement's
+    ChangeList-Error names that entry's position, not the first entry the
+    list would gain, and RemoveListElement, which has no range error, finds no
+    such entry (LIST_ELEMENT_NOT_FOUND). Out of range means a month
+    outside 1-14, a week-of-month outside 1-9, a weekday outside 1-7, a day
+    outside 1-34, or a date-range end that is neither a specific date nor
+    wholly unspecified. `set_present_value` is removed, `add_date_entry`
+    returns `Result`, and `is_active_on(day)` answers for any day.
+  - Schedule: Present_Value and the writes to its references used to carry an
+    Octet String of the time-value's encoding, which a commandable Real target
+    refused. Time-values are now typed (`BACnetTimeValue::value` is a
+    primitive `PropertyValue`), so a Real schedule writes a Real. Evaluation
+    used to apply every exception whatever its period and ignored
+    Effective_Period. Now, within Effective_Period, the value is that of the
+    best-priority special event in effect today (its inline calendar entry
+    matches, or the Calendar it references is TRUE) whose current value is not
+    NULL, the lower array index breaking a tie; else today's weekly entry if
+    not NULL; else Schedule_Default. Outside the period nothing is calculated
+    or written. Entering the period, the first pass after start-up included,
+    writes the value even when unchanged. Targets are written at
+    Priority_For_Writing (new `set_priority_for_writing`) instead of always
+    16, and a NULL relinquishes that slot. Present_Value is calculated even
+    with no references. `tick_schedule` now takes the date, the time and a
+    Calendar resolver and returns `ScheduleWrite`. The setters return `Result`
+    and refuse non-primitive values, repeated or non-specific times and
+    out-of-range priorities or calendar entries; Schedule_Default refuses a
+    constructed value with INVALID_DATA_TYPE. The schedule encoders in
+    `bacnet-encoding` return `Result`.
+  - The date rules live in one place, `bacnet_types::calendar`
+    (`SpecificDate`, plus `matches`, `contains` and `is_valid` on the calendar
+    types), which `ClockFrame::is_valid_actual_datetime` now uses too.
+
+- **Loop COV notifications carry Setpoint and Controlled_Variable_Value
+  (wire):** a Loop's SubscribeCOV notification now reports Present_Value,
+  Status_Flags, Setpoint and Controlled_Variable_Value, in that order, as the
+  COV criteria table (Clause 13.1, Table 13-1) lists for Loop (#985). Before,
+  it carried only the first two. Loop now serves the required
+  Controlled_Variable_Value (Table 12-20), a read-only REAL the application
+  sets with `LoopObject::set_controlled_variable_value`, and the COV_Increment
+  property the table requires of a Loop that reports COV: a writable REAL,
+  default 0 (any change), validated as on the analog objects. A Present_Value
+  change now reports only when it moves by at least COV_Increment; before,
+  every change did. A Setpoint or Controlled_Variable_Value change alone
+  still sends nothing. Loop's Present_Value is now writable while
+  Out_Of_Service is TRUE, for simulation, and refuses writes with
+  WRITE_ACCESS_DENIED in service; its property metadata and PICS row mark it
+  writable while out of service. In service the application supplies it
+  through `BACnetServer::set_present_value_local`, which now accepts a Loop
+  and is refused while Out_Of_Service is TRUE. The new rows appear in
+  Property_List, the property metadata, RPM ALL, REQUIRED and OPTIONAL, and
+  the PICS.
+
+- **Breaking Trend Log property set (wire):** Trend Log and Trend Log Multiple
+  no longer serve Out_Of_Service (#985). Neither property table (Clause 12.25,
+  Table 12-29; Clause 12.30, Table 12-35) defines it, yet Trend Log listed a
+  writable one that changed nothing (#978 already kept it from the flags) and
+  Trend Log Multiple a read-only one fixed at FALSE. It is gone from their
+  Property_List, property metadata, RPM ALL and OPTIONAL, and PICS rows, and
+  ReadProperty or WriteProperty on it now fails with PROPERTY /
+  UNKNOWN_PROPERTY, as #984 did for Calendar.
 
 - **Breaking wire format and Rust API:** AddListElement and RemoveListElement
   now answer every error with a ChangeList-Error, which carries the First
@@ -764,8 +866,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Schedule now derive FAULT from Reliability, OUT_OF_SERVICE from
   Out_Of_Service and IN_ALARM from Event_State. Trend Log and Trend Log
   Multiple derive only FAULT and IN_ALARM, and keep OVERRIDDEN and
-  OUT_OF_SERVICE FALSE as their object types require, so Trend Log's
-  non-standard Out_Of_Service property doesn't reach its flags. Calendar,
+  OUT_OF_SERVICE FALSE as their object types require; both have since lost
+  their non-standard Out_Of_Service property (see the #985 entry). Calendar,
   which the standard gives no Status_Flags, no longer serves one (see the
   #984 entry below). A Loop's COV subscribers now get a notification when a
   write to Reliability or Out_Of_Service changes its Status_Flags, carrying the

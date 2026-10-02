@@ -28,6 +28,7 @@ pub(crate) mod flags;
 mod lifetime;
 pub(crate) mod multiple_reads;
 pub(crate) mod prepare;
+pub(crate) mod reported;
 pub(crate) mod timed;
 mod timed_capture;
 pub(crate) use timed_capture::TimedWriteCapture;
@@ -341,7 +342,8 @@ impl CovSubscriptionTable {
 
     /// Ordinary whole-object trigger policy: a numeric Present_Value must move
     /// by the increment, any other value must change, and the first report
-    /// always fires. Status_Flags changes are checked separately by the caller.
+    /// always fires. Status_Flags and other Table 13-1 trigger values (such as
+    /// Staging's Present_Stage) are checked separately by the caller.
     /// An unchanged object therefore reports nothing, however often it is
     /// fanned out. Property subscriptions compare their prepared sample instead.
     pub fn should_notify(

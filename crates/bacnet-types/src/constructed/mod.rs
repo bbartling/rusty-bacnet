@@ -10,7 +10,7 @@ use alloc::{string::String, vec::Vec};
 use crate::bitstring::{DaysOfWeek, EventTransitionBits};
 use crate::enums::LifeSafetyState;
 use crate::error::Error;
-use crate::primitives::{Date, ObjectIdentifier, Time};
+use crate::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use crate::MacAddr;
 
 mod audit;
@@ -118,17 +118,20 @@ pub enum BACnetCalendarEntry {
 // BACnetTimeValue (Clause 12.24 -- Schedule Weekly_Schedule; Clause 21.6)
 // ---------------------------------------------------------------------------
 
-/// BACnet time-value pair: a Time followed by an application-tagged value.
+/// BACnet time-value pair: a Time followed by a value of any primitive
+/// datatype.
 ///
-/// The `value` field holds raw application-tagged bytes because the value
-/// type is polymorphic (Real, Boolean, Unsigned, Null, etc.) and the Schedule
-/// object stores them opaquely for later dispatch.
+/// The value is typed, so a Schedule writes it with its own datatype. Only
+/// primitive values ([`PropertyValue::is_primitive`]) belong here; the codec
+/// refuses to encode a `List` or `ApplicationData`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BACnetTimeValue {
     /// The time at which the value applies.
     pub time: Time,
-    /// Raw application-tagged BACnet encoding of the value.
-    pub value: Vec<u8>,
+    /// The value: NULL, BOOLEAN, Unsigned, INTEGER, REAL, Double, OCTET
+    /// STRING, CharacterString, BIT STRING, ENUMERATED, Date, Time or
+    /// BACnetObjectIdentifier.
+    pub value: PropertyValue,
 }
 
 // ---------------------------------------------------------------------------

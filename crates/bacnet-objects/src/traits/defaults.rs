@@ -1,5 +1,25 @@
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 
+use super::CovReportedProperty;
+
+/// The Table 13-1 properties a whole-object COV notification carries after
+/// Present_Value and Status_Flags, behind
+/// [`super::BACnetObject::cov_reported_properties`]. A free function for the
+/// same `dyn` reason as [`array_property_default`].
+pub(super) fn cov_reported_properties_default(
+    object_type: ObjectType,
+) -> &'static [CovReportedProperty] {
+    use CovReportedProperty::{Trigger, Value};
+    match object_type {
+        ObjectType::LOOP => &[
+            Value(PropertyIdentifier::SETPOINT),
+            Value(PropertyIdentifier::CONTROLLED_VARIABLE_VALUE),
+        ],
+        ObjectType::STAGING => &[Trigger(PropertyIdentifier::PRESENT_STAGE)],
+        _ => &[],
+    }
+}
+
 /// The default array/list classification behind
 /// [`super::BACnetObject::is_array_property`], keyed by the Clause 12 property
 /// tables. Three identifier classes:

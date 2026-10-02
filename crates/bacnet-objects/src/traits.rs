@@ -9,12 +9,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_types::bitstring::EventTransitionBits;
-use bacnet_types::constructed::{BACnetLogRecord, BACnetObjectPropertyReference};
+use bacnet_types::calendar::SpecificDate;
+use bacnet_types::constructed::BACnetLogRecord;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, Time};
 
 use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
 use crate::clock::ClockReader;
@@ -27,13 +28,41 @@ use crate::event_enrollment::{
 };
 use crate::file::{FileConfiguration, FileStorage};
 use crate::log_buffer::LogRecordIdentity;
+use crate::schedule::ScheduleWrite;
 
 /// Process-local monotonic time source used by internal object lifecycles.
 #[doc(hidden)]
 pub type MonotonicClock = dyn Fn() -> Duration + Send + Sync;
 
 mod defaults;
-use defaults::{array_property_default, historical_writable_default, list_property_default};
+use defaults::{
+    array_property_default, cov_reported_properties_default, historical_writable_default,
+    list_property_default,
+};
+
+/// One property a whole-object (SubscribeCOV) notification reports after
+/// Present_Value and Status_Flags, from the object type's Table 13-1 row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CovReportedProperty {
+    /// Carried in each notification; a change of it alone sends none.
+    Value(PropertyIdentifier),
+    /// Carried in each notification, and any change of it sends one.
+    Trigger(PropertyIdentifier),
+}
+
+impl CovReportedProperty {
+    /// The reported property.
+    pub const fn property(self) -> PropertyIdentifier {
+        match self {
+            Self::Value(property) | Self::Trigger(property) => property,
+        }
+    }
+
+    /// Whether any change of the property triggers a notification.
+    pub const fn triggers(self) -> bool {
+        matches!(self, Self::Trigger(_))
+    }
+}
 
 /// Result of applying a LifeSafetyOperation to an object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -439,17 +468,31 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         }
     }
 
-    /// COV increment for this object (analog objects only).
+    /// COV increment for this object (objects with a COV_Increment property).
     ///
     /// Returns `Some(increment)` for objects that use COV_Increment filtering
-    /// (e.g., AnalogInput, AnalogOutput, AnalogValue). A notification fires only
-    /// when the numeric Present_Value delta reaches the increment. Property COV
-    /// inherits this increment only for numeric Present_Value; other selected
-    /// properties use their own supplied increment or typed change reporting.
+    /// (e.g., AnalogInput, AnalogOutput, AnalogValue, Loop, Staging). A
+    /// notification fires only when the numeric Present_Value delta reaches the
+    /// increment. Property COV inherits this increment only for numeric
+    /// Present_Value; other selected properties use their own supplied
+    /// increment or typed change reporting.
     ///
     /// Returns `None` for objects that notify on any state change (binary, multi-state).
     fn cov_increment(&self) -> Option<f32> {
         None
+    }
+
+    /// Properties a whole-object (SubscribeCOV) notification reports after
+    /// Present_Value and Status_Flags, in report order.
+    ///
+    /// The default follows the object type's Table 13-1 row: Loop reports
+    /// Setpoint and Controlled_Variable_Value, and Staging reports
+    /// Present_Stage, whose changes also trigger a notification. Every other
+    /// type reports nothing more. The server leaves out a listed property the
+    /// object's Property_List lacks. Property subscriptions (SubscribeCOVProperty
+    /// and SubscribeCOVPropertyMultiple) report their own property instead.
+    fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
+        cov_reported_properties_default(self.object_identifier().object_type())
     }
 
     /// Set the OVERRIDDEN bit in StatusFlags.
@@ -539,17 +582,28 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         Err(EventTransitionCommitError::Unsupported)
     }
 
-    /// Evaluate this object's schedule for the given time.
+    /// Evaluate this object's schedule at `time` on `today` (Clause 12.24.4).
     ///
-    /// Returns `Some((new_value, refs))` if the present value changed, where `refs`
-    /// is the list of complete local references, including target array indices.
-    /// Only meaningful for Schedule objects; default returns `None`.
+    /// `calendar_active` answers for a special event whose period references
+    /// a Calendar: whether that Calendar is TRUE on `today`. Returns the
+    /// writes owed when Present_Value changed or the object has just entered
+    /// its Effective_Period, with the complete local references, target array
+    /// indices included. Only meaningful for Schedule objects; default returns
+    /// `None`.
     fn tick_schedule(
         &mut self,
-        _day_of_week: u8,
-        _hour: u8,
-        _minute: u8,
-    ) -> Option<(PropertyValue, Vec<BACnetObjectPropertyReference>)> {
+        _today: SpecificDate,
+        _time: Time,
+        _calendar_active: &dyn Fn(ObjectIdentifier) -> bool,
+    ) -> Option<ScheduleWrite> {
+        None
+    }
+
+    /// Whether this Calendar's Date_List matches `day`: its Present_Value on
+    /// that day. `None` for an object that does not evaluate a date list; the
+    /// schedule tick then reads its Present_Value instead.
+    #[doc(hidden)]
+    fn calendar_state_internal(&self, _day: SpecificDate) -> Option<bool> {
         None
     }
 

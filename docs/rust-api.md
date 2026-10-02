@@ -1567,6 +1567,29 @@ above; there is no alternate immediate-commit path. Standalone detector
 `probe`/`tick` methods retain their own detector-local behavior. Executed evidence
 is recorded in `BACNET-13-INTRINSIC-PROPOSAL-COMMIT` in the conformance ledger.
 
+### Constructed property framing
+
+Built-in objects read and write three constructed values in their Clause 21
+framing, through the shared `bacnet-encoding` codecs.
+
+- **Notification Class `Recipient_List`** is a BACnetLIST of BACnetDestination
+  (Clause 12.21). Each element is a seven-member sequence in the Clause 21
+  order: a days-of-week set and a time window, then the recipient, process
+  identifier, confirmation flag and event transitions. The recipient is a
+  CHOICE: a device identifier or a network address. Decoding is strict, and a
+  malformed stored list fails closed with no partial delivery. Indexed writes
+  are refused. The codec is not a Notification
+  Forwarder object, which is unsupported.
+- **`Event_Parameters` and `Fault_Parameters`** (Clause 12.12) use the
+  BACnetEventParameter and BACnetFaultParameter CHOICE framing. Modeled
+  alternatives round-trip. An alternative the stack does not model is kept as
+  opaque bytes, and omitted, deprecated and reserved choices, or trailing bytes
+  after a framed element, are rejected.
+- **BACnetTimeStamp** (Clause 21) has one codec for every producer and consumer.
+  The time form is a primitive tag holding raw Time octets, the sequence number
+  must fit 0..=65535 on both encode and decode, and the date-and-time form is an
+  opening and closing tag pair around an application-tagged Date and Time.
+
 ### ObjectDatabase
 
 ```rust
@@ -1638,11 +1661,13 @@ not disable the remaining supported AV/BV target Audit policy or add MSV target
 Audit reporting.
 
 `BACnetServer::set_present_value_local` supplies a logical application value to
-Analog/Binary/Multi-state Inputs and noncommandable Values, then runs the existing
-event and COV path after releasing the database lock. The corresponding low-level
+Analog/Binary/Multi-state Inputs, noncommandable Values and Loop (the control
+algorithm's output), then runs the existing event and COV path after releasing
+the database lock. The corresponding low-level
 `set_present_value_internal` hook bypasses those server notifications. Both deny
 updates while Out_Of_Service to preserve simulation ownership: this is local
-policy for Inputs and the object-clause rule for these Values. Application NULL
+policy for Inputs and the object-clause rule for these Values and Loop, whose
+Present_Value peers may write only while Out_Of_Service is TRUE. Application NULL
 is an invalid datatype, not a relinquishment. For network-equivalent writes use
 `write_local`; noncommandable writes remain available without resolved command
 identity. Commandable writes still require a valid source. These access modes are
@@ -1660,12 +1685,30 @@ Rust construction APIs; Python constructors retain their current defaults.
 
 `ScheduleObject::add_object_property_reference` retains a complete local
 `BACnetObjectPropertyReference`, including its optional target array index.
-The public `BACnetObject::tick_schedule` hook now returns
-`Option<(PropertyValue, Vec<BACnetObjectPropertyReference>)>`; custom overrides
-must return the full references instead of object/property pairs. Endpoint
-forwarding and server execution preserve those coordinates. A failed target
-write does not prevent subsequent target writes. The current profile is
-local-only, with read-only `Priority_For_Writing` fixed at 16.
+`ScheduleObject::evaluate(today, time, calendar_active)` calculates
+Present_Value as Clause 12.24.4 orders it (#1028): within Effective_Period, the
+best-priority special event in effect whose current value is not NULL (an
+inline calendar entry matching `today`, or a referenced Calendar that is TRUE),
+then today's weekly entry if not NULL, then Schedule_Default; outside the
+period it returns `None`. Time-values are typed (`BACnetTimeValue::value` is a
+primitive `PropertyValue`), so Present_Value and the target writes carry the
+scheduled value's own datatype. The public `BACnetObject::tick_schedule(today,
+time, calendar_active)` hook returns `Option<ScheduleWrite>` (value, priority,
+references): a changed value, or any value on entering the Effective_Period
+(start-up included). The server writes it to every reference at
+`Priority_For_Writing`, set with `set_priority_for_writing` (1 to 16, network
+read-only, default 16); a NULL relinquishes that slot. A failed target write
+does not prevent subsequent target writes. `set_weekly_schedule`,
+`add_exception` and `set_effective_period` return `Result` and refuse
+non-primitive values, non-specific or repeated times, out-of-range priorities
+and calendar entries.
+
+`CalendarObject` evaluates Present_Value from the bound Device clock's local
+date on every read (#1029): TRUE when any Date_List entry matches, FALSE
+without a clock. `set_present_value` is gone; `is_active_on(day)` answers for
+any `bacnet_types::calendar::SpecificDate`. `add_date_entry` returns `Result`
+and refuses out-of-range entries, as Date_List writes do. Date matching for
+both objects lives in `bacnet_types::calendar`.
 
 `List_Of_Object_Property_References` now reads as `PropertyValue::ApplicationData`
 containing concatenated bare context-tagged local DeviceObjectPropertyReference
@@ -1802,7 +1845,11 @@ writes may replace individual or whole `Stages`, `Target_References`, and
 configured `Stage_Names` arrays, but array lengths are fixed after construction
 so coupled configuration cannot pass through an invalid intermediate shape.
 `Max_Pres_Value` is derived from the final stage limit. Staging does not
-advertise intrinsic reporting or COV.
+advertise intrinsic reporting. It supports COV (Table 13-1): a SubscribeCOV
+notification carries Present_Value, Status_Flags and Present_Stage, and fires
+when Present_Value moves by the writable `COV_Increment` (default 0), when
+Status_Flags changes (including a target-plan completion that changes
+Reliability), or when Present_Stage changes.
 
 #### Lighting & Color (4)
 
