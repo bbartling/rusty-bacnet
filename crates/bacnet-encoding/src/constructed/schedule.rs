@@ -13,7 +13,7 @@
 //! |---------------------|--------------|--------------------------------------------------|
 //! | period              | (untagged)   | CHOICE: calendar-entry `[0]` or calendar-reference `[1]` |
 //! | list-of-time-values | `[2]`        | opening/closing pair around the time-values      |
-//! | event-priority      | `[3]`        | primitive Unsigned, 1 through 16                 |
+//! | event-priority      | `[3]`        | primitive Unsigned, 1 through 16 when valid      |
 //!
 //! The calendar-entry alternative wraps a `BACnetCalendarEntry`, itself a
 //! CHOICE, so it is an opening/closing `[0]` pair around the entry's own
@@ -21,6 +21,10 @@
 //! alternative is a primitive `[1]` Calendar object identifier.
 //! Exception_Schedule is a BACnetARRAY of special events, concatenated when
 //! read whole.
+//!
+//! These codecs check structure only, like the calendar-entry codec: a
+//! well-formed event with a priority outside 1 through 16 decodes, and the
+//! consumer range-checks it (#1087).
 
 use bacnet_types::constructed::{BACnetSpecialEvent, BACnetTimeValue, SpecialEventPeriod};
 use bacnet_types::error::Error;
@@ -167,18 +171,23 @@ pub fn decode_special_event_period(
 }
 
 /// Encode one `BACnetSpecialEvent`; fails only on a time-value that
-/// [`encode_time_value`] refuses.
+/// [`encode_time_value`] refuses. The event-priority goes out as held, in or
+/// out of its range.
 pub fn encode_special_event(buf: &mut BytesMut, event: &BACnetSpecialEvent) -> Result<(), Error> {
     encode_special_event_period(buf, &event.period);
     encode_time_values(buf, 2, &event.list_of_time_values)?;
-    primitives::encode_ctx_unsigned(buf, 3, u64::from(event.event_priority));
+    primitives::encode_ctx_unsigned(buf, 3, event.event_priority);
     Ok(())
 }
 
-/// Decode one `BACnetSpecialEvent` at `offset`.
+/// Decode one `BACnetSpecialEvent` at `offset`; returns the event and the
+/// offset just past it.
 ///
-/// Rejects an event-priority outside 1 through 16, the range Clause 21 gives
-/// the member. Returns the event and the offset just past it.
+/// The event-priority decodes as any Unsigned. Its 1 through 16 range is a
+/// property of the value, not of the encoding, so a consumer that stores or
+/// acts on the event checks it: the Schedule object refuses a priority out of
+/// range with VALUE_OUT_OF_RANGE (Clause 15.9.1.3), as it does for an inline
+/// calendar entry holding an octet out of range.
 pub fn decode_special_event(
     data: &[u8],
     offset: usize,
@@ -186,18 +195,12 @@ pub fn decode_special_event(
     let (period, pos) = decode_special_event_period(data, offset)?;
     let (list_of_time_values, pos) =
         decode_time_values(data, pos, 2, "special event list-of-time-values")?;
-    let (priority, end) = decode_ctx_unsigned(data, pos, 3, "special event event-priority")?;
-    if !(1..=16).contains(&priority) {
-        return Err(Error::decoding(
-            pos,
-            format!("special event event-priority {priority} outside 1..=16"),
-        ));
-    }
+    let (event_priority, end) = decode_ctx_unsigned(data, pos, 3, "special event event-priority")?;
     Ok((
         BACnetSpecialEvent {
             period,
             list_of_time_values,
-            event_priority: priority as u8,
+            event_priority,
         },
         end,
     ))
@@ -269,7 +272,8 @@ pub fn encode_exception_schedule(
 }
 
 /// Decode a whole Exception_Schedule: zero or more special events, back to
-/// back, with every byte belonging to one.
+/// back, with every byte belonging to one. Like [`decode_special_event`], it
+/// leaves each event-priority's range to the caller.
 pub fn decode_exception_schedule(data: &[u8]) -> Result<Vec<BACnetSpecialEvent>, Error> {
     let mut events = Vec::new();
     let mut pos = 0;

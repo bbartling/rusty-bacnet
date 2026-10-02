@@ -43,10 +43,33 @@ fn source_reporter_forwards_complete_schedule_targets() {
         Some(ScheduleWrite {
             value: PropertyValue::Unsigned(2),
             priority: 16,
-            references: refs,
+            references: refs.clone(),
         })
     );
     assert!(object.tick_schedule(today, noon, &no_calendars).is_none());
+
+    // A Present_Value written out of service is owed through the wrapper.
+    for (property, value) in [
+        (
+            PropertyIdentifier::OUT_OF_SERVICE,
+            PropertyValue::Boolean(true),
+        ),
+        (
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyValue::Unsigned(5),
+        ),
+    ] {
+        object.write_property(property, None, value, None).unwrap();
+    }
+    assert_eq!(
+        object.take_simulated_schedule_write(),
+        Some(ScheduleWrite {
+            value: PropertyValue::Unsigned(5),
+            priority: 16,
+            references: refs,
+        })
+    );
+    assert!(object.take_simulated_schedule_write().is_none());
 }
 
 #[test]

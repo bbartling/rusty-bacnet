@@ -12,12 +12,12 @@
 //! Errors follow the Clause 15.9.1.3 split. An element that starts with a tag
 //! the property's datatype never begins with (an application-tagged Real
 //! where a daily schedule belongs, say) is INVALID_DATA_TYPE. One that starts
-//! right but doesn't decode is INVALID_DATA_ENCODING; the codec refuses an
-//! event priority outside 1 to 16 while decoding, so that is reported here
-//! too, where the local setter says VALUE_OUT_OF_RANGE. After decoding, a
-//! time that isn't specific is VALUE_OUT_OF_RANGE, a time given twice in one
-//! list is DUPLICATE_ENTRY (Clauses 12.24.7 and 12.24.8), and an
-//! Exception_Schedule longer than [`MAX_EXCEPTIONS`] is
+//! right but doesn't decode is INVALID_DATA_ENCODING. After decoding, an
+//! event priority outside 1 to 16 or a time that isn't specific is
+//! VALUE_OUT_OF_RANGE, as from the local setters (the codec decodes any
+//! Unsigned priority and leaves its range to [`evaluation::check_special_event`],
+//! #1087), a time given twice in one list is DUPLICATE_ENTRY (Clauses 12.24.7
+//! and 12.24.8), and an Exception_Schedule longer than [`MAX_EXCEPTIONS`] is
 //! NO_SPACE_TO_WRITE_PROPERTY.
 //!
 //! Weekly_Schedule always has seven elements: a whole write must carry seven

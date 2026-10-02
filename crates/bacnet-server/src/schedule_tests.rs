@@ -309,3 +309,24 @@ async fn schedule_writes_only_within_its_effective_period() {
     assert_eq!(target_wire(&*db.read().await, 16).1, REAL_10);
     assert_eq!(schedule_present_value(&*db.read().await), REAL_10);
 }
+
+#[tokio::test]
+async fn a_present_value_written_out_of_service_reaches_the_target_without_a_clock() {
+    // #1055: a value written through the handler alone, with no server pass
+    // after it, goes out at the next tick; it needs no valid Device clock.
+    let clock = SettableClock::at(2026, 9, 14, 9, 0);
+    let mut schedule = ScheduleObject::new(SCHEDULE, "SCH-1", PropertyValue::Real(10.0)).unwrap();
+    schedule.set_priority_for_writing(9).unwrap();
+    let mut db = database(&clock, schedule);
+    db.set_clock_reader(None);
+    let sch = oid(ObjectType::SCHEDULE, SCHEDULE);
+    write_wire(&mut db, sch, PropertyIdentifier::OUT_OF_SERVICE, &[0x11]);
+    write_wire(&mut db, sch, PropertyIdentifier::PRESENT_VALUE, REAL_5);
+    assert_eq!(target_wire(&db, 9), (REAL_0.to_vec(), NULL.to_vec()));
+
+    let db = Arc::new(RwLock::new(db));
+    tick_schedules(&db).await;
+    let guard = db.read().await;
+    assert_eq!(schedule_present_value(&guard), REAL_5);
+    assert_eq!(target_wire(&guard, 9), (REAL_5.to_vec(), REAL_5.to_vec()));
+}

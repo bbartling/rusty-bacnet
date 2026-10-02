@@ -277,38 +277,56 @@ fn special_event_rejects_malformed_periods() {
 }
 
 #[test]
-fn special_event_rejects_bad_priorities_and_missing_members() {
+fn special_event_decodes_any_unsigned_priority_for_the_consumer_to_check() {
+    // The range is the consumer's to check (#1087): out-of-range priorities,
+    // up to the widest Unsigned, decode and encode back unchanged.
     let period: &[u8] = &[0x1C, 0x01, 0x80, 0x00, 0x01];
-    for (what, rest, needle) in [
+    for (priority, encoded) in [
+        (0, &[0x39, 0][..]),
+        (17, &[0x39, 17]),
+        (255, &[0x39, 0xFF]),
+        (300, &[0x3A, 0x01, 0x2C]),
         (
-            "priority 0",
-            &[0x2E, 0x2F, 0x39, 0][..],
-            Some("event-priority 0"),
+            u64::MAX,
+            &[0x3D, 8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
         ),
+    ] {
+        let wire = [period, &[0x2E, 0x2F], encoded].concat();
+        let event = BACnetSpecialEvent {
+            period: SpecialEventPeriod::CalendarReference(calendar(1)),
+            list_of_time_values: vec![],
+            event_priority: priority,
+        };
+        assert_eq!(
+            decode_special_event(&wire, 0).unwrap(),
+            (event.clone(), wire.len()),
+            "priority {priority}"
+        );
+        assert_eq!(encode_event(&event), wire, "priority {priority}");
+    }
+}
+
+#[test]
+fn special_event_rejects_malformed_priorities_and_missing_members() {
+    let period: &[u8] = &[0x1C, 0x01, 0x80, 0x00, 0x01];
+    for (what, rest) in [
+        ("no priority", &[0x2E, 0x2F][..]),
+        ("application-tagged priority", &[0x2E, 0x2F, 0x21, 3]),
+        // No Unsigned is wider than eight octets.
         (
-            "priority 17",
-            &[0x2E, 0x2F, 0x39, 17],
-            Some("event-priority 17"),
+            "nine-octet priority",
+            &[0x2E, 0x2F, 0x3D, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0],
         ),
-        ("no priority", &[0x2E, 0x2F], None),
-        ("application-tagged priority", &[0x2E, 0x2F, 0x21, 3], None),
-        ("no time-value frame", &[0x39, 3], None),
+        ("empty priority", &[0x2E, 0x2F, 0x38]),
+        ("no time-value frame", &[0x39, 3]),
         (
             "time-value frame never closed",
             &[0x2E, 0xB4, 8, 30, 0, 0, 0x21, 42, 0x39, 3],
-            None,
         ),
-        (
-            "time-value frame closed by [0]",
-            &[0x2E, 0x0F, 0x39, 3],
-            None,
-        ),
+        ("time-value frame closed by [0]", &[0x2E, 0x0F, 0x39, 3]),
     ] {
         let wire = [period, rest].concat();
-        let err = decode_special_event(&wire, 0).expect_err(what);
-        if let Some(needle) = needle {
-            assert!(format!("{err}").contains(needle), "{what}: {err}");
-        }
+        decode_special_event(&wire, 0).expect_err(what);
     }
 }
 

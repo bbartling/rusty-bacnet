@@ -17,10 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Exception_Schedule's index 0 resizes it, appending empty special events.
     Values are decoded with the shared Clause 21 codecs and checked by the
     same functions as the local setters, and a refused write leaves the
-    property unchanged: a time that isn't specific is VALUE_OUT_OF_RANGE, a
-    time given twice in one list DUPLICATE_ENTRY, an element of another
-    datatype INVALID_DATA_TYPE, and a malformed one INVALID_DATA_ENCODING
-    (an event priority outside 1 to 16 included, since the codec refuses it).
+    property unchanged: a time that isn't specific or an event priority
+    outside 1 to 16 is VALUE_OUT_OF_RANGE (#1087), a time given twice in one
+    list DUPLICATE_ENTRY, an element of another datatype INVALID_DATA_TYPE,
+    and a malformed one INVALID_DATA_ENCODING.
     A whole Weekly_Schedule must hold seven days (VALUE_OUT_OF_RANGE) and its
     index 0 is WRITE_ACCESS_DENIED. Exception_Schedule holds at most 1,024
     events, `add_exception` included (RESOURCES / NO_SPACE_TO_WRITE_PROPERTY).
@@ -40,6 +40,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     those writes unconditional, and a target that can't take a value refuses
     only that write. Whether each referenced property accepts the datatype is
     not checked yet.
+
+- **Schedule Present_Value while Out_Of_Service (wire):** a Schedule's
+  Present_Value is now writable while Out_Of_Service is TRUE, and each
+  written value goes on to the references (#1055).
+  - WriteProperty, WritePropertyMultiple and `write_local` take any primitive
+    value, NULL included (INVALID_DATA_TYPE otherwise). In service the write
+    is WRITE_ACCESS_DENIED, as before for every state; the PICS now lists
+    Present_Value writable.
+  - The server sends an accepted value to every reference at
+    Priority_For_Writing, a NULL relinquishing, in the pass it runs once the
+    write commits, with COV for the targets, and does so for every accepted
+    write, even of the value already held. Out of service, neither the
+    60-second tick nor a change to the schedules replaces the written value.
+  - When Out_Of_Service returns to FALSE, the evaluation runs at once and its
+    value takes over. A value written in the same WritePropertyMultiple just
+    before the return still goes out first.
+  - A Reliability simulated meanwhile doesn't hold the write back, and the
+    written value's datatype doesn't count towards CONFIGURATION_ERROR.
+  - New public hook `BACnetObject::take_simulated_schedule_write`, which the
+    schedule pass calls before `tick_schedule`. A value written on the
+    object directly, outside the server's write paths, goes out at the next
+    tick; it needs no valid Device clock.
 
 - Staging objects support COV (#988). A SubscribeCOV notification carries
   Present_Value, Status_Flags and Present_Stage, and goes out when
@@ -559,6 +581,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The date rules live in one place, `bacnet_types::calendar`
     (`SpecificDate`, plus `matches`, `contains` and `is_valid` on the calendar
     types), which `ClockFrame::is_valid_actual_datetime` now uses too.
+
+- **Breaking Exception_Schedule event priority (Rust API and wire):** a
+  special event whose priority is outside 1 to 16 now gets VALUE_OUT_OF_RANGE
+  from WriteProperty and WritePropertyMultiple, the error `add_exception`
+  gives it, instead of INVALID_DATA_ENCODING (#1087). The shared codec
+  (`decode_special_event`, `decode_exception_schedule`) now decodes any
+  Unsigned priority and leaves the range to the caller, as the calendar-entry
+  codec does for its octets; the Schedule object checks it on every path.
+  `BACnetSpecialEvent::event_priority` is now a `u64`, so a decoded value
+  is kept whole.
 
 - **Loop COV notifications carry Setpoint and Controlled_Variable_Value
   (wire):** a Loop's SubscribeCOV notification now reports Present_Value,
