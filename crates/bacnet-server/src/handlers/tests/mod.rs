@@ -52,6 +52,7 @@ mod cov_request_parameters;
 mod detection_enable_summary;
 mod device_description_writes;
 mod device_event;
+mod elevator_landing_calls;
 mod enrollment_summary_budget;
 mod enrollment_summary_filters;
 mod enrollment_summary_recipients;

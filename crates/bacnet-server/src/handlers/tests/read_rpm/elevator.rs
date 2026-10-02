@@ -5,6 +5,8 @@ use bacnet_objects::{
 };
 use bacnet_services::common::PropertyReference;
 use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::constructed::{BACnetLandingCallStatus, LandingCallCommand};
+use bacnet_types::enums::LiftCarDirection;
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
@@ -152,13 +154,28 @@ fn rpm_elevator_group_indexed_reads_and_bytes_are_unchanged() {
             object
                 .write_property(P::GROUP_MODE, None, PropertyValue::Enumerated(2), None)
                 .unwrap();
+            // BACnetLandingCallStatus: floor [0] 5, direction [1] UP.
             object
                 .write_property(
                     P::LANDING_CALL_CONTROL,
                     None,
-                    PropertyValue::Enumerated(1),
+                    PropertyValue::ApplicationData(vec![0x09, 0x05, 0x19, 0x03]),
                     None,
                 )
+                .unwrap();
+            object
+                .set_landing_calls(vec![
+                    BACnetLandingCallStatus {
+                        floor_number: 2,
+                        command: LandingCallCommand::Direction(LiftCarDirection::DOWN),
+                        floor_text: None,
+                    },
+                    BACnetLandingCallStatus {
+                        floor_number: 9,
+                        command: LandingCallCommand::Destination(1),
+                        floor_text: Some("L".into()),
+                    },
+                ])
                 .unwrap();
         }
         write_common(&mut object, configured);
@@ -199,7 +216,19 @@ fn rpm_elevator_group_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::LANDING_CALLS, None, Ok(&[0x21, 0])),
+            // A BACnetLIST of BACnetLandingCallStatus: concatenated
+            // context-tagged SEQUENCEs, empty until the application sets one.
+            (
+                P::LANDING_CALLS,
+                None,
+                Ok(if configured {
+                    &[
+                        0x09, 0x02, 0x19, 0x04, 0x09, 0x09, 0x29, 0x01, 0x3A, 0x00, 0x4C,
+                    ]
+                } else {
+                    EMPTY
+                }),
+            ),
             (
                 P::LANDING_CALLS,
                 Some(0),
@@ -213,7 +242,11 @@ fn rpm_elevator_group_indexed_reads_and_bytes_are_unchanged() {
             (
                 P::LANDING_CALL_CONTROL,
                 None,
-                Ok(if configured { &[0x91, 1] } else { &[0x91, 0] }),
+                Ok(if configured {
+                    &[0x09, 0x05, 0x19, 0x03]
+                } else {
+                    &[0x09, 0x00, 0x19, 0x00]
+                }),
             ),
             (
                 P::LANDING_CALL_CONTROL,
