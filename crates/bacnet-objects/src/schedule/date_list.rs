@@ -10,11 +10,16 @@
 //! RemoveListElement edit that list and write it back through the same path.
 //!
 //! Error pairings follow Clause 15.9.1.3, which separates a value of the wrong
-//! datatype from a malformed encoding: an element that isn't a calendar entry
-//! at all (an application-tagged Date, the form this property used to carry,
-//! or a context tag other than `[0]`, `[1]` or `[2]`) is INVALID_DATA_TYPE; an
-//! entry tag whose content doesn't decode is INVALID_DATA_ENCODING; and more
-//! than [`MAX_DATE_LIST_ENTRIES`] entries is NO_SPACE_TO_WRITE_PROPERTY.
+//! datatype from a malformed encoding and from a value out of range: an
+//! element that isn't a calendar entry at all (an application-tagged Date, the
+//! form this property used to carry, or a context tag other than `[0]`, `[1]`
+//! or `[2]`) is INVALID_DATA_TYPE; an entry tag whose content doesn't decode is
+//! INVALID_DATA_ENCODING; an entry holding an octet outside its Clause 21
+//! range ([`BACnetCalendarEntry::is_valid`]: month 1-14, week-of-month 1-9,
+//! weekday 1-7, day 1-34, and date-range ends that are specific dates or
+//! wholly unspecified) is VALUE_OUT_OF_RANGE (#1029); and more than
+//! [`MAX_DATE_LIST_ENTRIES`] entries is NO_SPACE_TO_WRITE_PROPERTY. Entries
+//! are checked in order, so the first offending entry decides the error.
 
 use bacnet_encoding::constructed::{decode_calendar_entry, encode_calendar_entry};
 use bacnet_encoding::tags::{self, TagClass};
@@ -29,6 +34,14 @@ use crate::common;
 /// Resource cap on Date_List entries, the same bound `MAX_ALARM_VALUES` puts
 /// on Alarm_Values.
 pub(crate) const MAX_DATE_LIST_ENTRIES: usize = 1024;
+
+/// The error for one entry more than [`MAX_DATE_LIST_ENTRIES`].
+pub(super) fn no_space_error() -> Error {
+    Error::Protocol {
+        class: ErrorClass::RESOURCES.to_raw() as u32,
+        code: ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32,
+    }
+}
 
 /// The property value of a Date_List: one encoded entry per list element.
 pub(super) fn read(entries: &[BACnetCalendarEntry]) -> PropertyValue {
@@ -59,12 +72,12 @@ pub(super) fn decode_write(value: PropertyValue) -> Result<Vec<BACnetCalendarEnt
         let mut offset = 0;
         while offset < bytes.len() {
             if entries.len() == MAX_DATE_LIST_ENTRIES {
-                return Err(Error::Protocol {
-                    class: ErrorClass::RESOURCES.to_raw() as u32,
-                    code: ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32,
-                });
+                return Err(no_space_error());
             }
             let (entry, end) = decode_entry(&bytes, offset)?;
+            if !entry.is_valid() {
+                return Err(common::value_out_of_range_error());
+            }
             entries.push(entry);
             offset = end;
         }

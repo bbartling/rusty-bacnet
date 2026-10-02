@@ -4,170 +4,29 @@ use bacnet_encoding::constructed::{
     encode_daily_schedule, encode_date_range, encode_object_property_reference,
     encode_special_event,
 };
+use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
-    BACnetCalendarEntry, BACnetDateRange, BACnetObjectPropertyReference, BACnetSpecialEvent,
-    BACnetTimeValue,
+    BACnetDateRange, BACnetObjectPropertyReference, BACnetSpecialEvent, BACnetTimeValue,
 };
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags};
+use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use bytes::BytesMut;
 use std::borrow::Cow;
 
 use crate::common::{self, read_property_list_property};
 use crate::traits::BACnetObject;
 
+mod calendar;
 mod calendar_metadata;
 mod date_list;
+mod evaluation;
 mod metadata;
 
-// ---------------------------------------------------------------------------
-// Calendar (type 6)
-// ---------------------------------------------------------------------------
-
-/// BACnet Calendar object.
-///
-/// Present_Value is Boolean — true when today matches one of the date_list
-/// entries. The application is responsible for evaluating the date_list and
-/// calling `set_present_value()`.
-///
-/// Date_List is a BACnetLIST of `BACnetCalendarEntry`, each entry under its
-/// Clause 21 CHOICE tag on the wire. It is network-writable (WriteProperty,
-/// AddListElement and RemoveListElement), so an application that evaluates
-/// Present_Value reads the current entries back with `date_list()`.
-///
-/// The object serves only properties its table (Clause 12.9, Table 12-11)
-/// defines. That table has no Status_Flags, Event_State, Out_Of_Service or
-/// Reliability, so reads and writes of those return UNKNOWN_PROPERTY.
-pub struct CalendarObject {
-    oid: ObjectIdentifier,
-    name: String,
-    description: String,
-    present_value: bool,
-    date_list: Vec<BACnetCalendarEntry>,
-}
-
-impl CalendarObject {
-    /// Create a new Calendar object with Present_Value false and no date list.
-    pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
-        let oid = ObjectIdentifier::new(ObjectType::CALENDAR, instance)?;
-        Ok(Self {
-            oid,
-            name: name.into(),
-            description: String::new(),
-            present_value: false,
-            date_list: Vec::new(),
-        })
-    }
-
-    /// Application sets this based on date-list evaluation.
-    pub fn set_present_value(&mut self, value: bool) {
-        self.present_value = value;
-    }
-
-    /// Set the description string.
-    pub fn set_description(&mut self, desc: impl Into<String>) {
-        self.description = desc.into();
-    }
-
-    /// Append a calendar entry to the date_list.
-    pub fn add_date_entry(&mut self, entry: BACnetCalendarEntry) {
-        self.date_list.push(entry);
-    }
-
-    /// Remove all entries from the date_list.
-    pub fn clear_date_list(&mut self) {
-        self.date_list.clear();
-    }
-
-    /// The current date_list entries, as configured or last written.
-    pub fn date_list(&self) -> &[BACnetCalendarEntry] {
-        &self.date_list
-    }
-}
-
-impl BACnetObject for CalendarObject {
-    fn object_identifier(&self) -> ObjectIdentifier {
-        self.oid
-    }
-
-    fn object_name(&self) -> &str {
-        &self.name
-    }
-
-    fn read_property(
-        &self,
-        property: PropertyIdentifier,
-        array_index: Option<u32>,
-    ) -> Result<PropertyValue, Error> {
-        match property {
-            p if p == PropertyIdentifier::OBJECT_IDENTIFIER => {
-                Ok(PropertyValue::ObjectIdentifier(self.oid))
-            }
-            p if p == PropertyIdentifier::OBJECT_NAME => {
-                Ok(PropertyValue::CharacterString(self.name.clone()))
-            }
-            p if p == PropertyIdentifier::DESCRIPTION => {
-                Ok(PropertyValue::CharacterString(self.description.clone()))
-            }
-            p if p == PropertyIdentifier::OBJECT_TYPE => {
-                Ok(PropertyValue::Enumerated(ObjectType::CALENDAR.to_raw()))
-            }
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Boolean(self.present_value))
-            }
-            p if p == PropertyIdentifier::DATE_LIST => Ok(date_list::read(&self.date_list)),
-            p if p == PropertyIdentifier::PROPERTY_LIST => {
-                read_property_list_property(&self.property_list(), array_index)
-            }
-            _ => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
-            }),
-        }
-    }
-
-    fn write_property(
-        &mut self,
-        property: PropertyIdentifier,
-        array_index: Option<u32>,
-        value: PropertyValue,
-        _priority: Option<u8>,
-    ) -> Result<(), Error> {
-        if let Some(result) = common::write_description(&mut self.description, property, &value) {
-            return result;
-        }
-        if property == PropertyIdentifier::DATE_LIST {
-            // A BACnetLIST takes no index; the services gate this first.
-            if array_index.is_some() {
-                return Err(common::property_is_not_an_array_error());
-            }
-            self.date_list = date_list::decode_write(value)?;
-            return Ok(());
-        }
-        if property == PropertyIdentifier::PRESENT_VALUE {
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
-            });
-        }
-        Err(crate::common::unhandled_write_error(
-            self.property_metadata().as_ref(),
-            property,
-            array_index,
-        ))
-    }
-
-    fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
-        calendar_metadata::for_object(self)
-    }
-
-    fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
-        crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
-    }
-}
+pub use calendar::CalendarObject;
+pub use evaluation::ScheduleWrite;
 
 // ---------------------------------------------------------------------------
 // Schedule (type 17)
@@ -175,9 +34,17 @@ impl BACnetObject for CalendarObject {
 
 /// BACnet Schedule object.
 ///
-/// Stores schedule configuration. The application is responsible for
-/// evaluating the weekly/exception schedule and calling `set_present_value()`.
-/// Present_Value data type matches schedule_default.
+/// Present_Value is calculated as Clause 12.24.4 describes (see
+/// [`evaluate`](Self::evaluate)): within Effective_Period, the best special
+/// event in effect, then today's weekly entry, then Schedule_Default. The
+/// bundled server evaluates every Schedule once a minute against the Device
+/// clock and writes a changed value, in its own datatype, to every member of
+/// List_Of_Object_Property_References at Priority_For_Writing. Entering the
+/// Effective_Period, the first evaluation after start-up included, writes the
+/// value even when it has not changed.
+///
+/// Time-values and Schedule_Default hold values of a primitive datatype; the
+/// setters refuse anything else.
 pub struct ScheduleObject {
     oid: ObjectIdentifier,
     name: String,
@@ -197,18 +64,27 @@ pub struct ScheduleObject {
     list_of_object_property_references: Vec<BACnetObjectPropertyReference>,
     /// Priority for writing to referenced objects (1-16).
     priority_for_writing: u8,
+    /// Whether the last evaluation found today inside Effective_Period. The
+    /// first evaluation inside it after one outside it (or after start-up)
+    /// writes the references even if Present_Value is unchanged (Clause
+    /// 12.24.6).
+    in_effective_period: bool,
 }
 
 impl ScheduleObject {
     /// Create a new Schedule object; `schedule_default` is both Schedule_Default and the initial
-    /// Present_Value. Effective_Period starts with both dates unspecified, a range that covers
-    /// every date.
+    /// Present_Value, and must be of a primitive datatype (INVALID_DATA_TYPE otherwise).
+    /// Effective_Period starts with both dates unspecified, a range that covers every date, and
+    /// Priority_For_Writing at 16.
     pub fn new(
         instance: u32,
         name: impl Into<String>,
         schedule_default: PropertyValue,
     ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::SCHEDULE, instance)?;
+        if !schedule_default.is_primitive() {
+            return Err(common::invalid_data_type_error());
+        }
         Ok(Self {
             oid,
             name: name.into(),
@@ -227,12 +103,8 @@ impl ScheduleObject {
             },
             list_of_object_property_references: Vec::new(),
             priority_for_writing: 16, // default: lowest priority
+            in_effective_period: false,
         })
-    }
-
-    /// Application sets this based on schedule evaluation.
-    pub fn set_present_value(&mut self, value: PropertyValue) {
-        self.present_value = value;
     }
 
     /// Set the description string.
@@ -241,20 +113,55 @@ impl ScheduleObject {
     }
 
     /// Set time-value entries for a given day (0=Monday .. 6=Sunday).
-    pub fn set_weekly_schedule(&mut self, day_index: usize, entries: Vec<BACnetTimeValue>) {
-        if day_index < 7 {
-            self.weekly_schedule[day_index] = entries;
-        }
+    ///
+    /// Refuses, leaving the day unchanged, a day index past 6 or a time that
+    /// is not specific (VALUE_OUT_OF_RANGE), a value that is not of a
+    /// primitive datatype (INVALID_DATA_TYPE), and a time given twice
+    /// (DUPLICATE_ENTRY).
+    pub fn set_weekly_schedule(
+        &mut self,
+        day_index: usize,
+        entries: Vec<BACnetTimeValue>,
+    ) -> Result<(), Error> {
+        let Some(day) = self.weekly_schedule.get_mut(day_index) else {
+            return Err(common::value_out_of_range_error());
+        };
+        evaluation::check_time_values(&entries)?;
+        *day = entries;
+        Ok(())
     }
 
     /// Append a special event to the exception schedule.
-    pub fn add_exception(&mut self, event: BACnetSpecialEvent) {
+    ///
+    /// Refuses an event priority outside 1 to 16 or an inline calendar entry
+    /// with an out-of-range value (VALUE_OUT_OF_RANGE), and time-values that
+    /// [`set_weekly_schedule`](Self::set_weekly_schedule) would refuse.
+    pub fn add_exception(&mut self, event: BACnetSpecialEvent) -> Result<(), Error> {
+        evaluation::check_special_event(&event)?;
         self.exception_schedule.push(event);
+        Ok(())
     }
 
     /// Set the effective period for this schedule.
-    pub fn set_effective_period(&mut self, period: BACnetDateRange) {
+    ///
+    /// Each date must be a specific date or wholly unspecified, an open end
+    /// (VALUE_OUT_OF_RANGE otherwise).
+    pub fn set_effective_period(&mut self, period: BACnetDateRange) -> Result<(), Error> {
+        if !period.is_valid() {
+            return Err(common::value_out_of_range_error());
+        }
         self.effective_period = period;
+        Ok(())
+    }
+
+    /// Set Priority_For_Writing, 1 (highest) to 16 (VALUE_OUT_OF_RANGE
+    /// otherwise).
+    pub fn set_priority_for_writing(&mut self, priority: u8) -> Result<(), Error> {
+        if !(1..=16).contains(&priority) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.priority_for_writing = priority;
+        Ok(())
     }
 
     /// Append a local target reference, retaining its optional array index.
@@ -265,45 +172,6 @@ impl ScheduleObject {
     /// Read the current present_value.
     pub fn present_value(&self) -> &PropertyValue {
         &self.present_value
-    }
-
-    /// Evaluate the schedule for the given day and time.
-    ///
-    /// Returns the current effective value (from exception, weekly, or default).
-    /// `day_of_week`: 0=Monday .. 6=Sunday.
-    pub fn evaluate(&self, day_of_week: u8, hour: u8, minute: u8) -> PropertyValue {
-        if self.out_of_service {
-            return self.present_value.clone();
-        }
-
-        // 1. Check exception_schedule first (highest priority = lowest number)
-        let mut best_exception: Option<(u8, &[u8])> = None;
-        for event in &self.exception_schedule {
-            if let Some(raw) = find_active_time_value(&event.list_of_time_values, hour, minute) {
-                match best_exception {
-                    None => best_exception = Some((event.event_priority, raw)),
-                    Some((p, _)) if event.event_priority < p => {
-                        best_exception = Some((event.event_priority, raw));
-                    }
-                    _ => {}
-                }
-            }
-        }
-        if let Some((_, raw)) = best_exception {
-            return PropertyValue::OctetString(raw.to_vec());
-        }
-
-        // 2. Check weekly_schedule[day_of_week]
-        if (day_of_week as usize) < 7 {
-            if let Some(raw) =
-                find_active_time_value(&self.weekly_schedule[day_of_week as usize], hour, minute)
-            {
-                return PropertyValue::OctetString(raw.to_vec());
-            }
-        }
-
-        // 3. Fall back to schedule_default
-        self.schedule_default.clone()
     }
 }
 
@@ -318,31 +186,17 @@ fn unspecified_date() -> Date {
 }
 
 /// One Weekly_Schedule element: a BACnetDailySchedule.
-fn daily_schedule(time_values: &[BACnetTimeValue]) -> PropertyValue {
+fn daily_schedule(time_values: &[BACnetTimeValue]) -> Result<PropertyValue, Error> {
     let mut encoded = BytesMut::new();
-    encode_daily_schedule(&mut encoded, time_values);
-    PropertyValue::ApplicationData(encoded.to_vec())
+    encode_daily_schedule(&mut encoded, time_values)?;
+    Ok(PropertyValue::ApplicationData(encoded.to_vec()))
 }
 
 /// One Exception_Schedule element: a BACnetSpecialEvent.
-fn special_event(event: &BACnetSpecialEvent) -> PropertyValue {
+fn special_event(event: &BACnetSpecialEvent) -> Result<PropertyValue, Error> {
     let mut encoded = BytesMut::new();
-    encode_special_event(&mut encoded, event);
-    PropertyValue::ApplicationData(encoded.to_vec())
-}
-
-/// Find the last time-value entry whose time is at or before (hour, minute).
-///
-/// Entries are expected to be in chronological order per the BACnet spec.
-fn find_active_time_value(entries: &[BACnetTimeValue], hour: u8, minute: u8) -> Option<&[u8]> {
-    let mut result = None;
-    for tv in entries {
-        let t = &tv.time;
-        if t.hour < hour || (t.hour == hour && t.minute <= minute) {
-            result = Some(tv.value.as_slice());
-        }
-    }
-    result
+    encode_special_event(&mut encoded, event)?;
+    Ok(PropertyValue::ApplicationData(encoded.to_vec()))
 }
 
 impl BACnetObject for ScheduleObject {
@@ -399,24 +253,27 @@ impl BACnetObject for ScheduleObject {
                     self.weekly_schedule
                         .iter()
                         .map(|day| daily_schedule(day))
-                        .collect(),
+                        .collect::<Result<_, _>>()?,
                 )),
                 Some(0) => Ok(PropertyValue::Unsigned(7)),
                 Some(idx) if (1..=7).contains(&idx) => {
-                    Ok(daily_schedule(&self.weekly_schedule[(idx - 1) as usize]))
+                    daily_schedule(&self.weekly_schedule[(idx - 1) as usize])
                 }
                 _ => Err(common::invalid_array_index_error()),
             },
             p if p == PropertyIdentifier::EXCEPTION_SCHEDULE => match array_index {
                 None => Ok(PropertyValue::List(
-                    self.exception_schedule.iter().map(special_event).collect(),
+                    self.exception_schedule
+                        .iter()
+                        .map(special_event)
+                        .collect::<Result<_, _>>()?,
                 )),
                 Some(0) => Ok(PropertyValue::Unsigned(self.exception_schedule.len() as u64)),
                 Some(i) => (i as usize)
                     .checked_sub(1)
                     .and_then(|idx| self.exception_schedule.get(idx))
-                    .map(special_event)
-                    .ok_or_else(common::invalid_array_index_error),
+                    .ok_or_else(common::invalid_array_index_error)
+                    .and_then(special_event),
             },
             p if p == PropertyIdentifier::EFFECTIVE_PERIOD => {
                 let mut encoded = BytesMut::new();
@@ -452,6 +309,10 @@ impl BACnetObject for ScheduleObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         if property == PropertyIdentifier::SCHEDULE_DEFAULT {
+            // Clause 12.24.9: any primitive datatype, NULL included.
+            if !value.is_primitive() {
+                return Err(common::invalid_data_type_error());
+            }
             self.schedule_default = value;
             return Ok(());
         }
@@ -524,24 +385,31 @@ impl BACnetObject for ScheduleObject {
 
     fn tick_schedule(
         &mut self,
-        day_of_week: u8,
-        hour: u8,
-        minute: u8,
-    ) -> Option<(PropertyValue, Vec<BACnetObjectPropertyReference>)> {
-        if self.out_of_service || self.list_of_object_property_references.is_empty() {
+        today: SpecificDate,
+        time: Time,
+        calendar_active: &dyn Fn(ObjectIdentifier) -> bool,
+    ) -> Option<ScheduleWrite> {
+        // Out_Of_Service decouples Present_Value from the calculation.
+        if self.out_of_service {
             return None;
         }
-
-        let new_value = self.evaluate(day_of_week, hour, minute);
-        if new_value == self.present_value {
+        let Some(value) = self.evaluate(today, time, calendar_active) else {
+            self.in_effective_period = false;
+            return None;
+        };
+        let entered = !std::mem::replace(&mut self.in_effective_period, true);
+        if !entered && value == self.present_value {
             return None;
         }
-
-        self.present_value = new_value.clone();
-
-        let refs = self.list_of_object_property_references.clone();
-
-        Some((new_value, refs))
+        self.present_value = value;
+        if self.list_of_object_property_references.is_empty() {
+            return None;
+        }
+        Some(ScheduleWrite {
+            value: self.present_value.clone(),
+            priority: self.priority_for_writing,
+            references: self.list_of_object_property_references.clone(),
+        })
     }
 }
 
@@ -550,3 +418,6 @@ mod tests;
 
 #[cfg(test)]
 mod calendar_tests;
+
+#[cfg(test)]
+mod evaluation_tests;
