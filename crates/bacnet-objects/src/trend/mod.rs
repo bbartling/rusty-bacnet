@@ -33,7 +33,6 @@ pub struct TrendLogObject {
     stop_when_full: bool,
     buffer_size: u32,
     log_buffer: LogRecordBuffer,
-    out_of_service: bool,
     reliability: Reliability,
     log_device_object_property: Option<BACnetDeviceObjectPropertyReference>,
     logging_type: u32, // 0=polled, 1=cov, 2=triggered
@@ -53,7 +52,6 @@ impl TrendLogObject {
             stop_when_full: false,
             buffer_size,
             log_buffer: LogRecordBuffer::new(buffer_size),
-            out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
             log_device_object_property: None,
             logging_type: 0,
@@ -155,8 +153,7 @@ impl BACnetObject for TrendLogObject {
             // Clause 12.25.30 lets only IN_ALARM (from Event_State) and FAULT
             // (from Reliability) move on a Trend Log; OVERRIDDEN and
             // OUT_OF_SERVICE are always FALSE. Table 12-29 has no
-            // Out_Of_Service, so the compatibility property never reaches the
-            // flags.
+            // Out_Of_Service property (#985).
             p if p == PropertyIdentifier::STATUS_FLAGS => Ok(common::compute_status_flags(
                 StatusFlags::empty(),
                 self.reliability,
@@ -168,9 +165,6 @@ impl BACnetObject for TrendLogObject {
             }
             p if p == PropertyIdentifier::RELIABILITY => {
                 Ok(PropertyValue::Enumerated(self.reliability.to_raw()))
-            }
-            p if p == PropertyIdentifier::OUT_OF_SERVICE => {
-                Ok(PropertyValue::Boolean(self.out_of_service))
             }
             p if p == PropertyIdentifier::LOG_BUFFER => {
                 Ok(self.log_buffer.project(LogRecordProfile::Trend))
@@ -263,11 +257,6 @@ impl BACnetObject for TrendLogObject {
                 code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
             });
         }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
-            return result;
-        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -319,7 +308,6 @@ pub struct TrendLogMultipleObject {
     log_buffer: LogRecordBuffer,
     log_device_object_property: Vec<BACnetDeviceObjectPropertyReference>,
     logging_type: u32, // 0=polled, 1=cov, 2=triggered
-    out_of_service: bool,
     reliability: Reliability,
     clock: Option<Arc<dyn ClockReader>>,
 }
@@ -340,7 +328,6 @@ impl TrendLogMultipleObject {
             log_buffer: LogRecordBuffer::new(buffer_size),
             log_device_object_property: Vec::new(),
             logging_type: 0,
-            out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
             clock: None,
         })
@@ -436,7 +423,8 @@ impl BACnetObject for TrendLogMultipleObject {
             )),
             // Clause 12.30.5 lets only IN_ALARM (from Event_State) and FAULT
             // (from Reliability) move on a Trend Log Multiple; OVERRIDDEN and
-            // OUT_OF_SERVICE are always FALSE.
+            // OUT_OF_SERVICE are always FALSE. Table 12-35 has no
+            // Out_Of_Service property (#985).
             p if p == PropertyIdentifier::STATUS_FLAGS => Ok(common::compute_status_flags(
                 StatusFlags::empty(),
                 self.reliability,
@@ -445,9 +433,6 @@ impl BACnetObject for TrendLogMultipleObject {
             )),
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
-            }
-            p if p == PropertyIdentifier::OUT_OF_SERVICE => {
-                Ok(PropertyValue::Boolean(self.out_of_service))
             }
             p if p == PropertyIdentifier::RELIABILITY => {
                 Ok(PropertyValue::Enumerated(self.reliability.to_raw()))

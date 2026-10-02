@@ -245,8 +245,9 @@ async fn staging_target_write_carries_its_commit_time() {
     )
     .await;
     h.notification().await;
-    // The Staging write commits BO-9 under the plan's own guard. The Staging
-    // object itself offers no COV, so its completion has no subscriber here.
+    // The Staging write commits BO-9 under the plan's own guard. Nothing
+    // subscribes to the Staging object itself here, so its completion has no
+    // subscriber.
     h.server.comm_state.store(2, Ordering::Release);
     h.set_clock(31);
     h.server

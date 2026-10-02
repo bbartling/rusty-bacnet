@@ -626,12 +626,13 @@ fn metadata_and_property_list_are_truthful_and_non_intrinsic() {
         PropertyIdentifier::PRIORITY_FOR_WRITING,
         PropertyIdentifier::MIN_PRES_VALUE,
         PropertyIdentifier::MAX_PRES_VALUE,
+        PropertyIdentifier::COV_INCREMENT,
     ] {
         assert!(list.contains(&required), "missing {required:?}");
     }
     assert!(object.is_writable_property(PropertyIdentifier::PRESENT_VALUE));
     assert!(!object.is_writable_property(PropertyIdentifier::PRESENT_STAGE));
-    assert!(!object.supports_cov());
+    assert!(object.supports_cov());
 
     let mut unnamed = config();
     unnamed.stage_names = None;
@@ -645,5 +646,47 @@ fn metadata_and_property_list_are_truthful_and_non_intrinsic() {
             .unwrap_err(),
         ErrorClass::PROPERTY,
         ErrorCode::UNKNOWN_PROPERTY,
+    );
+}
+
+#[test]
+fn staging_cov_increment_and_reported_present_stage() {
+    use crate::traits::CovReportedProperty::Trigger;
+    let mut object = StagingObject::new(1, "STG-1", config()).unwrap();
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::COV_INCREMENT, None)
+            .unwrap(),
+        PropertyValue::Real(0.0)
+    );
+    assert_eq!(object.cov_increment(), Some(0.0));
+    assert!(object.is_writable_property(PropertyIdentifier::COV_INCREMENT));
+    object
+        .write_property(
+            PropertyIdentifier::COV_INCREMENT,
+            None,
+            PropertyValue::Real(1.5),
+            None,
+        )
+        .unwrap();
+    assert_eq!(object.cov_increment(), Some(1.5));
+    for (value, code) in [
+        (PropertyValue::Real(-1.0), ErrorCode::VALUE_OUT_OF_RANGE),
+        (PropertyValue::Real(f32::NAN), ErrorCode::VALUE_OUT_OF_RANGE),
+        (PropertyValue::Unsigned(1), ErrorCode::INVALID_DATA_TYPE),
+    ] {
+        assert_protocol_error(
+            object
+                .write_property(PropertyIdentifier::COV_INCREMENT, None, value, None)
+                .unwrap_err(),
+            ErrorClass::PROPERTY,
+            code,
+        );
+    }
+    assert_eq!(object.cov_increment(), Some(1.5));
+    // Table 13-1: a Present_Stage change triggers a report and is carried.
+    assert_eq!(
+        object.cov_reported_properties(),
+        [Trigger(PropertyIdentifier::PRESENT_STAGE)]
     );
 }
