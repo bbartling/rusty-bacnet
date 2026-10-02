@@ -198,8 +198,8 @@ pub struct ConfirmedRequest {
     /// Segment number within a segmented request; `None` for unsegmented PDUs. `None` on a
     /// segmented PDU encodes as 0.
     pub sequence_number: Option<u8>,
-    /// Segments the sender proposes to send before waiting for a SegmentACK (1..=127); `None` for
-    /// unsegmented PDUs. `None` on a segmented PDU encodes as 1.
+    /// Proposed window: how many segments the sender will transmit per SegmentACK (1..=127);
+    /// `None` for unsegmented PDUs. `None` on a segmented PDU encodes as 1.
     pub proposed_window_size: Option<u8>,
     /// Which confirmed service is being requested.
     pub service_choice: ConfirmedServiceChoice,
@@ -237,8 +237,8 @@ pub struct ComplexAck {
     /// Segment number within a segmented reply; `None` for unsegmented PDUs. `None` on a
     /// segmented PDU encodes as 0.
     pub sequence_number: Option<u8>,
-    /// Segments the sender proposes to send before waiting for a SegmentACK (1..=127); `None` for
-    /// unsegmented PDUs. `None` on a segmented PDU encodes as 1.
+    /// Proposed window: how many segments the sender will transmit per SegmentACK (1..=127);
+    /// `None` for unsegmented PDUs. `None` on a segmented PDU encodes as 1.
     pub proposed_window_size: Option<u8>,
     /// Confirmed service this reply belongs to.
     pub service_choice: ConfirmedServiceChoice,
@@ -299,7 +299,7 @@ pub struct AbortPdu {
     /// Set when the abort comes from the server side of the transaction, clear when sent by the
     /// requester.
     pub sent_by_server: bool,
-    /// Invoke ID of the transaction being aborted.
+    /// Invoke ID of the transaction this PDU ends.
     pub invoke_id: u8,
     /// Why the transaction was aborted.
     pub abort_reason: AbortReason,

@@ -436,10 +436,12 @@ fn read_range_splits_framed_schedule_references() {
 }
 
 #[test]
-fn read_range_refuses_lists_it_cannot_split() {
+fn read_range_standalone_device_cov_lists_page_as_read_property_reads_them() {
+    // Without a running server the Device holds no COV subscriptions, and
+    // standalone ReadProperty returns both lists empty. ReadRange splits the
+    // same empty frame with the element walkers, so it pages no items rather
+    // than refusing; the live lists are paged in the server's wire tests.
     let mut db = ObjectDatabase::new();
-    // The standalone Device holds no COV subscriptions; only a running
-    // server's ReadProperty sees the live list, which has no element codec.
     let device = add(
         &mut db,
         DeviceObject::new(DeviceConfig {
@@ -449,12 +451,38 @@ fn read_range_refuses_lists_it_cannot_split() {
         })
         .unwrap(),
     );
+    for property in [
+        PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS,
+        PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
+    ] {
+        assert_eq!(
+            db.get(&device)
+                .unwrap()
+                .read_property(property, None)
+                .unwrap(),
+            PropertyValue::ApplicationData(Vec::new())
+        );
+        for range in [None, POSITION] {
+            let ack = call(&db, device, property, range.clone()).unwrap();
+            assert_ack(&ack, &[], (false, false, false), None);
+        }
+        assert_refused(
+            call(&db, device, property, SEQUENCE),
+            ErrorClass::PROPERTY,
+            ErrorCode::LIST_ITEM_NOT_NUMBERED,
+            &format!("{property:?} by sequence"),
+        );
+    }
+}
+
+#[test]
+fn read_range_refuses_lists_it_cannot_split() {
+    let mut db = ObjectDatabase::new();
     let mut truncated = encoded_destination(1);
     if let PropertyValue::ApplicationData(bytes) = &mut truncated {
         bytes.pop();
     }
     let cases = [
-        (device, PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS),
         // A vendor list held framed, and a framed Recipient_List whose stored
         // frame does not decode.
         (

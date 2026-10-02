@@ -1566,11 +1566,17 @@ element returns `SERVICES/PROPERTY_IS_NOT_A_LIST`, after the unknown object,
 unknown property and array-index errors and before any By Sequence Number or By
 Time error. A list the object holds framed in one `PropertyValue::ApplicationData`
 is split into its elements first, so By Position counts destinations in
-Recipient_List and references in Schedule's List_Of_Object_Property_References.
-A list it cannot split (a framed list with no element codec, such as a vendor
-list or the standalone Device's COV subscription lists, or a value of another
-shape) returns `SERVICES/OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`; ReadProperty
-still reads it whole. Custom objects that hold a vendor list should return
+Recipient_List, references in Schedule's List_Of_Object_Property_References,
+and subscriptions and COV-multiple contexts in the Device's
+Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions. A running
+server pages those two Device lists from the live COV table, through the same
+Device view as ReadProperty and from one snapshot per request, so a page's
+items joined in order are a run of the ReadProperty value. The standalone
+`handle_read_range` pages the Device object's empty lists, as standalone
+`handle_read_property` reads them. A list it cannot split (a framed list with
+no element codec, such as a vendor list, or a value of another shape) returns
+`SERVICES/OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`; ReadProperty still reads it
+whole. Custom objects that hold a vendor list should return
 `PropertyValue::List`, one value per item.
 
 Intrinsic reporting uses one proposal/commit contract. The
@@ -1744,7 +1750,7 @@ with `PROPERTY_IS_NOT_AN_ARRAY`. This correction adds no source-origin hooks.
 `AlertEnrollmentObject::new` now requires the initial
 `bacnet_types::primitives::ObjectIdentifier` reported by `Present_Value`.
 This is an intentional breaking correction: migrate two-argument callers by
-passing the object that most recently provided an alert. Use
+passing the identifier of the latest alert source. Use
 `record_alert_source(source)` to update only that source identity; the helper
 does not evaluate an alert or update event, timestamp, acknowledgement, or
 notification state. The served Table 12-61 surface no longer includes the

@@ -29,7 +29,7 @@
 //! fresh `ceil` conversion, like the intrinsic detectors.
 //!
 //! Transition actions (#166): an *indicated* transition executes Clause
-//! 13.2.2.1.4's actions even when it does not change the event state — the
+//! 13.2.2.1.4's actions even when its target equals the current state — the
 //! specific returned state is stored in `Event_State`, the corresponding
 //! `Acked_Transitions` bit is set/cleared per the referenced Notification
 //! Class's `Ack_Required` (Clause 13.2.3), and the transition is emitted with

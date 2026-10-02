@@ -504,12 +504,14 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// Send a routed APDU with a broadcast link DA, for when the next-hop
     /// router's MAC is unknown.
     ///
-    /// Clause 6.5.3 selects the router's MAC for the data link DA when the
-    /// router for DNET is known; otherwise, the appropriate link broadcast
-    /// DA can be used initially. DNET/DADR still select a single device in
-    /// the NPDU. Clause 6.3 permits link multicast or broadcast for other
-    /// PDU types with a single-device network-layer destination, so its restriction
-    /// on network-layer broadcasts does not exclude this send form.
+    /// Clause 6.5.3 normally addresses the frame to the MAC of the router
+    /// that serves DNET, and falls back to a link broadcast while that
+    /// router has not been located yet. DNET/DADR still select a single
+    /// device in the NPDU. Clause 6.3 reserves broadcast network addresses
+    /// for Unconfirmed-Request PDUs, but that limits the network-layer
+    /// address, not the link DA: a link broadcast carrying a one-device
+    /// DNET/DADR is fine for any PDU type, so this send form stays
+    /// conformant.
     pub async fn send_apdu_routed_via_local_broadcast(
         &self,
         apdu: &[u8],

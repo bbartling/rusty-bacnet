@@ -13,9 +13,9 @@ impl ScConnection {
 
     /// Handle a BVLC-Result received while waiting for Connect-Accept.
     ///
-    /// AB.6.2.2 requires an initiating peer that receives a
-    /// NODE_DUPLICATE_VMAC NAK for its Connect-Request to select a new
-    /// Random-48 VMAC before any subsequent connection attempt.
+    /// A NODE_DUPLICATE_VMAC NAK means another node already uses our VMAC,
+    /// so per AB.6.2.2 the initiating peer has to draw a fresh Random-48 VMAC
+    /// and use it for its next connection attempt.
     pub fn handle_connect_result(
         &mut self,
         result_message_id: u16,

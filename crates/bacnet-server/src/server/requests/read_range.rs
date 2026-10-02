@@ -1,7 +1,15 @@
 use super::*;
+use crate::device_view::{DeviceExecution, DeviceReadContext};
+use bacnet_services::read_range::ReadRangeRequest;
 
+/// ReadRange under one database read guard, through the same executor Device
+/// view as ReadProperty (#1046). A request for the selected Device's
+/// `Active_COV_Subscriptions` or `Active_COV_Multiple_Subscriptions` samples
+/// the COV table once, after the database guard (the server lock order), so
+/// every item, flag and count of the page comes from one instant.
 pub(super) async fn response(
     db: &RwLock<ObjectDatabase>,
+    cov_table: &RwLock<CovSubscriptionTable>,
     request: &ConfirmedRequestPdu,
     mut budget: ReadRangeBudget,
     effective_max_apdu: u16,
@@ -25,13 +33,31 @@ pub(super) async fn response(
     }
     let mut service_ack = BytesMut::new();
     let db = db.read().await;
-    match handlers::handle_read_range_observed(
-        &db,
-        &request.service_request,
-        &mut service_ack,
-        budget,
-        |target, property, index, result| completed(&db, target, property, index, result),
-    ) {
+    let result = match ReadRangeRequest::decode(&request.service_request) {
+        Ok(decoded) => {
+            let live = match handlers::active_cov_device(
+                &db,
+                decoded.object_identifier,
+                decoded.property_identifier,
+            ) {
+                Some(selection) => {
+                    Some(confirmed_response::active_cov_snapshot(&db, cov_table, selection).await)
+                }
+                None => None,
+            };
+            let view = DeviceReadContext::new(&db, DeviceExecution::FullServer, live.as_ref());
+            handlers::read_range_request_observed(
+                &db,
+                Some(&view),
+                decoded,
+                &mut service_ack,
+                budget,
+                |target, property, index, result| completed(&db, target, property, index, result),
+            )
+        }
+        Err(error) => Err(handlers::ReadRangeFailure::Service(error)),
+    };
+    match result {
         Ok(()) => Apdu::ComplexAck(ComplexAck {
             segmented: false,
             more_follows: false,

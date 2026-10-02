@@ -269,11 +269,29 @@ impl BACnetObject for DeviceReadView<'_> {
             self.object.is_array_property(property)
         }
     }
+    /// ReadRange asks this of the served object (#1046): the two COV lists
+    /// are BACnetLISTs, Property_List is an array and the services bit
+    /// string is a single value.
+    fn is_list_property(&self, property: P) -> bool {
+        if self.is_device() && owned(property) {
+            matches!(
+                property,
+                P::ACTIVE_COV_SUBSCRIPTIONS | P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
+            )
+        } else {
+            self.object.is_list_property(property)
+        }
+    }
     fn is_writable_property(&self, property: P) -> bool {
         if self.is_device() && owned(property) {
             false
         } else {
             self.object.is_writable_property(property)
         }
+    }
+    fn log_record_identities_internal(
+        &self,
+    ) -> Option<Vec<bacnet_objects::log_buffer::LogRecordIdentity>> {
+        self.object.log_record_identities_internal()
     }
 }

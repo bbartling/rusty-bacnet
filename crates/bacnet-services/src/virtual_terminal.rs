@@ -174,8 +174,8 @@ pub struct VTDataRequest {
     pub vt_session_identifier: u8,
     /// Octets of new data for the peer terminal.
     pub vt_new_data: Vec<u8>,
-    /// Sequence number that alternates between 0 (`false`) and 1 (`true`) with each new
-    /// VT-Data request on a session, letting the receiver detect repeats. It is sent as an
+    /// One-bit sequence number, 0 (`false`) or 1 (`true`), that the sender flips on every fresh
+    /// VT-Data request within a session so the receiver can spot a repeat. It is sent as an
     /// Unsigned, not as a Boolean.
     pub vt_data_flag: bool,
 }

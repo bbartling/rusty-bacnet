@@ -411,10 +411,10 @@ pub(crate) fn read_array(
 
 /// Return the property-is-not-an-array protocol error.
 ///
-/// Clause 15.5.1.3 / 15.9.1.3: an array index was provided but the property
-/// is not an array. The RP/RPM/WP/WPM service handlers gate on
-/// [`crate::traits::BACnetObject::is_array_property`]; object arms mirror the
-/// classification for direct (non-service) calls.
+/// Clause 15.5.1.3 / 15.9.1.3: the request named an array index for a
+/// property that isn't a BACnetARRAY. The RP/RPM/WP/WPM service handlers
+/// gate on [`crate::traits::BACnetObject::is_array_property`]; object arms
+/// mirror the classification for direct (non-service) calls.
 #[inline]
 pub(crate) fn property_is_not_an_array_error() -> bacnet_types::error::Error {
     protocol_error(

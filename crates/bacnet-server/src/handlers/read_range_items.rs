@@ -6,10 +6,14 @@
 //! `PropertyValue::ApplicationData`, the bytes ReadProperty returns. Those
 //! split back into one encoded item per element, with the element codec the
 //! property's datatype names, so By Position addresses elements and not the
-//! frame.
+//! frame. The Device's COV subscription lists arrive the same way, from the
+//! running server's live projection (#1046).
 
 use super::*;
-use bacnet_encoding::constructed::{decode_destination, decode_device_object_property_reference};
+use bacnet_encoding::constructed::{
+    decode_cov_multiple_subscription, decode_cov_subscription, decode_destination,
+    decode_device_object_property_reference,
+};
 
 /// The Clause 21 element of a list held framed, which marks where each
 /// element ends.
@@ -22,6 +26,12 @@ enum FramedElement {
     /// List_Of_Object_Property_References of Schedule and Timer (Tables 12-28
     /// and 12-75).
     DeviceObjectPropertyReference,
+    /// BACnetCOVSubscription: the Device's Active_COV_Subscriptions (Table
+    /// 12-13).
+    CovSubscription,
+    /// BACnetCOVMultipleSubscription: the Device's
+    /// Active_COV_Multiple_Subscriptions (Table 12-13).
+    CovMultipleSubscription,
 }
 
 impl FramedElement {
@@ -40,6 +50,14 @@ impl FramedElement {
             {
                 Some(Self::DeviceObjectPropertyReference)
             }
+            PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS if object_type == ObjectType::DEVICE => {
+                Some(Self::CovSubscription)
+            }
+            PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
+                if object_type == ObjectType::DEVICE =>
+            {
+                Some(Self::CovMultipleSubscription)
+            }
             _ => None,
         }
     }
@@ -50,6 +68,10 @@ impl FramedElement {
             Self::Destination => decode_destination(data, offset).map(|(_, end)| end),
             Self::DeviceObjectPropertyReference => {
                 decode_device_object_property_reference(data, offset).map(|(_, end)| end)
+            }
+            Self::CovSubscription => decode_cov_subscription(data, offset).map(|(_, end)| end),
+            Self::CovMultipleSubscription => {
+                decode_cov_multiple_subscription(data, offset).map(|(_, end)| end)
             }
         }
     }
@@ -68,10 +90,9 @@ fn unsplittable() -> Error {
 /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED: positional access into it is
 /// functionality it lacks, while ReadProperty still returns the list whole.
 /// The Clause 15.8 procedure lets a responder refuse a target it cannot serve
-/// for a reason its error table does not name. That covers a framed list
-/// with no element codec here (the Device's standalone COV subscription
-/// lists, whose live contents only ReadProperty sees), a stored frame that
-/// does not decode, and a value of any other shape.
+/// for a reason its error table does not name. That covers a framed vendor
+/// list with no element codec here, a stored frame that does not decode, and
+/// a value of any other shape.
 pub(super) fn list_items(
     object_type: ObjectType,
     property: PropertyIdentifier,

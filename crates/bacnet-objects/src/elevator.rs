@@ -119,8 +119,9 @@ impl ElevatorGroupObject {
         self.machine_room_id
     }
 
-    /// Set the Positive Integer Value object whose Present_Value holds the
-    /// number of the machine room this group is in (Clause 12.58).
+    /// Choose which Positive Integer Value object supplies this group's
+    /// machine-room number; clients read the number from that object's
+    /// Present_Value (Clause 12.58).
     ///
     /// Machine_Room_ID is read-only over the network, so this is the only way
     /// to change it. A reference to any other object type is refused with
