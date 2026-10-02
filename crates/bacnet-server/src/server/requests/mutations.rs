@@ -477,50 +477,50 @@ impl Request<'_> {
         )
     }
 
-    pub(super) async fn add_list_element<T: TransportPort + 'static>(
+    /// AddListElement (`remove` false) or RemoveListElement. A Schedule whose
+    /// references changed runs its pass at once under the same guard, as
+    /// after a WriteProperty, so an added target gets the current value and a
+    /// removed one is relinquished (#1121).
+    pub(super) async fn list_element<T: TransportPort + 'static>(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
+        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        effects: &mut MutationEffects,
         audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
+        remove: bool,
     ) -> Apdu {
         if let Err(error) = self.authorize(|| {
-            ListElementRequest::decode(&self.req.service_request)
-                .map(MutationTarget::AddListElement)
+            ListElementRequest::decode(&self.req.service_request).map(if remove {
+                MutationTarget::RemoveListElement
+            } else {
+                MutationTarget::AddListElement
+            })
         }) {
             return self.error::<T>(&error);
         }
-        let mut db = db.write().await;
-        let result = handlers::handle_list_element_observed(
-            &mut db,
-            &self.req.service_request,
-            false,
-            |db, request, current| audit.before_list(db, request, current),
+        let (result, schedule_cov) = {
+            let mut db = db.write().await;
+            let (result, written) = match handlers::handle_list_element_observed(
+                &mut db,
+                &self.req.service_request,
+                remove,
+                |db, request, current| audit.before_list(db, request, current),
+            ) {
+                Ok(oid) => (Ok(()), Some(oid)),
+                Err(error) => (Err(error), None),
+            };
+            audit.lifecycle_completed(&mut db, &result);
+            let schedule_cov = match written {
+                Some(oid) => crate::schedule::reevaluate_written(&mut db, &[oid], cov_table).await,
+                None => Default::default(),
+            };
+            (result, schedule_cov)
+        };
+        // Targets a Schedule commanded on re-evaluation.
+        schedule_cov.merge_into(
+            &mut effects.coarse_cov_oids,
+            &mut effects.life_safety_cov_changes,
         );
-        audit.lifecycle_completed(&mut db, &result);
-        match result {
-            Ok(()) => self.simple_ack(),
-            Err(e) => self.error::<T>(&e),
-        }
-    }
-
-    pub(super) async fn remove_list_element<T: TransportPort + 'static>(
-        &self,
-        db: &Arc<RwLock<ObjectDatabase>>,
-        audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
-    ) -> Apdu {
-        if let Err(error) = self.authorize(|| {
-            ListElementRequest::decode(&self.req.service_request)
-                .map(MutationTarget::RemoveListElement)
-        }) {
-            return self.error::<T>(&error);
-        }
-        let mut db = db.write().await;
-        let result = handlers::handle_list_element_observed(
-            &mut db,
-            &self.req.service_request,
-            true,
-            |db, request, current| audit.before_list(db, request, current),
-        );
-        audit.lifecycle_completed(&mut db, &result);
         match result {
             Ok(()) => self.simple_ack(),
             Err(e) => self.error::<T>(&e),

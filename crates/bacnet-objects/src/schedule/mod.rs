@@ -52,8 +52,10 @@ pub use evaluation::{ScheduleTargetOutcome, ScheduleWrite};
 /// Effective_Period, Schedule_Default, List_Of_Object_Property_References and
 /// Priority_For_Writing are network-writable, through the same checks as the
 /// setters; after such a write the bundled server runs the evaluation again
-/// at once. A change to the references or the priority sends the current
-/// value to the new targets and relinquishes the slots it leaves behind (see
+/// at once. AddListElement and RemoveListElement edit the reference list and
+/// write it back whole the same way. A change to the references or the
+/// priority sends the current value to the new targets and relinquishes the
+/// slots it leaves behind (see
 /// [`set_object_property_references`](Self::set_object_property_references)).
 ///
 /// Reliability is CONFIGURATION_ERROR while the non-NULL values in the two

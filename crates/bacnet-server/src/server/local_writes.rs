@@ -279,6 +279,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 | LocalWrite::ApplicationControlledVariableValue
                 | LocalWrite::ApplicationAveragingSample => None,
             };
+            let value = match write {
+                LocalWrite::Property { property, .. } => {
+                    crate::schedule_references::localize(&db, *oid, property, value)
+                }
+                _ => value,
+            };
             let prepared = match write {
                 LocalWrite::Property {
                     property,
