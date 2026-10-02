@@ -208,9 +208,11 @@ suppresses that reference without advancing its delivered baseline; valid
 Multiple siblings continue. Overlapping Multiple selectors share captured values
 and deduplicate report fields, while only qualifying references advance their
 own baselines and contribute timestamps. A qualifying explicit property selector
-controls its field's timestamp, including an explicit false choice. For implicit
-companions only, this implementation merges timestamp intent from qualifying
-contributors; that overlap policy does not give unqualified selectors authority.
+controls its field's timestamp, including an explicit false choice, and an
+explicit false selector keeps its field untimestamped even when it did not
+qualify (#856). For implicit companions only, this implementation merges
+timestamp intent from qualifying contributors; an unqualified explicit true
+selector gains no authority from that overlap policy.
 Existing delivery, lifetime and renewal
 fences apply; same-generation concurrent completion ordering is separate (#826).
 
@@ -1189,6 +1191,21 @@ let client = BACnetClient::generic_builder()
     .await?;
 ```
 
+To find the port name, `available_ports()` returns the names of the serial ports
+the operating system reports: macOS lists them through IOKit, Windows through
+SetupAPI and the registry, and Linux from sysfs (`/sys/class/tty`). A port that
+another program has open is listed too, and an empty list means none. It returns
+`Error::Transport` with the `std::io::ErrorKind` of the failure if the operating
+system can't be asked.
+
+```rust
+use bacnet_transport::mstp_serial::available_ports;
+
+for name in available_ports()? {
+    println!("{name}"); // /dev/ttyUSB0, /dev/cu.usbserial-1410, COM3, ...
+}
+```
+
 #### Kernel RS-485 Mode (Linux, RTS-based)
 
 When DE/RE is wired to the UART's RTS pin, the Linux kernel can toggle it automatically via the `TIOCSRS485` ioctl. Zero userspace overhead.
@@ -2137,10 +2154,17 @@ replay guarantee.
 
 Timestamped SubscribeCOVPropertyMultiple references (§13.16.3.1.2.3) record each
 qualifying change together with the Device clock frame of its commit. The capture
-runs under the database write guard of network WriteProperty, `write_local`,
-Binary Lighting terminal transitions, committed intrinsic transitions (both
-write-triggered and those confirmed by the periodic Time_Delay task),
-fault-detection reliability changes and schedule writes. Changes queue
+runs under the database write guard of network WriteProperty and
+WritePropertyMultiple, `write_local`, Staging target writes and source
+completion, Binary Lighting terminal transitions, committed intrinsic transitions
+(both write-triggered and those confirmed by the periodic Time_Delay task),
+fault-detection reliability changes and schedule writes. WritePropertyMultiple
+captures each successful attempt as it commits, so a request that writes a value
+out and back, or fails after a committed prefix, conveys every change it made.
+Life Safety objects capture exactly the properties each mutation changed, with
+the same selection as their exact fanout; LifeSafetyOperation changes, on any
+object, do the same. The admission check and the initial capture share one clock
+sample. Changes queue
 per reference until a notification carrying them is delivered: sent, for an
 unconfirmed context, or acknowledged, for a confirmed one (#896). Any notification
 to a context also carries the pending changes of that context's other references
@@ -2150,8 +2174,11 @@ notification carries everything held meanwhile (#896).
 Earlier changes of a reference come first, in capture order, as repeated
 coordinates. Its latest change then merges with untimestamped current values under
 the existing one-value-per-coordinate rules. A coordinate explicitly subscribed
-without timestamps is never repeated as history; as before, an unqualified explicit
-selector does not remove a companion's time from its current row. The header timestamp names
+without timestamps is never repeated as history, and its current row carries no
+time even when that selector did not qualify. A history row is dropped only when
+the next row for its coordinate repeats it exactly (overlapping selectors of one
+change, or an unchanged companion); a value that returns after a different one
+within the same clock tick stays. The header timestamp names
 the latest timestamped change conveyed. The initial report after admission or
 re-subscription is stamped with the Device time of admission; this is a local
 convention, since no change has been observed yet. A renewal keeps changes not yet
@@ -2171,10 +2198,22 @@ rather than delivered as stale state. These drops increment
 maximum APDU is not consulted. `CovSubscriptionTable::with_max_apdu_length` sets
 the bound (the full server uses its configured capacity).
 
-WritePropertyMultiple, staging and source-completion writes are not captured yet,
-and neither are Life Safety objects on any path. Their changes still report through the builder's
-current-state fallback, stamped when the notification is prepared (#856).
-`Max_Notification_Delay` remains reported but not acted on.
+Changes are reported as soon as they happen. When their notification fails or is
+held back (a failed send, a confirmed report that went unacknowledged,
+DISABLE_INITIATION, an exhausted budget), `Max_Notification_Delay` bounds the
+wait: once the delay has passed since the earliest queued change, the context is
+fanned out again without waiting for another change (§13.1, §13.16.1.1.4). The
+delay is an upper bound, so once nothing blocks them overdue changes go out
+promptly: re-enabling communication (by DeviceCommunicationControl or when its
+timer expires), or admitting a shorter delay, retries them at once; a confirmed
+hold-off moves the retry to the end of the hold-off; and the Ack of a confirmed
+report still outstanding sends whatever it held back. As local policy the
+backstop acts no sooner than one second after the change, and otherwise retries
+a blocked context at most once per delay (one second at least). Timestamped
+WritePropertyMultiple changes of Life Safety references that the request's
+exact fanout did not select are evaluated again right after it. A change no producer captured, such as
+a raw database mutation, still reports through the builder's current-state
+fallback, stamped when the notification is prepared.
 
 Background commits fan COV out as a network write does, once their database guard
 is dropped, to ordinary, SubscribeCOVProperty and Multiple subscribers alike: the

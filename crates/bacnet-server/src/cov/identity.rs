@@ -161,7 +161,8 @@ pub struct CovSubscriptionSnapshot {
     pub(super) flight: super::confirmed::FlightMarker,
     pub(super) subscription: CovSubscription,
     /// Reported maximum notification delay of a Multiple reference; `None`
-    /// for ordinary and Single entries. Never acted on.
+    /// for ordinary and Single entries. The timed store keeps the context's
+    /// current value for its deadline backstop.
     pub(super) max_notification_delay: Option<u32>,
 }
 

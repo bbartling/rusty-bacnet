@@ -10,6 +10,7 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{debug, warn};
 
 use crate::sc_frame::{Vmac, BACNET_SC_HUB_SUBPROTOCOL};
+use crate::sc_tls::boxed;
 
 use super::context::{HubConnectionContext, HubListener, PeerConnection};
 use super::heartbeat;
@@ -182,6 +183,10 @@ impl Drop for Admission {
 }
 
 // Tungstenite fixes the callback ErrorResponse size.
+//
+// Each stage's future is boxed, once per connection: tokio-tungstenite's
+// accept handshake takes about 100 KB of stack in a debug build, and unboxed,
+// these futures added about 65 KB more to a connection task's stack (#953).
 #[allow(clippy::result_large_err)]
 pub(super) async fn serve_connection(
     tcp_stream: tokio::net::TcpStream,
@@ -194,52 +199,55 @@ pub(super) async fn serve_connection(
     let clients = &ctx.clients;
     let tls_deadline = admission.tls_deadline;
     // TLS handshake
-    let tls_stream =
-        match super::deadlines::before(tls_deadline, acceptor.accept(tcp_stream).into_fallible())
-            .await
-        {
-            Ok(Ok(s)) => s,
-            Ok(Err((e, tcp_stream))) => {
-                warn!("Hub TLS handshake failed for {peer_addr}: {e}");
-                crate::tls_reject::close_after_alert(tcp_stream, tls_deadline).await;
-                return;
-            }
-            Err(()) => {
-                super::outcomes::increment(&clients.outcomes.tls_timeouts);
-                debug!("Hub TLS handshake deadline expired for {peer_addr}");
-                return;
-            }
-        };
+    let tls_stream = match boxed(|| {
+        super::deadlines::before(tls_deadline, acceptor.accept(tcp_stream).into_fallible())
+    })
+    .await
+    {
+        Ok(Ok(s)) => s,
+        Ok(Err((e, tcp_stream))) => {
+            warn!("Hub TLS handshake failed for {peer_addr}: {e}");
+            crate::tls_reject::close_after_alert(tcp_stream, tls_deadline).await;
+            return;
+        }
+        Err(()) => {
+            super::outcomes::increment(&clients.outcomes.tls_timeouts);
+            debug!("Hub TLS handshake deadline expired for {peer_addr}");
+            return;
+        }
+    };
     let verified_leaf = super::certificate_bindings::VerifiedLeaf::from_verified_chain(
         tls_stream.get_ref().1.peer_certificates(),
     );
 
     // WebSocket upgrade — require and echo the BACnet/SC hub subprotocol.
     let upgrade_deadline = tokio::time::Instant::now() + timeouts.websocket_upgrade();
-    let ws_stream = match super::deadlines::before(
-        upgrade_deadline,
-        tokio_tungstenite::accept_hdr_async_with_config(
-            tls_stream,
-            |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
-             mut response: tokio_tungstenite::tungstenite::handshake::server::Response|
-             -> Result<
-                tokio_tungstenite::tungstenite::handshake::server::Response,
-                tokio_tungstenite::tungstenite::handshake::server::ErrorResponse,
-            > {
-                if !offers_websocket_subprotocol(request, BACNET_SC_HUB_SUBPROTOCOL) {
-                    return Err(websocket_subprotocol_error_response());
-                }
-                response.headers_mut().insert(
-                    "Sec-WebSocket-Protocol",
-                    BACNET_SC_HUB_SUBPROTOCOL.parse().unwrap(),
-                );
-                Ok(response)
-            },
-            Some(crate::sc_limits::websocket(
-                crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH as usize,
-            )),
-        ),
-    )
+    let ws_stream = match boxed(|| {
+        super::deadlines::before(
+            upgrade_deadline,
+            tokio_tungstenite::accept_hdr_async_with_config(
+                tls_stream,
+                |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                 mut response: tokio_tungstenite::tungstenite::handshake::server::Response|
+                 -> Result<
+                    tokio_tungstenite::tungstenite::handshake::server::Response,
+                    tokio_tungstenite::tungstenite::handshake::server::ErrorResponse,
+                > {
+                    if !offers_websocket_subprotocol(request, BACNET_SC_HUB_SUBPROTOCOL) {
+                        return Err(websocket_subprotocol_error_response());
+                    }
+                    response.headers_mut().insert(
+                        "Sec-WebSocket-Protocol",
+                        BACNET_SC_HUB_SUBPROTOCOL.parse().unwrap(),
+                    );
+                    Ok(response)
+                },
+                Some(crate::sc_limits::websocket(
+                    crate::sc_limits::DEFAULT_MAX_BVLC_LENGTH as usize,
+                )),
+            ),
+        )
+    })
     .await
     {
         Ok(Ok(ws)) => ws,
@@ -258,15 +266,17 @@ pub(super) async fn serve_connection(
     let (write, read) = ws_stream.split();
     let write = Arc::new(Mutex::new(write));
 
-    handle_client(
-        PeerConnection {
-            addr: peer_addr,
-            read,
-            write,
-            verified_leaf,
-        },
-        ctx,
-        connect_deadline,
-    )
+    boxed(|| {
+        handle_client(
+            PeerConnection {
+                addr: peer_addr,
+                read,
+                write,
+                verified_leaf,
+            },
+            ctx,
+            connect_deadline,
+        )
+    })
     .await;
 }

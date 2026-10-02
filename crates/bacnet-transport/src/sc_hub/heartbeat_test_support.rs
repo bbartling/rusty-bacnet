@@ -1,5 +1,6 @@
 use super::heartbeat::HeartbeatIo;
 use super::*;
+use crate::sc_tls::boxed;
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::{client::ClientRequestBuilder, Error};
 
@@ -41,7 +42,10 @@ impl LiveClient {
         let url = format!("wss://localhost:{}", address.port());
         let request = ClientRequestBuilder::new(url.parse().unwrap())
             .with_sub_protocol(crate::sc_frame::BACNET_SC_HUB_SUBPROTOCOL);
-        let accept = async {
+        // Both handshakes are boxed: tests poll on a 2 MiB test thread, and
+        // unboxed, these futures put about 200 KB more in this frame and each
+        // test's (#953).
+        let accept = boxed(|| async {
             let (tcp, addr) = listener.accept().await.unwrap();
             crate::sc_tls::disable_nagle(&tcp); // as the hub's accept does
             let tls = TlsAcceptor::from(Arc::new(server))
@@ -55,9 +59,9 @@ impl LiveClient {
                 Ok(response)
             }).await.unwrap();
             (ws, addr)
-        };
+        });
         // Dialled like production SC sockets: tokio-rustls, then the upgrade.
-        let dial = async {
+        let dial = boxed(|| async {
             let tcp = tokio::net::TcpStream::connect(address).await.unwrap();
             crate::sc_tls::disable_nagle(&tcp);
             let tls = tokio_rustls::TlsConnector::from(Arc::new(client))
@@ -68,7 +72,7 @@ impl LiveClient {
                 .await
                 .unwrap();
             tokio_tungstenite::client_async(request, tls).await
-        };
+        });
         let ((server, peer_addr), client) =
             tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(accept, dial) })
                 .await
@@ -111,7 +115,7 @@ impl LiveClient {
     }
 
     pub async fn connect(clients: Clients, vmac: Vmac) -> Self {
-        let mut live = Self::open(clients, vmac).await;
+        let mut live = boxed(|| Self::open(clients, vmac)).await;
         let mut request = frame(ScFunction::ConnectRequest, 1);
         let mut payload = Vec::from(vmac);
         payload.extend_from_slice(&[vmac[0]; 16]);

@@ -30,8 +30,8 @@ limit. The script fails unless:
     only if it loads that framework; it loads no other library;
   - Windows (PE: `llvm-readobj`): a console program or a DLL as expected, which
     imports kernel32.dll, otherwise only Windows system DLLs, and an extension
-    module also the Universal CRT, VCRUNTIME140.dll and its own Python's
-    pythonXY.dll. A CLI binary imports no CRT DLL: it links the C runtime
+    module also the Universal CRT, VCRUNTIME140.dll, its own Python's
+    pythonXY.dll, and SetupAPI and cfgmgr32 for its serial port listing. A CLI binary imports no CRT DLL: it links the C runtime
     statically.
 
 Tool output that parses to nothing fails: the bind tables must list a
@@ -103,6 +103,10 @@ MACHO_LOAD_DYLIB = {"LC_LOAD_DYLIB", "LC_LOAD_WEAK_DYLIB", "LC_REEXPORT_DYLIB", 
 # them. A new one fails the check, so a new run-time dependency is noticed.
 WINDOWS_SYSTEM = {"kernel32.dll", "ntdll.dll", "user32.dll", "advapi32.dll", "ws2_32.dll", "iphlpapi.dll",
                   "bcryptprimitives.dll"}
+# Also allowed in an extension module, not in the CLI: serialport's port
+# listing, which list_serial_ports() uses (#951), as the macOS extension
+# modules alone may load IOKit and CoreFoundation.
+WINDOWS_EXTENSION_SYSTEM = {"setupapi.dll", "cfgmgr32.dll"}
 WINDOWS_API_SET = re.compile(r"^api-ms-win-core-[a-z0-9-]+\.dll$")
 # The C runtime an extension module shares with Python, which ships VCRUNTIME140.dll
 # and relies on the Universal CRT that Windows 10 and later include.
@@ -328,8 +332,9 @@ def check_pe(path, label, arch, python_dll=None):
     pythons = [name for name in imports if re.fullmatch(r"python\d*\.dll", name)]
     if pythons != ([python_dll] if python_dll else []):
         errors.append(f"{label} imports {pythons or 'no Python DLL'}, expected {python_dll or 'none'}")
+    allowed = WINDOWS_SYSTEM | (WINDOWS_EXTENSION_SYSTEM if python_dll else set())
     for name in imports:
-        if name in WINDOWS_SYSTEM or WINDOWS_API_SET.match(name) or name in pythons:
+        if name in allowed or WINDOWS_API_SET.match(name) or name in pythons:
             continue
         if WINDOWS_CRT.match(name):
             if not python_dll:

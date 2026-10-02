@@ -234,7 +234,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE => {
                 mutation
-                    .write_property_multiple::<T>(db, &mut effects, &mut audit)
+                    .write_property_multiple::<T>(db, cov_table, &mut effects, &mut audit)
                     .await
             }
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV => {
@@ -449,7 +449,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     ))
                                 } else {
                                     let mut db = db.write().await;
-                                    handlers::handle_life_safety_operation(&mut db, &request)
+                                    let result =
+                                        handlers::handle_life_safety_operation(&mut db, &request);
+                                    // Timestamped references capture the
+                                    // exact changes under this guard (#856).
+                                    if let Ok(changes) = &result {
+                                        let capture =
+                                            cov_table.read().await.timed_capture_exact(changes);
+                                        capture.run(&db);
+                                    }
+                                    result
                                 }
                             }
                         };
@@ -490,6 +499,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
+            timed_revisits,
         } = effects;
 
         // LSO-only replay store (server level, never handler/object level).
@@ -644,6 +654,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &life_safety_cov_changes,
         )
         .await;
+        // WritePropertyMultiple (SimpleACK or Error, never a ComplexACK) may
+        // have captured changes that fanout did not select (#856).
+        if !timed_revisits.is_empty() {
+            cov_table.read().await.revisits().request(timed_revisits);
+        }
 
         for notification in &initial_cov_notifications {
             match notification {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::sc_tls::boxed;
 use rcgen::{CertificateParams, Issuer, KeyPair};
 use rustls::pki_types::PrivatePkcs8KeyDer;
 use std::time::Duration;
@@ -118,7 +119,10 @@ impl TestTls {
     ) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = async {
+        // The handshakes are boxed here and in `websocket`: tests poll on a
+        // 2 MiB test thread, and unboxed, these futures put about 100 KB more
+        // in each caller's frame (#953).
+        let server = boxed(|| async {
             let (tcp, peer) = listener.accept().await.unwrap();
             crate::sc_tls::disable_nagle(&tcp); // as the hub's accept does
             let tls = self.acceptor.accept(tcp).await.unwrap();
@@ -128,8 +132,9 @@ impl TestTls {
                 Ok(response)
             }).await.unwrap();
             (ws, peer, tokio::time::Instant::now())
-        };
-        let ((server, peer, accepted), client) = tokio::join!(server, self.websocket(address));
+        });
+        let ((server, peer, accepted), client) =
+            tokio::join!(server, boxed(|| self.websocket(address)));
         (server, client, peer, accepted)
     }
 
@@ -138,14 +143,14 @@ impl TestTls {
         address: SocketAddr,
     ) -> WebSocketStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>> {
         let tcp = tokio::net::TcpStream::connect(address).await.unwrap();
-        let tls = self.connect_tls(tcp).await;
+        let tls = boxed(|| self.connect_tls(tcp)).await;
         let request = tokio_tungstenite::tungstenite::client::ClientRequestBuilder::new(
             format!("wss://localhost:{}", address.port())
                 .parse()
                 .unwrap(),
         )
         .with_sub_protocol(crate::sc_frame::BACNET_SC_HUB_SUBPROTOCOL);
-        tokio_tungstenite::client_async(request, tls)
+        boxed(|| tokio_tungstenite::client_async(request, tls))
             .await
             .unwrap()
             .0

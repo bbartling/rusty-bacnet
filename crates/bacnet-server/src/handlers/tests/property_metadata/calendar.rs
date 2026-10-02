@@ -40,9 +40,6 @@ fn rpm_calendar_metadata_selectors_preserve_bytes_and_budgets() {
         P::OBJECT_TYPE,
         P::PRESENT_VALUE,
         P::DATE_LIST,
-        P::STATUS_FLAGS,
-        P::EVENT_STATE,
-        P::OUT_OF_SERVICE,
     ];
     let required = [
         P::OBJECT_IDENTIFIER,
@@ -51,12 +48,9 @@ fn rpm_calendar_metadata_selectors_preserve_bytes_and_budgets() {
         P::PRESENT_VALUE,
         P::DATE_LIST,
     ];
-    let optional = [
-        P::DESCRIPTION,
-        P::STATUS_FLAGS,
-        P::EVENT_STATE,
-        P::OUT_OF_SERVICE,
-    ];
+    // Description is the only optional row Calendar serves: Table 12-11 has no
+    // Status_Flags, Event_State or Out_Of_Service (#984).
+    let optional = [P::DESCRIPTION];
     for configured in [false, true] {
         let object = calendar_object(configured);
         let oid = object.object_identifier();
@@ -71,6 +65,55 @@ fn rpm_calendar_metadata_selectors_preserve_bytes_and_budgets() {
             assert_rpm_selector_bytes(&db, oid, selector, expected);
         }
     }
+}
+
+#[test]
+fn wp_calendar_properties_outside_table_12_11_are_unknown() {
+    // #984: Calendar used to list these as read-only optional rows, so a write
+    // failed WRITE_ACCESS_DENIED. Now the object has no such property at all.
+    let object = calendar_object(true);
+    let oid = object.object_identifier();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(object)).unwrap();
+    let snapshot = |db: &ObjectDatabase| {
+        let object = db.get(&oid).unwrap();
+        [P::PRESENT_VALUE, P::DATE_LIST, P::PROPERTY_LIST]
+            .map(|p| object.read_property(p, None).unwrap())
+    };
+    let before = snapshot(&db);
+    for (property, value) in [
+        (
+            P::STATUS_FLAGS,
+            PropertyValue::BitString {
+                unused_bits: 4,
+                data: vec![0],
+            },
+        ),
+        (P::EVENT_STATE, PropertyValue::Enumerated(0)),
+        (P::OUT_OF_SERVICE, PropertyValue::Boolean(true)),
+        (P::OUT_OF_SERVICE, PropertyValue::Boolean(false)),
+    ] {
+        let mut property_value = BytesMut::new();
+        encode_property_value(&mut property_value, &value).unwrap();
+        let mut request = BytesMut::new();
+        WritePropertyRequest {
+            object_identifier: oid,
+            property_identifier: property,
+            property_array_index: None,
+            property_value: property_value.to_vec(),
+            priority: None,
+        }
+        .encode(&mut request)
+        .unwrap();
+        let result = handle_write_property(&mut db, &request);
+        assert!(
+            matches!(result, Err(Error::Protocol { class, code })
+                if class == ErrorClass::PROPERTY.to_raw() as u32
+                    && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32),
+            "{property:?} write must be UNKNOWN_PROPERTY, got {result:?}"
+        );
+    }
+    assert_eq!(snapshot(&db), before);
 }
 
 #[test]
@@ -115,9 +158,6 @@ mod pics {
             (P::OBJECT_TYPE, false, false),
             (P::PRESENT_VALUE, false, false),
             (P::DATE_LIST, false, false),
-            (P::STATUS_FLAGS, true, false),
-            (P::EVENT_STATE, true, false),
-            (P::OUT_OF_SERVICE, true, false),
             (P::PROPERTY_LIST, false, false),
         ];
         for configured in [false, true] {

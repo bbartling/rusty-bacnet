@@ -8,10 +8,7 @@ its native runners or its services.
 | Host | Runs |
 | --- | --- |
 | Forgejo (self-hosted Linux runner) | Linux CI, [`.forgejo/workflows/ci.yml`](../.forgejo/workflows/ci.yml); website validation, [`docs.yml`](../.forgejo/workflows/docs.yml); releases and publishing to crates.io, PyPI and Forgejo, [`release.yml`](../.forgejo/workflows/release.yml) |
-| GitHub (hosted runners) | [Native macOS and Windows tests](#native-tests-github), [`.github/workflows/native-tests.yml`](../.github/workflows/native-tests.yml); the GitHub Pages docs deploy, [`docs-pages.yml`](../.github/workflows/docs-pages.yml); the GitHub release copy, which Forgejo's release workflow makes through GitHub's API |
-
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) is the
-legacy release workflow, kept manual-only until #951 removes it.
+| GitHub (hosted runners) | [Native macOS and Windows tests](#native-tests-github), [`.github/workflows/native-tests.yml`](../.github/workflows/native-tests.yml); the [release smoke test](#smoke-test) of the macOS and Windows artifacts, [`release-smoke.yml`](../.github/workflows/release-smoke.yml), which Forgejo's release workflow dispatches; the GitHub Pages docs deploy, [`docs-pages.yml`](../.github/workflows/docs-pages.yml); the GitHub release copy, which Forgejo's release workflow makes through GitHub's API |
 
 | Platform | Where it is checked |
 | --- | --- |
@@ -137,9 +134,8 @@ things:
    Dockerfile's SHA-256, that `release.yml` uses the same `CI_IMAGE`, and that
    `.forgejo/ci-image` holds nothing but the Dockerfile.
 2. **Pins.** Checks that the Dockerfile's `RUST_TOOLCHAIN` matches
-   `rust-toolchain.toml` and the toolchain pins in `release.yml`, and that its
-   `RUST_MSRV` matches `Cargo.toml`'s `rust-version` and the MSRV job's
-   `RUSTUP_TOOLCHAIN`.
+   `rust-toolchain.toml`, and that its `RUST_MSRV` matches `Cargo.toml`'s
+   `rust-version` and the MSRV job's `RUSTUP_TOOLCHAIN`.
 3. **Image.** Queries Forgejo's container registry for the tag:
    - If the tag exists, it pulls the image into the VM's Docker. The registry
      requires sign-in to pull, and the runner never pulls job images itself
@@ -153,8 +149,7 @@ A PR that changes the Dockerfile therefore builds and tests its own image.
 **Changing the image** (a toolchain bump, a tool version, an apt package):
 
 1. Edit the Dockerfile.
-   - For a toolchain bump, also move `rust-toolchain.toml` and
-     `.github/workflows/release.yml`.
+   - For a toolchain bump, also move `rust-toolchain.toml`.
    - For an MSRV bump, also move `Cargo.toml`'s `rust-version`, the MSRV job's
      `RUSTUP_TOOLCHAIN` and `scripts/ci/check-msrv.sh`.
    - For a tool bump, update its `*_SHA256` along with its version.
@@ -209,6 +204,10 @@ also leaves out `bacnet-cli/pcap`, which needs the Npcap SDK. Each job runs:
 
 ```bash
 cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES" --profile ci
+# stack guard (#953): STACK_GUARD_TESTS again with 1 MiB thread stacks, after
+# `ulimit -s 1024` on macOS so the CLI tests' `bacnet` processes get a 1 MiB
+# main thread, as on Windows
+RUST_MIN_STACK=1048576 cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES" --profile ci -E "$STACK_GUARD_TESTS"
 cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES"
 cargo nextest run -p bacnet-cli --locked --profile ci   # the CLI's feature-off tests
 cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$NATIVE_FEATURES" -- -D warnings
@@ -223,7 +222,11 @@ cargo nextest run -p rusty-bacnet --locked --profile ci
 
 PyO3 builds link setup-python's interpreter (`PYO3_PYTHON`), not the venv's.
 Every step runs even when an earlier one failed, so one run reports each
-failure. The per-crate default-feature checks
+failure. `STACK_GUARD_TESTS` (in the workflow's `env`) selects every server,
+client, endpoint, integration and CLI test, the benchmark SC mTLS tests and
+bacnet-transport's BACnet/SC tests; the guard step runs `--no-run` first
+because rustc reads `RUST_MIN_STACK` too, and adds a minute or two to each
+job. The per-crate default-feature checks
 (`scripts/ci/check-default-features.sh`) run on Linux only.
 
 **Toolchain and tools.** Both runner images ship rustup, and
@@ -265,8 +268,16 @@ macOS and 21 on Windows cold, and 13 and 16 with a warm cache.
 - Stacks are smaller on Windows: the main thread gets 1 MiB (8 MiB on Linux
   and macOS), so `#[tokio::main]` binaries box their large futures, as
   `bacnet` does. Test threads get 2 MiB everywhere, and debug-build async
-  fixtures can fill that; box big fixture futures (`Box::pin`). Running a test
-  with `RUST_MIN_STACK=1048576` on macOS shows how close it is.
+  fixtures can fill that. A debug build gives every future an async fn awaits
+  at least one stack slot of its own, sized to the whole future, in that fn's
+  poll frame, so a fixture or startup path that awaits many large futures has
+  a large frame. Create such a future in a helper that boxes it
+  (`boxed(|| step()).await`, as the server, SC and fixture code does since
+  #953); `Box::pin(step())` in the caller still builds the full-size temporary
+  in the caller's frame. The stack guard step catches regressions; to see how
+  close a test is, bisect `RUST_MIN_STACK` (or `ulimit -s` for a binary's main
+  thread). On nightly, `-Zprint-type-sizes` gives future sizes, and
+  `-Cremark=prologepilog` gives each function's frame size.
 - Another socket may bind `127.0.0.1:P` beside a wildcard `0.0.0.0:P` on
   Windows unless the first socket set `SO_EXCLUSIVEADDRUSE`, which an
   ephemeral B/IP or B/IPv6 socket now does. Linux refuses that bind. macOS
@@ -373,23 +384,21 @@ merge comes from that PR's run, not an older one.
 tests and publishes a release from Forgejo (#943), which keeps the heavy work
 on the fixed-cost runner VM; GitHub only receives a copy of each release. The
 Linux runner cross-compiles every artifact: Linux and macOS with zig, Windows
-for the MSVC target with cargo-xwin (#944). A GitHub-hosted smoke gate for the
-macOS and Windows artifacts is #951.
-
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) now runs
-only when dispatched by hand, so re-enabling Actions can't publish a tag twice.
-It is not a way to add macOS or Windows assets to a tag Forgejo already
-released: it has no skip logic, and GitHub releases here are immutable once
-published. GitHub Pages publication remains the manual
-[`docs-pages.yml`](../.github/workflows/docs-pages.yml) dispatch on GitHub.
+for the MSVC target with cargo-xwin (#944). Before anything is published,
+GitHub-hosted runners run the macOS and Windows artifacts, which the Linux
+runner can't (the [smoke test](#smoke-test), #951). GitHub Pages publication
+remains the manual [`docs-pages.yml`](../.github/workflows/docs-pages.yml)
+dispatch on GitHub.
 
 ### Trigger and dry run
 
 - **Tag.** Pushing a `v*` tag to Forgejo runs the whole release.
 - **Dry run.** A manual dispatch is a dry run by default (`dry_run` is true). It
-  builds and tests every artifact, keeps them as workflow artifacts, makes the
-  release API calls read only (see [Release API](#release-api-dry-run)) and
-  publishes nothing. The notes come from the workspace version's
+  builds and tests every artifact, keeps them as workflow artifacts, runs the
+  [smoke test](#smoke-test) against a throwaway GitHub draft that it deletes
+  again, makes the release API calls read only (see
+  [Release API](#release-api-dry-run)) and publishes nothing. The notes come
+  from the workspace version's
   `CHANGELOG.md` section if it has one, otherwise from `[Unreleased]`, which
   may be empty:
 
@@ -404,15 +413,8 @@ published. GitHub Pages publication remains the manual
 To release:
 
 1. Set the workspace version, add its `CHANGELOG.md` section, and merge.
-2. Dispatch a dry run on the release commit, and download its
-   `release-assets` artifact. On an Apple Silicon Mac, install the arm64 wheel
-   (`macosx_11_0_arm64`) in a fresh virtual environment and run the Python
-   suite (`python -m unittest discover -s crates/rusty-bacnet/tests`), then run
-   `bacnet-macos-arm64 --version` and the README quickstart `read` against a
-   local Python server on that wheel. Rebuilds of a commit are byte-identical
-   (see [Re-running a partial release](#re-running-a-partial-release)), so
-   the tag builds the same files. This step stands until the GitHub-hosted
-   smoke gate for the macOS and Windows artifacts lands (#951).
+2. Optionally, dispatch a dry run on the release commit first: it runs
+   everything the release does, the smoke test included, without publishing.
 3. Tag the commit, on `main` or `dev`:
 
    ```bash
@@ -435,35 +437,38 @@ the release.
 | Wheels (linux-x86_64, linux-aarch64, macos-x86_64, macos-arm64, windows-x86_64) | `maturin build --release --locked` for CPython 3.11 to 3.14: with `--zig --compatibility manylinux2014` for Linux, `--zig` for macOS, and maturin's built-in xwin for Windows ([macOS and Windows builds](#macos-and-windows-builds)). The image has only Python 3.12; maturin uses its bundled sysconfig for the others and for macOS and Windows. |
 | CLI (linux-amd64, linux-arm64, macos-amd64, macos-arm64, windows-amd64) | Linux: `cargo zigbuild --release --locked -p bacnet-cli --features sc-tls,pcap` for `<target>.2.17`, against the image's static libpcap. `LIBPCAP_VER` gives the pcap crate libpcap's version, which its build script can't load through the linker-script shim, and must match the image's `/opt/libpcap/VERSION`. macOS: `cargo zigbuild` with `--features sc-tls`. Windows: `cargo xwin build` with `--features sc-tls` and the C runtime linked statically. |
 | Test the artifacts | `check_artifacts.py`: one wheel per Python and platform with the right tags, version (the workspace version in PEP 440 form) and extension module, and `THIRD-PARTY-NOTICES` in each wheel and the sdist. For every binary, its architecture and linkage: ELF with nothing above glibc 2.17 (`objdump -T`) and no dynamic libpcap; Mach-O with the tag's minimum macOS, a code signature on arm64, and only the expected libraries and flat lookups (`llvm-objdump`); PE with only the expected DLLs (`llvm-readobj`). Output that parses to nothing fails (no bind table, no Python lookups in an extension module, no `kernel32.dll` import). The Python suite against the installed x86_64 cp312 wheel. `cli_smoke.sh`: the amd64 CLI's `--version` and `--help`, the README quickstart read on loopback, and an offline capture of a one-packet pcap file. The quickstart read again with the server on each other x86_64 wheel, in CPython 3.11, 3.13 and 3.14 from `uv python install`. The arm64 CLI's `--version`, `--help` and offline capture under `qemu-aarch64-static`. |
+| Smoke test (macOS, Windows) | `release_smoke.py gate`: stages the release's files on a GitHub draft (the release's own; a dry run's throwaway `release-smoke-<run id>`), dispatches [`release-smoke.yml`](../.github/workflows/release-smoke.yml) against it and waits for it, failing on a failure or after 60 minutes. A dry run deletes its draft again. Skipped, with a warning, by a dry run without `GH_RELEASE_TOKEN`. See [Smoke test](#smoke-test). |
 | Release API (dry run) | Dry runs only. `release_api.py forgejo --dry-run` against Forgejo with the job token, and `release_api.py github --dry-run` if `GH_RELEASE_TOKEN` is set (otherwise a notice says it was skipped). Both read only, for the tag `v<version>`. |
 | Publish to crates.io | `publish_crates.sh`: one multi-package `cargo publish --no-verify` of the crates whose version isn't on crates.io yet. Cargo orders them and waits for the index. |
 | Publish to PyPI | `maturin upload --skip-existing` of the wheels and the sdist. |
 | Forgejo release | `release_api.py forgejo`: [draft, upload, publish](#draft-then-publish). |
-| GitHub release copy | `release_api.py github`: checks again that the mirror's tag points at the release commit (the preflight already waited for it), then drafts, uploads, checks and publishes through the GitHub REST API. |
+| GitHub release copy | `release_api.py github --staged-release <id> --staged-sums <sha256>`: checks again that the mirror's tag points at the release commit (the preflight already waited for it), then publishes the draft the smoke test ran against, unchanged: it must be that draft, holding exactly these files with their digests and the same `SHA256SUMS`, and nothing is uploaded or deleted. |
 
-The publish jobs run only for a tag, after every build and test passed, one at
-a time in the order above. A failure stops the jobs after it: each publish
+The publish jobs run only for a tag, after every build and test passed, the
+smoke test included, one at a time in the order above. A failure stops the
+jobs after it: each publish
 job's `if:` starts with `success() &&`, because Forgejo leaves the implicit
 `success()` to the runner. Release builds use no Rust cache.
 
 #### What is and isn't tested
 
-The runner is Linux x86_64, so the release runs only the x86_64 Linux wheels
-and CLI, and the arm64 Linux CLI under qemu. Everything else gets the static
-checks above:
+Every file gets the static checks above. The Forgejo runner is Linux x86_64,
+so it runs only the x86_64 Linux wheels and CLI, and the arm64 Linux CLI under
+qemu; the [smoke test](#smoke-test) runs the macOS and Windows ones on
+GitHub-hosted runners:
 
-- the aarch64 Linux wheels: tags, module names, ELF machine and glibc symbols;
-  the arm64 CLI's network commands aren't run;
-- the macOS wheels and CLI: tags, module names, Mach-O CPU type, minimum macOS,
-  loaded libraries and flat lookups. They are run by hand on an Apple Silicon
-  Mac before a release depends on them: the arm64 wheel with the Python suite,
-  and the arm64 CLI with `--version` and the README quickstart read against a
-  local Python server. The x86_64 ones run there only under Rosetta, if it's
-  installed;
-- the Windows wheels and CLI: tags, module names, PE machine, kind (console
-  program or DLL) and imported DLLs. Nothing here runs them.
+- the aarch64 Linux wheels: static checks only (tags, module names, ELF
+  machine and glibc symbols); the arm64 CLI's network commands aren't run;
+- the macOS wheels and CLI, on Apple Silicon (`macos-latest`) and Intel
+  (`macos-26-intel`), and the Windows ones (`windows-latest`): each wheel in
+  its own CPython, with an import, `list_serial_ports()` and a loopback
+  round trip, and each CLI's `--version`, `--help` and quickstart read. The
+  Python suite doesn't run against them; native tests run it on macOS arm64
+  and Windows against a local build of each PR.
 
-Running the macOS x86_64 and Windows artifacts on real hosts is #951.
+These smoke tests show that the files load and work on those hosts, not that
+the Python suite passes against them, and they say nothing about hardware or
+older macOS and Windows versions than the runners'.
 
 ### CI gate
 
@@ -508,9 +513,9 @@ PyPI, which can't be undone. Validate's "Release preflight" step runs
    page) with the token, which shows whether the release for the tag is
    absent, a draft the publish job will resume, or published (then only
    checked). A draft made for another commit stops the run here, as the
-   publish job would. Drafts named `release-preflight-*` that an earlier run
-   couldn't delete are reported, not deleted, since another tag's run may be
-   using its own.
+   publish job would. Drafts named `release-preflight-*` or `release-smoke-*`
+   (a dry run's [smoke test](#smoke-test) draft) that an earlier run couldn't
+   delete are reported, not deleted, since another run may be using its own.
 3. **Write check.** A disposable draft named `release-preflight-<run id>-<8 hex>`.
    It isn't a `v*` name, so no tag rule applies, and it's unique even when a
    run is re-run. The calls:
@@ -548,6 +553,144 @@ Any failure stops the release before anything is built, with the reason and
 write check; on GitHub it does only the anonymous tag check while
 `GH_RELEASE_TOKEN` isn't set, and says so in a notice.
 
+### Smoke test
+
+The Forgejo runner can't run the macOS and Windows artifacts. GitHub-hosted
+runners can, but they can't reach Forgejo, which is on the tailnet and needs
+sign-in. So the files reach GitHub on a draft release, and the "Smoke test
+(macOS, Windows)" job runs after the artifact tests and before anything is
+published. It runs `release_smoke.py gate`:
+
+1. **Stage.** On a release, the GitHub draft for the tag (`release_api.py`'s
+   `stage`): created at the release commit, or resumed (a draft for another
+   commit stops the run), and made to hold exactly this run's
+   `release-assets` files and their `SHA256SUMS`, then the
+   [final check](#draft-then-publish). Unlike the publish job's resume, it
+   replaces an asset that differs from this run's file instead of keeping
+   it, so the smoke test runs exactly what PyPI and both releases get. A
+   dry run makes a throwaway draft, `release-smoke-<run id>`, at the commit
+   instead (deleting one left by an earlier attempt of the run). A release
+   that is already published is only checked, and its files are tested.
+2. **Dispatch** [`release-smoke.yml`](../.github/workflows/release-smoke.yml)
+   on the run's ref (the tag, or a dry run's branch) with the inputs
+   `release_id`, `sums_sha256` (of the staged `SHA256SUMS`), `version`,
+   `commit`, `pythons` (`PYTHONS`) and `correlation_id`
+   (`<run id>-<8 hex>`). The run is named `Release smoke <correlation id>`.
+   The dispatch asks GitHub for the run's id (`return_run_details`), and the
+   gate checks that it is a `workflow_dispatch` run of `release-smoke.yml`
+   (not its name: GitHub calls a new run after the workflow until it has
+   evaluated `run-name`). Without the id, or after a lost response, the gate
+   finds the run by its name rather than dispatching twice. The run must be
+   for the release commit: its fetch job runs only its own commit's scripts,
+   so if the ref has moved on (a branch pushed to during a dry run), the gate
+   stops there. A tag doesn't move.
+3. **Wait.** Poll the run every 30 seconds, printing each job's state as it
+   changes, for up to 60 minutes, then fail. Whenever the gate fails while
+   the run is still going, it asks GitHub to cancel the run before a dry run
+   deletes its draft. Cancelling is asynchronous, so a job that is already
+   running may still look for the draft after it's gone; it then fails on the
+   missing release, and nothing is published either way.
+4. **Report.** Print every job with its result, its link and any failed step.
+   The gate passes only if the run succeeded and each of its four jobs did,
+   all of them present (a job skipped by mistake fails it).
+5. **Clean up** (dry run): delete the throwaway draft, whatever happened, and
+   check that no release or tag of that name is left. The job's last step
+   does the same in case the gate was killed first. Both refuse any name but
+   `release-smoke-*` (checked before anything else) and any release that
+   isn't a draft.
+
+The gate writes the draft's id and the `SHA256SUMS` sha256 as job outputs.
+The GitHub release copy publishes that draft with `--staged-release` and
+`--staged-sums`: the tag's release must be that draft, this run's files must
+give the same `SHA256SUMS`, and the draft must still hold exactly them with
+matching digests. It uploads and deletes nothing, so what is published is
+what was smoke-tested. It fails closed: a GitHub publish without both values,
+or with an empty one, publishes nothing (the step checks, and so does
+`release_api.py`), and there is no other way to publish on GitHub.
+
+**The GitHub workflow.** `release-smoke.yml` runs only when dispatched:
+
+- **Fetch the draft's assets** (`ubuntu-latest`, 10 minutes): checks each
+  input's form and that `commit` is the run's own commit (`github.sha`), so a
+  dispatch can't make this job, whose token can write, run another commit's
+  code. It then checks out `scripts/release` at that commit and runs
+  `release_smoke.py fetch`. That reads the draft by id, checks that its
+  `SHA256SUMS` has the staged sha256, downloads each macOS and Windows wheel
+  and CLI binary through the API, checks it against `SHA256SUMS`, and hands
+  each platform's files on as a workflow artifact kept for a day.
+- **Smoke test (macOS arm64)** on `macos-latest`, **(macOS x86_64)** on
+  `macos-26-intel`, GitHub's newest Intel image, and **(Windows x86_64)** on
+  `windows-latest` (20 minutes each; one failing doesn't cancel the others),
+  with CPython 3.11 to 3.14 from `actions/setup-python`:
+  - each wheel, installed with `pip --no-index --no-deps` into a fresh venv
+    of its own CPython, runs
+    [`wheel_smoke.py`](../scripts/release/wheel_smoke.py): the installed
+    version is the release's; `list_serial_ports()` returns a list of port
+    names, which on macOS goes through IOKit and CoreFoundation, linked
+    through the [framework stubs](#macos-and-windows-builds) and resolved by
+    flat lookup, and both frameworks must then be loaded, and on Windows goes
+    through SetupAPI; and a loopback round trip with the public API, where a
+    `BACnetServer` on 127.0.0.1 serves an analog input and an analog value
+    and a `BACnetClient` reads the input's present value, reads it and its
+    name with ReadPropertyMultiple, writes the value's present value at
+    priority 8 and reads it back;
+  - the CLI binary runs `cli_smoke.sh --no-capture --expect-version`:
+    `--version` must print `bacnet <version>`, `--help` runs, and the README
+    quickstart `read` and `--json readm` against the README server on the
+    cp312 wheel. These builds have no packet capture.
+- **Permissions.** The workflow's default is none. GitHub shows a draft
+  release only to a token with write access: with `contents: read`, the job
+  token gets HTTP 403, "Resource not accessible by integration", for the
+  draft (run 36913737816, 2026-10-01). So the fetch job has `contents:
+  write`, the least that works, and runs only the release commit's
+  `release_smoke.py`, which only reads. The smoke jobs, which run the
+  artifacts, have only `contents: read`, for the checkout; their files come
+  from the run's artifact storage. No secret is used, and every action is
+  pinned to a full commit SHA, as the repository requires.
+- **The token.** Forgejo's `GH_RELEASE_TOKEN` stages the draft (Contents
+  write), dispatches the run (Actions write), and reads and, at the
+  deadline, cancels it (Actions read and write).
+
+GitHub dispatches only a workflow it knows: one on the default branch (`dev`),
+or one that has already run. A dispatch on a tag or branch then runs that
+ref's copy of the file, so a renamed or new workflow must reach `dev` before a
+release can dispatch it. (While #951 was on its branch, a temporary push
+trigger registered the workflow.)
+
+**Reading a failed smoke test.** The smoke job's log ends with the GitHub run's
+link, each job's result and link, and every failed step:
+
+- **Fetch the draft's assets** failed: the draft isn't what was staged (its
+  `SHA256SUMS` changed, a wheel or binary is missing, or a file doesn't match
+  its digest), or the token can't read it. Nothing ran.
+- **Smoke test (*platform*)**, step **Wheels, CPython 3.11 to 3.14**: each
+  wheel's output is a log group named after the wheel, and the last one shows
+  which wheel and which check failed: the install, the import, the version,
+  the serial port listing or the round trip. On macOS, an abort with "symbol
+  not found in flat namespace" or "Library not loaded" points at the
+  framework links.
+- Step **CLI**: `cli_smoke.sh`'s output, with the Python server's log if it
+  didn't start.
+- The gate timed out: it cancelled the run. A long wait for a runner, most
+  often the Intel macOS one, is the usual cause.
+- The gate says the run is for another commit: the branch moved during a dry
+  run. Dispatch the dry run again.
+
+A failed smoke test publishes nothing, and on a release the tag's GitHub draft
+stays a draft. "Re-run all jobs" (or a `dry_run=false` dispatch on the tag)
+recovers only from a runner, network or GitHub failure: it rebuilds the same
+commit, stages the draft again and runs the smoke test before publishing. A
+bug in an artifact needs a new commit. Release it as a new version, or, to
+reuse the tag, first delete the tag's GitHub draft: it was made for the old
+commit, and a draft for another commit stops the run. To run the smoke
+workflow by hand against an existing draft:
+
+```bash
+gh workflow run release-smoke.yml -R jscott3201/rusty-bacnet --ref <tag or branch> \
+  -f release_id=<draft id> -f sums_sha256=<sha256 of its SHA256SUMS> -f version=<version> \
+  -f commit=<full sha> -f pythons="3.11 3.12 3.13 3.14" -f correlation_id=manual-1
+```
+
 ### Draft, then publish
 
 GitHub releases in this repository are immutable once published: assets can't
@@ -568,6 +711,11 @@ therefore builds each release as a draft and publishes it last. For GitHub:
    `make_latest: "legacy"`, the last call. `legacy` has GitHub pick the latest
    release by date and version, so a backport published after a newer
    release doesn't become the latest.
+
+On GitHub, the smoke job does steps 1 to 5 when it stages the draft (see
+[Smoke test](#smoke-test)), and the GitHub release copy checks that same draft
+again (step 5) and publishes it (step 6), without uploading or deleting
+anything.
 
 The Forgejo release follows the same order through Forgejo's API, so
 `releases/latest` never shows a half-uploaded release. Forgejo's API has no
@@ -799,7 +947,10 @@ together.
 
 Every publish job skips what's already there: crate versions on crates.io,
 files on PyPI, and a release that is already published. A draft is resumed as
-[above](#draft-then-publish).
+[above](#draft-then-publish). The smoke job stages the tag's GitHub draft
+again on every run, replacing any file that differs from the run's, and tests
+it before anything is published; the GitHub copy publishes only that staged
+draft.
 
 Forgejo deletes all of a run's artifacts whenever any of its jobs is re-run, so
 re-running only a failed publish job would find nothing to upload. To finish a
@@ -845,8 +996,10 @@ Repository secrets, each passed only to the step that needs it:
   `bacnet-cli`.
 - `PYPI_PUBLISH`: a PyPI API token for `rusty-bacnet`, used as `__token__`.
 - `GH_RELEASE_TOKEN`: a fine-grained GitHub token for `jscott3201/rusty-bacnet`
-  with Contents read and write. Validate's preflight uses it too, to list
-  releases and to create and delete its disposable draft.
+  with Contents read and write and Actions read and write. The GitHub release
+  copy publishes with it; Validate's preflight lists releases and creates and
+  deletes its disposable draft; the smoke job stages the draft, dispatches
+  `release-smoke.yml`, and reads and cancels its run.
 - The job's automatic token creates the Forgejo release, makes and deletes the
   preflight's draft, and reads commit statuses. Validate and the Forgejo
   release job declare `contents: write` for when Forgejo honours
@@ -858,9 +1011,7 @@ sees only whether each is set, never its value.
 
 ### macOS and Windows
 
-The runner is one Linux x86_64 VM, so the workflow builds only Linux binaries
-and wheels. Cross-compiled macOS and Windows builds are #944, and releases
-wait for them.
-
-These checks do not establish Windows support, hardware qualification or
-release readiness.
+The Linux runner cross-compiles the macOS and Windows builds (#944), and
+GitHub-hosted runners smoke-test them before a release publishes anything
+(#951). These checks do not establish hardware qualification, support for
+macOS or Windows versions older than the runners', or release readiness.

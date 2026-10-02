@@ -7,7 +7,7 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
     monotonic_origin: Instant,
 ) -> JoinHandle<()> {
     let owner = fanout.notification_transactions.audit_owner_lease();
-    tokio::spawn(async move {
+    super::heap_futures::spawn_boxed(move || async move {
         let _owner = owner;
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
