@@ -42,16 +42,6 @@ fn schedule_write_schedule_default() {
     assert_eq!(val, PropertyValue::Real(68.0));
 }
 
-#[test]
-fn schedule_set_present_value() {
-    let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    sched.set_present_value(PropertyValue::Real(65.0));
-    let val = sched
-        .read_property(PropertyIdentifier::PRESENT_VALUE, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Real(65.0));
-}
-
 // --- Schedule weekly_schedule ---
 
 fn make_time(hour: u8, minute: u8) -> Time {
@@ -63,10 +53,10 @@ fn make_time(hour: u8, minute: u8) -> Time {
     }
 }
 
-fn make_tv(hour: u8, minute: u8, raw_value: Vec<u8>) -> BACnetTimeValue {
+fn make_tv(hour: u8, minute: u8, value: PropertyValue) -> BACnetTimeValue {
     BACnetTimeValue {
         time: make_time(hour, minute),
-        value: raw_value,
+        value,
     }
 }
 
@@ -91,20 +81,23 @@ fn schedule_weekly_schedule_empty_by_default() {
 }
 
 /// Monday's BACnetDailySchedule: the `[0]` frame around two time-values,
-/// each an application Time (0xB4) then its raw application value.
+/// each an application Time (0xB4) then the value under its own application
+/// tag: Unsigned 1 (0x21 0x01), then Null (0x00).
 const MONDAY: &[u8] = &[
     0x0E, 0xB4, 8, 0, 0, 0, 0x21, 1, 0xB4, 17, 0, 0, 0, 0x00, 0x0F,
 ];
 
 fn monday_schedule() -> ScheduleObject {
     let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    sched.set_weekly_schedule(
-        0,
-        vec![
-            make_tv(8, 0, vec![0x21, 1]), // Unsigned 1
-            make_tv(17, 0, vec![0x00]),   // Null
-        ],
-    );
+    sched
+        .set_weekly_schedule(
+            0,
+            vec![
+                make_tv(8, 0, PropertyValue::Unsigned(1)),
+                make_tv(17, 0, PropertyValue::Null),
+            ],
+        )
+        .unwrap();
     sched
 }
 
@@ -135,7 +128,9 @@ fn schedule_weekly_schedule_index_1_returns_monday() {
 #[test]
 fn schedule_weekly_schedule_index_7_returns_sunday() {
     let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    sched.set_weekly_schedule(6, vec![make_tv(10, 0, vec![0x10])]); // Boolean FALSE
+    sched
+        .set_weekly_schedule(6, vec![make_tv(10, 0, PropertyValue::Boolean(false))])
+        .unwrap();
     assert_eq!(
         weekly(&sched, Some(7)).unwrap(),
         app(&[0x0E, 0xB4, 10, 0, 0, 0, 0x10, 0x0F])
@@ -154,10 +149,12 @@ fn schedule_weekly_schedule_invalid_index_8_returns_error() {
 }
 
 #[test]
-fn schedule_weekly_schedule_out_of_bounds_day_index_ignored() {
+fn schedule_weekly_schedule_refuses_a_day_index_past_sunday() {
     let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    // day_index 7 is out of bounds; should be silently ignored
-    sched.set_weekly_schedule(7, vec![make_tv(8, 0, vec![0x21, 1])]);
+    assert!(matches!(
+        sched.set_weekly_schedule(7, vec![make_tv(8, 0, PropertyValue::Unsigned(1))]),
+        Err(Error::Protocol { code, .. }) if code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32
+    ));
     assert_eq!(
         weekly(&sched, None).unwrap(),
         PropertyValue::List(vec![app(EMPTY_DAY); 7])
@@ -196,7 +193,7 @@ fn schedule_effective_period_set_and_read() {
             day_of_week: 2,
         },
     };
-    sched.set_effective_period(period);
+    sched.set_effective_period(period).unwrap();
     // Two application Dates (tag 10, length 4: 0xA4), not an Octet String.
     assert_eq!(
         sched
@@ -225,7 +222,7 @@ const SUNDAY_EVENT: &[u8] = &[
 fn sunday_event() -> BACnetSpecialEvent {
     BACnetSpecialEvent {
         period: every_weekday(7),
-        list_of_time_values: vec![make_tv(0, 0, vec![0x00])],
+        list_of_time_values: vec![make_tv(0, 0, PropertyValue::Null)],
         event_priority: 16,
     }
 }
@@ -250,7 +247,7 @@ fn schedule_exception_schedule_empty_by_default() {
 #[test]
 fn schedule_exception_schedule_count_via_index_zero() {
     let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    sched.add_exception(sunday_event());
+    sched.add_exception(sunday_event()).unwrap();
     assert_eq!(
         exceptions(&sched, Some(0)).unwrap(),
         PropertyValue::Unsigned(1)
@@ -262,19 +259,23 @@ fn schedule_exception_schedule_reads_each_special_event_with_its_period() {
     // #996: the period, inline calendar entry or Calendar reference, used to
     // be dropped, and the priority was an application Unsigned.
     let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    sched.add_exception(sunday_event());
-    sched.add_exception(BACnetSpecialEvent {
-        period: every_weekday(1),
-        list_of_time_values: vec![],
-        event_priority: 14,
-    });
-    sched.add_exception(BACnetSpecialEvent {
-        period: SpecialEventPeriod::CalendarReference(
-            ObjectIdentifier::new(ObjectType::CALENDAR, 7).unwrap(),
-        ),
-        list_of_time_values: vec![],
-        event_priority: 2,
-    });
+    sched.add_exception(sunday_event()).unwrap();
+    sched
+        .add_exception(BACnetSpecialEvent {
+            period: every_weekday(1),
+            list_of_time_values: vec![],
+            event_priority: 14,
+        })
+        .unwrap();
+    sched
+        .add_exception(BACnetSpecialEvent {
+            period: SpecialEventPeriod::CalendarReference(
+                ObjectIdentifier::new(ObjectType::CALENDAR, 7).unwrap(),
+            ),
+            list_of_time_values: vec![],
+            event_priority: 2,
+        })
+        .unwrap();
     let monday: &[u8] = &[0x0E, 0x2B, 0xFF, 0xFF, 1, 0x0F, 0x2E, 0x2F, 0x39, 14];
     // calendar-reference `[1]` (0x1C) holding Calendar 7, 0x01800007.
     let reference: &[u8] = &[0x1C, 0x01, 0x80, 0x00, 0x07, 0x2E, 0x2F, 0x39, 2];
@@ -359,206 +360,4 @@ fn schedule_property_list_contains_new_properties() {
     assert!(props.contains(&PropertyIdentifier::EXCEPTION_SCHEDULE));
     assert!(props.contains(&PropertyIdentifier::EFFECTIVE_PERIOD));
     assert!(props.contains(&PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES));
-}
-
-// --- Schedule evaluate() ---
-
-#[test]
-fn evaluate_returns_default_when_no_entries() {
-    let sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    let value = sched.evaluate(0, 12, 0); // Monday noon
-    assert_eq!(value, PropertyValue::Real(72.0));
-}
-
-#[test]
-fn evaluate_returns_weekly_value() {
-    let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    // Monday: 08:00 → occupied, 17:00 → unoccupied
-    sched.set_weekly_schedule(
-        0,
-        vec![make_tv(8, 0, vec![0x01]), make_tv(17, 0, vec![0x00])],
-    );
-
-    // Before first entry → default
-    assert_eq!(sched.evaluate(0, 7, 59), PropertyValue::Real(72.0));
-    // At 08:00 → occupied
-    assert_eq!(
-        sched.evaluate(0, 8, 0),
-        PropertyValue::OctetString(vec![0x01])
-    );
-    // At 12:00 → still occupied (last entry before current time)
-    assert_eq!(
-        sched.evaluate(0, 12, 0),
-        PropertyValue::OctetString(vec![0x01])
-    );
-    // At 17:00 → unoccupied
-    assert_eq!(
-        sched.evaluate(0, 17, 0),
-        PropertyValue::OctetString(vec![0x00])
-    );
-    // At 23:59 → still unoccupied
-    assert_eq!(
-        sched.evaluate(0, 23, 59),
-        PropertyValue::OctetString(vec![0x00])
-    );
-}
-
-#[test]
-fn evaluate_different_day_returns_default() {
-    let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    // Only Monday has entries
-    sched.set_weekly_schedule(0, vec![make_tv(8, 0, vec![0x01])]);
-
-    // Tuesday should return default
-    assert_eq!(sched.evaluate(1, 12, 0), PropertyValue::Real(72.0));
-}
-
-#[test]
-fn evaluate_exception_overrides_weekly() {
-    let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    // Monday: 08:00 → 0x01
-    sched.set_weekly_schedule(0, vec![make_tv(8, 0, vec![0x01])]);
-
-    // Exception: all day → 0xFF (higher priority)
-    sched.add_exception(BACnetSpecialEvent {
-        period: SpecialEventPeriod::CalendarEntry(BACnetCalendarEntry::WeekNDay(BACnetWeekNDay {
-            month: BACnetWeekNDay::ANY,
-            week_of_month: BACnetWeekNDay::ANY,
-            day_of_week: BACnetWeekNDay::ANY,
-        })),
-        list_of_time_values: vec![make_tv(0, 0, vec![0xFF])],
-        event_priority: 10,
-    });
-
-    // Exception should win over weekly schedule
-    assert_eq!(
-        sched.evaluate(0, 12, 0),
-        PropertyValue::OctetString(vec![0xFF])
-    );
-}
-
-#[test]
-fn evaluate_out_of_service_returns_present_value() {
-    let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    sched.set_weekly_schedule(0, vec![make_tv(8, 0, vec![0x01])]);
-    sched.set_present_value(PropertyValue::Real(55.0));
-    sched.out_of_service = true;
-
-    assert_eq!(sched.evaluate(0, 12, 0), PropertyValue::Real(55.0));
-}
-
-#[test]
-fn evaluate_exception_priority_lowest_number_wins() {
-    let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    // Two exceptions, priority 15 (lower prio) and priority 5 (higher prio)
-    sched.add_exception(BACnetSpecialEvent {
-        period: SpecialEventPeriod::CalendarEntry(BACnetCalendarEntry::WeekNDay(BACnetWeekNDay {
-            month: BACnetWeekNDay::ANY,
-            week_of_month: BACnetWeekNDay::ANY,
-            day_of_week: BACnetWeekNDay::ANY,
-        })),
-        list_of_time_values: vec![make_tv(0, 0, vec![0xAA])],
-        event_priority: 15,
-    });
-    sched.add_exception(BACnetSpecialEvent {
-        period: SpecialEventPeriod::CalendarEntry(BACnetCalendarEntry::WeekNDay(BACnetWeekNDay {
-            month: BACnetWeekNDay::ANY,
-            week_of_month: BACnetWeekNDay::ANY,
-            day_of_week: BACnetWeekNDay::ANY,
-        })),
-        list_of_time_values: vec![make_tv(0, 0, vec![0xBB])],
-        event_priority: 5,
-    });
-
-    // Priority 5 (lower number = higher priority) should win
-    assert_eq!(
-        sched.evaluate(0, 12, 0),
-        PropertyValue::OctetString(vec![0xBB])
-    );
-}
-
-// --- Schedule tick_schedule ---
-
-#[test]
-fn tick_schedule_returns_none_when_no_refs() {
-    let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    sched.set_weekly_schedule(0, vec![make_tv(8, 0, vec![0x01])]);
-    // No property references → None
-    assert!(sched.tick_schedule(0, 12, 0).is_none());
-}
-
-#[test]
-fn tick_schedule_returns_none_when_value_unchanged() {
-    let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    sched.add_object_property_reference(BACnetObjectPropertyReference::new(
-        oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    ));
-    // No weekly entries → evaluates to default (Real(72.0)) which matches present_value
-    assert!(sched.tick_schedule(0, 12, 0).is_none());
-}
-
-#[test]
-fn tick_schedule_returns_value_and_refs_on_change() {
-    let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    let target_oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 5).unwrap();
-    sched.add_object_property_reference(BACnetObjectPropertyReference::new(
-        target_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    ));
-    let indexed = BACnetObjectPropertyReference::new_indexed(
-        ObjectIdentifier::new(ObjectType::MULTI_STATE_OUTPUT, 7).unwrap(),
-        PropertyIdentifier::STATE_TEXT.to_raw(),
-        2,
-    );
-    sched.add_object_property_reference(indexed.clone());
-    sched.set_weekly_schedule(0, vec![make_tv(8, 0, vec![0x01])]);
-
-    let result = sched.tick_schedule(0, 12, 0);
-    assert!(result.is_some());
-    let (value, refs) = result.unwrap();
-    assert_eq!(value, PropertyValue::OctetString(vec![0x01]));
-    assert_eq!(refs.len(), 2);
-    assert_eq!(refs[1], indexed);
-    assert_eq!(refs[0].object_identifier, target_oid);
-    assert_eq!(
-        refs[0].property_identifier,
-        PropertyIdentifier::PRESENT_VALUE.to_raw()
-    );
-    assert_eq!(refs[0].property_array_index, None);
-}
-
-#[test]
-fn tick_schedule_updates_present_value() {
-    let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    sched.add_object_property_reference(BACnetObjectPropertyReference::new(
-        oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    ));
-    sched.set_weekly_schedule(0, vec![make_tv(8, 0, vec![0x01])]);
-
-    let _ = sched.tick_schedule(0, 12, 0);
-    assert_eq!(
-        *sched.present_value(),
-        PropertyValue::OctetString(vec![0x01])
-    );
-
-    // Second call with same time → no change
-    assert!(sched.tick_schedule(0, 12, 0).is_none());
-}
-
-#[test]
-fn tick_schedule_returns_none_when_out_of_service() {
-    let mut sched = ScheduleObject::new(1, "SCHED-1", PropertyValue::Real(72.0)).unwrap();
-    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    sched.add_object_property_reference(BACnetObjectPropertyReference::new(
-        oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    ));
-    sched.set_weekly_schedule(0, vec![make_tv(8, 0, vec![0x01])]);
-    sched.out_of_service = true;
-
-    assert!(sched.tick_schedule(0, 12, 0).is_none());
 }

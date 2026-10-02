@@ -3,8 +3,7 @@
 //!
 //! - `BACnetTimeValue` is a SEQUENCE of two untagged members, so it is an
 //!   application-tagged Time followed by one application-tagged primitive
-//!   value, with no frame. [`BACnetTimeValue::value`] holds that value's raw
-//!   bytes, tag included.
+//!   value, with no frame. [`BACnetTimeValue::value`] holds that value typed.
 //! - `BACnetDailySchedule` is a SEQUENCE with one member, day-schedule `[0]`,
 //!   a SEQUENCE OF `BACnetTimeValue`: an opening/closing `[0]` pair around the
 //!   time-values. Weekly_Schedule is a BACnetARRAY\[7\] of them, Monday first.
@@ -33,17 +32,25 @@ use super::{decode_ctx_unsigned, expect_closing, expect_opening, MAX_FRAMED_ITEM
 use crate::primitives;
 use crate::tags::{self, TagClass};
 
-/// Encode one `BACnetTimeValue`: the application-tagged Time, then the raw
-/// application-tagged value bytes.
-pub fn encode_time_value(buf: &mut BytesMut, time_value: &BACnetTimeValue) {
+/// Encode one `BACnetTimeValue`: the application-tagged Time, then the
+/// application-tagged value.
+///
+/// Refuses a value that is not of a primitive datatype (a `List` or
+/// `ApplicationData`), which no time-value can carry.
+pub fn encode_time_value(buf: &mut BytesMut, time_value: &BACnetTimeValue) -> Result<(), Error> {
+    if !time_value.value.is_primitive() {
+        return Err(Error::Encoding(
+            "time-value: the value must be of a primitive datatype".into(),
+        ));
+    }
     primitives::encode_app_time(buf, &time_value.time);
-    buf.extend_from_slice(&time_value.value);
+    primitives::encode_property_value(buf, &time_value.value)
 }
 
 /// Decode one `BACnetTimeValue` at `offset`.
 ///
-/// The value must be a single application-tagged primitive; it is kept as its
-/// raw bytes. Returns the time-value and the offset just past it.
+/// The value must be a single application-tagged primitive. Returns the
+/// time-value and the offset just past it.
 pub fn decode_time_value(data: &[u8], offset: usize) -> Result<(BACnetTimeValue, usize), Error> {
     let (tag, content) = tags::decode_tag(data, offset)?;
     if tag.class != TagClass::Application || tag.number != tags::app_tag::TIME || tag.length != 4 {
@@ -58,7 +65,7 @@ pub fn decode_time_value(data: &[u8], offset: usize) -> Result<(BACnetTimeValue,
     }
     let time = Time::decode(&data[content..value_start])?;
 
-    let (tag, content) = tags::decode_tag(data, value_start)?;
+    let (tag, _) = tags::decode_tag(data, value_start)?;
     if tag.class != TagClass::Application {
         return Err(Error::decoding(
             value_start,
@@ -68,35 +75,22 @@ pub fn decode_time_value(data: &[u8], offset: usize) -> Result<(BACnetTimeValue,
             ),
         ));
     }
-    // An application Boolean carries its value in the tag octet and has no
-    // content octets; every other primitive's content length is the tag length.
-    let content_len = if tag.number == tags::app_tag::BOOLEAN {
-        0
-    } else {
-        tag.length as usize
-    };
-    let value_end = content
-        .checked_add(content_len)
-        .ok_or_else(|| Error::decoding(content, "time-value: value length overflow"))?;
-    if value_end > data.len() {
-        return Err(Error::buffer_too_short(value_end, data.len()));
-    }
-    Ok((
-        BACnetTimeValue {
-            time,
-            value: data[value_start..value_end].to_vec(),
-        },
-        value_end,
-    ))
+    let (value, value_end) = primitives::decode_application_value(data, value_start)?;
+    Ok((BACnetTimeValue { time, value }, value_end))
 }
 
 /// Encode a SEQUENCE OF `BACnetTimeValue` inside an opening/closing `tag` pair.
-fn encode_time_values(buf: &mut BytesMut, tag: u8, time_values: &[BACnetTimeValue]) {
+fn encode_time_values(
+    buf: &mut BytesMut,
+    tag: u8,
+    time_values: &[BACnetTimeValue],
+) -> Result<(), Error> {
     tags::encode_opening_tag(buf, tag);
     for time_value in time_values {
-        encode_time_value(buf, time_value);
+        encode_time_value(buf, time_value)?;
     }
     tags::encode_closing_tag(buf, tag);
+    Ok(())
 }
 
 /// Decode a SEQUENCE OF `BACnetTimeValue` framed by an opening/closing `tag`
@@ -172,11 +166,13 @@ pub fn decode_special_event_period(
     ))
 }
 
-/// Encode one `BACnetSpecialEvent`.
-pub fn encode_special_event(buf: &mut BytesMut, event: &BACnetSpecialEvent) {
+/// Encode one `BACnetSpecialEvent`; fails only on a time-value that
+/// [`encode_time_value`] refuses.
+pub fn encode_special_event(buf: &mut BytesMut, event: &BACnetSpecialEvent) -> Result<(), Error> {
     encode_special_event_period(buf, &event.period);
-    encode_time_values(buf, 2, &event.list_of_time_values);
+    encode_time_values(buf, 2, &event.list_of_time_values)?;
     primitives::encode_ctx_unsigned(buf, 3, u64::from(event.event_priority));
+    Ok(())
 }
 
 /// Decode one `BACnetSpecialEvent` at `offset`.
@@ -207,9 +203,13 @@ pub fn decode_special_event(
     ))
 }
 
-/// Encode one `BACnetDailySchedule`: its time-values inside `[0]`.
-pub fn encode_daily_schedule(buf: &mut BytesMut, time_values: &[BACnetTimeValue]) {
-    encode_time_values(buf, 0, time_values);
+/// Encode one `BACnetDailySchedule`: its time-values inside `[0]`. Fails only
+/// on a time-value that [`encode_time_value`] refuses.
+pub fn encode_daily_schedule(
+    buf: &mut BytesMut,
+    time_values: &[BACnetTimeValue],
+) -> Result<(), Error> {
+    encode_time_values(buf, 0, time_values)
 }
 
 /// Decode one `BACnetDailySchedule` at `offset`; returns its time-values and
@@ -222,10 +222,14 @@ pub fn decode_daily_schedule(
 }
 
 /// Encode a whole Weekly_Schedule: seven daily schedules, Monday first.
-pub fn encode_weekly_schedule(buf: &mut BytesMut, days: &[Vec<BACnetTimeValue>; 7]) {
+pub fn encode_weekly_schedule(
+    buf: &mut BytesMut,
+    days: &[Vec<BACnetTimeValue>; 7],
+) -> Result<(), Error> {
     for day in days {
-        encode_daily_schedule(buf, day);
+        encode_daily_schedule(buf, day)?;
     }
+    Ok(())
 }
 
 /// Decode a whole Weekly_Schedule.
@@ -254,10 +258,14 @@ pub fn decode_weekly_schedule(data: &[u8]) -> Result<[Vec<BACnetTimeValue>; 7], 
 }
 
 /// Encode a whole Exception_Schedule: the special events, concatenated.
-pub fn encode_exception_schedule(buf: &mut BytesMut, events: &[BACnetSpecialEvent]) {
+pub fn encode_exception_schedule(
+    buf: &mut BytesMut,
+    events: &[BACnetSpecialEvent],
+) -> Result<(), Error> {
     for event in events {
-        encode_special_event(buf, event);
+        encode_special_event(buf, event)?;
     }
+    Ok(())
 }
 
 /// Decode a whole Exception_Schedule: zero or more special events, back to

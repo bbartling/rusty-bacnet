@@ -1,22 +1,30 @@
 //! Schedule execution engine.
 //!
-//! Periodically evaluates Schedule objects and writes the effective value
-//! to all controlled object-property references.
+//! Periodically evaluates Schedule objects (Clause 12.24.4) against one Device
+//! clock frame and writes the effective value to every controlled
+//! object-property reference at the Schedule's Priority_For_Writing.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::committed_cov::{BackgroundCommit, CommittedCov};
 use crate::cov::CovSubscriptionTable;
 use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_types::calendar::SpecificDate;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
-/// Compute the weekly-schedule index and time from one shared clock frame.
-pub(crate) fn current_time_components(frame: ClockFrame) -> Option<(u8, u8, u8)> {
-    let day_of_week = frame.local_date.day_of_week.checked_sub(1)?;
-    (day_of_week <= 6).then_some((day_of_week, frame.local_time.hour, frame.local_time.minute))
+/// The local date and time a clock frame gives schedule evaluation, or `None`
+/// when the frame's date is not a real day or its time is not specific.
+pub(crate) fn schedule_instant(frame: ClockFrame) -> Option<(SpecificDate, Time)> {
+    let today = SpecificDate::from_date(&frame.local_date)?;
+    frame
+        .local_time
+        .is_specific()
+        .then_some((today, frame.local_time))
 }
 
 /// Evaluate all Schedule objects and write to their controlled properties.
@@ -38,59 +46,85 @@ pub(crate) async fn tick_schedules_committed(
     commit.finish(&db_w, cov_table).await
 }
 
+/// Whether each Calendar is TRUE on `today`, resolved once per pass so every
+/// Schedule that references one sees the same answer.
+fn calendar_states(db: &ObjectDatabase, today: SpecificDate) -> HashMap<ObjectIdentifier, bool> {
+    db.find_by_type(ObjectType::CALENDAR)
+        .into_iter()
+        .filter_map(|oid| {
+            let calendar = db.get(&oid)?;
+            // A Calendar that does not evaluate a date list itself reports
+            // its state through Present_Value.
+            let active = calendar.calendar_state_internal(today).unwrap_or_else(|| {
+                matches!(
+                    calendar.read_property(PropertyIdentifier::PRESENT_VALUE, None),
+                    Ok(PropertyValue::Boolean(true))
+                )
+            });
+            Some((oid, active))
+        })
+        .collect()
+}
+
 fn evaluate(db_w: &mut ObjectDatabase) -> BackgroundCommit {
     let mut commit = BackgroundCommit::new();
-    let Some((day_of_week, hour, minute)) = db_w.clock_frame().and_then(current_time_components)
-    else {
+    let Some((today, now)) = db_w.clock_frame().and_then(schedule_instant) else {
         debug!("Skipping Schedule evaluation without a valid Device clock");
         return commit;
     };
+    let calendars = calendar_states(db_w, today);
+    let calendar_active = |oid: ObjectIdentifier| calendars.get(&oid).copied().unwrap_or(false);
 
     let mut writes = Vec::new();
     for oid in db_w.find_by_type(ObjectType::SCHEDULE) {
         if let Some(obj) = db_w.get_mut(&oid) {
-            if let Some((value, refs)) = obj.tick_schedule(day_of_week, hour, minute) {
+            if let Some(write) = obj.tick_schedule(today, now, &calendar_active) {
                 debug!(
                     schedule = %oid,
-                    refs = refs.len(),
+                    refs = write.references.len(),
                     "Schedule value changed, writing to controlled properties"
                 );
-                for reference in refs {
-                    writes.push((oid, reference, value.clone()));
-                }
+                writes.push((oid, write));
             }
         }
     }
 
-    for (initiator, reference, value) in writes {
+    for (initiator, write) in writes {
         let origin = crate::command_source::resolve_local(
             db_w,
             crate::LocalCommandSource::Object(initiator),
         )
         .ok();
-        let target_oid = reference.object_identifier;
-        let prop_id = reference.property_identifier;
-        commit.before_change(db_w, target_oid);
-        if let Some(target_obj) = db_w.get_mut(&target_oid) {
-            let prop = PropertyIdentifier::from_raw(prop_id);
-            if let Err(e) = crate::command_source::write_target(
-                target_obj,
-                prop,
-                reference.property_array_index,
-                value,
-                None,
-                origin.as_ref(),
-            ) {
-                warn!(
-                    target = %target_oid,
-                    property = prop_id,
-                    error = %e,
-                    "Schedule failed to write to controlled property"
-                );
-            } else {
-                commit.changed(target_oid);
+        // Clause 12.24.4: a failed member does not stop the others.
+        for reference in write.references {
+            let target_oid = reference.object_identifier;
+            let prop_id = reference.property_identifier;
+            commit.before_change(db_w, target_oid);
+            if let Some(target_obj) = db_w.get_mut(&target_oid) {
+                let prop = PropertyIdentifier::from_raw(prop_id);
+                if let Err(e) = crate::command_source::write_target(
+                    target_obj,
+                    prop,
+                    reference.property_array_index,
+                    write.value.clone(),
+                    Some(write.priority),
+                    origin.as_ref(),
+                ) {
+                    warn!(
+                        target = %target_oid,
+                        property = prop_id,
+                        error = %e,
+                        "Schedule failed to write to controlled property"
+                    );
+                } else {
+                    commit.changed(target_oid);
+                }
             }
         }
     }
     commit
 }
+
+#[cfg(test)]
+#[path = "schedule_tests.rs"]
+pub(crate) mod tests;
