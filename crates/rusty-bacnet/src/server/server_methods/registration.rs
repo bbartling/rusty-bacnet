@@ -110,129 +110,52 @@ impl BACnetServer {
         registered_network_port: Option<u32>,
         cov_policy: Option<&Bound<'_, pyo3::types::PyDict>>,
     ) -> PyResult<Self> {
-        if registered_network_port.is_some_and(|instance| !(1..=255).contains(&instance)) {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "registered_network_port must be 1..255",
-            ));
-        }
-        if registered_network_port.is_some() && transport != "bip" {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "registered_network_port requires B/IP",
-            ));
-        }
-
-        let mutation_policy = match mutation_policy {
-            "permissive" => bacnet_server::mutation::MutationPolicy::Permissive,
-            "deny_all" => bacnet_server::mutation::MutationPolicy::DenyAll,
-            _ => {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "mutation_policy must be 'permissive' or 'deny_all'",
-                ))
-            }
-        };
-        let dcc_policy = match dcc_policy {
-            "deny_all" => server::DccPolicy::DenyAll,
-            "require_password" => server::DccPolicy::RequirePassword,
-            "legacy_permissive" => server::DccPolicy::LegacyPermissive,
-            _ => {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "dcc_policy must be 'deny_all', 'require_password', or 'legacy_permissive'",
-                ))
-            }
-        };
-        dcc_policy
-            .validate(&dcc_password)
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        let dcc_source_restriction = dcc_source_restriction
-            .map(|entries| {
-                let restriction = server::DccSourceRestriction::new(
-                    entries
-                        .into_iter()
-                        .map(|(network, address)| match network {
-                            None => server::DccSource::Direct(address),
-                            Some(network) => server::DccSource::Routed { network, address },
-                        })
-                        .collect(),
-                )?;
-                restriction.validate_policy(dcc_policy)?;
-                Ok::<_, bacnet_types::error::Error>(restriction)
-            })
-            .transpose()
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        let dcc_disable_rate_limit = dcc_disable_rate_limit
-            .map(|(capacity, refill_interval_ms)| {
-                let limit = server::DccDisableRateLimit {
-                    capacity,
-                    refill_interval_ms,
-                };
-                limit.validate()?;
-                Ok::<_, bacnet_types::error::Error>(limit)
-            })
-            .transpose()
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        let request_admission_policy = server::RequestAdmissionPolicy {
+        super::constructor_budgets::registered_network_port(registered_network_port, transport)?;
+        let mutation_policy = super::constructor_budgets::mutation_policy(mutation_policy)?;
+        let super::constructor_budgets::DccConfiguration {
+            policy: dcc_policy,
+            source_restriction: dcc_source_restriction,
+            disable_rate_limit: dcc_disable_rate_limit,
+        } = super::constructor_budgets::dcc_configuration(
+            dcc_policy,
+            &dcc_password,
+            dcc_source_restriction,
+            dcc_disable_rate_limit,
+        )?;
+        let super::constructor_budgets::Budgets {
+            request_admission_policy,
+            read_property_multiple_budget,
+            get_alarm_summary_budget,
+            get_enrollment_summary_budget,
+            atomic_read_file_budget,
+            atomic_write_file_budget,
+            read_range_budget,
+            get_event_information_budget,
+        } = super::constructor_budgets::budgets(super::constructor_budgets::BudgetKeywords {
             max_confirmed_in_flight,
             max_unconfirmed_in_flight,
             max_confirmed_in_flight_per_peer,
             max_unconfirmed_in_flight_per_peer,
             confirmed_recovery_reserve,
             max_recovery_in_flight_per_peer,
-        };
-        request_admission_policy
-            .validate()
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        let read_property_multiple_budget = server::ReadPropertyMultipleBudget {
-            max_result_elements: rpm_max_result_elements,
-            max_service_ack_bytes: rpm_max_service_ack_bytes,
-        };
-        read_property_multiple_budget
-            .validate()
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        let get_alarm_summary_budget = server::GetAlarmSummaryBudget {
-            max_objects: alarm_summary_max_objects,
-            max_service_ack_bytes: alarm_summary_max_service_ack_bytes,
-        };
-        get_alarm_summary_budget
-            .validate()
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        let get_enrollment_summary_budget = server::GetEnrollmentSummaryBudget {
-            max_objects: enrollment_summary_max_objects,
-            max_service_ack_bytes: enrollment_summary_max_service_ack_bytes,
-        };
-        get_enrollment_summary_budget
-            .validate()
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        let atomic_read_file_budget = server::AtomicReadFileBudget {
-            max_requested_stream_octets: atomic_read_file_max_requested_stream_octets,
-            max_requested_records: atomic_read_file_max_requested_records,
-            max_service_ack_bytes: atomic_read_file_max_service_ack_bytes,
-        };
-        atomic_read_file_budget
-            .validate()
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        let read_range_budget = server::ReadRangeBudget {
-            max_returned_items: read_range_max_returned_items,
-            max_service_ack_bytes: read_range_max_service_ack_bytes,
-        };
-        let atomic_write_file_budget = server::AtomicWriteFileBudget {
-            max_stream_payload_octets: atomic_write_file_max_stream_payload_octets,
-            max_records: atomic_write_file_max_records,
-            max_record_payload_bytes: atomic_write_file_max_record_payload_bytes,
-        };
-        atomic_write_file_budget
-            .validate()
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        read_range_budget
-            .validate()
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        let get_event_information_budget = server::GetEventInformationBudget {
-            max_objects: event_information_max_objects,
-            max_returned_summaries: event_information_max_returned_summaries,
-            max_service_ack_bytes: event_information_max_service_ack_bytes,
-        };
-        get_event_information_budget
-            .validate()
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+            rpm_max_result_elements,
+            rpm_max_service_ack_bytes,
+            alarm_summary_max_objects,
+            alarm_summary_max_service_ack_bytes,
+            enrollment_summary_max_objects,
+            enrollment_summary_max_service_ack_bytes,
+            atomic_read_file_max_requested_stream_octets,
+            atomic_read_file_max_requested_records,
+            atomic_read_file_max_service_ack_bytes,
+            atomic_write_file_max_stream_payload_octets,
+            atomic_write_file_max_records,
+            atomic_write_file_max_record_payload_bytes,
+            read_range_max_returned_items,
+            read_range_max_service_ack_bytes,
+            event_information_max_objects,
+            event_information_max_returned_summaries,
+            event_information_max_service_ack_bytes,
+        })?;
         let cov_policy = super::cov_policy::cov_policy(cov_policy)?;
         if transport == "sc" {
             crate::tls::required_sc_credentials(
