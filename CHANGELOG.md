@@ -698,11 +698,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OTHER. A SubscribeCOVPropertyMultiple-Error names the monitored object and
   the property reference of a refused COV reference (unknown object, object or
   property without COV, unknown property, index on a property that is not an
-  array, an oversized sample); a failure before the references are processed
-  (lifetime, notification delay, clock, authorization, capacity) is the general
-  choice, the class and code alone. A peer that only parses the plain form no
-  longer reads these errors. The server does not serve ConfirmedPrivateTransfer
-  or VT-Close, which it still rejects.
+  array, an oversized sample, no room left for it under the subscription caps
+  since #1059); a failure before the references are processed (lifetime,
+  notification delay, clock, authorization) is the general choice, the class
+  and code alone. A peer that only parses the plain form no longer reads these
+  errors. The server does not serve ConfirmedPrivateTransfer or VT-Close, which
+  it still rejects.
+
+- **Breaking wire behaviour and Rust API:** a SubscribeCOVPropertyMultiple
+  request no longer stands or falls as a whole (#1058). The server goes
+  through its COV references in request order and stops at the first one that
+  fails: the error names it, the references before it stay subscribed and get
+  their initial notification, and the context's lifetime, notification delay
+  and route are renewed as for an accepted request. The references after the
+  failed one are not processed. Before, one refused reference left the whole
+  request without effect. A request that fails at its first reference, or
+  before any reference (inconsistent or out-of-range lifetime and delay,
+  timestamped references without a valid clock, authorization), still changes
+  and reports nothing (Clause 13.16.2). The subscription caps are checked one
+  reference at a time as well (#1059). A renewal or a repeat of an earlier
+  reference takes no slot, and the first reference that would go past the
+  recipient's quota or the table's capacity is named in a RESOURCES /
+  NO_SPACE_TO_ADD_LIST_ELEMENT failed-subscription error; the whole request
+  used to go out with the general choice. `CovSubscriptionTable::subscribe_multiple`
+  now fails with `MultipleRefusal`, which carries the error, the position of
+  the refused reference and the snapshots kept before it.
 
 - Python's `BacnetProtocolError` gains `first_failed_write_attempt` and
   `first_failed_subscription` (object, property and index dicts, typed

@@ -1,5 +1,42 @@
 use super::*;
 
+/// A SubscribeCOVPropertyMultiple admission that did not take every reference
+/// (Clause 13.16.2). Processing runs in request order and stops at the first
+/// reference that fails; the references before it stay subscribed and are
+/// owed their initial notifications, and those after it are never looked at.
+#[derive(Debug)]
+pub struct MultipleRefusal {
+    /// The failure to report.
+    pub error: Error,
+    /// Position, counted from 0 in request order, of the reference that
+    /// failed; `None` when the request failed as a whole, before any
+    /// reference was processed.
+    pub refused: Option<usize>,
+    /// Snapshots of the references accepted before the failure (final
+    /// duplicates only, in request order); empty when nothing was kept.
+    pub committed: Vec<CovSubscriptionSnapshot>,
+}
+
+impl From<Error> for MultipleRefusal {
+    /// A failure of the whole request, which keeps nothing.
+    fn from(error: Error) -> Self {
+        Self {
+            error,
+            refused: None,
+            committed: Vec::new(),
+        }
+    }
+}
+
+/// The cap a new subscription would go past.
+#[derive(Clone, Copy)]
+enum Cap {
+    /// The recipient's own quota.
+    Peer,
+    /// The table's global or unreserved capacity.
+    Table,
+}
+
 impl CovSubscriptionTable {
     /// Accept an ordinary or Single insertion or renewal after quota and
     /// generation preflight. Multiple references are rejected before any table
@@ -23,8 +60,17 @@ impl CovSubscriptionTable {
         Ok(self.publish(key, sub, generation, None, None, None))
     }
 
-    /// Atomically accept final unique Multiple references and refresh their exact context.
-    /// All identities/options are validated before quota/generation reservation or refresh.
+    /// Accept Multiple references in request order and refresh their exact
+    /// context. All identities/options are validated before quota/generation
+    /// reservation or refresh. Each proposal that would add a subscription is
+    /// then checked against the recipient's quota and the table's capacity in
+    /// turn (a renewal, or a repeat of an earlier proposal, adds none), and
+    /// the first that does not fit ends the request (Clause 13.16.2, #1059).
+    /// The proposals before it are kept as if they had been the whole request
+    /// and come back in a [`MultipleRefusal`] naming its position; when it is
+    /// the first proposal, or the request fails as a whole (identity or route
+    /// mismatch, generation exhaustion), nothing changes (#1058). Final
+    /// duplicates among the kept proposals win, once each.
     /// The request's expiry, maximum notification delay and the maximum APDU
     /// its subscriber advertised become the whole context's (last write wins;
     /// a `None` maximum APDU, unknown, keeps the one advertised before). The
@@ -48,14 +94,14 @@ impl CovSubscriptionTable {
         max_notification_delay: u32,
         subscriber_max_apdu: Option<u16>,
         mut subscriptions: Vec<CovSubscription>,
-    ) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
+    ) -> Result<Vec<CovSubscriptionSnapshot>, MultipleRefusal> {
         context.recipient.validate()?;
         let recipient = CovRecipient::from_endpoint(&route.mac, route.network.as_ref());
         recipient.validate()?;
         if recipient != context.recipient {
-            return Err(Error::Encoding(
-                "Multiple route does not match its recipient".into(),
-            ));
+            return Err(
+                Error::Encoding("Multiple route does not match its recipient".into()).into(),
+            );
         }
         for sub in &subscriptions {
             if sub.key()?.multiple_context() != Some(context)
@@ -64,21 +110,30 @@ impl CovSubscriptionTable {
             {
                 return Err(Error::Encoding(
                     "Multiple subscription does not match its context/route/expiry".into(),
-                ));
+                )
+                .into());
             }
+        }
+        self.purge_expired();
+        let overflow = self
+            .first_overflow(&recipient, &subscriptions)
+            .map(|(position, cap)| (position, self.refuse_new(cap)));
+        match overflow {
+            Some((0, error)) => {
+                return Err(MultipleRefusal {
+                    error,
+                    refused: Some(0),
+                    committed: Vec::new(),
+                })
+            }
+            Some((position, _)) => subscriptions.truncate(position),
+            None => {}
         }
         // Final options win exactly once, retaining the final-occurrence request order.
         subscriptions.reverse();
         let mut keys = std::collections::HashSet::new();
         subscriptions.retain(|sub| keys.insert(sub.key().expect("validated identity")));
         subscriptions.reverse();
-        self.purge_expired();
-        let new_count = keys
-            .iter()
-            .filter(|key| !self.subs.contains_key(key))
-            .count();
-        let peer = CovRecipient::from_endpoint(&route.mac, route.network.as_ref());
-        self.check_admission_multiple(&peer, new_count, 0)?;
         let first_generation = self.reserve_generations(subscriptions.len())?;
         // No fallible step follows this point. Unreplaced context references retain generations.
         let (flight, replaced) = self.context_flight(context, route, !subscriptions.is_empty());
@@ -102,10 +157,10 @@ impl CovSubscriptionTable {
                 entry.flight = flight.clone();
             }
         }
-        if let Some(count) = self.peer_indefinite_counts.get_mut(&peer) {
+        if let Some(count) = self.peer_indefinite_counts.get_mut(&recipient) {
             *count -= previously_indefinite;
             if *count == 0 {
-                self.peer_indefinite_counts.remove(&peer);
+                self.peer_indefinite_counts.remove(&recipient);
             }
         }
         let accepted = subscriptions
@@ -130,7 +185,41 @@ impl CovSubscriptionTable {
         if let Some(replaced) = replaced {
             self.fence_context_flight(context, &replaced, &keys);
         }
-        Ok(accepted)
+        match overflow {
+            None => Ok(accepted),
+            Some((position, error)) => Err(MultipleRefusal {
+                error,
+                refused: Some(position),
+                committed: accepted,
+            }),
+        }
+    }
+
+    /// The first proposal that would add a subscription past one of
+    /// `recipient`'s caps, and the cap it meets. Renewals of live entries and
+    /// repeats of an earlier proposal add none.
+    fn first_overflow(
+        &self,
+        recipient: &CovRecipient,
+        proposals: &[CovSubscription],
+    ) -> Option<(usize, Cap)> {
+        let (peer_room, table_room) = self.room(recipient);
+        let room = peer_room.min(table_room);
+        let mut added = std::collections::HashSet::new();
+        for (position, sub) in proposals.iter().enumerate() {
+            let key = sub.key().expect("validated identity");
+            if self.subs.contains_key(&key) || added.contains(&key) {
+                continue;
+            }
+            if added.len() == room {
+                let cap = self
+                    .cap_passed(recipient, room + 1)
+                    .expect("one past the room passes a cap");
+                return Some((position, cap));
+            }
+            added.insert(key);
+        }
+        None
     }
 
     /// Test fixture: admit one proposal through its family's production
@@ -149,14 +238,16 @@ impl CovSubscriptionTable {
         let expires_at = sub
             .expires_at
             .expect("Multiple contexts always have a finite lifetime");
-        let mut accepted = self.subscribe_multiple(
-            &context,
-            &sub.endpoint(),
-            expires_at,
-            max_notification_delay,
-            None,
-            vec![sub],
-        )?;
+        let mut accepted = self
+            .subscribe_multiple(
+                &context,
+                &sub.endpoint(),
+                expires_at,
+                max_notification_delay,
+                None,
+                vec![sub],
+            )
+            .map_err(|refusal| refusal.error)?;
         Ok(accepted.remove(0))
     }
 
@@ -278,11 +369,13 @@ impl CovSubscriptionTable {
             }
         };
 
-        self.check_admission_multiple(peer, new_count, new_indefinite)
+        self.check_caps(peer, new_count, new_indefinite)
     }
 
-    /// Check admission for a batch of subscriptions against policy quotas.
-    fn check_admission_multiple(
+    /// Check the indefinite policy and the subscription caps for one
+    /// admission adding `new_count` subscriptions, `new_indefinite` of them
+    /// indefinite.
+    fn check_caps(
         &mut self,
         peer: &CovRecipient,
         new_count: usize,
@@ -312,44 +405,51 @@ impl CovSubscriptionTable {
             }
         }
 
-        if new_count == 0 {
-            return Ok(());
+        match self.cap_passed(peer, new_count) {
+            Some(cap) => Err(self.refuse_new(cap)),
+            None => Ok(()),
         }
+    }
 
+    /// How many more subscriptions `peer` may add under its own quota, and
+    /// under the table's capacity (the global cap and, for a recipient
+    /// without a reservation, the unreserved share).
+    fn room(&self, peer: &CovRecipient) -> (usize, usize) {
         let current_peer = self.peer_counts.get(peer).copied().unwrap_or(0);
-        if current_peer + new_count > self.policy.max_subscriptions_per_peer {
-            self.counters
-                .subscriptions_rejected_quota
-                .fetch_add(1, Ordering::Relaxed);
-            return Err(Error::Protocol {
-                class: ErrorClass::RESOURCES.to_raw() as u32,
-                code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
-            });
-        }
-
-        if self.subs.len() + new_count > self.policy.max_subscriptions_global {
-            self.counters
-                .subscriptions_rejected_capacity
-                .fetch_add(1, Ordering::Relaxed);
-            return Err(Error::Protocol {
-                class: ErrorClass::RESOURCES.to_raw() as u32,
-                code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
-            });
-        }
-
+        let peer_room = self
+            .policy
+            .max_subscriptions_per_peer
+            .saturating_sub(current_peer);
+        let mut capacity = self.policy.max_subscriptions_global;
         if !self.policy.is_peer_reserved(peer) {
-            let unreserved_capacity = self.policy.effective_unreserved_capacity();
-            if self.subs.len() + new_count > unreserved_capacity {
-                self.counters
-                    .subscriptions_rejected_capacity
-                    .fetch_add(1, Ordering::Relaxed);
-                return Err(Error::Protocol {
-                    class: ErrorClass::RESOURCES.to_raw() as u32,
-                    code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
-                });
-            }
+            capacity = capacity.min(self.policy.effective_unreserved_capacity());
         }
+        (peer_room, capacity.saturating_sub(self.subs.len()))
+    }
 
-        Ok(())
+    /// The cap `new_count` more subscriptions of `peer` would pass, its own
+    /// quota checked first.
+    fn cap_passed(&self, peer: &CovRecipient, new_count: usize) -> Option<Cap> {
+        let (peer_room, table_room) = self.room(peer);
+        if new_count > peer_room {
+            Some(Cap::Peer)
+        } else if new_count > table_room {
+            Some(Cap::Table)
+        } else {
+            None
+        }
+    }
+
+    /// Count a refusal at `cap` and build its error.
+    fn refuse_new(&self, cap: Cap) -> Error {
+        let counter = match cap {
+            Cap::Peer => &self.counters.subscriptions_rejected_quota,
+            Cap::Table => &self.counters.subscriptions_rejected_capacity,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        Error::Protocol {
+            class: ErrorClass::RESOURCES.to_raw() as u32,
+            code: ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32,
+        }
     }
 }

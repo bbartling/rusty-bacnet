@@ -561,7 +561,15 @@ impl Request<'_> {
                         }
                         self.simple_ack()
                     }
-                    Err(e) => self.error::<T>(&e),
+                    // The references kept before the failed one are reported
+                    // as an accepted request's would be (Clause 13.16.2).
+                    Err(refusal) => {
+                        if !refusal.committed.is_empty() {
+                            initial_cov_notifications
+                                .push(InitialCovNotification::Multiple(refusal.committed));
+                        }
+                        self.error::<T>(&refusal.error)
+                    }
                 }
             }
         }
