@@ -721,9 +721,9 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
             match &mut eval_state.pending {
                 // In flight to the same target under the same condition: the
                 // countdown advances; a redundant qualifying observation does
-                // NOT re-seed it (Clause 13.2.4's debounce semantics, the same
-                // rule the intrinsic detectors document at
-                // `OutOfRangeDetector::probe`).
+                // NOT re-seed it (Clause 13.3 counts the delay from when the
+                // condition began to hold, the same rule the intrinsic
+                // detectors document at `OutOfRangeDetector::probe`).
                 Some(p) if p.state == ind.target && p.condition == ind.condition => {
                     p.remaining = p.remaining.saturating_sub(1);
                     eval_state_dirty = true;

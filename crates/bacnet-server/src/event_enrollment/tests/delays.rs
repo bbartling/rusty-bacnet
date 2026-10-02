@@ -1,5 +1,5 @@
 //! Time_Delay / Time_Delay_Normal honoring in the Event Enrollment evaluator
-//! (#163; ASHRAE 135-2020 Clauses 13.2.4, 13.3).
+//! (#163; ASHRAE 135-2020 Clause 13.3).
 //!
 //! Delays are SECONDS in the standard; the pending countdown stores passes
 //! via `ceil(delay_secs / interval_secs)` (never-fire-early). Most tests
@@ -100,7 +100,7 @@ fn event_state(db: &ObjectDatabase, ee_oid: &ObjectIdentifier) -> EventState {
 
 /// TD=3: the indication-conditioned transition waits three seeded passes and
 /// fires on the fourth — and the observable `Event_State` holds at NORMAL
-/// while the delay counts down (Clause 13.2.4).
+/// while the delay counts down (Clause 13.3).
 ///
 /// Delay 3 firing exactly at pass 4 — never later, on a path where every
 /// pass is a fresh qualifying observation — also pins the no-restart rule:
