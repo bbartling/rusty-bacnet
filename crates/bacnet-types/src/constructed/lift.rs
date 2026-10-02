@@ -61,3 +61,42 @@ pub struct BACnetLandingDoorStatus {
     /// Context tag 0: the landing doors, in the order they are encoded.
     pub landing_doors: Vec<LandingDoor>,
 }
+
+/// One landing call in a [`BACnetAssignedLandingCalls`]: the floor it was
+/// placed at and the direction it asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AssignedLandingCall {
+    /// Context tag 0: the landing's floor, by universal floor number
+    /// (Unsigned8).
+    pub floor_number: u8,
+    /// Context tag 1: the direction of travel the call asks for.
+    ///
+    /// Decoding keeps any value, including reserved and proprietary ones;
+    /// whoever stores the value decides which ones are in range.
+    pub direction: LiftCarDirection,
+}
+
+/// `BACnetAssignedLandingCalls` (Clause 21): the landing calls assigned to
+/// one car door.
+///
+/// The Lift object serves an array of these as Assigned_Landing_Calls, one
+/// element per car door (Clause 12.59, Table 12-77). The `bacnet-encoding`
+/// crate owns the wire codec.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct BACnetAssignedLandingCalls {
+    /// Context tag 0: the landing calls, in the order they are encoded.
+    pub landing_calls: Vec<AssignedLandingCall>,
+}
+
+/// `BACnetLiftCarCallList` (Clause 21): the floors with a car call registered
+/// for one car door.
+///
+/// The Lift object serves an array of these as Registered_Car_Call, one
+/// element per car door (Clause 12.59, Table 12-77). The `bacnet-encoding`
+/// crate owns the wire codec.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct BACnetLiftCarCallList {
+    /// Context tag 0: the universal floor numbers (each an Unsigned8), in the
+    /// order they are encoded.
+    pub floor_numbers: Vec<u8>,
+}
