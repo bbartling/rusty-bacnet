@@ -1,7 +1,10 @@
 use super::*;
-use bacnet_encoding::{constructed::decode_destination_list, primitives::decode_application_value};
+use bacnet_encoding::constructed::{
+    decode_calendar_entry_list, decode_destination_list, encode_calendar_entry_list,
+};
+use bacnet_encoding::primitives::decode_application_value;
 use bacnet_services::list_manipulation::ListElementRequest;
-use bacnet_types::constructed::BACnetDestination;
+use bacnet_types::constructed::{BACnetCalendarEntry, BACnetDestination};
 
 fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
     Error::Protocol {
@@ -38,30 +41,38 @@ enum ElementCodec {
     Values,
     /// BACnetDestination entries, held as the framed list in `ApplicationData`.
     Destinations,
+    /// BACnetCalendarEntry entries under their Clause 21 CHOICE tags, held as
+    /// a `PropertyValue::List` with one encoded entry per element (#996).
+    CalendarEntries,
 }
 
 impl ElementCodec {
     /// The codec the property's datatype implies, known even when the object
     /// is missing. Only a BACnetLIST of BACnetDestination, the Recipient_List
     /// of Notification Class and Notification Forwarder (Tables 12-24 and
-    /// 12-58), takes the destination codec.
+    /// 12-58), takes the destination codec, and only Calendar's Date_List, a
+    /// BACnetLIST of BACnetCalendarEntry (Table 12-11), the calendar codec.
     fn for_datatype(object_type: ObjectType, property: PropertyIdentifier) -> Self {
-        let destinations = property == PropertyIdentifier::RECIPIENT_LIST
-            && matches!(
-                object_type,
-                ObjectType::NOTIFICATION_CLASS | ObjectType::NOTIFICATION_FORWARDER
-            );
-        if destinations {
-            Self::Destinations
-        } else {
-            Self::Values
+        match property {
+            PropertyIdentifier::RECIPIENT_LIST
+                if matches!(
+                    object_type,
+                    ObjectType::NOTIFICATION_CLASS | ObjectType::NOTIFICATION_FORWARDER
+                ) =>
+            {
+                Self::Destinations
+            }
+            PropertyIdentifier::DATE_LIST if object_type == ObjectType::CALENDAR => {
+                Self::CalendarEntries
+            }
+            _ => Self::Values,
         }
     }
 
     /// Whether the object holds the list in the form this codec edits.
     fn holds(self, stored: &PropertyValue) -> bool {
         match self {
-            Self::Values => matches!(stored, PropertyValue::List(_)),
+            Self::Values | Self::CalendarEntries => matches!(stored, PropertyValue::List(_)),
             Self::Destinations => matches!(stored, PropertyValue::ApplicationData(_)),
         }
     }
@@ -69,6 +80,9 @@ impl ElementCodec {
     fn decode(self, elements: &[u8]) -> Result<ListEdits, Error> {
         match self {
             Self::Destinations => decode_destination_list(elements).map(ListEdits::Destinations),
+            Self::CalendarEntries => {
+                decode_calendar_entry_list(elements).map(ListEdits::CalendarEntries)
+            }
             Self::Values => {
                 let mut values = Vec::new();
                 let mut offset = 0;
@@ -86,6 +100,7 @@ impl ElementCodec {
 enum ListEdits {
     Values(Vec<PropertyValue>),
     Destinations(Vec<BACnetDestination>),
+    CalendarEntries(Vec<BACnetCalendarEntry>),
 }
 
 /// A request refused before any element is applied. `current` is the target
@@ -210,6 +225,29 @@ pub(crate) fn handle_list_element_observed(
             }
             let mut bytes = BytesMut::new();
             bacnet_encoding::constructed::encode_destination_list(&mut bytes, &destinations);
+            PropertyValue::ApplicationData(bytes.to_vec())
+        }
+        ListEdits::CalendarEntries(edits) => {
+            let PropertyValue::List(items) = &current else {
+                unreachable!("list_target admits only lists of calendar entries")
+            };
+            // As for destinations, decode the stored entries before observation
+            // or mutation, so a malformed one is never dropped on removal.
+            let mut entries = Vec::with_capacity(items.len());
+            for item in items {
+                let PropertyValue::ApplicationData(bytes) = item else {
+                    return Err(invalid_data_type());
+                };
+                entries.extend(decode_calendar_entry_list(bytes).map_err(|_| invalid_data_type())?);
+            }
+            before(db, &request, Some(&current));
+            if remove {
+                entries.retain(|entry| !edits.contains(entry));
+            } else {
+                entries.extend(edits);
+            }
+            let mut bytes = BytesMut::new();
+            encode_calendar_entry_list(&mut bytes, &entries);
             PropertyValue::ApplicationData(bytes.to_vec())
         }
         ListEdits::Values(edits) => {

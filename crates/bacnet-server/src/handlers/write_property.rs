@@ -396,7 +396,14 @@ pub(crate) fn decode_write_property_value(
         offset = new_offset;
     }
     match values.len() {
-        0 if property == PropertyIdentifier::FAULT_SIGNALS => Ok(PropertyValue::List(values)),
+        // BACnetLIST properties that may be written empty.
+        0 if matches!(
+            property,
+            PropertyIdentifier::FAULT_SIGNALS | PropertyIdentifier::DATE_LIST
+        ) =>
+        {
+            Ok(PropertyValue::List(values))
+        }
         0 => Err(invalid_data_encoding_error()),
         1 => Ok(values.pop().expect("one element present")),
         _ => Ok(PropertyValue::List(values)),

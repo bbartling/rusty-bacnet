@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 20 |
-| Priority | P1 | 70 |
+| Priority | P1 | 71 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 42 |
+| Status | supported-with-clause-evidence | 43 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -75,7 +75,7 @@
 | `BACNET-12-BINARY-LIGHTING-OPERATIONS` | Clause 12.55 and Table 12-70, including 12.55.4.1 and 12.55.10.1; Clause 19.2 command prioritization; Clause 21 BACnetBinaryLightingPV | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-REFERENCE-PROPERTY-WRITABILITY` | Clause 12.17 with Table 12-20 (Loop), Clause 12.23 with Table 12-27 (Pulse Converter Input_Reference), Clause 12.5 Table 12-5 (Averaging Object_Property_Reference - BACnetDeviceObjectPropertyReference), Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-ALERT-ENROLLMENT-TABLE-12-61` | Clause 12.52 and Table 12-61; Clause 21 BACnetNotifyType; Clause 15.7 ReadPropertyMultiple | P1 | supported-with-clause-evidence | 4 |
-| `BACNET-12-CALENDAR-PROPERTY-SET` | Clause 12.9 and Table 12-11; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 1 |
+| `BACNET-12-CALENDAR-PROPERTY-SET` | Clause 12.9 and Table 12-11; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-ENROLLMENT-EVENT-TIME-STAMPS` | Clause 12.12 Table 12-14; Clause 12.52 Table 12-61; Clause 12.1.5.1; Clause 13.2.2.1; Clause 21 BACnetTimeStamp | P1 | implementation-present-needs-state-machine-audit | 0 |
 | `BACNET-12-TIME-DELAY-NORMAL` | Clause 13.3.2 CHANGE_OF_STATE, Clause 13.3.4 COMMAND_FAILURE, Clause 13.3.6 OUT_OF_RANGE (pTimeDelayNormal definitions and condition letters); Clause 12.2 Table 12-2 (Analog Input, O5), 12.3 Table 12-3 (Analog Output, O4), 12.4 Table 12-4 (Analog Value, O6), 12.6 Table 12-6 (Binary Input, O7), 12.7 Table 12-8 (Binary Output, O6), 12.8 Table 12-10 (Binary Value, O8), 12.18 Table 12-21 (Multi-state Input, O5), 12.19 Table 12-22 (Multi-state Output, O3), 12.20 Table 12-23 (Multi-state Value, O6) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-13-COV-SUBSCRIPTIONS` | Clauses 13.14-13.18; §13.14.1.1–13.14.2 (printed703–704/PDF705–706); §13.15.1.1 (printed707/PDF709); §13.15.1.3 Table13-20; §§13.6/13.7 (printed685/687, PDF687/689); §§13.17/13.18 (printed714/717, PDF716/719); §13.1 Tables13-1/13-1a (printed633–634/PDF635–636) | P1 | implementation-present-needs-conformance-tests | 2 |
@@ -96,6 +96,7 @@
 | `BACNET-19-COMMAND-SOURCE-TRACKING` | Clause 19.5.1 command source tracking and 19.5.1.3 source correction; Tables 12-3, 12-4, 12-8, 12-10, 12-22, 12-23; Clause 21 BACnetValueSource and BACnetTimeStamp | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-13-VALUE-SOURCE-COV` | Table 13-1 and Table 13-1a-2; Clause 19.5.2; Clauses 13.15, 13.16.3, 13.17.3.1.2.4 and 13.18.3.1.2.4 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-21-TIMESTAMP-CHOICE` | Clause 21 (BACnetTimeStamp), Clause 20.2.1.5 | P1 | supported-with-clause-evidence | 1 |
+| `BACNET-21-CALENDAR-ENTRY-CHOICE` | Clause 21 BACnetCalendarEntry, BACnetDateRange, BACnetWeekNDay, BACnetSpecialEvent, BACnetDailySchedule and BACnetTimeValue; Clauses 20.2.1.3.2 and 20.2.1.5; Clause 12.9 Date_List; Clause 12.24 Effective_Period, Weekly_Schedule and Exception_Schedule; Clauses 15.1.1.3, 15.2, 15.8 and 15.9.1.3 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-A-PICS` | Annex A | P1 | in-progress | 0 |
 | `BACNET-J-BVLC-FUNCTION-CODES` | Annex J.2 | P0 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-J-ORIGINAL-UNICAST-NPDU` | Annex J | P0 | implementation-present-needs-negative-tests | 1 |

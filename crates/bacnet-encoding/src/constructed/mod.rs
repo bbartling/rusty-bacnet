@@ -34,12 +34,14 @@ use crate::tags::{self, TagClass};
 
 mod audit_notification;
 mod audit_record;
+pub mod calendar;
 pub mod cov_subscription;
 pub mod event_parameter;
 pub mod fault_parameter;
 pub mod landing_call_status;
 pub mod object_property_reference;
 pub mod recipient;
+pub mod schedule;
 pub mod staging;
 mod value_source;
 
@@ -47,6 +49,10 @@ pub use audit_notification::{decode_audit_notification_at, encode_audit_notifica
 pub use audit_record::{
     decode_audit_log_record, decode_audit_log_record_result_at, encode_audit_log_record,
     encode_audit_log_record_result,
+};
+pub use calendar::{
+    decode_calendar_entry, decode_calendar_entry_list, decode_date_range, encode_calendar_entry,
+    encode_calendar_entry_list, encode_date_range,
 };
 pub use cov_subscription::{
     encode_cov_multiple_subscription, encode_cov_multiple_subscription_list,
@@ -65,6 +71,12 @@ pub use object_property_reference::{
 pub use recipient::{
     decode_destination, decode_destination_list, decode_recipient, encode_destination,
     encode_destination_list, encode_recipient,
+};
+pub use schedule::{
+    decode_daily_schedule, decode_exception_schedule, decode_special_event,
+    decode_special_event_period, decode_time_value, decode_weekly_schedule, encode_daily_schedule,
+    encode_exception_schedule, encode_special_event, encode_special_event_period,
+    encode_time_value, encode_weekly_schedule,
 };
 pub use staging::{
     decode_device_object_reference, decode_stage_limit_value, encode_device_object_reference,
