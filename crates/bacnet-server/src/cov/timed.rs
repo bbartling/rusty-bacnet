@@ -26,15 +26,23 @@
 //!   (communication re-enabled, a shorter delay admitted), so overdue changes
 //!   go out at once.
 //!
-//! Delays and waits live only with timestamped histories, so a context
-//! without one costs nothing here.
+//! Untimestamped references have no queue: their current values are read
+//! again for each report. One whose values a report began going out without
+//! (parts held back after an earlier part went, or deferred behind a
+//! confirmed report's outstanding part) is owed instead, and the backstop
+//! treats it as a pending change of its context, from the moment it was
+//! first owed (#1038). The report that next evaluates it takes the mark.
+//!
+//! Delays and waits live only with timestamped histories and owed
+//! references, so a context with neither costs nothing here.
 //!
 //! Changes that one notification cannot carry go out in several (§13.1,
 //! §13.18.1.1), strictly in capture order: [`TimedClaim::split_oldest`] moves
 //! the oldest changes, a reference's latest included, into earlier
 //! notifications (#1008). An unconfirmed context sends one such report at a
 //! time ([`SendTurn`]), so a later report cannot overtake the parts of an
-//! earlier one.
+//! earlier one. Untimestamped values that one notification cannot carry go
+//! out after every timestamped change, split by object item (#1038).
 //!
 //! Local bound policy: the pending changes of one COV-multiple context are
 //! limited to an estimate of what [`HISTORY_NOTIFICATIONS`] notifications can
@@ -171,6 +179,17 @@ struct FieldRecord {
     frame: ClockFrame,
 }
 
+/// An untimestamped reference of a COV-multiple context, kept so a report
+/// that did not deliver its values can owe them (#1038).
+#[derive(Debug)]
+struct UntimedReference {
+    generation: u64,
+    /// The context's Max_Notification_Delay, as last admitted.
+    delay: Duration,
+    /// When a report first prepared values of it that are still undelivered.
+    owed_since: Option<Instant>,
+}
+
 #[derive(Debug)]
 struct TimedHistory {
     /// Identity of this history across renewals. A cancelled and recreated
@@ -249,6 +268,8 @@ pub(crate) enum FieldTiming {
 #[derive(Debug)]
 pub(crate) struct TimedHistories {
     histories: HashMap<CovSubscriptionKey, TimedHistory>,
+    /// Every live untimestamped COV-multiple reference (#1038).
+    untimed: HashMap<CovSubscriptionKey, UntimedReference>,
     /// Sizing terms of every context with a timestamped history.
     terms: HashMap<MultipleContextKey, ContextTerms>,
     /// Unconfirmed contexts with a report going out, and whether another
@@ -271,6 +292,7 @@ impl TimedHistories {
     fn new(local_apdu: usize, counters: Arc<AtomicCovCounters>) -> Self {
         Self {
             histories: HashMap::new(),
+            untimed: HashMap::new(),
             terms: HashMap::new(),
             sending: HashMap::new(),
             context_bytes: HashMap::new(),
@@ -293,6 +315,12 @@ impl TimedHistories {
             if key.multiple_context() == Some(context) {
                 shorter |= delay < history.delay;
                 history.delay = delay;
+            }
+        }
+        for (key, reference) in &mut self.untimed {
+            if key.multiple_context() == Some(context) {
+                shorter |= reference.owed_since.is_some() && delay < reference.delay;
+                reference.delay = delay;
             }
         }
         if shorter {
@@ -366,34 +394,44 @@ impl TimedHistories {
             .histories
             .keys()
             .any(|key| key.multiple_context() == Some(context))
+            || self.owes(context)
         {
             self.not_before.insert(context.clone(), until);
             self.wake.notify_one();
         }
     }
 
-    /// Take the references with pending changes of every context whose
-    /// deadline has passed at `now`, and the next deadline still ahead.
+    /// Take the references with pending changes, or owed values, of every
+    /// context whose deadline has passed at `now`, and the next deadline
+    /// still ahead.
     ///
-    /// A context is due at its earliest pending change plus its delay, but no
-    /// sooner than [`DEADLINE_FLOOR`] after that change, nor before its wait
-    /// from a previous attempt or hold-off. Handing it out starts a wait of its
-    /// delay (the floor at least), in case the attempt is blocked again.
+    /// A context is due at its earliest pending change or owed reference plus
+    /// its delay, but no sooner than [`DEADLINE_FLOOR`] after it, nor before
+    /// its wait from a previous attempt or hold-off. Handing it out starts a
+    /// wait of its delay (the floor at least), in case the attempt is blocked
+    /// again.
     pub(crate) fn take_due(&mut self, now: Instant) -> (Vec<CovSubscriptionKey>, Option<Instant>) {
-        // Earliest pending change and shortest delay per context.
+        // Earliest pending change or owed reference, and shortest delay, per
+        // context.
         let mut pending: HashMap<&MultipleContextKey, (Instant, Duration)> = HashMap::new();
-        for (key, history) in &self.histories {
-            let (Some(context), Some(first)) = (key.multiple_context(), history.entries.front())
-            else {
+        let timed = self.histories.iter().filter_map(|(key, history)| {
+            Some((key, history.entries.front()?.captured_at, history.delay))
+        });
+        let owed = self
+            .untimed
+            .iter()
+            .filter_map(|(key, reference)| Some((key, reference.owed_since?, reference.delay)));
+        for (key, since, delay) in timed.chain(owed) {
+            let Some(context) = key.multiple_context() else {
                 continue;
             };
             pending
                 .entry(context)
-                .and_modify(|(at, delay)| {
-                    *at = (*at).min(first.captured_at);
-                    *delay = (*delay).min(history.delay);
+                .and_modify(|(at, shortest)| {
+                    *at = (*at).min(since);
+                    *shortest = (*shortest).min(delay);
                 })
-                .or_insert((first.captured_at, history.delay));
+                .or_insert((since, delay));
         }
         let mut due = Vec::new();
         let mut next: Option<Instant> = None;
@@ -415,18 +453,21 @@ impl TimedHistories {
             self.not_before.insert(context.clone(), now + *spacing);
         }
         let due: Vec<_> = due.into_iter().map(|(context, _)| context).collect();
-        let keys = self
+        let is_due = |key: &CovSubscriptionKey| {
+            key.multiple_context()
+                .is_some_and(|context| due.contains(context))
+        };
+        let timed = self
             .histories
             .iter()
-            .filter(|(key, history)| {
-                !history.entries.is_empty()
-                    && key
-                        .multiple_context()
-                        .is_some_and(|context| due.contains(context))
-            })
-            .map(|(key, _)| key.clone())
-            .collect();
-        (keys, next)
+            .filter(|(key, history)| !history.entries.is_empty() && is_due(key))
+            .map(|(key, _)| key.clone());
+        let owed = self
+            .untimed
+            .iter()
+            .filter(|(key, reference)| reference.owed_since.is_some() && is_due(key))
+            .map(|(key, _)| key.clone());
+        (timed.chain(owed).collect(), next)
     }
 
     /// Bind a (re)published reference generation with its context's admitted
@@ -466,9 +507,11 @@ impl TimedHistories {
         }
     }
 
-    /// Drop the history of a removed reference, and its context's backstop
-    /// wait once no timestamped reference of the context remains.
+    /// Drop the history, or owed mark, of a removed reference, and its
+    /// context's backstop wait once no timestamped reference or owed one of
+    /// the context remains.
     pub(super) fn remove(&mut self, key: &CovSubscriptionKey) {
+        self.untimed.remove(key);
         if let Some(history) = self.histories.remove(key) {
             let bytes: usize = history.entries.iter().map(|e| e.cost).sum();
             self.release_bytes(key, bytes);
@@ -484,18 +527,21 @@ impl TimedHistories {
                     terms.reserve = 0;
                 }
             } else {
-                self.not_before.remove(context);
+                if !self.owes(context) {
+                    self.not_before.remove(context);
+                }
                 self.terms.remove(context);
             }
         }
     }
 
-    /// Timestamped histories (or context terms, should any outlive them) and
-    /// backstop waits held, for leak tests.
+    /// Timestamped histories (or context terms, should any outlive them)
+    /// plus untimestamped references, and backstop waits held, for leak
+    /// tests.
     #[cfg(test)]
     pub(crate) fn held(&self) -> (usize, usize) {
         (
-            self.histories.len().max(self.terms.len()),
+            self.histories.len().max(self.terms.len()) + self.untimed.len(),
             self.not_before.len(),
         )
     }
@@ -860,6 +906,7 @@ impl TimedStore {
 }
 
 mod claim;
+mod owed;
 pub(crate) use claim::{SendTurn, TimedClaim};
 
 #[cfg(test)]
