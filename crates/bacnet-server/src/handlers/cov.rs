@@ -261,15 +261,19 @@ pub(crate) fn handle_subscribe_cov_property_multiple_with_initial_endpoint(
         db,
         source_mac,
         source_network,
+        None,
         request,
     )
 }
 
+/// `subscriber_max_apdu` is the max-APDU-length-accepted of the request's
+/// header, when the caller has it; the context's notifications fit it.
 pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     table: &mut CovSubscriptionTable,
     db: &ObjectDatabase,
     source_mac: &[u8],
     source_network: Option<&NpduAddress>,
+    subscriber_max_apdu: Option<u16>,
     request: bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest,
 ) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
     let confirmed = request.issue_confirmed_notifications;
@@ -386,6 +390,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
         &route,
         expires_at,
         max_notification_delay,
+        subscriber_max_apdu,
         subscriptions,
     )?;
     if let Some(frame) = admission_clock {

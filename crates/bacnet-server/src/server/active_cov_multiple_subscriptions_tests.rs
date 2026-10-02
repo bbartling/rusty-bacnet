@@ -277,7 +277,14 @@ async fn active_cov_multiple_wire_renewal_cancellation_expiry_and_cleanup_are_ex
         .cov_table
         .write()
         .await
-        .subscribe_multiple(&short, &proposal.endpoint(), expires_at, 0, vec![proposal])
+        .subscribe_multiple(
+            &short,
+            &proposal.endpoint(),
+            expires_at,
+            0,
+            None,
+            vec![proposal],
+        )
         .unwrap();
     let listed = wire.multiple().await;
     assert_eq!(listed.len(), 2);

@@ -73,7 +73,7 @@ fn refresh(
         .and_then(|sub| sub.expires_at)
         .unwrap_or_else(|| std::time::Instant::now() + Duration::from_secs(120));
     table
-        .subscribe_multiple(&context, route, expires, 5, listed)
+        .subscribe_multiple(&context, route, expires, 5, None, listed)
         .unwrap();
 }
 
