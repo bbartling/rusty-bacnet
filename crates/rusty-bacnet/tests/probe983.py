@@ -225,8 +225,53 @@ class Stamp(logging.Formatter):
         return f"[{record.created - T0:9.3f}] {record.name} {record.getMessage()[-400:]}"
 
 
+NIL = "test_native_nodes_nil_accept_expires_without_connecting"
+VALID = "test_native_nodes_wait_silently_then_accept_valid_uuid"
+
+
+def run_names(names):
+    suite = unittest.defaultTestLoader.loadTestsFromNames(names)
+    return unittest.TextTestRunner(verbosity=1, resultclass=StampedResult).run(suite)
+
+
+def repeat(n):
+    """The real (current) tests, n times each in this process, no added load."""
+    names = []
+    for _ in range(n):
+        names += [f"test_sc_accept_uuid.AcceptUuidTests.{NIL}", f"test_sc_accept_uuid.AcceptUuidTests.{VALID}"]
+    result = run_names(names)
+    bad = len(result.failures) + len(result.errors)
+    log(f"REPEAT ran={result.testsRun} passed={result.testsRun - bad} failed={bad}")
+
+
+def paired(hogs, rounds):
+    """Dev's and this branch's nil test, alternately, while `hogs` processes spin."""
+    procs = [subprocess.Popen([sys.executable, "-c", "while True: pass"]) for _ in range(hogs)]
+    tally = {"old": [0, 0], "new": [0, 0]}
+    try:
+        for r in range(rounds):
+            for label, module in (("old", "old983_sc_accept_uuid"), ("new", "test_sc_accept_uuid")):
+                t = time.perf_counter()
+                result = run_names([f"{module}.AcceptUuidTests.{NIL}"])
+                ok = result.wasSuccessful()
+                tally[label][0 if ok else 1] += 1
+                log(f"PAIRED round={r} {label} {'PASS' if ok else 'FAIL'} {time.perf_counter() - t:.1f}s")
+    finally:
+        for proc in procs:
+            proc.kill()
+    log(f"PAIRED hogs={hogs} old pass={tally['old'][0]} fail={tally['old'][1]} "
+        f"new pass={tally['new'][0]} fail={tally['new'][1]}")
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "30"
+    if mode.startswith("repeat:"):
+        log(f"start mode={mode} python={sys.version.split()[0]} platform={sys.platform} cpus={os.cpu_count()}")
+        return repeat(int(mode.split(":")[1]))
+    if mode.startswith("paired:"):
+        _, hogs, rounds = mode.split(":")
+        log(f"start mode={mode} python={sys.version.split()[0]} platform={sys.platform} cpus={os.cpu_count()}")
+        return paired(int(hogs), int(rounds))
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(Stamp())
     logging.basicConfig(level=logging.WARNING, handlers=[handler])
