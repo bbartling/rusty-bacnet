@@ -10,9 +10,9 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
     for configured in [false, true] {
         let mut object = AveragingObject::new(7, "AVG-7").unwrap();
         if configured {
-            object.add_sample(10.0);
-            object.add_sample(20.0);
-            object.add_sample(30.0);
+            object.add_sample(10.0).unwrap();
+            object.add_sample(20.0).unwrap();
+            object.add_sample(30.0).unwrap();
             let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
             object
                 .write_property(

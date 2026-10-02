@@ -653,6 +653,8 @@ mod active_cov_subscriptions_tests;
 #[cfg(test)]
 mod audit_log_query_tests;
 #[cfg(test)]
+mod averaging_sample_tests;
+#[cfg(test)]
 mod binary_lighting_task_tests;
 #[cfg(test)]
 mod cov_background_tests;

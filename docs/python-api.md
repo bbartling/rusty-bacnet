@@ -1936,6 +1936,22 @@ value. The server doesn't follow Controlled_Variable_Reference itself.
 65535 or a priority outside 1 to 16 raise VALUE_OUT_OF_RANGE. Peers can write
 the Loop's Action (DIRECT until written).
 
+The application feeds an Averaging object too, because the server doesn't
+read its Object_Property_Reference: it samples the referenced property and
+passes each value with `await server.add_averaging_sample_local(averaging_id,
+PropertyValue.real(21.5))`. A BOOLEAN (counted as 0 or 1), Signed, Unsigned
+and Enumerated sample is accepted as well as a finite REAL. Another datatype,
+Double included, raises INVALID_DATA_TYPE and NaN or an infinity
+VALUE_OUT_OF_RANGE, and a refused sample isn't counted; other objects raise
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Minimum_Value, Maximum_Value,
+Average_Value, Attempted_Samples and Valid_Samples change together and go
+through the server's COV path. SubscribeCOV on an Averaging object is refused,
+since Table 13-1 has no row for it, but a property subscription
+(SubscribeCOVProperty or SubscribeCOVPropertyMultiple) is notified when its
+property moves by the subscription's COV increment, or on any change without
+one; the report has no Status_Flags. The statistics cover every sample so far,
+since Window_Interval and Window_Samples aren't served yet.
+
 #### Lighting
 
 ```python

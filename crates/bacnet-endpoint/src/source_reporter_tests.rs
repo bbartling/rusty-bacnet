@@ -147,6 +147,9 @@ fn source(db: &ObjectDatabase, oid: ObjectIdentifier) -> bool {
 #[path = "source_reporter_forwarding_tests.rs"]
 mod forwarding;
 
+#[path = "source_reporter_averaging_tests.rs"]
+mod averaging;
+
 #[path = "source_audit_recipient_tests.rs"]
 mod recipient;
 
