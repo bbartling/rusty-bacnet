@@ -390,6 +390,25 @@ pub(crate) fn invalid_array_index_error() -> bacnet_types::error::Error {
     )
 }
 
+/// Read a BACnetARRAY held as its element values: the whole array with no
+/// index, its size at index 0, or the element at a one-based index, which
+/// fails with INVALID_ARRAY_INDEX past the end.
+pub(crate) fn read_array(
+    values: Vec<bacnet_types::primitives::PropertyValue>,
+    array_index: Option<u32>,
+) -> Result<bacnet_types::primitives::PropertyValue, bacnet_types::error::Error> {
+    use bacnet_types::primitives::PropertyValue;
+
+    match array_index {
+        None => Ok(PropertyValue::List(values)),
+        Some(0) => Ok(PropertyValue::Unsigned(values.len() as u64)),
+        Some(index) => values
+            .into_iter()
+            .nth((index - 1) as usize)
+            .ok_or_else(invalid_array_index_error),
+    }
+}
+
 /// Return the property-is-not-an-array protocol error.
 ///
 /// Clause 15.5.1.3 / 15.9.1.3: an array index was provided but the property

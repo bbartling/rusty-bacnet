@@ -2,9 +2,11 @@ use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EscalatorMode, EscalatorOperationDirection};
 
 mod escalator_status_writability;
+mod group_membership;
 mod group_properties;
 mod landing_calls;
 mod lift_car_moving_direction;
+mod lift_properties;
 
 /// Escalator write-domain tests run with Out_Of_Service enabled so they do not
 /// set policy for writes while the object is in service.
@@ -223,6 +225,9 @@ fn escalator_property_list() {
     assert!(list.contains(&PropertyIdentifier::OPERATION_DIRECTION));
     assert!(list.contains(&PropertyIdentifier::PASSENGER_ALARM));
     assert!(list.contains(&PropertyIdentifier::STATUS_FLAGS));
+    assert!(list.contains(&PropertyIdentifier::ELEVATOR_GROUP));
+    assert!(list.contains(&PropertyIdentifier::GROUP_ID));
+    assert!(list.contains(&PropertyIdentifier::INSTALLATION_ID));
 }
 
 // --- Escalator_Mode domain (#400) ---
@@ -509,11 +514,6 @@ fn lift_create_and_read_defaults() {
     let lift = LiftObject::new(1, "LIFT-1", 10).unwrap();
     assert_eq!(lift.object_name(), "LIFT-1");
     assert_eq!(
-        lift.read_property(PropertyIdentifier::TRACKING_VALUE, None)
-            .unwrap(),
-        PropertyValue::Unsigned(1)
-    );
-    assert_eq!(
         lift.read_property(PropertyIdentifier::CAR_POSITION, None)
             .unwrap(),
         PropertyValue::Unsigned(1)
@@ -550,55 +550,6 @@ fn lift_floor_text() {
 }
 
 #[test]
-fn lift_read_car_load() {
-    let lift = LiftObject::new(1, "LIFT-1", 5).unwrap();
-    assert_eq!(
-        lift.read_property(PropertyIdentifier::CAR_LOAD, None)
-            .unwrap(),
-        PropertyValue::Unsigned(0)
-    );
-}
-
-#[test]
-fn lift_write_tracking_value() {
-    let mut lift = LiftObject::new(1, "LIFT-1", 10).unwrap();
-    lift.write_property(
-        PropertyIdentifier::TRACKING_VALUE,
-        None,
-        PropertyValue::Unsigned(5),
-        None,
-    )
-    .unwrap();
-    assert_eq!(
-        lift.read_property(PropertyIdentifier::TRACKING_VALUE, None)
-            .unwrap(),
-        PropertyValue::Unsigned(5)
-    );
-}
-
-#[test]
-fn lift_write_car_load_out_of_range() {
-    let mut lift = LiftObject::new(1, "LIFT-1", 5).unwrap();
-    let result = lift.write_property(
-        PropertyIdentifier::CAR_LOAD,
-        None,
-        PropertyValue::Unsigned(101),
-        None,
-    );
-    assert!(result.is_err());
-}
-
-#[test]
-fn lift_read_landing_doors() {
-    let lift = LiftObject::new(1, "LIFT-1", 8).unwrap();
-    assert_eq!(
-        lift.read_property(PropertyIdentifier::LANDING_DOOR_STATUS, None)
-            .unwrap(),
-        PropertyValue::Unsigned(8)
-    );
-}
-
-#[test]
 fn lift_read_energy_meter() {
     let lift = LiftObject::new(1, "LIFT-1", 5).unwrap();
     assert_eq!(
@@ -612,13 +563,25 @@ fn lift_read_energy_meter() {
 fn lift_property_list() {
     let lift = LiftObject::new(1, "LIFT-1", 5).unwrap();
     let list = lift.property_list();
-    assert!(list.contains(&PropertyIdentifier::TRACKING_VALUE));
-    assert!(list.contains(&PropertyIdentifier::CAR_POSITION));
-    assert!(list.contains(&PropertyIdentifier::CAR_MOVING_DIRECTION));
-    assert!(list.contains(&PropertyIdentifier::CAR_DOOR_STATUS));
-    assert!(list.contains(&PropertyIdentifier::CAR_LOAD));
-    assert!(list.contains(&PropertyIdentifier::LANDING_DOOR_STATUS));
-    assert!(list.contains(&PropertyIdentifier::FLOOR_TEXT));
-    assert!(list.contains(&PropertyIdentifier::ENERGY_METER));
-    assert!(list.contains(&PropertyIdentifier::STATUS_FLAGS));
+    for property in [
+        PropertyIdentifier::ELEVATOR_GROUP,
+        PropertyIdentifier::GROUP_ID,
+        PropertyIdentifier::INSTALLATION_ID,
+        PropertyIdentifier::CAR_POSITION,
+        PropertyIdentifier::CAR_MOVING_DIRECTION,
+        PropertyIdentifier::CAR_DOOR_STATUS,
+        PropertyIdentifier::CAR_LOAD,
+        PropertyIdentifier::CAR_LOAD_UNITS,
+        PropertyIdentifier::PASSENGER_ALARM,
+        PropertyIdentifier::FAULT_SIGNALS,
+        PropertyIdentifier::LANDING_DOOR_STATUS,
+        PropertyIdentifier::FLOOR_TEXT,
+        PropertyIdentifier::ENERGY_METER,
+        PropertyIdentifier::STATUS_FLAGS,
+    ] {
+        assert!(list.contains(&property), "{property:?}");
+    }
+    // Neither is a Table 12-77 row (#1021).
+    assert!(!list.contains(&PropertyIdentifier::TRACKING_VALUE));
+    assert!(!list.contains(&PropertyIdentifier::FLOOR_NUMBER));
 }

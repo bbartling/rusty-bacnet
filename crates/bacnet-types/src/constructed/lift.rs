@@ -1,9 +1,10 @@
-//! Constructed values used by the Elevator Group object (Clause 12.58).
+//! Constructed values used by the Elevator Group (Clause 12.58) and Lift
+//! (Clause 12.59) objects.
 
 #[cfg(not(feature = "std"))]
-use alloc::string::String;
+use alloc::{string::String, vec::Vec};
 
-use crate::enums::LiftCarDirection;
+use crate::enums::{DoorStatus, LiftCarDirection};
 
 /// The `command` CHOICE of a [`BACnetLandingCallStatus`] (Clause 21).
 ///
@@ -34,4 +35,29 @@ pub struct BACnetLandingCallStatus {
     pub command: LandingCallCommand,
     /// Context tag 3, optional: a label for the floor.
     pub floor_text: Option<String>,
+}
+
+/// One landing door in a [`BACnetLandingDoorStatus`]: the floor it serves
+/// and its current status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LandingDoor {
+    /// Context tag 0: the universal floor number of the landing (Unsigned8).
+    pub floor_number: u8,
+    /// Context tag 1: the landing door's status.
+    ///
+    /// Decoding keeps any value, including reserved and proprietary ones;
+    /// whoever stores the value decides which ones are in range.
+    pub door_status: DoorStatus,
+}
+
+/// `BACnetLandingDoorStatus` (Clause 21): the landing doors that pair with one
+/// car door, floor by floor.
+///
+/// The Lift object serves an array of these as Landing_Door_Status, one
+/// element per car door (Clause 12.59, Table 12-77). The `bacnet-encoding`
+/// crate owns the wire codec.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct BACnetLandingDoorStatus {
+    /// Context tag 0: the landing doors, in the order they are encoded.
+    pub landing_doors: Vec<LandingDoor>,
 }
