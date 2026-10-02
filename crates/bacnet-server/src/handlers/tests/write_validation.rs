@@ -193,15 +193,8 @@ fn trend_log_reliability_write_is_denied_over_write_property() {
     let tl_oid = tl.object_identifier();
     db.add(Box::new(tl)).unwrap();
 
-    // Clause 12.25 Table 12-29: Reliability O, no writability footnote; the
-    // object-family gate does not apply, so even out-of-service writes refuse.
-    write_wire(
-        &mut db,
-        tl_oid,
-        PropertyIdentifier::OUT_OF_SERVICE,
-        PropertyValue::Boolean(true),
-    )
-    .unwrap();
+    // Clause 12.25 Table 12-29: Reliability O, no writability footnote, and
+    // no Out_Of_Service to grant a simulation write (#985), so it refuses.
     assert_refused(
         &mut db,
         tl_oid,
@@ -209,8 +202,19 @@ fn trend_log_reliability_write_is_denied_over_write_property() {
         PropertyValue::Enumerated(1),
         ErrorCode::WRITE_ACCESS_DENIED,
         PropertyValue::Enumerated(0),
-        "TL out-of-service Reliability",
+        "TL Reliability",
     );
+    assert!(matches!(
+        write_wire(
+            &mut db,
+            tl_oid,
+            PropertyIdentifier::OUT_OF_SERVICE,
+            PropertyValue::Boolean(true),
+        ),
+        Err(Error::Protocol { class, code })
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32
+    ));
 }
 
 // ──────────────────────────────────────────────────────────────────────────

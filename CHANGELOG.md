@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Staging objects support COV (#988). A SubscribeCOV notification carries
+  Present_Value, Status_Flags and Present_Stage, and goes out when
+  Present_Value moves by at least COV_Increment, when Status_Flags changes, or
+  when Present_Stage changes, as the COV criteria table (Clause 13.1, Table
+  13-1) lists for Staging. Staging gains the COV_Increment property that table
+  calls for: a writable REAL, default 0 (any change), where a negative or
+  non-finite value fails with VALUE_OUT_OF_RANGE. SubscribeCOVProperty works
+  for Present_Value (which inherits COV_Increment), Status_Flags and
+  Present_Stage, each reported with Status_Flags. When a target plan's
+  completion changes Reliability, subscribers get the Status_Flags change. A
+  WriteProperty that changes the stage runs the stage's target writes before
+  its own COV fanout, so one notification can carry both the new stage and
+  the completion's flags; `write_local` reports the stage first. The new
+  `BACnetObject::cov_reported_properties` hook, with `CovReportedProperty`,
+  lists the values a SubscribeCOV notification carries after Present_Value and
+  Status_Flags, and which of them also trigger one; the default follows the
+  table for Loop and Staging, and the server leaves out any the object's
+  Property_List lacks.
+
 - `bacnet tui` opens a full-screen terminal UI (ratatui 0.30, crossterm 0.29)
   on the transport the global flags choose: BACnet/IP, BACnet/IPv6 or
   BACnet/SC. Its first screen is a live device table fed by the client's I-Am
@@ -371,6 +390,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Loop COV notifications carry Setpoint and Controlled_Variable_Value
+  (wire):** a Loop's SubscribeCOV notification now reports Present_Value,
+  Status_Flags, Setpoint and Controlled_Variable_Value, in that order, as the
+  COV criteria table (Clause 13.1, Table 13-1) lists for Loop (#985). Before,
+  it carried only the first two. Loop now serves the required
+  Controlled_Variable_Value (Table 12-20), a read-only REAL the application
+  sets with `LoopObject::set_controlled_variable_value`, and the COV_Increment
+  property the table requires of a Loop that reports COV: a writable REAL,
+  default 0 (any change), validated as on the analog objects. A Present_Value
+  change now reports only when it moves by at least COV_Increment; before,
+  every change did. A Setpoint or Controlled_Variable_Value change alone
+  still sends nothing. Loop's Present_Value is now writable while
+  Out_Of_Service is TRUE, for simulation, and refuses writes with
+  WRITE_ACCESS_DENIED in service; its property metadata and PICS row mark it
+  writable while out of service. In service the application supplies it
+  through `BACnetServer::set_present_value_local`, which now accepts a Loop
+  and is refused while Out_Of_Service is TRUE. The new rows appear in
+  Property_List, the property metadata, RPM ALL, REQUIRED and OPTIONAL, and
+  the PICS.
+
+- **Breaking Trend Log property set (wire):** Trend Log and Trend Log Multiple
+  no longer serve Out_Of_Service (#985). Neither property table (Clause 12.25,
+  Table 12-29; Clause 12.30, Table 12-35) defines it, yet Trend Log listed a
+  writable one that changed nothing (#978 already kept it from the flags) and
+  Trend Log Multiple a read-only one fixed at FALSE. It is gone from their
+  Property_List, property metadata, RPM ALL and OPTIONAL, and PICS rows, and
+  ReadProperty or WriteProperty on it now fails with PROPERTY /
+  UNKNOWN_PROPERTY, as #984 did for Calendar.
+
 - **Breaking wire format and Rust API:** AddListElement and RemoveListElement
   now answer every error with a ChangeList-Error, which carries the First
   Failed Element Number, instead of a plain class and code (#1026). The number
@@ -731,8 +779,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Schedule now derive FAULT from Reliability, OUT_OF_SERVICE from
   Out_Of_Service and IN_ALARM from Event_State. Trend Log and Trend Log
   Multiple derive only FAULT and IN_ALARM, and keep OVERRIDDEN and
-  OUT_OF_SERVICE FALSE as their object types require, so Trend Log's
-  non-standard Out_Of_Service property doesn't reach its flags. Calendar,
+  OUT_OF_SERVICE FALSE as their object types require; both have since lost
+  their non-standard Out_Of_Service property (see the #985 entry). Calendar,
   which the standard gives no Status_Flags, no longer serves one (see the
   #984 entry below). A Loop's COV subscribers now get a notification when a
   write to Reliability or Out_Of_Service changes its Status_Flags, carrying the

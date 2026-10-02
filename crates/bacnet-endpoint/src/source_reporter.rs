@@ -21,7 +21,8 @@ use bacnet_objects::log_buffer::LogRecordIdentity;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
-    BACnetObject, LifeSafetyOperationOutcome, MonotonicClock, ReliabilityEvaluation,
+    BACnetObject, CovReportedProperty, LifeSafetyOperationOutcome, MonotonicClock,
+    ReliabilityEvaluation,
 };
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
 use bacnet_types::constructed::{
@@ -260,6 +261,10 @@ impl BACnetObject for SourceReporter {
 
     fn cov_increment(&self) -> Option<f32> {
         self.wrapped.cov_increment()
+    }
+
+    fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
+        self.wrapped.cov_reported_properties()
     }
 
     fn set_overridden(&mut self, overridden: bool) {

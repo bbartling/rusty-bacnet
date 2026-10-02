@@ -4,7 +4,7 @@ use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
 use bacnet_objects::file::{FileConfiguration, FileObject, FileStorage, FileWriteStart};
 use bacnet_objects::property_metadata::PropertyMetadata;
-use bacnet_objects::traits::{MonotonicClock, ReliabilityEvaluation};
+use bacnet_objects::traits::{CovReportedProperty, MonotonicClock, ReliabilityEvaluation};
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::{
     BACnetAuditLogQueryParameters, BACnetAuditNotification, BACnetLogRecord, BACnetObjectSelector,
@@ -204,6 +204,7 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
 
 const CUSTOM: PropertyIdentifier = PropertyIdentifier::from_raw(5000);
 const CUSTOM_LIST: PropertyIdentifier = PropertyIdentifier::from_raw(5001);
+const REPORTED: [CovReportedProperty; 1] = [CovReportedProperty::Trigger(CUSTOM)];
 
 #[derive(Default)]
 struct Calls {
@@ -341,6 +342,9 @@ impl BACnetObject for ExtendedReporter {
     }
     fn cov_increment(&self) -> Option<f32> {
         Some(1.25)
+    }
+    fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
+        &REPORTED
     }
     fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
         Some(Box::new(
@@ -595,6 +599,7 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         assert!(object.supports_cov_property(CUSTOM));
         assert!(!object.supports_cov_property(PropertyIdentifier::DESCRIPTION));
         assert_eq!(object.cov_increment(), Some(1.25));
+        assert_eq!(object.cov_reported_properties(), &REPORTED);
         assert_eq!(
             object.cov_snapshot_internal().unwrap().object_name(),
             "Custom snapshot"
