@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Print one CHANGELOG.md section as release notes (#943).
 
-    changelog_notes.py --version 0.12.0 [--changelog CHANGELOG.md]
-    changelog_notes.py --unreleased [--allow-empty]
+    changelog_notes.py --version 0.12.0 [--changelog CHANGELOG.md] [--allow-empty]
     changelog_notes.py --version 0.12.0 --max-chars 125000 --full-url URL
 
 A section runs from its `## [<name>]` heading to the next level-2 heading,
 ignoring headings inside fenced code blocks. The heading itself is left out.
 The script fails if the section is missing or empty; with --allow-empty (dry
-runs), an empty section gives a one-line placeholder instead.
+runs), an empty section gives a one-line placeholder instead. Unreleased
+entries are fragments in changelog.d/, so a dry run reads a copy that
+`scripts/changelog.py assemble --output` wrote.
 
 GitHub refuses release bodies over 125,000 characters. With --max-chars, a
 longer section is cut at the last blank line that fits and ends with a link to
@@ -104,9 +105,7 @@ def truncate(body, max_chars, full_url):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    which = parser.add_mutually_exclusive_group(required=True)
-    which.add_argument("--version", help="release version, for example 0.12.0")
-    which.add_argument("--unreleased", action="store_true", help="the [Unreleased] section")
+    parser.add_argument("--version", required=True, help="release version, for example 0.12.0")
     parser.add_argument("--changelog", default="CHANGELOG.md", type=Path)
     parser.add_argument("--max-chars", type=int, help="cut longer notes to this many characters")
     parser.add_argument("--full-url", help="link to the full changelog, required with --max-chars")
@@ -115,7 +114,7 @@ def main(argv=None):
     if args.max_chars is not None and not args.full_url:
         parser.error("--max-chars needs --full-url")
 
-    name = "Unreleased" if args.unreleased else args.version.removeprefix("v")
+    name = args.version.removeprefix("v")
     try:
         try:
             body = extract(args.changelog.read_text(encoding="utf-8"), name)
