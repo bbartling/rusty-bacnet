@@ -129,31 +129,6 @@ pub(super) async fn write_property_multiple(
     response(h).await
 }
 
-/// Wait for the SimpleACK or Error answering the last request sent.
-pub(super) async fn response(h: &Harness) -> Result<(), ErrorCode> {
-    let invoke_id = h.invoke_id;
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let answer = {
-                let mut frames = h.frames.lock().unwrap();
-                let at = frames.iter().position(|apdu| match apdu {
-                    Apdu::SimpleAck(ack) => ack.invoke_id == invoke_id,
-                    Apdu::Error(error) => error.invoke_id == invoke_id,
-                    _ => false,
-                });
-                at.map(|at| frames.remove(at))
-            };
-            match answer {
-                Some(Apdu::SimpleAck(_)) => return Ok(()),
-                Some(Apdu::Error(error)) => return Err(error.error_code),
-                _ => tokio::time::sleep(Duration::from_millis(1)).await,
-            }
-        }
-    })
-    .await
-    .expect("a response to the last request")
-}
-
 #[tokio::test(start_paused = true)]
 async fn write_property_of_a_weekly_day_commands_the_target_at_once() {
     let mut h = start().await;

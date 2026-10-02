@@ -324,17 +324,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 None => return,
             };
 
+            // Present_Value leads, except on an Access Point (Access_Event).
+            let lead = crate::cov::reported::lead(oid.object_type());
             let prepared = (|| {
-                let pv = object
-                    .read_property(PropertyIdentifier::PRESENT_VALUE, None)
-                    .ok()?;
-                let sample = crate::cov::CovSample::new(&pv).ok()?;
+                let leading = object.read_property(lead.property(), None).ok()?;
+                let sample = crate::cov::CovSample::new(&leading).ok()?;
                 let flags = crate::cov::flags::PreparedFlags::read(object).ok()?;
                 let reported = crate::cov::reported::PreparedReported::read(object).ok()?;
                 let mut buf = BytesMut::new();
                 encode_property_value(&mut buf, sample.value()).ok()?;
                 let mut values = vec![BACnetPropertyValue {
-                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                    property_identifier: lead.property(),
                     property_array_index: None,
                     value: buf.to_vec(),
                     priority: None,
@@ -347,7 +347,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         priority: None,
                     });
                 }
-                // Table 13-1 extras follow PV and flags, in the object's order.
+                // Table 13-1 extras follow the leading value and flags, in the
+                // object's order.
                 values.extend(reported.values);
                 let observation = flags.observation(sample).with_triggers(reported.triggers);
                 let increment = object.cov_increment();
@@ -359,11 +360,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .filter_map(|(index, sub)| {
                         if sub.monitored_property.is_some()
                             || (!force
-                                && !CovSubscriptionTable::should_notify(
-                                    sub,
-                                    Some(observation.sample()),
-                                    sub.cov_increment.or(increment),
-                                )
+                                && !(lead.triggers()
+                                    && CovSubscriptionTable::should_notify(
+                                        sub,
+                                        Some(observation.sample()),
+                                        sub.cov_increment.or(increment),
+                                    ))
                                 && !observation
                                     .flags_changed(sub.last_notified_observation.as_ref())
                                 && !observation

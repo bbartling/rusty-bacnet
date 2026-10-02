@@ -1910,6 +1910,11 @@ on the Loop carries the value in its next report without being triggered by it.
 Before the Loop is added, `LoopObject::set_controlled_variable_value` sets the
 starting value.
 
+Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
+Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and
+Shed_Duration, and a change of any of them sends one. Duty_Window, which the
+row also names, isn't served yet.
+
 The application also feeds an Averaging object its samples. The server doesn't
 read Object_Property_Reference: the application samples the referenced property
 and, in a running server, passes each value to
@@ -2020,6 +2025,17 @@ Reliability), or when Present_Stage changes.
 | `AccessRightsObject` | `::new(instance, name)` |
 | `AccessZoneObject` | `::new(instance, name)` |
 | `CredentialDataInputObject` | `::new(instance, name)` |
+
+Access Door, Access Point and Credential Data Input support COV (Table 13-1).
+A door's SubscribeCOV report carries Present_Value, Status_Flags and
+Door_Alarm_State; a Door_Alarm_State change sends one. An Access Point has no
+Present_Value, so its report starts with Access_Event, then Status_Flags,
+Access_Event_Tag and Access_Event_Time, and only an Access_Event_Time or
+Status_Flags change sends one. A Credential Data Input report carries
+Update_Time, whose change sends one. These values are read-only over the
+network; set them before adding the object with
+`AccessDoorObject::set_door_alarm_state`, `AccessPointObject::set_access_event`
+and `CredentialDataInputObject::set_update_time`.
 
 #### Transportation (3)
 

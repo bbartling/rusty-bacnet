@@ -8,6 +8,7 @@ use bacnet_encoding::npdu::{encode_npdu, Npdu};
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
+use bacnet_objects::traits::BACnetObject;
 use bacnet_services::common::PropertyReference;
 use bacnet_services::cov::{
     COVNotificationRequest, SubscribeCOVPropertyRequest, SubscribeCOVRequest,
@@ -254,6 +255,28 @@ impl Harness {
 
     pub(super) fn set_clock(&self, second: u8) {
         *self.clock.0.lock().unwrap() = at(second);
+    }
+
+    /// Put `object` in place of the stored object with its identifier, as an
+    /// application holding new input would, then run the server's COV fanout
+    /// for it as a committed write does.
+    pub(super) async fn replace_and_fan_out(&self, object: Box<dyn BACnetObject>) {
+        let oid = object.object_identifier();
+        self.server.database().write().await.add(object).unwrap();
+        let server = &self.server;
+        BACnetServer::<TestTransport>::fire_cov_notifications(
+            &super::cov_notify_context::CovNotifyContext {
+                db: &server.db,
+                network: server.test_network(),
+                cov_table: &server.cov_table,
+                cov_in_flight: &server.cov_in_flight,
+                notification_transactions: &server.notification_transactions,
+                comm_state: &server.comm_state,
+                config: &server.config,
+            },
+            &oid,
+        )
+        .await;
     }
 
     fn plan(&self, after: usize, action: PlanAction) {
@@ -679,6 +702,32 @@ pub(super) fn real(value: f32) -> Vec<u8> {
     bacnet_encoding::primitives::encode_property_value(&mut encoded, &PropertyValue::Real(value))
         .unwrap();
     encoded.to_vec()
+}
+
+/// Wait for the SimpleACK or Error answering the last request sent, take it,
+/// and return the error code of an Error.
+pub(super) async fn response(h: &Harness) -> Result<(), ErrorCode> {
+    let invoke_id = h.invoke_id;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let answer = {
+                let mut frames = h.frames.lock().unwrap();
+                let at = frames.iter().position(|apdu| match apdu {
+                    Apdu::SimpleAck(ack) => ack.invoke_id == invoke_id,
+                    Apdu::Error(error) => error.invoke_id == invoke_id,
+                    _ => false,
+                });
+                at.map(|at| frames.remove(at))
+            };
+            match answer {
+                Some(Apdu::SimpleAck(_)) => return Ok(()),
+                Some(Apdu::Error(error)) => return Err(error.error_code),
+                _ => tokio::time::sleep(Duration::from_millis(1)).await,
+            }
+        }
+    })
+    .await
+    .expect("a response to the last request")
 }
 
 /// `(property, value bytes, time)` rows of the single monitored object.

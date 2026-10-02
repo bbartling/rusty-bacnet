@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::binary::BinaryValueObject;
+use bacnet_types::enums::ObjectType;
 use std::time::Duration;
 
 const MULTIPLE: PropertyIdentifier = PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS;

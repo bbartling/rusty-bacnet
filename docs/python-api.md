@@ -1984,6 +1984,13 @@ server.add_access_zone(instance=1, name="Building A")
 server.add_credential_data_input(instance=1, name="Card Reader")
 ```
 
+Access Door, Access Point, Credential Data Input and Load Control take
+SubscribeCOV, and each report carries the values their Table 13-1 rows name:
+Door_Alarm_State on a door; Access_Event (in place of Present_Value),
+Access_Event_Tag and Access_Event_Time on an Access Point; Update_Time on a
+Credential Data Input; and Requested_Shed_Level, Start_Time and Shed_Duration
+on a Load Control.
+
 #### Transportation
 
 ```python

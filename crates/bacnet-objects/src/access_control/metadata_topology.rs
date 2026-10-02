@@ -63,8 +63,9 @@ use crate::property_metadata::{
 // neither needs an override. Array gating keeps the default: Priority_Array
 // (BACnetARRAY per Table 12-30) and Property_List admit an index while every
 // other served row rejects one. COV keeps its override: supports_cov=true on
-// Access Door, and the COV gating path (read_property plus
-// supports_cov_property to supports_cov) never consults metadata.
+// Access Door and Access Point (Table 13-1 lists both; #1061 added the
+// point) and false on Access Zone, and the COV gating path (read_property
+// plus supports_cov_property to supports_cov) never consults metadata.
 const ACCESS_DOOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -345,7 +346,8 @@ mod tests {
         ];
         assert_exact_sets(&object, &all, &required);
         assert_indexed_property_list(&object, &all);
-        assert!(!object.supports_cov());
+        // Table 13-1 has an Access Point row (#1061).
+        assert!(object.supports_cov());
         // Table 12-36 has no Present_Value row (#1064).
         assert_error(
             object.read_property(P::PRESENT_VALUE, None).unwrap_err(),
