@@ -112,6 +112,8 @@ pub(super) struct Harness {
     pub(super) after_broadcast: Arc<StdMutex<Option<ClockFrame>>>,
     pub(super) fail_notifications: Arc<AtomicBool>,
     pub(super) invoke_id: u8,
+    /// Max-APDU-length-accepted the subscriber advertises in its requests.
+    pub(super) request_max_apdu: u16,
     /// Invoke ID and service of the last confirmed notification taken.
     last_confirmed: StdMutex<Option<(u8, ConfirmedServiceChoice)>>,
     /// Every confirmed notification taken. Invoke IDs rotate, so a byte-equal
@@ -176,6 +178,7 @@ impl Harness {
             after_broadcast,
             fail_notifications,
             invoke_id: 0,
+            request_max_apdu: 1476,
             last_confirmed: StdMutex::new(None),
             taken: StdMutex::new(Vec::new()),
         }
@@ -197,7 +200,7 @@ impl Harness {
                 more_follows: false,
                 segmented_response_accepted: false,
                 max_segments: None,
-                max_apdu_length: 1476,
+                max_apdu_length: self.request_max_apdu,
                 invoke_id: self.invoke_id,
                 sequence_number: None,
                 proposed_window_size: None,
