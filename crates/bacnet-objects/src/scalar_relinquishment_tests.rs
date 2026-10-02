@@ -1,6 +1,6 @@
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
-use crate::elevator::{ElevatorGroupObject, EscalatorObject, LiftObject};
+use crate::elevator::{EscalatorObject, LiftObject};
 use crate::loop_obj::LoopObject;
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::network_port::NetworkPortObject;
@@ -54,7 +54,6 @@ fn scalar_null_relinquishment_preserves_common_description_and_oos_state() {
     objects.extend([
         Box::new(NetworkPortObject::new_bip(1, "NP", Default::default()).unwrap())
             as Box<dyn BACnetObject>,
-        Box::new(ElevatorGroupObject::new(1, "Group").unwrap()),
         Box::new(EscalatorObject::new(1, "Escalator").unwrap()),
         Box::new(LiftObject::new(1, "Lift", 3).unwrap()),
         Box::new(ScheduleObject::new(1, "Schedule", V::Unsigned(2)).unwrap()),

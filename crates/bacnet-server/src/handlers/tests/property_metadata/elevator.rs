@@ -15,6 +15,11 @@ fn elevator_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
         let lift2 = ObjectIdentifier::new(ObjectType::LIFT, 2).unwrap();
         group.add_member(lift1);
         group.add_member(lift2);
+        group
+            .set_machine_room_id(
+                ObjectIdentifier::new(ObjectType::POSITIVE_INTEGER_VALUE, 9).unwrap(),
+            )
+            .unwrap();
         escalator
             .write_property(P::POWER_MODE, None, PropertyValue::Boolean(true), None)
             .unwrap();
@@ -44,14 +49,17 @@ fn elevator_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
             )
             .unwrap();
         // Exercise the unconditional write route so large encodings persist.
-        object
-            .write_property(
-                P::OUT_OF_SERVICE,
-                None,
-                PropertyValue::Boolean(configured),
-                None,
-            )
-            .unwrap();
+        // Elevator Group has no Out_Of_Service (Table 12-76).
+        if object.object_identifier().object_type() != ObjectType::ELEVATOR_GROUP {
+            object
+                .write_property(
+                    P::OUT_OF_SERVICE,
+                    None,
+                    PropertyValue::Boolean(configured),
+                    None,
+                )
+                .unwrap();
+        }
     }
     objects
 }
@@ -63,14 +71,12 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::OBJECT_NAME,
             P::DESCRIPTION,
             P::OBJECT_TYPE,
+            P::MACHINE_ROOM_ID,
             P::GROUP_ID,
             P::GROUP_MEMBERS,
             P::GROUP_MODE,
             P::LANDING_CALLS,
             P::LANDING_CALL_CONTROL,
-            P::STATUS_FLAGS,
-            P::OUT_OF_SERVICE,
-            P::RELIABILITY,
         ],
         ObjectType::ESCALATOR => vec![
             P::OBJECT_IDENTIFIER,
