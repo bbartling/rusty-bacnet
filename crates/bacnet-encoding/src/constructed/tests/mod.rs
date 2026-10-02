@@ -10,6 +10,7 @@ use bacnet_types::enums::ObjectType;
 mod cov_subscription;
 mod event_parameter;
 mod fault_parameter;
+mod landing_call_status;
 mod object_identifier_invariant;
 mod recipient;
 mod staging;

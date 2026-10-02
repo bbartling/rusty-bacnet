@@ -1,4 +1,4 @@
-//! Pure single-link Network Number state and Clause 6.4.15 precedence.
+//! Pure single-link Network Number state and Clause 6.4.20 precedence.
 /// One live number/quality pair. The default is UNKNOWN/zero.
 /// Known numbers are always in 1..=65534; peer observations cannot create local configuration.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -22,7 +22,7 @@ impl NetworkNumber {
     pub fn snapshot(self) -> (u16, u8) {
         (self.number, self.quality)
     }
-    /// Apply Clause 6.4.15 precedence. Unusable values are local refusal policy.
+    /// Apply Clause 6.4.20 precedence. Unusable values are local refusal policy.
     pub fn observe(&mut self, number: u16, flag: u8) -> Observation {
         if number == 0 || number == u16::MAX || flag > 1 {
             return Observation::Ignored;

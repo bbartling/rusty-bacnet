@@ -458,10 +458,11 @@ mod tests {
                     PropertyValue::Enumerated(2),
                     PropertyValue::Enumerated(2),
                 ),
+                // BACnetLandingCallStatus: floor [0] 5, direction [1] UP.
                 (
                     P::LANDING_CALL_CONTROL,
-                    PropertyValue::Enumerated(1),
-                    PropertyValue::Enumerated(1),
+                    PropertyValue::ApplicationData(vec![0x09, 0x05, 0x19, 0x03]),
+                    PropertyValue::ApplicationData(vec![0x09, 0x05, 0x19, 0x03]),
                 ),
             ] {
                 object.write_property(p, None, value, None).unwrap();
