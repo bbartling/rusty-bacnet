@@ -153,6 +153,10 @@ jobs:
       - name: Clippy (PyO3 bindings)
         if: ${{ !cancelled() }}
         run: cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
+      # bacnet-cli without its default `tui` feature, which every other run turns on.
+      - name: Clippy (bacnet-cli, no default features)
+        if: ${{ !cancelled() }}
+        run: cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
       - name: Clippy and rustdoc (each published crate, default features; no_std bacnet-types)
         if: ${{ !cancelled() }}
         run: bash scripts/ci/check-default-features.sh
@@ -185,6 +189,11 @@ jobs:
       # sc-tls and pcap); LINUX_FEATURES compiles them out.
       - name: bacnet-cli tests (default features)
         run: cargo nextest run -p bacnet-cli --locked --profile ci
+      # And with the default `tui` feature off too, where `bacnet tui` prints
+      # rebuild advice instead.
+      - name: bacnet-cli tests (no default features)
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p bacnet-cli --no-default-features --locked --profile ci
 
   python:
     name: Python bindings

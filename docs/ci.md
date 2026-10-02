@@ -25,7 +25,7 @@ both jobs of the native tests on GitHub (see [Merge evidence](#merge-evidence)).
 | --- | --- | --- | --- | --- |
 | CI image: build and push the job image if its tag is missing | ✓ | ✓ | ✓ | ✓ |
 | Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions | ✓ | ✓ | ✓ | ✓ |
-| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, each published crate with default features | ✓ | ✓ | ✓ | ✓ |
+| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ | ✓ |
 | Python bindings: `maturin develop` (maturin 1.15.0), then `python -m unittest discover -s crates/rusty-bacnet/tests` and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
 | MSRV 1.93, Linux native (`check-msrv.sh --linux-native`) |  | ✓ |  | ✓ |
@@ -64,13 +64,16 @@ CI uses the `ci` profile, and nextest does not run doctests, so a separate
 `cargo test --doc` step covers them. The Linux test commands are below, with
 `$LINUX_FEATURES` as set in `ci.yml`: every optional feature that builds on
 Linux, including per-crate ones such as `bacnet-endpoint/sc-tls` and
-`bacnet-cli/pcap`. A last step runs the `bacnet-cli` tests with default
-features, because a few exist only when `sc-tls` or `pcap` is off.
+`bacnet-cli/pcap`. The last steps run the `bacnet-cli` tests with default
+features, because a few exist only when `sc-tls` or `pcap` is off, and with no
+default features, because a few exist only when the default `tui` feature is
+off.
 
 ```bash
 cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$LINUX_FEATURES" --profile ci
 cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$LINUX_FEATURES"
 cargo nextest run -p bacnet-cli --locked --profile ci
+cargo nextest run -p bacnet-cli --no-default-features --locked --profile ci
 ```
 
 The Python job builds the PyO3 extension in debug mode into a fresh venv with
@@ -330,6 +333,7 @@ Clippy runs three ways:
 
 - the workspace with every feature;
 - the PyO3 crate on its own;
+- `bacnet-cli` with no default features (without the TUI);
 - each published crate alone with default features, plus the `no_std` build of
   `bacnet-types` (`scripts/ci/check-default-features.sh`). This also runs
   rustdoc, which is how docs.rs builds.
@@ -343,9 +347,11 @@ FEATURES=$(sed -n 's/^  LINUX_FEATURES: //p' .forgejo/workflows/ci.yml)
 cargo fmt --all --check
 cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$FEATURES" -- -D warnings
 cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
+cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
 bash scripts/ci/check-default-features.sh
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$FEATURES"
 cargo nextest run -p bacnet-cli --locked   # the CLI's feature-off tests
+cargo nextest run -p bacnet-cli --no-default-features --locked   # without the TUI
 cargo nextest run -p rusty-bacnet --locked # the PyO3 crate's Rust tests
 bash scripts/ci/check-file-size.sh
 bash scripts/ci/test-check-no-secrets.sh && bash scripts/ci/check-no-secrets.sh
