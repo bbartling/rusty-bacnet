@@ -83,6 +83,87 @@ pub(super) fn array_property_default(
     }
 }
 
+/// The default BACnetLIST classification behind
+/// [`super::BACnetObject::is_list_property`], keyed by the property datatypes
+/// in the Clause 12 object tables. Two identifier classes:
+///
+/// - **Identifier-stable BACnetLIST** properties are lists on every object
+///   type that defines them: DATE_LIST (Table 12-11); the Device lists of
+///   Table 12-13 (address bindings, the COV and COV-multiple subscriptions,
+///   the VT classes and sessions, and the three recipient lists);
+///   LIST_OF_GROUP_MEMBERS (Table 12-17); RECIPIENT_LIST (Tables 12-24 and
+///   12-58); LOG_BUFFER (Tables 12-29, 12-31, 12-35 and 12-83); the
+///   life-safety mode, alarm-value and zone-member lists (Tables 12-18 and
+///   12-19); the access-control event, zone, user, credential and exemption
+///   lists (Tables 12-30 and 12-36 to 12-40); COVU_RECIPIENTS (Table 12-57);
+///   SUBSCRIBED_RECIPIENTS (Table 12-58); the B/IP, MS/TP and routing tables
+///   of Network Port (Table 12-71); LANDING_CALLS (Table 12-76); and
+///   FAULT_SIGNALS (Tables 12-77 and 12-78).
+/// - **Type-dependent** identifiers classify by `object_type`: ALARM_VALUES /
+///   FAULT_VALUES are lists except on CharacterString Value and BitString
+///   Value, where they are arrays; LIST_OF_OBJECT_PROPERTY_REFERENCES is a list
+///   except on Channel (an array); PRESENT_VALUE is a list only on Group
+///   (Table 12-17); MEMBER_OF is a list on Life Safety Point, Life Safety Zone
+///   and Access User but a single BACnetDeviceObjectReference on Audit Log.
+///
+/// Everything else is a scalar, a constructed single value or a BACnetARRAY.
+/// The 2020 tables define no BACnetARRAY of BACnetLIST, so no identifier is
+/// both an array and a list here.
+#[inline]
+pub(super) fn list_property_default(object_type: ObjectType, property: PropertyIdentifier) -> bool {
+    match property {
+        PropertyIdentifier::DATE_LIST
+        | PropertyIdentifier::DEVICE_ADDRESS_BINDING
+        | PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS
+        | PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
+        | PropertyIdentifier::VT_CLASSES_SUPPORTED
+        | PropertyIdentifier::ACTIVE_VT_SESSIONS
+        | PropertyIdentifier::TIME_SYNCHRONIZATION_RECIPIENTS
+        | PropertyIdentifier::UTC_TIME_SYNCHRONIZATION_RECIPIENTS
+        | PropertyIdentifier::RESTART_NOTIFICATION_RECIPIENTS
+        | PropertyIdentifier::LIST_OF_GROUP_MEMBERS
+        | PropertyIdentifier::RECIPIENT_LIST
+        | PropertyIdentifier::LOG_BUFFER
+        | PropertyIdentifier::ACCEPTED_MODES
+        | PropertyIdentifier::LIFE_SAFETY_ALARM_VALUES
+        | PropertyIdentifier::ZONE_MEMBERS
+        | PropertyIdentifier::MASKED_ALARM_VALUES
+        | PropertyIdentifier::FAILED_ATTEMPT_EVENTS
+        | PropertyIdentifier::ACCESS_ALARM_EVENTS
+        | PropertyIdentifier::ACCESS_TRANSACTION_EVENTS
+        | PropertyIdentifier::CREDENTIALS_IN_ZONE
+        | PropertyIdentifier::ENTRY_POINTS
+        | PropertyIdentifier::EXIT_POINTS
+        | PropertyIdentifier::MEMBERS
+        | PropertyIdentifier::CREDENTIALS
+        | PropertyIdentifier::REASON_FOR_DISABLE
+        | PropertyIdentifier::AUTHORIZATION_EXEMPTIONS
+        | PropertyIdentifier::COVU_RECIPIENTS
+        | PropertyIdentifier::SUBSCRIBED_RECIPIENTS
+        | PropertyIdentifier::BBMD_BROADCAST_DISTRIBUTION_TABLE
+        | PropertyIdentifier::BBMD_FOREIGN_DEVICE_TABLE
+        | PropertyIdentifier::MANUAL_SLAVE_ADDRESS_BINDING
+        | PropertyIdentifier::SLAVE_ADDRESS_BINDING
+        | PropertyIdentifier::VIRTUAL_MAC_ADDRESS_TABLE
+        | PropertyIdentifier::ROUTING_TABLE
+        | PropertyIdentifier::LANDING_CALLS
+        | PropertyIdentifier::FAULT_SIGNALS => true,
+        PropertyIdentifier::ALARM_VALUES | PropertyIdentifier::FAULT_VALUES => !matches!(
+            object_type,
+            ObjectType::CHARACTERSTRING_VALUE | ObjectType::BITSTRING_VALUE
+        ),
+        PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
+            object_type != ObjectType::CHANNEL
+        }
+        PropertyIdentifier::PRESENT_VALUE => object_type == ObjectType::GROUP,
+        PropertyIdentifier::MEMBER_OF => matches!(
+            object_type,
+            ObjectType::LIFE_SAFETY_POINT | ObjectType::LIFE_SAFETY_ZONE | ObjectType::ACCESS_USER
+        ),
+        _ => false,
+    }
+}
+
 /// The historical PICS writable-property heuristic, used by the default
 /// [`super::BACnetObject::is_writable_property`] so unmigrated object types keep
 /// their current PICS output.
@@ -123,4 +204,96 @@ pub(super) fn historical_writable_default(
         || property == PropertyIdentifier::LOW_LIMIT
         || property == PropertyIdentifier::DEADBAND
         || property == PropertyIdentifier::NOTIFICATION_CLASS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_classification_follows_the_datatype_and_never_overlaps_arrays() {
+        for object_type in (0..=63).map(ObjectType::from_raw) {
+            for property in (0..=1023).map(PropertyIdentifier::from_raw) {
+                assert!(
+                    !(array_property_default(object_type, property)
+                        && list_property_default(object_type, property)),
+                    "{object_type:?} {property:?} is both an array and a list"
+                );
+            }
+        }
+        let cases = [
+            (ObjectType::CALENDAR, PropertyIdentifier::DATE_LIST, true),
+            (
+                ObjectType::NOTIFICATION_CLASS,
+                PropertyIdentifier::RECIPIENT_LIST,
+                true,
+            ),
+            (
+                ObjectType::ELEVATOR_GROUP,
+                PropertyIdentifier::LANDING_CALLS,
+                true,
+            ),
+            (
+                ObjectType::MULTI_STATE_INPUT,
+                PropertyIdentifier::ALARM_VALUES,
+                true,
+            ),
+            (
+                ObjectType::CHARACTERSTRING_VALUE,
+                PropertyIdentifier::ALARM_VALUES,
+                false,
+            ),
+            (
+                ObjectType::BITSTRING_VALUE,
+                PropertyIdentifier::ALARM_VALUES,
+                false,
+            ),
+            (
+                ObjectType::SCHEDULE,
+                PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES,
+                true,
+            ),
+            (
+                ObjectType::CHANNEL,
+                PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES,
+                false,
+            ),
+            (ObjectType::GROUP, PropertyIdentifier::PRESENT_VALUE, true),
+            (
+                ObjectType::GLOBAL_GROUP,
+                PropertyIdentifier::PRESENT_VALUE,
+                false,
+            ),
+            (
+                ObjectType::DATETIME_VALUE,
+                PropertyIdentifier::PRESENT_VALUE,
+                false,
+            ),
+            (
+                ObjectType::LIFE_SAFETY_ZONE,
+                PropertyIdentifier::MEMBER_OF,
+                true,
+            ),
+            (ObjectType::AUDIT_LOG, PropertyIdentifier::MEMBER_OF, false),
+            (
+                ObjectType::ELEVATOR_GROUP,
+                PropertyIdentifier::LANDING_CALL_CONTROL,
+                false,
+            ),
+            (
+                ObjectType::MULTI_STATE_VALUE,
+                PropertyIdentifier::STATE_TEXT,
+                false,
+            ),
+            (ObjectType::DEVICE, PropertyIdentifier::OBJECT_LIST, false),
+            (ObjectType::DEVICE, PropertyIdentifier::PROPERTY_LIST, false),
+        ];
+        for (object_type, property, list) in cases {
+            assert_eq!(
+                list_property_default(object_type, property),
+                list,
+                "{object_type:?} {property:?}"
+            );
+        }
+    }
 }

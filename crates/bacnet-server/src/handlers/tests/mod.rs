@@ -70,6 +70,7 @@ mod indexed_write_presence;
 mod life_safety_cov;
 mod life_safety_operation;
 mod life_safety_reset;
+mod list_element_targets;
 mod multi_element_writes;
 mod passwords;
 mod property_metadata;

@@ -33,7 +33,7 @@ use crate::log_buffer::LogRecordIdentity;
 pub type MonotonicClock = dyn Fn() -> Duration + Send + Sync;
 
 mod defaults;
-use defaults::{array_property_default, historical_writable_default};
+use defaults::{array_property_default, historical_writable_default, list_property_default};
 
 /// Result of applying a LifeSafetyOperation to an object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,6 +307,27 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// vendor or per-instance array properties override.
     fn is_array_property(&self, property: PropertyIdentifier) -> bool {
         array_property_default(self.object_identifier().object_type(), property)
+    }
+
+    /// Whether `property` is a BACnetLIST on this object.
+    ///
+    /// AddListElement and RemoveListElement (Clauses 15.1 and 15.2) edit only
+    /// BACnetLIST properties. The server's handlers ask this before decoding
+    /// any element and refuse every other target, including an array element,
+    /// with SERVICES / PROPERTY_IS_NOT_A_LIST. Like
+    /// [`Self::is_array_property`], the answer follows the property's datatype,
+    /// not the shape of a value read: a whole array also reads as a list, and
+    /// constructed single values often read as framed bytes.
+    ///
+    /// The default reproduces the standard's classification (see
+    /// `list_property_default`): identifier-stable lists are admitted on every
+    /// object type, and the identifiers whose datatype changes with the object
+    /// type (ALARM_VALUES / FAULT_VALUES, LIST_OF_OBJECT_PROPERTY_REFERENCES,
+    /// PRESENT_VALUE, MEMBER_OF) classify by `object_identifier().object_type()`.
+    /// Object implementations with vendor or per-instance list properties
+    /// override.
+    fn is_list_property(&self, property: PropertyIdentifier) -> bool {
+        list_property_default(self.object_identifier().object_type(), property)
     }
 
     /// Whether this object type can be created at runtime via CreateObject.

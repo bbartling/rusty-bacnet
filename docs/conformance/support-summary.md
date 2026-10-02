@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 20 |
-| Priority | P1 | 67 |
+| Priority | P1 | 68 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 39 |
+| Status | supported-with-clause-evidence | 40 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -84,6 +84,7 @@
 | `BACNET-15-WP-EVENT-FIELD-VALIDATION` | Clause 15.9.1.3 (WriteProperty error table) with Clause 21 BACnetNotifyType / BACnetEventTransitionBits / BACnetLimitEnable productions | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-15-STRUCTURED-WRITE-DECODE` | Clause 15.9 WriteProperty (15.9.1.2 Result(+), 15.9.1.3 Result(-)), Clause 15.10 WritePropertyMultiple, Clause 20.2.1 (concatenated elements) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-15-LIST-ELEMENT-OUTBOUND-VALIDATION` | Clauses 15.1.1.1 and 15.2.1.1 (printed731/733, PDF733/735) | P1 | supported-with-clause-evidence | 3 |
+| `BACNET-15-LIST-ELEMENT-TARGET-KIND` | Clauses 15.1.1.3.1 and 15.2.1.3.1 with the service procedures of 15.1 and 15.2 (printed732/734, PDF734/736); Clause 12 property tables (BACnetLIST and BACnetARRAY datatypes); local licensed source inspected | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-15-WPM-OUTBOUND-VALIDATION` | Clause 15.10 and 15.10.3.2 / Table 15-17 (printed754-756/PDF756-758) | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-15-WPM-ORDERED-PREFIX-ERROR` | Clause 15.10 and 15.10.1.3 (WritePropertyMultiple service procedure and Result(-)); Clause 18.9 (Reject reasons); Clause 21 (Error and BACnetObjectPropertyReference productions) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-20-ENCODING` | Clause 20 | P1 | implementation-present-needs-negative-tests | 2 |
