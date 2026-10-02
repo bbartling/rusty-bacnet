@@ -1608,7 +1608,7 @@ is recorded in `BACNET-13-INTRINSIC-PROPOSAL-COMMIT` in the conformance ledger.
 
 ### Constructed property framing
 
-Built-in objects read and write three constructed values in their Clause 21
+Built-in objects read and write these constructed values in their Clause 21
 framing, through the shared `bacnet-encoding` codecs.
 
 - **Notification Class `Recipient_List`** is a BACnetLIST of BACnetDestination
@@ -1646,6 +1646,14 @@ framing, through the shared `bacnet-encoding` codecs.
   The time form is a primitive tag holding raw Time octets, the sequence number
   must fit 0..=65535 on both encode and decode, and the date-and-time form is an
   opening and closing tag pair around an application-tagged Date and Time.
+- **Global Group `Group_Members` and `Present_Value`** (Clause 12.50) are
+  arrays. A Group_Members element is a BACnetDeviceObjectPropertyReference. A
+  Present_Value element is a BACnetPropertyAccessResult: the member's
+  reference, then the value read or the error the read failed with. The
+  application stores those results in `GlobalGroupObject::present_value` as
+  `AccessResult` values, by member position, and a member without one reads
+  PROPERTY / VALUE_NOT_INITIALIZED. Index 0 reads the array size and each
+  index from 1 one element.
 
 ### ObjectDatabase
 

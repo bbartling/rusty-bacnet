@@ -5,7 +5,7 @@ use bacnet_objects::{
 };
 use bacnet_services::common::PropertyReference;
 use bacnet_services::rpm::ReadAccessSpecification;
-use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
+use bacnet_types::constructed::{AccessResult, BACnetDeviceObjectPropertyReference};
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
@@ -236,57 +236,64 @@ fn rpm_group_indexed_reads_and_bytes_are_unchanged() {
 }
 
 #[test]
-fn rpm_global_group_indexed_reads_and_bytes_are_unchanged() {
+fn rpm_global_group_indexed_reads_serve_array_elements() {
     for configured in [false, true] {
-        let mut object = GlobalGroupObject::new(7, "GG-7").unwrap();
-        if configured {
-            let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-            object
-                .group_members
-                .push(BACnetDeviceObjectPropertyReference {
-                    object_identifier: ai1,
-                    property_identifier: P::PRESENT_VALUE.to_raw(),
-                    property_array_index: None,
-                    device_identifier: None,
-                });
-            object.group_member_names.push("a".into());
-            object.present_value.push(PropertyValue::Enumerated(1));
-            object.present_value.push(PropertyValue::Enumerated(2));
-        }
-        write_common(&mut object, configured);
+        let object = global_group(configured);
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
-        // Independent application-value bytes pin the existing projection.
-        // Group_Members, Group_Member_Names, and Present_Value are
-        // BACnetARRAY (Table 12-57), so the service gate admits an index and
-        // the object arms return the whole value (the same documented residue
-        // as Command/Staging arrays) — unlike Group, where Present_Value
-        // rejects the index.
-        let members: &[u8] = if configured {
-            &[0xC4, 0, 0, 0, 1, 0x21, 85, 0x00, 0x00]
+        // Group_Members, Group_Member_Names and Present_Value are BACnetARRAY
+        // (Table 12-57): index 0 is the size, then one element per index,
+        // and past the end is INVALID_ARRAY_INDEX. Group_Members elements are
+        // BACnetDeviceObjectPropertyReference and Present_Value elements
+        // BACnetPropertyAccessResult (#1107), unlike Group, whose
+        // Present_Value is a list and rejects any index.
+        let mut cases: Vec<(P, Option<u32>, ExpectedRead)> = if configured {
+            vec![
+                (P::GROUP_MEMBERS, None, Ok(GG_MEMBERS)),
+                (P::GROUP_MEMBERS, Some(0), Ok(&[0x21, 2])),
+                (P::GROUP_MEMBERS, Some(1), Ok(GG_MEMBER_1)),
+                (P::GROUP_MEMBERS, Some(2), Ok(GG_MEMBER_2)),
+                (
+                    P::GROUP_MEMBERS,
+                    Some(3),
+                    Err(ErrorCode::INVALID_ARRAY_INDEX),
+                ),
+                (
+                    P::GROUP_MEMBER_NAMES,
+                    None,
+                    Ok(&[0x72, 0x00, b'a', 0x72, 0x00, b'b']),
+                ),
+                (P::GROUP_MEMBER_NAMES, Some(0), Ok(&[0x21, 2])),
+                (P::GROUP_MEMBER_NAMES, Some(2), Ok(&[0x72, 0x00, b'b'])),
+                (
+                    P::GROUP_MEMBER_NAMES,
+                    Some(3),
+                    Err(ErrorCode::INVALID_ARRAY_INDEX),
+                ),
+                (P::PRESENT_VALUE, None, Ok(GG_PRESENT_VALUE)),
+                (P::PRESENT_VALUE, Some(0), Ok(&[0x21, 2])),
+                (P::PRESENT_VALUE, Some(1), Ok(GG_RESULT_1)),
+                (P::PRESENT_VALUE, Some(2), Ok(GG_RESULT_2)),
+                (
+                    P::PRESENT_VALUE,
+                    Some(3),
+                    Err(ErrorCode::INVALID_ARRAY_INDEX),
+                ),
+            ]
         } else {
-            EMPTY
+            [P::GROUP_MEMBERS, P::GROUP_MEMBER_NAMES, P::PRESENT_VALUE]
+                .into_iter()
+                .flat_map(|p| {
+                    [
+                        (p, None, Ok(EMPTY)),
+                        (p, Some(0), Ok(&[0x21, 0][..])),
+                        (p, Some(1), Err(ErrorCode::INVALID_ARRAY_INDEX)),
+                    ]
+                })
+                .collect()
         };
-        let names: &[u8] = if configured {
-            &[0x72, 0x00, b'a']
-        } else {
-            EMPTY
-        };
-        let present_value: &[u8] = if configured {
-            &[0x91, 1, 0x91, 2]
-        } else {
-            EMPTY
-        };
-        let cases: &[(P, Option<u32>, ExpectedRead)] = &[
-            (P::GROUP_MEMBERS, None, Ok(members)),
-            (P::GROUP_MEMBERS, Some(0), Ok(members)),
-            (P::GROUP_MEMBERS, Some(1), Ok(members)),
-            (P::GROUP_MEMBER_NAMES, None, Ok(names)),
-            (P::GROUP_MEMBER_NAMES, Some(0), Ok(names)),
-            (P::PRESENT_VALUE, None, Ok(present_value)),
-            (P::PRESENT_VALUE, Some(0), Ok(present_value)),
-            (P::PRESENT_VALUE, Some(1), Ok(present_value)),
+        cases.extend_from_slice(&[
             (
                 P::STATUS_FLAGS,
                 None,
@@ -363,9 +370,94 @@ fn rpm_global_group_indexed_reads_and_bytes_are_unchanged() {
             // The COVU rows stay unknown: the object sends no unsubscribed
             // COV.
             (P::COVU_PERIOD, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-        ];
-        assert_cases(&db, oid, cases);
+        ]);
+        assert_cases(&db, oid, &cases);
     }
+}
+
+// The configured Global Group's arrays, written out from the Clause 21 tags:
+// member 1 is AI-1 Present_Value, member 2 AI-2 Present_Value in device 9.
+// Member 1's read returned ENUMERATED 1 and member 2's failed with
+// OBJECT / UNKNOWN_OBJECT.
+const GG_MEMBER_1: &[u8] = &[0x0C, 0, 0, 0, 1, 0x19, 85];
+const GG_MEMBER_2: &[u8] = &[0x0C, 0, 0, 0, 2, 0x19, 85, 0x3C, 0x02, 0, 0, 9];
+const GG_MEMBERS: &[u8] = &[
+    0x0C, 0, 0, 0, 1, 0x19, 85, 0x0C, 0, 0, 0, 2, 0x19, 85, 0x3C, 0x02, 0, 0, 9,
+];
+const GG_RESULT_1: &[u8] = &[0x0C, 0, 0, 0, 1, 0x19, 85, 0x4E, 0x91, 1, 0x4F];
+const GG_RESULT_2: &[u8] = &[
+    0x0C, 0, 0, 0, 2, 0x19, 85, 0x3C, 0x02, 0, 0, 9, 0x5E, 0x91, 1, 0x91, 31, 0x5F,
+];
+const GG_PRESENT_VALUE: &[u8] = &[
+    0x0C, 0, 0, 0, 1, 0x19, 85, 0x4E, 0x91, 1, 0x4F, 0x0C, 0, 0, 0, 2, 0x19, 85, 0x3C, 0x02, 0, 0,
+    9, 0x5E, 0x91, 1, 0x91, 31, 0x5F,
+];
+
+/// A Global Group with the two members above, or none.
+fn global_group(configured: bool) -> GlobalGroupObject {
+    let mut object = GlobalGroupObject::new(7, "GG-7").unwrap();
+    if configured {
+        let ai = |instance| ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap();
+        let device = ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap();
+        object.group_members = vec![
+            BACnetDeviceObjectPropertyReference::new_local(ai(1), P::PRESENT_VALUE.to_raw()),
+            BACnetDeviceObjectPropertyReference::new_remote(
+                ai(2),
+                P::PRESENT_VALUE.to_raw(),
+                device,
+            ),
+        ];
+        object.group_member_names = vec!["a".into(), "b".into()];
+        object.present_value = vec![
+            AccessResult::Value(PropertyValue::Enumerated(1)),
+            AccessResult::Error {
+                class: ErrorClass::OBJECT,
+                code: ErrorCode::UNKNOWN_OBJECT,
+            },
+        ];
+    }
+    write_common(&mut object, configured);
+    object
+}
+
+#[test]
+fn rpm_all_global_group_serves_the_array_productions() {
+    let object = global_group(true);
+    let oid = object.object_identifier();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(object)).unwrap();
+    let mut request = BytesMut::new();
+    ReadPropertyMultipleRequest {
+        list_of_read_access_specs: vec![ReadAccessSpecification {
+            object_identifier: oid,
+            list_of_property_references: vec![PropertyReference {
+                property_identifier: P::ALL,
+                property_array_index: None,
+            }],
+        }],
+    }
+    .encode(&mut request)
+    .unwrap();
+    let mut ack = BytesMut::new();
+    handle_read_property_multiple(&db, &request, &mut ack).unwrap();
+    let ack = ReadPropertyMultipleACK::decode(&ack).unwrap();
+    let results = &ack.list_of_read_access_results[0].list_of_results;
+    let value = |p: P| {
+        let result = results
+            .iter()
+            .find(|result| result.property_identifier == p)
+            .unwrap_or_else(|| panic!("{p:?} missing from RPM ALL"));
+        assert_eq!(result.property_array_index, None);
+        result.property_value.as_deref().unwrap()
+    };
+    assert_eq!(value(P::GROUP_MEMBERS), GG_MEMBERS);
+    assert_eq!(value(P::PRESENT_VALUE), GG_PRESENT_VALUE);
+    assert_eq!(
+        value(P::GROUP_MEMBER_NAMES),
+        &[0x72, 0x00, b'a', 0x72, 0x00, b'b']
+    );
+    // No member references Status_Flags, so Member_Status_Flags is clear.
+    assert_eq!(value(P::MEMBER_STATUS_FLAGS), &[0x82, 4, 0]);
 }
 
 #[test]
@@ -394,7 +486,9 @@ fn rp_and_rpm_global_group_member_status_flags_combine_status_flags_members() {
     };
     // IN_ALARM on the first member, OVERRIDDEN on the Present_Value member
     // (ignored) and FAULT on the third.
-    object.present_value = vec![flags(0x80), flags(0x20), flags(0x40)];
+    object.present_value = [0x80, 0x20, 0x40]
+        .map(|octet| AccessResult::Value(flags(octet)))
+        .to_vec();
     let oid = object.object_identifier();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(object)).unwrap();

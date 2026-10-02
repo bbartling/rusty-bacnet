@@ -46,6 +46,7 @@ pub mod landing_door_status;
 pub mod lift_car_call_list;
 mod members;
 pub mod object_property_reference;
+mod property_access_result;
 pub mod recipient;
 pub mod schedule;
 pub mod staging;
@@ -82,6 +83,7 @@ pub use object_property_reference::{
     decode_object_property_reference, decode_setpoint_reference, encode_object_property_reference,
     encode_setpoint_reference,
 };
+pub use property_access_result::{decode_property_access_result, encode_property_access_result};
 pub use recipient::{
     decode_configured_recipient, decode_destination, decode_destination_list, decode_recipient,
     encode_destination, encode_destination_list, encode_recipient,

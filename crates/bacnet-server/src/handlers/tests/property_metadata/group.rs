@@ -3,7 +3,7 @@ use bacnet_objects::{
     group::{GlobalGroupObject, GroupObject, StructuredViewObject},
     traits::BACnetObject,
 };
-use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
+use bacnet_types::constructed::{AccessResult, BACnetDeviceObjectPropertyReference};
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
@@ -26,8 +26,9 @@ fn group_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
                 device_identifier: None,
             });
         global.group_member_names.push("a".into());
-        global.present_value.push(PropertyValue::Enumerated(1));
-        global.present_value.push(PropertyValue::Enumerated(2));
+        global
+            .present_value
+            .push(AccessResult::Value(PropertyValue::Enumerated(1)));
         view.add_subordinate(ai1, "a");
         let _ = ai2;
     }
