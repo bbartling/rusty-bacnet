@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `bacnet tui` opens a full-screen terminal UI (ratatui 0.30, crossterm 0.29)
+  on the transport the global flags choose: BACnet/IP, BACnet/IPv6 or
+  BACnet/SC. Its first screen is a live device table fed by the client's I-Am
+  notifications, with a Who-Is form (local, global, directed or remote network,
+  optional instance range), sort, a `/` filter, and a banner when two addresses
+  claim one instance. A global or unbounded Who-Is asks for a second Enter
+  after a one-line warning. It is read-only, and the status bar says so. On
+  BACnet/IP without `-i` the interface picker is a dialog. Tracing goes to an
+  in-app log pane (`L`) and optionally `--log-file`, never to the terminal
+  while it is in raw mode; `--fps` sets the redraw rate, and an idle screen is
+  not redrawn. Ctrl-C cancels the running Who-Is and a second press quits. The
+  terminal is restored on panic (including a panic in a background task, after
+  which the TUI stops drawing and exits 1), on SIGTERM, SIGHUP and SIGINT, and
+  on Windows console close; a signal exit uses the shell's 128-plus-signal
+  status on Unix. Without a terminal on stdin and stdout, with `TERM=dumb`, or
+  when the terminal refuses raw mode, it exits 1 with a hint on stderr and an
+  empty stdout. Below 80x24 it shows a notice instead of a broken layout.
+  The UI loop runs in the CLI's boxed
+  `block_on` future; a worker generic over the transport owns the client and
+  reaches the UI over bounded channels, dropping and counting events (shown as
+  `drop N`) instead of queueing without limit. The new default-on `tui` cargo
+  feature can be turned off; `bacnet tui` then prints rebuild advice. The
+  one-shot commands, the shell and their output are unchanged. The design is
+  in `docs/design/tui.md` (#961, part of #975).
+
 - Standalone clients now passively learn and answer local Network Number controls on opted-in transports. A bounded worker preserves routed Reject/APDU progress and is canceled and joined during stop (#879).
 
 - Optional immutable SC Hub certificate bindings restrict verified leaf SHA-256
@@ -35,6 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variant (#956).
 
 ### Changed
+
+- The workspace uses Cargo's `resolver = "3"`, so updating the lock file
+  prefers dependency versions that support the declared MSRV (1.93). Feature
+  resolution is unchanged, and the MSRV CI job still checks the lock file
+  (#961).
 
 - Alarm and event service types use the enumerations and bit strings that
   `bacnet-types` already provides instead of raw integers. In `bacnet-services`,
@@ -623,7 +653,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Present read-only properties still deny writes; earlier state/source/security
   and indexed guards, plus WPM successful-prefix behavior, remain intact (#870).
 
-- NORMAL B/IP full servers and endpoints now own local Network Number discovery/learning, using only explicit registration for configured provenance. Selected Number/Quality readback follows configured-source precedence; unregistered owners start unknown. Control workers preserve APDU/Audit progress and join shutdown with socket/registration ownership. Other links, BBMD/foreign mode and multiport routing remain separate (#875).
+- NORMAL B/IP full servers and endpoints now own local Network Number discovery/learning, using only explicit registration for configured provenance. Selected Number/Quality readback follows configured-source precedence; unregistered owners start unknown. Control workers preserve APDU/Audit progress and join shutdown with socket/registration ownership. Multiport routing remains separate under #863 (#875).
+
+- Full servers and shared endpoints on the other built-in links now answer and learn local Network Number controls the same way, each through the one owner its transport already has: B/IP in BBMD and foreign-device modes, BACnet/SC, and MS/TP, plus full servers on normal and foreign-device B/IPv6 and on Linux Ethernet. None of these links has configured Network Port authority, so each starts UNKNOWN. On SC, only the Hub broadcast VMAC is a logical broadcast and replies go out through the Hub. An admitted Forwarded-NPDU counts as a local broadcast even when its UDP hop is unicast. Which senders are admitted depends on the mode: a B/IP BBMD admits only its BDT peers, and B/IPv6 admits only the configured BBMD in foreign-device mode and only multicast delivery in normal mode. B/IP NORMAL and foreign-device modes admit a Forwarded-NPDU from any UDP sender under the existing compatibility policy, so a logical broadcast there says nothing about who sent it. No startup announcement is sent. The MS/TP evidence is LoopbackSerial simulation with no RS-485 timing claim; the B/IPv6 and Ethernet wire tests need an isolated Linux link and do not run in ordinary CI (#879).
 
 - Explicit registered NORMAL B/IP Network Port selection now reconciles the chosen
   object/identity with its actual bind, protects it through admitted work and final

@@ -822,7 +822,7 @@ impl BACnetRouter {
 /// off the local handler unless this router is their destination.
 ///
 /// Never-routed controls (What-Is-Network-Number / Network-Number-Is,
-/// Clauses 6.4.14–6.4.15) always take local treatment, where their
+/// Clauses 6.4.19–6.4.20) always take local treatment, where their
 /// non-routed address restrictions are enforced. Reject-Message-To-Network
 /// (Clause 6.6.3.5) also always takes local treatment: it updates the local
 /// table and relays toward the origin, and must never be re-routed or

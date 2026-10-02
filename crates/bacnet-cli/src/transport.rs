@@ -8,6 +8,7 @@ use bacnet_types::error::Error;
 
 /// CLI-level transport arguments for constructing a BACnet client.
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct TransportArgs {
     pub interface: Ipv4Addr,
     pub port: u16,
@@ -23,6 +24,41 @@ pub struct TransportArgs {
     pub ipv6: bool,
     pub ipv6_interface: Option<Ipv6Addr>,
     pub device_instance: Option<u32>,
+}
+
+impl TransportArgs {
+    /// Collect the global transport flags, with the BACnet/IP interface and
+    /// broadcast address already chosen by the caller.
+    pub(crate) fn from_cli(
+        cli: &crate::args::Cli,
+        interface: Ipv4Addr,
+        broadcast: Ipv4Addr,
+    ) -> Result<Self, String> {
+        let ipv6_interface = cli
+            .ipv6_interface
+            .as_deref()
+            .map(|s| {
+                s.parse::<Ipv6Addr>()
+                    .map_err(|e| format!("invalid --ipv6-interface address '{s}': {e}"))
+            })
+            .transpose()?;
+        Ok(Self {
+            interface,
+            port: cli.port,
+            broadcast,
+            timeout_ms: cli.timeout,
+            sc: cli.sc,
+            sc_url: cli.sc_url.clone(),
+            sc_ca: cli.sc_ca.clone(),
+            sc_cert: cli.sc_cert.clone(),
+            sc_key: cli.sc_key.clone(),
+            sc_vmac: cli.sc_vmac,
+            sc_device_uuid: cli.sc_device_uuid,
+            ipv6: cli.ipv6,
+            ipv6_interface,
+            device_instance: cli.device_instance,
+        })
+    }
 }
 
 fn parse_fixed_hex_array<const N: usize>(
