@@ -14,8 +14,13 @@ with no `::` may be a directory or file and only has to exist.
 
 A `public_claims` entry is `path[#heading-slug] [free-text note]`. The file must
 exist and a `#slug` must match a heading in it (GitHub slug rules, so a heading
-rename or removal is caught). A claim on `README.md` must name its section: a
-bare `README.md` is rejected because a reader cannot check it.
+rename or removal is caught). A Markdown claim must name its section: a bare
+`.md` path is rejected because a reader cannot check it. Two kinds of path may
+stay bare and are only checked for existence: source files (`.rs`, `.pyi`),
+which have no headings, and `CHANGELOG.md`, whose headings (`### Fixed`,
+`### Added`) repeat under every release and move at release time, so a slug
+would be positional and wrong after the next cut. A CHANGELOG claim names the
+entry in its free-text note instead.
 """
 
 from __future__ import annotations
@@ -30,7 +35,8 @@ ROOT = Path(__file__).resolve().parents[1]
 LEDGER = ROOT / "docs" / "conformance" / "bacnet-135-2020.json"
 FIELDS = ("positive_tests", "negative_tests")
 FENCE = "`" * 3
-TEST_ATTR = re.compile(r"#\[\s*(?:[\w:]+::)?(?:test|rstest|test_case|wasm_bindgen_test)\b")
+BARE_OK = {"CHANGELOG.md"}
+TEST_ATTR =re.compile(r"#\[\s*(?:[\w:]+::)?(?:test|rstest|test_case|wasm_bindgen_test)\b")
 
 
 @lru_cache(maxsize=None)
@@ -164,8 +170,8 @@ def resolve_claim(claim: str, root: Path = ROOT) -> str | None:
     if not path.is_file():
         return f"file `{path_s}` does not exist"
     if not slug:
-        if Path(path_s).name == "README.md":
-            return "README.md claim names no section (use `README.md#heading-slug`)"
+        if path.suffix == ".md" and path.name not in BARE_OK:
+            return f"`{path_s}` claim names no section (use `{path_s}#heading-slug`)"
         return None
     src = _source(path)
     if src is None:
@@ -195,6 +201,9 @@ def self_test() -> list[str]:
     bad_claims = [
         "README.md",
         "README.md supported services",
+        "docs/rust-api.md",
+        "docs/python-api.md some note",
+        "docs/conformance/standard-135-2020-ledger.md",
         "README.md#no-such-heading-anywhere",
         "docs/no_such_file.md#x",
         "docs/rust-api.md#no-such-heading-anywhere",
