@@ -92,7 +92,7 @@
    "benchmarks": [],
    "public_claims": [
     "docs/rust-api.md#configured-network-port-snapshots Configured Network Port snapshots",
-    "docs/python-api.md#measurement--file add_bip_network_port",
+    "docs/python-api.md#configured-network-port-snapshots add_bip_network_port",
     "CHANGELOG.md #867"
    ],
    "notes": "Refs #867. Constructor snapshot only: no active socket/NIC association, activation owner, dormant lease or registration API. Changes_Pending remains false because activation-dependent writes are denied; Command is absent. Description/OOS retain object-local behavior. Local B/IP instance/Port ID1..255 is conservative implementation policy, distinct from UDP0. Initial zero number is UNKNOWN, nonzero caller-supplied number CONFIGURED based on provenance. Port399 accepts Unsigned >=50 including non-Device-table51; declared default1476 is independent of Device62 and later live capability validation. Zero mask/gateway and nonempty zero-DNS sentinel do not invent interface facts. Ethernet/VIRTUAL constructors expose common application rows only, not complete link profiles. Both identity database builders use the same construction boundary. No whole NetworkPort, SC, BBMD, foreign, DHCP, router or live receiving-port support claim; #785 and #863 remain separate."
@@ -210,7 +210,7 @@
     "CHANGELOG.md",
     "docs/target-audit-reporters.md#target-audit-reporters",
     "docs/delayed-target-audit.md#delayed-target-audit-reporting",
-    "docs/rust-api.md#logging--trending-5",
+    "docs/rust-api.md#audit-reporter-configuration-and-send-delay",
     "docs/python-api.md#target-audit-reporters"
    ],
    "notes": "Refs #783/#345. None omits the pair; Some0 exposes immediate control; local accepted range 0..3600 seconds and active presence fixed. First-record deadline never extends; captured route/mode/APDU/configuration identity determines batches. Local capacities: 256 records/256KiB global, 64/64KiB per Reporter, separate 64 active sends; 8 historical contexts per Reporter and 256 global including baseline. Whole-Device and Reporter changes reserve contexts and immediate resources before publication; late refusal leaves canonical state and sequence unchanged. TRUE always commands current unsent prefix, FALSE does not cancel it, internal reset does not create WRITE. FALSE after terminal failure means quiescent, not delivered; ACK health is separate from local-send completion. No retries/outbound segmentation/durability. Captured non-NONE level and AUDITING_FAILURE bit continue to filter summaries in this partial profile; normative tension with complete 19.6.6 remains tracked by #345/#732/#783. Earliest loss uses original admission ordinal, not callback or timestamp order. Historical summary cannot alter current health. Mandatory actual changes and dedicated Reporter attempts remain immediate; ordinary pressure does not deny service mutation. First target stop gates application work and retains one absolute three-second drain deadline across cancellation, with ACK/control progress, joined workers and DB uninstall. Source rejects the optional pair and retains current-only loss semantics. This row supersedes only the earlier target no-batching/current-only-loss descriptions; historical slice evidence and global pins/statuses are unchanged. No full Audit/BIBB/BTL claim."
@@ -4679,7 +4679,7 @@
    ],
    "benchmarks": [],
    "public_claims": [
-    "docs/python-api.md#constructor sc_heartbeat_interval_ms",
+    "docs/python-api.md#heartbeat-interval-and-timeout sc_heartbeat_interval_ms",
     "docs/rust-api.md#bacnetsc-client-transport with_heartbeat_interval_ms"
    ],
    "notes": "AB.6.3 heartbeat evidence now covers no-VMAC Heartbeat-Request/Heartbeat-ACK construction, native Heartbeat-ACK message-id/no-VMAC validation, production `ScTransport::start` rejection of configurable heartbeat intervals outside 3..300 seconds, production rejection of disconnect timeouts that are not greater than the heartbeat interval, periodic heartbeat initiation after idle inbound BVLC activity, inbound BVLC activity resetting the liveness timer, timeout-driven native disconnect when no BVLC response arrives, send-error disconnect behavior, and hub-initiated heartbeat tracking that sends idle Heartbeat-Requests, records the pending Message ID, clears the pending state only for a matching Heartbeat-ACK, and removes the hub client when the pending ACK exceeds the hub timeout. Accelerated native heartbeat tests use a private test-only timing override so production builders keep Annex AB.6.3 range enforcement at start. The row remains open because the native heartbeat timeout evidence relies on a test-only timing override rather than formal Annex AB.6.3 timeout conformance tests. Refs #769 distinguishes the accepting Hub optional local probe from the initiating-node requirement: one monotonic origin, checked millisecond policy, strict-exceeds scan-driven ages from reservation, Skip missed ticks, and matching-only ACK activity updates. Serial sends may delay detection; ACK age is not a hard closure deadline. Node timing bounds and this row status remain unchanged."
@@ -5348,7 +5348,7 @@
    "benchmarks": [],
    "public_claims": [
     "docs/rust-api.md#accepted-direct-tls-identity",
-    "docs/python-api.md#required-operational-credentials"
+    "docs/python-api.md#accepted-direct-identity-and-responses"
    ],
    "notes": "Refs #803. Local identity is SHA-256 of exact verified leaf DER plus the existing checked process-wide membership generation; captured before upgrade and admitted under with_current. Same-cert reconnect changes incarnation. Complete admitted work retains its original snapshot after retirement. Real TLS listener-to-network-to-server tests use deterministic queued envelopes and DB barriers; old A segment controls are admitted before replacement, never freshly accepted from retired A. Generic duplicate and LSO replay entries retain direct identity with existing bounds and non-direct canonical keys. #876 makes generic detection pending-only: pending same-socket WP remains suppressed, completed same-socket WP reauthorizes, and completed LSO still replays without reauthorization. Direct partial contexts and Abort cancellation isolate incarnations; non-direct address sweeps cannot remove direct contexts. Hub admission migrates to a distinct scope-only channel with no downstream direct leaf identity. Copy/Eq/Hash and redacted Debug are retained. No mandatory or enabled direct certificate-to-claimed-ID binding, Hub-relayed end-to-end identity, Python principal callback, #524 response socket/replay delivery/segmented-response control confinement, #886 outbound application NPDU intake, broader security-profile promotion or external certification. Source APIs postdate published0.11.0. Independent duplicate-partition and Abort-sweep negative controls are recorded in the scoped evidence narrative."
   },
@@ -5394,7 +5394,7 @@
     "benchmarks": [],
     "public_claims": [
       "docs/rust-api.md#accepted-direct-server-responses",
-      "docs/python-api.md#required-operational-credentials"
+      "docs/python-api.md#accepted-direct-identity-and-responses"
     ],
     "notes": "Refs GitLab #888, child of #524. Selected local original-socket policy; no Standard historical-socket delivery mandate. Weak membership and irreversible network/server response scope; one bounded accepted writer, queue64, Connect-timeout queue/write limits, negotiated NPDU/BVLC bounds. Clause 5.2.1.2 response selection uses framing-derived path capacity as well as local/requester APDU limits; real TLS exact-boundary, local/routed, independent BVLC, segment-count and too-small cases cover fitting delivery or bounded failure. Sizing metadata is immutable and independent of current membership. Real TLS baseline red observes generic egress, not proven cross-peer delivery. Green controls use exact sockets and completion barriers. Ready WebSocket controls return one scheduling turn without extending Connect or binary-activity idle deadlines; deterministic control-stream and real TLS Ping/Pong tests cover this bound, not an indefinite network stall. Started writes cannot be recalled; registered transport teardown seals retained listener handles. Complete admitted execution keeps original authorization. #876 pending-only/local issuance and separate LSO replay persist. Unconfirmed Who-Is/Who-Has discovery replies retain ordinary routing outside this guarantee. Excludes client/shared-endpoint reply consumers (#889), outgoing client ownership, ordinary bidirectional traffic (#886), Hub end-to-end identity, Python direct-entry support, full Annex AB or certification. Source APIs postdate published0.11.0."
   },
@@ -5429,7 +5429,7 @@
     "benchmarks": [],
     "public_claims": [
       "docs/rust-api.md#accepted-direct-client-and-endpoint-replies",
-      "docs/python-api.md#required-operational-credentials",
+      "docs/python-api.md#accepted-direct-identity-and-responses",
       "crates/bacnet-endpoint/src/lib.rs"
     ],
     "notes": "Refs GitLab #889 under #524. Selected original-socket policy for inbound confirmed request consumers, not a BACnet requirement against response path switching. Direct provenance OR any capability selects checked issuance before reply_tx; malformed mixed envelopes cannot bypass through a one-shot or generic address send. Existing ordinary client failed-prompt fallback and endpoint failed-prompt completion remain distinct. Saved route crosses the existing bounded endpoint command queue with caller-owned cancellation; queue-full/closed and stop/drop remain bounded. Clause 5.2.1.2 local/routed NPDU and BVLC limits select the existing endpoint SEGMENTATION_NOT_SUPPORTED Abort for oversized ComplexACKs, without adding segmentation; even an unfit Abort fails without fallback. Admitted notification delivery/Device writes retain original execution authority after retirement or missing reply capability. Direct responses have empty Data Options; ordinary endpoint attributes remain unchanged. Real TLS baseline red proves generic egress, not cross-peer disclosure. A/B replacement, prompt-channel attacks, live session teardown, queue cancellation and exact sizing controls require explicit bacnet-endpoint/sc-tls; the standard hosted transport-only feature list does not select these integration cases. Excludes outgoing client transaction/retry policy and controls (#890), native notification traffic (#891), ordinary direct intake/routing (#886), Hub end-to-end identity, Python direct-entry support and full Annex AB/certification. Postdates published0.11.0."
@@ -5469,7 +5469,7 @@
     "benchmarks": [],
     "public_claims": [
       "docs/rust-api.md#bidirectional-direct-traffic",
-      "docs/python-api.md#required-operational-credentials"
+      "docs/python-api.md#accepted-direct-identity-and-responses"
     ],
     "notes": "Refs GitLab #886. Established direct selection includes accepted peers with discovery disabled; broadcast remains Hub-only. The private built-in TLS path couples verified leaf DER SHA-256, committed incarnation and original reply capability; full/resumed real TLS retains authenticated session identity without claiming certificate retransmission or remote client-certificate policy. Custom factories stay application send-only. Shared FIFO64 plus at most one active write, fair read/control turns, finite I/O and current-generation admission preserve bounded ownership. Saturation and uncertain started writes do not replay via Hub; only definitely unstarted retired work permits a fresh route decision. Retained admitted envelopes keep original authority. Real TLS baseline red observes Hub routing and missing outbound intake, not cross-peer disclosure. Public client, server and EndpointSession controls cover actual bidirectional replies and both server segmentation directions; explicit bacnet-endpoint/sc-tls is required for these integration tests. Separate native NotificationTransactions worker controls feed actual network envelopes through its production admission API, not a full subscription-emission lifecycle. Existing canonical peer/Invoke/service/direction/phase correlation remains: Hub/direct path switching and matching replacement-peer terminals are accepted, not same-leaf continuity. Optional strict outgoing route policy, Hub end-to-end identity, Python direct-entry support, full Annex AB and certification remain outside scope. Source APIs postdate published0.11.0; no global evidence pins advanced."
   }

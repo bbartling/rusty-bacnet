@@ -1990,6 +1990,11 @@ server.set_file_data(instance=1, data=b"mode=occupied\n")
 server.add_file(instance=2, name="Record File")
 server.set_file_access_method(instance=2, access_method="record")
 server.set_file_records(instance=2, records=[b"first", b"second"])
+```
+
+#### Configured Network Port snapshots
+
+```python
 server.add_bip_network_port(instance=1, name="BIP Port", ip_address="192.0.2.10",
                             udp_port=47808, network_number=0, apdu_length=1476)
 ```
@@ -2928,31 +2933,6 @@ and compatible; a trusted server with no CertificateRequest can complete without
 receiving the node certificate. Local configuration does not attest an arbitrary
 remote hub's verification policy (#513 remains open/partial).
 
-Current native source also retains a verified direct leaf fingerprint
-and connection incarnation through queued server work, duplicate/replay admission,
-and partial request reassembly. Python does not expose a principal authorizer or
-the direct listener through this API; its mutation policy remains the existing
-static `permissive`/`deny_all` choice. The Rust identity APIs postdate published
-0.11.0. Hub admission's scope-only channel assertion and Hub-relayed application
-traffic never become downstream direct leaf identities. See the
-[Rust identity contract](rust-api.md#accepted-direct-tls-identity). Native
-`BACnetServer` now confines accepted-direct confirmed replies, LSO replay and
-segmented-request controls to the original socket. Unconfirmed Who-Is/Who-Has
-discovery replies retain ordinary routing. Python still exposes neither
-direct-listener setup nor this response capability. This adds no Python direct-connection entry point
-or Python direct-connection support. Native source also confines the standalone
-client's inbound confirmed replies and the shared endpoint's narrow responder;
-that does not change outgoing client transaction/retry policy or expose a Python
-response capability. See the [server response scope](rust-api.md#accepted-direct-server-responses)
-and [native client/endpoint scope](rust-api.md#accepted-direct-client-and-endpoint-replies).
-Native `ScTransport::with_direct_tls` now admits bidirectional application traffic
-with matching verified identity and original reply authority; established accepted
-peers also serve ordinary unicast with discovery disabled. Arbitrary custom dialers
-remain send-only. Outgoing transactions retain standard address/Invoke-ID correlation
-and Hub/direct path switching, not a same-leaf continuity guarantee. These source
-APIs postdate 0.11.0 and add no Python direct-connection entry point. See the
-[native routing contract](rust-api.md#bidirectional-direct-traffic).
-
 ```python
 # Client connecting to a hub
 client = BACnetClient(
@@ -2981,8 +2961,37 @@ server = BACnetServer(
 )
 ```
 
+#### Heartbeat interval and timeout
+
 Production BACnet/SC clients validate the configured heartbeat interval as `3000..=300000`
 ms and require `sc_heartbeat_timeout_ms` to be greater than the interval.
+
+#### Accepted-direct identity and responses
+
+Current native source retains a verified direct leaf fingerprint
+and connection incarnation through queued server work, duplicate/replay admission,
+and partial request reassembly. Python does not expose a principal authorizer or
+the direct listener through this API; its mutation policy remains the existing
+static `permissive`/`deny_all` choice. The Rust identity APIs postdate published
+0.11.0. Hub admission's scope-only channel assertion and Hub-relayed application
+traffic never become downstream direct leaf identities. See the
+[Rust identity contract](rust-api.md#accepted-direct-tls-identity). Native
+`BACnetServer` now confines accepted-direct confirmed replies, LSO replay and
+segmented-request controls to the original socket. Unconfirmed Who-Is/Who-Has
+discovery replies retain ordinary routing. Python still exposes neither
+direct-listener setup nor this response capability. This adds no Python direct-connection entry point
+or Python direct-connection support. Native source also confines the standalone
+client's inbound confirmed replies and the shared endpoint's narrow responder;
+that does not change outgoing client transaction/retry policy or expose a Python
+response capability. See the [server response scope](rust-api.md#accepted-direct-server-responses)
+and [native client/endpoint scope](rust-api.md#accepted-direct-client-and-endpoint-replies).
+Native `ScTransport::with_direct_tls` now admits bidirectional application traffic
+with matching verified identity and original reply authority; established accepted
+peers also serve ordinary unicast with discovery disabled. Arbitrary custom dialers
+remain send-only. Outgoing transactions retain standard address/Invoke-ID correlation
+and Hub/direct path switching, not a same-leaf continuity guarantee. These source
+APIs postdate 0.11.0 and add no Python direct-connection entry point. See the
+[native routing contract](rust-api.md#bidirectional-direct-traffic).
 
 ## Request admission limits
 

@@ -1792,6 +1792,8 @@ retries failed insertions without advancing its last-log time. Bounded evidence
 is recorded in `BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family conformance
 is not claimed.
 
+#### Audit Reporter configuration and send delay
+
 Trusted local configuration through `dyn BACnetObject` uses one atomic
 `configure_audit_reporter_internal(level, operations, confirmed, selectors, priorities, maximum_send_delay)`
 contract. It replaces all six settings once; invalid or resource-denied changes

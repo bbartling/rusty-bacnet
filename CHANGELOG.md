@@ -151,6 +151,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they have no stable headings. 82 bare entries now point at specific
   headings, and Recipient_List, Event_Parameters and BACnetTimeStamp framing
   have a short public statement in `docs/rust-api.md` (#1041).
+- `docs/python-api.md` gives configured Network Port snapshots, the SC
+  heartbeat settings and accepted-direct SC identity and responses their own
+  headings, and `docs/rust-api.md` the Audit Reporter configuration and send
+  delay. The ledger claims for them now point at those sections instead of the
+  nearest one (#1071).
 - Test-only: the endpoint Device-write tests bind port 0 and read the real
   address back, the benchmarks hub-restart test retries on a lost bind instead
   of probing the old address, and the BBMD several-own-rows test reruns on a
