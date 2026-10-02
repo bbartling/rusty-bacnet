@@ -144,6 +144,11 @@ pub struct CovCounters {
     /// older notification failed. Changes split across several notifications
     /// are not counted.
     pub timed_changes_dropped: u64,
+    /// Total number of times a COV-multiple report left out an untimestamped
+    /// reference because its values alone exceed one notification to the
+    /// subscriber. The value is not queued: the reference is evaluated again
+    /// at its next fanout, and each report that leaves it out counts once.
+    pub untimed_references_oversized: u64,
 }
 
 /// Atomic storage for COV telemetry counters.
@@ -182,6 +187,11 @@ pub struct AtomicCovCounters {
     /// older notification failed. Changes split across several notifications
     /// are not counted.
     pub timed_changes_dropped: AtomicU64,
+    /// Total number of times a COV-multiple report left out an untimestamped
+    /// reference because its values alone exceed one notification to the
+    /// subscriber. The value is not queued: the reference is evaluated again
+    /// at its next fanout, and each report that leaves it out counts once.
+    pub untimed_references_oversized: AtomicU64,
 }
 
 impl AtomicCovCounters {
@@ -208,6 +218,7 @@ impl AtomicCovCounters {
                 .load(Ordering::Relaxed),
             notifications_throttled_peer: self.notifications_throttled_peer.load(Ordering::Relaxed),
             timed_changes_dropped: self.timed_changes_dropped.load(Ordering::Relaxed),
+            untimed_references_oversized: self.untimed_references_oversized.load(Ordering::Relaxed),
         }
     }
 }

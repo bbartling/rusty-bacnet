@@ -416,17 +416,7 @@ async fn an_untimestamped_value_too_large_for_any_notification_is_left_out_witho
     })
     .await;
     // A 200-character value alone exceeds a 206-octet notification.
-    h.server
-        .write_local(
-            &csv,
-            PV,
-            None,
-            PropertyValue::CharacterString("a".repeat(200)),
-            Some(8),
-            crate::LocalCommandSource::ServerDevice,
-        )
-        .await
-        .unwrap();
+    write_text(&h, csv, "a".repeat(200)).await;
     h.request_max_apdu = SMALL_APDU;
     let mut specs = vec![(csv, vec![(PV, false)])];
     specs.extend((1..=OBJECTS).map(|instance| (av(instance), vec![(PV, false)])));
@@ -447,6 +437,63 @@ async fn an_untimestamped_value_too_large_for_any_notification_is_left_out_witho
     h.ack().await;
     h.settle().await;
     h.no_notification().await;
+    h.server.stop().await.unwrap();
+}
+
+/// Write `text` to the Present_Value of `object`, a CharacterString Value.
+async fn write_text(h: &Harness, object: ObjectIdentifier, text: String) {
+    h.server
+        .write_local(
+            &object,
+            PV,
+            None,
+            PropertyValue::CharacterString(text),
+            Some(8),
+            crate::LocalCommandSource::ServerDevice,
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn each_report_leaving_out_an_oversized_untimestamped_value_counts_it() {
+    use bacnet_objects::value_types::CharacterStringValueObject;
+    let csv = ObjectIdentifier::new(ObjectType::CHARACTERSTRING_VALUE, 1).unwrap();
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        db.add(Box::new(
+            CharacterStringValueObject::new(1, "CSV-1").unwrap(),
+        ))
+        .unwrap();
+    })
+    .await;
+    // A 200-character value alone exceeds a 206-octet notification.
+    write_text(&h, csv, "a".repeat(200)).await;
+    h.request_max_apdu = SMALL_APDU;
+    let specs = vec![(csv, vec![(PV, false)]), (av1(), vec![(PV, false)])];
+    h.subscribe_with_delay(false, specs, 1).await;
+    // The initial report carries AV-1 alone; leaving the string out counts
+    // once, and no timestamped change is involved (#1066).
+    let report = h.notification().await;
+    check(&report, false);
+    assert_eq!(objects_of(&report), [av1()]);
+    h.no_notification().await;
+    let counters = h.server.cov_counters();
+    assert_eq!(counters.untimed_references_oversized, 1);
+    assert_eq!(counters.timed_changes_dropped, 0);
+    // A newer value that is still too large: its report sends nothing and
+    // counts again.
+    write_text(&h, csv, "b".repeat(200)).await;
+    h.no_notification().await;
+    assert_eq!(h.server.cov_counters().untimed_references_oversized, 2);
+    // A value that fits goes out, and counts nothing.
+    write_text(&h, csv, "c".into()).await;
+    let report = h.notification().await;
+    check(&report, false);
+    assert_eq!(objects_of(&report), [csv]);
+    h.no_notification().await;
+    let counters = h.server.cov_counters();
+    assert_eq!(counters.untimed_references_oversized, 2);
+    assert_eq!(counters.timed_changes_dropped, 0);
     h.server.stop().await.unwrap();
 }
 
