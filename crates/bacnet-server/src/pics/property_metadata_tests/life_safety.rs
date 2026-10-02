@@ -18,14 +18,14 @@ fn pics_life_safety_point_property_metadata_is_exact() {
         (P::ACCEPTED_MODES, false, false),
         (P::SILENCED, false, false),
         (P::OPERATION_EXPECTED, false, false),
-        (P::TRACKING_VALUE, false, false),
+        (P::TRACKING_VALUE, false, true),
         (P::MEMBER_OF, true, false),
         (P::DIRECT_READING, true, true),
         (P::MAINTENANCE_REQUIRED, true, true),
         (P::EVENT_STATE, false, false),
         (P::STATUS_FLAGS, false, false),
         (P::OUT_OF_SERVICE, false, true),
-        (P::RELIABILITY, false, false),
+        (P::RELIABILITY, false, true),
         (P::PROPERTY_LIST, false, false),
     ];
     for configured in [false, true] {
@@ -88,12 +88,12 @@ fn pics_life_safety_zone_property_metadata_is_exact() {
         (P::ACCEPTED_MODES, false, false),
         (P::SILENCED, false, false),
         (P::OPERATION_EXPECTED, false, false),
-        (P::TRACKING_VALUE, false, false),
+        (P::TRACKING_VALUE, false, true),
         (P::ZONE_MEMBERS, false, false),
         (P::EVENT_STATE, false, false),
         (P::STATUS_FLAGS, false, false),
         (P::OUT_OF_SERVICE, false, true),
-        (P::RELIABILITY, false, false),
+        (P::RELIABILITY, false, true),
         (P::PROPERTY_LIST, false, false),
     ];
     for configured in [false, true] {

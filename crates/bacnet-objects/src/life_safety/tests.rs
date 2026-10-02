@@ -700,7 +700,7 @@ fn zone_write_out_of_service() {
 }
 
 #[test]
-fn zone_tracking_value_is_network_read_only() {
+fn zone_tracking_value_refuses_writes_in_service() {
     let mut z = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
     assert_eq!(
         read_enumerated(&z, PropertyIdentifier::TRACKING_VALUE),
