@@ -99,8 +99,11 @@ async fn audit_reporter_create_delete_reach_real_log_over_udp() {
                     )
                     .await
                     .unwrap_err();
-                assert!(matches!(error, Error::Protocol { class, code }
-                    if class == ErrorClass::OBJECT.to_raw() as u32 && code == ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS.to_raw() as u32));
+                // A CreateObject-Error naming no initial value (#1047).
+                assert!(matches!(error, Error::Structured { class, code, detail }
+                    if class == ErrorClass::OBJECT.to_raw() as u32
+                        && code == ErrorCode::OBJECT_IDENTIFIER_ALREADY_EXISTS.to_raw() as u32
+                        && *detail == bacnet_types::error::ErrorDetail::FirstFailedElementNumber(0)));
             }
             2 => {
                 client

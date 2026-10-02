@@ -2184,7 +2184,18 @@ except BacnetError as e:
     print(f"BACnet error: {e}")
 ```
 
-`BacnetProtocolError` has `error_class` and `error_code` integer attributes, and `first_failed_element_number`, which is an integer for an AddListElement or RemoveListElement ChangeList-Error and `None` for every other error. `BacnetRejectError` and `BacnetAbortError` have a `reason` integer attribute.
+`BacnetProtocolError` has `error_class` and `error_code` integer attributes. Some services answer with a structured error body (Clause 21) that adds fields; each attribute below is `None` unless the device's error carried it:
+
+| Attribute | Set by | Value |
+|-----------|--------|-------|
+| `first_failed_element_number` | AddListElement/RemoveListElement ChangeList-Error, CreateObject-Error | Position, from 1, of the list element or initial value that failed; 0 when the request failed for another reason |
+| `first_failed_write_attempt` | WritePropertyMultiple-Error | `{"object_identifier", "property_identifier", "property_array_index"}` of the first write that failed |
+| `first_failed_subscription` | SubscribeCOVPropertyMultiple-Error about one COV reference | The same dict for the refused reference; `None` for a general failure |
+| `vendor_id`, `service_number` | ConfirmedPrivateTransfer-Error | The private service the error answers |
+| `error_parameters` | ConfirmedPrivateTransfer-Error | Encoded vendor-defined error parameters (`bytes`), when present |
+| `vt_session_identifiers` | VT-Close error that lists them | Local identifiers of the sessions that could not be closed |
+
+`BacnetRejectError` and `BacnetAbortError` have a `reason` integer attribute.
 
 ---
 

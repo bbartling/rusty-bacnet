@@ -276,10 +276,11 @@ pub struct ErrorPdu {
     /// Error code from the standard Error production.
     pub error_code: ErrorCode,
     /// Service-specific bytes following the error class and code; empty for a plain class/code
-    /// error. For WritePropertyMultiple, AddListElement and RemoveListElement it holds the whole
-    /// error body when that decodes in the formal Clause 21 form (WritePropertyMultiple-Error,
-    /// ChangeList-Error); a legacy class/code error from those services keeps only the bytes
-    /// after the code.
+    /// error. For a service whose Clause 21 production replaces the plain pair
+    /// (WritePropertyMultiple-Error, ChangeList-Error, CreateObject-Error,
+    /// SubscribeCOVPropertyMultiple-Error, ConfirmedPrivateTransfer-Error, VTClose-Error) it
+    /// holds the whole error body when that decodes in the formal form; a legacy class/code
+    /// error from those services keeps only the bytes after the code.
     pub error_data: Bytes,
 }
 
@@ -456,8 +457,8 @@ fn valid_window_size(field: &str, value: u8) -> Result<u8, Error> {
 
 fn encode_error(buf: &mut BytesMut, pdu: &ErrorPdu) -> Result<(), Error> {
     // A legacy generic error may carry arbitrary service data beginning with
-    // context [0]. Only suppress the generic pair for a complete, structurally
-    // valid formal service body (WPM, AddListElement, RemoveListElement).
+    // an opening tag. Only suppress the generic pair for a complete,
+    // structurally valid formal body of a service that defines one.
     let formal =
         formal_error::decode_formal_body(pdu.service_choice, &pdu.error_data).unwrap_or(None);
     if let Some((error_class, error_code)) = formal {
@@ -799,6 +800,8 @@ fn decode_abort(data: Bytes) -> Result<AbortPdu, Error> {
 
 #[cfg(test)]
 mod change_list_error_tests;
+#[cfg(test)]
+mod structured_error_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

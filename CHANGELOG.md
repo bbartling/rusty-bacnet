@@ -360,13 +360,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the request or its target was refused (authorization, unknown object or
   property, array index, not a list, write access). A peer that only parses the
   plain form no longer reads these errors. The client decodes the new form, which
-  it used to drop as undecodable, and returns the new
-  `Error::ChangeList { class, code, first_failed_element_number }`; a device
-  that still sends only a class and code returns `Error::Protocol` as before.
-  `TsmResponse::Error` gains `first_failed_element_number`, and
-  `bacnet_services::list_manipulation::ChangeListError` encodes and decodes the
-  body. In Python, `BacnetProtocolError` gains `first_failed_element_number`,
-  `None` for other errors.
+  it used to drop as undecodable, and returns `Error::Structured` with
+  `ErrorDetail::FirstFailedElementNumber` (the variant #1047 generalized); a
+  device that still sends only a class and code returns `Error::Protocol` as
+  before. `bacnet_services::list_manipulation::ChangeListError` encodes and
+  decodes the body. In Python, `BacnetProtocolError` gains
+  `first_failed_element_number`, `None` for other errors.
+
+- **Breaking Rust API:** the client decodes every other structured error body
+  of Clause 21 and reports its fields (#1047). A conformant peer's
+  CreateObject-Error, SubscribeCOVPropertyMultiple-Error,
+  ConfirmedPrivateTransfer-Error or VTClose-Error used to fail APDU decode, so
+  the request timed out instead of returning the error. `Error::ChangeList`
+  becomes `Error::Structured { class, code, detail: Box<ErrorDetail> }`, one
+  variant for every body. `ErrorDetail` has `FirstFailedElementNumber`
+  (ChangeList-Error, CreateObject-Error), `FirstFailedWriteAttempt`
+  (WritePropertyMultiple-Error, which the client used to reduce to the class
+  and code), `FirstFailedSubscription`, `PrivateTransfer { vendor_id,
+  service_number, error_parameters }` and `VtSessionIdentifiers`. A body with
+  no fields beyond the error (SubscribeCOVPropertyMultiple's general choice,
+  VTClose-Error without its list) stays `Error::Protocol`, and
+  `Error::protocol(class, code, detail)` builds either. `TsmResponse::Error`
+  carries `detail: Option<ErrorDetail>`. `bacnet_services` adds
+  `object_mgmt::CreateObjectError`,
+  `cov_multiple::SubscribeCOVPropertyMultipleError`,
+  `private_transfer::PrivateTransferError`, `virtual_terminal::VTCloseError`
+  and `structured_error::detail`, which reads the detail of any Error PDU.
+
+- **Breaking wire format:** the server answers CreateObject and
+  SubscribeCOVPropertyMultiple errors with their Clause 21 bodies instead of a
+  plain class and code (#1047). A CreateObject-Error carries the position,
+  counted from 1, of the initial value that could not be applied, or 0 when the
+  request or the object was refused (authorization, an identifier in use, an
+  unsupported type, no space). An initial value that does not decode is now
+  PROPERTY / INVALID_DATA_ENCODING at its position, where it was SERVICES /
+  OTHER. A SubscribeCOVPropertyMultiple-Error names the monitored object and
+  the property reference of a refused COV reference (unknown object, object or
+  property without COV, unknown property, index on a property that is not an
+  array, an oversized sample); a failure before the references are processed
+  (lifetime, notification delay, clock, authorization, capacity) is the general
+  choice, the class and code alone. A peer that only parses the plain form no
+  longer reads these errors. The server does not serve ConfirmedPrivateTransfer
+  or VT-Close, which it still rejects.
+
+- Python's `BacnetProtocolError` gains `first_failed_write_attempt` and
+  `first_failed_subscription` (object, property and index dicts, typed
+  `ObjectPropertyReference` in the stub), `vendor_id`, `service_number`,
+  `error_parameters` and `vt_session_identifiers` (#1047). Each is `None`
+  unless the device's error carried it, on the class as well as on raised
+  instances.
 
 - **Breaking list service behaviour:** AddListElement and RemoveListElement now
   compare whole elements and follow the add and remove rules of Clauses 15.1

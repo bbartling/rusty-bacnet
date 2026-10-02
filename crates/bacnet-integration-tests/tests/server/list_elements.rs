@@ -8,7 +8,7 @@ use super::*;
 async fn list_element_semantics_and_change_list_errors_reach_the_client() {
     use bacnet_objects::multistate::MultiStateInputObject;
     use bacnet_types::enums::{ErrorClass, ErrorCode};
-    use bacnet_types::error::Error;
+    use bacnet_types::error::{Error, ErrorDetail};
     use bacnet_types::primitives::PropertyValue;
 
     let mut server = make_server().await;
@@ -43,15 +43,18 @@ async fn list_element_semantics_and_change_list_errors_reach_the_client() {
             .unwrap()
     };
     let refusal = |result: Result<(), Error>| match result {
-        Err(Error::ChangeList {
+        Err(Error::Structured {
             class,
             code,
-            first_failed_element_number,
-        }) => (
-            ErrorClass::from_raw(class as u16),
-            ErrorCode::from_raw(code as u16),
-            first_failed_element_number,
-        ),
+            detail,
+        }) => match *detail {
+            ErrorDetail::FirstFailedElementNumber(element) => (
+                ErrorClass::from_raw(class as u16),
+                ErrorCode::from_raw(code as u16),
+                element,
+            ),
+            other => panic!("expected an element number, got {other:?}"),
+        },
         other => panic!("expected a ChangeList-Error, got {other:?}"),
     };
 

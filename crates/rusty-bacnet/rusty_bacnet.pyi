@@ -1383,20 +1383,50 @@ class BacnetError(Exception):
     """Base exception for all BACnet errors."""
     ...
 
+class ObjectPropertyReference(TypedDict):
+    """The object, property and array index a structured error names."""
+    object_identifier: ObjectIdentifier
+    property_identifier: PropertyIdentifier
+    property_array_index: int | None
+
+
 class BacnetProtocolError(BacnetError):
     """Raised on BACnet protocol-level errors (Error PDU).
+
+    Some services answer with a structured error body that adds fields to the
+    class and code. Each such attribute is None unless the device's error
+    carried it.
 
     Attributes:
         error_class: The BACnet error class (integer).
         error_code: The BACnet error code (integer).
         first_failed_element_number: For an AddListElement or
-            RemoveListElement ChangeList-Error, the position (from 1) of the
-            element that failed, or 0 when the request failed for another
-            reason; None for every other error.
+            RemoveListElement ChangeList-Error, or a CreateObject-Error, the
+            position (from 1) of the list element or initial value that
+            failed, or 0 when the request failed for another reason.
+        first_failed_write_attempt: For a WritePropertyMultiple-Error, the
+            object, property and index of the first write that failed.
+        first_failed_subscription: For a SubscribeCOVPropertyMultiple-Error
+            about one COV reference, its object, property and index. None for
+            a general failure of the request.
+        vendor_id: For a ConfirmedPrivateTransfer-Error, the vendor of the
+            private service.
+        service_number: For a ConfirmedPrivateTransfer-Error, the private
+            service number.
+        error_parameters: For a ConfirmedPrivateTransfer-Error, the encoded
+            vendor-defined error parameters, when the device sent any.
+        vt_session_identifiers: For a VT-Close error that lists them, the
+            local identifiers of the VT sessions that could not be closed.
     """
     error_class: int
     error_code: int
     first_failed_element_number: Optional[int]
+    first_failed_write_attempt: Optional[ObjectPropertyReference]
+    first_failed_subscription: Optional[ObjectPropertyReference]
+    vendor_id: Optional[int]
+    service_number: Optional[int]
+    error_parameters: Optional[bytes]
+    vt_session_identifiers: Optional[list[int]]
 
 class BacnetTimeoutError(BacnetError):
     """Raised when a BACnet operation times out."""
@@ -1589,6 +1619,8 @@ class BACnetClient:
         priorities outside 1..16 raise ValueError synchronously for the whole
         request. Priorities outside u8 raise OverflowError. None, index zero,
         proprietary properties, NULL and empty list values remain allowed.
+        A device error raises BacnetProtocolError with
+        first_failed_write_attempt set from its WritePropertyMultiple-Error.
         """
         ...
 
@@ -1879,6 +1911,8 @@ class BACnetClient:
         object needs references; ALL/REQUIRED/OPTIONAL selectors are prohibited and the
         cumulative reference limit is 10,000. Empty outer lists remain encodable with
         valid finite timing, without claiming bundled-server empty-context support.
+        A device error about one COV reference raises BacnetProtocolError with
+        first_failed_subscription set; a general failure leaves it None.
         """
         ...
 
@@ -1907,7 +1941,9 @@ class BACnetClient:
         ``object_specifier`` is an ``ObjectType`` (server assigns instance) or
         ``ObjectIdentifier`` (specific instance). ``initial_values`` is
         ``[(property_id, value, priority, array_index), ...]``.
-        Returns the raw CreateObject-ACK response bytes.
+        Returns the raw CreateObject-ACK response bytes. A device error raises
+        BacnetProtocolError with first_failed_element_number set when the
+        device answers with a CreateObject-Error.
         """
         ...
 
@@ -2112,6 +2148,9 @@ class BACnetClient:
         """Send a ConfirmedPrivateTransfer request.
 
         Returns ``{"vendor_id": int, "service_number": int, "result_block": bytes | None}``.
+        A device error raises BacnetProtocolError with vendor_id,
+        service_number and error_parameters set from its
+        ConfirmedPrivateTransfer-Error.
         """
         ...
 
@@ -2210,7 +2249,9 @@ class BACnetClient:
 
         ``session_ids`` must not be empty and each identifier is 0-255. Raises
         ``ValueError`` for an empty list, or ``OverflowError`` for an integer that
-        doesn't fit, before anything is sent.
+        doesn't fit, before anything is sent. A device error that lists the
+        sessions it could not close raises BacnetProtocolError with
+        vt_session_identifiers set.
         """
         ...
 

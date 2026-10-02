@@ -1,6 +1,6 @@
 //! AddListElement and RemoveListElement answer errors with a ChangeList-Error
 //! (Clause 21): the error plus the First Failed Element Number. The client
-//! surfaces it as `Error::ChangeList`; a plain class/code error from an older
+//! surfaces it as `Error::Structured`; a plain class/code error from an older
 //! device stays `Error::Protocol`.
 
 use super::*;
@@ -9,8 +9,20 @@ use bacnet_encoding::apdu::ErrorPdu;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_types::{
     enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier},
+    error::ErrorDetail,
     primitives::ObjectIdentifier,
 };
+
+/// The structured error naming `element`.
+fn element_error<T>(result: &Result<T, Error>, class: u32, code: u32, element: u32) -> bool {
+    matches!(
+        result,
+        Err(Error::Structured { class: c, code: k, detail })
+            if *c == class
+                && *k == code
+                && **detail == ErrorDetail::FirstFailedElementNumber(element)
+    )
+}
 
 /// An Error PDU for `service` exactly as `wire` (after the three-octet header)
 /// puts it on the network.
@@ -32,27 +44,11 @@ fn change_list_error_projects_its_element_number() {
         // [0] { SERVICES (5), LIST_ELEMENT_NOT_FOUND (81) } then [1] 3.
         let pdu = decoded(service, &[0x0E, 0x91, 5, 0x91, 81, 0x0F, 0x19, 3]);
         let result = confirmed_response_result(TsmResponse::from_error_pdu(&pdu));
-        assert!(
-            matches!(
-                result,
-                Err(Error::ChangeList {
-                    class: 5,
-                    code: 81,
-                    first_failed_element_number: 3
-                })
-            ),
-            "{service:?}: {result:?}"
-        );
+        assert!(element_error(&result, 5, 81, 3), "{service:?}: {result:?}");
         // Zero, for a refusal of the target, is kept too.
         let pdu = decoded(service, &[0x0E, 0x91, 1, 0x91, 31, 0x0F, 0x19, 0]);
-        assert!(matches!(
-            confirmed_response_result(TsmResponse::from_error_pdu(&pdu)),
-            Err(Error::ChangeList {
-                class: 1,
-                code: 31,
-                first_failed_element_number: 0
-            })
-        ));
+        let result = confirmed_response_result(TsmResponse::from_error_pdu(&pdu));
+        assert!(element_error(&result, 1, 31, 0), "{service:?}: {result:?}");
     }
 }
 
@@ -75,21 +71,6 @@ fn plain_list_service_error_stays_a_protocol_error() {
     assert!(matches!(
         confirmed_response_result(TsmResponse::from_error_pdu(&pdu)),
         Err(Error::Protocol { class: 5, code: 81 })
-    ));
-    // WritePropertyMultiple's formal body keeps its class/code-only projection.
-    let pdu = bacnet_services::wpm::WritePropertyMultipleError {
-        error_class: ErrorClass::PROPERTY,
-        error_code: ErrorCode::WRITE_ACCESS_DENIED,
-        first_failed_write_attempt: bacnet_types::constructed::BACnetObjectPropertyReference {
-            object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
-            property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
-            property_array_index: None,
-        },
-    }
-    .to_error_pdu(1);
-    assert!(matches!(
-        confirmed_response_result(TsmResponse::from_error_pdu(&pdu)),
-        Err(Error::Protocol { class: 2, code: 40 })
     ));
 }
 
@@ -164,18 +145,15 @@ async fn list_services_surface_the_first_failed_element_number() {
             peer.send_unicast(&npdu, &[1]).await.unwrap();
         };
         let (result, ()) = tokio::join!(send, reply);
-        match result {
-            Err(Error::ChangeList {
-                class,
-                code,
-                first_failed_element_number,
-            }) => {
-                assert_eq!(class, error_class.to_raw() as u32);
-                assert_eq!(code, error_code.to_raw() as u32);
-                assert_eq!(first_failed_element_number, element);
-            }
-            other => panic!("expected a ChangeList-Error, got {other:?}"),
-        }
+        assert!(
+            element_error(
+                &result,
+                error_class.to_raw() as u32,
+                error_code.to_raw() as u32,
+                element,
+            ),
+            "expected a ChangeList-Error, got {result:?}"
+        );
         assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
     }
     client.stop().await.unwrap();

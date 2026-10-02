@@ -306,7 +306,12 @@ fn cov_sample_admission_coordinate_and_size_failure_preserve_entire_context() {
         )
         .unwrap_err();
         assert!(
-            matches!(error,Error::Protocol{class,code} if class==ErrorClass::PROPERTY.to_raw() as u32 && code==ErrorCode::NOT_COV_PROPERTY.to_raw() as u32)
+            matches!(&error, Error::Structured { class, code, detail }
+                if *class == ErrorClass::PROPERTY.to_raw() as u32
+                    && *code == ErrorCode::NOT_COV_PROPERTY.to_raw() as u32
+                    && matches!(**detail, bacnet_types::error::ErrorDetail::FirstFailedSubscription(ref reference)
+                        if reference.property_identifier == CUSTOM.to_raw())),
+            "{error:?}"
         );
         assert!(table.is_current(&first));
         assert_eq!(
@@ -351,7 +356,12 @@ fn cov_sample_admission_coordinate_and_size_failure_preserve_entire_context() {
     )
     .unwrap_err();
     assert!(
-        matches!(error,Error::Protocol{class,code} if class==ErrorClass::RESOURCES.to_raw() as u32 && code==ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32)
+        matches!(&error, Error::Structured { class, code, detail }
+            if *class == ErrorClass::RESOURCES.to_raw() as u32
+                && *code == ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u32
+                && matches!(**detail, bacnet_types::error::ErrorDetail::FirstFailedSubscription(ref reference)
+                    if reference.property_identifier == VARIABLE.to_raw())),
+        "{error:?}"
     );
     let error = crate::handlers::handle_subscribe_cov_property(
         &mut table,

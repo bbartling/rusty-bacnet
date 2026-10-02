@@ -20,11 +20,11 @@ fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
 /// Elements, sent as a ChangeList-Error with that First Failed Element Number.
 /// Every other refusal of these services goes out with element number 0.
 fn element_error(class: ErrorClass, code: ErrorCode, position: u32) -> Error {
-    Error::ChangeList {
-        class: class.to_raw() as u32,
-        code: code.to_raw() as u32,
-        first_failed_element_number: position,
-    }
+    Error::protocol(
+        class.to_raw() as u32,
+        code.to_raw() as u32,
+        Some(ErrorDetail::FirstFailedElementNumber(position)),
+    )
 }
 
 /// A stored list the server cannot decode: a fault of the target, not of any
@@ -42,7 +42,7 @@ fn position(index: usize) -> u32 {
 ///
 /// Adds every element not already in the list. An element already present is
 /// the same whole element, so it is left as it is. Nothing changes when any
-/// element is refused. A refusal of one element is `Error::ChangeList` naming
+/// element is refused. A refusal of one element is `Error::Structured` naming
 /// its position; a refusal of the request or its target is `Error::Protocol`.
 pub fn handle_add_list_element(db: &mut ObjectDatabase, service_data: &[u8]) -> Result<(), Error> {
     handle_list_element_observed(db, service_data, false, |_, _, _| {})
@@ -344,14 +344,12 @@ fn object_refusal(error: Error, remove: bool, first_new: Option<u32>) -> Error {
     ]
     .iter()
     .any(|element_code| element_code.to_raw() as u32 == code);
-    match first_new {
-        Some(first_failed_element_number) if about_elements => Error::ChangeList {
-            class,
-            code,
-            first_failed_element_number,
-        },
-        _ => Error::Protocol { class, code },
-    }
+    let element = first_new.filter(|_| about_elements);
+    Error::protocol(
+        class,
+        code,
+        element.map(ErrorDetail::FirstFailedElementNumber),
+    )
 }
 
 /// A request refused before any element is applied. `current` is the target
