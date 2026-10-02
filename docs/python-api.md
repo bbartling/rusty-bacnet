@@ -1913,7 +1913,9 @@ A Loop's COV notification carries Present_Value, Status_Flags, Setpoint and
 Controlled_Variable_Value and fires on a `COV_Increment` move of Present_Value
 or a Status_Flags change. Loop Present_Value is network-writable only while
 Out_Of_Service is TRUE; in service the application supplies it with
-`set_present_value_local`.
+`set_present_value_local`. A Loop added from Python serves
+Controlled_Variable_Units and the gain units rows as NO_UNITS and
+Priority_For_Writing as 16; peers can write its Action (DIRECT until written).
 
 #### Lighting
 

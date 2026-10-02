@@ -2,10 +2,15 @@
 //!
 //! PID control loop. The application is responsible for running the PID
 //! algorithm; this object stores configuration and current output.
+//! Action and Priority_For_Writing are configuration for that algorithm:
+//! the object itself neither computes an output nor commands the property
+//! that Manipulated_Variable_Reference names, so nothing here changes with
+//! them.
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
+    Action, EngineeringUnits, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier,
+    Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
@@ -29,6 +34,12 @@ pub struct LoopObject {
     integral_constant: f32,
     derivative_constant: f32,
     output_units: u32,
+    controlled_variable_units: EngineeringUnits,
+    proportional_constant_units: EngineeringUnits,
+    integral_constant_units: EngineeringUnits,
+    derivative_constant_units: EngineeringUnits,
+    action: Action,
+    priority_for_writing: u8,
     update_interval: u32,
     out_of_service: bool,
     reliability: Reliability,
@@ -58,7 +69,13 @@ impl LoopObject {
             integral_constant: 0.0,
             derivative_constant: 0.0,
             output_units,
-            update_interval: 1000, // milliseconds
+            controlled_variable_units: EngineeringUnits::NO_UNITS,
+            proportional_constant_units: EngineeringUnits::NO_UNITS,
+            integral_constant_units: EngineeringUnits::NO_UNITS,
+            derivative_constant_units: EngineeringUnits::NO_UNITS,
+            action: Action::DIRECT,
+            priority_for_writing: 16, // the lowest command priority
+            update_interval: 1000,    // milliseconds
             out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
             reliability_before_out_of_service: None,
@@ -92,12 +109,7 @@ impl LoopObject {
     /// Shared by the network and internal routes, which differ only in the
     /// Out_Of_Service condition each requires.
     fn apply_present_value(&mut self, value: PropertyValue) -> Result<(), Error> {
-        let PropertyValue::Real(v) = value else {
-            return Err(common::invalid_data_type_error());
-        };
-        common::reject_non_finite(v)?;
-        self.present_value = v;
-        Ok(())
+        write_finite_real(&mut self.present_value, value)
     }
 
     /// Set the description string.
@@ -122,6 +134,75 @@ impl LoopObject {
     pub fn set_setpoint_reference(&mut self, r: BACnetObjectPropertyReference) {
         self.setpoint_reference = Some(r);
     }
+
+    /// Set the units of Controlled_Variable_Value and Setpoint, served as
+    /// Controlled_Variable_Units (Clause 12.17.15). A new Loop uses NO_UNITS.
+    ///
+    /// The property is read-only over the network. A value above 65535,
+    /// outside BACnetEngineeringUnits, is refused with VALUE_OUT_OF_RANGE and
+    /// the property is left unchanged.
+    pub fn set_controlled_variable_units(&mut self, units: EngineeringUnits) -> Result<(), Error> {
+        self.controlled_variable_units = checked_units(units)?;
+        Ok(())
+    }
+
+    /// Set Proportional_Constant_Units (Clause 12.17.20), the units the
+    /// algorithm gives its proportional gain. A new Loop uses NO_UNITS.
+    /// Read-only over the network; refuses a value above 65535 like
+    /// [`Self::set_controlled_variable_units`].
+    pub fn set_proportional_constant_units(
+        &mut self,
+        units: EngineeringUnits,
+    ) -> Result<(), Error> {
+        self.proportional_constant_units = checked_units(units)?;
+        Ok(())
+    }
+
+    /// Set Integral_Constant_Units (Clause 12.17.22). A new Loop uses
+    /// NO_UNITS. Read-only over the network; refuses a value above 65535.
+    pub fn set_integral_constant_units(&mut self, units: EngineeringUnits) -> Result<(), Error> {
+        self.integral_constant_units = checked_units(units)?;
+        Ok(())
+    }
+
+    /// Set Derivative_Constant_Units (Clause 12.17.24). A new Loop uses
+    /// NO_UNITS. Read-only over the network; refuses a value above 65535.
+    pub fn set_derivative_constant_units(&mut self, units: EngineeringUnits) -> Result<(), Error> {
+        self.derivative_constant_units = checked_units(units)?;
+        Ok(())
+    }
+
+    /// Set Priority_For_Writing (Clause 12.17.28), the command priority the
+    /// loop's output holds in the Priority_Array of the property that
+    /// Manipulated_Variable_Reference names. A new Loop uses 16, the lowest.
+    ///
+    /// The property is read-only over the network. A priority outside 1..=16
+    /// is refused with VALUE_OUT_OF_RANGE and the property is left unchanged.
+    pub fn set_priority_for_writing(&mut self, priority: u8) -> Result<(), Error> {
+        if !(1..=16).contains(&priority) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.priority_for_writing = priority;
+        Ok(())
+    }
+}
+
+/// BACnetEngineeringUnits is an enumeration capped at 65535 (Clause 21).
+fn checked_units(units: EngineeringUnits) -> Result<EngineeringUnits, Error> {
+    if units.to_raw() > 65_535 {
+        return Err(common::value_out_of_range_error());
+    }
+    Ok(units)
+}
+
+/// Store a finite REAL write into `target`.
+fn write_finite_real(target: &mut f32, value: PropertyValue) -> Result<(), Error> {
+    let PropertyValue::Real(v) = value else {
+        return Err(common::invalid_data_type_error());
+    };
+    common::reject_non_finite(v)?;
+    *target = v;
+    Ok(())
 }
 
 impl BACnetObject for LoopObject {
@@ -172,6 +253,24 @@ impl BACnetObject for LoopObject {
             }
             p if p == PropertyIdentifier::OUTPUT_UNITS => {
                 Ok(PropertyValue::Enumerated(self.output_units))
+            }
+            p if p == PropertyIdentifier::CONTROLLED_VARIABLE_UNITS => Ok(
+                PropertyValue::Enumerated(self.controlled_variable_units.to_raw()),
+            ),
+            p if p == PropertyIdentifier::PROPORTIONAL_CONSTANT_UNITS => Ok(
+                PropertyValue::Enumerated(self.proportional_constant_units.to_raw()),
+            ),
+            p if p == PropertyIdentifier::INTEGRAL_CONSTANT_UNITS => Ok(PropertyValue::Enumerated(
+                self.integral_constant_units.to_raw(),
+            )),
+            p if p == PropertyIdentifier::DERIVATIVE_CONSTANT_UNITS => Ok(
+                PropertyValue::Enumerated(self.derivative_constant_units.to_raw()),
+            ),
+            p if p == PropertyIdentifier::ACTION => {
+                Ok(PropertyValue::Enumerated(self.action.to_raw()))
+            }
+            p if p == PropertyIdentifier::PRIORITY_FOR_WRITING => {
+                Ok(PropertyValue::Unsigned(self.priority_for_writing.into()))
             }
             p if p == PropertyIdentifier::UPDATE_INTERVAL => {
                 Ok(PropertyValue::Unsigned(self.update_interval as u64))
@@ -244,49 +343,27 @@ impl BACnetObject for LoopObject {
             return result;
         }
         match property {
-            p if p == PropertyIdentifier::SETPOINT => {
-                if let PropertyValue::Real(v) = value {
-                    common::reject_non_finite(v)?;
-                    self.setpoint = v;
-                    return Ok(());
-                }
-                Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-                })
-            }
+            p if p == PropertyIdentifier::SETPOINT => write_finite_real(&mut self.setpoint, value),
             p if p == PropertyIdentifier::PROPORTIONAL_CONSTANT => {
-                if let PropertyValue::Real(v) = value {
-                    common::reject_non_finite(v)?;
-                    self.proportional_constant = v;
-                    return Ok(());
-                }
-                Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-                })
+                write_finite_real(&mut self.proportional_constant, value)
             }
             p if p == PropertyIdentifier::INTEGRAL_CONSTANT => {
-                if let PropertyValue::Real(v) = value {
-                    common::reject_non_finite(v)?;
-                    self.integral_constant = v;
-                    return Ok(());
-                }
-                Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-                })
+                write_finite_real(&mut self.integral_constant, value)
             }
             p if p == PropertyIdentifier::DERIVATIVE_CONSTANT => {
-                if let PropertyValue::Real(v) = value {
-                    common::reject_non_finite(v)?;
-                    self.derivative_constant = v;
-                    return Ok(());
+                write_finite_real(&mut self.derivative_constant, value)
+            }
+            // BACnetAction names only DIRECT and REVERSE (Clause 21).
+            p if p == PropertyIdentifier::ACTION => {
+                let PropertyValue::Enumerated(raw) = value else {
+                    return Err(common::invalid_data_type_error());
+                };
+                let action = Action::from_raw(raw);
+                if action != Action::DIRECT && action != Action::REVERSE {
+                    return Err(common::value_out_of_range_error());
                 }
-                Err(Error::Protocol {
-                    class: ErrorClass::PROPERTY.to_raw() as u32,
-                    code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
-                })
+                self.action = action;
+                Ok(())
             }
             p if p == PropertyIdentifier::UPDATE_INTERVAL => {
                 if let PropertyValue::Unsigned(v) = value {
@@ -413,3 +490,6 @@ impl BACnetObject for LoopObject {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod property_set_tests;

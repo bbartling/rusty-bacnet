@@ -1788,6 +1788,16 @@ delay capability and preserving exactly-one source-role ownership. See
 | `AveragingObject` | `::new(instance, name)` |
 | `StagingObject` | `::new(instance, name, StagingConfig { ... })` |
 
+The Loop serves every required Table 12-20 row. Setpoint, the gain constants,
+Update_Interval and Action (DIRECT or REVERSE) take network writes.
+Controlled_Variable_Units, the three gain units rows and Priority_For_Writing
+are read-only over the network; set them before adding the Loop with
+`set_controlled_variable_units`, `set_proportional_constant_units`,
+`set_integral_constant_units`, `set_derivative_constant_units` and
+`set_priority_for_writing`. The object stores the loop's configuration and
+output for the application's algorithm: it neither computes Present_Value nor
+writes it to the Manipulated_Variable_Reference target.
+
 Staging uses an explicit atomic configuration; the former stage-count-only
 constructor is intentionally removed because it could not create a valid
 ladder or target mapping. To migrate to 0.11.0, replace that argument with a
