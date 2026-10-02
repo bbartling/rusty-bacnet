@@ -641,6 +641,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs again from a fresh port when another socket takes that port while no
   hub holds it, like the other hub restart and release tests (#1095).
 
+- **Breaking wire behaviour:** a SubscribeCOVPropertyMultiple reference that
+  asks for timestamps while the Device has no valid clock is now refused on
+  its own, in request order like any other failed reference (#1102). The
+  error names it in the failed-subscription choice, still SERVICES /
+  OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and the references before it stay
+  subscribed and get their initial notification; those after it are not
+  processed. Before, any timestamped reference refused the whole request with
+  the general choice, even after references that would have been accepted.
+  Timestamped is an option of each reference, and Clause 13.16.2 keeps the
+  general error for failures before any reference is processed.
+
 - **Breaking Rust API (wire behaviour for AddListElement):** when an object
   refuses an AddListElement that adds several new elements, the
   ChangeList-Error now names the element it refused (#1048). The object
@@ -829,15 +840,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed one are not processed. Before, one refused reference left the whole
   request without effect. A request that fails at its first reference, or
   before any reference (inconsistent or out-of-range lifetime and delay,
-  timestamped references without a valid clock, authorization), still changes
-  and reports nothing (Clause 13.16.2). The subscription caps are checked one
-  reference at a time as well (#1059). A renewal or a repeat of an earlier
-  reference takes no slot, and the first reference that would go past the
-  recipient's quota or the table's capacity is named in a RESOURCES /
-  NO_SPACE_TO_ADD_LIST_ELEMENT failed-subscription error; the whole request
-  used to go out with the general choice. `CovSubscriptionTable::subscribe_multiple`
-  now fails with `MultipleRefusal`, which carries the error, the position of
-  the refused reference and the snapshots kept before it.
+  authorization), still changes and reports nothing (Clause 13.16.2). The
+  subscription caps are checked one reference at a time as well (#1059). A
+  renewal or a repeat of an earlier reference takes no slot, and the first
+  reference that would go past the recipient's quota or the table's capacity
+  is named in a RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT failed-subscription
+  error; the whole request used to go out with the general choice.
+  `CovSubscriptionTable::subscribe_multiple` now fails with `MultipleRefusal`,
+  which carries the error, the position of the refused reference and the
+  snapshots kept before it.
 
 - Python's `BacnetProtocolError` gains `first_failed_write_attempt` and
   `first_failed_subscription` (object, property and index dicts, typed
