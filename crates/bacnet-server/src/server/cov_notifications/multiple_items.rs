@@ -1,6 +1,6 @@
 //! Item assembly for one COV-multiple notification: queued timestamped history
 //! followed by one current value per coordinate.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use bacnet_objects::clock::ClockFrame;
 use bacnet_services::cov_multiple::{COVNotificationItem, COVNotificationValue};
@@ -8,18 +8,23 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::cov::multiple_reads::MultipleReads;
-use crate::cov::timed::{TimedChange, TimedClaim};
+use crate::cov::timed::TimedChange;
 use crate::cov::{CovSubscriptionKey, CovSubscriptionSnapshot};
 
 /// Object, property and index of a subscribed coordinate.
 pub(super) type Coordinate = (ObjectIdentifier, Option<PropertyIdentifier>, Option<u32>);
 
 /// Each retained reference with its prepared current values (empty for a
-/// timestamped reference, whose claimed latest change supplies them).
+/// timestamped reference, whose latest change in [`Latest`] supplies them).
 pub(super) type Retained<'a> = [(&'a CovSubscriptionSnapshot, &'a [COVNotificationValue])];
 
 /// Queued history conveyed as distinct timestamped values, in capture order.
 pub(super) type History<'a> = [(&'a CovSubscriptionKey, &'a TimedChange)];
+
+/// The latest change a notification carries of each timestamped reference,
+/// conveyed as its current state. A reference without one conveys no change
+/// in that notification: its changes went out in an earlier one (#1008).
+pub(super) type Latest<'a> = HashMap<&'a CovSubscriptionKey, &'a TimedChange>;
 
 /// Capture sequence and clock frame of a change whose time a value carries.
 pub(super) type LastChange = (u64, ClockFrame);
@@ -41,14 +46,15 @@ pub(super) type Stamp<'a> = dyn Fn(&Coordinate, &[u8]) -> FieldStamp + 'a;
 /// Build the items of one notification: `history`, then, unless `retained` is
 /// `None` (a notification carrying history only), the current state of the
 /// `retained` references. Untimestamped references supply their prepared
-/// current values; timestamped references their latest change in `claim`.
-/// `untimed` holds coordinates the context explicitly subscribes without
-/// timestamps, and `stamp` times the current values described above. Returns
-/// the items and the newest change whose time `stamp` gave them.
+/// current values; timestamped references their change in `latest`, and those
+/// without one add nothing. `untimed` holds coordinates the context explicitly
+/// subscribes without timestamps, and `stamp` times the current values
+/// described above. Returns the items and the newest change whose time `stamp`
+/// gave them.
 pub(super) fn build_items(
-    claim: &TimedClaim,
     history: &History<'_>,
     retained: Option<&Retained<'_>>,
+    latest: &Latest<'_>,
     reads: &MultipleReads,
     untimed: &HashSet<Coordinate>,
     stamp: &Stamp<'_>,
@@ -97,13 +103,15 @@ pub(super) fn build_items(
     let history_rows: Vec<usize> = items.iter().map(|item| item.list_of_values.len()).collect();
     let start = |index: usize| history_rows.get(index).copied().unwrap_or(0);
     // Current state: one value per coordinate. A timestamped reference
-    // contributes its latest change stamped with that change's own time.
+    // contributes its latest change stamped with that change's own time; one
+    // whose changes all went out earlier contributes nothing, not even an
+    // item (#1008).
     for (sub, values) in retained {
         let values = if sub.timestamped {
-            claim
-                .latest(sub.key())
-                .map(|change| change.values().to_vec())
-                .unwrap_or_default()
+            match latest.get(sub.key()) {
+                Some(change) => change.values().to_vec(),
+                None => continue,
+            }
         } else {
             values.to_vec()
         };
@@ -139,8 +147,14 @@ pub(super) fn build_items(
     }
     // Qualified explicit selectors control their own current coordinate. OR
     // above combines only implicit companion intent; an explicit false remains
-    // false. Unqualified references have no entry in this list.
+    // false. Unqualified references have no entry in this list. A timestamped
+    // selector that carries no change here is left to `stamp` below, like any
+    // other that conveys no change now (#987, #1008).
     for (sub, _) in retained {
+        let current = latest.get(sub.key());
+        if sub.timestamped && current.is_none() {
+            continue;
+        }
         let Some(index) = items
             .iter()
             .position(|item| item.monitored_object_identifier == sub.monitored_object_identifier)
@@ -155,10 +169,7 @@ pub(super) fn build_items(
                     && value.property_array_index == sub.monitored_property_array_index
             })
         {
-            value.time_of_change = sub
-                .timestamped
-                .then(|| claim.latest(sub.key()).map(|c| c.frame().local_time))
-                .flatten();
+            value.time_of_change = current.map(|change| change.frame().local_time);
         }
     }
     // An explicit timestamped selector that conveys no change this round only

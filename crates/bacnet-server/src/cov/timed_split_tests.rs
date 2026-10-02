@@ -26,47 +26,49 @@ fn two_reference_claim(store: &TimedStore) -> (TimedClaim, CovSubscriptionKey, C
     (claim, a, b)
 }
 
-fn history_seconds(claim: &TimedClaim) -> Vec<u8> {
+fn claimed_seconds(claim: &TimedClaim) -> Vec<u8> {
     claim
-        .earlier()
+        .in_order()
         .iter()
         .map(|(_, c)| c.frame().local_time.second)
         .collect()
 }
 
 #[test]
-fn splitting_moves_the_oldest_history_and_keeps_every_latest_change() {
+fn splitting_moves_the_oldest_changes_in_capture_order_latest_ones_included() {
     let (store, counters) = store(8, 4);
-    let (mut claim, a, b) = two_reference_claim(&store);
-    assert_eq!(history_seconds(&claim), [1, 2, 9]);
-    assert!(history_seconds(&claim.split_earliest(0)).is_empty());
+    let (mut claim, _, b) = two_reference_claim(&store);
+    assert_eq!(claimed_seconds(&claim), [1, 2, 3, 9, 10]);
+    assert!(claimed_seconds(&claim.split_oldest(0)).is_empty());
 
-    let part = claim.split_earliest(2);
-    assert_eq!(history_seconds(&part), [1, 2], "every change is history");
-    assert_eq!(part.latest(&a).map(|c| c.frame()), None);
+    let part = claim.split_oldest(2);
+    assert_eq!(claimed_seconds(&part), [1, 2]);
+    assert_eq!(claimed_seconds(&claim), [3, 9, 10]);
+
+    // `a`'s latest change goes with `b`'s older one: capture order across
+    // the claim decides, not whether a change is a reference's latest (#1008).
+    let next = claim.split_oldest(2);
+    assert_eq!(claimed_seconds(&next), [3, 9]);
     assert_eq!(
-        part.newest().map(|(_, f)| f),
-        Some(frame(2)),
-        "named after its last"
+        next.last_changes()
+            .map(|(_, c)| c.frame().local_time.second)
+            .collect::<Vec<_>>(),
+        [3, 9]
     );
-    assert_eq!(history_seconds(&claim), [9], "the oldest across the claim");
-    assert_eq!(claim.latest(&a).map(|c| c.frame()), Some(frame(3)));
-    assert_eq!(claim.latest(&b).map(|c| c.frame()), Some(frame(10)));
-
-    // Asking for more than there is moves every earlier change, never a
-    // reference's latest.
-    let rest = claim.split_earliest(5);
-    assert_eq!(history_seconds(&rest), [9]);
-    assert!(history_seconds(&claim).is_empty());
-    assert_eq!(claim.newest().map(|(_, f)| f), Some(frame(10)));
     assert_eq!(
         claim
             .last_changes()
-            .map(|(_, c)| c.frame().local_time.second)
+            .map(|(key, c)| (key.clone(), c.frame()))
             .collect::<Vec<_>>(),
-        [3, 10]
+        [(b, frame(10))],
+        "`a` has nothing left here"
     );
-    drop((part, rest, claim));
+
+    // Asking for more than there is moves everything.
+    let rest = claim.split_oldest(5);
+    assert_eq!(claimed_seconds(&rest), [10]);
+    assert!(claimed_seconds(&claim).is_empty());
+    drop((part, next, rest, claim));
     assert_eq!(dropped(&counters), 0, "splitting drops nothing");
 }
 
@@ -81,7 +83,7 @@ fn split_parts_retire_and_return_on_their_own_without_drops() {
     let mut claim = TimedClaim::new(store.clone());
     let (incarnation, drained) = store.lock().drain(&k, 1);
     claim.add(k.clone(), incarnation, drained);
-    let first = claim.split_earliest(1);
+    let first = claim.split_oldest(1);
     // A confirmed report sends the first part and returns the rest.
     drop(claim);
     first.commit();
@@ -94,7 +96,7 @@ fn split_parts_retire_and_return_on_their_own_without_drops() {
     let mut claim = TimedClaim::new(store.clone());
     let (incarnation, drained) = store.lock().drain(&k, 1);
     claim.add(k.clone(), incarnation, drained);
-    let first = claim.split_earliest(1);
+    let first = claim.split_oldest(1);
     first.commit();
     drop(claim);
     assert_eq!(seconds(&store.lock().drain(&k, 1).1), [5]);
@@ -224,7 +226,7 @@ fn deferred_parts_return_without_eviction_and_discarded_ones_are_counted() {
     assert_eq!(seconds(&drained), [1, 2, 3]);
     let mut claim = TimedClaim::new(store.clone());
     claim.add(k.clone(), incarnation, drained);
-    claim.split_earliest(1).discard("too large");
+    claim.split_oldest(1).discard("too large");
     assert_eq!(dropped(&counters), 1);
     drop(claim);
     assert_eq!(seconds(&store.lock().drain(&k, 1).1), [2, 3]);
