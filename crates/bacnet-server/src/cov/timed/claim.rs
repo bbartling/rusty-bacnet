@@ -3,6 +3,7 @@
 //! #1038).
 
 use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use tokio::time::Instant;
@@ -76,10 +77,19 @@ impl TimedClaim {
     }
 
     /// Give up the untimestamped references left in this claim without owing
-    /// them: their values fit no notification, so a later attempt would only
-    /// fail again. They are evaluated again at their next fanout.
+    /// them, counting each in
+    /// [`untimed_references_oversized`](crate::cov::AtomicCovCounters::untimed_references_oversized):
+    /// their values fit no notification, so a later attempt would only fail
+    /// again. They are evaluated again at their next fanout (#1066).
     pub(crate) fn forgo_untimed(&mut self) {
-        self.untimed.clear();
+        let left_out = std::mem::take(&mut self.untimed).len();
+        if left_out > 0 {
+            self.store
+                .lock()
+                .counters
+                .untimed_references_oversized
+                .fetch_add(left_out as u64, Ordering::Relaxed);
+        }
     }
 
     /// Return these changes without applying the context bound: a report
