@@ -163,6 +163,7 @@ impl BACnetServer {
 
 mod server_methods {
     mod averaging_methods;
+    mod constructor_budgets;
     mod cov_counters;
     mod cov_policy;
     mod dcc_outcomes;
