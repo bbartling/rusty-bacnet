@@ -152,14 +152,6 @@ jobs:
         run: |
           openssl version
           python -m unittest discover -s crates/rusty-bacnet/tests
-      # TEMPORARY (#983): repeat AcceptUuidTests on Windows, then dev's and this
-      # branch's nil test under CPU hogs. REMOVE BEFORE MERGE.
-      - name: TEMPORARY repeat for 983
-        if: ${{ !cancelled() && runner.os == 'Windows' }}
-        run: |
-          python crates/rusty-bacnet/tests/probe983.py repeat:30
-          python crates/rusty-bacnet/tests/probe983.py paired:4:5
-          python crates/rusty-bacnet/tests/probe983.py paired:8:5
       # The crate's lib unit tests and integration tests, linked against the
       # setup-python interpreter's libpython (#919), not the venv's.
       - name: PyO3 crate Rust tests
