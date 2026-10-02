@@ -10,9 +10,7 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
     for configured in [false, true] {
         let mut object = AveragingObject::new(7, "AVG-7").unwrap();
         if configured {
-            object.add_sample(10.0).unwrap();
-            object.add_sample(20.0).unwrap();
-            object.add_sample(30.0).unwrap();
+            // The reference write resets the window, so it comes first.
             let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
             object
                 .write_property(
@@ -25,6 +23,9 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
                     None,
                 )
                 .unwrap();
+            object.add_sample(10.0).unwrap();
+            object.add_sample(20.0).unwrap();
+            object.add_sample(30.0).unwrap();
         }
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
@@ -33,7 +34,7 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
         type ExpectedRead = Result<&'static [u8], ErrorCode>;
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             // Table 12-5 has no Present_Value (#1064); Average_Value carries
-            // the running average.
+            // the window average.
             (P::PRESENT_VALUE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::PRESENT_VALUE,
@@ -45,13 +46,15 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
+            // With no sample yet, the statistics read +INF, -INF and the
+            // quiet NaN (Clause 12.5).
             (
                 P::MINIMUM_VALUE,
                 None,
                 Ok(if configured {
                     &[0x44, 0x41, 0x20, 0x00, 0x00]
                 } else {
-                    &[0x44, 0, 0, 0, 0]
+                    &[0x44, 0x7F, 0x80, 0, 0]
                 }),
             ),
             (
@@ -65,7 +68,7 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
                 Ok(if configured {
                     &[0x44, 0x41, 0xF0, 0x00, 0x00]
                 } else {
-                    &[0x44, 0, 0, 0, 0]
+                    &[0x44, 0xFF, 0x80, 0, 0]
                 }),
             ),
             (
@@ -79,7 +82,7 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
                 Ok(if configured {
                     &[0x44, 0x41, 0xA0, 0x00, 0x00]
                 } else {
-                    &[0x44, 0, 0, 0, 0]
+                    &[0x44, 0x7F, 0xC0, 0, 0]
                 }),
             ),
             (
@@ -156,9 +159,10 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
                 None,
                 Ok(&[
                     0x91, 28, 0x91, 136, 0x91, 135, 0x91, 125, 0x91, 124, 0x91, 146, 0x91, 78,
+                    0x91, 147, 0x91, 148,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 7])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 9])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 136])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 135])),
@@ -166,9 +170,11 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 124])),
             (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 146])),
             (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 78])),
+            (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 147])),
+            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 148])),
             (
                 P::PROPERTY_LIST,
-                Some(8),
+                Some(10),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -176,8 +182,19 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            (P::WINDOW_INTERVAL, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-            (P::WINDOW_SAMPLES, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            // The window rows (#1092): 900 s and 15 samples by default.
+            (P::WINDOW_INTERVAL, None, Ok(&[0x22, 0x03, 0x84])),
+            (
+                P::WINDOW_INTERVAL,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (P::WINDOW_SAMPLES, None, Ok(&[0x21, 15])),
+            (
+                P::WINDOW_SAMPLES,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
             (
                 P::MINIMUM_VALUE_TIMESTAMP,
                 None,

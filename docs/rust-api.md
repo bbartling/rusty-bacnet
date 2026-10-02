@@ -1950,24 +1950,42 @@ Shed_Duration, and a change of any of them sends one. Duty_Window, which the
 row also names, isn't served yet.
 
 The application also feeds an Averaging object its samples. The server doesn't
-read Object_Property_Reference: the application samples the referenced property
-and, in a running server, passes each value to
-`BACnetServer::add_averaging_sample_local(&averaging_id, value)`. Before the
-object is added, `AveragingObject::add_sample(v)` does the same for an `f32`.
-The value may be a BOOLEAN (FALSE and TRUE count as 0 and 1), Signed, Unsigned,
-Enumerated or finite REAL, since the object computes in REAL. Another
-datatype, Double included, fails with INVALID_DATA_TYPE and NaN or an
-infinity with VALUE_OUT_OF_RANGE, and a refused sample counts as neither
-attempted nor valid. Any object other than an Averaging object refuses the call
-with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Minimum_Value, Maximum_Value,
-Average_Value, Attempted_Samples and Valid_Samples change together, then the
-server's COV path runs. Averaging has no Table 13-1 row, so SubscribeCOV on it
-is refused (`supports_cov` is false), but it takes SubscribeCOVProperty and
-SubscribeCOVPropertyMultiple (`supports_subscribe_cov_property` is true): a
-numeric property is reported when it moves by the subscription's COV increment,
-or on any change if the subscription gives none, and the report carries no
-Status_Flags because the object has none. The statistics are cumulative over
-every sample so far; Window_Interval and Window_Samples aren't served yet.
+read Object_Property_Reference: the application samples the referenced property,
+spacing its reads Window_Interval / Window_Samples seconds apart, and, in a
+running server, passes each result to
+`BACnetServer::add_averaging_sample_local(&averaging_id, Some(value))`, or
+`None` for an attempt that produced no value (a failed read, say). Before the
+object is added, `AveragingObject::add_sample(v)` does the same for an `f32` and
+`add_missed_sample()` for a miss. The value may be a BOOLEAN (FALSE and TRUE
+count as 0 and 1), Signed, Unsigned, Enumerated or finite REAL, since the
+object computes in REAL. Another datatype, Double included, fails with
+INVALID_DATA_TYPE and NaN or an infinity with VALUE_OUT_OF_RANGE, and a refused
+sample counts as neither attempted nor valid. Any object other than an
+Averaging object refuses the call with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+
+The object keeps the most recent Window_Samples attempts (15 by default, at
+most `MAX_WINDOW_SAMPLES` = 1440) and treats each call as the next one: it has
+no clock, so Window_Interval (900 s by default) tells the application how often
+to sample rather than timing anything itself. Minimum_Value, Maximum_Value and
+Average_Value cover the valid samples in the window, Attempted_Samples counts
+the attempts in it and Valid_Samples the valid ones, so a miss shows up as the
+difference. With no valid sample in the window, the statistics read positive
+infinity, negative infinity and NaN. Window_Interval and Window_Samples are
+writable over the network and through `set_window_interval` and
+`set_window_samples`; a write of either, of Object_Property_Reference, or of
+zero to Attempted_Samples empties the window. A zero interval, a sample count of
+zero or above the bound, and a nonzero Attempted_Samples fail with
+VALUE_OUT_OF_RANGE and change nothing.
+
+Each sample changes the statistics and counts together, then the server's COV
+path runs, as it does after a write. Averaging has no Table 13-1 row, so
+SubscribeCOV on it is refused (`supports_cov` is false), but it takes
+SubscribeCOVProperty and SubscribeCOVPropertyMultiple
+(`supports_subscribe_cov_property` is true): a numeric property is reported
+when it moves by the subscription's COV increment, or on any change if the
+subscription gives none, and the report carries no Status_Flags because the
+object has none. A move to or from the NaN or an infinity of an empty window is
+always reported, whatever the increment, and staying at one never is.
 
 Staging uses an explicit atomic configuration; the former stage-count-only
 constructor is intentionally removed because it could not create a valid
