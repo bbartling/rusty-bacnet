@@ -6,6 +6,7 @@ use confirmed::ConfirmedReport;
 mod confirmed;
 mod life_safety;
 mod multiple;
+mod multiple_chunks;
 mod multiple_items;
 mod revisit;
 
@@ -506,6 +507,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         completion,
                         observations: vec![(sub.clone(), current_observation)],
                         claim: None,
+                        deferred: Vec::new(),
                     },
                     |invoke_id| {
                         let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {

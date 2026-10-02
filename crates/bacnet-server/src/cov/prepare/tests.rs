@@ -284,6 +284,7 @@ fn cov_sample_admission_coordinate_and_size_failure_preserve_entire_context() {
         &db,
         &[1],
         None,
+        None,
         request(vec![(PropertyIdentifier::PRESENT_VALUE, None)], 300),
     )
     .unwrap()
@@ -293,6 +294,7 @@ fn cov_sample_admission_coordinate_and_size_failure_preserve_entire_context() {
             &mut table,
             &db,
             &[1],
+            None,
             None,
             request(
                 vec![
@@ -340,6 +342,7 @@ fn cov_sample_admission_coordinate_and_size_failure_preserve_entire_context() {
         &mut table,
         &db,
         &[1],
+        None,
         None,
         request(
             vec![(PropertyIdentifier::PRESENT_VALUE, None), (VARIABLE, None)],

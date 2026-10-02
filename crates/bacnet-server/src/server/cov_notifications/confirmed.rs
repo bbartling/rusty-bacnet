@@ -18,6 +18,10 @@ pub(in crate::server) struct ConfirmedReport {
     /// Timestamped history conveyed; it retires on the Ack and otherwise
     /// returns to its references.
     pub(in crate::server) claim: Option<TimedClaim>,
+    /// Later parts of a report too large for one notification (#986). They
+    /// return to their queue once this report holds its coordinate, so no
+    /// other report can carry them first, and the Ack's follow-up sends them.
+    pub(in crate::server) deferred: Vec<TimedClaim>,
 }
 
 impl ConfirmedReport {
@@ -42,7 +46,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     pub(in crate::server) async fn send_confirmed_cov(
         handles: &CovFanoutHandles<'_, '_, T>,
         budget: &mut EventBudget,
-        report: ConfirmedReport,
+        mut report: ConfirmedReport,
         encode: impl FnOnce(u8) -> Result<BytesMut, Error>,
     ) {
         let &CovFanoutHandles {
@@ -103,7 +107,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             (flight, Arc::clone(table.revisits()))
         };
         let flight = match flight {
-            Ok(flight) => flight,
+            Ok(flight) => {
+                // The coordinate is marked busy: the later parts can queue.
+                drop(std::mem::take(&mut report.deferred));
+                flight
+            }
             Err(refusal) => {
                 budget.refund(buf.len());
                 let keys: Vec<_> = report.keys().collect();

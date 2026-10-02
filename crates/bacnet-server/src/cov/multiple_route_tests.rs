@@ -24,7 +24,7 @@ fn cov_multiple_route_empty_renewal_fences_all_old_snapshots_without_new_generat
     let expiry = Instant::now() + Duration::from_secs(600);
     table.generation = u64::MAX;
     table
-        .subscribe_multiple(&context, &a.endpoint(), expiry, 2, vec![])
+        .subscribe_multiple(&context, &a.endpoint(), expiry, 2, None, vec![])
         .unwrap();
     assert!(
         old.iter().all(|snapshot| table.is_current(snapshot)),
@@ -32,7 +32,7 @@ fn cov_multiple_route_empty_renewal_fences_all_old_snapshots_without_new_generat
     );
     let b = routed_proposal(2, None);
     assert!(table
-        .subscribe_multiple(&context, &b.endpoint(), expiry, 3, vec![])
+        .subscribe_multiple(&context, &b.endpoint(), expiry, 3, None, vec![])
         .unwrap()
         .is_empty());
     assert_eq!(table.generation, u64::MAX);
@@ -61,7 +61,7 @@ fn cov_multiple_route_empty_renewal_fences_all_old_snapshots_without_new_generat
         0
     );
     table
-        .subscribe_multiple(&context, &a.endpoint(), expiry, 4, vec![])
+        .subscribe_multiple(&context, &a.endpoint(), expiry, 4, None, vec![])
         .unwrap();
     assert!(
         old.iter().all(|snapshot| !table.is_current(snapshot)),
@@ -89,6 +89,7 @@ fn cov_multiple_route_rejected_generation_or_identity_preserves_live_target() {
                 &b.endpoint(),
                 a.expires_at.unwrap(),
                 9,
+                None,
                 vec![a.clone()]
             ),
             Err(Error::Encoding(_))
@@ -98,17 +99,17 @@ fn cov_multiple_route_rejected_generation_or_identity_preserves_live_target() {
     table.generation = u64::MAX;
     resource_error(
         table
-            .subscribe_multiple(&context, &b.endpoint(), expiry, 9, vec![b.clone()])
+            .subscribe_multiple(&context, &b.endpoint(), expiry, 9, None, vec![b.clone()])
             .unwrap_err(),
     );
     let mut wrong_route = b.endpoint();
     wrong_route.network.as_mut().unwrap().network = 11;
     assert!(table
-        .subscribe_multiple(&context, &wrong_route, expiry, 9, vec![])
+        .subscribe_multiple(&context, &wrong_route, expiry, 9, None, vec![])
         .is_err());
     b.subscriber_process_identifier += 1;
     assert!(table
-        .subscribe_multiple(&context, &b.endpoint(), expiry, 9, vec![b.clone()])
+        .subscribe_multiple(&context, &b.endpoint(), expiry, 9, None, vec![b.clone()])
         .is_err());
     assert_eq!(table.len(), 1);
     assert!(table.is_current(&before));
@@ -153,6 +154,7 @@ fn cov_multiple_route_distinct_contexts_and_cleanup_remain_independent() {
             &b.endpoint(),
             b.expires_at.unwrap(),
             0,
+            None,
             vec![],
         )
         .unwrap();
@@ -167,7 +169,14 @@ fn cov_multiple_route_distinct_contexts_and_cleanup_remain_independent() {
     assert!(table.is_empty());
     table.admit_for_test(base.clone(), 0).unwrap();
     table
-        .subscribe_multiple(&context(&base), &b.endpoint(), Instant::now(), 0, vec![])
+        .subscribe_multiple(
+            &context(&base),
+            &b.endpoint(),
+            Instant::now(),
+            0,
+            None,
+            vec![],
+        )
         .unwrap();
     assert_eq!(table.purge_expired(), 1);
     assert_eq!(table.peer_subscription_count(&base.recipient()), 0);

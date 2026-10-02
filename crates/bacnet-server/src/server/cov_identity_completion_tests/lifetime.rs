@@ -105,6 +105,7 @@ async fn cov_lifetime_context_refresh_uses_live_expiry_without_replacing_snapsho
                         &snapshots[0].endpoint(),
                         Instant::now() + Duration::from_secs(1000),
                         0,
+                        None,
                         vec![],
                     )
                     .unwrap();

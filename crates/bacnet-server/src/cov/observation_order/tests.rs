@@ -144,6 +144,7 @@ fn cov_order_multiple_expiry_refresh_retains_progress_and_route_change_fences() 
             &first.endpoint(),
             Instant::now() + Duration::from_secs(120),
             5,
+            None,
             vec![],
         )
         .unwrap();
@@ -164,6 +165,7 @@ fn cov_order_multiple_expiry_refresh_retains_progress_and_route_change_fences() 
             &route,
             Instant::now() + Duration::from_secs(120),
             5,
+            None,
             vec![],
         )
         .unwrap();

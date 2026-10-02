@@ -241,6 +241,7 @@ fn cov_recipient_empty_routed_source_is_refused_before_any_table_effect() {
                         &malformed.endpoint(),
                         original.expires_at.unwrap(),
                         0,
+                        None,
                         subscriptions
                     ),
                     Err(Error::Encoding(_))
@@ -252,6 +253,7 @@ fn cov_recipient_empty_routed_source_is_refused_before_any_table_effect() {
                     &malformed.endpoint(),
                     original.expires_at.unwrap(),
                     0,
+                    None,
                     vec![]
                 ),
                 Err(Error::Encoding(_))

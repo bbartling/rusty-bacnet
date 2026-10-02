@@ -129,6 +129,7 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
                 &existing.endpoint(),
                 expiry,
                 4,
+                None,
                 vec![replacement.clone(), added],
             )
             .unwrap_err(),
@@ -169,6 +170,7 @@ fn cov_identity_batch_reserves_only_final_duplicates_and_exhaustion_is_atomic() 
             &existing.endpoint(),
             expiry,
             4,
+            None,
             vec![replacement; 64]
                 .into_iter()
                 .chain([final_options])

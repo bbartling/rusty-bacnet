@@ -4,7 +4,7 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use bacnet_types::MacAddr;
 
-fn context(process_id: u32) -> MultipleContextKey {
+pub(super) fn context(process_id: u32) -> MultipleContextKey {
     MultipleContextKey {
         recipient: CovRecipient::Direct(MacAddr::from_slice(&[10, 0, 0, 1, 0xBA, 0xC0])),
         process_id,
@@ -12,7 +12,7 @@ fn context(process_id: u32) -> MultipleContextKey {
     }
 }
 
-fn key(process_id: u32, instance: u32) -> CovSubscriptionKey {
+pub(super) fn key(process_id: u32, instance: u32) -> CovSubscriptionKey {
     CovSubscriptionKey::Multiple {
         context: context(process_id),
         object: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, instance).unwrap(),
@@ -21,7 +21,7 @@ fn key(process_id: u32, instance: u32) -> CovSubscriptionKey {
     }
 }
 
-fn frame(second: u8) -> ClockFrame {
+pub(super) fn frame(second: u8) -> ClockFrame {
     ClockFrame {
         local_date: Date {
             year: 126,
@@ -41,7 +41,7 @@ fn frame(second: u8) -> ClockFrame {
 }
 
 /// A change whose single value occupies `payload` octets.
-fn change(second: u8, payload: usize) -> TimedChange {
+pub(super) fn change(second: u8, payload: usize) -> TimedChange {
     let sample = CovSample::new(&PropertyValue::Real(f32::from(second))).unwrap();
     TimedChange::new(
         frame(second),
@@ -55,30 +55,44 @@ fn change(second: u8, payload: usize) -> TimedChange {
     )
 }
 
-fn seconds(changes: &[TimedChange]) -> Vec<u8> {
+pub(super) fn seconds(changes: &[TimedChange]) -> Vec<u8> {
     changes
         .iter()
         .map(|c| c.frame().local_time.second)
         .collect()
 }
 
+/// Octets one change of `payload` octets counts against its context's bound.
+pub(super) fn change_len(payload: usize) -> usize {
+    change(0, payload).cost
+}
+
+/// A maximum APDU whose context bound holds exactly `n` changes of `payload`
+/// octets, with no reserve.
+pub(super) fn apdu_for(n: usize, payload: usize) -> usize {
+    let octets = n * change_len(payload);
+    assert_eq!(octets % HISTORY_NOTIFICATIONS, 0, "an exact bound");
+    ENVELOPE_RESERVE + octets / HISTORY_NOTIFICATIONS
+}
+
 /// Capacity for exactly `n` changes of `payload` octets in one context.
-fn histories(n: usize, payload: usize) -> (TimedHistories, Arc<AtomicCovCounters>) {
+pub(super) fn histories(n: usize, payload: usize) -> (TimedHistories, Arc<AtomicCovCounters>) {
     let counters = Arc::new(AtomicCovCounters::default());
-    let capacity = n * (payload + VALUE_FRAMING);
     (
-        TimedHistories::new(capacity, Arc::clone(&counters)),
+        TimedHistories::new(apdu_for(n, payload), Arc::clone(&counters)),
         counters,
     )
 }
 
-fn store(n: usize, payload: usize) -> (TimedStore, Arc<AtomicCovCounters>) {
+pub(super) fn store(n: usize, payload: usize) -> (TimedStore, Arc<AtomicCovCounters>) {
     let counters = Arc::new(AtomicCovCounters::default());
-    let apdu = ENVELOPE_RESERVE + n * (payload + VALUE_FRAMING);
-    (TimedStore::new(apdu, Arc::clone(&counters)), counters)
+    (
+        TimedStore::new(apdu_for(n, payload), Arc::clone(&counters)),
+        counters,
+    )
 }
 
-fn dropped(counters: &AtomicCovCounters) -> u64 {
+pub(super) fn dropped(counters: &AtomicCovCounters) -> u64 {
     counters.timed_changes_dropped.load(Ordering::Relaxed)
 }
 
@@ -374,42 +388,6 @@ fn failed_older_notification_cannot_requeue_behind_a_transmitted_newer_one() {
 }
 
 #[test]
-fn trimming_a_claim_discards_oldest_superseded_history_but_keeps_latest_changes() {
-    let (store, counters) = store(8, 4);
-    let (a, b) = (key(1, 1), key(1, 2));
-    let mut claim = TimedClaim::new(store.clone());
-    let mut changes_a: Vec<_> = (1..=3).map(|s| change(s, 4)).collect();
-    for (seq, c) in changes_a.iter_mut().enumerate() {
-        c.seq = seq as u64 + 1;
-    }
-    let mut changes_b: Vec<_> = [9, 10].into_iter().map(|s| change(s, 4)).collect();
-    changes_b[0].seq = 9;
-    changes_b[1].seq = 10;
-    claim.add(a.clone(), 1, changes_a);
-    claim.add(b.clone(), 1, changes_b);
-    let order = |claim: &TimedClaim| {
-        claim
-            .earlier()
-            .iter()
-            .map(|(_, c)| c.frame().local_time.second)
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(order(&claim), [1, 2, 9]);
-    assert!(claim.drop_oldest_earlier());
-    assert_eq!(order(&claim), [2, 9], "oldest across the claim goes first");
-    assert!(claim.drop_oldest_earlier());
-    assert!(claim.drop_oldest_earlier());
-    assert!(
-        !claim.drop_oldest_earlier(),
-        "latest changes are never trimmed"
-    );
-    assert_eq!(claim.latest(&a).map(|c| c.frame()), Some(frame(3)));
-    assert_eq!(claim.latest(&b).map(|c| c.frame()), Some(frame(10)));
-    assert_eq!(dropped(&counters), 3);
-    claim.commit();
-}
-
-#[test]
 fn a_reference_evicts_its_own_oldest_change_before_a_siblings() {
     let (mut h, counters) = histories(3, 4);
     let (a, b) = (key(1, 1), key(1, 2));
@@ -545,7 +523,10 @@ async fn the_latest_admitted_delay_applies_until_the_context_goes() {
     assert_eq!(h.held(), (0, 0), "the last reference took its wait along");
 }
 
-fn timed_reference(process_id: u32, expires_at: std::time::Instant) -> crate::cov::CovSubscription {
+pub(super) fn timed_reference(
+    process_id: u32,
+    expires_at: std::time::Instant,
+) -> crate::cov::CovSubscription {
     crate::cov::CovSubscription {
         subscriber_mac: MacAddr::from_slice(&[10, 0, 0, 1, 0xBA, 0xC0]),
         subscriber_network: None,
@@ -575,7 +556,7 @@ fn empty_admissions_of_unknown_contexts_leave_no_deadline_state() {
                 ..context(process_id)
             };
             let accepted = table
-                .subscribe_multiple(&context, &route, expires, 10, Vec::new())
+                .subscribe_multiple(&context, &route, expires, 10, None, Vec::new())
                 .unwrap();
             assert!(accepted.is_empty());
         }
