@@ -198,7 +198,7 @@ async fn advertisement_silence_and_known_codes_never_consult_expired_budget() {
             panic!("unexpected receive")
         }
     }
-    let expired = RejectionBudget::new(Instant::now() - Duration::from_secs(1), 1);
+    let expired = RejectionBudget::new(tokio::time::Instant::now() - Duration::from_secs(1), 1);
     // Forbidden local shapes must consult the budget (expiry surfaces).
     let nak_cases: Vec<(u8, Vec<u8>)> = vec![
         (4, vec![]),

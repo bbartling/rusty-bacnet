@@ -203,7 +203,9 @@ async fn unknown_function_rejection_deadline_fresh_redial_validates_probe_identi
     fresh_redial_validates_probe(4).await;
 }
 
-#[tokio::test]
+// Paused clock: on real time, a runner stall between two of the 30 ms-spaced
+// heartbeats could outlast the 240 ms timeout and redial mid-loop (#1017).
+#[tokio::test(start_paused = true)]
 async fn rejection_deadline_unused_failover_works_but_poisoned_primary_never_restores() {
     let (client, hub, observed) = GateSocket::pair();
     let (failover, failover_hub, _failover_observed) = GateSocket::pair();

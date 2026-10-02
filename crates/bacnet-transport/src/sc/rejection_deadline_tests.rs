@@ -240,7 +240,9 @@ async fn rejection_deadline_held_naks_disconnect_and_drop_future() {
     }
 }
 
-#[tokio::test]
+// Paused clock: on real time, a runner stall between the held NAK and the
+// budget expiry could break the upper bound on `held.elapsed()` (#1017).
+#[tokio::test(start_paused = true)]
 async fn rejection_deadline_late_naks_share_original_budget_not_per_frame() {
     for (wire, nak) in transport_rejections() {
         let (client, hub, observed) = GateSocket::pair();
@@ -248,7 +250,7 @@ async fn rejection_deadline_late_naks_share_original_budget_not_per_frame() {
             .with_device_uuid([1; 16])
             .with_test_heartbeat_timing_ms(100, 1000);
         let mut rx = started(&mut transport, &hub).await;
-        let start = Instant::now();
+        let start = tokio::time::Instant::now();
         // Start from an actual pending heartbeat. Prompt rejected frames do not
         // reset activity or clear this pending identity.
         let probe = recv_function(&hub, 0x0A).await;
@@ -260,7 +262,7 @@ async fn rejection_deadline_late_naks_share_original_budget_not_per_frame() {
         assert!(start.elapsed() >= Duration::from_millis(700));
         observed.hold_nak.store(true, Ordering::SeqCst);
         hub.send(&wire).await.unwrap();
-        let held = Instant::now();
+        let held = tokio::time::Instant::now();
         wait_for_state(&transport, ScConnectionState::Disconnected)
             .await
             .unwrap();
@@ -322,7 +324,7 @@ async fn rejection_deadline_timely_completion_and_immediate_error_preserve_pendi
 async fn rejection_deadline_expired_budget_never_polls_send_or_times_out_silence() {
     use super::rejection::{reject, RejectionBudget, RejectionExpired};
     let (client, _hub, observed) = GateSocket::pair();
-    let budget = RejectionBudget::new(Instant::now() - Duration::from_secs(1), 1);
+    let budget = RejectionBudget::new(tokio::time::Instant::now() - Duration::from_secs(1), 1);
     for wire in rejection_wires() {
         let msg = decode_sc_message(&wire).unwrap();
         assert_eq!(
@@ -389,7 +391,7 @@ async fn rejection_deadline_checks_before_repoll_and_after_slow_completion() {
     }
     let ws = SlowReady(AtomicUsize::new(0));
     assert!(matches!(
-        RejectionBudget::new(Instant::now(), 10)
+        RejectionBudget::new(tokio::time::Instant::now(), 10)
             .send(&ws, &[])
             .await,
         Err(RejectionExpired)
@@ -414,7 +416,7 @@ async fn rejection_deadline_checks_before_repoll_and_after_slow_completion() {
     }
     let ws = BecomesReady(AtomicUsize::new(0));
     assert!(matches!(
-        RejectionBudget::new(Instant::now(), 10)
+        RejectionBudget::new(tokio::time::Instant::now(), 10)
             .send(&ws, &[])
             .await,
         Err(RejectionExpired)
@@ -430,8 +432,13 @@ async fn rejection_deadline_checks_before_repoll_and_after_slow_completion() {
         let msg = decode_sc_message(&wire).unwrap();
         let slow = SlowReady(AtomicUsize::new(0));
         assert_eq!(
-            super::rejection::reject(&msg, &wire, &slow, RejectionBudget::new(Instant::now(), 10))
-                .await,
+            super::rejection::reject(
+                &msg,
+                &wire,
+                &slow,
+                RejectionBudget::new(tokio::time::Instant::now(), 10)
+            )
+            .await,
             Err(RejectionExpired)
         );
         assert_eq!(slow.0.load(Ordering::SeqCst), 1);
@@ -441,7 +448,7 @@ async fn rejection_deadline_checks_before_repoll_and_after_slow_completion() {
                 &msg,
                 &wire,
                 &ready,
-                RejectionBudget::new(Instant::now(), 10)
+                RejectionBudget::new(tokio::time::Instant::now(), 10)
             )
             .await,
             Err(RejectionExpired)

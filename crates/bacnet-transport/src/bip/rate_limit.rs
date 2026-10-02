@@ -62,7 +62,8 @@ pub(super) fn is_covered_management_request(function: BvlcFunction) -> bool {
 /// Tracks at most [`MANAGEMENT_RATE_MAX_SOURCES`] source IPv4 addresses in
 /// a preallocated array; the window reset clears accounting without
 /// allocating. Time is supplied by the caller so accounting stays
-/// deterministic in tests without sleeps.
+/// deterministic in tests without sleeps; tests that drive the receive
+/// path, which uses the `*_now` entry points, freeze the clock instead.
 #[derive(Debug)]
 pub(super) struct ManagementRateLimiter {
     window_start: Option<Instant>,
@@ -71,6 +72,9 @@ pub(super) struct ManagementRateLimiter {
     entries: [SourceQuota; MANAGEMENT_RATE_MAX_SOURCES],
     len: usize,
     counters: ManagementCounters,
+    /// Instant the `*_now` entry points use in place of the monotonic clock.
+    #[cfg(test)]
+    frozen_now: Option<Instant>,
 }
 
 impl ManagementRateLimiter {
@@ -86,7 +90,26 @@ impl ManagementRateLimiter {
             }; MANAGEMENT_RATE_MAX_SOURCES],
             len: 0,
             counters: ManagementCounters::default(),
+            #[cfg(test)]
+            frozen_now: None,
         }
+    }
+
+    /// Current time for the `*_now` entry points.
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(now) = self.frozen_now {
+            return now;
+        }
+        Instant::now()
+    }
+
+    /// Pin the `*_now` entry points to `now`, so a test that fills the quota
+    /// through the receive path can't have the window roll over under it
+    /// when the runner stalls.
+    #[cfg(test)]
+    pub(super) fn freeze_clock(&mut self, now: Instant) {
+        self.frozen_now = Some(now);
     }
 
     fn roll_window_if_expired(&mut self, now: Instant) {
@@ -142,7 +165,8 @@ impl ManagementRateLimiter {
 
     /// Production entry point using monotonic time.
     pub(super) fn check_now(&mut self, ip: [u8; 4]) -> bool {
-        self.check(ip, Instant::now())
+        let now = self.now();
+        self.check(ip, now)
     }
 
     /// Admit (`true`) or throttle (`false`) response bytes for a source IPv4 address.
@@ -188,7 +212,8 @@ impl ManagementRateLimiter {
 
     /// Check response byte admission using monotonic time.
     pub(super) fn check_response_now(&mut self, ip: [u8; 4], bytes: usize) -> bool {
-        self.check_response(ip, bytes, Instant::now())
+        let now = self.now();
+        self.check_response(ip, bytes, now)
     }
 
     /// Record an admitted Read-BDT-ACK response.

@@ -436,10 +436,12 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
 
             'transport: loop {
                 let mut current_reusable = true;
+                // Idle time is on tokio's clock, like `hb_interval`, so the two
+                // agree under a paused test clock too.
                 let mut hb_interval =
                     tokio::time::interval(Duration::from_millis(heartbeat_interval_ms));
                 hb_interval.tick().await; // consume the first immediate tick
-                let mut last_bvlc_received = Instant::now();
+                let mut last_bvlc_received = tokio::time::Instant::now();
                 let mut pending_heartbeat_id = None;
 
                 loop {
@@ -517,7 +519,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
 
                                     if msg.function == ScFunction::HeartbeatAck {
                                         if heartbeat::ack_matches_outstanding(&msg, pending_heartbeat_id) {
-                                            last_bvlc_received = Instant::now();
+                                            last_bvlc_received = tokio::time::Instant::now();
                                             pending_heartbeat_id = None;
                                         } else if malformed_diag.should_emit_now() {
                                             let suppressed = malformed_diag.take_suppressed();
@@ -532,7 +534,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
 
                                     // Local admission policy: rejected frames do not
                                     // refresh activity or retire an outstanding probe.
-                                    last_bvlc_received = Instant::now();
+                                    last_bvlc_received = tokio::time::Instant::now();
                                     pending_heartbeat_id = None;
 
                                     // Handle Heartbeat-Request with Heartbeat-ACK
@@ -687,7 +689,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                 Ok(restored_ws) => {
                                     ws_clone = restored_ws;
                                     active_hub = ActiveHub::Primary;
-                                    last_bvlc_received = Instant::now();
+                                    last_bvlc_received = tokio::time::Instant::now();
                                     pending_heartbeat_id = None;
                                     info!("SC restored primary hub while failover was active");
                                 }
