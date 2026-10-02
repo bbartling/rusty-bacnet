@@ -22,10 +22,12 @@ fn binding_database(recipients: &[(ObjectIdentifier, bool)]) -> ObjectDatabase {
     let mut db = clocked_test_database();
     let mut class = NotificationClass::new(0, "NC-0").unwrap();
     for (identifier, confirmed) in recipients {
-        class.add_destination(destination_for(
-            BACnetRecipient::Device(*identifier),
-            *confirmed,
-        ));
+        class
+            .add_destination(destination_for(
+                BACnetRecipient::Device(*identifier),
+                *confirmed,
+            ))
+            .unwrap();
     }
     db.add(Box::new(class)).unwrap();
     db.add(Box::new(AnalogInputObject::new(1, "AI-1", 0).unwrap()))

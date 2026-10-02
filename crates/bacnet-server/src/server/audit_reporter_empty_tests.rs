@@ -36,7 +36,7 @@ async fn audit_empty_values_wp_recipient_list_preserves_present_empty_and_null()
     );
     assert!(populated.len() <= 32);
     let mut object = NotificationClass::new(1, "empty-audit-destinations").unwrap();
-    object.add_destination(destination);
+    object.add_destination(destination).unwrap();
     fixture
         .server
         .db

@@ -161,7 +161,9 @@ pub(super) fn class(
     let mut class = NotificationClass::new(instance, format!("NC-{instance}")).unwrap();
     class.notification_class = intrinsic_notification_class;
     class.priority = priority;
-    class.recipient_list = recipient_list;
+    for destination in recipient_list {
+        class.add_destination(destination).unwrap();
+    }
     class
 }
 

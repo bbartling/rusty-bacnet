@@ -7,7 +7,7 @@
 //! behind an element already present, so the two counts differ.
 //!
 //! PROPERTY 2, RESOURCES 3; INVALID_DATA_TYPE 9, NO_SPACE_TO_ADD_LIST_ELEMENT
-//! 19, VALUE_OUT_OF_RANGE 37.
+//! 19, NO_SPACE_TO_WRITE_PROPERTY 20, VALUE_OUT_OF_RANGE 37.
 
 use super::mutation_list_wire_tests::{change_list_error, list_request, wire, ADD, REMOVE};
 use super::mutation_tests::{oid, Fixture};
@@ -16,6 +16,7 @@ use bacnet_encoding::constructed::{
     decode_destination_list, encode_destination, encode_destination_list,
 };
 use bacnet_objects::elevator::EscalatorObject;
+use bacnet_objects::notification_class::{NotificationClass, MAX_RECIPIENT_LIST_DESTINATIONS};
 use bacnet_objects::schedule::CalendarObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::write_property::WritePropertyRequest;
@@ -421,6 +422,136 @@ async fn add_list_element_names_the_destination_an_object_refuses() {
         );
         assert_eq!(fixture.read(object, recipient_list).await, before, "{what}");
     }
+}
+
+/// The Recipient_List cap (#1098), as the test's process identifiers count.
+const CAP: u32 = MAX_RECIPIENT_LIST_DESTINATIONS as u32;
+
+/// A Notification Class holding `count` destinations, process identifiers 1
+/// to `count`.
+fn notification_class(instance: u32, count: u32) -> NotificationClass {
+    let mut class = NotificationClass::new(instance, format!("NC-{instance}")).unwrap();
+    for process_identifier in 1..=count {
+        class
+            .add_destination(destination(process_identifier))
+            .unwrap();
+    }
+    class
+}
+
+#[tokio::test]
+async fn add_list_element_names_the_destination_past_the_recipient_list_cap() {
+    // One class has room for one more destination, the other for two.
+    let fixture = Fixture::new(None);
+    let one_left = oid(ObjectType::NOTIFICATION_CLASS, 1);
+    let two_left = oid(ObjectType::NOTIFICATION_CLASS, 2);
+    {
+        let mut db = fixture.db.write().await;
+        db.add(Box::new(notification_class(1, CAP - 1))).unwrap();
+        db.add(Box::new(notification_class(2, CAP - 2))).unwrap();
+    }
+    let recipient_list = PropertyIdentifier::RECIPIENT_LIST;
+    for (what, object, elements, element) in [
+        (
+            "two new destinations, no room for the second",
+            one_left,
+            elements(&[100, 101]),
+            2,
+        ),
+        (
+            "a stored destination, then two new ones, no room for the third",
+            one_left,
+            elements(&[1, 100, 101]),
+            3,
+        ),
+        (
+            "three new destinations, no room for the third",
+            two_left,
+            elements(&[100, 101, 102]),
+            3,
+        ),
+    ] {
+        let before = fixture.read(object, recipient_list).await;
+        assert_eq!(
+            add_wire(&fixture, object, recipient_list, &elements).await,
+            change_list_error(ADD, 3, 19, element),
+            "{what}"
+        );
+        assert_eq!(fixture.read(object, recipient_list).await, before, "{what}");
+    }
+}
+
+#[tokio::test]
+async fn add_list_element_fills_the_recipient_list_to_the_cap() {
+    let fixture = Fixture::new(None);
+    let class = oid(ObjectType::NOTIFICATION_CLASS, 1);
+    fixture
+        .db
+        .write()
+        .await
+        .add(Box::new(notification_class(1, CAP - 2)))
+        .unwrap();
+    let recipient_list = PropertyIdentifier::RECIPIENT_LIST;
+    let full: Vec<u32> = (1..=CAP - 2).chain([100, 101]).collect();
+    let full = PropertyValue::ApplicationData(elements(&full));
+    assert_eq!(
+        add_wire(&fixture, class, recipient_list, &elements(&[100, 101])).await,
+        vec![0x20, 5, ADD.to_raw()]
+    );
+    assert_eq!(fixture.read(class, recipient_list).await, full);
+    // A full list still takes a destination it already holds, which adds
+    // nothing, and refuses the first new one.
+    assert_eq!(
+        add_wire(&fixture, class, recipient_list, &elements(&[1])).await,
+        vec![0x20, 5, ADD.to_raw()]
+    );
+    assert_eq!(
+        add_wire(&fixture, class, recipient_list, &elements(&[1, 102])).await,
+        change_list_error(ADD, 3, 19, 2)
+    );
+    assert_eq!(fixture.read(class, recipient_list).await, full);
+}
+
+#[tokio::test]
+async fn write_property_of_a_recipient_list_past_the_cap_is_no_space() {
+    let fixture = Fixture::new(None);
+    let class = oid(ObjectType::NOTIFICATION_CLASS, 1);
+    fixture
+        .db
+        .write()
+        .await
+        .add(Box::new(notification_class(1, 1)))
+        .unwrap();
+    let recipient_list = PropertyIdentifier::RECIPIENT_LIST;
+    let write_property = |count: u32| {
+        let mut request = BytesMut::new();
+        WritePropertyRequest {
+            object_identifier: class,
+            property_identifier: recipient_list,
+            property_array_index: None,
+            property_value: elements(&(1..=count).collect::<Vec<_>>()),
+            priority: None,
+        }
+        .encode(&mut request)
+        .unwrap();
+        request.freeze()
+    };
+    let service = ConfirmedServiceChoice::WRITE_PROPERTY;
+    let before = fixture.read(class, recipient_list).await;
+    // The plain class and code: a WriteProperty error names no element.
+    assert_eq!(
+        wire(&fixture, service, write_property(CAP + 1)).await,
+        vec![0x50, 5, 15, 0x91, 3, 0x91, 20]
+    );
+    assert_eq!(fixture.read(class, recipient_list).await, before);
+    assert_eq!(
+        wire(&fixture, service, write_property(CAP)).await,
+        vec![0x20, 5, 15]
+    );
+    assert_eq!(
+        fixture.read(class, recipient_list).await,
+        PropertyValue::ApplicationData(elements(&(1..=CAP).collect::<Vec<_>>()))
+    );
 }
 
 #[tokio::test]

@@ -43,7 +43,8 @@ fn get_recipients_filters_by_transition() {
         make_time(23, 59),
         false,
         EventTransitionBits::TO_OFFNORMAL,
-    ));
+    ))
+    .unwrap();
     // Recipient 2: only TO_NORMAL (bit 2)
     nc.add_destination(make_dest(
         20,
@@ -52,7 +53,8 @@ fn get_recipients_filters_by_transition() {
         make_time(23, 59),
         true,
         EventTransitionBits::TO_NORMAL,
-    ));
+    ))
+    .unwrap();
     // Recipient 3: all transitions
     nc.add_destination(make_dest(
         30,
@@ -61,7 +63,8 @@ fn get_recipients_filters_by_transition() {
         make_time(23, 59),
         false,
         EventTransitionBits::all(),
-    ));
+    ))
+    .unwrap();
     db.add(Box::new(nc)).unwrap();
 
     let now = make_time(12, 0);
@@ -103,7 +106,8 @@ fn get_recipients_filters_by_day() {
         make_time(23, 59),
         false,
         EventTransitionBits::all(),
-    ));
+    ))
+    .unwrap();
     db.add(Box::new(nc)).unwrap();
 
     let now = make_time(12, 0);
@@ -162,7 +166,8 @@ fn get_recipients_filters_by_time_window() {
         make_time(17, 0),
         false,
         EventTransitionBits::all(),
-    ));
+    ))
+    .unwrap();
     db.add(Box::new(nc)).unwrap();
 
     let monday = DaysOfWeek::MONDAY;
@@ -210,7 +215,8 @@ fn get_recipients_time_window_boundary_inclusive() {
         make_time(17, 0),
         false,
         EventTransitionBits::all(),
-    ));
+    ))
+    .unwrap();
     db.add(Box::new(nc)).unwrap();
 
     let monday = DaysOfWeek::MONDAY;
@@ -258,7 +264,8 @@ fn get_recipients_overnight_window_crosses_midnight() {
         make_time(2, 0),
         false,
         EventTransitionBits::all(),
-    ));
+    ))
+    .unwrap();
     db.add(Box::new(nc)).unwrap();
 
     let monday = DaysOfWeek::MONDAY;
@@ -316,7 +323,8 @@ fn get_recipients_day_filter_sunday_and_weekend_bits() {
         make_time(23, 59),
         false,
         EventTransitionBits::all(),
-    ));
+    ))
+    .unwrap();
     db.add(Box::new(nc)).unwrap();
 
     let now = make_time(12, 0);

@@ -1615,7 +1615,12 @@ framing, through the shared `bacnet-encoding` codecs.
   identifier, confirmation flag and event transitions. The recipient is a
   CHOICE: a device identifier or a network address. Decoding is strict, and a
   malformed stored list fails closed with no partial delivery. Indexed writes
-  are refused. The codec is not a Notification
+  are refused. The list holds at most `MAX_RECIPIENT_LIST_DESTINATIONS` (32)
+  destinations (#1098): a write that would leave more fails with RESOURCES /
+  NO_SPACE_TO_WRITE_PROPERTY naming the first destination past the cap, which
+  AddListElement reports as NO_SPACE_TO_ADD_LIST_ELEMENT at the request element
+  that brought it. `add_destination` returns `Result` and refuses past the cap
+  too, and `recipient_list()` reads the list. The codec is not a Notification
   Forwarder object, which is unsupported.
 - **`Event_Parameters` and `Fault_Parameters`** (Clause 12.12) use the
   BACnetEventParameter and BACnetFaultParameter CHOICE framing. Modeled

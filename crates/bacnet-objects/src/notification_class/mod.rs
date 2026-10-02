@@ -30,11 +30,13 @@ use crate::traits::BACnetObject;
 
 mod enrollment_summary;
 mod metadata;
+mod recipient_list;
 #[doc(hidden)]
 pub use enrollment_summary::{
     resolve_enrollment_summary_class_internal, EnrollmentSummaryClassProjection,
     EnrollmentSummaryClassProjectionError,
 };
+pub use recipient_list::MAX_RECIPIENT_LIST_DESTINATIONS;
 
 /// BACnet NotificationClass object.
 ///
@@ -53,8 +55,8 @@ pub struct NotificationClass {
     pub priority: [u8; 3],
     /// Transitions whose notifications require acknowledgment. Default empty.
     pub ack_required: EventTransitionBits,
-    /// Recipient list.
-    pub recipient_list: Vec<BACnetDestination>,
+    /// Recipient list, at most [`MAX_RECIPIENT_LIST_DESTINATIONS`] long.
+    recipient_list: Vec<BACnetDestination>,
 }
 
 impl NotificationClass {
@@ -82,8 +84,21 @@ impl NotificationClass {
     }
 
     /// Add a destination to the recipient list.
-    pub fn add_destination(&mut self, dest: BACnetDestination) {
+    ///
+    /// Refuses, as a network write would, a destination past the
+    /// [`MAX_RECIPIENT_LIST_DESTINATIONS`] cap (RESOURCES /
+    /// NO_SPACE_TO_WRITE_PROPERTY).
+    pub fn add_destination(&mut self, dest: BACnetDestination) -> Result<(), Error> {
+        if self.recipient_list.len() >= MAX_RECIPIENT_LIST_DESTINATIONS {
+            return Err(recipient_list::no_space_error());
+        }
         self.recipient_list.push(dest);
+        Ok(())
+    }
+
+    /// The Recipient_List destinations, in list order.
+    pub fn recipient_list(&self) -> &[BACnetDestination] {
+        &self.recipient_list
     }
 }
 
@@ -174,33 +189,7 @@ impl BACnetObject for NotificationClass {
             if array_index.is_some() {
                 return Err(common::property_is_not_an_array_error());
             }
-            self.recipient_list = match &value {
-                // Framed wire form (Clause 12.21 BACnetLIST of
-                // BACnetDestination): strict — one malformed entry rejects
-                // the whole write.
-                PropertyValue::ApplicationData(bytes) => {
-                    match bacnet_encoding::constructed::decode_destination_list(bytes) {
-                        Ok(list) => list,
-                        Err(_) => return Err(common::invalid_data_type_error()),
-                    }
-                }
-                // Legacy flat application-tagged form (pre-#152 layout):
-                // still accepted so older internal clients keep working.
-                PropertyValue::List(entries) => {
-                    let mut new_list = Vec::with_capacity(entries.len());
-                    for entry in entries {
-                        let PropertyValue::List(fields) = entry else {
-                            return Err(common::invalid_data_type_error());
-                        };
-                        match destination_from_flat_fields(fields) {
-                            Some(dest) => new_list.push(dest),
-                            None => return Err(common::invalid_data_type_error()),
-                        }
-                    }
-                    new_list
-                }
-                _ => return Err(common::invalid_data_type_error()),
-            };
+            self.recipient_list = recipient_list::decode_write(value)?;
             return Ok(());
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {

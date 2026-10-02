@@ -40,7 +40,7 @@ async fn audit_reporter_list_framed_destinations_decode_before_observation() {
     for service in SERVICES {
         let mut fixture = list_server(vec![1]).await;
         let mut object = NotificationClass::new(1, "destinations").unwrap();
-        object.add_destination(destination.clone());
+        object.add_destination(destination.clone()).unwrap();
         fixture
             .server
             .db

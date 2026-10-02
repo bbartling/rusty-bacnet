@@ -1,0 +1,160 @@
+//! The Recipient_List cap (#1098): writes past
+//! [`MAX_RECIPIENT_LIST_DESTINATIONS`] are refused, naming the first
+//! destination that doesn't fit, and a full list stays small on the wire.
+
+use super::super::*;
+use super::{make_dest_device, make_time};
+use crate::common::assert_list_element_refused;
+use bacnet_encoding::constructed::{encode_destination, encode_destination_list};
+use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
+use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bytes::BytesMut;
+
+const CAP: usize = MAX_RECIPIENT_LIST_DESTINATIONS;
+
+/// `count` distinct device destinations: process identifiers 1 to `count`.
+fn destinations(count: usize) -> Vec<BACnetDestination> {
+    (1..=count)
+        .map(|process_identifier| BACnetDestination {
+            process_identifier: process_identifier as u32,
+            ..make_dest_device(10)
+        })
+        .collect()
+}
+
+fn framed(list: &[BACnetDestination]) -> PropertyValue {
+    let mut buf = BytesMut::new();
+    encode_destination_list(&mut buf, list);
+    PropertyValue::ApplicationData(buf.to_vec())
+}
+
+/// The legacy flat form of a device destination.
+fn flat(process_identifier: u64) -> PropertyValue {
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, 10).unwrap();
+    PropertyValue::List(vec![
+        PropertyValue::BitString {
+            unused_bits: 1,
+            data: vec![0b1111_1110],
+        },
+        PropertyValue::Time(make_time(0, 0)),
+        PropertyValue::Time(make_time(23, 59)),
+        PropertyValue::ObjectIdentifier(device),
+        PropertyValue::Unsigned(process_identifier),
+        PropertyValue::Boolean(false),
+        PropertyValue::BitString {
+            unused_bits: 5,
+            data: vec![0b1110_0000],
+        },
+    ])
+}
+
+fn write(nc: &mut NotificationClass, value: PropertyValue) -> Result<(), Error> {
+    nc.write_property(PropertyIdentifier::RECIPIENT_LIST, None, value, None)
+}
+
+/// Assert a plain class / code refusal, naming no element.
+fn assert_refused(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
+    match result {
+        Err(Error::Protocol {
+            class: actual_class,
+            code: actual_code,
+        }) => assert_eq!(
+            (actual_class, actual_code),
+            (class.to_raw() as u32, code.to_raw() as u32)
+        ),
+        other => panic!("expected {class:?}/{code:?}, got {other:?}"),
+    }
+}
+
+#[test]
+fn recipient_list_write_past_the_cap_names_the_first_destination_that_does_not_fit() {
+    let mut nc = NotificationClass::new(1, "NC-1").unwrap();
+    write(&mut nc, framed(&destinations(CAP))).unwrap();
+    assert_eq!(nc.recipient_list(), destinations(CAP));
+    let mut garbage_past_the_cap = framed(&destinations(CAP));
+    if let PropertyValue::ApplicationData(bytes) = &mut garbage_past_the_cap {
+        bytes.push(0xFF);
+    }
+    let flat_over: Vec<_> = (1..=CAP as u64 + 1).map(flat).collect();
+    for (what, value) in [
+        ("framed, one over", framed(&destinations(CAP + 1))),
+        ("framed, many over", framed(&destinations(3 * CAP))),
+        // Destinations are checked in order: the one past the cap is refused
+        // before it is decoded.
+        ("framed, garbage past the cap", garbage_past_the_cap),
+        ("legacy flat, one over", PropertyValue::List(flat_over)),
+    ] {
+        assert_list_element_refused(
+            write(&mut nc, value),
+            ErrorClass::RESOURCES,
+            ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+            CAP as u32 + 1,
+            what,
+        );
+        assert_eq!(nc.recipient_list(), destinations(CAP), "{what}");
+    }
+    // A malformed destination within the cap is still a datatype error.
+    let mut malformed = framed(&destinations(2));
+    if let PropertyValue::ApplicationData(bytes) = &mut malformed {
+        bytes.push(0xFF);
+    }
+    assert_refused(
+        write(&mut nc, malformed),
+        ErrorClass::PROPERTY,
+        ErrorCode::INVALID_DATA_TYPE,
+    );
+}
+
+#[test]
+fn add_destination_refuses_past_the_cap() {
+    let mut nc = NotificationClass::new(1, "NC-1").unwrap();
+    for destination in destinations(CAP) {
+        nc.add_destination(destination).unwrap();
+    }
+    assert_refused(
+        nc.add_destination(make_dest_device(99)),
+        ErrorClass::RESOURCES,
+        ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+    );
+    assert_eq!(nc.recipient_list(), destinations(CAP));
+}
+
+#[test]
+fn recipient_list_at_the_cap_reads_in_one_unsegmented_apdu() {
+    // The largest destination of each form the cap's justification counts: a
+    // device, and an address with a 6-octet MAC on the largest network
+    // number, each with the largest process identifier.
+    let device = BACnetDestination {
+        process_identifier: u32::MAX,
+        ..make_dest_device(10)
+    };
+    let address = BACnetDestination {
+        recipient: BACnetRecipient::Address(BACnetAddress {
+            network_number: u16::MAX,
+            mac_address: bacnet_types::MacAddr::from_slice(&[0xFF; 6]),
+        }),
+        ..device.clone()
+    };
+    let encoded_len = |destination: &BACnetDestination| {
+        let mut buf = BytesMut::new();
+        encode_destination(&mut buf, destination);
+        buf.len()
+    };
+    assert_eq!(encoded_len(&device), 27);
+    assert_eq!(encoded_len(&address), 35);
+
+    // A ReadProperty-ACK spends 12 octets around the list: the PDU type,
+    // invoke ID and service choice, the object identifier [0], the property
+    // identifier [1], and the opening and closing tags of the value [3].
+    let mut nc = NotificationClass::new(1, "NC-1").unwrap();
+    for _ in 0..CAP {
+        nc.add_destination(address.clone()).unwrap();
+    }
+    let Ok(PropertyValue::ApplicationData(list)) =
+        nc.read_property(PropertyIdentifier::RECIPIENT_LIST, None)
+    else {
+        panic!("Recipient_List reads as framed data");
+    };
+    assert_eq!(list.len(), 1_120);
+    assert!(12 + list.len() <= 1476);
+}
