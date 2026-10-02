@@ -635,11 +635,12 @@ generic endpoint rollback or repairability of every configuration field.
 
 The caller owns predeployment UUID generation and durable same-byte lifetime
 reuse. Internal reconnect/failover/primary restore preserve the UUID, including
-when a duplicate-VMAC NAK legitimately reselects the VMAC. The checks run at
-startup, and `ScTransport` exposes no mutable access to its `ScConnection`
-afterwards: applications read the link state through
-`connection_state_changes()` (#956). Pure `ScConnection` codec/manual WebSocket
-use and later handshake validation are outside this guard.
+when a duplicate-VMAC NAK legitimately reselects the VMAC. This is **startup
+enforcement, not lifetime immutability**. Since #956 `ScTransport` no longer
+exposes its `ScConnection`, so applications cannot change the identity through
+it and read the link state through `connection_state_changes()`. Pure
+`ScConnection` codec/manual WebSocket use and later handshake validation are
+outside this guard.
 
 `with_advertised_uris` configures known direct-connection URIs; it does not enable
 accepting connections. Address-Resolution requests receive an ACK (with a
