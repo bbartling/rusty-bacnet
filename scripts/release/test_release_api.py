@@ -57,8 +57,9 @@ class FakeHost:
     label = "Fake"
     published_hint = "Fake releases are immutable."
 
-    def __init__(self, can_read_assets=True, draft_creates_tag=False, hide_drafts=False):
+    def __init__(self, can_read_assets=True, draft_creates_tag=False, hide_drafts=False, staged_only=False):
         self.can_read_assets = can_read_assets
+        self.staged_only = staged_only
         self.draft_creates_tag = draft_creates_tag
         self.hide_drafts = hide_drafts
         self.releases = []
@@ -455,6 +456,165 @@ class PublishTests(unittest.TestCase):
         self.assertEqual([c[0] for c in writes(host)].count("create"), 1)
         self.assertFalse(host.releases[0]["draft"])
 
+    def test_github_like_host_publishes_nothing_without_a_staged_draft(self):
+        # Fails closed (#951): no draft is made, filled or published, even
+        # when a complete draft is waiting.
+        for files in ({}, {"x.whl": WHEEL, "bacnet-linux-amd64": BINARY, "SHA256SUMS": SUMS_OK}):
+            host = FakeHost(staged_only=True)
+            if files:
+                host.add("v1.0.0", files, draft=True)
+            with self.subTest(draft=bool(files)):
+                self.publish_fails(host, "publishes only the draft the smoke test ran against")
+                self.assertEqual(host.calls, [])
+        out = self.run_publish(FakeHost(staged_only=True), dry_run=True)
+        self.assertIn("would create draft release v1.0.0", out)
+
+
+SUMS_SHA = api.sha256_bytes(SUMS_OK)
+
+
+class StageTests(unittest.TestCase):
+    """stage() and publishing the staged draft (#951)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        (self.dir / "x.whl").write_bytes(WHEEL)
+        (self.dir / "bacnet-linux-amd64").write_bytes(BINARY)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def stage(self, host, **kwargs):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            release, sums = api.stage(host, "v1.0.0", "notes", self.dir, COMMIT, **kwargs)
+        return release, sums, out.getvalue()
+
+    def publish_staged(self, host, staged):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            api.publish(host, "v1.0.0", "notes", self.dir, COMMIT, False, staged)
+        return out.getvalue()
+
+    def test_new_draft_is_staged_and_stays_a_draft(self):
+        host = FakeHost()
+        release, sums, out = self.stage(host)
+        self.assertEqual(writes(host), [
+            ("create", "v1.0.0", "Rusty BACnet v1.0.0", COMMIT, False),
+            ("upload", "bacnet-linux-amd64"), ("upload", "x.whl"), ("upload", "SHA256SUMS")])
+        self.assertTrue(host.releases[0]["draft"])
+        self.assertEqual((release["id"], sums), (host.releases[0]["id"], SUMS_SHA))
+        self.assertIn("final check: 3 assets as expected", out)
+
+    def test_staging_replaces_an_earlier_build_on_the_draft(self):
+        # Unlike a plain resume, the draft must end up with this run's files, so
+        # that the smoke test runs what PyPI gets.
+        host = FakeHost()
+        host.add("v1.0.0", {"x.whl": b"older wheel", "bacnet-linux-amd64": BINARY}, draft=True)
+        _, sums, out = self.stage(host)
+        self.assertEqual(writes(host), [("delete", "x.whl"), ("upload", "x.whl"), ("upload", "SHA256SUMS")])
+        self.assertIn("delete x.whl: it differs from this run's file, which replaces it", out)
+        self.assertEqual(host.files()["SHA256SUMS"], SUMS_OK)
+        self.assertEqual(sums, SUMS_SHA)
+
+    def test_complete_staged_draft_is_left_alone(self):
+        host = FakeHost()
+        host.add("v1.0.0", {"x.whl": WHEEL, "bacnet-linux-amd64": BINARY, "SHA256SUMS": SUMS_OK}, draft=True)
+        _, sums, _ = self.stage(host)
+        self.assertEqual(writes(host), [])
+        self.assertEqual(sums, SUMS_SHA)
+
+    def test_draft_for_another_commit_stops_staging(self):
+        host = FakeHost()
+        host.add("v1.0.0", {}, draft=True, commit="beef")
+        with self.assertRaisesRegex(api.ReleaseError, "made for beef, not c0ffee"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.stage(host)
+        self.assertEqual(writes(host), [])
+
+    def test_published_release_is_only_checked(self):
+        host = FakeHost()
+        release = host.add("v1.0.0", {"x.whl": WHEEL, "bacnet-linux-amd64": BINARY, "SHA256SUMS": SUMS_OK},
+                           draft=False)
+        found, sums, out = self.stage(host)
+        self.assertEqual(writes(host), [])
+        self.assertEqual((found["id"], sums), (release["id"], SUMS_SHA))
+        self.assertIn("already published; smoke-testing its files", out)
+        host.add("v2.0.0", {"x.whl": WHEEL}, draft=False)
+        with self.assertRaisesRegex(api.ReleaseError, "published but incomplete"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            api.stage(host, "v2.0.0", "notes", self.dir, COMMIT)
+
+    def test_throwaway_draft_replaces_a_leftover_of_its_name(self):
+        host = FakeHost()
+        old = host.add("release-smoke-42", {"x.whl": WHEEL}, draft=True)
+        host.add("v1.0.0", {}, draft=True, commit="beef")  # the tag's draft is not touched
+        release, sums, out = self.stage(host, throwaway="release-smoke-42")
+        self.assertEqual(writes(host)[:2], [
+            ("delete-release", "release-smoke-42"),
+            ("create", "release-smoke-42", "Release smoke test release-smoke-42", COMMIT, True)])
+        self.assertNotEqual(release["id"], old["id"])
+        self.assertEqual(host.files("release-smoke-42")["SHA256SUMS"], SUMS_OK)
+        self.assertEqual(sums, SUMS_SHA)
+        self.assertIn("smoke test: no release or tag release-smoke-42 is left", out)
+        self.assertEqual(host.files("v1.0.0"), {})
+
+    def test_throwaway_name_must_be_a_smoke_name(self):
+        with self.assertRaisesRegex(api.ReleaseError, "must start with release-smoke-"):
+            self.stage(FakeHost(), throwaway="v1.0.0")
+
+    def test_staged_draft_is_published_without_any_other_write(self):
+        host = FakeHost()
+        release, sums, _ = self.stage(host)
+        host.calls.clear()
+        out = self.publish_staged(host, (str(release["id"]), sums))
+        self.assertEqual(writes(host), [("publish",)])
+        self.assertFalse(host.releases[0]["draft"])
+        self.assertIn("the smoke-tested draft is public as v1.0.0", out)
+
+    def test_another_release_for_the_tag_isnt_published(self):
+        host = FakeHost()
+        release, sums, _ = self.stage(host)
+        host.calls.clear()
+        for staged in ((str(release["id"] + 1), sums), ("7", sums)):
+            with self.assertRaisesRegex(api.ReleaseError, "isn't the draft the smoke test ran against"):
+                self.publish_staged(host, staged)
+        host.releases.clear()
+        with self.assertRaisesRegex(api.ReleaseError, r"v1.0.0 \(none\) isn't the draft"):
+            self.publish_staged(host, (str(release["id"]), sums))
+        self.assertEqual(writes(host), [])
+
+    def test_draft_changed_after_the_smoke_test_isnt_published(self):
+        host = FakeHost()
+        release, sums, _ = self.stage(host)
+        host.delete_asset(release, host.releases[0]["assets"][0])
+        host._store(host.releases[0], "extra.bin", b"x")
+        host.calls.clear()
+        with self.assertRaisesRegex(api.ReleaseError, "failed the final check") as caught, \
+                contextlib.redirect_stdout(io.StringIO()):
+            api.publish(host, "v1.0.0", "notes", self.dir, COMMIT, False, (release["id"], sums))
+        self.assertIn("bacnet-linux-amd64 is missing", str(caught.exception))
+        self.assertIn("extra.bin isn't part of this release", str(caught.exception))
+        self.assertEqual(writes(host), [])
+
+    def test_other_local_files_than_the_smoke_tested_ones_arent_published(self):
+        host = FakeHost()
+        release, sums, _ = self.stage(host)
+        (self.dir / "x.whl").write_bytes(b"rebuilt")
+        host.calls.clear()
+        with self.assertRaisesRegex(api.ReleaseError, "aren't the ones the smoke test ran against"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            api.publish(host, "v1.0.0", "notes", self.dir, COMMIT, False, (release["id"], sums))
+        self.assertEqual(writes(host), [])
+
+    def test_staged_release_already_published_is_only_checked(self):
+        host = FakeHost()
+        release, sums, _ = self.stage(host)
+        host.publish_release(release)
+        host.calls.clear()
+        out = self.publish_staged(host, (release["id"], sums))
+        self.assertEqual(writes(host), [])
+        self.assertIn("is complete; nothing to do", out)
+
 
 PROBE = "release-preflight-42-0a1b2c3d"
 
@@ -543,13 +703,15 @@ class PreflightTests(unittest.TestCase):
         host.add("v1.0.0", {}, draft=True)
         self.assertIn("the publish job will resume it", self.run_preflight(host))
 
-    def test_stale_preflight_drafts_are_reported_not_deleted(self):
+    def test_stale_preflight_and_smoke_drafts_are_reported_not_deleted(self):
         host = FakeHost()
         host.add("release-preflight-7-ffffffff", {}, draft=True)
+        host.add("release-smoke-8", {}, draft=True)
         out = self.run_preflight(host)
-        self.assertIn("still has preflight drafts from earlier runs", out)
-        self.assertIn("release-preflight-7-ffffffff", out)
+        self.assertIn("has preflight or smoke test drafts of other runs: release-preflight-7-ffffffff,"
+                      " release-smoke-8.", out)
         self.assertNotIn(("delete-release", "release-preflight-7-ffffffff"), host.calls)
+        self.assertNotIn(("delete-release", "release-smoke-8"), host.calls)
 
     def test_refused_upload_still_deletes_the_draft(self):
         host = FakeHost()
@@ -604,6 +766,21 @@ class PreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(api.ReleaseError, "must start with release-preflight-"):
             api.write_check(FakeHost(), "v9.9.9", COMMIT)
 
+    def test_remove_draft_deletes_only_disposable_drafts(self):
+        host = FakeHost()
+        published = host.add("v1.0.0", {"x.whl": WHEEL}, draft=False)
+        draft = host.add("v1.0.0", {}, draft=True)
+        for name, made in (("v1.0.0", []), ("v1.0.0", [draft]), ("release-x", [])):
+            with self.subTest(name=name, made=bool(made)), \
+                    self.assertRaisesRegex(api.ReleaseError, f"refusing to delete release {name}: only"):
+                api.remove_draft(host, name, made, "smoke test")
+        smoke = host.add("release-smoke-9", {}, draft=False)  # a published release of a smoke name
+        with self.assertRaisesRegex(api.ReleaseError, "refusing to delete release release-smoke-9 .*isn't a draft"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            api.remove_draft(host, "release-smoke-9", [], "smoke test")
+        self.assertEqual(writes(host), [])
+        self.assertEqual({r["id"] for r in host.releases}, {published["id"], draft["id"], smoke["id"]})
+
 
 class MainTests(unittest.TestCase):
     def run_main(self, argv, env):
@@ -617,10 +794,40 @@ class MainTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "notes.md").write_text("n")
             code, _, err = self.run_main(["github", "--tag", "v1.0.0", "--notes", str(Path(tmp, "notes.md")),
-                                          "--assets", tmp, "--commit", "abc"], {})
+                                          "--assets", tmp, "--commit", "abc", "--staged-release", "7",
+                                          "--staged-sums", "ab"], {})
         self.assertEqual(code, 1)
         self.assertIn("GH_RELEASE_TOKEN is not set", err)
         self.assertIn("Contents read and write", err)
+
+    def test_github_publish_fails_closed_without_staged_values(self):
+        # Empty values (an unset job output) must not fall back to an
+        # unstaged publish (#951): argparse stops before any request.
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "notes.md").write_text("n")
+            Path(tmp, "x.whl").write_bytes(WHEEL)
+            base = ["github", "--tag", "v1.0.0", "--notes", str(Path(tmp, "notes.md")), "--assets", tmp,
+                    "--commit", "abc"]
+            for extra in ([], ["--staged-release", "", "--staged-sums", ""], ["--staged-release", "7"],
+                          ["--staged-sums", "ab"], ["--staged-release", "7", "--staged-sums", ""]):
+                with self.subTest(extra=extra), \
+                        mock.patch.object(api.GitHub, "find_release") as find, \
+                        mock.patch.object(api.GitHub, "publish_release") as publish, \
+                        mock.patch.object(api.GitHub, "tag_commit") as tag:
+                    with self.assertRaises(SystemExit) as caught:
+                        self.run_main(base + extra, {"GH_RELEASE_TOKEN": "t"})
+                    self.assertNotEqual(caught.exception.code, 0)
+                    find.assert_not_called()
+                    publish.assert_not_called()
+                    tag.assert_not_called()
+
+    def test_staged_values_are_only_for_a_github_publish(self):
+        for argv in (["forgejo", "--tag", "v1.0.0", "--commit", "abc", "--preflight", "--staged-release", "7"],
+                     ["github", "--tag", "v1.0.0", "--commit", "abc", "--preflight", "--dry-run",
+                      "--staged-sums", "ab"]):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit) as caught:
+                self.run_main(argv, {})
+            self.assertEqual(caught.exception.code, 2)
 
     def test_preflight_needs_the_token_to_publish(self):
         code, _, err = self.run_main(["github", "--preflight", "--tag", "v1.0.0", "--commit", "abc"], {})

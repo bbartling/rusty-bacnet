@@ -1,26 +1,37 @@
 #!/usr/bin/env bash
 # Smoke-test a release CLI binary (#943), with a Python that has the
 # rusty_bacnet wheel installed:
-#   scripts/release/cli_smoke.sh [--offline] <bacnet-binary> <python>
+#   scripts/release/cli_smoke.sh [--offline] [--no-capture] [--expect-version V] <bacnet-binary> <python>
 #
-# - --version and --help run;
+# - --version and --help run, and with --expect-version, --version names V;
 # - the README quickstart on loopback: a Python server with one analog input,
 #   then `read` and `--json readm` from the CLI (skipped with --offline, where
 #   <python> needs no wheel);
 # - capture --read decodes a one-packet pcap file, which exercises the
 #   statically linked libpcap, including its filter compiler, without needing
-#   capture privileges.
+#   capture privileges (skipped with --no-capture, for the macOS and Windows
+#   builds, which have no packet capture).
 #
 # CLI_WRAPPER runs the binary under another command, for example
-# "qemu-aarch64-static -L /usr/aarch64-linux-gnu" for the arm64 build.
+# "qemu-aarch64-static -L /usr/aarch64-linux-gnu" for the arm64 build. Bash
+# on Windows is Git Bash, as GitHub's `shell: bash` gives it (#951).
 set -euo pipefail
 
-offline=false
-[ "${1:-}" = --offline ] && { offline=true; shift; }
+offline=false capture=true expect_version=
+while [ $# -gt 2 ]; do
+  case "$1" in
+    --offline) offline=true; shift ;;
+    --no-capture) capture=false; shift ;;
+    --expect-version) expect_version=$2; shift 2 ;;
+    *) echo "unknown option $1" >&2; exit 2 ;;
+  esac
+done
+[ $# -eq 2 ] || { echo "usage: cli_smoke.sh [--offline] [--no-capture] [--expect-version V] <bacnet-binary> <python>" >&2; exit 2; }
 cli=$1
 python=$2
 read -ra wrapper <<<"${CLI_WRAPPER:-}"
-bacnet() { "${wrapper[@]}" "$cli" "$@"; }
+# The +-expansion keeps an empty array legal under set -u in macOS's bash 3.2.
+bacnet() { ${wrapper[@]+"${wrapper[@]}"} "$cli" "$@"; }
 tmp=$(mktemp -d)
 server=
 cleanup() {
@@ -29,7 +40,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-bacnet --version
+version=$(bacnet --version)
+echo "$version"
+if [ -n "$expect_version" ] && [ "$version" != "bacnet $expect_version" ]; then
+  echo "--version printed '$version', expected 'bacnet $expect_version'"
+  exit 1
+fi
 bacnet --help >/dev/null
 
 if ! $offline; then
@@ -84,6 +100,11 @@ done
 kill "$server"
 wait "$server" 2>/dev/null || true
 server=
+fi
+
+if ! $capture; then
+  echo "CLI smoke test passed (no packet capture in this build)"
+  exit 0
 fi
 
 # One Ethernet/IPv4/UDP frame to port 47808 carrying a BACnet/IP Who-Is,

@@ -46,6 +46,38 @@ impl Default for SerialConfig {
     }
 }
 
+/// The names of the serial ports the operating system reports, for
+/// [`SerialConfig::port_name`].
+///
+/// macOS lists them through IOKit, Windows through SetupAPI and the registry,
+/// and Linux from sysfs (`/sys/class/tty`), so a port that another program has
+/// open is listed too. An empty list means the system reports no serial port.
+///
+/// # Errors
+///
+/// [`Error::Transport`] if the operating system can't be asked, with the
+/// [`std::io::ErrorKind`] of the failure.
+pub fn available_ports() -> Result<Vec<String>, Error> {
+    // serialport panics when sysfs has no tty class (a chroot without /sys, say).
+    #[cfg(target_os = "linux")]
+    if !std::path::Path::new("/sys/class/tty").is_dir() {
+        return Err(Error::Transport(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "serial port listing failed: /sys/class/tty doesn't exist",
+        )));
+    }
+    match tokio_serial::available_ports() {
+        Ok(ports) => Ok(ports.into_iter().map(|port| port.port_name).collect()),
+        Err(error) => {
+            let error = std::io::Error::from(error);
+            Err(Error::Transport(std::io::Error::new(
+                error.kind(),
+                format!("serial port listing failed: {error}"),
+            )))
+        }
+    }
+}
+
 /// A real serial port implementing the MS/TP [`SerialPort`] trait.
 ///
 /// Wraps `tokio_serial::SerialStream` for async RS-485 I/O. By default,

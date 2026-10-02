@@ -464,3 +464,29 @@ async fn dedicated_blocking_io_keeps_app_responsive_and_stop_waits_for_release()
         assert_eq!(node.state, MasterState::Idle);
     }
 }
+
+#[test]
+fn available_ports_lists_device_names() {
+    match available_ports() {
+        Ok(ports) => {
+            for name in &ports {
+                assert!(!name.is_empty());
+                #[cfg(unix)]
+                assert!(name.starts_with("/dev/"), "{name}");
+            }
+        }
+        // Only a system without sysfs's tty class may fail to list, as an
+        // operating system error.
+        Err(error) => {
+            assert!(
+                cfg!(target_os = "linux") && !std::path::Path::new("/sys/class/tty").is_dir(),
+                "{error}"
+            );
+            assert!(
+                matches!(&error, Error::Transport(io) if io.kind() == std::io::ErrorKind::NotFound),
+                "{error:?}"
+            );
+            assert!(error.to_string().contains("/sys/class/tty"), "{error}");
+        }
+    }
+}
