@@ -189,7 +189,7 @@ fn zone_silence_unsilence_leaves_event_state_and_in_alarm_untouched() {
             !outcome
                 .changed_properties
                 .contains(&PropertyIdentifier::TRACKING_VALUE),
-            "zone must never invent TRACKING_VALUE"
+            "an unchanged TRACKING_VALUE is not reported"
         );
     }
 }
@@ -253,6 +253,7 @@ fn zone_resets_leave_event_state_and_in_alarm_untouched() {
         zone.set_reset_executor(Arc::new(|_| {
             Ok(LifeSafetyZoneResetCommit {
                 present_value: Some(LifeSafetyState::QUIET),
+                tracking_value: None,
                 silenced: Some(SilencedState::UNSILENCED),
             })
         }));
@@ -276,7 +277,7 @@ fn zone_resets_leave_event_state_and_in_alarm_untouched() {
             !outcome
                 .changed_properties
                 .contains(&PropertyIdentifier::TRACKING_VALUE),
-            "zone must never invent TRACKING_VALUE"
+            "an unchanged TRACKING_VALUE is not reported"
         );
     }
 }

@@ -49,9 +49,8 @@ pub struct LifeSafetyPointResetCommit {
 
 /// Immutable Life Safety Zone state supplied to a reset executor.
 ///
-/// Zone `Tracking_Value` is intentionally absent because the built-in Zone
-/// object does not model that required property yet. Network provenance is
-/// retained only by the server-owned authorization boundary.
+/// Network provenance is retained only by the server-owned authorization
+/// boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LifeSafetyZoneResetContext {
     /// Object receiving the operation.
@@ -60,6 +59,8 @@ pub struct LifeSafetyZoneResetContext {
     pub operation: LifeSafetyOperation,
     /// Current `Present_Value`.
     pub present_value: LifeSafetyState,
+    /// Current `Tracking_Value`.
+    pub tracking_value: LifeSafetyState,
     /// Current `Silenced` value.
     pub silenced: SilencedState,
     /// Current `Operation_Expected`, equal to `operation` when invoked.
@@ -74,6 +75,8 @@ pub struct LifeSafetyZoneResetContext {
 pub struct LifeSafetyZoneResetCommit {
     /// Replacement `Present_Value`, when application truth changed.
     pub present_value: Option<LifeSafetyState>,
+    /// Replacement `Tracking_Value`, when application truth changed.
+    pub tracking_value: Option<LifeSafetyState>,
     /// Replacement `Silenced`, when application truth changed.
     pub silenced: Option<SilencedState>,
 }
@@ -235,6 +238,7 @@ impl LifeSafetyZoneObject {
             object_identifier: self.oid,
             operation,
             present_value: self.present_value,
+            tracking_value: self.tracking_value,
             silenced: self.silenced,
             operation_expected: self.operation_expected,
         };
@@ -248,6 +252,9 @@ impl LifeSafetyZoneObject {
             .present_value
             .is_some_and(|value| !valid_life_safety_state(value))
             || commit
+                .tracking_value
+                .is_some_and(|value| !valid_life_safety_state(value))
+            || commit
                 .silenced
                 .is_some_and(|value| !valid_silenced_state(value))
         {
@@ -256,6 +263,9 @@ impl LifeSafetyZoneObject {
 
         if let Some(value) = commit.present_value {
             self.present_value = value;
+        }
+        if let Some(value) = commit.tracking_value {
+            self.tracking_value = value;
         }
         if let Some(value) = commit.silenced {
             self.silenced = value;

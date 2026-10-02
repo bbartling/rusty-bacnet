@@ -5,16 +5,10 @@ use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-const POINT_PROPERTIES: [PropertyIdentifier; 5] = [
+/// The COV surface a Point and a Zone share, Tracking_Value included.
+const PROPERTIES: [PropertyIdentifier; 5] = [
     PropertyIdentifier::PRESENT_VALUE,
     PropertyIdentifier::TRACKING_VALUE,
-    PropertyIdentifier::SILENCED,
-    PropertyIdentifier::OPERATION_EXPECTED,
-    PropertyIdentifier::STATUS_FLAGS,
-];
-
-const ZONE_PROPERTIES: [PropertyIdentifier; 4] = [
-    PropertyIdentifier::PRESENT_VALUE,
     PropertyIdentifier::SILENCED,
     PropertyIdentifier::OPERATION_EXPECTED,
     PropertyIdentifier::STATUS_FLAGS,
@@ -59,11 +53,7 @@ pub(crate) fn is_life_safety_object(object_identifier: ObjectIdentifier) -> bool
 }
 
 fn properties_for(object_identifier: ObjectIdentifier) -> Option<&'static [PropertyIdentifier]> {
-    match object_identifier.object_type() {
-        ObjectType::LIFE_SAFETY_POINT => Some(&POINT_PROPERTIES),
-        ObjectType::LIFE_SAFETY_ZONE => Some(&ZONE_PROPERTIES),
-        _ => None,
-    }
+    is_life_safety_object(object_identifier).then_some(&PROPERTIES)
 }
 
 impl LifeSafetyCovSnapshots {

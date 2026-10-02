@@ -36,16 +36,9 @@ fn validate_cov_property(
     property: PropertyIdentifier,
     array_index: Option<u32>,
 ) -> Result<(), Error> {
-    let zone_tracking_deferred = object.object_identifier().object_type()
-        == ObjectType::LIFE_SAFETY_ZONE
-        && property == PropertyIdentifier::TRACKING_VALUE;
-    let value = object.read_property(property, array_index).map_err(|_| {
-        cov_property_error(if zone_tracking_deferred {
-            ErrorCode::NOT_COV_PROPERTY
-        } else {
-            ErrorCode::UNKNOWN_PROPERTY
-        })
-    })?;
+    let value = object
+        .read_property(property, array_index)
+        .map_err(|_| cov_property_error(ErrorCode::UNKNOWN_PROPERTY))?;
     if !object.supports_cov_property(property) {
         return Err(cov_property_error(ErrorCode::NOT_COV_PROPERTY));
     }
