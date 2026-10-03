@@ -21,3 +21,22 @@ fn python_staging_boundary_maps_typed_tuples_and_local_references_exactly() {
     assert_eq!(config.target_references[0].object_identifier, target);
     assert_eq!(config.stage_names.unwrap(), vec!["Off", "On"]);
 }
+
+#[test]
+fn elevator_group_machine_room_id_accepts_only_positive_integer_value() {
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::enums::PropertyIdentifier;
+    use bacnet_types::primitives::PropertyValue;
+
+    let room = ObjectIdentifier::new(ObjectType::POSITIVE_INTEGER_VALUE, 5).unwrap();
+    let obj = elevator_group(1, "EG", Some(room)).unwrap();
+    assert_eq!(
+        obj.read_property(PropertyIdentifier::MACHINE_ROOM_ID, None)
+            .unwrap(),
+        PropertyValue::ObjectIdentifier(room)
+    );
+
+    let wrong = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 5).unwrap();
+    assert!(elevator_group(1, "EG", Some(wrong)).is_err());
+    assert!(elevator_group(1, "EG", None).is_ok());
+}

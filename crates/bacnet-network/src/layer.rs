@@ -21,13 +21,16 @@
 //! | --- | --- | --- | --- | --- |
 //! | Raw APDU | [`NetworkLayer::start`], [`BACnetRouter::start`](crate::router::BACnetRouter::start) | 256 | None | Full/Closed counted internally; no admission snapshot or depth/high-water tracking |
 //! | Tracked APDU | [`NetworkLayer::start_with_admission`], [`BACnetRouter::start_with_admission`](crate::router::BACnetRouter::start_with_admission) | 256 | 16 queued APDUs per key, defined below | Exact depth/high-water and Full/fairness/Closed totals via [`AdmissionReceiver::counters`] |
-//! | Raw control | [`NetworkLayer::enable_network_control_receiver`] | 256, separate from APDUs | None | Full/Closed counted internally; no admission snapshot or depth/high-water tracking |
+//! | Raw control | [`NetworkLayer::enable_network_control_receiver`], [`BACnetRouter::start_with_network_control_receiver`](crate::router::BACnetRouter::start_with_network_control_receiver) | 256, separate from APDUs | None | Full/Closed counted internally; no admission snapshot or depth/high-water tracking |
 //! | Tracked control | [`NetworkLayer::enable_network_control_receiver_with_admission`] | 256, separate from APDUs | None | Exact depth/high-water and Full/Closed totals; fairness always zero |
 //!
 //! Raw receivers remain `tokio::sync::mpsc::Receiver`; tracked receivers are the
 //! additive [`AdmissionReceiver`] alternatives. APDU and control opt-ins are
-//! independent. Routers process network messages inline, not through a control
-//! receiver. [`priority_channel`](crate::priority_channel) is not used by these ingress paths.
+//! independent. Routers process network messages inline; their control receiver
+//! gets only the Reject-Message-To-Network messages addressed to the router
+//! itself, and every closed admission attempt counts as Closed without
+//! disabling the stream. [`priority_channel`](crate::priority_channel) is not
+//! used by these ingress paths.
 //!
 //! ## Source keys and drop precedence
 //!
@@ -98,7 +101,7 @@ pub use issuance::IssuedApdu;
 
 #[path = "layer_admission.rs"]
 mod admission;
-use admission::AdmissionSender;
+pub(crate) use admission::AdmissionSender;
 pub use admission::{AdmissionReceiver, QueueAdmissionCounters, QueueAdmissionSnapshot};
 
 /// A received APDU with source addressing information.
@@ -154,7 +157,9 @@ pub struct ReceivedApdu {
 ///
 /// Non-router users opt in to this stream before [`NetworkLayer::start`].
 /// Without that opt-in, network messages retain their historical discard/log
-/// behavior.
+/// behavior. A router opts in with
+/// [`BACnetRouter::start_with_network_control_receiver`](crate::router::BACnetRouter::start_with_network_control_receiver),
+/// and its stream carries only the rejects addressed to the router itself.
 #[derive(Clone)]
 pub struct ReceivedNetworkControl {
     /// Decoded NPDU, including network-message type and typed-address fields.
@@ -638,7 +643,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     }
 }
 
-fn next_ingress_sequence(sequence: &AtomicU64) -> u64 {
+/// Advance a control ingress sequence, saturating at `u64::MAX`. Shared by
+/// [`NetworkLayer`] and the router's control receiver.
+pub(crate) fn next_ingress_sequence(sequence: &AtomicU64) -> u64 {
     #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
     let previous = sequence
         .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {

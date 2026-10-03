@@ -51,6 +51,7 @@ mod property_access_result;
 mod read_access;
 pub mod recipient;
 pub mod schedule;
+mod shed_level;
 pub mod staging;
 mod value_source;
 
@@ -103,6 +104,7 @@ pub use schedule::{
     encode_exception_schedule, encode_special_event, encode_special_event_period,
     encode_time_value, encode_weekly_schedule,
 };
+pub use shed_level::{decode_shed_level, encode_shed_level};
 pub use staging::{
     decode_device_object_reference, decode_stage_limit_value, encode_device_object_reference,
     encode_stage_limit_value,

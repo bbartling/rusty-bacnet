@@ -2030,6 +2030,13 @@ simulated or not (Clause 12.26.14).
 
 ```python
 server.add_elevator_group(instance=1, name="Elevator Bank A")
+# Optional Machine_Room_ID: must name a Positive Integer Value object, else a
+# BacnetProtocolError (VALUE_OUT_OF_RANGE). Read-only over the network.
+server.add_elevator_group(
+    instance=2,
+    name="Elevator Bank B",
+    machine_room_id=ObjectIdentifier(ObjectType.POSITIVE_INTEGER_VALUE, 5),
+)
 server.add_escalator(instance=1, name="Escalator 1")
 server.add_lift(instance=1, name="Elevator 1", num_floors=10)
 ```
