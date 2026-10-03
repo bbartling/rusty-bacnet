@@ -41,9 +41,11 @@ pub(in crate::server) async fn active_cov_snapshot(
     LiveDeviceCov::project(db, selection, entries)
 }
 
-/// Budgeted ReadPropertyMultiple under one database read guard. A single
-/// request-local Device projection serves every explicit and expanded row,
-/// a Group's member rows included (#1171).
+/// Budgeted ReadPropertyMultiple under one database read guard. The request
+/// is planned first; when the plan reads either Device COV list, one
+/// request-local projection serves every such row, a Group's member rows
+/// included (#1171, #1213). A request past its work limit fails in planning,
+/// before the COV table is sampled.
 pub(super) async fn read_property_multiple_observed(
     db: &RwLock<ObjectDatabase>,
     cov_table: &RwLock<CovSubscriptionTable>,
@@ -62,25 +64,27 @@ pub(super) async fn read_property_multiple_observed(
     let db = db.read().await;
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest::decode(service_request)
         .map_err(handlers::ReadFailure::Service)?;
-    let live = match handlers::active_cov_device_for_rpm(&db, &request) {
+    let view = DeviceReadContext::new(&db, DeviceExecution::FullServer)
+        .with_registered_port(registered_port);
+    let plan = handlers::RpmPlan::new(&db, &request, budget.max_result_elements, Some(&view))?;
+    let live = match plan.live_cov(&db) {
         Some(selection) => Some(active_cov_snapshot(&db, cov_table, selection).await),
         None => None,
     };
-    let view = DeviceReadContext::new(&db, DeviceExecution::FullServer, live.as_ref())
-        .with_registered_port(registered_port);
-    handlers::rpm_budgeted_request_observed(
+    let view = view.with_live(live.as_ref());
+    plan.read_observed(
         &db,
         Some(&view),
-        &request,
         service_ack,
-        budget,
+        budget.max_service_ack_bytes,
         |oid, property, index, result| completed(&db, oid, property, index, result),
     )
 }
 
-/// ReadProperty under one database read guard. A Group's Present_Value counts
-/// against `work_limit` as a ReadPropertyMultiple naming only it would, and a
-/// read past it is aborted as that request would be.
+/// ReadProperty under one database read guard, planned before the COV table
+/// is sampled (#1213). A Group's Present_Value counts against `work_limit` as
+/// a ReadPropertyMultiple naming only it would, and a read past it is aborted
+/// as that request would be.
 pub(super) async fn read_property_response_observed(
     db: &RwLock<ObjectDatabase>,
     cov_table: Option<&RwLock<CovSubscriptionTable>>,
@@ -101,25 +105,36 @@ pub(super) async fn read_property_response_observed(
         Ok(decoded) => {
             let lookup_oid =
                 handlers::resolve_read_target(&db, &decoded.object_identifier, registered_port);
-            let live = match (
-                cov_table,
-                handlers::active_cov_device(&db, lookup_oid, decoded.property_identifier),
-            ) {
-                (Some(cov_table), Some(selection)) => {
-                    Some(active_cov_snapshot(&db, cov_table, selection).await)
-                }
-                _ => None,
-            };
-            let view = DeviceReadContext::new(&db, execution, live.as_ref())
+            let view = DeviceReadContext::new(&db, execution)
                 .with_registered_port(registered_port)
                 .with_work_limit(work_limit);
-            handlers::read_property_request_observed(
+            match handlers::plan_read_property(
                 &db,
                 Some(&view),
-                &decoded,
-                &mut service_ack,
-                |oid, request, result| completed(&db, oid, request, result),
-            )
+                lookup_oid,
+                decoded.property_identifier,
+                decoded.property_array_index,
+            ) {
+                Ok(plan) => {
+                    let live = match (cov_table, plan.live_cov(&db)) {
+                        (Some(cov_table), Some(selection)) => {
+                            Some(active_cov_snapshot(&db, cov_table, selection).await)
+                        }
+                        _ => None,
+                    };
+                    let view = view.with_live(live.as_ref());
+                    handlers::read_property_request_observed(
+                        &db,
+                        Some(&view),
+                        &decoded,
+                        plan,
+                        &mut service_ack,
+                        |oid, request, result| completed(&db, oid, request, result),
+                    )
+                    .map_err(handlers::ReadFailure::Service)
+                }
+                Err(failure) => Err(failure),
+            }
         }
         Err(error) => Err(handlers::ReadFailure::Service(error)),
     };

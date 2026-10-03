@@ -1,6 +1,80 @@
+use super::group_present_value::GroupMembers;
+use super::rpm_budget::{self, PlannedRow};
 use super::*;
 use crate::local_device::selected_device;
-use bacnet_types::constructed::ReadAccessSpecification;
+use bacnet_objects::traits::BACnetObject;
+use bacnet_types::constructed::PropertyReference;
+
+/// One single-property read (ReadProperty, ReadRange or the local read),
+/// planned before any value is read: its target and row, with the member rows
+/// of a Group's whole Present_Value charged to the view's work limit (#1172).
+/// Planning reads no value, so the request chooses its COV snapshot from the
+/// plan and reads afterwards (#1213).
+pub(crate) struct PropertyPlan {
+    lookup_oid: ObjectIdentifier,
+    row: PlannedRow,
+}
+
+impl PropertyPlan {
+    /// Plan the read of `property` on `stored`, the object the service's own
+    /// lookup found at `lookup_oid`. A missing object plans nothing more; the
+    /// read reports it.
+    pub(super) fn new(
+        db: &ObjectDatabase,
+        view: Option<&DeviceReadContext<'_>>,
+        lookup_oid: ObjectIdentifier,
+        stored: Option<&dyn BACnetObject>,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+    ) -> Result<Self, ReadFailure> {
+        let reference = PropertyReference {
+            property_identifier: property,
+            property_array_index: array_index,
+        };
+        let members = match stored {
+            Some(stored) => {
+                let served = view.map(|view| view.object(stored));
+                let object: &dyn BACnetObject = served.as_ref().map_or(stored, |served| served);
+                group_present_value::plan_property(db, view, object, &reference)?
+            }
+            None => None,
+        };
+        Ok(Self {
+            lookup_oid,
+            row: PlannedRow { reference, members },
+        })
+    }
+
+    /// The selected Device's COV lists this read takes, by name or through
+    /// the planned members of a Group.
+    pub(crate) fn live_cov(&self, db: &ObjectDatabase) -> Option<LiveCovSelection> {
+        rpm_budget::live_cov_selection(db, [(self.lookup_oid, &self.row)])
+    }
+
+    pub(super) fn into_members(self) -> Option<GroupMembers> {
+        self.row.members
+    }
+}
+
+/// Plan a ReadProperty, or a local read, of the resolved `lookup_oid`. Past
+/// the view's work limit it fails with [`ReadFailure::Work`], before any
+/// value is read.
+pub(crate) fn plan_read_property(
+    db: &ObjectDatabase,
+    view: Option<&DeviceReadContext<'_>>,
+    lookup_oid: ObjectIdentifier,
+    property: PropertyIdentifier,
+    array_index: Option<u32>,
+) -> Result<PropertyPlan, ReadFailure> {
+    PropertyPlan::new(
+        db,
+        view,
+        lookup_oid,
+        read_target_object(db, &lookup_oid),
+        property,
+        array_index,
+    )
+}
 
 /// Handle a ReadProperty request against standalone object data.
 ///
@@ -15,57 +89,59 @@ pub fn handle_read_property(
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
     let request = ReadPropertyRequest::decode(service_data)?;
-    read_property_request_observed(db, None, &request, buf, |_, _, _| {})
-        .map_err(ReadFailure::unlimited)
+    let lookup_oid = resolve_read_target(db, &request.object_identifier, None);
+    let plan = plan_read_property(
+        db,
+        None,
+        lookup_oid,
+        request.property_identifier,
+        request.property_array_index,
+    )
+    .map_err(ReadFailure::unlimited)?;
+    read_property_request_observed(db, None, &request, plan, buf, |_, _, _| {})
 }
 
-/// ReadProperty evaluator over one decoded request. `view` carries executor-owned
-/// Device definitions, request-local COV lists and the work limit a Group's
-/// Present_Value is charged to; observations carry only execution outcomes,
-/// never the read value. A read past the work limit fails with
-/// [`ReadFailure::Work`] and is not observed, as a ReadPropertyMultiple over
-/// its work budget is not.
+/// ReadProperty evaluator over one decoded request and its plan. `view`
+/// carries executor-owned Device definitions and the request-local COV lists
+/// the plan selected; observations carry only execution outcomes, never the
+/// read value. A read past the work limit failed in planning and is not
+/// observed, as a ReadPropertyMultiple over its work budget is not.
 pub(crate) fn read_property_request_observed(
     db: &ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
     request: &ReadPropertyRequest,
+    plan: PropertyPlan,
     buf: &mut BytesMut,
     mut completed: impl FnMut(ObjectIdentifier, &ReadPropertyRequest, &Result<(), Error>),
-) -> Result<(), ReadFailure> {
-    let lookup_oid = resolve_read_target(
-        db,
-        &request.object_identifier,
-        view.and_then(|view| view.registered_port),
-    );
-    let result = match read_property_decoded(db, view, request, lookup_oid, buf) {
-        Ok(()) => Ok(()),
-        Err(ReadFailure::Service(error)) => Err(error),
-        Err(failure) => return Err(failure),
-    };
+) -> Result<(), Error> {
+    let lookup_oid = plan.lookup_oid;
+    let result = read_property_decoded(db, view, request, plan, buf);
     completed(lookup_oid, request, &result);
-    result.map_err(ReadFailure::Service)
+    result
 }
 
-/// Evaluate one property read with ReadProperty error precedence: unknown
-/// object, then non-array index using the effective property definition, then
-/// the executor view or raw object's reader, except that a Group's
-/// Present_Value is rebuilt from its members within the view's work limit.
+/// Evaluate one planned property read with ReadProperty error precedence:
+/// unknown object, then non-array index using the effective property
+/// definition, then the executor view or raw object's reader, except that a
+/// Group's Present_Value is rebuilt from the members its plan holds.
 pub(crate) fn read_property_value(
     db: &ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
-    lookup_oid: ObjectIdentifier,
-    property: PropertyIdentifier,
-    array_index: Option<u32>,
-) -> Result<PropertyValue, ReadFailure> {
-    let object =
-        read_target_object(db, &lookup_oid).ok_or(ReadFailure::Service(Error::Protocol {
-            class: ErrorClass::OBJECT.to_raw() as u32,
-            code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-        }))?;
+    plan: PropertyPlan,
+) -> Result<PropertyValue, Error> {
+    let PropertyPlan {
+        lookup_oid,
+        row: PlannedRow { reference, members },
+    } = plan;
+    let property = reference.property_identifier;
+    let array_index = reference.property_array_index;
+    let object = read_target_object(db, &lookup_oid).ok_or(Error::Protocol {
+        class: ErrorClass::OBJECT.to_raw() as u32,
+        code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+    })?;
 
     let served = view.map(|view| view.object(object));
-    let object: &dyn bacnet_objects::traits::BACnetObject =
-        served.as_ref().map_or(object, |served| served);
+    let object: &dyn BACnetObject = served.as_ref().map_or(object, |served| served);
 
     // Clause 15.5.1.3: an array index on a non-array property is rejected
     // with PROPERTY / PROPERTY_IS_NOT_AN_ARRAY. The array/list decision
@@ -73,32 +149,27 @@ pub(crate) fn read_property_value(
     // type-dependent identifiers, e.g. ALARM_VALUES), so the handler defers
     // to the trait query.
     if array_index.is_some() && !object.is_array_property(property) {
-        return Err(ReadFailure::Service(Error::Protocol {
+        return Err(Error::Protocol {
             class: ErrorClass::PROPERTY.to_raw() as u32,
             code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
-        }));
+        });
     }
 
-    group_present_value::read_served_property(db, view, object, property, array_index)
+    group_present_value::read_served_property(db, view, object, property, array_index, members)
 }
 
 fn read_property_decoded(
     db: &ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
     request: &ReadPropertyRequest,
-    lookup_oid: ObjectIdentifier,
+    plan: PropertyPlan,
     buf: &mut BytesMut,
-) -> Result<(), ReadFailure> {
-    let value = read_property_value(
-        db,
-        view,
-        lookup_oid,
-        request.property_identifier,
-        request.property_array_index,
-    )?;
+) -> Result<(), Error> {
+    let lookup_oid = plan.lookup_oid;
+    let value = read_property_value(db, view, plan)?;
 
     let mut value_buf = BytesMut::new();
-    encode_property_value(&mut value_buf, &value).map_err(ReadFailure::Service)?;
+    encode_property_value(&mut value_buf, &value)?;
 
     let ack = ReadPropertyACK {
         object_identifier: lookup_oid,
@@ -144,150 +215,6 @@ pub(crate) fn resolve_read_target(
         }
     }
     *oid
-}
-
-/// `(Active_COV_Subscriptions, Active_COV_Multiple_Subscriptions)` that one
-/// property reference may select, explicitly or through ALL, REQUIRED or
-/// OPTIONAL expansion.
-fn live_cov_lists(property: PropertyIdentifier) -> (bool, bool) {
-    match property {
-        PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS => (true, false),
-        PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS => (false, true),
-        PropertyIdentifier::ALL | PropertyIdentifier::REQUIRED | PropertyIdentifier::OPTIONAL => {
-            (true, true)
-        }
-        _ => (false, false),
-    }
-}
-
-fn either(a: (bool, bool), b: (bool, bool)) -> (bool, bool) {
-    (a.0 || b.0, a.1 || b.1)
-}
-
-/// The lists one specification may select from `device`: its references'
-/// lists when it names that Device or the Device wildcard, else none.
-fn device_spec_lists(spec: &ReadAccessSpecification, device: ObjectIdentifier) -> (bool, bool) {
-    if spec.object_identifier != device && !is_device_wildcard(&spec.object_identifier) {
-        return (false, false);
-    }
-    spec.list_of_property_references
-        .iter()
-        .map(|reference| live_cov_lists(reference.property_identifier))
-        .fold((false, false), either)
-}
-
-/// Whether `property` may select a Group's Present_Value, by name or, as
-/// [`live_cov_lists`] assumes for the Device, through any selector.
-fn may_select_present_value(property: PropertyIdentifier) -> bool {
-    matches!(
-        property,
-        PropertyIdentifier::PRESENT_VALUE
-            | PropertyIdentifier::ALL
-            | PropertyIdentifier::REQUIRED
-            | PropertyIdentifier::OPTIONAL
-    )
-}
-
-/// The lists the members of Group `group` may select from `device` (#1171).
-/// The Present_Value rebuild reads its member rows through the request's view,
-/// so they serve the same snapshot as the request's own rows. A list that
-/// doesn't decode selects nothing; its read fails without reading a member.
-fn group_member_lists(
-    db: &ObjectDatabase,
-    group: ObjectIdentifier,
-    device: ObjectIdentifier,
-) -> (bool, bool) {
-    if group.object_type() != ObjectType::GROUP {
-        return (false, false);
-    }
-    db.get(&group)
-        .and_then(|object| group_present_value::members(object).ok())
-        .map_or((false, false), |members| {
-            members
-                .iter()
-                .map(|member| device_spec_lists(member, device))
-                .fold((false, false), either)
-        })
-}
-
-/// The selected Device's server-owned COV lists that `(lookup_oid, property)`
-/// may read: the Device's own list by name, or the lists the members of a
-/// Group read when `property` is that Group's Present_Value. Any other read
-/// needs no COV table snapshot.
-pub(crate) fn active_cov_device(
-    db: &ObjectDatabase,
-    lookup_oid: ObjectIdentifier,
-    property: PropertyIdentifier,
-) -> Option<LiveCovSelection> {
-    let direct = matches!(
-        property,
-        PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS
-            | PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
-    );
-    let group = property == PropertyIdentifier::PRESENT_VALUE
-        && lookup_oid.object_type() == ObjectType::GROUP;
-    if !direct && !group {
-        return None;
-    }
-    let device = selected_device(db)?;
-    let (active, multiple) = if direct {
-        if device != lookup_oid {
-            return None;
-        }
-        live_cov_lists(property)
-    } else {
-        group_member_lists(db, lookup_oid, device)
-    };
-    (active || multiple).then_some(LiveCovSelection {
-        device,
-        active,
-        multiple,
-    })
-}
-
-/// The selected Device's COV lists that any ReadPropertyMultiple reference to
-/// it may select, explicitly or through ALL, REQUIRED or OPTIONAL expansion,
-/// together with the lists the members of every Group whose Present_Value
-/// the request may read select. One snapshot then serves every such row.
-pub(crate) fn active_cov_device_for_rpm(
-    db: &ObjectDatabase,
-    request: &ReadPropertyMultipleRequest,
-) -> Option<LiveCovSelection> {
-    let group_spec = |spec: &ReadAccessSpecification| {
-        spec.object_identifier.object_type() == ObjectType::GROUP
-            && spec
-                .list_of_property_references
-                .iter()
-                .any(|reference| may_select_present_value(reference.property_identifier))
-    };
-    let device_spec = |spec: &ReadAccessSpecification| {
-        spec.list_of_property_references
-            .iter()
-            .any(|reference| live_cov_lists(reference.property_identifier) != (false, false))
-    };
-    // Only a request that may select either property pays the Device scan.
-    let mut specs = request
-        .list_of_read_access_specs
-        .iter()
-        .filter(|spec| device_spec(spec) || group_spec(spec))
-        .peekable();
-    specs.peek()?;
-    let device = selected_device(db)?;
-    let (active, multiple) = specs
-        .map(|spec| {
-            let members = if group_spec(spec) {
-                group_member_lists(db, spec.object_identifier, device)
-            } else {
-                (false, false)
-            };
-            either(device_spec_lists(spec, device), members)
-        })
-        .fold((false, false), either);
-    (active || multiple).then_some(LiveCovSelection {
-        device,
-        active,
-        multiple,
-    })
 }
 
 fn expand_property_reference(
@@ -404,15 +331,22 @@ pub fn handle_read_property_multiple(
                             });
                             continue;
                         }
-                        match group_present_value::read_served_property(
-                            db,
-                            None,
-                            object,
-                            prop_id,
-                            array_index,
-                        )
-                        .map_err(ReadFailure::unlimited)
-                        {
+                        let reference = PropertyReference {
+                            property_identifier: prop_id,
+                            property_array_index: array_index,
+                        };
+                        match group_present_value::plan_property(db, None, object, &reference)
+                            .map_err(ReadFailure::unlimited)
+                            .and_then(|members| {
+                                group_present_value::read_served_property(
+                                    db,
+                                    None,
+                                    object,
+                                    prop_id,
+                                    array_index,
+                                    members,
+                                )
+                            }) {
                             Ok(value) => {
                                 let mut value_buf = BytesMut::new();
                                 match encode_property_value(&mut value_buf, &value) {

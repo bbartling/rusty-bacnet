@@ -55,7 +55,7 @@ pub(crate) use read_budget::ReadFailure;
 mod read_property;
 mod read_range;
 mod rpm_budget;
-pub(crate) use rpm_budget::rpm_budgeted_request_observed;
+pub(crate) use rpm_budget::RpmPlan;
 mod write_property;
 
 pub use alarm_event::*;

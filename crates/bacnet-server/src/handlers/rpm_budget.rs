@@ -2,6 +2,8 @@
 use super::group_present_value::GroupMembers;
 use super::read_budget::{ReadFailure, Work};
 use super::*;
+use crate::local_device::selected_device;
+#[cfg(test)]
 use crate::server::ReadPropertyMultipleBudget;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
@@ -79,7 +81,137 @@ fn expand(
     Ok(())
 }
 
-pub(super) fn plan(
+/// Every planned row of `objects`, with the object it reads.
+pub(super) fn planned_rows(
+    objects: &[PlannedObject],
+) -> impl Iterator<Item = (ObjectIdentifier, &PlannedRow)> {
+    objects.iter().flat_map(|object| {
+        object
+            .properties
+            .iter()
+            .map(move |row| (object.lookup_oid, row))
+    })
+}
+
+/// The selected Device's COV lists that planned `rows` read: a row naming
+/// either list on that Device, or such a row among the planned members of a
+/// Group whose whole Present_Value is read (#1171). A plan holds exactly the
+/// rows the request will read, ALL, REQUIRED and OPTIONAL already expanded,
+/// so the request samples only the lists it serves (#1213).
+pub(super) fn live_cov_selection<'a>(
+    db: &ObjectDatabase,
+    rows: impl IntoIterator<Item = (ObjectIdentifier, &'a PlannedRow)>,
+) -> Option<LiveCovSelection> {
+    // Only a plan that names either list pays the Device lookup.
+    let mut device = None;
+    let mut selection: Option<LiveCovSelection> = None;
+    let mut select = |oid: ObjectIdentifier, row: &PlannedRow| {
+        let (active, multiple) = match row.reference.property_identifier {
+            PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS => (true, false),
+            PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS => (false, true),
+            _ => return,
+        };
+        if *device.get_or_insert_with(|| selected_device(db)) != Some(oid) {
+            return;
+        }
+        let selection = selection.get_or_insert(LiveCovSelection {
+            device: oid,
+            active: false,
+            multiple: false,
+        });
+        selection.active |= active;
+        selection.multiple |= multiple;
+    };
+    for (oid, row) in rows {
+        select(oid, row);
+        for (member, member_row) in row.members.iter().flat_map(GroupMembers::rows) {
+            select(member, member_row);
+        }
+    }
+    selection
+}
+
+/// A ReadPropertyMultiple request planned before any value is read: every
+/// result row after target resolution and expansion, a Group's member rows
+/// included, charged to the request's work limit. Planning reads no value, so
+/// the request takes its one COV snapshot from the plan, then reads (#1213).
+pub(crate) struct RpmPlan(Vec<PlannedObject>);
+
+impl RpmPlan {
+    /// Plan `request` within `limit` result rows. A request past it fails
+    /// with [`ReadFailure::Work`] here, before any value is read.
+    pub(crate) fn new(
+        db: &ObjectDatabase,
+        request: &ReadPropertyMultipleRequest,
+        limit: usize,
+        view: Option<&DeviceReadContext<'_>>,
+    ) -> Result<Self, ReadFailure> {
+        plan(db, request, limit, view).map(Self)
+    }
+
+    /// The selected Device's COV lists the planned rows read.
+    pub(crate) fn live_cov(&self, db: &ObjectDatabase) -> Option<LiveCovSelection> {
+        live_cov_selection(db, planned_rows(&self.0))
+    }
+
+    /// Read every planned row into `buf`, within `max_service_ack_bytes`.
+    ///
+    /// Atomic with respect to the caller's buffer, not object read side
+    /// effects. Observations are provisional until this entire call succeeds.
+    /// The caller must discard them on failure; callbacks carry the requested
+    /// index (which may differ from the response index) and no property
+    /// values. `view` owns the effective Device definitions and the
+    /// request-local COV values for every row.
+    pub(crate) fn read_observed(
+        self,
+        db: &ObjectDatabase,
+        view: Option<&DeviceReadContext<'_>>,
+        buf: &mut BytesMut,
+        max_service_ack_bytes: usize,
+        mut completed: impl FnMut(
+            ObjectIdentifier,
+            PropertyIdentifier,
+            Option<u32>,
+            Option<(ErrorClass, ErrorCode)>,
+        ),
+    ) -> Result<(), ReadFailure> {
+        let mut scratch = Scratch {
+            bytes: BytesMut::new(),
+            limit: max_service_ack_bytes,
+        };
+        let mut footer = BytesMut::new();
+        ReadAccessResult::encode_footer(&mut footer);
+        for spec in self.0 {
+            let mut header = BytesMut::new();
+            ReadAccessResult::encode_header(&mut header, &spec.lookup_oid);
+            scratch.append(&header, footer.len())?;
+            for row in spec.properties {
+                let object = read_property::read_target_object(db, &spec.lookup_oid);
+                let served = object.and_then(|object| view.map(|view| view.object(object)));
+                let object = served
+                    .as_ref()
+                    .map(|served| served as &dyn BACnetObject)
+                    .or(object);
+                let requested_index = row.reference.property_array_index;
+                let result = read_row(db, view, object, row);
+                let mut encoded = BytesMut::new();
+                result.encode(&mut encoded);
+                scratch.append(&encoded, footer.len())?;
+                completed(
+                    spec.lookup_oid,
+                    result.property_identifier,
+                    requested_index,
+                    result.error,
+                );
+            }
+            scratch.append(&footer, 0)?;
+        }
+        buf.extend_from_slice(&scratch.bytes);
+        Ok(())
+    }
+}
+
+fn plan(
     db: &ObjectDatabase,
     request: &ReadPropertyMultipleRequest,
     limit: usize,
@@ -264,61 +396,13 @@ pub(crate) fn handle_rpm_budgeted_observed(
     ),
 ) -> Result<(), ReadFailure> {
     let request = ReadPropertyMultipleRequest::decode(data).map_err(ReadFailure::Service)?;
-    rpm_budgeted_request_observed(db, None, &request, buf, budget, completed)
-}
-
-/// Atomic with respect to the caller's buffer, not object read side effects.
-/// Observations are provisional until this entire call succeeds. The caller
-/// must discard them on failure; callbacks carry the requested index (which may
-/// differ from the response index) and no property values. `view` owns the
-/// effective Device definitions and request-local COV values for every row.
-pub(crate) fn rpm_budgeted_request_observed(
-    db: &ObjectDatabase,
-    view: Option<&DeviceReadContext<'_>>,
-    request: &ReadPropertyMultipleRequest,
-    buf: &mut BytesMut,
-    budget: ReadPropertyMultipleBudget,
-    mut completed: impl FnMut(
-        ObjectIdentifier,
-        PropertyIdentifier,
-        Option<u32>,
-        Option<(ErrorClass, ErrorCode)>,
-    ),
-) -> Result<(), ReadFailure> {
-    let plan = plan(db, request, budget.max_result_elements, view)?;
-    let mut scratch = Scratch {
-        bytes: BytesMut::new(),
-        limit: budget.max_service_ack_bytes,
-    };
-    let mut footer = BytesMut::new();
-    ReadAccessResult::encode_footer(&mut footer);
-    for spec in plan {
-        let mut header = BytesMut::new();
-        ReadAccessResult::encode_header(&mut header, &spec.lookup_oid);
-        scratch.append(&header, footer.len())?;
-        for row in spec.properties {
-            let object = read_property::read_target_object(db, &spec.lookup_oid);
-            let served = object.and_then(|object| view.map(|view| view.object(object)));
-            let object = served
-                .as_ref()
-                .map(|served| served as &dyn BACnetObject)
-                .or(object);
-            let requested_index = row.reference.property_array_index;
-            let result = read_row(db, view, object, row);
-            let mut encoded = BytesMut::new();
-            result.encode(&mut encoded);
-            scratch.append(&encoded, footer.len())?;
-            completed(
-                spec.lookup_oid,
-                result.property_identifier,
-                requested_index,
-                result.error,
-            );
-        }
-        scratch.append(&footer, 0)?;
-    }
-    buf.extend_from_slice(&scratch.bytes);
-    Ok(())
+    RpmPlan::new(db, &request, budget.max_result_elements, None)?.read_observed(
+        db,
+        None,
+        buf,
+        budget.max_service_ack_bytes,
+        completed,
+    )
 }
 
 #[cfg(test)]
