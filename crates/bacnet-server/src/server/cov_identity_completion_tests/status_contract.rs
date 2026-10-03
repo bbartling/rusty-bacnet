@@ -11,7 +11,7 @@ struct State {
     selected: PropertyValue,
     reads: usize,
     changing: bool,
-    increment: Option<f32>,
+    increment: Option<f64>,
 }
 struct Probe(Arc<StdMutex<State>>);
 fn flags(bits: u8) -> PropertyValue {
@@ -40,7 +40,7 @@ impl BACnetObject for Probe {
     fn supports_cov(&self) -> bool {
         true
     }
-    fn cov_increment(&self) -> Option<f32> {
+    fn cov_increment(&self) -> Option<f64> {
         self.0.lock().unwrap().increment
     }
     fn read_property(&self, p: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {

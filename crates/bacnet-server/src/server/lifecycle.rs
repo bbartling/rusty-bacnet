@@ -148,6 +148,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             time_sync_limiter: time_sync_limiter.clone(),
             request_tasks: Arc::clone(&request_tasks),
         };
+        // A Schedule tick that writes a Command's Present_Value starts its list.
+        let schedule_runner = super::command_runs::CommandRunner::new(
+            &dispatch_context.services,
+            &request_tasks.spawner(),
+        );
         let dispatch_task = spawn_owned(audit_owner.clone(), move || async move {
             let mut seg_receivers: HashMap<SegRecvKey, SegmentedRequestState> = HashMap::new();
             let mut notifications_open = true;
@@ -643,7 +648,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             );
                             commit.changed(change.object_id);
                         }
-                        commit.finish(&db_guard, &fanout.cov_table).await
+                        commit.finish(&mut db_guard, &fanout.cov_table).await
                     };
                     fanout.fire(&committed).await;
                 }
@@ -692,6 +697,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 )
                 .await;
                 schedule_fanout.fire(&committed).await;
+                schedule_runner.start(committed.command_runs);
             }
         }));
 

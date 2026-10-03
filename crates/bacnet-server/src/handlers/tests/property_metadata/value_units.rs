@@ -26,7 +26,7 @@ fn numeric_values(configured: bool) -> [Box<dyn BACnetObject>; 3] {
     [Box::new(iv), Box::new(piv), Box::new(lav)]
 }
 
-const ALL: [P; 11] = [
+const ALL: [P; 13] = [
     P::OBJECT_IDENTIFIER,
     P::OBJECT_NAME,
     P::DESCRIPTION,
@@ -38,6 +38,8 @@ const ALL: [P; 11] = [
     P::UNITS,
     P::PRIORITY_ARRAY,
     P::RELINQUISH_DEFAULT,
+    P::COV_INCREMENT,
+    P::CURRENT_COMMAND_PRIORITY,
 ];
 const REQUIRED: [P; 6] = [
     P::OBJECT_IDENTIFIER,
@@ -47,12 +49,14 @@ const REQUIRED: [P; 6] = [
     P::STATUS_FLAGS,
     P::UNITS,
 ];
-const OPTIONAL: [P; 5] = [
+const OPTIONAL: [P; 7] = [
     P::DESCRIPTION,
     P::OUT_OF_SERVICE,
     P::RELIABILITY,
     P::PRIORITY_ARRAY,
     P::RELINQUISH_DEFAULT,
+    P::COV_INCREMENT,
+    P::CURRENT_COMMAND_PRIORITY,
 ];
 
 #[test]

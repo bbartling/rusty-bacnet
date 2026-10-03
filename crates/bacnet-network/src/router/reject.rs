@@ -5,8 +5,9 @@
 //! message, and that message's source fields say who that is. Every reject
 //! this router originates (reasons 1, 2, 3 and 6) goes through
 //! [`send_reject`], which addresses it from the refused NPDU's SNET/SADR. A
-//! received reject is passed on by [`relay_reject`], which routes it by the
-//! DNET/DADR such a reject carries.
+//! received reject goes to [`route_received_reject`]: one addressed to this
+//! router stops here and reaches the router's own network-control consumer
+//! (#1175), and any other is routed by the DNET/DADR such a reject carries.
 
 use std::sync::atomic::AtomicU64;
 
@@ -19,6 +20,7 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::warn;
 
 use super::forwarding::forward_unicast;
+use super::local_control::LocalControl;
 use super::{IngressContext, SendRequest};
 use crate::layer::count_address_length_drop;
 use crate::router_table::{ReachabilityStatus, RouterTable};
@@ -27,6 +29,8 @@ use crate::router_table::{ReachabilityStatus, RouterTable};
 pub(super) struct Refused<'a> {
     /// Send queue of the port the refused NPDU arrived on.
     pub send_tx: &'a mpsc::Sender<SendRequest>,
+    /// Network number of the port the refused NPDU arrived on.
+    pub port_network: u16,
     /// Link-layer source of the refused NPDU: the node that handed it to us.
     pub sender_mac: &'a [u8],
     /// The refused NPDU's SNET/SADR, present when a router relayed it.
@@ -36,14 +40,17 @@ pub(super) struct Refused<'a> {
 }
 
 impl<'a> Refused<'a> {
-    /// A decoded NPDU refused on the port `send_tx` serves.
+    /// A decoded NPDU refused on the port `send_tx` serves, which is attached
+    /// to `port_network`.
     pub(super) fn frame(
         send_tx: &'a mpsc::Sender<SendRequest>,
+        port_network: u16,
         received: &'a ReceivedNpdu,
         npdu: &'a Npdu,
     ) -> Self {
         Self {
             send_tx,
+            port_network,
             sender_mac: &received.source_mac,
             origin: npdu.source.as_ref(),
             data_attributes: &received.data_attributes,
@@ -57,6 +64,7 @@ impl<'a> Refused<'a> {
     ) -> Self {
         Self {
             send_tx: &send_txs[ctx.port_idx],
+            port_network: ctx.port_network,
             sender_mac: &ctx.source_mac,
             origin: ctx.npdu.source.as_ref(),
             data_attributes: &ctx.data_attributes,
@@ -86,6 +94,14 @@ pub(super) fn route_refusal(
 /// knows the way back. An NPDU without SNET/SADR came from the arrival link
 /// itself, and the reject is a plain local unicast to its sender.
 ///
+/// An SNET equal to the arrival port's own network puts the originator on the
+/// arrival link too (#1174). A router reaches a node on a directly connected
+/// network by dropping DNET/DADR and sending to that node's MAC (Clause
+/// 6.5.4), so the reject is a local unicast to the SADR. Sent to the link
+/// sender with a DNET instead, it would be lost: a non-router discards an NPDU
+/// that names a remote DNET (Clause 6.5.2.1), and a router would have to send
+/// it back out the port it arrived on.
+///
 /// Locally generated, but ingress-triggered: the caller's data attributes
 /// travel with the reject instead of being silently dropped (RB-03).
 pub(super) fn send_reject(
@@ -97,10 +113,15 @@ pub(super) fn send_reject(
     payload.put_u8(reason.to_raw());
     payload.put_u16(rejected_network);
 
+    let (destination, link_mac) = match refused.origin {
+        Some(origin) if origin.network == refused.port_network => (None, &origin.mac_address[..]),
+        Some(origin) => (Some(origin.clone()), refused.sender_mac),
+        None => (None, refused.sender_mac),
+    };
     let reject = Npdu {
         is_network_message: true,
         message_type: Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()),
-        destination: refused.origin.cloned(),
+        destination,
         hop_count: 255,
         payload: payload.freeze(),
         ..Npdu::default()
@@ -116,7 +137,7 @@ pub(super) fn send_reject(
         .send_tx
         .try_send(SendRequest::unicast_with_attributes(
             buf.freeze(),
-            MacAddr::from_slice(refused.sender_mac),
+            MacAddr::from_slice(link_mac),
             refused.data_attributes,
         ))
     {
@@ -140,6 +161,7 @@ pub(super) fn send_reject(
 pub(super) fn refuse_address_too_long(
     send_tx: &mpsc::Sender<SendRequest>,
     port_idx: usize,
+    port_network: u16,
     received: &ReceivedNpdu,
     refused: &NpduDecodeError,
     drops: &AtomicU64,
@@ -152,6 +174,7 @@ pub(super) fn refuse_address_too_long(
     if let Some(dnet) = dnet.filter(|&dnet| dnet != 0xFFFF) {
         let refused = Refused {
             send_tx,
+            port_network,
             sender_mac: &received.source_mac,
             origin: source.as_ref(),
             data_attributes: &received.data_attributes,
@@ -160,22 +183,33 @@ pub(super) fn refuse_address_too_long(
     }
 }
 
-/// Pass a received reject on toward the node it names (Clause 6.6.3.5).
+/// Deliver or pass on a received reject, once the caller has applied it to
+/// the routing table.
 ///
-/// That node is the reject's DNET/DADR, so the reject is routed like any other
-/// NPDU (Clause 6.5): handed to the DADR, with SNET/SADR added, when the DNET
-/// is directly connected, or to the next router with one hop spent. A reject
-/// without a DNET is addressed to this router and stops here. Nothing answers
-/// a reject, so one this router cannot route is dropped: a DNET it has no
-/// route to, the global broadcast DNET, or the arrival network, where the
-/// sender could have reached the node itself.
-pub(super) async fn relay_reject(
+/// A reject with no DNET, or whose DADR is this router's own MAC on the
+/// DNET's port, is addressed to this router. It goes no further, and the
+/// router's own network-control consumer gets it (#1175), the way a
+/// non-router hands one to its application side.
+///
+/// Any other reject is meant for the node its DNET/DADR names (Clause
+/// 6.6.3.5), so it is routed like any other NPDU (Clause 6.5): handed to the
+/// DADR, with SNET/SADR added, when the DNET is directly connected, or to the
+/// next router with one hop spent. Nothing answers a reject, so one this
+/// router cannot route is dropped: a DNET it has no route to, the global
+/// broadcast DNET, or the arrival network, where the sender could have
+/// reached the node itself.
+pub(super) async fn route_received_reject(
     table: &Mutex<RouterTable>,
     send_txs: &[mpsc::Sender<SendRequest>],
+    local: &LocalControl,
     ctx: &IngressContext,
 ) {
-    let Some(dnet) = ctx.npdu.destination.as_ref().map(|dest| dest.network) else {
-        return;
+    let dnet = match ctx.npdu.destination.as_ref() {
+        Some(dest) if !local.is_own_address(dest) => dest.network,
+        _ => {
+            local.deliver(ctx);
+            return;
+        }
     };
     if dnet == 0xFFFF || dnet == ctx.port_network {
         return;

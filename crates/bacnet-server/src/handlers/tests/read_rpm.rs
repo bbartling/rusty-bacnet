@@ -488,7 +488,7 @@ fn rpm_handler_required_vs_optional() {
 
     // Metadata routing fixtures mirror the Time Value precedent: REQUIRED
     // carries the RequiredRead rows (Property_List excluded from the wire
-    // expansion), OPTIONAL the Optional rows, and ALL the 10-row projection.
+    // expansion), OPTIONAL the Optional rows, and ALL the 11-row projection.
     let req_pids = [
         P::OBJECT_IDENTIFIER,
         P::OBJECT_NAME,
@@ -502,6 +502,7 @@ fn rpm_handler_required_vs_optional() {
         P::RELIABILITY,
         P::PRIORITY_ARRAY,
         P::RELINQUISH_DEFAULT,
+        P::CURRENT_COMMAND_PRIORITY,
     ];
     // ALL omits Property_List although required_properties keeps it.
     let all = [
@@ -515,6 +516,7 @@ fn rpm_handler_required_vs_optional() {
         P::RELIABILITY,
         P::PRIORITY_ARRAY,
         P::RELINQUISH_DEFAULT,
+        P::CURRENT_COMMAND_PRIORITY,
     ];
     for (selector, expected) in [
         (P::REQUIRED, req_pids.as_slice()),

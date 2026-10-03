@@ -1501,10 +1501,21 @@ first sent the refused NPDU (Clause 6.4.4, #1158). An NPDU that arrived
 with SNET/SADR came through another router: the reject carries that SNET/SADR
 as its DNET/DADR, with a hop count of 255, and goes back out the arrival port
 to the router that relayed the NPDU. An NPDU without SNET/SADR draws a local
-unicast to its sender. A reason 6 reject for an over-long SADR has no
-originator to name, so it falls back to that local unicast. A received reject
-is relayed by its DNET/DADR like any routed NPDU (Clause 6.6.3.5); one without
-a DNET is addressed to the router itself and goes no further.
+unicast to its sender. An SNET equal to the arrival port's own network puts
+the originator on that link, so the reject is a local unicast to the SADR,
+with no DNET (Clause 6.5.4, #1174). A reason 6 reject for an over-long SADR
+has no originator to name, so it falls back to that local unicast. A received
+reject is relayed by its DNET/DADR like any routed NPDU (Clause 6.6.3.5).
+
+A received reject with no DNET, or whose DADR is the router's own MAC on the
+port attached to its DNET, is addressed to the router itself (#1175). It
+updates the routing table and goes no further. Start the router with
+`BACnetRouter::start_with_network_control_receiver` to also get these rejects
+as `ReceivedNetworkControl` records, the same type a non-router
+`NetworkLayer` control receiver yields. A client or server attached to a
+router through a `LoopbackTransport` port does not need this: it is an
+ordinary node on that port's network, and rejects for its requests reach its
+own `NetworkLayer`.
 
 ---
 
@@ -1571,8 +1582,10 @@ a constructed single value, a whole array or an indexed array element, returns
 `SERVICES/PROPERTY_IS_NOT_A_LIST` before any element is decoded. Unknown object,
 unknown property and array-index errors come first, and element datatype errors
 after. Only a BACnetLIST of BACnetDestination (Recipient_List) uses the
-destination codec, and only Schedule's List_Of_Object_Property_References the
-reference codec (#1121). A list the object holds framed with no element codec,
+destination codec, only Schedule's List_Of_Object_Property_References the
+reference codec (#1121), and only a Notification Forwarder's
+Subscribed_Recipients the subscription codec (#1049). A list the object holds
+framed with no element codec,
 such as the standalone Device's COV subscription lists, returns
 `PROPERTY/WRITE_ACCESS_DENIED`.
 
@@ -1580,6 +1593,10 @@ Elements compare whole (Clauses 15.1.2 and 15.2.2): two elements are the same
 when their encodings are, so a destination that differs in one field is a
 different destination. AddListElement leaves an element that is already present
 as it is, including a repeat within the request; that is not a failure.
+Subscribed_Recipients is the exception (Clause 12.51.9): an element names the
+entry with the same recipient and process identifier, so AddListElement renews
+that entry in place with the element's confirmation flag and Time Remaining,
+and RemoveListElement removes it whatever those two members say.
 RemoveListElement checks every element first and removes nothing if one is
 refused: an element that does not decode as the property's element, or whose
 datatype differs from the stored elements', returns
@@ -1607,8 +1624,9 @@ unknown property and array-index errors and before any By Sequence Number or By
 Time error. A list the object holds framed in one `PropertyValue::ApplicationData`
 is split into its elements first, so By Position counts destinations in
 Recipient_List, references in Schedule's List_Of_Object_Property_References,
-and subscriptions and COV-multiple contexts in the Device's
-Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions. A running
+entries in a Notification Forwarder's Subscribed_Recipients, and subscriptions
+and COV-multiple contexts in the Device's Active_COV_Subscriptions and
+Active_COV_Multiple_Subscriptions. A running
 server pages those two Device lists from the live COV table, through the same
 Device view as ReadProperty and from one snapshot per request, so a page's
 items joined in order are a run of the ReadProperty value. The standalone
@@ -1668,6 +1686,22 @@ framing, through the shared `bacnet-encoding` codecs.
   `RecipientLookupOutcome::RecipientListTooLong`, and the transition reaches
   none of its destinations. The codec is not a Notification Forwarder object,
   which is unsupported.
+- **Notification Forwarder `Subscribed_Recipients`** is a BACnetLIST of
+  BACnetEventNotificationSubscription (Clause 12.51.9): a recipient, a process
+  identifier, a confirmation flag and the minutes the entry has left, under
+  context tags 0 to 3 (`encode_event_notification_subscription`,
+  `decode_event_notification_subscription`). The stack bundles no forwarder
+  object (#188), but an application's own one can hold the list in
+  `bacnet_objects::subscribed_recipients::SubscribedRecipients` and route the
+  property's read and write and the `*_monotonic_*_internal` clock hooks to
+  it. Nothing forwards notifications to the entries. The store keeps at most
+  `MAX_SUBSCRIBED_RECIPIENTS` (32) entries and takes 1 to
+  `MAX_SUBSCRIPTION_MINUTES` (1,440) minutes, refusing anything else by
+  position, as a Recipient_List write does. It serves whole minutes left,
+  rounded up, and the server's monotonic operation task drops an entry at its
+  deadline. A rewrite keeps the deadline of each entry written exactly as it
+  reads. The server's list services and ReadRange edit and page the list of any
+  NOTIFICATION_FORWARDER object held this way.
 - **`Event_Parameters` and `Fault_Parameters`** (Clause 12.12) use the
   BACnetEventParameter and BACnetFaultParameter CHOICE framing. Modeled
   alternatives round-trip. An alternative the stack does not model is kept as
@@ -1697,7 +1731,12 @@ framing, through the shared `bacnet-encoding` codecs.
   ReadAccessResult per member, reading each member as ReadPropertyMultiple
   would, so a failed read carries its error and an object that isn't in the
   database reads OBJECT / UNKNOWN_OBJECT. Read directly from the object alone,
-  Present_Value is an empty list.
+  Present_Value is an empty list. Every member row counts against
+  `ReadPropertyMultipleBudget::max_result_elements` along with the request's
+  own rows, so several Groups in one request share it; ReadProperty, ReadRange
+  and `read_local` get the limit of a ReadPropertyMultiple naming only that
+  Present_Value. A request that would pass the limit is aborted with
+  OUT_OF_RESOURCES (`read_local` returns `Error::Abort`).
 - **Structured View `Subordinate_List` and Command `Action`** (Clauses 12.29
   and 12.10) are arrays too, with the same per-index reads, as is
   `Subordinate_Annotations`. A Subordinate_List element is a
@@ -1707,7 +1746,27 @@ framing, through the shared `bacnet-encoding` codecs.
   selects, framed in `[0]`. `CommandObject::set_action` takes
   `BACnetActionList` values and refuses a command whose priority is outside 1
   to 16 or whose value can't be encoded. All three arrays are read-only on the
-  network, and the Command stores Present_Value without running the actions.
+  network. Writing the Command's Present_Value runs the list it selects; see
+  [Building Control](#building-control-7).
+- **Load Control shed levels** (Clause 12.28): Requested_Shed_Level,
+  Expected_Shed_Level and Actual_Shed_Level are `BACnetShedLevel` values, one
+  context tag each: percent `[0]` or level `[1]` (Unsigned, `u64` in Rust) or
+  amount `[2]` (REAL). They start at level 0, the LEVEL choice's no-shed value.
+  A WriteProperty of Requested_Shed_Level must carry one of those choices;
+  anything else fails with INVALID_DATA_TYPE, and a percent above 100 or an
+  amount that is negative or not finite with VALUE_OUT_OF_RANGE.
+  `LoadControlObject::set_requested_shed_level` applies the same checks and
+  returns `Result`. Present_Value stays SHED_INACTIVE (the shed state machine
+  isn't modeled), so a new requested level also resets Expected_Shed_Level and
+  Actual_Shed_Level to its choice's Table 12-33 default: 100, 0 or 0.0.
+  `set_actual_shed_level` refuses a level of another choice than the requested
+  one.
+- **Access Point `Access_Event_Time` and Credential Data Input `Update_Time`**
+  are `BACnetTimeStamp` values, the unspecified date and time in the datetime
+  form until the first update. Credential Data Input `Present_Value` is a
+  `BACnetAuthenticationFactor`, the UNDEFINED factor until the first read.
+  `CredentialDataInputObject::set_present_value(factor, update_time)` records
+  a read and its time together.
 
 ### ObjectDatabase
 
@@ -2022,6 +2081,28 @@ on the Loop carries the value in its next report without being triggered by it.
 Before the Loop is added, `LoopObject::set_controlled_variable_value` sets the
 starting value.
 
+A Command object runs one of its Action lists each time its Present_Value is
+written (Clause 12.10). Give it the lists with `CommandObject::set_action`
+before adding it, and optionally one description per list with
+`set_action_text`, which serves Action_Text and needs exactly one text per
+list; both arrays are read-only on the network. Present_Value N selects list
+N. A number above the list count is VALUE_OUT_OF_RANGE, and zero or an empty
+list writes nothing and sets All_Writes_Successful TRUE. Otherwise In_Process
+turns TRUE and All_Writes_Successful FALSE, and every Present_Value write is
+OBJECT / BUSY until the run ends. A running server makes the commands in order
+through the `write_local` path, each at its own priority with the Command as
+the initiating object, and waits out a command's `post_delay` in the run's own
+task, so the write that started the run is answered at once. Each command's
+`write_successful` flag records its outcome; a failure with `quit_on_failure`
+set stops the list and marks the rest unsuccessful. At the end In_Process
+returns to FALSE, with All_Writes_Successful TRUE only if every write
+succeeded. The server writes to its own objects only, so a command naming
+another Device fails. A Schedule writing a Command's Present_Value starts the
+run as well. Command takes SubscribeCOVProperty but not SubscribeCOV, so a
+client can follow In_Process. A run that `stop()` cuts short isn't resumed,
+and a Command used without the server keeps its queued run, and In_Process
+TRUE, until something takes it.
+
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
 Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and
 Shed_Duration, and a change of any of them sends one. Duty_Window, which the
@@ -2035,8 +2116,8 @@ window (below) starts the spacing over. The spacing never drops below
 so that window spans more than Window_Interval. A referenced object or property
 that doesn't exist, an array index on a property that isn't an array, a failed
 read, or a value of a datatype the object can't average counts as a missed
-attempt. References are always local: a device-qualified write is refused. The
-server's monotonic operation task does this through
+attempt. References are always local: a written reference naming another
+device is refused (see below). The server's monotonic operation task does this through
 `ObjectDatabase::sample_due_averaging_objects`, which an application driving
 its own database can call as well.
 
@@ -2076,6 +2157,15 @@ when it moves by the subscription's COV increment, or on any change if the
 subscription gives none, and the report carries no Status_Flags because the
 object has none. A move to or from the NaN or an infinity of an empty window is
 always reported, whatever the increment, and staying at one never is.
+
+An Averaging object samples only properties in its own device. A written
+Object_Property_Reference naming another device is refused with
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. One naming the Device the server answers
+for is the local reference it stands for: the server drops that Device member
+before the object decodes the value, on WriteProperty, WritePropertyMultiple
+and `write_local`, and it reads back without it (#1153). `AveragingObject`
+itself can't tell which Device holds it, so written directly it refuses every
+Device member.
 
 Staging uses an explicit atomic configuration; the former stage-count-only
 constructor is intentionally removed because it could not create a valid
@@ -2156,6 +2246,14 @@ Reliability), or when Present_Stage changes.
 | `ColorObject` | `::new(instance, name)` |
 | `ColorTemperatureObject` | `::new(instance, name)` |
 
+Lighting Output's `Default_Fade_Time`, `Default_Ramp_Rate` and
+`Default_Step_Increment` are writable over the network and through
+`set_default_fade_time`, `set_default_ramp_rate` and
+`set_default_step_increment`. A new object uses 100 ms, 100.0 %/s and 1.0 %.
+A fade time outside 100 to 86,400,000 ms, or a rate or increment outside 0.1
+to 100.0, is refused with VALUE_OUT_OF_RANGE (Clauses 12.54.16 to 12.54.18).
+Both lighting objects serve `Current_Command_Priority`.
+
 #### Life Safety (2)
 
 | Type | Constructor |
@@ -2183,9 +2281,10 @@ Access_Event_Tag and Access_Event_Time, and only an Access_Event_Time or
 Status_Flags change sends one. A Credential Data Input report carries
 Update_Time, whose change sends one. The application sets these values before
 adding the object with `AccessDoorObject::set_door_alarm_state`,
-`AccessPointObject::set_access_event` and
-`CredentialDataInputObject::set_update_time`, and a door's Door_Status and
-Lock_Status with `set_door_status` and `set_lock_status`.
+`AccessPointObject::set_access_event` (its time a `BACnetTimeStamp`) and
+`CredentialDataInputObject::set_present_value` (the factor read and its
+Update_Time), and a door's Door_Status and Lock_Status with `set_door_status`
+and `set_lock_status`.
 
 Over the network the Access Point and Credential Data Input values stay
 read-only. A door's Door_Status, Lock_Status and Door_Alarm_State, the rows
@@ -2255,6 +2354,17 @@ Simulated values count the same as the device's.
 | `DatePatternValueObject` | `::new(instance, name)` |
 | `TimePatternValueObject` | `::new(instance, name)` |
 | `DateTimePatternValueObject` | `::new(instance, name)` |
+
+All 12 are commandable. Each serves `Current_Command_Priority`, the
+Priority_Array slot Present_Value comes from, or NULL while
+Relinquish_Default is in effect. Integer, Positive Integer and Large Analog
+Value also serve `Units` (set with `set_units`) and a writable
+`COV_Increment`, Unsigned on the two integer types and Double on Large Analog
+Value, set over the network or with `set_cov_increment`. It starts at 0, so
+every Present_Value change sends a SubscribeCOV notification; a larger
+increment holds notifications back until Present_Value has moved that far from
+the value last reported (Table 13-1). Large Analog Value refuses a negative or
+non-finite increment with VALUE_OUT_OF_RANGE.
 
 ---
 
@@ -3640,13 +3750,16 @@ still readable after `stop()`. Fields are sampled independently.
 
 ```rust
 let counters = server.event_notification_counters();
-counters.notification_class_missing; // no Notification Class with that number
-counters.recipient_list_unavailable; // its Recipient_List could not be read
-counters.recipient_list_invalid;     // the list did not decode as a whole
-counters.recipient_list_too_long;    // a custom class served more than 32 destinations
-counters.confirmed_no_invoke_id;     // no invoke ID free for a confirmed notification
-counters.confirmed_rejected;         // the recipient answered Error, Reject or Abort
-counters.confirmed_unanswered;       // no acknowledgment after the last retry
+counters.notification_class_missing;    // no Notification Class with that number
+counters.recipient_list_unavailable;    // its Recipient_List could not be read
+counters.recipient_list_invalid;        // the list did not decode as a whole
+counters.recipient_list_too_long;       // a custom class served more than 32 destinations
+counters.device_recipient_unbound;      // a Device recipient with no current binding
+counters.recipient_unroutable;          // a recipient no binding or retry can route
+counters.confirmed_broadcast_recipient; // confirmed requested at a broadcast address
+counters.confirmed_no_invoke_id;        // no invoke ID free for a confirmed notification
+counters.confirmed_rejected;            // the recipient answered Error, Reject or Abort
+counters.confirmed_unanswered;          // no acknowledgment after the last retry
 ```
 
 The four recipient-list fields count transitions, event and acknowledgment
@@ -3657,6 +3770,22 @@ configured behaviour and are not counted, nor are notifications held back by
 DCC or Event_Enable. The three confirmed fields count notifications to one
 recipient; a reservation refused because the server is stopping is not
 counted.
+
+The three route fields (#1160) count destinations that matched the transition
+but were skipped while their route was resolved, once per destination; the
+transition's other destinations are still served. They are grouped by what
+fixes them, and the warning logged with each skip gives the finer reason:
+
+- `device_recipient_unbound`: no Device binding was configured or observed, or
+  the observed one expired. Observing the device's I-Am again, or configuring a
+  binding, clears it.
+- `recipient_unroutable`: the entry can't be routed as written. Its Device
+  identifier names an object that isn't a Device (or its binding is unusable on
+  this link), or its address puts a MAC on network 65535.
+- `confirmed_broadcast_recipient`: the entry asks for confirmed notifications at
+  a local, remote or global broadcast address. Clause 6.3 allows only
+  unconfirmed requests there, and sending one unconfirmed would lose the
+  acknowledgment, so the entry is skipped before any invoke ID is reserved.
 
 ### Concurrency
 

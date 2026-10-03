@@ -540,13 +540,18 @@ fn rpm_credential_data_input_indexed_reads_and_bytes_are_unchanged() {
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
-        // Update_Time reads back the unspecified Date/Time pair, the same
-        // bytes as the Access Point Access_Event_Time default. The format
-        // lists are BACnetLIST/BACnetARRAY rows the default array gate
-        // rejects an index on, so every index overflows to NOT_AN_ARRAY.
-        let unspec_time: &[u8] = &[0xa4, 0xff, 0xff, 0xff, 0xff, 0xb4, 0xff, 0xff, 0xff, 0xff];
+        // Present_Value is the UNDEFINED BACnetAuthenticationFactor: format
+        // type [0] 0, format class [1] 0, an empty value [2]. Update_Time is
+        // a BACnetTimeStamp, the unspecified date and time framed as the
+        // datetime [2] choice, the same bytes as the Access Point
+        // Access_Event_Time default (#1133). The format lists are
+        // BACnetLIST/BACnetARRAY rows the default array gate rejects an
+        // index on, so every index overflows to NOT_AN_ARRAY.
+        let unspec_time: &[u8] = &[
+            0x2e, 0xa4, 0xff, 0xff, 0xff, 0xff, 0xb4, 0xff, 0xff, 0xff, 0xff, 0x2f,
+        ];
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
-            (P::PRESENT_VALUE, None, Ok(&[0x91, 0])),
+            (P::PRESENT_VALUE, None, Ok(&[0x09, 0x00, 0x19, 0x00, 0x28])),
             (
                 P::PRESENT_VALUE,
                 Some(0),

@@ -456,6 +456,44 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         false
     }
 
+    /// Take the action list a Command object's Present_Value write queued.
+    ///
+    /// The default keeps every other object source-compatible. The bundled
+    /// server takes it under the guard that committed the write, then makes
+    /// the writes after releasing that guard.
+    #[doc(hidden)]
+    fn take_command_run_internal(&mut self) -> Option<crate::command::CommandRun> {
+        None
+    }
+
+    /// Return the current Command run generation, if applicable.
+    #[doc(hidden)]
+    fn command_generation_internal(&self) -> Option<u64> {
+        None
+    }
+
+    /// Record how command `command` of the running list fared.
+    ///
+    /// Returns whether the run is still the current one. Implementations
+    /// ignore a stale generation, so older work can't mark a newer run.
+    #[doc(hidden)]
+    fn record_command_write_internal(
+        &mut self,
+        _generation: u64,
+        _command: usize,
+        _success: bool,
+    ) -> bool {
+        false
+    }
+
+    /// End the current Command run, setting All_Writes_Successful.
+    ///
+    /// Returns whether readable state changed; a stale generation is ignored.
+    #[doc(hidden)]
+    fn complete_command_run_internal(&mut self, _generation: u64, _all_succeeded: bool) -> bool {
+        false
+    }
+
     /// Return this object's GetEnrollmentSummary event capability.
     ///
     /// The default opts custom and downstream objects out. Implementations opt
@@ -493,14 +531,19 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// COV increment for this object (objects with a COV_Increment property).
     ///
     /// Returns `Some(increment)` for objects that use COV_Increment filtering
-    /// (e.g., AnalogInput, AnalogOutput, AnalogValue, Loop, Staging). A
-    /// notification fires only when the numeric Present_Value delta reaches the
-    /// increment. Property COV inherits this increment only for numeric
-    /// Present_Value; other selected properties use their own supplied
-    /// increment or typed change reporting.
+    /// (e.g., AnalogInput, AnalogOutput, AnalogValue, Loop, Staging, and the
+    /// Integer, Positive Integer and Large Analog Value types). A notification
+    /// fires only when the numeric Present_Value delta reaches the increment.
+    /// Property COV inherits this increment only for numeric Present_Value;
+    /// other selected properties use their own supplied increment or typed
+    /// change reporting.
+    ///
+    /// The increment is an `f64` so every COV_Increment datatype fits without
+    /// rounding: a REAL widens exactly, a Large Analog Value's Double is kept
+    /// as is, and an Unsigned increment is exact up to 2^53.
     ///
     /// Returns `None` for objects that notify on any state change (binary, multi-state).
-    fn cov_increment(&self) -> Option<f32> {
+    fn cov_increment(&self) -> Option<f64> {
         None
     }
 

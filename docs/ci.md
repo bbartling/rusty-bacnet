@@ -369,7 +369,8 @@ Clippy runs three ways:
 - `bacnet-cli` with no default features (without the TUI);
 - each published crate alone with default features, plus the `no_std` build of
   `bacnet-types` (`scripts/ci/check-default-features.sh`). This also runs
-  rustdoc, which is how docs.rs builds.
+  rustdoc, which is how docs.rs builds, and a rustdoc-only run of `bacnet-cli`
+  without the TUI.
 
 The last catches code that compiles only when another crate's feature unifies
 in. With no arguments it checks the host; given target triples, it checks
@@ -386,8 +387,11 @@ public item whose docs link to a private item
 (`rustdoc::private_intra_doc_links` fires with or without it), so the
 every-feature run replaces the public-only run rather than adding a second
 one. Every module of the PyO3 crate is private, so without the flag rustdoc
-would check none of its docs. The per-crate default-features run above stays
-public, as docs.rs builds.
+would check none of its docs. The per-crate default-features run and the
+feature-off rustdoc runs of `check-default-features.sh` (`bacnet-types` without
+`std`, `bacnet-cli` without `tui`) pass the flag too (#1192), so private items
+that exist only in one feature configuration are covered; the run takes about
+2 s longer on the host.
 
 The individual gates are also runnable anywhere. `FEATURES` is
 `LINUX_FEATURES` from `ci.yml`, without the serial and ethernet entries on macOS:

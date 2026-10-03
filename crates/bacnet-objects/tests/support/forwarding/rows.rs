@@ -156,6 +156,9 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("staging_generation_internal", |o| {
         format!("{:?}", o.staging_generation_internal())
     }),
+    ("command_generation_internal", |o| {
+        format!("{:?}", o.command_generation_internal())
+    }),
     ("enrollment_summary_capability_internal", |o| {
         format!("{:?}", o.enrollment_summary_capability_internal())
     }),
@@ -279,6 +282,15 @@ pub const COMMANDS: &[(&str, Command)] = &[
     }),
     ("complete_staging_write_plan_internal", |o| {
         o.complete_staging_write_plan_internal(7, true).to_string()
+    }),
+    ("take_command_run_internal", |o| {
+        format!("{:?}", o.take_command_run_internal())
+    }),
+    ("record_command_write_internal", |o| {
+        o.record_command_write_internal(11, 2, false).to_string()
+    }),
+    ("complete_command_run_internal", |o| {
+        o.complete_command_run_internal(11, false).to_string()
     }),
     ("set_overridden", |o| {
         format!("{:?}", o.set_overridden(true))

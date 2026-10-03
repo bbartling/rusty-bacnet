@@ -12,7 +12,7 @@
 use super::*;
 use bacnet_encoding::constructed::{
     decode_cov_multiple_subscription, decode_cov_subscription, decode_destination,
-    decode_device_object_property_reference,
+    decode_device_object_property_reference, decode_event_notification_subscription,
 };
 
 /// The Clause 21 element of a list held framed, which marks where each
@@ -32,6 +32,9 @@ enum FramedElement {
     /// BACnetCOVMultipleSubscription: the Device's
     /// Active_COV_Multiple_Subscriptions (Table 12-13).
     CovMultipleSubscription,
+    /// BACnetEventNotificationSubscription: the Notification Forwarder's
+    /// Subscribed_Recipients (Table 12-58).
+    EventNotificationSubscription,
 }
 
 impl FramedElement {
@@ -58,6 +61,11 @@ impl FramedElement {
             {
                 Some(Self::CovMultipleSubscription)
             }
+            PropertyIdentifier::SUBSCRIBED_RECIPIENTS
+                if object_type == ObjectType::NOTIFICATION_FORWARDER =>
+            {
+                Some(Self::EventNotificationSubscription)
+            }
             _ => None,
         }
     }
@@ -72,6 +80,9 @@ impl FramedElement {
             Self::CovSubscription => decode_cov_subscription(data, offset).map(|(_, end)| end),
             Self::CovMultipleSubscription => {
                 decode_cov_multiple_subscription(data, offset).map(|(_, end)| end)
+            }
+            Self::EventNotificationSubscription => {
+                decode_event_notification_subscription(data, offset).map(|(_, end)| end)
             }
         }
     }

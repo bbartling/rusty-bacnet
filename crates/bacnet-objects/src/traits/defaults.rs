@@ -55,7 +55,9 @@ pub(super) fn cov_reported_properties_default(
 ///   table carrying either).
 /// - **Type-dependent** identifiers classify by `object_type`: ACTION is
 ///   BACnetARRAY\[N\] on Command (Table 12-12) but a single BACnetAction on Loop
-///   (Table 12-20); ALARM_VALUES / FAULT_VALUES are BACnetARRAY\[N\] on
+///   (Table 12-20), and ACTION_TEXT, its parallel array of descriptions, is
+///   classified on Command, the only type that has it; ALARM_VALUES /
+///   FAULT_VALUES are BACnetARRAY\[N\] on
 ///   CharacterString Value (Table 12-44) and BitString Value (Table 12-47) but
 ///   BACnetLIST on the multi-state, life-safety, and access families;
 ///   LIST_OF_OBJECT_PROPERTY_REFERENCES is
@@ -70,7 +72,7 @@ pub(super) fn cov_reported_properties_default(
 ///   ACTIVE_COV_SUBSCRIPTIONS (Table 12-13) — takes no index: Clause 12.1.5.2
 ///   makes ReadRange the only positional access to a BACnetLIST. Array-typed
 ///   identifiers whose object types are not modeled in-tree (e.g.
-///   ACTION_TEXT, EVENT_MESSAGE_TEXTS_CONFIG) stay
+///   EVENT_MESSAGE_TEXTS_CONFIG) stay
 ///   rejected until their object-side modeling lands.
 ///
 /// Like [`historical_writable_default`] this is a free function (not a
@@ -103,7 +105,9 @@ pub(super) fn array_property_default(
         | PropertyIdentifier::TARGET_REFERENCES
         | PropertyIdentifier::AUTHENTICATION_FACTORS
         | PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS => true,
-        PropertyIdentifier::ACTION => object_type == ObjectType::COMMAND,
+        PropertyIdentifier::ACTION | PropertyIdentifier::ACTION_TEXT => {
+            object_type == ObjectType::COMMAND
+        }
         PropertyIdentifier::ALARM_VALUES | PropertyIdentifier::FAULT_VALUES => matches!(
             object_type,
             ObjectType::CHARACTERSTRING_VALUE | ObjectType::BITSTRING_VALUE

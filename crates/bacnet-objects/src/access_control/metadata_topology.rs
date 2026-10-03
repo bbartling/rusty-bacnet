@@ -143,7 +143,7 @@ mod tests {
     use crate::traits::BACnetObject;
     use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
     use bacnet_types::error::Error;
-    use bacnet_types::primitives::{Date, PropertyValue, Time};
+    use bacnet_types::primitives::PropertyValue;
     use std::collections::HashSet;
 
     fn assert_error(error: Error, expected: ErrorCode) {
@@ -364,29 +364,20 @@ mod tests {
             object.read_property(P::ACCESS_EVENT_TAG, None).unwrap(),
             PropertyValue::Unsigned(0)
         );
+        // The unspecified date and time as the datetime [2] choice (#1133).
         assert_eq!(
             object.read_property(P::ACCESS_EVENT_TIME, None).unwrap(),
-            PropertyValue::List(vec![
-                PropertyValue::Date(Date {
-                    year: 0xFF,
-                    month: 0xFF,
-                    day: 0xFF,
-                    day_of_week: 0xFF,
-                }),
-                PropertyValue::Time(Time {
-                    hour: 0xFF,
-                    minute: 0xFF,
-                    second: 0xFF,
-                    hundredths: 0xFF,
-                }),
+            PropertyValue::ApplicationData(vec![
+                0x2E, 0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF, 0x2F
             ])
         );
         assert_eq!(
             object.read_property(P::ACCESS_DOORS, None).unwrap(),
             PropertyValue::List(vec![])
         );
-        // Access_Doors and Access_Event_Time are BACnetLIST rows, so an
-        // index is rejected even though the values are lists.
+        // Access_Event_Time is one BACnetTimeStamp, so an index is rejected.
+        // Access_Doors takes none either: it is served as a list of object
+        // identifiers, without per-index reads.
         assert!(!object.is_array_property(P::ACCESS_DOORS));
         assert!(!object.is_array_property(P::ACCESS_EVENT_TIME));
     }

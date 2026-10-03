@@ -418,19 +418,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             };
 
-            if !route.is_deliverable(notification_class) {
-                continue;
-            }
-
-            // Downgrading to unconfirmed would drop the acknowledgment the
-            // recipient was configured to require, so both cases are skips.
-            if *confirmed && !route.permits_confirmed() {
-                // Clause 6.3 restricts broadcast to Unconfirmed-Request-PDUs.
-                warn!(
-                    notification_class,
-                    "Recipient requests confirmed notifications at a broadcast address; \
-                     Clause 6.3 permits only unconfirmed PDUs there, skipping"
-                );
+            // A route that can't carry this notification is skipped and
+            // counted (#1160); the remaining destinations are still served.
+            if let Some(skip) = route.skip(*confirmed, notification_class) {
+                suppressions.record(skip);
                 continue;
             }
 
@@ -661,7 +652,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             .send_apdu_routed(&buf, *net, mac, router, false, network_priority)
                             .await
                     }
-                    // Filtered out by `RecipientRoute::is_deliverable` above.
+                    // Skipped by `RecipientRoute::skip` above.
                     RecipientRoute::ContradictoryGlobal
                     | RecipientRoute::UnknownDevice
                     | RecipientRoute::StaleDevice

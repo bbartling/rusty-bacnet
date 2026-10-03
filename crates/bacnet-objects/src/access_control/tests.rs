@@ -215,15 +215,15 @@ fn access_point_property_list() {
 #[test]
 fn access_point_read_access_event_time() {
     let point = AccessPointObject::new(1, "AP-1").unwrap();
-    let val = point
-        .read_property(PropertyIdentifier::ACCESS_EVENT_TIME, None)
-        .unwrap();
-    match val {
-        PropertyValue::List(items) => {
-            assert_eq!(items.len(), 2);
-        }
-        other => panic!("expected List, got {other:?}"),
-    }
+    // The unspecified date and time, framed as the datetime [2] choice.
+    assert_eq!(
+        point
+            .read_property(PropertyIdentifier::ACCESS_EVENT_TIME, None)
+            .unwrap(),
+        PropertyValue::ApplicationData(vec![
+            0x2E, 0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF, 0x2F
+        ])
+    );
 }
 
 #[test]
@@ -455,7 +455,8 @@ fn credential_data_input_create_and_read_defaults() {
     assert_eq!(
         cdi.read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
-        PropertyValue::Enumerated(0) // notReady
+        // The UNDEFINED factor: format type [0] 0, class [1] 0, empty value [2].
+        PropertyValue::ApplicationData(vec![0x09, 0x00, 0x19, 0x00, 0x28])
     );
 }
 
@@ -482,15 +483,13 @@ fn credential_data_input_property_list() {
 #[test]
 fn credential_data_input_read_update_time() {
     let cdi = CredentialDataInputObject::new(1, "CDI-1").unwrap();
-    let val = cdi
-        .read_property(PropertyIdentifier::UPDATE_TIME, None)
-        .unwrap();
-    match val {
-        PropertyValue::List(items) => {
-            assert_eq!(items.len(), 2);
-        }
-        other => panic!("expected List, got {other:?}"),
-    }
+    assert_eq!(
+        cdi.read_property(PropertyIdentifier::UPDATE_TIME, None)
+            .unwrap(),
+        PropertyValue::ApplicationData(vec![
+            0x2E, 0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF, 0x2F
+        ])
+    );
 }
 
 #[test]

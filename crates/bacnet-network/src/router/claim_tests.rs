@@ -24,6 +24,7 @@ async fn deliver(
         &[tx0, tx1],
         &ctx,
         &super::control_policy::ControlGate::permissive(),
+        &LocalControl::default(),
     )
     .await;
     let mut output = [Vec::new(), Vec::new()];
@@ -451,6 +452,7 @@ async fn dampened_table_transition_still_relays_every_reject() {
             &send_txs,
             &IngressContext::test_local(0, 1000, &[1], npdu.clone()),
             &super::control_policy::ControlGate::permissive(),
+            &LocalControl::default(),
         )
         .await;
         let SendRequest::Unicast {

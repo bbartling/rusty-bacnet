@@ -1,21 +1,25 @@
-//! References that name this device (#1122, #1136).
+//! References that name this device (#1122, #1136, #1153).
 //!
-//! Two properties hold references this server keeps inside its own device: a
-//! Schedule's List_Of_Object_Property_References (Clause 12.24.10) and a
-//! Staging object's Target_References (Clause 12.62.14). For a property with
-//! that limit, both clauses permit refusing a reference to an object in some
-//! other device, and nothing more. Neither object can tell which Device holds
-//! it, so each refuses every member that carries a Device identifier. A member
-//! whose Device identifier is this device's points inside the device, so
-//! refusing it would be stricter than the clauses allow. The server knows the
-//! local Device (`local_device::selected_device`, under the same database
-//! guard as the write), so it rewrites such a member as the local reference it
-//! denotes before the object sees it: WriteProperty, WritePropertyMultiple,
-//! `write_local`, and, for the Schedule's list, the elements of AddListElement
-//! and RemoveListElement. A member naming any other device keeps its Device
-//! identifier, and the object refuses it. The object stores, and a read
-//! returns, the local form, so a member written with and without the
-//! identifier is one member.
+//! Three properties hold references this server keeps inside its own device:
+//! a Schedule's List_Of_Object_Property_References (Clause 12.24.10), a
+//! Staging object's Target_References (Clause 12.62.14) and an Averaging
+//! object's Object_Property_Reference (Clause 12.5.13). Each clause lets the
+//! object stay within its own device, which permits refusing a reference to
+//! an object in some other device, and nothing more. None of these objects
+//! can tell which Device holds it, so each refuses every member that carries
+//! a Device identifier. A member whose Device identifier is this device's
+//! points inside the device, so refusing it would be stricter than the
+//! clauses allow. The server knows the local Device
+//! (`local_device::selected_device`, under the same database guard as the
+//! write), so it rewrites such a member as the local reference it denotes
+//! before the object sees it: WriteProperty, WritePropertyMultiple,
+//! `write_local`, and, for the Schedule's list, the elements of
+//! AddListElement and RemoveListElement. A member naming any other device
+//! keeps its Device identifier, and the object refuses it. The object stores,
+//! and a read returns, the local form, so a member written with and without
+//! the identifier is one member.
+
+use std::borrow::Cow;
 
 use bacnet_encoding::constructed::{
     decode_device_object_property_reference, decode_device_object_reference,
@@ -67,19 +71,23 @@ impl DeviceQualified for BACnetDeviceObjectReference {
     }
 }
 
-/// Rewrites a run of encoded members so none names the given Device.
-type Rewrite = fn(&[u8], ObjectIdentifier) -> Vec<u8>;
+/// Rewrites a written value so no reference in it names the given Device.
+type Rewrite = fn(PropertyValue, ObjectIdentifier) -> PropertyValue;
 
 /// The rewrite for `property` of an object of `object_type`, if the server
-/// localizes its references: a Schedule's List_Of_Object_Property_References
-/// or a Staging object's Target_References.
+/// localizes its references. A list or an array takes
+/// [`localize_members`], a property holding one reference
+/// [`localize_single`].
 fn rewrite(object_type: ObjectType, property: PropertyIdentifier) -> Option<Rewrite> {
     match (object_type, property) {
         (ObjectType::SCHEDULE, PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES) => {
-            Some(localize_bytes::<BACnetDeviceObjectPropertyReference>)
+            Some(localize_members::<BACnetDeviceObjectPropertyReference>)
         }
         (ObjectType::STAGING, PropertyIdentifier::TARGET_REFERENCES) => {
-            Some(localize_bytes::<BACnetDeviceObjectReference>)
+            Some(localize_members::<BACnetDeviceObjectReference>)
+        }
+        (ObjectType::AVERAGING, PropertyIdentifier::OBJECT_PROPERTY_REFERENCE) => {
+            Some(localize_single::<BACnetDeviceObjectPropertyReference>)
         }
         _ => None,
     }
@@ -116,19 +124,69 @@ pub(crate) fn localize(
     let Some(local) = local_device(db) else {
         return value;
     };
+    rewrite(value, local)
+}
+
+/// A list or array value with each member naming `local` in its local form.
+/// Each chunk holds whole members and is rewritten on its own: a whole value
+/// comes as one chunk per element (the shape a read returns, and a whole
+/// array as the handler splits it), or as one chunk of members back to back.
+fn localize_members<R: DeviceQualified>(
+    value: PropertyValue,
+    local: ObjectIdentifier,
+) -> PropertyValue {
     let chunk = |value| match value {
         PropertyValue::ApplicationData(bytes) => {
-            PropertyValue::ApplicationData(rewrite(&bytes, local))
+            PropertyValue::ApplicationData(localize_bytes::<R>(&bytes, local))
         }
         other => other,
     };
     match value {
-        // The shape a read returns, and a whole array as the handler splits
-        // it: one chunk of members per element.
         PropertyValue::List(elements) => {
             PropertyValue::List(elements.into_iter().map(chunk).collect())
         }
         value => chunk(value),
+    }
+}
+
+/// A value holding one reference, as a single chunk in its local form if the
+/// reference names `local`. The service decode splits a reference into one
+/// chunk per context-tagged member, so the chunks are joined before the
+/// decode. Unless the joined bytes are exactly one reference naming `local`,
+/// the value passes on as written, for the object to judge.
+fn localize_single<R: DeviceQualified>(
+    value: PropertyValue,
+    local: ObjectIdentifier,
+) -> PropertyValue {
+    let Some(bytes) = joined_chunks(&value) else {
+        return value;
+    };
+    let Ok((mut reference, end)) = R::decode(&bytes, 0) else {
+        return value;
+    };
+    if end != bytes.len() || *reference.device_mut() != Some(local) {
+        return value;
+    }
+    localize_member(&mut reference, Some(local));
+    let mut localized = BytesMut::new();
+    reference.encode(&mut localized);
+    PropertyValue::ApplicationData(localized.to_vec())
+}
+
+/// The raw bytes of a chunk, or of a list made only of chunks, joined in
+/// order. Any other value has none.
+fn joined_chunks(value: &PropertyValue) -> Option<Cow<'_, [u8]>> {
+    match value {
+        PropertyValue::ApplicationData(bytes) => Some(Cow::Borrowed(bytes)),
+        PropertyValue::List(chunks) => chunks
+            .iter()
+            .map(|chunk| match chunk {
+                PropertyValue::ApplicationData(bytes) => Some(bytes.as_slice()),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|parts| Cow::Owned(parts.concat())),
+        _ => None,
     }
 }
 
@@ -295,6 +353,83 @@ mod tests {
             localize(&db, staging(), TARGETS, PropertyValue::Unsigned(3)),
             PropertyValue::Unsigned(3)
         );
+    }
+
+    const REFERENCE: PropertyIdentifier = PropertyIdentifier::OBJECT_PROPERTY_REFERENCE;
+
+    fn averaging() -> ObjectIdentifier {
+        ObjectIdentifier::new(ObjectType::AVERAGING, 1).unwrap()
+    }
+
+    /// One reference split into a chunk per context-tagged member, as the
+    /// service decode hands a WriteProperty value over.
+    fn split(reference: BACnetDeviceObjectPropertyReference) -> PropertyValue {
+        let bytes = encoded(&[reference]);
+        let mut chunks = Vec::new();
+        let mut offset = 0;
+        while offset < bytes.len() {
+            let (chunk, end) =
+                bacnet_encoding::primitives::decode_application_value(&bytes, offset).unwrap();
+            chunks.push(chunk);
+            offset = end;
+        }
+        PropertyValue::List(chunks)
+    }
+
+    #[test]
+    fn an_averaging_reference_naming_the_local_device_loses_its_device() {
+        // Device 7 has no Averaging object; the rewrite keys on the identifier.
+        let db = database(7);
+        let local = PropertyValue::ApplicationData(encoded(&[member(1, None)]));
+        // Split, as the handler passes it, and whole, as write_local may.
+        assert_eq!(
+            localize(
+                &db,
+                averaging(),
+                REFERENCE,
+                split(member(1, Some(device(7))))
+            ),
+            local
+        );
+        assert_eq!(
+            localize(
+                &db,
+                averaging(),
+                REFERENCE,
+                PropertyValue::ApplicationData(encoded(&[member(1, Some(device(7)))]))
+            ),
+            local
+        );
+        // An array index stays.
+        let indexed = |device| BACnetDeviceObjectPropertyReference {
+            property_array_index: Some(3),
+            ..member(1, device)
+        };
+        assert_eq!(
+            localize(&db, averaging(), REFERENCE, split(indexed(Some(device(7))))),
+            PropertyValue::ApplicationData(encoded(&[indexed(None)]))
+        );
+        // Anything but exactly one reference naming device 7 passes on as
+        // written: another device, no device, a second reference after it, a
+        // flat list, an empty list and Null.
+        let analog_input = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+        for value in [
+            split(member(1, Some(device(9)))),
+            split(member(1, None)),
+            PropertyValue::ApplicationData(encoded(&[member(1, Some(device(7))), member(2, None)])),
+            PropertyValue::List(vec![
+                PropertyValue::ObjectIdentifier(analog_input),
+                PropertyValue::Unsigned(85),
+            ]),
+            PropertyValue::List(Vec::new()),
+            PropertyValue::Null,
+        ] {
+            assert_eq!(localize(&db, averaging(), REFERENCE, value.clone()), value);
+        }
+        // The same property of another object type is not localized.
+        let enrollment = ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap();
+        let named = split(member(1, Some(device(7))));
+        assert_eq!(localize(&db, enrollment, REFERENCE, named.clone()), named);
     }
 
     #[test]
