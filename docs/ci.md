@@ -475,7 +475,10 @@ To release:
 
    `assemble` adds `## [0.12.0] - <date>` below `[Unreleased]`, with the
    entries grouped by heading and ordered by issue number, and deletes the
-   fragments it used. A tag fails if any fragment is still waiting.
+   fragments it used. Each entry ends with a link to the GitHub commit that
+   brought its fragment into dev, found along the first-parent history, so run
+   it on a branch cut from dev's tip with full history (#1188); `preview` shows
+   the same links. A tag fails if any fragment is still waiting.
 2. Optionally, dispatch a dry run on the release commit first: it runs
    everything the release does, the smoke test included, without publishing.
 3. Tag the commit, on `main` or `dev`:
@@ -851,9 +854,13 @@ lacks as a warning.
   That is 0.11.0's asset names (the five CLI binaries on GitHub, the wheels
   and sdist on PyPI) plus the CPython 3.14 wheels and `THIRD-PARTY-NOTICES`.
 - `release-notes`: `notes.md` for Forgejo, and `notes-github.md` for GitHub.
-  GitHub refuses bodies over 125,000 characters, so a longer section is cut at
-  120,000 with a link to the full `CHANGELOG.md`, closing any code block the
-  cut leaves open. The 0.11.0 section is about 171,000.
+  Issue numbers are Forgejo's, so the GitHub copy (`changelog_notes.py
+  --github`) puts a zero-width space after each reference's `#`, which stops
+  GitHub linking it to its own item of that number, and opens with a line
+  saying where the numbers live (#1188). GitHub refuses bodies over 125,000
+  characters, so a longer section is cut at 120,000 with a link to the full
+  `CHANGELOG.md`, closing any code block the cut leaves open. The 0.11.0
+  section is about 21,000 since the #1188 trim (171,000 before).
 - `notices`: `THIRD-PARTY-NOTICES`, which the sdist and wheel jobs build in.
 - `crates`, `sdist`, `wheels-<platform>` and `cli-<platform>`: each build
   job's output.

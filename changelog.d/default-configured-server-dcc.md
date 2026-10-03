@@ -1,6 +1,6 @@
 ---
 section: Changed
 ---
-- Default configured-server DCC authorization to deny all, even with a correct
-  configured password. Add explicit Rust `DccPolicy` and Python keyword-only
-  `dcc_policy` modes; deprecated DISABLE remains denied in every mode.
+- **Breaking (Rust and Python API):** a configured server's DCC authorization
+  defaults to deny all, even with the right password, until a `DccPolicy` mode
+  (Python: `dcc_policy`) is chosen.
