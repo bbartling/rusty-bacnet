@@ -102,7 +102,7 @@ async fn store_staged(
                 AuditBatchStage::Staged(staged) => staged,
             }
         };
-        staged.saved().await;
+        super::super::durable_writes::saved(staged.saved()).await;
         let mut db = db.write().await;
         let (outcome, changed) = handlers::finish_audit_notification(&mut db, sink, staged)?;
         let forward = ForwardBatch::after_commit(&db, sink, changed, payload.clone());

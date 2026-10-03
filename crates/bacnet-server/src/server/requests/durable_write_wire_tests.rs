@@ -473,3 +473,36 @@ async fn deleting_a_forwarder_while_its_save_is_held_leaves_the_database_availab
     // The list write then finds its forwarder gone.
     assert_eq!(writing.await.unwrap()[0], ERROR_PDU);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_paused_clock_stands_still_while_a_staged_save_runs() {
+    let storage = Arc::new(HeldStorage::default());
+    let (fixture, nf) = fixture(&storage).await;
+    let (started, go) = storage.hold();
+    // The save takes real time on the forwarder's writer thread, as on a
+    // slow disk, while a timer like a request's APDU timeout is pending.
+    let releasing = std::thread::spawn(move || {
+        started.recv_timeout(WAIT).expect("the save started");
+        std::thread::sleep(Duration::from_millis(50));
+        go.send(()).unwrap();
+    });
+    let timer = tokio::spawn(tokio::time::sleep(Duration::from_secs(3)));
+    let start = tokio::time::Instant::now();
+    let request = list_request(
+        nf,
+        PropertyIdentifier::SUBSCRIBED_RECIPIENTS,
+        None,
+        &framed(&[subscription(7)]),
+    );
+    assert_eq!(wire(&fixture, ADD, request).await, SIMPLE_ACK_ADD);
+    releasing.join().unwrap();
+    // Waiting for the save kept the runtime busy, so the paused clock did
+    // not jump to the timer.
+    assert!(
+        start.elapsed() < Duration::from_secs(3),
+        "virtual time jumped {:?} while the save ran",
+        start.elapsed()
+    );
+    assert!(!timer.is_finished());
+    timer.abort();
+}

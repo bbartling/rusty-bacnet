@@ -3904,7 +3904,10 @@ and a commit that fails leaves the log as it was. One commit is staged per log
 at a time; a second batch waits for the first without holding the guard.
 `AuditLogNotificationSink::stage_notification_batch` and
 `finish_notification_batch` are the sink's side of this. Their defaults store
-the batch at once, so a custom sink keeps committing where it did.
+the batch at once, so a custom sink keeps committing where it did. The server
+waits for a staged commit on Tokio's blocking pool, so under a paused test
+clock (`tokio::time::pause`) virtual time does not jump to the next timer
+while the writer thread commits.
 
 Application code that changes the log while holding the guard
 (`add_record`, or `write_property` through the database) still commits in
@@ -4309,7 +4312,8 @@ server waits for them with the object database guard dropped, except where
 noted below; application code writing a list through the database waits for
 the save in place. The bundled server stages each network or
 `write_local` list write: the forwarder queues the save, the server waits for
-it with the guard dropped, and the write then takes the saved list. A write
+it with the guard dropped (on the blocking pool, as for the Audit Log), and the
+write then takes the saved list. A write
 that cannot be saved fails with DEVICE / OPERATIONAL_PROBLEM and leaves the old
 list. WritePropertyMultiple stages too, except under a `mutation_authorizer`,
 which sees each attempt only as the handler reaches it; such an attempt saves

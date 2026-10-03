@@ -206,6 +206,28 @@ impl StagedWrites {
     }
 }
 
+/// Wait for a staged save with the database guard dropped.
+///
+/// The save runs on the object's own writer thread, which Tokio cannot see.
+/// Awaiting it directly would leave the runtime looking idle, and under a
+/// paused test clock (`tokio::time::pause`) an idle runtime jumps virtual
+/// time to the next timer: request timeouts would fire while the save was
+/// still running. The wait therefore runs on the blocking pool, which keeps a
+/// paused clock where it is until the save is done. A pool thread is held
+/// only while a staged save is in flight, at most one per object.
+pub(super) async fn saved(wait: SaveWait) {
+    if wait.is_ready() {
+        return;
+    }
+    let blocking = wait.clone();
+    if tokio::task::spawn_blocking(move || blocking.block())
+        .await
+        .is_err()
+    {
+        wait.await;
+    }
+}
+
 /// Stage `targets` and wait for their saves without holding the database
 /// guard. `targets` come in object order, so two requests never wait on each
 /// other.
@@ -235,9 +257,9 @@ pub(super) async fn stage(
                 writes.stage_write(target.property, target.array_index, &value)
             };
             match step {
-                StageStep::Staged(saved) => {
-                    saved.clone().await;
-                    staged.push((target.oid, saved));
+                StageStep::Staged(wait) => {
+                    saved(wait.clone()).await;
+                    staged.push((target.oid, wait));
                     break;
                 }
                 StageStep::Busy(wait) => {

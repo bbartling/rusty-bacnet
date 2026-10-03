@@ -12,7 +12,9 @@
 //!   at a time and in the order they were queued.
 //! - A save whose outcome decides a request is *staged*. The object sets the
 //!   state the request would leave aside and keeps serving the old one. The
-//!   server drops the guard and awaits the save's [`SaveWait`]; then, holding
+//!   server drops the guard and waits for the save's [`SaveWait`] on Tokio's
+//!   blocking pool, so a paused test clock does not jump while the writer
+//!   thread works; then, holding
 //!   the guard again, it runs the request as usual, and the object takes the
 //!   saved state, or refuses the request if the save failed. So a forwarder
 //!   list write that cannot be saved is refused and leaves the old list, and an
@@ -156,6 +158,12 @@ impl SaveWait {
     /// Whether the wait is already over.
     pub fn is_ready(&self) -> bool {
         self.event.is_set()
+    }
+
+    /// Block this thread until the wait is over, for a caller that waits
+    /// off its async runtime, such as on Tokio's blocking pool.
+    pub fn block(&self) {
+        self.event.wait_blocking();
     }
 }
 

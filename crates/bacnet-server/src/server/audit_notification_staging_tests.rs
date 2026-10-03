@@ -164,3 +164,42 @@ async fn a_confirmed_notification_whose_commit_fails_is_refused_and_stores_nothi
     assert!(matches!(response, Apdu::SimpleAck(_)));
     assert_eq!(count(&db, sink).await, (1, 1));
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_paused_clock_stands_still_while_a_commit_runs() {
+    let storage = Arc::new(HeldStorage::default());
+    let sink = oid(ObjectType::AUDIT_LOG, 7);
+    let db = database(Arc::clone(&storage));
+    let (started, go) = storage.hold();
+    // The commit takes real time on the log's writer thread, as on a slow
+    // disk, while a timer like a request's APDU timeout is pending.
+    let releasing = std::thread::spawn(move || {
+        started.recv_timeout(WAIT).expect("the commit started");
+        std::thread::sleep(Duration::from_millis(50));
+        go.send(()).unwrap();
+    });
+    let timer = tokio::spawn(tokio::time::sleep(Duration::from_secs(3)));
+    let start = tokio::time::Instant::now();
+    let response = dispatch(
+        &db,
+        &config(sink),
+        &Arc::new(ConfirmedRequestTracker::default()),
+        9,
+        &[0x10],
+        None,
+        request_bytes(vec![notification(AuditOperation::WRITE)]),
+    )
+    .await
+    .unwrap();
+    releasing.join().unwrap();
+    assert!(matches!(response, Apdu::SimpleAck(_)));
+    // Waiting for the commit kept the runtime busy, so the paused clock did
+    // not jump to the timer.
+    assert!(
+        start.elapsed() < Duration::from_secs(3),
+        "virtual time jumped {:?} while the commit ran",
+        start.elapsed()
+    );
+    assert!(!timer.is_finished());
+    timer.abort();
+}
