@@ -1199,9 +1199,9 @@ answers, so the call returns once the request is sent.
 A value outside those rules raises `ValueError`, or `OverflowError` for integers that
 don't fit, before anything is sent.
 
-The Rust server executes WriteGroup on its Channel objects, whose members may
-be in other devices. The Python `BACnetServer` can't hold a Channel yet, so it
-has nothing for a WriteGroup to change.
+The Rust server and the Python `BACnetServer` execute WriteGroup on their
+Channel objects, whose members may be in other devices; `add_channel` registers
+one (see [Channels](#channels)).
 
 ```python
 await client.write_group(
@@ -2163,6 +2163,62 @@ moves to or from NaN or an infinity; the report has no Status_Flags.
 server.add_lighting_output(instance=1, name="Dimmer")
 server.add_binary_lighting_output(instance=1, name="On/Off Light")
 ```
+
+#### Channels
+
+```python
+dimmer = ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 1)
+fan = ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
+server.add_channel(
+    instance=1,
+    name="Zone Scene",
+    channel_number=11,  # the number a WriteGroup names, 0 to 65535
+    members=[
+        (dimmer, PropertyIdentifier.PRESENT_VALUE),
+        # The mapping form; it can carry a device_identifier too.
+        {"object_identifier": fan, "property_identifier": PropertyIdentifier.PRESENT_VALUE},
+    ],
+    execution_delay=[0, 500],  # milliseconds, one per member
+    control_groups=[5, 7],  # WriteGroup groups; [0] (none) when omitted
+    allow_group_delay_inhibit=True,
+)
+```
+
+`add_channel(instance, name, channel_number, members=None,
+execution_delay=None, control_groups=None, *, allow_group_delay_inhibit=False)`
+registers a Channel. A member is an `(object, property)` or
+`(object, property, array_index)` tuple for a property in this device, or a
+`DeviceObjectPropertyReference` mapping, the shape an access rule's
+`time_range` takes: `object_identifier`, `property_identifier`, and optionally
+`property_array_index` and `device_identifier`. A member naming the server's
+own Device is stored as the local reference it stands for, as it is when a
+peer writes the list. A member in another device keeps its Device and is
+written there with a confirmed WriteProperty when the server has a binding for
+it, from `add_device_binding` or an I-Am it has heard; the value goes as
+written, without the datatype conversion local members get (see the Channel
+paragraphs under [Lighting & Color](rust-api.md#lighting--color-5)).
+`execution_delay` holds one delay in milliseconds per member (zeros when
+omitted), `control_groups` the groups whose WriteGroup the Channel takes, and
+`allow_group_delay_inhibit` whether a WriteGroup that asks for no delays skips
+them. Peers can write all of these, and Channel_Number, over the network.
+
+Once the server runs, a value written to the Channel's Present_Value, over the
+network or with `write_property_local`, goes on to each member at the write's
+priority once that member's delay has passed, converted to a local member
+property's datatype, as the Rust server does. Write_Status reads IN_PROGRESS
+until every member is done and then SUCCESSFUL or FAILED, and Reliability
+reports what kind of failure the first failed member had; another
+Present_Value write meanwhile is refused with BUSY. A [WriteGroup](#write-group) naming one of the Channel's
+groups and its number writes the value the same way.
+
+A wrong shape or Python type raises `TypeError`. An unknown or missing mapping
+key, a device that isn't a Device, or a mapping's index outside unsigned32
+raises `ValueError`, and a channel number, a tuple's index, a delay or a group
+outside unsigned32 raises `OverflowError`. The Channel's own checks raise
+`BacnetProtocolError`: VALUE_OUT_OF_RANGE for a channel number above 65535, a
+delay count that differs from the member count or an empty group list, and
+NO_SPACE_TO_WRITE_PROPERTY for more than 1024 members or 64 groups. Nothing is
+registered after any of them.
 
 #### Life Safety
 

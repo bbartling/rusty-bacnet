@@ -1091,12 +1091,14 @@ class ActionCommand(TypedDict):
     device_identifier: NotRequired[ObjectIdentifier | None]
 
 
-class AccessRuleTimeRange(TypedDict):
-    """The property whose value decides when an access rule applies, such as
-    a Schedule's Present_Value (``BACnetDeviceObjectPropertyReference``).
+class DeviceObjectPropertyReference(TypedDict):
+    """A property of an object, in this device or the one ``device_identifier``
+    names (``BACnetDeviceObjectPropertyReference``): an access rule's
+    ``time_range``, or a Channel member.
 
-    Unknown keys and a ``device_identifier`` that isn't a Device raise
-    ValueError; wrong types raise TypeError.
+    Unknown or missing keys and a ``device_identifier`` that isn't a Device
+    raise ValueError, as does a ``property_array_index`` outside unsigned32;
+    wrong types raise TypeError.
     """
 
     object_identifier: ObjectIdentifier
@@ -1115,7 +1117,7 @@ class AccessRule(TypedDict):
     """
 
     enable: bool
-    time_range: NotRequired[AccessRuleTimeRange | None]
+    time_range: NotRequired[DeviceObjectPropertyReference | None]
     location: NotRequired[
         ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier] | None
     ]
@@ -2809,6 +2811,46 @@ class BACnetServer:
     # --- Lighting ---
     def add_lighting_output(self, instance: int, name: str) -> None: ...
     def add_binary_lighting_output(self, instance: int, name: str) -> None: ...
+    def add_channel(
+        self,
+        instance: int,
+        name: str,
+        channel_number: int,
+        members: Optional[
+            list[
+                tuple[ObjectIdentifier, PropertyIdentifier]
+                | tuple[ObjectIdentifier, PropertyIdentifier, Optional[int]]
+                | DeviceObjectPropertyReference
+            ]
+        ] = None,
+        execution_delay: Optional[list[int]] = None,
+        control_groups: Optional[list[int]] = None,
+        *,
+        allow_group_delay_inhibit: bool = False,
+    ) -> None:
+        """Add a Channel; a write of its Present_Value is passed on to ``members``.
+
+        ``channel_number`` (0..=65535) is the number a WriteGroup names. Each
+        member is an ``(object, property)`` or ``(object, property,
+        array_index)`` tuple for a property in this device, or a
+        ``DeviceObjectPropertyReference`` mapping; one naming this server's
+        Device is kept in its local form, and one naming another Device is
+        written there through the server's device bindings
+        (``add_device_binding`` or a heard I-Am). ``execution_delay`` holds one delay
+        in milliseconds per member (zeros when omitted), ``control_groups``
+        the WriteGroup groups the Channel is in (``[0]``, none, when omitted),
+        and ``allow_group_delay_inhibit`` lets a WriteGroup that asks for no
+        delays skip them. All of them are writable over the network too.
+
+        A wrong shape or type raises TypeError, an unknown or missing mapping
+        key or a device that isn't a Device raises ValueError, and an integer
+        outside unsigned32 raises OverflowError. A channel number above 65535,
+        a delay count that differs from the member count or an empty group
+        list raises BacnetProtocolError with VALUE_OUT_OF_RANGE; more than
+        1024 members or 64 groups, NO_SPACE_TO_WRITE_PROPERTY. Nothing is
+        registered after any of them.
+        """
+        ...
 
     # --- Life safety ---
     def add_life_safety_point(self, instance: int, name: str) -> None: ...
