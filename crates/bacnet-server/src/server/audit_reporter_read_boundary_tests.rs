@@ -211,7 +211,7 @@ async fn audit_reporter_read_audit_log_targets_are_not_excluded() {
 }
 
 #[tokio::test]
-async fn audit_reporter_read_malformed_and_dcc_denials_are_silent() {
+async fn audit_reporter_read_malformed_and_disable_are_silent_disable_initiation_is_audited() {
     for service in [
         ConfirmedServiceChoice::READ_PROPERTY,
         ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,

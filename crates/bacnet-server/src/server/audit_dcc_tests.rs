@@ -410,6 +410,55 @@ async fn audit_owing_writes_commit_and_notify_under_disable_initiation() {
     }
 }
 
+/// Send_Now under DISABLE_INITIATION flushes a delayed Reporter's queue: the
+/// record queued before DCC and the one queued under it go out with the
+/// command's own record, and neither the send delay running out nor the DCC
+/// timer re-enabling initiation sends them again.
+#[tokio::test(start_paused = true)]
+async fn send_now_under_disable_initiation_flushes_the_queue_once() {
+    let mut f = server(batching::delayed(30)).await;
+    assert!(matches!(
+        write_value(&f.server, None).await,
+        Apdu::SimpleAck(_)
+    ));
+    disable_initiation(&mut f).await;
+    assert!(matches!(
+        write_value(&f.server, None).await,
+        Apdu::SimpleAck(_)
+    ));
+    settle().await;
+    assert!(audit_frames(&f).is_empty(), "both wait for the send delay");
+    batching::command(&f, true).await;
+    settle().await;
+    let count = |f: &Fixture| {
+        let frames = audit_frames(f);
+        let queued = frames
+            .iter()
+            .filter(|(_, n)| n.target_object == Some(oid(ObjectType::BINARY_VALUE, 1)))
+            .count();
+        let commands = frames
+            .iter()
+            .filter(|(_, n)| {
+                n.target_property.as_ref().map(|p| p.property_identifier)
+                    == Some(PropertyIdentifier::SEND_NOW)
+            })
+            .count();
+        (queued, commands, frames.len())
+    };
+    assert_eq!(
+        count(&f),
+        (2, 1, 3),
+        "queue flushed with the command record"
+    );
+    assert_eq!(f.server.comm_state(), 2);
+    assert_eq!(health(&f.server).await, Reliability::NO_FAULT_DETECTED);
+    // Sixty seconds also runs past the 30-second send delay.
+    expire_dcc(&f).await;
+    assert_eq!(count(&f), (2, 1, 3), "nothing is resent");
+    assert_eq!(health(&f.server).await, Reliability::NO_FAULT_DETECTED);
+    f.server.stop().await.unwrap();
+}
+
 /// A record dropped for want of a send slot under DISABLE_INITIATION is a
 /// resource loss like any other, and its AUDITING_FAILURE summary goes out.
 #[tokio::test(start_paused = true)]
