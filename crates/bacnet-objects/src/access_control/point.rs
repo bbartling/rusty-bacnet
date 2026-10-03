@@ -14,7 +14,7 @@ pub struct AccessPointObject {
     description: String,
     access_event: AccessEvent,
     access_event_tag: u64,
-    access_event_time: ([u8; 4], [u8; 4]), // (Date, Time) as raw bytes
+    access_event_time: BACnetTimeStamp,
     access_doors: Vec<ObjectIdentifier>,
     event_state: EventState,
     status_flags: StatusFlags,
@@ -32,7 +32,7 @@ impl AccessPointObject {
             description: String::new(),
             access_event: AccessEvent::NONE,
             access_event_tag: 0,
-            access_event_time: ([0xFF, 0xFF, 0xFF, 0xFF], [0xFF, 0xFF, 0xFF, 0xFF]),
+            access_event_time: never_updated(),
             access_doors: Vec::new(),
             event_state: EventState::NORMAL,
             status_flags: StatusFlags::empty(),
@@ -44,16 +44,14 @@ impl AccessPointObject {
     /// Record the most recent access event: Access_Event, Access_Event_Tag
     /// and Access_Event_Time, which the application's access logic produces.
     ///
-    /// A change of Access_Event_Time triggers a SubscribeCOV notification;
-    /// the event and its tag only ride along (Table 13-1). Over the network
-    /// all three stay read-only.
-    pub fn set_access_event(&mut self, event: AccessEvent, tag: u64, date: Date, time: Time) {
+    /// Access_Event_Time is a `BACnetTimeStamp` (Clause 12.31.29) and goes
+    /// out in its Clause 21 CHOICE form. A change of it triggers a SubscribeCOV
+    /// notification; the event and its tag only ride along (Table 13-1). Over
+    /// the network all three stay read-only.
+    pub fn set_access_event(&mut self, event: AccessEvent, tag: u64, time: BACnetTimeStamp) {
         self.access_event = event;
         self.access_event_tag = tag;
-        self.access_event_time = (
-            [date.year, date.month, date.day, date.day_of_week],
-            [time.hour, time.minute, time.second, time.hundredths],
-        );
+        self.access_event_time = time;
     }
 }
 
@@ -85,21 +83,7 @@ impl BACnetObject for AccessPointObject {
                 Ok(PropertyValue::Unsigned(self.access_event_tag))
             }
             p if p == PropertyIdentifier::ACCESS_EVENT_TIME => {
-                let (d, t) = &self.access_event_time;
-                Ok(PropertyValue::List(vec![
-                    PropertyValue::Date(Date {
-                        year: d[0],
-                        month: d[1],
-                        day: d[2],
-                        day_of_week: d[3],
-                    }),
-                    PropertyValue::Time(Time {
-                        hour: t[0],
-                        minute: t[1],
-                        second: t[2],
-                        hundredths: t[3],
-                    }),
-                ]))
+                timestamp_value(&self.access_event_time)
             }
             p if p == PropertyIdentifier::ACCESS_DOORS => Ok(PropertyValue::List(
                 self.access_doors
