@@ -14,10 +14,11 @@ use crate::property_metadata::{
 // Order preserves the legacy 11-property projection; PROPERTY_LIST is
 // appended so the projection helper omits it while required_properties keeps
 // it. Only implemented rows are described: table rows the object does not
-// serve (Action_Text, Event_* detectors, Value_Source, audit, tags, profile
-// rows) stay absent until dispatch exists.
-// Present_Value carries the table W code and dispatch accepts Unsigned
-// writes (stored verbatim with no action execution), so it is
+// serve (Event_* detectors, Value_Source, audit, tags, profile rows) stay
+// absent until dispatch exists. Action_Text is a per-instance row, present
+// once the application sets it, read-only like Action.
+// Present_Value carries the table W code and dispatch accepts an Unsigned up
+// to the Action size, which starts that list (#1150), so it is
 // RequiredWrite/Always. In_Process, All_Writes_Successful, and Action carry
 // the table R code and have no network write route (Action writes are
 // WRITE_ACCESS_DENIED), so they stay RequiredRead/ReadOnly rather than
@@ -40,8 +41,21 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
-pub(super) fn for_object(_object: &CommandObject) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(BASE)
+pub(super) fn for_object(object: &CommandObject) -> Cow<'_, [PropertyMetadata]> {
+    if object.action_text.is_none() {
+        return Cow::Borrowed(BASE);
+    }
+    let mut rows = BASE.to_vec();
+    let after_action = rows
+        .iter()
+        .position(|row| row.property_identifier == P::ACTION)
+        .expect("Action row")
+        + 1;
+    rows.insert(
+        after_action,
+        PropertyMetadata::new(P::ACTION_TEXT, Optional, None, ReadOnly),
+    );
+    Cow::Owned(rows)
 }
 
 #[cfg(test)]
@@ -115,8 +129,7 @@ mod tests {
             assert_eq!(row.conformance, expected, "{:?}", row.property_identifier);
             object.read_property(row.property_identifier, None).unwrap();
         }
-        // Present_Value stores the written Unsigned verbatim; no action
-        // execution, priority, or range handling exists on this route.
+        // Present_Value starts at zero, selecting no list.
         assert_eq!(
             object.read_property(P::PRESENT_VALUE, None).unwrap(),
             PropertyValue::Unsigned(0)
@@ -162,6 +175,14 @@ mod tests {
     #[test]
     fn property_metadata_command_write_capabilities_match_dispatch() {
         let mut object = CommandObject::new(1, "CMD-1").unwrap();
+        // Three empty lists, so Present_Value 3 is in range and completes at
+        // once without queuing a run.
+        object
+            .set_action(vec![
+                bacnet_types::constructed::BACnetActionList::default();
+                3
+            ])
+            .unwrap();
         let original = object.property_metadata().into_owned();
         for row in &original {
             let p = row.property_identifier;
@@ -189,8 +210,8 @@ mod tests {
                 assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
             }
         }
-        // Present_Value stores Unsigned verbatim and rejects other types
-        // without changing state.
+        // Present_Value takes an Unsigned up to the Action size and rejects
+        // other types without changing state.
         object
             .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(3), None)
             .unwrap();
@@ -267,5 +288,44 @@ mod tests {
             );
         }
         assert_eq!(object.property_metadata().as_ref(), original);
+    }
+
+    #[test]
+    fn property_metadata_command_action_text_row_follows_action_once_set() {
+        let mut object = CommandObject::new(1, "CMD-1").unwrap();
+        object
+            .set_action(vec![
+                bacnet_types::constructed::BACnetActionList::default();
+                2
+            ])
+            .unwrap();
+        object
+            .set_action_text(vec!["Unoccupied".into(), "Occupied".into()])
+            .unwrap();
+        let metadata = object.property_metadata();
+        assert!(matches!(metadata, Cow::Owned(_)));
+        let at = metadata
+            .iter()
+            .position(|row| row.property_identifier == P::ACTION_TEXT)
+            .unwrap();
+        assert_eq!(metadata[at - 1].property_identifier, P::ACTION);
+        assert_eq!(metadata[at].conformance, Optional);
+        assert_eq!(metadata[at].write_capability, ReadOnly);
+        assert!(object.property_list().contains(&P::ACTION_TEXT));
+        assert!(object.is_array_property(P::ACTION_TEXT));
+        assert!(!object.is_writable_property(P::ACTION_TEXT));
+        for index in [None, Some(1)] {
+            assert_error(
+                object
+                    .write_property(
+                        P::ACTION_TEXT,
+                        index,
+                        PropertyValue::CharacterString("x".into()),
+                        None,
+                    )
+                    .unwrap_err(),
+                ErrorCode::WRITE_ACCESS_DENIED,
+            );
+        }
     }
 }

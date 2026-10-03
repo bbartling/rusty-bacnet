@@ -38,6 +38,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// and `BACnetLIST of BACnetCOVMultipleSubscription`
     /// (`PropertyValue::ApplicationData`). After [`stop`](Self::stop) the
     /// server services no subscriptions, so both properties read as empty lists.
+    ///
+    /// A Group's `Present_Value` is rebuilt from its members, whose rows count
+    /// against the ReadPropertyMultiple work limit
+    /// ([`ReadPropertyMultipleBudget::max_result_elements`](crate::server::ReadPropertyMultipleBudget))
+    /// as for network ReadProperty; past it the read fails with
+    /// [`Error::Abort`] carrying OUT_OF_RESOURCES.
     pub async fn read_local(
         &self,
         oid: &ObjectIdentifier,
@@ -65,8 +71,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &db,
             crate::device_view::DeviceExecution::FullServer,
             live.as_ref(),
+        )
+        .with_work_limit(
+            self.config
+                .read_property_multiple_budget
+                .max_result_elements,
         );
-        handlers::read_property_value(&db, Some(&view), lookup_oid, property, array_index)
+        handlers::read_property_value(&db, Some(&view), lookup_oid, property, array_index).map_err(
+            |failure| match failure {
+                handlers::RpmFailure::Service(error) => error,
+                handlers::RpmFailure::Work | handlers::RpmFailure::Bytes => Error::Abort {
+                    reason: AbortReason::OUT_OF_RESOURCES.to_raw(),
+                },
+            },
+        )
     }
 
     /// Create a cloneable handle for unsolicited I-Am announcements.

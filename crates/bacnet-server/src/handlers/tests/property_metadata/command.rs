@@ -14,14 +14,15 @@ fn command_object(configured: bool) -> CommandObject {
                 None,
             )
             .unwrap();
-        object
-            .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(3), None)
-            .unwrap();
+        // Present_Value 3 selects the last of three empty lists.
         object
             .set_action(vec![
                 bacnet_types::constructed::BACnetActionList::default();
-                2
+                3
             ])
+            .unwrap();
+        object
+            .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(3), None)
             .unwrap();
     }
     object

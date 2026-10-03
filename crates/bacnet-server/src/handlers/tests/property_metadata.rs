@@ -123,7 +123,8 @@ pub(super) fn assert_rpm_selector_bytes(
     assert_eq!(legacy, explicit_ack);
     let mut bounded = BytesMut::new();
     let budget = crate::server::ReadPropertyMultipleBudget {
-        max_result_elements: expected.len(),
+        max_result_elements: expected.len()
+            + group_member_rows(db, oid, expected.iter().map(|&p| (p, None))),
         max_service_ack_bytes: legacy.len(),
     };
     super::super::rpm_budget::handle_rpm_budgeted(db, &request_bytes, &mut bounded, budget)
@@ -136,7 +137,7 @@ pub(super) fn assert_rpm_selector_bytes(
             &request_bytes,
             &mut prefix,
             crate::server::ReadPropertyMultipleBudget {
-                max_result_elements: expected.len() - 1,
+                max_result_elements: budget.max_result_elements - 1,
                 ..budget
             }
         ),
@@ -176,6 +177,7 @@ fn rpm_metadata_selectors_are_exact_for_time_value() {
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::PRIORITY_ARRAY,
             PropertyIdentifier::RELINQUISH_DEFAULT,
+            PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
         ]
     );
     assert_eq!(
@@ -196,6 +198,7 @@ fn rpm_metadata_selectors_are_exact_for_time_value() {
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::PRIORITY_ARRAY,
             PropertyIdentifier::RELINQUISH_DEFAULT,
+            PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
         ]
     );
 }

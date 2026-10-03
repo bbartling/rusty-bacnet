@@ -150,6 +150,9 @@ mod forwarding;
 #[path = "source_reporter_averaging_tests.rs"]
 mod averaging;
 
+#[path = "source_reporter_command_run_tests.rs"]
+mod command_run;
+
 #[path = "source_audit_recipient_tests.rs"]
 mod recipient;
 

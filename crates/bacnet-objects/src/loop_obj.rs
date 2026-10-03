@@ -464,8 +464,8 @@ impl BACnetObject for LoopObject {
         true
     }
 
-    fn cov_increment(&self) -> Option<f32> {
-        Some(self.cov_increment)
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
     }
 
     fn set_present_value_internal(&mut self, value: PropertyValue) -> Result<(), Error> {

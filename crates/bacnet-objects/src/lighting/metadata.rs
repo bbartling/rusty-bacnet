@@ -13,9 +13,9 @@ use crate::property_metadata::{
 // Canonical effective rows for the Lighting duo (ASHRAE 135-2020; PDF = printed + 2):
 // - Lighting Output (type 54, §12.54 Table 12-64; printed pp. 518-519 / PDF pp. 520-521)
 // - Binary Lighting Output (type 55, §12.55 Table 12-69; printed pp. 532-533 / PDF pp. 534-535)
-// Order preserves each legacy projection; DEFAULT_FADE_TIME (readable but
-// unlisted, served constant Unsigned 0) is appended after the Lighting Output
-// legacy rows (Lift FLOOR_NUMBER precedent), followed by the rows #1092 added
+// Order preserves each legacy projection; DEFAULT_FADE_TIME (once readable
+// but unlisted) is appended after the Lighting Output legacy rows (Lift
+// FLOOR_NUMBER precedent), followed by the rows #1092 added
 // (Default_Ramp_Rate, Default_Step_Increment, then Current_Command_Priority
 // on both objects), and PROPERTY_LIST is appended so the projection helper
 // omits it while required_properties keeps it. Only implemented rows are
@@ -37,11 +37,10 @@ use crate::property_metadata::{
 // table-R rows with a write arm are RequiredRead/Always. Table-O served rows
 // are Optional, with Always exactly where dispatch accepts the write
 // (Description) and ReadOnly where it does not (Reliability).
-// Default_Fade_Time carries the table R code and is readable as constant
-// Unsigned 0 with no write arm, so RequiredRead/ReadOnly.
-// Default_Ramp_Rate and Default_Step_Increment carry the table R code and
-// take range-checked Real writes (Clauses 12.54.17 and 12.54.18 give each a
-// range and the error for a write outside it), so RequiredRead/Always.
+// Default_Fade_Time, Default_Ramp_Rate and Default_Step_Increment carry the
+// table R code and take range-checked writes (Clauses 12.54.16 to 12.54.18
+// give each a range and the error for a write outside it; #1092, #1111), so
+// RequiredRead/Always.
 // Current_Command_Priority carries the table R code on both objects and is
 // derived from Priority_Array (Clauses 12.54.39 and 12.55.32), so
 // RequiredRead/ReadOnly.
@@ -81,7 +80,7 @@ const LIGHTING_OUTPUT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, RequiredRead, None, Always),
-    PropertyMetadata::new(P::DEFAULT_FADE_TIME, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::DEFAULT_FADE_TIME, RequiredRead, None, Always),
     PropertyMetadata::new(P::DEFAULT_RAMP_RATE, RequiredRead, None, Always),
     PropertyMetadata::new(P::DEFAULT_STEP_INCREMENT, RequiredRead, None, Always),
     PropertyMetadata::new(P::CURRENT_COMMAND_PRIORITY, RequiredRead, None, ReadOnly),
@@ -276,7 +275,7 @@ mod tests {
         );
         assert_eq!(
             object.read_property(P::DEFAULT_FADE_TIME, None).unwrap(),
-            PropertyValue::Unsigned(0)
+            PropertyValue::Unsigned(100)
         );
         assert_eq!(
             object.read_property(P::DEFAULT_RAMP_RATE, None).unwrap(),
@@ -382,6 +381,7 @@ mod tests {
                     P::BLINK_WARN_ENABLE,
                     P::EGRESS_TIME,
                     P::RELINQUISH_DEFAULT,
+                    P::DEFAULT_FADE_TIME,
                     P::DEFAULT_RAMP_RATE,
                     P::DEFAULT_STEP_INCREMENT,
                 ],
@@ -452,24 +452,6 @@ mod tests {
                         .unwrap_err(),
                     ErrorCode::WRITE_ACCESS_DENIED,
                 );
-                // Default_Fade_Time is readable as constant 0 with no write
-                // arm: even its own readback is denied on write.
-                if object.object_identifier().object_type()
-                    == bacnet_types::enums::ObjectType::LIGHTING_OUTPUT
-                {
-                    assert!(!object.is_writable_property(P::DEFAULT_FADE_TIME));
-                    assert_error(
-                        object
-                            .write_property(
-                                P::DEFAULT_FADE_TIME,
-                                None,
-                                PropertyValue::Unsigned(0),
-                                None,
-                            )
-                            .unwrap_err(),
-                        ErrorCode::WRITE_ACCESS_DENIED,
-                    );
-                }
                 assert_eq!(object.property_metadata().as_ref(), original);
             }
         }
@@ -562,6 +544,7 @@ mod tests {
                 (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
                 (P::BLINK_WARN_ENABLE, PropertyValue::Enumerated(1)),
                 (P::EGRESS_TIME, PropertyValue::Boolean(true)),
+                (P::DEFAULT_FADE_TIME, PropertyValue::Real(100.0)),
                 (P::DEFAULT_RAMP_RATE, PropertyValue::Unsigned(10)),
                 (P::DEFAULT_STEP_INCREMENT, PropertyValue::Double(1.0)),
             ] {

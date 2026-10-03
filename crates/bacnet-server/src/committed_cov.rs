@@ -4,9 +4,12 @@
 //! writes) mutate objects under the database guard and fan COV out after
 //! dropping it, as a network write does. Ordinary objects are re-evaluated as a
 //! whole; Life Safety objects report exactly the properties the pass changed.
+//! A Schedule writing a Command object's Present_Value also leaves a Command
+//! run to start once the guard is dropped (#1150).
 
 use crate::cov::CovSubscriptionTable;
 use crate::life_safety_cov::{is_life_safety_object, LifeSafetyCovChange, LifeSafetyCovSnapshots};
+use bacnet_objects::command::CommandRun;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -58,15 +61,24 @@ impl BackgroundCommit {
     }
 
     /// Finish under the same guard: record timestamped COV-multiple history at
-    /// commit time, then split the fanout owed once the guard is dropped.
+    /// commit time, take the Command runs the pass queued, then split the
+    /// fanout owed once the guard is dropped.
     pub(crate) async fn finish(
         self,
-        db: &ObjectDatabase,
+        db: &mut ObjectDatabase,
         cov_table: &RwLock<CovSubscriptionTable>,
     ) -> CommittedCov {
         if self.changed.is_empty() {
             return CommittedCov::default();
         }
+        let command_runs = self
+            .changed
+            .iter()
+            .filter_map(|oid| {
+                db.get_mut(oid)
+                    .and_then(|object| object.take_command_run_internal())
+            })
+            .collect();
         let (life_safety, coarse): (Vec<_>, Vec<_>) = self
             .changed
             .into_iter()
@@ -86,28 +98,34 @@ impl BackgroundCommit {
         CommittedCov {
             life_safety,
             coarse,
+            command_runs,
         }
     }
 }
 
-/// COV fanout owed after a background commit.
+/// COV fanout, and Command runs to start, owed after a background commit.
 #[derive(Debug, Default)]
 pub(crate) struct CommittedCov {
     pub(crate) coarse: Vec<ObjectIdentifier>,
     pub(crate) life_safety: Vec<LifeSafetyCovChange>,
+    /// Runs the pass's Present_Value writes queued on Command objects. A pass
+    /// that can write one (the Schedule's) must start them, or the Command
+    /// stays busy.
+    pub(crate) command_runs: Vec<CommandRun>,
 }
 
 impl CommittedCov {
     pub(crate) fn is_empty(&self) -> bool {
-        self.coarse.is_empty() && self.life_safety.is_empty()
+        self.coarse.is_empty() && self.life_safety.is_empty() && self.command_runs.is_empty()
     }
 
-    /// Add this fanout to a request's own, leaving out objects the request
-    /// already fans out for.
+    /// Add this fanout and these runs to a request's own, leaving out objects
+    /// the request already fans out for.
     pub(crate) fn merge_into(
         self,
         coarse: &mut Vec<ObjectIdentifier>,
         life_safety: &mut Vec<LifeSafetyCovChange>,
+        command_runs: &mut Vec<CommandRun>,
     ) {
         for oid in self.coarse {
             if !coarse.contains(&oid) {
@@ -115,5 +133,6 @@ impl CommittedCov {
             }
         }
         life_safety.extend(self.life_safety);
+        command_runs.extend(self.command_runs);
     }
 }
