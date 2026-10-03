@@ -2044,7 +2044,14 @@ let staging = StagingObject::new(
 ```
 
 Staging targets are local-only Binary Output, Binary Value, or Binary Lighting
-Output objects. The server applies stage changes through its ordinary local
+Output objects. A written target naming another device is refused with
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. One naming the Device the server answers
+for is the local reference it stands for: the server drops that Device member
+before the Staging object decodes the value, on WriteProperty,
+WritePropertyMultiple and `write_local`, and it reads back without it (#1136).
+`StagingObject` itself can't tell which Device holds it, so written directly
+or configured through `StagingConfig` it refuses every Device member. The
+server applies stage changes through its ordinary local
 write notification path at `priority_for_writing`, completing the bounded local
 plan during write handling without remote I/O. A target failure sets source
 `Reliability` to `UNRELIABLE_OTHER`; a later fully successful current plan

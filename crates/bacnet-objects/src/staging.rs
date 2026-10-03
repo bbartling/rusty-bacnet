@@ -31,6 +31,8 @@ use metadata::STAGING_PROPERTY_METADATA;
 ///
 /// Target references are deliberately local-only. A reference carrying a
 /// `device_identifier` is rejected rather than initiating remote BACnet I/O.
+/// The bundled server drops a Device identifier naming its own Device from a
+/// written reference before the object sees it (#1136).
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagingConfig {
     /// Initial REAL `Present_Value`; finite values are clamped to the ladder.
@@ -624,6 +626,8 @@ fn validate_config(config: &StagingConfig) -> Result<(), Error> {
 
 fn validate_target_references(references: &[BACnetDeviceObjectReference]) -> Result<(), Error> {
     for reference in references {
+        // The object can't tell which Device holds it, so any Device member
+        // is refused here; the server localizes one naming itself (#1136).
         if reference.device_identifier.is_some() {
             return Err(protocol_error(
                 ErrorClass::PROPERTY,
