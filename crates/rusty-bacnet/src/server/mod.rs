@@ -32,7 +32,7 @@ use bacnet_objects::loop_obj::LoopObject;
 use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
-use bacnet_objects::notification_class::NotificationClass;
+use bacnet_objects::notification_class::{FileNotificationClassPersistence, NotificationClass};
 use bacnet_objects::program::ProgramObject;
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
 use bacnet_objects::staging::{StagingConfig, StagingObject};

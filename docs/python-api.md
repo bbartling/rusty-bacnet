@@ -1554,7 +1554,12 @@ from rusty_bacnet import EventType
 
 server.add_calendar(instance=1, name="Holiday Calendar")
 server.add_schedule(instance=1, name="Occupancy Schedule")
-server.add_notification_class(instance=1, name="Critical Alarms", notification_class=1)
+server.add_notification_class(
+    instance=1,
+    name="Critical Alarms",
+    notification_class=1,
+    storage_path="/application/state/class-1",  # optional
+)
 server.add_notification_forwarder(
     instance=1,
     name="Forwarder",
@@ -1595,6 +1600,13 @@ server.add_event_enrollment(
     event_type=EventType.OUT_OF_RANGE,  # default: EventType.CHANGE_OF_BITSTRING
 )
 ```
+
+A Notification Class with `storage_path` keeps the Recipient_List a client
+writes in that file and serves it again after a restart; without it the list
+lives in memory only. The file is replaced whole on each list write, and the
+save runs on a thread of its own while the server goes on answering other
+requests. A write whose list cannot be saved is refused with DEVICE /
+OPERATIONAL_PROBLEM, and the class keeps its old list.
 
 The Notification Forwarder sends each event notification the server
 receives, and each one its own objects address to its Device, on to the

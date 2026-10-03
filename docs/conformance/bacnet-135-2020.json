@@ -3461,7 +3461,9 @@
     "crates/bacnet-objects/src/notification_forwarder/mod.rs::NotificationForwarderObject::with_persistence",
     "crates/bacnet-objects/src/notification_forwarder/saving.rs::Storage",
     "crates/bacnet-objects/src/durable.rs::SaveWriter",
-    "crates/bacnet-server/src/server/durable_writes.rs::stage"
+    "crates/bacnet-server/src/server/durable_writes.rs::stage",
+    "crates/bacnet-objects/src/durable/staged.rs::StagedSaves",
+    "crates/bacnet-objects/src/durable/file.rs::ObjectFile"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/event_notification_subscription.rs::event_notification_subscription_round_trips_golden_elements",
@@ -3877,6 +3879,70 @@
      "The ValueSource and AuditLogQuery address codecs share the same check (check_decoded_mac_len, check_encoded_mac_len). Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, and COV admission and remote command origins refuse a longer direct MAC, so nothing the stack stores fails to encode.",
      "A Notification Forwarder's Recipient_List takes the same framed writes and cap."
     ]
+  },
+  {
+   "id": "BACNET-12-NOTIFICATION-CLASS-RECIPIENT-LIST-RESTART",
+   "standard_anchor": "Clause 12.21.8",
+   "priority": "P1",
+   "summary": "A Notification Class built with persistence saves each written Recipient_List before serving it and serves the saved list again after a restart.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/notification_class/persistence.rs::NotificationClassPersistence",
+    "crates/bacnet-objects/src/notification_class/persistence.rs::FileNotificationClassPersistence",
+    "crates/bacnet-objects/src/notification_class/saving.rs::with_persistence",
+    "crates/bacnet-objects/src/durable/staged.rs::StagedSaves",
+    "crates/bacnet-objects/src/durable/file.rs::ObjectFile",
+    "crates/bacnet-server/src/server/durable_writes.rs::may_save",
+    "crates/rusty-bacnet/src/server/server_methods/registration.rs::add_notification_class"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::a_written_recipient_list_reads_back_after_a_rebuild",
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::saved_recipient_list_wins_over_configured_destinations",
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::configured_destinations_apply_at_every_start_until_a_write",
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::a_saved_empty_recipient_list_still_wins",
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::file_persistence_keeps_a_class_list_across_a_rebuild",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_staged_write_saves_while_the_class_serves_the_old_list",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_second_write_waits_until_the_first_has_landed",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_staged_write_its_request_never_made_leaves_storage_with_the_served_list",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_dropped_staged_write_leaves_configured_destinations_unsaved",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_write_nobody_staged_supersedes_a_staged_one",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_forgotten_staged_write_is_dropped_by_the_next_write_that_stages",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::staging_skips_writes_the_class_does_not_save_or_will_refuse",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_write_property_saves_off_the_lock_and_survives_a_rebuild",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_write_property_multiple_saves_off_the_lock_and_survives_a_rebuild",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::an_add_list_element_saves_off_the_lock_and_survives_a_rebuild",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_remove_list_element_saves_off_the_lock_and_survives_a_rebuild",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_write_local_saves_off_the_lock_and_survives_a_rebuild",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::configured_destinations_are_never_saved_and_a_written_list_wins_on_restart",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_write_property_multiple_stopped_before_its_list_write_saves_no_list",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::deleting_a_class_while_its_save_is_held_leaves_the_database_available",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_paused_clock_stands_still_while_a_class_save_runs",
+    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRestartTests::test_a_written_recipient_list_survives_a_restart",
+    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_runtime_and_stub_agree"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::a_recipient_list_write_that_cannot_be_saved_is_refused",
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::a_saved_recipient_list_a_write_would_refuse_refuses_the_class",
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::file_persistence_round_trips_and_refuses_another_objects_file",
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::file_persistence_refuses_a_file_past_its_size_or_entry_caps",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_staged_write_whose_save_fails_is_refused_and_the_old_list_stays",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_list_that_cannot_be_saved_is_refused_on_every_path_and_the_old_list_stays",
+    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRestartTests::test_a_list_that_cannot_be_saved_is_refused_and_the_old_list_stays",
+    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_an_empty_storage_path_is_refused"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#schedule--notification-6",
+    "docs/python-api.md#schedule--notification"
+   ],
+   "notes": [
+    "Destinations from `add_destination` are never saved and apply at each start until a write sets the list; after that the saved list wins, even when empty, and `add_destination` only checks.",
+    "The server stages list writes from WriteProperty, WritePropertyMultiple, AddListElement, RemoveListElement and `write_local`, saving with the database guard dropped; WritePropertyMultiple under a mutation authorizer saves in place.",
+    "A list that cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM and the old list stays. A staged list no write took is replaced in storage by the served state at once.",
+    "`FileNotificationClassPersistence` writes its own `RBNNCL01` format, a sibling of the forwarder's `RBNFWD01`, and refuses a file past 64 KiB or 32 destinations, or saved for another object.",
+    "A class built with `NotificationClass::new`, and one added from Python without `storage_path`, keeps its Recipient_List in memory only."
+   ],
+   "gaps": []
   },
   {
    "id": "BACNET-12-EVENT-PARAMETERS-FRAMING",

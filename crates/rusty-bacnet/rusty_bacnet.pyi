@@ -2665,7 +2665,18 @@ class BACnetServer:
     def add_date_time_pattern_value(self, instance: int, name: str) -> None: ...
 
     # --- Notification/logging ---
-    def add_notification_class(self, instance: int, name: str, notification_class: int = 0) -> None: ...
+    def add_notification_class(
+        self,
+        instance: int,
+        name: str,
+        notification_class: int = 0,
+        storage_path: Optional[str] = None,
+    ) -> None:
+        """Add a Notification Class (Clause 12.21). With ``storage_path``, a
+        Recipient_List a client writes is kept in that file across restarts; a
+        write whose list cannot be saved is refused with DEVICE /
+        OPERATIONAL_PROBLEM and the old list stays. Without it the list lives in
+        memory only."""
     def add_notification_forwarder(
         self,
         instance: int,

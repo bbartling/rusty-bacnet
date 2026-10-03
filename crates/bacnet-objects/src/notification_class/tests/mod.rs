@@ -1,11 +1,14 @@
 mod enrollment_summary_projection;
 mod lookup;
+mod persistence_tests;
 mod priority;
 mod properties;
 mod recipient_list;
 mod recipient_list_cap;
 mod recipients;
 mod routed_list;
+mod staging_tests;
+mod storage;
 
 use super::*;
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};

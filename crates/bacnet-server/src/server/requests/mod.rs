@@ -41,6 +41,8 @@ mod mutation_tests;
 mod mutation_wpm_priority_tests;
 #[cfg(test)]
 mod mutation_wpm_tests;
+#[cfg(test)]
+mod notification_class_durable_tests;
 mod read_range;
 #[cfg(test)]
 mod recipient_mac_bound_tests;

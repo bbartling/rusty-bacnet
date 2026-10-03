@@ -1,11 +1,11 @@
 //! Saving object state off the object database lock (#1270).
 //!
-//! The Audit Log and the Notification Forwarder keep state in storage the
-//! application provides ([`AuditLogPersistence`] and
-//! [`NotificationForwarderPersistence`]). A storage call can be slow, since
-//! the file backends write, synchronize and rename, so neither object makes
-//! one while its caller holds the database's write guard. Both follow the
-//! pattern this module provides.
+//! The Audit Log, the Notification Forwarder and the Notification Class keep
+//! state in storage the application provides ([`AuditLogPersistence`],
+//! [`NotificationForwarderPersistence`] and [`NotificationClassPersistence`]).
+//! A storage call can be slow, since the file backends write, synchronize and
+//! rename, so none of these objects makes one while its caller holds the
+//! database's write guard. They all follow the pattern this module provides.
 //!
 //! - Under the guard, the object copies the state to keep and queues the copy
 //!   on its save writer. The writer's own thread makes the storage calls, one
@@ -48,25 +48,33 @@
 //!
 //! # Adding an object
 //!
-//! Any other object that keeps a written state in storage, such as a
-//! Notification Class keeping its Recipient_List (#1315), reuses this module
+//! Any other object that keeps a written state in storage reuses this module
 //! instead of saving under the guard:
 //!
-//! 1. Own a `SaveWriter` over a snapshot of the state to keep. Queue a save
-//!    that decides a request with `SaveWriter::submit`, and one nobody waits
-//!    for with `SaveWriter::submit_coalescing`.
+//! 1. Own a `staged::StagedSaves` over a `SaveWriter` of a snapshot of the
+//!    state to keep. It stages a write's save, hands the write the saved
+//!    state or the save's error, and drops a staged write its request never
+//!    made, leaving the object to save its served state at once
+//!    (`StagedSaves::correct`). A write nobody staged saves with
+//!    `StagedSaves::save_now`, and a save nobody waits for coalesces through
+//!    `StagedSaves::submit_coalescing`.
 //! 2. Implement [`DurableWrites`] for the object and return it from
 //!    `BACnetObject::durable_writes_internal`.
-//! 3. Add the object type to `may_save` in the server's `durable_writes`
-//!    module. The server stages only the types listed there; any other
-//!    type's writes save in place.
-//! 4. Have a file backend call `sync_parent_dir` after its rename.
+//! 3. Add the object type, and the properties it saves, to `may_save` in the
+//!    server's `durable_writes` module. The server stages only the writes
+//!    listed there; any other write saves in place.
+//! 4. Give a file backend a `file::ObjectFile`, which tags the file with
+//!    the format and the object identifier, caps its size, and replaces it
+//!    through a synchronized temporary file, a rename and `sync_parent_dir`.
 //!
-//! The Notification Forwarder's `saving` module is the worked example: a
-//! list write stages, and the operation task's saves coalesce.
+//! The Notification Forwarder's `saving` module is the full example: a list
+//! write stages, and the operation task's saves coalesce. The Notification
+//! Class's is the smallest: a Recipient_List write stages, and nothing else
+//! saves.
 //!
 //! [`AuditLogPersistence`]: crate::audit::AuditLogPersistence
 //! [`NotificationForwarderPersistence`]: crate::notification_forwarder::NotificationForwarderPersistence
+//! [`NotificationClassPersistence`]: crate::notification_class::NotificationClassPersistence
 
 use std::collections::VecDeque;
 use std::future::Future;
@@ -81,6 +89,9 @@ use std::time::Instant;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
+
+pub(crate) mod file;
+pub(crate) mod staged;
 
 /// How long a staged write may wait for its request once its save has run.
 /// It counts from the end of the save, so a slow save never uses it up. Past

@@ -36,7 +36,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::persistence::{ForwarderSnapshot, NotificationForwarderPersistence};
-use crate::durable::{Event, SaveTicket, SaveWait, SaveWriter, StageStep};
+use crate::durable::staged::StagedSaves;
+use crate::durable::{SaveWait, SaveWriter, StageStep};
 use crate::subscribed_recipients::SubscribedRecipients;
 
 /// The least time between two saves the operation task makes for falling
@@ -75,23 +76,10 @@ pub(super) enum NextList {
     SubscribedRecipients(SubscribedRecipients),
 }
 
-/// A write staged for a request: the lists it leaves, saving on the writer.
-struct StagedWrite {
-    property: PropertyIdentifier,
-    value: PropertyValue,
-    /// The forwarder's write count when staged. The write takes the staged
-    /// list only if no other write came between.
-    base: u64,
-    next: NextList,
-    ticket: SaveTicket,
-    /// Set when the staged write is taken or dropped, for a request that
-    /// found the forwarder busy.
-    released: Arc<Event>,
-}
-
-/// A forwarder's storage, its writer, and what storage last confirmed.
+/// A forwarder's storage, its writer and staged write, and what storage
+/// last confirmed.
 pub(super) struct Storage {
-    writer: SaveWriter<ForwarderSnapshot>,
+    saves: StagedSaves<ForwarderSnapshot, NextList>,
     /// The lists storage last confirmed, updated by the writer's thread.
     confirmed: Arc<Mutex<ForwarderSnapshot>>,
     /// When the operation task last queued a save, on the store's clock.
@@ -99,11 +87,6 @@ pub(super) struct Storage {
     /// A lapse wants the next operation task call to save without waiting
     /// for the minute.
     resave_now: bool,
-    /// A staged write was dropped whose save did not fail, so storage may
-    /// hold lists the forwarder never served; [`correct`](Self::correct)
-    /// saves the served ones.
-    correction_due: bool,
-    staged: Option<StagedWrite>,
 }
 
 impl Storage {
@@ -135,31 +118,22 @@ impl Storage {
             },
         );
         Self {
-            writer,
+            saves: StagedSaves::new(writer),
             confirmed,
             last_attempt: None,
             resave_now: false,
-            correction_due: false,
-            staged: None,
         }
     }
 
-    /// The wait for a staged write that still holds the forwarder: one whose
-    /// save is running, or finished within
-    /// [`STAGED_WRITE_LIFETIME`](crate::durable::STAGED_WRITE_LIFETIME). An
-    /// older one is dropped.
+    /// The wait for a staged write that still holds the forwarder (see
+    /// [`StagedSaves::busy`]).
     pub(super) fn busy(&mut self) -> Option<SaveWait> {
         self.busy_at(Instant::now())
     }
 
     /// [`busy`](Self::busy), judged at `now`.
     pub(super) fn busy_at(&mut self, now: Instant) -> Option<SaveWait> {
-        let staged = self.staged.as_ref()?;
-        if !staged.ticket.outlived_at(now) {
-            return Some(SaveWait::new(Arc::clone(&staged.released)));
-        }
-        self.drop_staged();
-        None
+        self.saves.busy_at(now)
     }
 
     /// Queue a save of `snapshot` for a write of `value` to `property` that
@@ -172,75 +146,35 @@ impl Storage {
         next: NextList,
         snapshot: ForwarderSnapshot,
     ) -> StageStep {
-        let ticket = self.writer.submit(snapshot);
-        let wait = ticket.wait();
-        self.staged = Some(StagedWrite {
-            property,
-            value,
-            base,
-            next,
-            ticket,
-            released: Arc::default(),
-        });
-        StageStep::Staged(wait)
+        self.saves.stage(property, value, base, next, snapshot)
     }
 
-    /// Take the staged list for a write of `value` to `property` made at
-    /// write count `base`: the list if its save succeeded, the save's error
-    /// if not. `None` when no staged write matches; a staged write that does
-    /// not match is dropped, since the write about to be saved supersedes it.
+    /// Take the staged list for a write (see [`StagedSaves::claim`]).
     pub(super) fn claim(
         &mut self,
         property: PropertyIdentifier,
         value: &PropertyValue,
         base: u64,
     ) -> Option<Result<NextList, Error>> {
-        let staged = self.staged.as_ref()?;
-        if staged.property != property || staged.base != base || staged.value != *value {
-            self.drop_staged();
-            return None;
-        }
-        let staged = self.staged.take().expect("matched above");
-        staged.released.set();
-        Some(staged.ticket.take_outcome().map(|()| staged.next))
+        self.saves.claim(property, value, base)
     }
 
     /// Save `snapshot` and wait for the outcome, for a write nobody staged.
     pub(super) fn save_now(&mut self, snapshot: ForwarderSnapshot) -> Result<(), Error> {
-        self.writer.submit(snapshot).take_outcome()
+        self.saves.save_now(snapshot)
     }
 
     /// The request that staged a write and was given `wait` is done. A
     /// staged write another request made is left alone.
     pub(super) fn release(&mut self, wait: &SaveWait) {
-        if self
-            .staged
-            .as_ref()
-            .is_some_and(|staged| staged.ticket.issued(wait))
-        {
-            self.drop_staged();
-        }
-    }
-
-    fn drop_staged(&mut self) {
-        let Some(staged) = self.staged.take() else {
-            return;
-        };
-        staged.released.set();
-        // Unless its save failed, storage holds, or is about to hold, lists
-        // the forwarder never served.
-        if staged.ticket.succeeded() != Some(false) {
-            self.correction_due = true;
-        }
+        self.saves.release(wait);
     }
 
     /// After a staged write was dropped, queue a save of `served`, the lists
     /// the forwarder serves, at once. It lands after the dropped write's
     /// save, since saves run in order.
     pub(super) fn correct(&mut self, served: impl FnOnce() -> ForwarderSnapshot) {
-        if std::mem::take(&mut self.correction_due) {
-            self.writer.submit_coalescing(served());
-        }
+        self.saves.correct(served);
     }
 
     /// Bring storage up to date from the operation task: at once when an
@@ -261,7 +195,7 @@ impl Storage {
             return;
         }
         // A staged write dropped just now: save the served lists below.
-        self.resave_now |= std::mem::take(&mut self.correction_due);
+        self.resave_now |= self.saves.take_correction();
         let current = current();
         if current
             == *self
@@ -281,18 +215,18 @@ impl Storage {
         }
         self.last_attempt = Some(now);
         self.resave_now = false;
-        self.writer.submit_coalescing(current);
+        self.saves.submit_coalescing(current);
     }
 
     /// The store's clock changed: times kept on the old one no longer apply,
     /// and a staged list holds deadlines on the old clock.
     pub(super) fn clock_changed(&mut self) {
         self.last_attempt = None;
-        self.drop_staged();
+        self.saves.drop_staged();
     }
 
     /// Block until every queued save has run.
     pub(super) fn wait_idle(&self) {
-        self.writer.wait_idle();
+        self.saves.wait_idle();
     }
 }
