@@ -245,6 +245,7 @@ mod tests {
                 device_bindings: &Arc::new(RwLock::new(
                     crate::server::device_bindings::DeviceBindingTable::new(),
                 )),
+                suppressions: &Default::default(),
                 retry_timeout_ms: 1000,
                 local_apdu_capacity: 1476,
             },

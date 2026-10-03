@@ -9,6 +9,7 @@ pub(super) struct EventEnrollmentTask<T: TransportPort + 'static> {
     pub(super) learned_routers: Arc<Mutex<LearnedRouterCache>>,
     pub(super) notification_transactions: Arc<NotificationTransactions>,
     pub(super) device_bindings: Arc<RwLock<DeviceBindingTable>>,
+    pub(super) suppressions: Arc<super::event_suppression::EventSuppressions>,
     /// Evaluation period, already clamped by the caller.
     pub(super) period: Duration,
     pub(super) retry_ms: u64,
@@ -25,6 +26,7 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
         learned_routers,
         notification_transactions,
         device_bindings,
+        suppressions,
         period,
         retry_ms,
         local_apdu_capacity,
@@ -81,6 +83,7 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
                         learned_routers: &learned_routers,
                         notification_transactions: &notification_transactions,
                         device_bindings: &device_bindings,
+                        suppressions: &suppressions,
                         retry_timeout_ms: retry_ms,
                         local_apdu_capacity,
                     },

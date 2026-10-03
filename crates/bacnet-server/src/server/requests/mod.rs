@@ -78,6 +78,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             comm_state,
             dcc_timer: _,
             dcc_outcomes: _,
+            event_suppressions: _,
             mutation_decisions,
             config,
         } = services;

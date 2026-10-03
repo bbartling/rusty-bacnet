@@ -459,6 +459,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 learned_routers: &self.learned_routers,
                 notification_transactions: &self.notification_transactions,
                 device_bindings: &self.device_bindings,
+                suppressions: &self.event_suppressions,
                 retry_timeout_ms: self.config.cov_retry_timeout_ms,
                 local_apdu_capacity: self.config.max_apdu_length,
             },
@@ -522,6 +523,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             learned_routers: &self.learned_routers,
             notification_transactions: &self.notification_transactions,
             device_bindings: &self.device_bindings,
+            suppressions: &self.event_suppressions,
             retry_timeout_ms: self.config.cov_retry_timeout_ms,
             local_apdu_capacity: self.config.max_apdu_length,
         }

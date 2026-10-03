@@ -2389,6 +2389,16 @@ class CovPolicy(TypedDict, total=False):
     max_notification_bytes_per_event: int
     max_confirmed_in_flight_per_peer: int
 
+class EventNotificationCounters(TypedDict):
+    """Undelivered event notifications, zero at each start; independent u64 totals, saturating at 2**64-1."""
+    notification_class_missing: int
+    recipient_list_unavailable: int
+    recipient_list_invalid: int
+    recipient_list_too_long: int
+    confirmed_no_invoke_id: int
+    confirmed_rejected: int
+    confirmed_unanswered: int
+
 class DccOutcomeCounters(TypedDict):
     """Independent u64 lifetime totals, saturating at 2**64-1; not an audit log."""
     accepted_total: int
@@ -2897,6 +2907,21 @@ class BACnetServer:
         one. untimed_references_oversized counts each report that left out an
         untimestamped reference too large for one notification. Raises
         RuntimeError before start and after stop.
+        """
+        ...
+
+    def event_notification_counters(self) -> Awaitable[EventNotificationCounters]:
+        """Sample the totals of event notifications the server did not deliver.
+
+        Every field of the Rust EventNotificationCounters under the same name,
+        zero at each start. The recipient-list fields count transitions whose
+        Notification Class lookup failed closed: the class is missing, its
+        Recipient_List can't be read or decoded, or it serves more than 32
+        destinations. An empty or fully filtered list, DCC and Event_Enable are
+        not counted. The confirmed fields count notifications to one recipient
+        that found no free invoke ID, were answered with an Error, Reject or
+        Abort, or drew no acknowledgment after the last retry. Fields are
+        sampled independently. Raises RuntimeError before start and after stop.
         """
         ...
 
