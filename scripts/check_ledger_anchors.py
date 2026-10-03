@@ -12,6 +12,11 @@ Entry syntax: an optional trailing ` (free-text note)` is ignored, `a; b` lists
 several anchors, and `{x,y}` expands in the file path or the test list. A path
 with no `::` may be a directory or file and only has to exist.
 
+A `code_anchors` or `benchmarks` entry is a path or a glob (`*`, `?`, `[...]`)
+that must match at least one existing file or directory, optionally followed by
+`::`-separated names (`file.rs::Type::method`) that must each appear as a whole
+word in a matched file. The same note, `; ` and `{x,y}` syntax applies.
+
 A `public_claims` entry is `path[#heading-slug] [free-text note]`. The file must
 exist and a `#slug` must match a heading in it (GitHub slug rules, so a heading
 rename or removal is caught). A Markdown claim must name its section: a bare
@@ -34,6 +39,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 LEDGER = ROOT / "docs" / "conformance" / "bacnet-135-2020.json"
 FIELDS = ("positive_tests", "negative_tests")
+PATH_FIELDS = ("code_anchors", "benchmarks")
 FENCE = "`" * 3
 BARE_OK = {"CHANGELOG.md"}
 TEST_ATTR = re.compile(r"#\[\s*(?:[\w:]+::)?(?:test|rstest|test_case|wasm_bindgen_test)\b")
@@ -140,7 +146,42 @@ def stale_anchors(data: dict, root: Path = ROOT) -> list[tuple[str, str, str]]:
     return out
 
 
-def _heading_slugs(src: str) -> set[str]:
+def resolve_path(anchor: str, root: Path = ROOT) -> str | None:
+    """Return None if a `code_anchors` or `benchmarks` entry resolves, else a reason string."""
+    anchors = _expand(_strip_note(anchor))
+    if len(anchors) > 1 or anchors[0] != anchor:
+        reasons = [r for a in anchors if (r := resolve_path(a, root))]
+        return "; ".join(reasons) or None
+    path_s, _, rest = anchor.partition("::")
+    if not path_s:
+        return "empty path"
+    if re.search(r"[*?\[]", path_s):
+        paths = sorted(root.glob(path_s))
+        if not paths:
+            return "glob matches no file"
+    else:
+        paths = [root / path_s]
+        if not paths[0].exists():
+            return "file does not exist"
+    for name in rest.split("::") if rest else []:
+        word = re.compile(rf"\b{re.escape(name)}\b")
+        if not any(word.search(_source(p) or "") for p in paths if p.is_file()):
+            return f"`{name}` does not appear in the file"
+    return None
+
+
+def stale_paths(data: dict, root: Path = ROOT) -> list[tuple[str, str, str]]:
+    out = []
+    for row in data["rows"]:
+        for field in PATH_FIELDS:
+            for anchor in row.get(field, []):
+                why = resolve_path(anchor, root)
+                if why:
+                    out.append((row["id"], anchor, why))
+    return out
+
+
+def heading_slugs(src: str) -> set[str]:
     """GitHub-style anchors of the Markdown headings in `src` (fenced code skipped)."""
     slugs: set[str] = set()
     seen: dict[str, int] = {}
@@ -176,7 +217,7 @@ def resolve_claim(claim: str, root: Path = ROOT) -> str | None:
     src = _source(path)
     if src is None:
         return "file unreadable"
-    if slug not in _heading_slugs(src):
+    if slug not in heading_slugs(src):
         return f"no heading `#{slug}` in `{path_s}`"
     return None
 
@@ -208,7 +249,17 @@ def self_test() -> list[str]:
         "docs/no_such_file.md#x",
         "docs/rust-api.md#no-such-heading-anywhere",
     ]
-    return [a for a in bad if resolve(a) is None] + [c for c in bad_claims if resolve_claim(c) is None]
+    bad_paths = [
+        "scripts/no_such_file.rs",
+        "crates/no-such-crate-*/src",
+        "scripts/ledger_schema.py::no_such_symbol_anywhere",
+        "crates/bacnet-*/src/no_such_module_anywhere.rs",
+    ]
+    return (
+        [a for a in bad if resolve(a) is None]
+        + [c for c in bad_claims if resolve_claim(c) is None]
+        + [p for p in bad_paths if resolve_path(p) is None]
+    )
 
 
 def check(data: dict) -> int:
@@ -226,7 +277,12 @@ def check(data: dict) -> int:
         print(f"stale public claim in {row_id}: {claim} ({why})")
     if claims:
         print(f"{len(claims)} stale ledger public claim(s)")
-    return 1 if (stale or claims or failures) else 0
+    paths = stale_paths(data)
+    for row_id, anchor, why in paths:
+        print(f"stale code or benchmark anchor in {row_id}: {anchor} ({why})")
+    if paths:
+        print(f"{len(paths)} stale ledger code or benchmark anchor(s)")
+    return 1 if (stale or claims or paths or failures) else 0
 
 
 def main() -> int:

@@ -4067,12 +4067,12 @@
    "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-client/src/read_property.rs::decode_ack",
-    "crates/bacnet-endpoint/src/source_read.rs",
-    "crates/bacnet-endpoint/src/source_read_delivery.rs",
+    "crates/bacnet-endpoint/src/source_audit.rs",
+    "crates/bacnet-endpoint/src/source_audit_delivery.rs",
     "crates/bacnet-endpoint/src/session_dispatch.rs",
-    "crates/bacnet-client/src/endpoint_read_operation.rs",
+    "crates/bacnet-client/src/endpoint_operation.rs",
     "crates/bacnet-endpoint-core/src/endpoint_ingress.rs",
-    "crates/bacnet-endpoint/src/source_read_failures.rs",
+    "crates/bacnet-endpoint/src/source_audit_failures.rs",
     "crates/bacnet-server/src/server/audit_failure_queue.rs",
     "crates/bacnet-objects/src/audit/reporter_status.rs",
     "crates/bacnet-endpoint/src/source_recipient.rs",
@@ -4612,7 +4612,7 @@
    "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-server/src/handlers/read_property.rs::handle_read_property_multiple",
-    "crates/bacnet-server/src/handlers/read_property.rs::resolve_device_wildcard",
+    "crates/bacnet-server/src/handlers/read_property.rs::resolve_read_target",
     "crates/bacnet-server/src/handlers/rpm_budget.rs::RpmPlan::read_observed"
    ],
    "positive_tests": [
@@ -5284,7 +5284,7 @@
    "requirement_summary": "Formal APDU structures, service choices, errors, rejects, aborts, and confirmed/unconfirmed service encodings are validated.",
    "status": "implementation-present-needs-conformance-tests",
    "code_anchors": [
-    "crates/bacnet-encoding/src/apdu.rs",
+    "crates/bacnet-encoding/src/apdu/mod.rs",
     "crates/bacnet-services/src"
    ],
    "positive_tests": [

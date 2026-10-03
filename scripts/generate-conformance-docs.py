@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Generate draft BACnet conformance support documents from the ledger.
 
+Rows may use the lean schema or the old one; ledger_schema.py reads both.
+--check also runs the row style check (check_ledger_style.py) and the
+conformance link check (check_ledger_links.py).
+
 With --check this also verifies that every test anchor in the ledger resolves
 (see check_ledger_anchors.py). A row's notes may be one string or an array of
 entries, which the docs print joined with single spaces (see
@@ -15,6 +19,9 @@ from pathlib import Path
 
 import check_ledger_anchors
 from ledger_notes_split import notes_text
+import check_ledger_links
+import check_ledger_style
+import ledger_schema
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,7 +132,8 @@ def pics_draft(data: dict) -> str:
 def bibbs_draft(data: dict) -> str:
     groups: dict[str, list[dict]] = defaultdict(list)
     for row in data["rows"]:
-        if row["id"] == "BACNET-K-BIBBS" or "service" in row["requirement_summary"].lower() or "tsm" in row["requirement_summary"].lower():
+        summary = ledger_schema.summary(row).lower()
+        if row["id"] == "BACNET-K-BIBBS" or "service" in summary or "tsm" in summary:
             groups[row["priority"]].append(row)
     lines = header("Draft BACnet BIBB Support Evidence")
     lines += [
@@ -173,7 +181,7 @@ def main() -> int:
             print(f"stale: {path.relative_to(ROOT)}")
         return 1
     if args.check:
-        return check_ledger_anchors.check(data)
+        return max(check_ledger_anchors.check(data), check_ledger_style.check(data), check_ledger_links.check())
     return 0
 
 
