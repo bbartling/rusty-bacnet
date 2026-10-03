@@ -601,7 +601,7 @@
    "standard_anchor": "Clause 16.1",
    "priority": "P1",
    "summary": "While DCC restricts initiation the server sends no COV or event notification and ends a confirmed one at its next attempt, freeing its invoke ID; audit notifications are exempt.",
-   "status": "in-progress",
+   "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-server/src/server/notification_transactions.rs::run_notification_under_dcc",
     "crates/bacnet-server/src/server/notification_transactions.rs::run_attempts",
@@ -611,7 +611,9 @@
     "crates/bacnet-server/src/handlers/device_mgmt.rs::validate_dcc"
    ],
    "positive_tests": [
-    "crates/bacnet-server/src/server/notification_dcc_tests.rs::{an_answer_claimed_as_the_retry_timer_fires_still_ends_the_notification,disable_initiation_leaves_an_outstanding_audit_notification_to_its_answer}",
+    "crates/bacnet-server/src/server/notification_dcc_tests.rs::an_answer_claimed_as_the_retry_timer_fires_still_ends_the_notification",
+    "crates/bacnet-server/src/server/audit_dcc_tests.rs::{an_outstanding_audit_notification_survives_disable_initiation_to_its_answer,audit_notifications_start_under_disable_initiation_and_keep_the_reporter_healthy,audit_owing_writes_commit_and_notify_under_disable_initiation,a_resource_drop_under_disable_initiation_is_summarized}",
+    "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_goes_out_under_disable_initiation",
     "crates/bacnet-server/src/server/notification_transactions_tests.rs::an_answer_ahead_of_a_withdrawn_retry_still_ends_the_transaction",
     "crates/bacnet-server/src/server/cov_timed_deadline_tests.rs::history_of_a_report_dcc_ends_at_a_retry_goes_out_once_enabled",
     "crates/bacnet-server/src/server/cov_timed_value_split_tests.rs::a_value_dcc_withdraws_goes_out_again_with_the_rest_of_its_change"
@@ -621,7 +623,8 @@
     "crates/bacnet-server/src/server/cov_confirmed_baseline_tests.rs::{confirmed_report_dcc_stops_at_a_retry_ends_there_without_a_hold_off,confirmed_follow_up_under_dcc_is_dropped_not_deferred}",
     "crates/bacnet-server/src/server/event_confirmed_routing_tests/dcc_retry.rs::dcc_ends_an_outstanding_confirmed_event_notification_at_its_next_retry",
     "crates/bacnet-server/src/server/cov_notifications/confirmed/tests.rs::a_report_dcc_withdraws_before_its_first_attempt_is_not_counted",
-    "crates/bacnet-integration-tests/tests/server/dcc.rs::{dcc_disable_rejected_without_changing_comm_state,dcc_disable_initiation_allows_rp_blocks_cov}"
+    "crates/bacnet-integration-tests/tests/server/dcc.rs::{dcc_disable_rejected_without_changing_comm_state,dcc_disable_initiation_allows_rp_blocks_cov}",
+    "crates/bacnet-server/src/server/audit_dcc_tests.rs::disable_initiation_still_holds_back_cov_and_events_beside_audit"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -631,12 +634,10 @@
     "Each attempt of a confirmed COV or event notification, retries included, reads the DCC state first. One that DISABLE_INITIATION blocks ends the notification there, its invoke ID freed, unless an answer has already taken the lease.",
     "A COV report ended this way takes no hold-off and keeps its baselines. Its timestamped history goes back to the queue for the backstop to send once initiation is enabled; untimestamped values go out at the next fanout.",
     "An event notification ended this way moves no `EventNotificationCounters` field and is not sent again once initiation is enabled. `Acked_Transitions` keeps what the transition committed.",
-    "Audit notifications are never ended this way: Clause 16.1 exempts them from DISABLE_INITIATION, and each makes one attempt, so one already sent waits for its answer and the reporter's health is unchanged.",
+    "Audit notifications, AUDITING_FAILURE summaries and Audit Log forwards go out under DISABLE_INITIATION, and one already outstanding waits for its answer; DCC never counts against a Reporter's health or as a dropped record.",
     "DISABLE is refused with `SERVICES` / `SERVICE_REQUEST_DENIED`, so DISABLE_INITIATION is the state that restricts initiation. Command and Channel writes to other devices follow the same per-attempt rule."
    ],
-   "gaps": [
-    "#1370: Audit notifications due to start while DISABLE_INITIATION is in force are held back and count as failed deliveries, though Clause 16.1 exempts them"
-   ]
+   "gaps": []
   },
   {
    "id": "BACNET-15-ENDPOINT-DEVICE-WRITE",

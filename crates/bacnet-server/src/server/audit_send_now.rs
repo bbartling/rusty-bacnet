@@ -120,8 +120,7 @@ impl<T: TransportPort + 'static> super::audit_recipient::TargetAudit<T> {
                     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
                     Ok(async move {
                         let _permit = permit;
-                        let delivered =
-                            deliver(&network, &route, &bytes, reserved, deadline).await;
+                        let delivered = deliver(&network, &route, &bytes, reserved, deadline).await;
                         completion.finish(delivered);
                     })
                 })

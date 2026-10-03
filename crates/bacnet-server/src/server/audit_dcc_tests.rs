@@ -51,25 +51,24 @@ fn audit_frames(f: &Fixture) -> Vec<(Option<u8>, BACnetAuditNotification)> {
     use bacnet_services::audit::AuditNotificationRequest;
     let mut frames = Vec::new();
     for bytes in f.transport.sent.lock().unwrap().iter() {
-        let (invoke, service) = match decode_apdu(decode_npdu(bytes.clone()).unwrap().payload)
-            .unwrap()
-        {
-            Apdu::ConfirmedRequest(request) => {
-                assert_eq!(
-                    request.service_choice,
-                    ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION
-                );
-                (Some(request.invoke_id), request.service_request)
-            }
-            Apdu::UnconfirmedRequest(request) => {
-                assert_eq!(
-                    request.service_choice,
-                    UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION
-                );
-                (None, request.service_request)
-            }
-            other => panic!("unexpected {other:?}"),
-        };
+        let (invoke, service) =
+            match decode_apdu(decode_npdu(bytes.clone()).unwrap().payload).unwrap() {
+                Apdu::ConfirmedRequest(request) => {
+                    assert_eq!(
+                        request.service_choice,
+                        ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION
+                    );
+                    (Some(request.invoke_id), request.service_request)
+                }
+                Apdu::UnconfirmedRequest(request) => {
+                    assert_eq!(
+                        request.service_choice,
+                        UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION
+                    );
+                    (None, request.service_request)
+                }
+                other => panic!("unexpected {other:?}"),
+            };
         for notification in AuditNotificationRequest::decode(&service)
             .unwrap()
             .notifications
@@ -106,7 +105,9 @@ async fn audit_notifications_start_under_disable_initiation_and_keep_the_reporte
         } else {
             reporter()
         };
-        reporter.set_issue_confirmed_notifications(confirmed).unwrap();
+        reporter
+            .set_issue_confirmed_notifications(confirmed)
+            .unwrap();
         let mut f = server(reporter).await;
         disable_initiation(&mut f).await;
         assert!(matches!(
@@ -146,6 +147,36 @@ async fn audit_notifications_start_under_disable_initiation_and_keep_the_reporte
         );
         f.server.stop().await.unwrap();
     }
+}
+
+/// DCC taking effect while a confirmed audit notification waits for its
+/// answer leaves it alone: the acknowledgment still delivers it.
+#[tokio::test(start_paused = true)]
+async fn an_outstanding_audit_notification_survives_disable_initiation_to_its_answer() {
+    let mut reporter = reporter();
+    reporter.set_issue_confirmed_notifications(true).unwrap();
+    let mut f = server(reporter).await;
+    assert!(matches!(
+        write_value(&f.server, None).await,
+        Apdu::SimpleAck(_)
+    ));
+    settle().await;
+    let frames = audit_frames(&f);
+    assert_eq!(frames.len(), 1);
+    disable_initiation(&mut f).await;
+    tokio::time::advance(Duration::from_millis(1500)).await;
+    settle().await;
+    assert_eq!(
+        f.server.notification_transactions.active_count(),
+        1,
+        "still waiting for its answer"
+    );
+    ack(&f, frames[0].0.expect("confirmed"));
+    settle().await;
+    assert_eq!(f.server.notification_transactions.active_count(), 0);
+    assert_eq!(audit_frames(&f).len(), 1, "one attempt, no retry");
+    assert_eq!(health(&f.server).await, Reliability::NO_FAULT_DETECTED);
+    f.server.stop().await.unwrap();
 }
 
 /// COV and event notifications seen at `SOURCE`, which subscribes and is the
@@ -247,7 +278,11 @@ async fn disable_initiation_still_holds_back_cov_and_events_beside_audit() {
         Apdu::SimpleAck(_)
     ));
     settle().await;
-    assert_eq!(cov_and_events(&f), (1, 0), "the subscription's first report");
+    assert_eq!(
+        cov_and_events(&f),
+        (1, 0),
+        "the subscription's first report"
+    );
 
     disable_initiation(&mut f).await;
     write_watched(&f, 90.0).await;
@@ -309,8 +344,7 @@ async fn audit_owing_writes_commit_and_notify_under_disable_initiation() {
         let (target, property, value) = match case {
             "recipient" => {
                 let mut value = BytesMut::new();
-                bacnet_encoding::constructed::encode_recipient(&mut value, &recipient(21))
-                    .unwrap();
+                bacnet_encoding::constructed::encode_recipient(&mut value, &recipient(21)).unwrap();
                 (
                     oid(ObjectType::DEVICE, 10),
                     PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
@@ -330,7 +364,9 @@ async fn audit_owing_writes_commit_and_notify_under_disable_initiation() {
             _ => (
                 oid(ObjectType::ANALOG_VALUE, 11),
                 PropertyIdentifier::AUDIT_LEVEL,
-                encoded(&PropertyValue::Enumerated(AuditLevel::AUDIT_CONFIG.to_raw())),
+                encoded(&PropertyValue::Enumerated(
+                    AuditLevel::AUDIT_CONFIG.to_raw(),
+                )),
             ),
         };
         let response = dispatch(
@@ -339,7 +375,10 @@ async fn audit_owing_writes_commit_and_notify_under_disable_initiation() {
             wp(target, property, value, None),
         )
         .await;
-        assert!(matches!(response, Apdu::SimpleAck(_)), "{case}: {response:?}");
+        assert!(
+            matches!(response, Apdu::SimpleAck(_)),
+            "{case}: {response:?}"
+        );
         settle().await;
         let frames = audit_frames(&f);
         // A recipient change reports to the old and the new recipient.
