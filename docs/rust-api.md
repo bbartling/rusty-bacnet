@@ -4317,6 +4317,9 @@ a cleanup-task panic remains an error on later calls.
 32 local sends in flight, independent of inbound peer quotas. An admitted send is
 server-owned even if its caller stops waiting. Shutdown cancels and joins it;
 retained handles reject new sends and do not prolong the transport lifetime.
+While DeviceCommunicationControl restricts initiation, a send goes nowhere and
+fails with `SERVICES` / `COMMUNICATION_DISABLED` (see [Discovery answers under
+DeviceCommunicationControl](#discovery-answers-under-devicecommunicationcontrol)).
 Local mutation methods reject before changing objects once shutdown starts.
 `read_local()`, PICS, counters and database inspection remain available after
 Rust server stop. `local_mac()` retains the last bound address snapshot; it does
@@ -4665,6 +4668,18 @@ the notification:
 
 A write a Command or Channel makes in another device follows the same rule
 (see [Building Control](#building-control-7)).
+
+### Discovery answers under DeviceCommunicationControl
+
+Of the discovery messages, Clause 16.1 lets a device whose initiation is
+disabled send only the I-Am that answers a Who-Is (#1388). Under
+DISABLE_INITIATION the server therefore still answers Who-Is, but a Who-Has
+gets no I-Have, and `broadcast_i_am()` sends nothing and returns `SERVICES` /
+`COMMUNICATION_DISABLED`. The state is read just before the I-Have would go
+out, ahead of the discovery limiter, so a held-back Who-Has costs no rate
+budget and leaves nothing to coalesce: the same request is answered once
+initiation is enabled again. Network-layer messages, such as a
+Network-Number-Is answer, are not application services and go out as usual.
 
 ### Notification forwarding
 

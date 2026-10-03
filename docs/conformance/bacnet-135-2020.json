@@ -606,15 +606,19 @@
     "crates/bacnet-server/src/server/cov_notifications/confirmed.rs::send_confirmed_cov",
     "crates/bacnet-server/src/server/event_send.rs::send_event_notification",
     "crates/bacnet-server/src/server/audit_delivery.rs::deliver_observed",
+    "crates/bacnet-server/src/server/requests/unconfirmed.rs::handle_unconfirmed_request",
+    "crates/bacnet-server/src/server/discovery.rs::broadcast_i_am_from",
     "crates/bacnet-server/src/handlers/device_mgmt.rs::validate_dcc"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/notification_dcc_tests.rs::{an_answer_claimed_as_the_retry_timer_fires_still_ends_the_notification,disable_initiation_leaves_an_outstanding_audit_notification_to_its_answer}",
     "crates/bacnet-server/src/server/notification_transactions_tests.rs::an_answer_ahead_of_a_withdrawn_retry_still_ends_the_transaction",
     "crates/bacnet-server/src/server/cov_timed_deadline_tests.rs::history_of_a_report_dcc_ends_at_a_retry_goes_out_once_enabled",
+    "crates/bacnet-server/src/server/discovery_dcc_tests.rs::a_who_has_held_back_by_dcc_is_answered_once_the_timer_enables_initiation",
     "crates/bacnet-server/src/server/cov_timed_value_split_tests.rs::a_value_dcc_withdraws_goes_out_again_with_the_rest_of_its_change"
    ],
    "negative_tests": [
+    "crates/bacnet-server/src/server/discovery_dcc_tests.rs::{disable_initiation_holds_back_i_have_and_still_answers_who_is,broadcast_i_am_fails_under_disable_initiation_and_sends_once_enabled}",
     "crates/bacnet-server/src/server/notification_dcc_tests.rs::{dcc_ends_an_outstanding_notification_at_its_next_retry_and_frees_its_lease,dcc_in_force_at_the_first_attempt_sends_nothing_and_frees_the_lease_at_once}",
     "crates/bacnet-server/src/server/cov_confirmed_baseline_tests.rs::{confirmed_report_dcc_stops_at_a_retry_ends_there_without_a_hold_off,confirmed_follow_up_under_dcc_is_dropped_not_deferred}",
     "crates/bacnet-server/src/server/event_confirmed_routing_tests/dcc_retry.rs::dcc_ends_an_outstanding_confirmed_event_notification_at_its_next_retry",
@@ -623,6 +627,7 @@
    ],
    "benchmarks": [],
    "public_claims": [
+    "docs/rust-api.md#discovery-answers-under-devicecommunicationcontrol",
     "docs/rust-api.md#confirmed-notifications-under-devicecommunicationcontrol"
    ],
    "notes": [
@@ -630,7 +635,7 @@
     "A COV report ended this way takes no hold-off and keeps its baselines. Its timestamped history goes back to the queue for the backstop to send once initiation is enabled; untimestamped values go out at the next fanout.",
     "An event notification ended this way moves no `EventNotificationCounters` field and is not sent again once initiation is enabled. `Acked_Transitions` keeps what the transition committed.",
     "Audit notifications are never ended this way: Clause 16.1 exempts them from DISABLE_INITIATION, and each makes one attempt, so one already sent waits for its answer and the reporter's health is unchanged.",
-    "DISABLE is refused with `SERVICES` / `SERVICE_REQUEST_DENIED`, so DISABLE_INITIATION is the state that restricts initiation. Command and Channel writes to other devices follow the same per-attempt rule."
+    "DISABLE is refused (`SERVICE_REQUEST_DENIED`), so DISABLE_INITIATION restricts initiation: Who-Is still gets its I-Am, but Who-Has gets no I-Have and `broadcast_i_am` fails. Command and Channel writes to other devices stop per attempt."
    ],
    "gaps": [
     "#1370: Audit notifications due to start while DISABLE_INITIATION is in force are held back and count as failed deliveries, though Clause 16.1 exempts them"
