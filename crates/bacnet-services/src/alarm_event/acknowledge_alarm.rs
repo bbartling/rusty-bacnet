@@ -1,6 +1,8 @@
 use super::*;
 
-use crate::common::{decode_context, decode_context_enum, decode_context_u32};
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_object_id, decode_ctx_primitive, decode_ctx_unsigned,
+};
 
 fn decode_acknowledgment_source(content: &[u8]) -> Result<String, Error> {
     if content.is_empty() {
@@ -55,22 +57,18 @@ impl AcknowledgeAlarmRequest {
 
         // [0]
         let (acknowledging_process_identifier, end) =
-            decode_context_u32(data, offset, 0, "AcknowledgeAlarm process-id")?;
+            decode_ctx_unsigned::<u32>(data, offset, 0, "AcknowledgeAlarm process-id")?;
         offset = end;
 
         // [1]
-        let (content, end) = decode_context(data, offset, 1, "AcknowledgeAlarm object-id")?;
-        let event_object_identifier = ObjectIdentifier::decode(content)?;
+        let (event_object_identifier, end) =
+            decode_ctx_object_id(data, offset, 1, "AcknowledgeAlarm object-id")?;
         offset = end;
 
         // [2]
-        let (event_state_acknowledged, end) = decode_context_enum(
-            data,
-            offset,
-            2,
-            "AcknowledgeAlarm event-state",
-            EventState::from_raw,
-        )?;
+        let (event_state, end) =
+            decode_ctx_unsigned::<u32>(data, offset, 2, "AcknowledgeAlarm event-state")?;
+        let event_state_acknowledged = EventState::from_raw(event_state);
         offset = end;
 
         // [3] timestamp
@@ -79,7 +77,7 @@ impl AcknowledgeAlarmRequest {
 
         // [4] acknowledgmentSource
         let (content, end) =
-            decode_context(data, offset, 4, "AcknowledgeAlarm acknowledgment-source")?;
+            decode_ctx_primitive(data, offset, 4, "AcknowledgeAlarm acknowledgment-source")?;
         let acknowledgment_source = decode_acknowledgment_source(content)?;
         offset = end;
 

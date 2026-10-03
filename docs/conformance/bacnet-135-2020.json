@@ -1539,9 +1539,51 @@
     "A ReadRange item is the record's timestamp and datum without its sequence number; By Sequence and By Time report the first one as First Sequence Number. Log-status and time-change records appear in the buffer, while AuditLogQuery returns notification records only, newest first.",
     "Sequence numbers are Unsigned64 and wrap from u64::MAX to 1. Selection follows insertion order, never numeric order, so a wrapped ring pages correctly. The ReadRange codec carries the wider references and First Sequence Number (BACNET-15-READ-RANGE-LOG-BUFFER).",
     "A page encodes only the records it reaches, so a narrow window over a 10,000-record ring does not encode the rest. The server's ReadRangeBudget bounds items and bytes as for the other logs.",
-    "Not covered: Buffer_Size writes, and a network route to purge the ring.",
     "The other logs (Trend Log Multiple, Trend Log, Event Log) refuse ReadProperty of Log_Buffer the same way, through the same helper (BACNET-15-READ-RANGE-LOG-BUFFER, #1237).",
-    "A log-status record shares the other logs' LogStatus codec: log-disabled is 05 80."
+    "A log-status record shares the other logs' LogStatus codec: log-disabled is 05 80.",
+    "Buffer_Size writes and the application's purge of the ring are row BACNET-12-AUDIT-LOG-RESIZE-PURGE."
+   ]
+  },
+  {
+   "id": "BACNET-12-AUDIT-LOG-RESIZE-PURGE",
+   "standard_anchor": "Clauses 12.64.8 to 12.64.11; Table 12-83",
+   "priority": "P1",
+   "summary": "Audit Log Buffer_Size takes writes while logging is off, and the application purges a log through the server, leaving a BUFFER_PURGED record; peers cannot purge one.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/audit/buffer.rs",
+    "crates/bacnet-objects/src/audit/staging.rs::AuditLogObject::commit_change",
+    "crates/bacnet-objects/src/durable.rs::PendingWrite",
+    "crates/bacnet-objects/src/audit/log_metadata.rs",
+    "crates/bacnet-objects/src/durable.rs::DurableWrites",
+    "crates/bacnet-server/src/server/audit_log_purge.rs",
+    "crates/bacnet-server/src/server/durable_writes.rs::DurableTarget::purge",
+    "crates/rusty-bacnet/src/server/server_methods/audit_log_methods.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/audit/buffer_tests.rs::{buffer_size_takes_a_write_only_while_logging_is_off,a_shrink_below_the_record_count_keeps_the_newest_records,a_purge_leaves_one_buffer_purged_record_and_nothing_to_query,a_staged_resize_or_purge_commits_while_the_log_serves_its_committed_state,a_purge_staged_behind_a_batch_lands_after_it,a_batch_that_arrives_during_a_purge_lands_after_it,a_request_folds_its_log_enable_and_buffer_size_writes_into_one_commit,a_request_that_stops_between_its_staged_writes_puts_the_served_log_in_storage}",
+    "crates/bacnet-server/src/server/requests/audit_log_buffer_wire_tests.rs::{buffer_size_is_written_only_while_logging_is_off,a_buffer_size_commit_runs_while_the_database_stays_available,a_write_property_multiple_turns_logging_off_then_resizes_in_one_commit_off_the_guard,a_paused_clock_stands_still_while_a_buffer_size_commit_runs}",
+    "crates/bacnet-server/src/server/audit_log_purge_tests.rs::{a_purge_commits_while_the_database_stays_available_and_lands_once_durable,a_batch_committing_when_a_purge_is_asked_for_lands_first_and_is_purged,a_batch_that_arrives_while_a_purge_commits_follows_the_purge_record,a_paused_clock_stands_still_while_a_purge_commits}",
+    "crates/bacnet-server/src/pics/property_metadata_tests/audit_log.rs::pics_audit_log_property_metadata_is_exact",
+    "crates/rusty-bacnet/tests/test_audit_log_buffer.py::AuditLogBufferTests::test_buffer_size_writes_and_purge"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/audit/buffer_tests.rs::{a_failing_store_refuses_a_resize_or_purge_and_leaves_the_log_unchanged,a_purge_without_a_valid_clock_changes_nothing,staging_skips_a_resize_the_write_would_refuse_or_not_need,an_object_without_a_log_refuses_a_purge,a_request_that_resizes_before_turning_logging_off_stages_nothing}",
+    "crates/bacnet-server/src/server/requests/audit_log_buffer_wire_tests.rs::{record_count_stays_read_only_so_no_write_purges_the_log,a_buffer_size_write_that_cannot_be_committed_is_refused_and_changes_nothing,a_log_enable_write_that_cannot_be_committed_is_refused_and_changes_nothing,a_denied_buffer_size_write_stages_nothing}",
+    "crates/bacnet-server/src/server/audit_log_purge_tests.rs::{a_purge_that_cannot_be_committed_leaves_the_log_as_it_was,only_a_running_server_purges_and_only_an_audit_log}",
+    "crates/bacnet-objects/src/audit/log_metadata.rs::tests::property_metadata_log_write_capabilities_match_dispatch"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#buffer_size-and-purging",
+    "docs/python-api.md#purge_audit_logobject_id"
+   ],
+   "notes": [
+    "A smaller Buffer_Size keeps the newest records that fit and adds no status record, as ring overflow does; a larger one keeps them all. A reopened log keeps the stored size over the configured one.",
+    "Record_Count stays read-only (Clause 12.64.11), so a peer has no purge. A purge keeps Total_Record_Count counting and the confirmed-receipt ledger, and flags LOG_DISABLED too while logging is off.",
+    "A Buffer_Size write and a server purge stage like a Log_Enable write, and a WritePropertyMultiple's Log_Enable and Buffer_Size writes share one commit. A failed commit refuses them with DEVICE / OPERATIONAL_PROBLEM.",
+    "Changes to one log land in staging order: a batch committing when a purge is asked for is purged with the rest, and one arriving during the purge follows the purge record.",
+    "Buffer_Size 2^32-1, the unknown size, and any size above 10,000 are VALUE_OUT_OF_RANGE."
    ]
   },
   {
@@ -5773,7 +5815,8 @@
     "FileAuditLogPersistence writes snapshot schema v3. Loading a v1 or v2 snapshot reverses the three bits of each log-status record, which 0.11.0 stored reversed, so an old log-disabled record reads back as LOG_DISABLED; the next commit saves v3.",
     "The built-in Audit Log commits on its own writer thread. The server stages each inbound batch and awaits the commit without the database guard; the batch reaches memory, and a confirmed one its SimpleACK, once records and receipt are durable.",
     "One commit is staged per Audit Log at a time; a second batch waits for the first without the guard. A network or write_local Log_Enable change stages the same way; add_record and other in-place changes commit under the caller's guard.",
-    "Storage holds a staged batch a moment before the log serves it: the commit returns on the writer thread, then the request applies the batch under the guard. A query made after the SimpleACK sees the batch."
+    "Storage holds a staged batch a moment before the log serves it: the commit returns on the writer thread, then the request applies the batch under the guard. A query made after the SimpleACK sees the batch.",
+    "A Buffer_Size write and `purge_audit_log` stage the same way. A Log_Enable or Buffer_Size write, or a purge, whose commit fails is refused with DEVICE / OPERATIONAL_PROBLEM."
    ],
    "target_device_recipient": {
     "scope": "Target portion of #728; the completed bounded source endpoint migration is recorded separately in BACNET-19-SOURCE-READ-PROPERTY. Broader Audit conformance remains open. Corrected Device recipient requirement: Clause 12.11 with 135-2020 Errata Summary 2024-04-29 item 25 (PDF page 7), preserving base O and footnotes 19-20; NULL operation semantics in 15.9/15.10/19.2; record shape Table 19-4 and BACnetRecipient in Clause 21.",
@@ -6470,7 +6513,10 @@
     "crates/bacnet-types/src/primitives.rs::object_identifier_checked_instance_boundaries",
     "crates/rusty-bacnet/tests/test_object_identifier_invariant.py",
     "crates/bacnet-encoding/src/constructed/tests/tagged.rs::{contents_past_the_end_are_a_short_buffer,fixed_size_primitives_refuse_any_other_length,application_enumerated_items_narrow_and_canonical_ones_refuse_padding}",
-    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::read_property_multiple_cut_short_draws_services_other"
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::read_property_multiple_cut_short_draws_services_other",
+    "crates/bacnet-encoding/src/constructed/tests/tagged.rs::{application_primitives_read_any_type_and_name_the_expected_one,application_unsigned_values_narrow_to_their_width,an_application_boolean_has_no_contents_to_read,fixed_size_contents_check_their_length_first}",
+    "crates/bacnet-services/src/truncated_member_tests.rs::{members_cut_short_are_a_short_buffer,fixed_size_members_of_the_wrong_length_stay_malformed_when_cut_short,confirmed_cov_notification_rejects_keep_their_reasons,reals_and_times_check_their_length_before_their_contents}",
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{service_parameters_cut_short_draw_services_other,subscribe_cov_property_multiple_process_cut_short_draws_the_general_error,malformed_and_cut_short_requests_draw_the_same_reply}"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -6485,7 +6531,9 @@
     "In the shared tagged-field helpers and the codecs and formal Error bodies read with them, contents that run past the end of the data are Error::BufferTooShort; a cut-short or malformed tag header is Error::Decoding.",
     "A fixed-size context member (object identifier, REAL, BOOLEAN, a lighting-command level) has its length checked before its contents, so a wrong length is Error::Decoding even when the data also stops early.",
     "A member cut short inside a constructed frame is caught when the frame is extracted (tags::extract_context_value), which reports Error::Decoding.",
-    "The server answers a ReadPropertyMultiple, SubscribeCOVProperty or ConfirmedAuditNotification cut short with SERVICES / OTHER, and a SubscribeCOVPropertyMultiple with its general error, whichever kind the decoder reports."
+    "The server answers a ReadPropertyMultiple, SubscribeCOVProperty or ConfirmedAuditNotification cut short with SERVICES / OTHER, and a SubscribeCOVPropertyMultiple with its general error, whichever kind the decoder reports.",
+    "A service parameter member that bacnet-services reads through the same public helpers (constructed::tagged) is Error::BufferTooShort when cut short; members it still reads inline report Error::Decoding.",
+    "A ReadProperty, WriteProperty, ReadRange, SubscribeCOV, SubscribeCOVProperty, AcknowledgeAlarm, GetEventInformation, LifeSafetyOperation or AuditLogQuery cut short draws SERVICES / OTHER from the server."
    ]
   },
   {

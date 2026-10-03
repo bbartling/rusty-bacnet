@@ -19,14 +19,16 @@ use super::AuditLogObject;
 // dispatch exists. Log_Buffer is present but served only by ReadRange and
 // AuditLogQuery, so ReadProperty and RPM answer it with READ_ACCESS_DENIED.
 // Enable carries the table W code; Description carries the table O code and
-// the only other network write route.
+// a write route. Buffer_Size keeps its table R code with a write route that
+// Clause 12.64.9 opens only while Enable is FALSE (#1238); the capability
+// names the route, not that gate.
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::LOG_ENABLE, RequiredWrite, None, Always),
-    PropertyMetadata::new(P::BUFFER_SIZE, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::BUFFER_SIZE, RequiredRead, None, Always),
     crate::log_buffer::LOG_BUFFER_METADATA,
     PropertyMetadata::new(P::RECORD_COUNT, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::TOTAL_RECORD_COUNT, RequiredRead, None, ReadOnly),
@@ -340,7 +342,7 @@ mod tests {
         let metadata = object.property_metadata().into_owned();
         for row in &metadata {
             let p = row.property_identifier;
-            let writable = matches!(p, P::LOG_ENABLE | P::DESCRIPTION);
+            let writable = matches!(p, P::LOG_ENABLE | P::DESCRIPTION | P::BUFFER_SIZE);
             assert_eq!(
                 row.write_capability,
                 if writable { Always } else { ReadOnly },
@@ -357,11 +359,12 @@ mod tests {
                 );
                 continue;
             }
-            // Writing back the current value is a no-op success for both
-            // writable rows and needs no clock; read-only rows deny access.
+            // Writing back the current value is a no-op success for Enable
+            // and Description and needs no clock. Buffer_Size refuses every
+            // write while Enable is TRUE, and read-only rows deny access.
             let before = object.read_property(p, None).unwrap();
             let result = object.write_property(p, None, before.clone(), None);
-            if writable {
+            if writable && p != P::BUFFER_SIZE {
                 result.unwrap();
             } else {
                 assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);

@@ -1,5 +1,8 @@
 //! COV (Change of Value) services per ASHRAE 135-2020 Clauses 13.6, 13.7, 13.14 and 13.15.
 
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_boolean, decode_ctx_object_id, decode_ctx_real, decode_ctx_unsigned, next_is_context,
+};
 use bacnet_encoding::constructed::{decode_property_reference, encode_bacnet_property_value};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
@@ -8,7 +11,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::{decode_context, decode_context_bool, decode_context_u32, BACnetPropertyValue};
+use crate::common::BACnetPropertyValue;
 
 pub use crate::cov_decode::COVNotificationDecodeError;
 
@@ -72,35 +75,30 @@ impl SubscribeCOVRequest {
 
         // [0] subscriber-process-identifier
         let (subscriber_process_identifier, end) =
-            decode_context_u32(data, offset, 0, "SubscribeCOV process-id")?;
+            decode_ctx_unsigned::<u32>(data, offset, 0, "SubscribeCOV process-id")?;
         offset = end;
 
         // [1] monitored-object-identifier
-        let (content, end) = decode_context(data, offset, 1, "SubscribeCOV object-id")?;
-        let monitored_object_identifier = ObjectIdentifier::decode(content)?;
+        let (monitored_object_identifier, end) =
+            decode_ctx_object_id(data, offset, 1, "SubscribeCOV object-id")?;
         offset = end;
 
         // [2] issue-confirmed-notifications (optional)
         let mut issue_confirmed_notifications = None;
-        if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(2) {
-                let (value, end) =
-                    decode_context_bool(data, offset, 2, "SubscribeCOV confirmed-notifications")?;
-                issue_confirmed_notifications = Some(value);
-                offset = end;
-            }
+        if next_is_context(data, offset, 2)? {
+            let (value, end) =
+                decode_ctx_boolean(data, offset, 2, "SubscribeCOV confirmed-notifications")?;
+            issue_confirmed_notifications = Some(value);
+            offset = end;
         }
 
         // [3] lifetime (optional)
         let mut lifetime = None;
-        if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(3) {
-                let (value, end) = decode_context_u32(data, offset, 3, "SubscribeCOV lifetime")?;
-                lifetime = Some(value);
-                offset = end;
-            }
+        if next_is_context(data, offset, 3)? {
+            let (value, end) =
+                decode_ctx_unsigned::<u32>(data, offset, 3, "SubscribeCOV lifetime")?;
+            lifetime = Some(value);
+            offset = end;
         }
         if offset != data.len() {
             return Err(Error::decoding(offset, "SubscribeCOV has trailing data"));
@@ -197,40 +195,34 @@ impl SubscribeCOVPropertyRequest {
 
         // [0] subscriberProcessIdentifier
         let (subscriber_process_identifier, end) =
-            decode_context_u32(data, offset, 0, "SubscribeCOVProperty process-id")?;
+            decode_ctx_unsigned::<u32>(data, offset, 0, "SubscribeCOVProperty process-id")?;
         offset = end;
 
         // [1] monitoredObjectIdentifier
-        let (content, end) = decode_context(data, offset, 1, "SubscribeCOVProperty object-id")?;
-        let monitored_object_identifier = ObjectIdentifier::decode(content)?;
+        let (monitored_object_identifier, end) =
+            decode_ctx_object_id(data, offset, 1, "SubscribeCOVProperty object-id")?;
         offset = end;
 
         // [2] issueConfirmedNotifications (optional)
         let mut issue_confirmed_notifications = None;
-        if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(2) {
-                let (value, end) = decode_context_bool(
-                    data,
-                    offset,
-                    2,
-                    "SubscribeCOVProperty confirmed-notifications",
-                )?;
-                issue_confirmed_notifications = Some(value);
-                offset = end;
-            }
+        if next_is_context(data, offset, 2)? {
+            let (value, end) = decode_ctx_boolean(
+                data,
+                offset,
+                2,
+                "SubscribeCOVProperty confirmed-notifications",
+            )?;
+            issue_confirmed_notifications = Some(value);
+            offset = end;
         }
 
         // [3] lifetime (optional)
         let mut lifetime = None;
-        if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(3) {
-                let (value, end) =
-                    decode_context_u32(data, offset, 3, "SubscribeCOVProperty lifetime")?;
-                lifetime = Some(value);
-                offset = end;
-            }
+        if next_is_context(data, offset, 3)? {
+            let (value, end) =
+                decode_ctx_unsigned::<u32>(data, offset, 3, "SubscribeCOVProperty lifetime")?;
+            lifetime = Some(value);
+            offset = end;
         }
 
         // [4] monitoredPropertyIdentifier (BACnetPropertyReference)
@@ -254,14 +246,11 @@ impl SubscribeCOVPropertyRequest {
 
         // [5] covIncrement (optional)
         let mut cov_increment = None;
-        if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(5) {
-                let (content, end) =
-                    decode_context(data, offset, 5, "SubscribeCOVProperty COV increment")?;
-                cov_increment = Some(primitives::decode_real(content)?);
-                offset = end;
-            }
+        if next_is_context(data, offset, 5)? {
+            let (increment, end) =
+                decode_ctx_real(data, offset, 5, "SubscribeCOVProperty COV increment")?;
+            cov_increment = Some(increment);
+            offset = end;
         }
         if offset != data.len() {
             return Err(Error::decoding(

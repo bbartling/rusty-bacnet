@@ -1,7 +1,8 @@
 //! Detailed confirmed-COV decoding and Reject classification.
 
 use bacnet_encoding::constructed::decode_bacnet_property_value_in_list;
-use bacnet_encoding::{primitives, tags};
+use bacnet_encoding::constructed::tagged::{decode_canonical_unsigned, decode_ctx_primitive};
+use bacnet_encoding::tags;
 use bacnet_types::enums::RejectReason;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -45,6 +46,10 @@ fn failure(error: Error, reject_reason: RejectReason) -> COVNotificationDecodeEr
     COVNotificationDecodeError::new(error, reject_reason)
 }
 
+/// The contents of the required primitive context tag `expected_tag` at
+/// `offset`. A missing member is MISSING_REQUIRED_PARAMETER; contents that run
+/// past the end of the data (the reader's only [`Error::BufferTooShort`]) are
+/// INVALID_DATA_ENCODING; any other fault in the tag is INVALID_TAG.
 fn decode_required_context<'a>(
     data: &'a [u8],
     offset: usize,
@@ -57,30 +62,13 @@ fn decode_required_context<'a>(
             RejectReason::MISSING_REQUIRED_PARAMETER,
         ));
     }
-    let (tag, pos) = tags::decode_tag(data, offset)
-        .map_err(|error| failure(error, RejectReason::INVALID_TAG))?;
-    if !tag.is_context(expected_tag) {
-        return Err(failure(
-            Error::decoding(
-                offset,
-                format!("{field} expected context tag {expected_tag}"),
-            ),
-            RejectReason::INVALID_TAG,
-        ));
-    }
-    let end = pos.checked_add(tag.length as usize).ok_or_else(|| {
-        failure(
-            Error::decoding(pos, format!("{field} length overflow")),
-            RejectReason::INVALID_DATA_ENCODING,
-        )
-    })?;
-    if end > data.len() {
-        return Err(failure(
-            Error::decoding(pos, format!("{field} has invalid data encoding")),
-            RejectReason::INVALID_DATA_ENCODING,
-        ));
-    }
-    Ok((&data[pos..end], end))
+    decode_ctx_primitive(data, offset, expected_tag, field).map_err(|error| {
+        let reject_reason = match error {
+            Error::BufferTooShort { .. } => RejectReason::INVALID_DATA_ENCODING,
+            _ => RejectReason::INVALID_TAG,
+        };
+        failure(error, reject_reason)
+    })
 }
 
 fn decode_required_u32(
@@ -90,13 +78,7 @@ fn decode_required_u32(
     field: &str,
 ) -> COVDecodeResult<(u32, usize)> {
     let (content, end) = decode_required_context(data, offset, expected_tag, field)?;
-    if content.len() > 1 && content.first() == Some(&0) {
-        return Err(failure(
-            Error::decoding(offset, format!("{field} is not minimally encoded")),
-            RejectReason::INVALID_DATA_ENCODING,
-        ));
-    }
-    let value = primitives::decode_unsigned(content)
+    let value = decode_canonical_unsigned(content, offset, field)
         .map_err(|error| failure(error, RejectReason::INVALID_DATA_ENCODING))?;
     let value = u32::try_from(value).map_err(|_| {
         failure(
