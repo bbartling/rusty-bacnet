@@ -347,6 +347,7 @@ pub fn received_apdu(envelope: ReceivedNpdu) -> bacnet_network::layer::ReceivedA
         ingress_network: None,
         link_layer_group: envelope.link_layer_group,
         is_group: envelope.link_layer_group,
+        global_broadcast: false,
         data_attributes: envelope.data_attributes,
         provenance: envelope.provenance,
         direct_response: envelope.direct_response,

@@ -1,10 +1,13 @@
-//! Unconfirmed-service dispatch (Who-Is, Who-Has, time sync, text, and Audit
-//! notification receipt) — see `EXECUTED_UNCONFIRMED`.
+//! Unconfirmed-service dispatch (Who-Is, Who-Has, time sync, text, event
+//! notifications for the forwarders, and Audit notification receipt) — see
+//! `EXECUTED_UNCONFIRMED`.
 //!
 //! Split out of `requests.rs` to keep every file under the 700-LOC cap.
 
+use super::super::event_forwarding::{ForwardOrigin, Reception};
 use super::super::*;
 use bacnet_objects::clock::ClockReader;
+use bacnet_services::alarm_event::ForwardedEventNotification;
 use bacnet_services::device_mgmt::TimeSynchronizationRequest;
 use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -20,6 +23,7 @@ pub(crate) const EXECUTED_UNCONFIRMED: &[UnconfirmedServiceChoice] = &[
     UnconfirmedServiceChoice::TIME_SYNCHRONIZATION,
     UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION,
     UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE,
+    UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION,
     UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION,
 ];
 
@@ -40,6 +44,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             discovery_limiter,
             time_sync_limiter,
             notification_transactions,
+            ..
         } = services;
         let clock = clock.as_ref();
         let comm = comm_state.load(Ordering::Acquire);
@@ -303,6 +308,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 Err(e) => {
                     debug!(error = %e, "UnconfirmedTextMessage decode failed");
                 }
+            }
+        } else if req.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION {
+            match ForwardedEventNotification::decode(&req.service_request) {
+                Ok(notification) => {
+                    Self::forward_event_notification(
+                        &services.event_delivery(),
+                        notification,
+                        ForwardOrigin::Received(Reception::of(received)),
+                    )
+                    .await;
+                }
+                Err(error) => debug!(%error, "Ignoring malformed UnconfirmedEventNotification"),
             }
         } else if req.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION {
             match super::audit_notification::receive_unconfirmed_audit_notification(

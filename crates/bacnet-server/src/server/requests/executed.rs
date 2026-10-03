@@ -6,6 +6,7 @@ use super::*;
 /// compares it with `bacnet_objects::device::EXECUTED_SERVICES`.
 pub(crate) const EXECUTED_CONFIRMED: &[ConfirmedServiceChoice] = &[
     ConfirmedServiceChoice::ACKNOWLEDGE_ALARM,
+    ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
     ConfirmedServiceChoice::GET_ALARM_SUMMARY,
     ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY,
     ConfirmedServiceChoice::SUBSCRIBE_COV,

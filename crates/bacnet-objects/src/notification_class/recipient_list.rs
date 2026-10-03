@@ -35,7 +35,7 @@ use crate::common;
 pub const MAX_RECIPIENT_LIST_DESTINATIONS: usize = 32;
 
 /// The refusal of a destination past [`MAX_RECIPIENT_LIST_DESTINATIONS`].
-pub(super) fn no_space_error() -> Error {
+pub(crate) fn no_space_error() -> Error {
     common::protocol_error(ErrorClass::RESOURCES, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY)
 }
 
@@ -81,7 +81,7 @@ pub(super) fn decode_capped(bytes: &[u8]) -> Result<Vec<BACnetDestination>, Capp
 /// Decode a whole-list Recipient_List write. Only the framed wire form
 /// (`ApplicationData`) is a Recipient_List value (#1125); anything else, a
 /// malformed destination included, fails with PROPERTY / INVALID_DATA_TYPE.
-pub(super) fn decode_write(value: PropertyValue) -> Result<Vec<BACnetDestination>, Error> {
+pub(crate) fn decode_write(value: PropertyValue) -> Result<Vec<BACnetDestination>, Error> {
     let PropertyValue::ApplicationData(bytes) = value else {
         return Err(common::invalid_data_type_error());
     };
@@ -96,7 +96,7 @@ pub(super) fn decode_write(value: PropertyValue) -> Result<Vec<BACnetDestination
 /// [`BACnetAddress::MAX_MAC_LEN`] octets fails, as the write would, with
 /// PROPERTY / INVALID_DATA_TYPE (#1124). Stored, it would make the class's
 /// own list undecodable and routing would drop every destination with it.
-pub(super) fn check_added(destination: &BACnetDestination) -> Result<(), Error> {
+pub(crate) fn check_added(destination: &BACnetDestination) -> Result<(), Error> {
     match &destination.recipient {
         BACnetRecipient::Address(address)
             if address.mac_address.len() > BACnetAddress::MAX_MAC_LEN =>

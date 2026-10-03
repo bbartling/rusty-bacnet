@@ -321,6 +321,39 @@ impl BACnetServer {
         self.push_pending(Box::new(nc))
     }
 
+    /// Add a Notification Forwarder object to the server (before starting).
+    ///
+    /// With `storage_path`, Subscribed_Recipients is kept in that file and
+    /// restored when the server is built again.
+    #[pyo3(signature = (
+        instance,
+        name,
+        process_identifier_filter=None,
+        local_forwarding_only=false,
+        storage_path=None
+    ))]
+    fn add_notification_forwarder(
+        &self,
+        instance: u32,
+        name: &str,
+        process_identifier_filter: Option<u32>,
+        local_forwarding_only: bool,
+        storage_path: Option<&str>,
+    ) -> PyResult<()> {
+        let mut nf = match storage_path {
+            Some(path) => {
+                let storage =
+                    Arc::new(FileSubscribedRecipientsPersistence::new(path).map_err(to_py_err)?);
+                NotificationForwarderObject::with_persistence(instance, name, storage)
+                    .map_err(to_py_err)?
+            }
+            None => NotificationForwarderObject::new(instance, name).map_err(to_py_err)?,
+        };
+        nf.set_process_identifier_filter(process_identifier_filter);
+        nf.set_local_forwarding_only(local_forwarding_only);
+        self.push_pending(Box::new(nf))
+    }
+
     /// Add a Trend Log object to the server (before starting).
     #[pyo3(signature = (instance, name, buffer_size=100))]
     fn add_trend_log(&self, instance: u32, name: &str, buffer_size: u32) -> PyResult<()> {

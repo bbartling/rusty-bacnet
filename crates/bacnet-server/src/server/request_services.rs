@@ -57,6 +57,8 @@ pub(super) struct UnconfirmedServices<T: TransportPort + 'static> {
     pub(super) discovery_limiter: Arc<DiscoveryLimiter>,
     pub(super) time_sync_limiter: Arc<TimeSyncLimiter>,
     pub(super) notification_transactions: Arc<NotificationTransactions>,
+    pub(super) learned_routers: Arc<Mutex<LearnedRouterCache>>,
+    pub(super) event_suppressions: Arc<super::event_suppression::EventSuppressions>,
 }
 
 /// Everything the dispatch loop hands to [`BACnetServer::dispatch`]: the
@@ -84,6 +86,26 @@ impl<T: TransportPort + 'static> DispatchContext<T> {
             discovery_limiter: Arc::clone(&self.discovery_limiter),
             time_sync_limiter: Arc::clone(&self.time_sync_limiter),
             notification_transactions: Arc::clone(&self.services.notification_transactions),
+            learned_routers: Arc::clone(&self.services.learned_routers),
+            event_suppressions: Arc::clone(&self.services.event_suppressions),
+        }
+    }
+}
+
+impl<T: TransportPort + 'static> UnconfirmedServices<T> {
+    /// The EventNotification delivery view of these handles, as
+    /// [`RequestServices::event_delivery`] gives it.
+    pub(super) fn event_delivery(&self) -> super::event_delivery::EventDelivery<'_, T> {
+        super::event_delivery::EventDelivery {
+            db: &self.db,
+            network: &self.network,
+            comm_state: &self.comm_state,
+            learned_routers: &self.learned_routers,
+            notification_transactions: &self.notification_transactions,
+            device_bindings: &self.device_bindings,
+            suppressions: &self.event_suppressions,
+            retry_timeout_ms: self.config.cov_retry_timeout_ms,
+            local_apdu_capacity: self.config.max_apdu_length,
         }
     }
 }
@@ -170,6 +192,8 @@ impl<T: TransportPort + 'static> UnconfirmedServices<T> {
             discovery_limiter: Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None)),
             time_sync_limiter: Arc::new(TimeSyncLimiter::new(TimeSyncPolicy::default())),
             notification_transactions: NotificationTransactions::new(),
+            learned_routers: Arc::new(Mutex::new(LearnedRouterCache::new())),
+            event_suppressions: Arc::default(),
         }
     }
 }
@@ -209,6 +233,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             discovery_limiter: Arc::clone(&self.discovery_limiter),
             time_sync_limiter: Arc::clone(&self.time_sync_limiter),
             notification_transactions: Arc::clone(&self.notification_transactions),
+            learned_routers: Arc::clone(&self.learned_routers),
+            event_suppressions: Arc::clone(&self.event_suppressions),
         }
     }
 

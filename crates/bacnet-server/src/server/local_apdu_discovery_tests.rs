@@ -58,6 +58,7 @@ async fn who_is_rechecks_selected_device_raw_capacity_and_recovers() {
                 source_network: None,
                 link_layer_group: false,
                 is_group: false,
+                global_broadcast: false,
                 data_attributes: vec![],
                 provenance: TransportProvenance::unverified(),
                 reply_tx: None,

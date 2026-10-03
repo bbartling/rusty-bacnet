@@ -586,6 +586,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                         let source_network = npdu.source.clone();
                         let is_group =
                             is_group_delivery(received.link_layer_group, npdu.destination.as_ref());
+                        let global_broadcast = is_global_broadcast(npdu.destination.as_ref());
                         let apdu = ReceivedApdu {
                             direct_response: received.direct_response.clone(),
                             apdu: npdu.payload,
@@ -594,6 +595,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                             source_network,
                             link_layer_group: received.link_layer_group,
                             is_group,
+                            global_broadcast,
                             data_attributes: received.data_attributes,
                             provenance: received.provenance,
                             reply_tx: received.reply_tx,
