@@ -643,7 +643,8 @@ pub(super) enum Attempt<W> {
     /// silence would.
     NotSent,
     /// Nothing may be sent any more: the transaction ends at once, its invoke
-    /// ID freed, with this reason.
+    /// ID freed, with this reason. An answer that has already taken the lease
+    /// is the exception: it is on its way, and it ends the transaction instead.
     Withdrawn(W),
 }
 

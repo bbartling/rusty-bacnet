@@ -611,12 +611,14 @@
    "positive_tests": [
     "crates/bacnet-server/src/server/notification_dcc_tests.rs::{an_answer_claimed_as_the_retry_timer_fires_still_ends_the_notification,disable_initiation_leaves_an_outstanding_audit_notification_to_its_answer}",
     "crates/bacnet-server/src/server/notification_transactions_tests.rs::an_answer_ahead_of_a_withdrawn_retry_still_ends_the_transaction",
-    "crates/bacnet-server/src/server/cov_timed_deadline_tests.rs::history_of_a_report_dcc_ends_at_a_retry_goes_out_once_enabled"
+    "crates/bacnet-server/src/server/cov_timed_deadline_tests.rs::history_of_a_report_dcc_ends_at_a_retry_goes_out_once_enabled",
+    "crates/bacnet-server/src/server/cov_timed_value_split_tests.rs::a_value_dcc_withdraws_goes_out_again_with_the_rest_of_its_change"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/notification_dcc_tests.rs::{dcc_ends_an_outstanding_notification_at_its_next_retry_and_frees_its_lease,dcc_in_force_at_the_first_attempt_sends_nothing_and_frees_the_lease_at_once}",
     "crates/bacnet-server/src/server/cov_confirmed_baseline_tests.rs::{confirmed_report_dcc_stops_at_a_retry_ends_there_without_a_hold_off,confirmed_follow_up_under_dcc_is_dropped_not_deferred}",
     "crates/bacnet-server/src/server/event_confirmed_routing_tests/dcc_retry.rs::dcc_ends_an_outstanding_confirmed_event_notification_at_its_next_retry",
+    "crates/bacnet-server/src/server/cov_notifications/confirmed/tests.rs::a_report_dcc_withdraws_before_its_first_attempt_is_not_counted",
     "crates/bacnet-integration-tests/tests/server/dcc.rs::{dcc_disable_rejected_without_changing_comm_state,dcc_disable_initiation_allows_rp_blocks_cov}"
    ],
    "benchmarks": [],
@@ -631,7 +633,7 @@
     "DISABLE is refused with `SERVICES` / `SERVICE_REQUEST_DENIED`, so DISABLE_INITIATION is the state that restricts initiation. Command and Channel writes to other devices follow the same per-attempt rule."
    ],
    "gaps": [
-    "Audit notifications due to start while DISABLE_INITIATION is in force are held back and count as failed deliveries, though Clause 16.1 exempts them (no issue)"
+    "#1370: Audit notifications due to start while DISABLE_INITIATION is in force are held back and count as failed deliveries, though Clause 16.1 exempts them"
    ]
   },
   {

@@ -4501,6 +4501,8 @@ the notification:
   Untimestamped values are reported by the reference's next fanout, as a
   change DCC held back before its first send would be. A change partly sent
   value by value stays in delivery, so the history bound keeps the rest of it.
+  A report withdrawn before its first attempt is taken back out of the COV
+  counters, since nothing went out.
 - **Events.** Nothing in `EventNotificationCounters` moves, and the
   notification is not sent again once communication is enabled, the same as a
   transition DCC stops before its first send. `Acked_Transitions` keeps what
@@ -4510,7 +4512,7 @@ the notification:
   notification makes a single attempt with no retries, so one already sent
   waits for its answer, and the reporter's health and backlog are untouched.
   The server still holds back audit notifications that are due to start while
-  initiation is disabled, a known gap against that exemption.
+  initiation is disabled, a known gap against that exemption (#1370).
 
 A write a Command or Channel makes in another device follows the same rule
 (see [Building Control](#building-control-7)).

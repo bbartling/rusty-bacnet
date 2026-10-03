@@ -146,6 +146,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .fetch_add(buf.len() as u64, Ordering::Relaxed);
 
         let id = operation.invoke_id();
+        let (counted, buf_len) = (Arc::clone(counters), buf.len() as u64);
         let network = Arc::clone(ctx.network);
         let comm_state = Arc::clone(ctx.comm_state);
         let cov_table = Arc::clone(ctx.cov_table);
@@ -163,6 +164,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 claim,
                 ..
             } = report;
+            // Whether an attempt got past the DCC check, so went to the link.
+            let attempted = std::sync::atomic::AtomicBool::new(false);
             let delivery = run_notification_under_dcc(
                 operation,
                 result_rx,
@@ -170,6 +173,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 apdu_retries,
                 &comm_state,
                 |attempt| {
+                    attempted.store(true, Ordering::Relaxed);
                     let network = Arc::clone(&network);
                     let buf = buf.clone();
                     let route = route.clone();
@@ -253,12 +257,25 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // held back before its first send. Its history returns to the
                 // queue before the mark clears, the backstop sends it once
                 // initiation is enabled again, and the next fanout reports
-                // untimestamped values still away from their baselines.
+                // untimestamped values still away from their baselines. A
+                // change the report began sending value by value stays in
+                // delivery (#1163), as after a report whose sends all failed.
                 Err(InitiationRestricted) => {
                     debug!(
                         invoke_id = id,
                         "{label} withdrawn: DCC restricts initiation"
                     );
+                    if !attempted.load(Ordering::Relaxed) {
+                        // DCC took effect after the fanout counted the report
+                        // but before its first attempt: nothing went out.
+                        counted.notifications_sent.fetch_sub(1, Ordering::Relaxed);
+                        counted
+                            .notifications_confirmed
+                            .fetch_sub(1, Ordering::Relaxed);
+                        counted
+                            .notification_bytes_sent
+                            .fetch_sub(buf_len, Ordering::Relaxed);
+                    }
                     drop(claim);
                     drop(flight);
                     Vec::new()
