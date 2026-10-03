@@ -474,7 +474,8 @@ application-tagged primitive, or a context-0 lighting command, with no wrapper t
 `encode` is fallible: it rejects priorities outside 1 to 16, an empty change list and
 a value that is not a single BACnetChannelValue with `Error::Encoding`, leaving the
 buffer unchanged. `decode` enforces the same rules and rejects trailing data.
-Nothing in the bundled server executes inbound WriteGroup.
+The bundled server executes inbound WriteGroup on its Channel objects (see the
+Channel paragraphs under Lighting & Color), and `BACnetClient::write_group` sends one.
 
 ### Who-Am-I and You-Are
 
@@ -2534,9 +2535,32 @@ SUCCESSFUL. A NULL a member refuses as the wrong datatype isn't a failure, so
 one Channel can relinquish commandable members alongside others. With no
 members Write_Status stays IDLE, empty references (instance 4194303) are
 skipped, and while Out_Of_Service is TRUE the value is kept but not passed on.
-Reliability and Allow_Group_Delay_Inhibit aren't served, and inbound WriteGroup,
-which addresses Channels by Channel_Number and Control_Groups, isn't executed
-yet.
+Reliability isn't served.
+
+A running server also executes inbound WriteGroup on its Channels (Clause
+15.11). For each change-list entry, every Channel whose Channel_Number is the
+entry's channel and whose Control_Groups holds the request's group takes the
+value as a Present_Value write, at the entry's own priority or else the
+request's, and passes it on as above. Group membership is each Channel's own:
+a Channel outside the group is left alone even when another Channel in the
+device is in it. When the request sets Inhibit Delay, a Channel whose
+Allow_Group_Delay_Inhibit is TRUE (`set_allow_group_delay_inhibit`, or a
+network write) writes all its members at once; the others keep their delays.
+A Channel that refuses its value, as a busy one does, doesn't stop the rest.
+A channel number listed twice in one change list reaches the same Channels
+twice: the later value is refused as busy while the distribution the earlier
+one queued is still running, and taken once it has finished, so which value
+stays depends on timing. Each Channel is checked again when its own write
+runs: one that has left the group or changed its number by then is skipped,
+and one whose Allow_Group_Delay_Inhibit is FALSE by then keeps its delays.
+Nothing is answered and a malformed request is dropped. DCC's
+DISABLE_INITIATION leaves WriteGroup running, as it only stops what the device
+starts; the deprecated DISABLE state, which the server never accepts over the
+network, would drop it. Every WriteGroup is dropped while the server's
+`mutation_policy` is `DenyAll` or a `mutation_authorizer` is installed, because
+the authorizer only decides confirmed services (#1319); those drops aren't
+counted in `mutation_decision_counters()`. The Channel writes make no Audit
+records (#1318), and the endpoint responder ignores WriteGroup.
 
 Channel runs are owned as Command runs are (#1178). Without a server,
 `tick_schedules` runs a distribution its Schedule writes start before it
@@ -3642,15 +3666,22 @@ client
 
 ### Write Group and Who-Am-I
 
-The client has no dedicated methods for these services. Build the
-`bacnet_services` request and send it through the generic unconfirmed-request API.
+`write_group` sends a WriteGroup to a `WriteGroupDestination`: one `Device` by
+its link address, a `LocalBroadcast`, a `RemoteBroadcast` to network 1 to
+65534, or a `GlobalBroadcast`. It returns once the request is sent, since
+nothing answers it, and fails before sending when the request doesn't encode
+or the remote network is 0 or 65535. Who-Am-I has no dedicated method: build
+the `bacnet_services` request and send it through the generic
+unconfirmed-request API.
 
 ```rust
 use std::num::NonZeroU32;
 
+use bacnet_client::client::WriteGroupDestination;
 use bacnet_services::who_am_i::WhoAmIRequest;
 use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 use bacnet_types::enums::UnconfirmedServiceChoice;
+use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
 // Channel 5 gets REAL 72.0; channel 6 gets NULL at priority 10.
@@ -3671,9 +3702,13 @@ let request = WriteGroupRequest {
     ],
     inhibit_delay: Some(false),
 };
-let mut service_data = BytesMut::new();
-request.encode(&mut service_data)?;
-client.unconfirmed_request(&mac, UnconfirmedServiceChoice::WRITE_GROUP, &service_data).await?;
+client
+    .write_group(&WriteGroupDestination::Device(MacAddr::from_slice(&mac)), &request)
+    .await?;
+// The same change list for every device on network 5.
+client
+    .write_group(&WriteGroupDestination::RemoteBroadcast(5), &request)
+    .await?;
 
 // Who-Am-I is usually broadcast.
 let who_am_i = WhoAmIRequest {
@@ -3976,7 +4011,11 @@ each element in order and retains an authorized prefix on later denial or
 malformed input; other covered services authorize once after service decoding.
 Callbacks must be fast, nonblocking, and side-effect-free. Context addresses and
 process IDs are claimed, not authenticated identities. DCC/Reinit, Audit/LifeSafety,
-reads, discovery, unconfirmed services, and trusted local writes are unchanged.
+reads, discovery, trusted local writes and unconfirmed services other than WriteGroup
+are unchanged. The callback can't decide an inbound WriteGroup, so an installed
+authorizer, even one that allows everything, drops every inbound WriteGroup without
+being called, and so does `MutationPolicy::DenyAll` (#1319 tracks letting the
+authorizer decide). Those drops aren't counted in `mutation_decision_counters()`.
 
 Each decision context also carries the reassembled ingress snapshot
 (`provenance: TransportProvenance`) and the derived channel/relay scope
