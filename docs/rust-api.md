@@ -2544,6 +2544,15 @@ the database, such as one a write made straight into the database queued.
 `stop()` doesn't wait for a database the application holds: those runs end as
 soon as it lets go.
 
+A run doesn't need `stop()` to end when the `write_local` that started it is
+dropped after its write committed, by a timeout or a `select!` (#1324). The
+write stays made, and the run, which hadn't reached its task yet, ends as if
+none of its writes were made: In_Process FALSE with every command
+unsuccessful, or a Channel's Write_Status FAILED with Reliability
+PROCESS_ERROR. It ends at once, or as soon as a database the application holds
+is free. The COV and event work the dropped call hadn't done yet is skipped
+(#1367).
+
 Whatever commits a Present_Value write owns the run it starts and finishes it,
 so no path leaves a Command in process (#1178). Without a server,
 `tick_schedules` runs the lists its Schedule writes start before it returns,
@@ -2829,7 +2838,9 @@ the authorizer only decides confirmed services (#1319); those drops aren't
 counted in `mutation_decision_counters()`. The Channel writes make no Audit
 records (#1318), and the endpoint responder ignores WriteGroup.
 
-Channel runs are owned as Command runs are (#1178). Without a server,
+Channel runs are owned as Command runs are (#1178). A `write_local` dropped
+after the Channel took its value ends the distribution FAILED without
+`stop()`, as it ends a Command's run (#1324). Without a server,
 `tick_schedules` runs a distribution its Schedule writes start before it
 returns, delays included, and ends it FAILED if its future is dropped first.
 The bare `handle_write_property` and `handle_write_property_multiple` handlers
@@ -3438,8 +3449,11 @@ context to one follow-up, so changes held on every object go out together. Nothi
 re-sends by itself, so a subscriber that stopped answering, or keeps refusing,
 costs at most one delivery attempt per hold-off however often its objects change,
 and cannot keep the per-peer and global in-flight slots to itself. Shutdown and
-cancellation clear the mark without a hold-off. The retry timeout starts once each
-send has completed, and the transport bounds the send itself, so a report stays
+cancellation clear the mark without a hold-off, and so does DCC ending a report at
+a retry (see [Confirmed notifications under
+DeviceCommunicationControl](#confirmed-notifications-under-devicecommunicationcontrol)).
+The retry timeout starts once each send has completed, and the transport bounds
+the send itself, so a report stays
 outstanding for the transport's send bounds plus the retry cycle. The standard
 ends delivery with the confirmed-request retries (Clause 5.4.4); reporting again
 after a hold-off is local policy.
@@ -4572,6 +4586,41 @@ naming any network is sent routed, as it is written. The server has one port,
 so the local network is that port's; a multi-port device would need the
 network attached to each port (#863).
 
+### Confirmed notifications under DeviceCommunicationControl
+
+While DeviceCommunicationControl restricts initiation the server sends no COV
+or event notification, and that holds for the retries of a confirmed one
+already outstanding (Clause 16.1, #1327). Every attempt, the first and each
+retry, reads the communication state before it sends. An attempt that DCC
+blocks is not sent: the notification ends there, its invoke ID freed at once
+instead of after the remaining timeouts. An answer that has already taken the
+lease still ends it as usual. The server refuses the deprecated DISABLE, so
+DISABLE_INITIATION is the state that does this. What happens next depends on
+the notification:
+
+- **COV.** The report ends with no hold-off, because the subscriber did not
+  fail, and its baselines stay where they were. Timestamped history goes back
+  to its queue, and the `Max_Notification_Delay` backstop sends it once
+  communication is enabled again, at once if its delay has run out by then.
+  Untimestamped values are reported by the reference's next fanout, as a
+  change DCC held back before its first send would be. A change partly sent
+  value by value stays in delivery, so the history bound keeps the rest of it.
+  A report withdrawn before its first attempt is taken back out of the COV
+  counters, since nothing went out.
+- **Events.** Nothing in `EventNotificationCounters` moves, and the
+  notification is not sent again once communication is enabled, the same as a
+  transition DCC stops before its first send. `Acked_Transitions` keeps what
+  the transition set; delivery never changes it.
+- **Audit.** Not withdrawn. Clause 16.1 exempts Confirmed- and
+  UnconfirmedAuditNotification from DISABLE_INITIATION, and an audit
+  notification makes a single attempt with no retries, so one already sent
+  waits for its answer, and the reporter's health and backlog are untouched.
+  The server still holds back audit notifications that are due to start while
+  initiation is disabled, a known gap against that exemption (#1370).
+
+A write a Command or Channel makes in another device follows the same rule
+(see [Building Control](#building-control-7)).
+
 ### Notification forwarding
 
 A `NotificationForwarderObject` (type 51, Clause 12.51) originates no events.
@@ -4721,7 +4770,8 @@ notifications alike, whose Notification Class lookup failed closed: one per
 `RecipientLookupOutcome` that suppresses delivery, alongside the warning each
 one logs. `NoConfiguredDestinations` and `NoMatchingDestinations` are
 configured behaviour and are not counted, nor are notifications held back by
-DCC or Event_Enable. The three confirmed fields count notifications to one
+DCC or Event_Enable, a confirmed one DCC ends at a retry included. The three
+confirmed fields count notifications to one
 recipient; a reservation refused because the server is stopping is not
 counted.
 

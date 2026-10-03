@@ -595,6 +595,48 @@
    "gaps": []
   },
   {
+   "id": "BACNET-16-DCC-NOTIFICATION-INITIATION",
+   "standard_anchor": "Clause 16.1",
+   "priority": "P1",
+   "summary": "While DCC restricts initiation the server sends no COV or event notification and ends a confirmed one at its next attempt, freeing its invoke ID; audit notifications are exempt.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-server/src/server/notification_transactions.rs::run_notification_under_dcc",
+    "crates/bacnet-server/src/server/notification_transactions.rs::run_attempts",
+    "crates/bacnet-server/src/server/cov_notifications/confirmed.rs::send_confirmed_cov",
+    "crates/bacnet-server/src/server/event_send.rs::send_event_notification",
+    "crates/bacnet-server/src/server/audit_delivery.rs::deliver_observed",
+    "crates/bacnet-server/src/handlers/device_mgmt.rs::validate_dcc"
+   ],
+   "positive_tests": [
+    "crates/bacnet-server/src/server/notification_dcc_tests.rs::{an_answer_claimed_as_the_retry_timer_fires_still_ends_the_notification,disable_initiation_leaves_an_outstanding_audit_notification_to_its_answer}",
+    "crates/bacnet-server/src/server/notification_transactions_tests.rs::an_answer_ahead_of_a_withdrawn_retry_still_ends_the_transaction",
+    "crates/bacnet-server/src/server/cov_timed_deadline_tests.rs::history_of_a_report_dcc_ends_at_a_retry_goes_out_once_enabled",
+    "crates/bacnet-server/src/server/cov_timed_value_split_tests.rs::a_value_dcc_withdraws_goes_out_again_with_the_rest_of_its_change"
+   ],
+   "negative_tests": [
+    "crates/bacnet-server/src/server/notification_dcc_tests.rs::{dcc_ends_an_outstanding_notification_at_its_next_retry_and_frees_its_lease,dcc_in_force_at_the_first_attempt_sends_nothing_and_frees_the_lease_at_once}",
+    "crates/bacnet-server/src/server/cov_confirmed_baseline_tests.rs::{confirmed_report_dcc_stops_at_a_retry_ends_there_without_a_hold_off,confirmed_follow_up_under_dcc_is_dropped_not_deferred}",
+    "crates/bacnet-server/src/server/event_confirmed_routing_tests/dcc_retry.rs::dcc_ends_an_outstanding_confirmed_event_notification_at_its_next_retry",
+    "crates/bacnet-server/src/server/cov_notifications/confirmed/tests.rs::a_report_dcc_withdraws_before_its_first_attempt_is_not_counted",
+    "crates/bacnet-integration-tests/tests/server/dcc.rs::{dcc_disable_rejected_without_changing_comm_state,dcc_disable_initiation_allows_rp_blocks_cov}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#confirmed-notifications-under-devicecommunicationcontrol"
+   ],
+   "notes": [
+    "Each attempt of a confirmed COV or event notification, retries included, reads the DCC state first. One that DISABLE_INITIATION blocks ends the notification there, its invoke ID freed, unless an answer has already taken the lease.",
+    "A COV report ended this way takes no hold-off and keeps its baselines. Its timestamped history goes back to the queue for the backstop to send once initiation is enabled; untimestamped values go out at the next fanout.",
+    "An event notification ended this way moves no `EventNotificationCounters` field and is not sent again once initiation is enabled. `Acked_Transitions` keeps what the transition committed.",
+    "Audit notifications are never ended this way: Clause 16.1 exempts them from DISABLE_INITIATION, and each makes one attempt, so one already sent waits for its answer and the reporter's health is unchanged.",
+    "DISABLE is refused with `SERVICES` / `SERVICE_REQUEST_DENIED`, so DISABLE_INITIATION is the state that restricts initiation. Command and Channel writes to other devices follow the same per-attempt rule."
+   ],
+   "gaps": [
+    "#1370: Audit notifications due to start while DISABLE_INITIATION is in force are held back and count as failed deliveries, though Clause 16.1 exempts them"
+   ]
+  },
+  {
    "id": "BACNET-15-ENDPOINT-DEVICE-WRITE",
    "standard_anchor": "Clause 15.9; Clause 12.11 Protocol_Services_Supported",
    "priority": "P1",
@@ -2524,6 +2566,7 @@
     "crates/bacnet-endpoint/src/source_reporter.rs",
     "crates/bacnet-server/src/command_lists.rs",
     "crates/bacnet-server/src/command_lists/unattached.rs",
+    "crates/bacnet-server/src/command_lists/taken.rs::TakenRuns",
     "crates/bacnet-server/src/server/remote_writes.rs",
     "crates/bacnet-server/src/server/binding_probes.rs",
     "crates/bacnet-server/src/server/device_bindings.rs",
@@ -2569,6 +2612,8 @@
     "crates/bacnet-server/src/server/command_remote_write_tests.rs::{command_write_another_device_refuses_busy_fails_at_once_and_quits,command_write_another_device_never_answers_is_retried_then_fails,command_write_another_device_fails_unsent_while_dcc_restricts_initiation,command_write_another_device_ends_at_the_first_retry_dcc_blocks,stop_during_an_outstanding_remote_write_ends_the_run_and_frees_its_invoke_id}",
     "crates/bacnet-server/src/server/command_run_stop_tests.rs::{stop_during_a_post_delay_ends_the_run_with_what_it_made,stop_while_the_database_is_busy_ends_the_run_where_it_stood,run_no_task_starts_ends_at_once_as_unsuccessful,stop_during_a_channel_member_delay_ends_the_distribution_failed,stop_while_the_database_is_busy_ends_a_channel_distribution_failed,channel_run_no_task_starts_ends_at_once_failed,stop_ends_a_run_nothing_took,run_whose_write_panics_ends_with_its_unmade_commands_unsuccessful,stop_during_the_last_post_delay_ends_the_run_successful,run_whose_write_panics_while_the_database_is_busy_ends_where_it_stood}",
     "crates/bacnet-server/src/server/remote_write_answer_tests.rs::{remote_write_ignores_answers_from_another_peer_or_for_another_service,remote_write_error_reject_or_abort_ends_it_at_once_saying_why,remote_write_blocked_by_dcc_at_a_retry_ends_there_as_disabled}",
+    "crates/bacnet-server/src/server/command_run_cancel_tests.rs::{write_local_dropped_after_its_commit_ends_the_command_run_unsuccessful,write_local_dropped_while_the_database_is_busy_ends_the_run_once_it_is_free}",
+    "crates/bacnet-server/src/command_lists/taken_tests.rs::{taken_runs_dropped_unstarted_end_at_once_as_if_nothing_was_written,taken_runs_dropped_while_the_database_is_busy_end_once_it_is_free,taken_runs_handed_over_belong_to_their_new_owner,an_owner_that_panics_part_way_leaves_the_runs_not_yet_handed_to_the_drop,a_dropped_run_ends_once_and_never_ends_its_objects_next_run}",
     "crates/bacnet-server/src/server/remote_write_discovery_tests.rs::{silent_unbound_target_fails_after_the_apdu_timeout_with_one_who_is,silent_unbound_command_target_fails_and_the_rest_of_the_list_runs,no_who_is_while_dcc_restricts_initiation_or_for_the_wildcard_device,absent_device_gets_one_who_is_per_hold_off,the_wait_for_an_i_am_counts_from_the_who_is_send,a_fruitless_who_is_on_the_last_network_drops_it_and_the_next_asks_everywhere,stop_during_a_who_is_wait_ends_the_run_with_nothing_made}",
     "crates/bacnet-server/src/server/binding_probes_tests.rs::{a_probe_is_joined_while_out_then_holds_off_its_device_for_a_minute,probes_are_capped_until_their_hold_off_ends,a_wait_too_long_to_add_still_starts_a_probe,a_withdrawn_probe_ends_its_waits_and_holds_nothing_off}"
    ],
@@ -2582,6 +2627,7 @@
     "CHANGELOG.md Unreleased Added entry for #1180 (Command actions in other devices), from changelog.d/1180-command-remote-writes.md",
     "CHANGELOG.md Unreleased Fixed entry for #1252 (stop ends Command runs), from changelog.d/1252-stop-ends-command-runs.md",
     "CHANGELOG.md Unreleased Changed entry for #1323 (remote write refusals keep their payload), from changelog.d/1323-refusal-payload.md",
+    "CHANGELOG.md Unreleased Fixed entry for #1324 (a dropped write_local ends its runs), from changelog.d/1324-dropped-write-local-runs.md",
     "CHANGELOG.md Unreleased Added entry for #1322 (targeted Who-Is for unbound remote targets), from changelog.d/1322-targeted-who-is.md"
    ],
    "notes": [
@@ -2602,7 +2648,7 @@
     "A command naming another Device goes out as a confirmed WriteProperty, addressed from the device bindings (a configured DeviceBinding or an I-Am under ten minutes old).",
     "Remote write bounds: each attempt waits cov_retry_timeout_ms, silence earns up to three retries under one invoke ID, and an Error (BUSY included), Reject or Abort is final. Nothing is sent while DCC restricts initiation, a retry included.",
     "A remote write leases its invoke ID from the pool confirmed notifications use, and the lease names the peer and WriteProperty. No database guard is held while it is outstanding. tick_schedules, which has no network, fails remote commands.",
-    "stop() ends a cancelled run where it stood: In_Process FALSE, unmade commands FALSE, All_Writes_Successful TRUE only if every write was made and succeeded. Runs let go of while the database was busy, then ownerless ones, end once it is free.",
+    "stop() ends a cancelled run where it stood: In_Process FALSE, unmade commands FALSE, All_Writes_Successful TRUE only if every write was made and succeeded. Runs let go of while the database was busy, then ownerless ones, end once it is free. A write_local dropped after its commit ends the run it took but hadn't started as if no command was made, without stop().",
     "A run whose write panics ends the same way, its unmade commands FALSE, and its property subscribers hear of the end.",
     "A remote write's refusal reaches the run host with what the device said: the Error class and code, or the Reject or Abort reason. A Command keeps only pass or fail; a Channel member in another device goes through the same remote write path.",
     "Python reads Action as lists of ActionCommand mappings with every key, Write_Successful included; add_command takes those mappings back and ignores write_successful, so a command starts FALSE.",
@@ -2612,7 +2658,6 @@
     "At most 256 devices with a Who-Is out or held off; an answered device frees its place and stays bound ten minutes, so the cap holds unanswered Who-Is requests to 256 a minute."
    ],
    "gaps": [
-    "#1324: runs a cancelled write_local took but never started stay in progress until stop()"
    ]
   },
   {
@@ -3920,6 +3965,7 @@
     "crates/bacnet-server/src/command_lists/target.rs",
     "crates/bacnet-server/src/command_lists/chain.rs",
     "crates/bacnet-server/src/command_lists/unattached.rs",
+    "crates/bacnet-server/src/command_lists/taken.rs::TakenRuns",
     "crates/bacnet-server/src/server/command_runs.rs",
     "crates/bacnet-server/src/server/remote_writes.rs",
     "crates/bacnet-server/src/server/binding_probes.rs",
@@ -3978,7 +4024,8 @@
     "crates/bacnet-server/src/server/command_run_stop_tests.rs::{stop_during_a_channel_member_delay_ends_the_distribution_failed,stop_while_the_database_is_busy_ends_a_channel_distribution_failed,channel_run_no_task_starts_ends_at_once_failed,stop_ends_a_run_nothing_took}",
     "crates/bacnet-server/src/server/channel_remote_write_tests.rs::{channel_member_in_another_device_that_refuses_fails_the_distribution,channel_member_in_another_device_that_never_answers_is_a_communication_failure,channel_member_in_another_device_sends_nothing_while_dcc_restricts_initiation,channel_skips_the_rest_of_an_unbound_device_its_who_is_finds_silent,stop_during_an_outstanding_member_write_ends_the_distribution_failed}",
     "crates/bacnet-server/src/server/channel_reliability_tests.rs::{channel_member_naming_a_missing_object_is_a_configuration_error,channel_value_a_member_cannot_take_is_a_configuration_error,stop_after_a_member_failed_keeps_that_failure}",
-    "crates/bacnet-server/src/command_lists/unattached_tests.rs::unattached_channel_member_in_another_device_fails_unsent"
+    "crates/bacnet-server/src/command_lists/unattached_tests.rs::unattached_channel_member_in_another_device_fails_unsent",
+    "crates/bacnet-server/src/server/command_run_cancel_tests.rs::{write_local_dropped_inside_its_database_guard_ends_the_distribution_failed,write_local_dropped_after_its_commit_ends_the_distribution_failed}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3986,6 +4033,7 @@
     "docs/python-api.md#channels",
     "CHANGELOG.md Unreleased Added entry for #1151 (Channel object), from changelog.d/1151-channel-object.md",
     "CHANGELOG.md Unreleased Added entry for #1264 (Channel remote members and Reliability), from changelog.d/1264-channel-remote-members-reliability.md",
+    "CHANGELOG.md Unreleased Fixed entry for #1324 (a dropped write_local ends its runs), from changelog.d/1324-dropped-write-local-runs.md",
     "CHANGELOG.md Unreleased Added entry for #1322 (targeted Who-Is for unbound remote targets), from changelog.d/1322-targeted-who-is.md",
     "docs/rust-api.md#lighting--color-5 Channel object"
    ],
@@ -4032,7 +4080,7 @@
     "crates/rusty-bacnet/src/client/client_methods/enrollment_alarm_covmulti_who_writegroup.rs::write_group_address_and_network_pick_the_destination"
    ],
    "negative_tests": [
-    "crates/bacnet-server/src/server/write_group_tests.rs::{write_group_is_dropped_under_dcc_disable_and_runs_under_disable_initiation,write_group_is_dropped_when_local_policy_restricts_network_writes,write_group_malformed_requests_are_dropped_without_an_answer,write_group_skips_a_channel_that_left_the_group_after_the_plan,write_group_reads_allow_group_delay_inhibit_at_the_write}",
+    "crates/bacnet-server/src/server/write_group_tests.rs::{write_group_is_dropped_under_dcc_disable_and_runs_under_disable_initiation,write_group_is_dropped_when_local_policy_restricts_network_writes,write_group_malformed_requests_are_dropped_without_an_answer,write_group_skips_a_channel_that_left_the_group_after_the_plan,write_group_reads_allow_group_delay_inhibit_at_the_write,write_group_dropped_after_a_channel_took_its_value_ends_that_distribution_failed}",
     "crates/bacnet-server/src/server/requests/endpoint_responder_tests.rs::responder_ignores_write_group_and_leaves_its_channels_alone",
     "crates/bacnet-endpoint/src/device_execution_tests.rs::endpoint_execution_profile_refusals_precede_ingress_and_allow_repair",
     "crates/bacnet-client/src/client/write_group_tests.rs::write_group_refuses_a_bad_request_or_network_before_sending",

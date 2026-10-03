@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::future::{poll_fn, Future};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
 
@@ -401,6 +402,15 @@ impl NotificationTransactions {
     pub(super) fn release_token_for_test(&self, token: LeaseToken) {
         self.core.release(token);
     }
+
+    /// Take the lease's answer slot and complete its lease as an arriving
+    /// answer does, leaving the caller to send that answer when it chooses.
+    #[cfg(test)]
+    pub(super) fn claim_answer_for_test(&self, token: LeaseToken) -> oneshot::Sender<CovAckResult> {
+        let sender = self.core.state.lock().unwrap().pending.remove(&token);
+        let _ = self.core.coordinator.complete(token);
+        sender.expect("an armed answer slot")
+    }
 }
 
 impl NotificationCore {
@@ -633,10 +643,13 @@ pub(super) enum Attempt<W> {
     /// silence would.
     NotSent,
     /// Nothing may be sent any more: the transaction ends at once, its invoke
-    /// ID freed, with this reason.
+    /// ID freed, with this reason. An answer that has already taken the lease
+    /// is the exception: it is on its way, and it ends the transaction instead.
     Withdrawn(W),
 }
 
+/// The shared retry loop for a notification none of whose attempts is
+/// withdrawn: a send that fails waits out its timeout as silence would.
 #[doc(hidden)]
 pub async fn run_notification_worker<F, Fut, E>(
     operation: NotificationOperation,
@@ -664,9 +677,49 @@ where
     }
 }
 
+/// DeviceCommunicationControl restricted initiation when a confirmed COV or
+/// event notification was due for an attempt: it ended there, its invoke ID
+/// freed, with nothing more sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct InitiationRestricted;
+
+/// [`run_notification_worker`] for a confirmed COV or event notification,
+/// which DeviceCommunicationControl stops (Clause 16.1). `comm_state` is read
+/// before every attempt, the first and each retry: once DCC restricts
+/// initiation the attempt is withdrawn instead of sent, so a notification
+/// outstanding when it takes effect ends at its next retry.
+pub(super) async fn run_notification_under_dcc<F, Fut, E>(
+    operation: NotificationOperation,
+    receiver: oneshot::Receiver<CovAckResult>,
+    timeout: Duration,
+    max_retries: u8,
+    comm_state: &AtomicU8,
+    mut send: F,
+) -> Result<NotificationWorkerResult, InitiationRestricted>
+where
+    F: FnMut(u8) -> Fut,
+    Fut: Future<Output = Result<(), E>>,
+{
+    run_attempts(operation, receiver, timeout, max_retries, |attempt| {
+        // DISABLE and DISABLE_INITIATION both stop these notifications.
+        let sent = (comm_state.load(Ordering::Acquire) == 0).then(|| send(attempt));
+        async move {
+            let Some(sent) = sent else {
+                return Attempt::Withdrawn(InitiationRestricted);
+            };
+            match sent.await {
+                Ok(()) => Attempt::Sent,
+                Err(_) => Attempt::NotSent,
+            }
+        }
+    })
+    .await
+}
+
 /// Make the first attempt and up to `max_retries` more, each waiting
 /// `timeout` for the answer. Only silence earns another attempt; an attempt
-/// that is withdrawn ends the transaction at once.
+/// that is withdrawn ends the transaction at once, unless an answer has
+/// already taken the lease, which then ends it as usual.
 pub(super) async fn run_attempts<F, Fut, W>(
     mut operation: NotificationOperation,
     mut receiver: oneshot::Receiver<CovAckResult>,
@@ -684,6 +737,12 @@ where
             Attempt::Sent => false,
             Attempt::NotSent => true,
             Attempt::Withdrawn(reason) => {
+                // The receiver was armed before this attempt was asked for,
+                // so an answer that has taken the lease since, on another
+                // thread, is on its way to it and still counts.
+                if !operation.withdraw() {
+                    break receiver.await;
+                }
                 operation.cancel();
                 return Err(reason);
             }
