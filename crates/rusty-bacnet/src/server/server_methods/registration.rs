@@ -699,13 +699,6 @@ impl BACnetServer {
         let obj = EventLogObject::new(instance, name, buffer_size).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
-
-    /// Add a Trend Log Multiple object to the server (before starting).
-    #[pyo3(signature = (instance, name, buffer_size=100))]
-    fn add_trend_log_multiple(&self, instance: u32, name: &str, buffer_size: u32) -> PyResult<()> {
-        let obj = TrendLogMultipleObject::new(instance, name, buffer_size).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
 }
 
 fn staging_config(

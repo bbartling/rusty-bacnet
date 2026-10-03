@@ -765,6 +765,8 @@ mod life_safety_operation_tests;
 #[cfg(test)]
 mod list_element_event_tests;
 #[cfg(test)]
+mod local_network_number_tests;
+#[cfg(test)]
 mod log_reference_resize_tests;
 #[cfg(test)]
 mod loop_controlled_variable_tests;

@@ -1196,7 +1196,13 @@
     "crates/bacnet-objects/src/trend/multiple.rs::TrendLogMultipleObject",
     "crates/bacnet-objects/src/traits.rs::BACnetObject::add_trend_record",
     "crates/bacnet-objects/src/traits.rs::BACnetObject::add_trend_multiple_record",
-    "crates/bacnet-server/src/trend_log.rs::poll_trend_logs"
+    "crates/bacnet-server/src/trend_log.rs::poll_trend_logs",
+    "crates/bacnet-objects/src/log_window.rs::LogWindow",
+    "crates/bacnet-objects/src/log_lifecycle.rs::LogLifecycle::refresh_window",
+    "crates/bacnet-objects/src/trend/acquisition.rs::Acquisition",
+    "crates/bacnet-objects/src/database/trend_poll/alignment.rs::Alignment",
+    "crates/bacnet-objects/src/traits.rs::BACnetObject::refresh_log_window_internal",
+    "crates/rusty-bacnet/src/server/server_methods/trend_log_methods.rs::trend_log_multiple"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/database/trend_poll/tests.rs (exact hundredths, lifecycle/configuration ownership, bounded failure retries, completion anchoring and width boundaries)",
@@ -1222,7 +1228,30 @@
     "crates/bacnet-objects/src/database/trend_poll/any_value_tests.rs::a_character_string_and_a_double_are_logged_and_read_back_exactly",
     "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::members_of_other_datatypes_are_logged_as_any_values",
     "crates/bacnet-objects/src/database/trend_poll/any_value_tests.rs::oversized_and_uncarriable_values_log_a_failure",
-    "crates/bacnet-objects/src/database/trend_poll/any_value_tests.rs::a_polled_value_too_long_to_page_logs_value_too_long"
+    "crates/bacnet-objects/src/database/trend_poll/any_value_tests.rs::a_polled_value_too_long_to_page_logs_value_too_long",
+    "crates/bacnet-objects/src/trend/multiple_options_tests.rs::trigger_asks_a_triggered_log_for_one_record",
+    "crates/bacnet-objects/src/trend/multiple_options_tests.rs::alignment_rows_read_back_what_is_written",
+    "crates/bacnet-objects/src/trend/multiple_options_tests.rs::the_window_holds_back_records_and_logs_each_change",
+    "crates/bacnet-objects/src/trend/multiple_options_tests.rs::a_local_window_is_configuration_and_its_opening_is_logged",
+    "crates/bacnet-objects/src/trend/multiple_options_tests.rs::an_opening_that_would_fill_a_stop_when_full_log_disables_it",
+    "crates/bacnet-objects/src/log_window.rs::tests::the_span_holds_its_start_and_excludes_its_stop",
+    "crates/bacnet-objects/src/database/trend_poll/acquisition_tests.rs::each_trigger_acquires_one_record_and_reads_false_again",
+    "crates/bacnet-objects/src/database/trend_poll/acquisition_tests.rs::a_trigger_is_served_without_members_and_while_disabled",
+    "crates/bacnet-objects/src/database/trend_poll/alignment_tests.rs::aligned_polls_wait_for_each_boundary_and_never_take_one_twice",
+    "crates/bacnet-objects/src/database/trend_poll/alignment_tests.rs::interval_offset_shifts_each_boundary_modulo_the_interval",
+    "crates/bacnet-objects/src/database/trend_poll/alignment_tests.rs::alignment_needs_an_interval_that_divides_a_day",
+    "crates/bacnet-objects/src/database/trend_poll/alignment_tests.rs::a_clock_set_forward_moves_the_plan_without_an_off_boundary_record",
+    "crates/bacnet-objects/src/database/trend_poll/alignment_tests.rs::a_clock_set_back_logs_each_boundary_as_the_clock_reaches_it",
+    "crates/bacnet-objects/src/database/trend_poll/alignment_tests.rs::boundaries_run_on_across_midnight",
+    "crates/bacnet-objects/src/database/trend_poll/alignment_tests.rs::a_log_interval_change_mid_wait_plans_from_the_new_interval",
+    "crates/bacnet-objects/src/trend/multiple_options_tests.rs::each_record_is_judged_by_its_own_timestamp",
+    "crates/bacnet-objects/src/log_window.rs::tests::unspecified_seconds_and_hundredths_count_as_zero",
+    "crates/bacnet-objects/src/database/trend_poll/acquisition_tests.rs::each_pass_records_the_window_opening_and_closing",
+    "crates/bacnet-server/src/handlers/tests/trend_log_multiple_options.rs::a_trigger_written_over_the_wire_is_served_by_the_next_poll",
+    "crates/bacnet-server/src/handlers/tests/trend_log_multiple_options.rs::start_and_stop_time_take_a_date_and_time_and_alignment_reads_back",
+    "crates/rusty-bacnet/src/server/server_methods/trend_log_methods_tests.rs::python_add_trend_log_multiple_settings_reach_every_row",
+    "crates/rusty-bacnet/src/types/property_reference_tests.rs::reference_mappings_fill_every_field_and_default_the_optional_ones",
+    "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleLiveServerTests::test_polled_and_triggered_logs_configured_from_python"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/trend_log_clock_tests.rs::unusable_acquisition_clock_preserves_records_and_schedule_then_retries",
@@ -1240,7 +1269,16 @@
     "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::a_failing_member_logs_its_error_beside_the_other_values",
     "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::a_member_naming_another_device_logs_a_failure_for_that_member",
     "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::an_empty_member_logs_no_property_specified",
-    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::only_polled_logs_with_an_interval_and_members_are_sampled"
+    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::only_polled_logs_with_an_interval_and_members_are_sampled",
+    "crates/bacnet-objects/src/trend/multiple_options_tests.rs::logging_type_takes_polled_or_triggered_and_refuses_cov",
+    "crates/bacnet-objects/src/trend/multiple_options_tests.rs::window_writes_refuse_what_is_not_an_actual_moment",
+    "crates/bacnet-objects/src/log_window.rs::tests::writes_take_a_date_and_time_that_is_actual_or_wholly_unspecified",
+    "crates/bacnet-objects/src/database/trend_poll/acquisition_tests.rs::a_trigger_waits_for_a_clock_and_stays_true_until_served",
+    "crates/bacnet-server/src/handlers/tests/trend_log_multiple_options.rs::logging_type_writes_refuse_cov_and_steer_log_interval",
+    "crates/rusty-bacnet/src/server/server_methods/trend_log_methods_tests.rs::python_add_trend_log_multiple_settings_are_checked_like_the_rust_setters",
+    "crates/rusty-bacnet/src/types/property_reference_tests.rs::reference_mappings_refuse_bad_shapes_and_types",
+    "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleConfigurationTests::test_bad_settings_are_refused_before_start",
+    "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleStubContractTests::test_runtime_and_stub_take_the_same_keyword_arguments"
    ],
    "benchmarks": [],
    "public_claims": [],
@@ -1253,17 +1291,23 @@
      "Refs #748/#753: database-owned schedules compare the complete selection configuration, retire on structural access, and use exact hundredths under one exclusive selection/acquisition/append guard. The former external TrendLogState and mutable Box getter are removed.",
      "Successful next intervals start at actual completion without catch-up; configuration reconciliation and failed-attempt retries use a local 100 ms bound, and slow passes yield 1 ms when another entry is already due.",
      "Poller insertion failures preserve last success and retry after clock repair; SourceReporter forwards results. Constructors, records() and raw clear() retain their behavior. ReadRange By Sequence and By Time can select the resident purge status identity under BACNET-15-READ-RANGE-LOG-BUFFER.",
-     "Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, persistence/restart, and complete log conformance remain deferred.",
+     "Start_Time/Stop_Time windows on Trend Log and Event Log (#1353), LOG_INTERRUPTED, persistence/restart, and complete log conformance remain deferred; Trend Log Multiple has its window.",
      "#1183: the poller reads only its own database. A Log_DeviceObjectProperty whose Device member names another device (ObjectDatabase::local_device, the rule the server's Event Enrollment evaluation shares) logs a failure record, PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, at the configured interval and is never read from a same-numbered local object; one naming this device reads locally, as one without a Device does.",
      "A failed local read now logs a failure record carrying its error (OBJECT / UNKNOWN_OBJECT for a missing object, the read's own class and code otherwise, SERVICES / OTHER for an error without one) instead of a null value, the failure choice of the Clause 12.25 Log_Buffer datum.",
      "A Device member that is not an object identifier leaves the log unpolled.",
      "Trend Log Multiple: the same poller samples every Log_DeviceObjectProperty member each interval into one record, values in member order, under the shared Enable, Buffer_Size and Stop_When_Full lifecycle (#1203).",
      "Each Trend Log Multiple member resolves through ObjectDatabase::local_device as a Trend Log reference does. A member naming another device, or whose read fails, logs its own failure value; one naming instance 4194303 logs PROPERTY / NO_PROPERTY_SPECIFIED.",
      "A reference with an array index reads that element behind the ReadProperty gate the Averaging sampler shares: an index on a non-array logs PROPERTY / PROPERTY_IS_NOT_AN_ARRAY, one past the end logs INVALID_ARRAY_INDEX. An index that isn't Unsigned leaves the log unpolled (#1205).",
-     "Only POLLED logs with a nonzero Log_Interval and at least one member are polled. Trend Log Multiple triggered acquisition, Align_Intervals, Interval_Offset and intrinsic reporting are not modeled.",
+     "Only POLLED logs with a nonzero Log_Interval and at least one member are polled, besides a Trend Log Multiple's Trigger. Trend Log Multiple intrinsic reporting is not modeled.",
      "Both pollers log a value with no alternative of its own (CharacterString, Double, Date, ObjectIdentifier, OctetString, a whole array, a framed constructed value) as any-value holding the encoding a ReadProperty of it carries. A BitString logs as bitstring-value, and only a NULL value logs as null-value (#1236).",
      "An any-value holds at most ANY_VALUE_MAX_OCTETS (256) octets; a longer value logs PROPERTY / VALUE_TOO_LONG and one no record could carry logs SERVICES / OTHER, so the log never refuses a polled record.",
-     "A client's change to Log_DeviceObjectProperty purges the log and records BUFFER_PURGED, as a zero Record_Count write does; the poller then samples the references written."
+     "A client's change to Log_DeviceObjectProperty purges the log and records BUFFER_PURGED, as a zero Record_Count write does; the poller then samples the references written.",
+     "Trend Log Multiple Logging_Type is writable, POLLED or TRIGGERED; COV or any other value is PROPERTY / VALUE_OUT_OF_RANGE, also through set_logging_type. TRIGGERED zeroes Log_Interval and makes it read-only; POLLED at zero takes 6000.",
+     "A TRUE Trigger write on a TRIGGERED Trend Log Multiple makes one poller acquisition; Trigger reads TRUE until the record is accepted. TRUE on a POLLED log is PROPERTY / NOT_CONFIGURED_FOR_TRIGGERED_LOGGING.",
+     "Trend Log Multiple Start_Time / Stop_Time gate records, each judged at its own timestamp; an opening or closing while Enable is TRUE is logged. Unspecified seconds or hundredths count as zero; other partial ends are VALUE_OUT_OF_RANGE.",
+     "An aligned POLLED Trend Log Multiple whose Log_Interval divides a day acquires when the Device clock's time of day is Interval_Offset, modulo the interval, past a multiple of it.",
+     "An aligned log is checked against the Device clock on every pass, so after a clock change it waits for the next boundary the clock reaches; a skipped boundary is not logged off the grid.",
+     "Python's add_trend_log_multiple takes the members, Log_Interval, Logging_Type, window and alignment as keyword arguments."
     ]
   },
   {
@@ -3746,7 +3790,9 @@
     "crates/bacnet-server/src/server/event_forwarding_repeats.rs::ConfirmedEventRepeats",
     "crates/bacnet-server/src/server/lifecycle.rs",
     "crates/bacnet-objects/src/notification_forwarder/persistence.rs::ForwarderSnapshot",
-    "crates/bacnet-objects/src/notification_forwarder/mod.rs::NotificationForwarderObject::add_destination"
+    "crates/bacnet-objects/src/notification_forwarder/mod.rs::NotificationForwarderObject::add_destination",
+    "crates/bacnet-server/src/server/event_recipient_route.rs::RecipientRoute::localize",
+    "crates/bacnet-network/src/network_number.rs::LocalNetworkNumber"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::forwarder_sends_to_its_recipient_list_and_its_subscriptions",
@@ -3774,6 +3820,9 @@
     "crates/rusty-bacnet/tests/test_read_value_shapes.py::ClientReadShapeTests::test_recipient_lists_keep_every_destination",
     "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_recipient_naming_this_network_by_number_is_local_to_the_loop_rules",
     "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_network_number_is_remote_while_this_network_has_none",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::a_number_learned_without_a_network_port_makes_this_network_local",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::a_registered_port_and_the_routes_share_one_network_number",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::notification_class_and_forwarded_copies_to_this_network_go_without_a_dnet",
     "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::a_repeat_is_matched_by_source_invoke_id_and_octets",
     "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::a_written_recipient_list_reads_back_after_a_rebuild",
     "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::saved_recipient_list_wins_over_configured_destinations",
@@ -3821,11 +3870,12 @@
    "notes": [
     "Every received event notification, and each local one whose Notification Class names this device's Device object, goes to every NOTIFICATION_FORWARDER object, bundled or custom, read through its properties.",
     "A copy keeps the received request octet for octet after the process identifier, so text in any character set and event values the stack does not model pass through.",
-    "The server is a single-port node: a notification arrives through Port_ID 0, Port_Filter is absent unless set, and an address naming the registered Network Port's known Network_Number is local to the loop rules.",
+    "The server is a single-port node: a notification arrives through Port_ID 0, Port_Filter is absent unless set, and a recipient naming the local network's known number, configured or learned, is local to the loop rules.",
     "A well-formed ConfirmedEventNotification sent to this device alone is acknowledged before any copy goes, taken or not; a repeat within 60 s with the same source, invoke ID and octets is acknowledged, not forwarded.",
     "Within one device a forwarder takes a notification once, a destination gets one copy, and at most 64 copies that would be sent go out across all forwarders, local or received; forwarding_cap_dropped counts the rest."
    ],
    "gaps": [
+    "#863: the local network is the server's one port's; a multi-port device would take it per port, the one attached to the recipient's network."
    ]
   },
   {
@@ -3999,6 +4049,9 @@
     "crates/bacnet-server/src/server/event_confirmed_routing_tests/learned_router_cache.rs::admitted_routes_stop_at_64_but_existing_network_updates_at_capacity",
     "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::every_deliverable_route_moves_no_counter",
     "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_recipient_list_takes_framed_writes_up_to_the_cap",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::notification_class_and_forwarded_copies_to_this_network_go_without_a_dnet",
+    "crates/bacnet-server/src/server/local_network_number_tests/localize.rs::localize_takes_only_routes_naming_this_network_as_local",
+    "crates/bacnet-server/src/server/local_network_number_tests/localize.rs::a_confirmed_notification_to_this_network_is_completed_by_the_direct_ack",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_recipient_lists_read_as_the_destinations_written",
     "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{recipient_lists_read_as_the_destinations_written,equality_and_repr_follow_the_element_production}"
    ],
@@ -4024,7 +4077,9 @@
     "crates/bacnet-encoding/src/constructed/tests/recipient.rs::recipient_mac_bound_holds_in_both_directions",
     "crates/bacnet-services/src/enrollment_summary_width_tests.rs::enrollment_filter_recipient_mac_holds_to_the_bacnet_address_bound",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::FallbackTests::test_a_value_that_is_not_the_expected_production_keeps_its_octets",
-    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{a_value_that_is_not_the_expected_production_falls_back,empty_values_and_other_properties_keep_the_generic_shape}"
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{a_value_that_is_not_the_expected_production_falls_back,empty_values_and_other_properties_keep_the_generic_shape}",
+    "crates/bacnet-server/src/server/local_network_number_tests/localize.rs::localize_leaves_every_route_alone_while_the_number_is_unknown",
+    "crates/bacnet-server/src/server/local_network_number_tests/localize.rs::a_device_bound_at_the_broadcast_mac_on_this_network_is_unroutable"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -4047,6 +4102,8 @@
      "#1156: decode_recipient itself holds to the bound, so the separate decode_configured_recipient is gone. COV subscription lists, audit notifications and records, and the GetEnrollmentSummary enrollment filter decode through it, and every recipient encoder (encode_recipient, encode_destination and its list form, the COV subscription encoders, the audit notification encoder) refuses a longer MAC before writing anything.",
      "The ValueSource and AuditLogQuery address codecs share the same check (check_decoded_mac_len, check_encoded_mac_len). Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, and COV admission and remote command origins refuse a longer direct MAC, so nothing the stack stores fails to encode.",
      "A Notification Forwarder's Recipient_List takes the same framed writes and cap.",
+     "A recipient naming the local network's known number, as an address or a routed Device binding, is sent with no DNET: a unicast to its MAC, or a local broadcast for an empty or link broadcast MAC.",
+     "A Device binding routed to the local network's known number at the link broadcast MAC is skipped and counts in recipient_unroutable, as a local binding at that MAC does.",
      "Python reads either object's Recipient_List as a list of Destination mappings with every key, the form add_notification_forwarder takes; a value that doesn't decode as destinations stays application_data octets."
     ]
   },
@@ -4766,7 +4823,8 @@
     "crates/bacnet-server/src/server/cov_multiple_admission_tests.rs::a_partly_admitted_request_warns_afresh_about_dropped_changes",
     "crates/bacnet-server/src/cov/multiple_admission_tests.rs::cov_multiple_admission_stops_at_the_first_proposal_past_the_quota",
     "crates/bacnet-server/src/server/cov_quota_tests.rs::subscribe_cov_property_multiple_quota_names_the_overflowing_reference",
-    "crates/bacnet-server/src/cov/timed/bound.rs::tests::{the_envelope_is_what_the_encoder_lays_around_the_items,at_a_50_octet_subscriber_a_change_that_fits_the_wire_fits_the_bound,admission_sizes_the_envelope_from_the_lifetime_left}"
+    "crates/bacnet-server/src/cov/timed/bound.rs::tests::{the_envelope_is_what_the_encoder_lays_around_the_items,at_a_50_octet_subscriber_a_change_that_fits_the_wire_fits_the_bound,admission_sizes_the_envelope_from_the_lifetime_left}",
+    "crates/bacnet-server/src/cov/timed/bound.rs::tests::{at_a_50_octet_subscriber_the_bound_keeps_four_notifications_of_changes,the_bound_keeps_what_fits_both_its_notifications_and_its_memory_ceiling,the_memory_ceiling_caps_every_context_under_many_subscribers}"
    ],
    "negative_tests": [
         "crates/bacnet-server/src/server/cov_identity_completion_tests/completion_order.rs::cov_order_newer_failure_or_cancellation_does_not_block_older_success",
@@ -4886,7 +4944,8 @@
    "public_claims": [
     "docs/rust-api.md#cov-subscriptions",
     "docs/python-api.md#cov-subscriptions",
-    "CHANGELOG.md Unreleased Changed entry for #1197 (COV-multiple history bound sized from the real envelope), from changelog.d/1197-cov-multiple-envelope.md"
+    "CHANGELOG.md Unreleased Changed entry for #1197 (COV-multiple history bound sized from the real envelope), from changelog.d/1197-cov-multiple-envelope.md",
+    "CHANGELOG.md Unreleased Changed entry for #1287 (COV-multiple history memory overhead counted against its own ceiling), from changelog.d/1287-cov-history-overhead.md"
    ],
    "notes": [
     "Issue #826 adds local latest-successful preparation ordering for whole unconfirmed observations, not a Standard-mandated concurrency tie-break. A checked table-owner counter is reserved after coherent eligible capture and before later awaits; each live reference atomically commits a newer successful marker and complete baseline.",
@@ -4943,7 +5002,7 @@
     "Untimestamped values have no queue, so a report that began going out owes the untimestamped references of the parts it did not deliver: an unconfirmed report those of the parts left after a stop, a confirmed one those of its deferred parts once it holds the context.",
     "The backstop treats an owed reference as a pending change of its context from when it was first owed (deadline, hold-off, re-enabled communication); the report that next evaluates it takes the mark and reads its value afresh, so a newer change goes in place of the value first prepared, and puts it ahead of newer changes so a split confirmed report cannot defer it for good.",
     "A reference stays owed until a part carrying it is delivered or a report finds nothing left to send for it. A report none of whose parts went out owes nothing new: as before, the next fanout or the failed report's hold-off reports it, though a split confirmed report whose first part fails is brought back at the hold-off's end by the owed references of its deferred parts.",
-    "Local bound: one context holds an estimated four notifications of pending history, counting each change's encoding, item framing and a fixed 32-octet overhead, and a per-context reserve, at most one notification's worth, for the most its untimestamped values have taken since it was last admitted or lost a reference; only on overflow is the oldest change dropped, never a reference's latest.",
+    "Local bound: one context holds an estimated four notifications of pending history, counting each change's encoding and item framing, and a per-context reserve, at most one notification's worth, for the most its untimestamped values have taken since it was last admitted or lost a reference; only on overflow is the oldest change dropped, never a reference's latest.",
     "Changes returned by a failed notification wait for an in-flight newer change and are dropped once it is delivered. Those drops are counted in timed_changes_dropped, as is each change that loses a value too large for any notification; each cause (bound overflow, a value too large for any notification, superseded) logs one warning per context until a timestamped reference of it is admitted again or an admission changes its notification size, so the counter is the running signal (#1039).",
     "Changes are reported as soon as they happen; Max_Notification_Delay bounds how long changes left queued by a failed send, an unacknowledged confirmed report, DISABLE_INITIATION or an exhausted budget wait: once the context's delay has passed since its earliest queued change, the context is fanned out again (§13.1, §13.16.1.1.4).",
     "The delay is an upper bound, so overdue changes go out once nothing blocks them: re-enabling communication (DCC request or timer) or admitting a shorter delay retries at once, a confirmed hold-off moves the retry to its end, and an outstanding report's Ack sends what it held back.",
@@ -4966,8 +5025,9 @@
     "Neither error table has a row for it: Clause 18.5 defines that code for service parameters that would need functionality the device lacks, and Clause 16.1.1.3 pairs it with a device without a clock. The general row for a context that cannot be created never fires and stays documented only (#1102 item 2): a context exists only while it holds references and has no storage or limit of its own, so a new context whose first reference finds no room gets the per-reference RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT error.",
     "It ties to the empty-spec context materialization gap below; revisit it if contexts get their own storage or limit. A cancellation validates nothing and removes every listed reference. CovSubscriptionTable::subscribe_multiple returns Err(MultipleRefusal) with the error, the refused position and the kept snapshots.",
     "Issue #1163 keeps a change in delivery out of the local bound's eviction. A change sent one value per notification (#1090) is in delivery from when a part of it is delivered, or sent as a confirmed report's first part with the rest deferred, until its last value is delivered; each reference marks only the change a part last went out ahead of.",
-    "Eviction takes neither that change nor a reference's newest, so at a 50-octet subscriber, where the bound holds about one Present_Value and Status_Flags change, a value held back by a failed send or a deferral still goes out after a newer change, and timed_changes_dropped moves only on a real overflow, for a change not yet begun. Beyond the bound a context holds at most two changes per reference. The bound and this exemption are local policy.",
-    "The bound sizes each notification as the smaller maximum APDU less the octets the encoder puts around its items for that context: the confirmed or unconfirmed header, the process identifier, the lifetime left at the last admission, the device identifier, the timestamp and the list tags, 25 to 33 octets (#1197)."
+    "Eviction takes neither that change nor a reference's newest, so at a 50-octet subscriber, where the bound holds two or three Present_Value and Status_Flags changes, a value held back by a failed send or a deferral still goes out after a newer change, and timed_changes_dropped moves only on a real overflow, for a change not yet begun. Beyond the bound a context holds at most two changes per reference. The bound and this exemption are local policy.",
+    "The bound sizes each notification as the smaller maximum APDU less the octets the encoder puts around its items for that context: the confirmed or unconfirmed header, the process identifier, the lifetime left at the last admission, the device identifier, the timestamp and the list tags, 25 to 33 octets (#1197).",
+    "A memory ceiling counts held changes plus 32 octets each, up to four notifications at this device's own maximum APDU; the room omits that overhead, so a 50-octet subscriber keeps four REAL Present_Value changes if that APDU is 78+ (#1287)."
    ]
   },
   {
@@ -8583,7 +8643,8 @@
     "crates/bacnet-transport/src/bip6/port.rs",
     "crates/bacnet-transport/src/mstp/port.rs",
     "crates/bacnet-transport/src/bip/mod.rs",
-    "crates/bacnet-transport/src/bip/io.rs"
+    "crates/bacnet-transport/src/bip/io.rs",
+    "crates/bacnet-network/src/network_number.rs::LocalNetworkNumber"
    ],
    "positive_tests": [
     "crates/bacnet-integration-tests/tests/ethernet_network_numbers.rs",
@@ -8624,7 +8685,11 @@
     "crates/bacnet-endpoint/tests/sc_client_network_numbers.rs",
     "crates/bacnet-endpoint/tests/sc_client_network_numbers/support.rs",
     "crates/bacnet-integration-tests/tests/client_ipv6_network_numbers.rs",
-    "crates/bacnet-integration-tests/tests/client_bip_network_numbers.rs"
+    "crates/bacnet-integration-tests/tests/client_bip_network_numbers.rs",
+    "crates/bacnet-network/src/network_number/tests.rs::local_network_number_shares_the_last_published_state",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::a_number_learned_without_a_network_port_makes_this_network_local",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::a_registered_port_and_the_routes_share_one_network_number",
+    "crates/bacnet-client/src/client/number_tests/lifecycle.rs::client_number_worker_queue_is_bounded_and_closes_on_abort"
    ],
    "negative_tests": [
     "crates/bacnet-endpoint/tests/mstp_network_numbers.rs::mstp_number_server_tokio_wire",
@@ -8696,7 +8761,8 @@
     "No new API/dependency/configured authority, Python foreign API, IPv6 endpoint builder, physical LAN, Windows runtime or full Annex U qualification. Separate isolated Linux standalone-client BBMD/foreign tests capture own Original-Broadcast versus forwarding traffic and exact DBTN to the configured BBMD.",
     "Positive Number fences cover UNKNOWN, BDT/FDT admission/refusal, alternate-sender compatibility, precedence and representative invalid/routed controls; registration NAKs retain DBTN attempts and the timer retries registration.",
     "An ordinary client ReadProperty completes during live Number controls, and awaited stop permits exclusive socket rebind before client Drop. No configured client number, new registration policy or complete Annex J claim is added.",
-    "Standalone-client MS/TP LoopbackSerial tests in Tokio and DedicatedThread modes reuse the full-server/endpoint fixture: they decode complete broadcast DNER NNI frames behind the same positive FIFO fences, complete the client's own ReadProperty to the peer while a post-enqueue Number producer is held, and release the producer and serial owner on canceled stop and bare drop. Simulator evidence only, with no RS-485 timing or hardware claim."
+    "Standalone-client MS/TP LoopbackSerial tests in Tokio and DedicatedThread modes reuse the full-server/endpoint fixture: they decode complete broadcast DNER NNI frames behind the same positive FIFO fences, complete the client's own ReadProperty to the peer while a post-enqueue Number producer is held, and release the producer and serial owner on canceled stop and bare drop. Simulator evidence only, with no RS-485 timing or hardware claim.",
+    "The full server publishes the number it holds on NetworkLayer::local_network_number, where its event routing reads it without a lock; with a registered port the copy is taken from the port's state under the database write lock that changed it, so the two never disagree. The standalone client publishes its learned number on its own layer, which nothing in the client reads."
    ]
   },
   {

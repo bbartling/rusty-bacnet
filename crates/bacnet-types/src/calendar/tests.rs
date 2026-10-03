@@ -106,19 +106,24 @@ fn weekday_is_monday_first_and_advances_one_per_day_over_every_date() {
     }
     let mut expected = 1;
     let mut count = 0;
+    // 1900-01-01 is 25567 days before 1970-01-01.
+    let mut number = -25_567;
     for year in 1900..=2154 {
         for month in 1..=12 {
             for d in month_days(year, month) {
                 assert_eq!(d.weekday(), expected, "{d:?}");
+                assert_eq!(d.days_since_1970(), number, "{d:?}");
                 assert_eq!(SpecificDate::from_date(&d.to_date()), Some(d));
                 assert_eq!(d.to_date().day_of_week, expected);
                 expected = expected % 7 + 1;
                 count += 1;
+                number += 1;
             }
         }
     }
     // 255 years, 62 of them leap years.
     assert_eq!(count, 255 * 365 + 62);
+    assert_eq!(day(1970, 1, 1).days_since_1970(), 0);
 }
 
 #[test]

@@ -20,9 +20,9 @@ use tokio::time::Instant as TokioInstant;
 const SMALL_APDU: u16 = 206;
 
 /// Changes held before the one that releases them. With it, ten PV and
-/// Status_Flags changes: as many as one 206-octet context holds, since the
-/// bound counts each change's encoding, item framing and fixed overhead, and
-/// more than one 206-octet notification carries.
+/// Status_Flags changes: fewer than one 206-octet context holds, about
+/// twenty by its room for items, and more than one 206-octet notification
+/// carries.
 const HELD: u8 = 9;
 
 /// One PV row: encoded value and Time_Of_Change.

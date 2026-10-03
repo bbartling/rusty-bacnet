@@ -63,7 +63,13 @@ pub(super) fn publish<T: TransportPort + 'static>(
         address.ip().octets(),
         address.port(),
         network.transport().local_receive_apdu_capacity() as u32,
-    )
+    )?;
+    // The port's configured number is the local network number from the
+    // start; the control worker copies every later change from the port.
+    if let Some(state) = db.network_number_internal(oid, None) {
+        network.local_network_number().publish(state);
+    }
+    Ok(())
 }
 
 /// Failed/cancelled startup still owns cleanup. Capturing the runtime at creation
@@ -167,7 +173,8 @@ pub(super) fn spawn_number_worker<T: TransportPort + 'static>(
 ) -> JoinHandle<()> {
     let network = Arc::clone(network);
     let mut owner =
-        crate::network_number::NetworkNumberOwner::new(selected.map(|oid| (Arc::clone(db), oid)));
+        crate::network_number::NetworkNumberOwner::new(selected.map(|oid| (Arc::clone(db), oid)))
+            .publishing_to(network.local_network_number().clone());
     super::heap_futures::spawn_boxed(move || async move {
         while let Some(control) = controls.recv().await {
             if let Some(npdu) = owner.handle(control).await {
