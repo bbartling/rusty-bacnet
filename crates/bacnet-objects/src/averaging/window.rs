@@ -1,18 +1,22 @@
 //! The sliding sample window behind the Averaging statistics (Clause 12.5).
 //!
 //! The window keeps the most recent Window_Samples attempts in arrival order.
-//! Each slot holds either the REAL the application sampled or a marker for an
-//! attempt that produced no value. Minimum_Value, Maximum_Value and
+//! Each slot holds either the REAL that was sampled or a marker for an attempt
+//! that produced no value. Minimum_Value, Maximum_Value and
 //! Average_Value cover the valid slots only; Attempted_Samples counts every
 //! slot and Valid_Samples the valid ones, so subtracting the second from the
 //! first tells a reader how many attempts in the window failed (Clauses
 //! 12.5.11 and 12.5.12).
 
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::time::Duration;
 
 use bacnet_types::error::Error;
 
+use super::schedule::{SampleSchedule, MIN_SAMPLE_PERIOD};
 use crate::common;
+use crate::traits::MonotonicClock;
 
 /// Largest Window_Samples an Averaging object accepts.
 ///
@@ -57,7 +61,8 @@ impl Statistics {
     };
 }
 
-/// A bounded buffer of the most recent sample attempts.
+/// A bounded buffer of the most recent sample attempts, and the schedule the
+/// server fills it on.
 #[derive(Debug, Clone)]
 pub(super) struct SampleWindow {
     /// Window_Interval, in seconds.
@@ -67,6 +72,9 @@ pub(super) struct SampleWindow {
     /// Oldest first; `None` marks an attempt that yielded no value.
     slots: VecDeque<Option<f32>>,
     statistics: Statistics,
+    /// Restarted by every [`reset`](Self::reset), which every route that
+    /// empties the window goes through.
+    schedule: SampleSchedule,
 }
 
 impl SampleWindow {
@@ -76,6 +84,7 @@ impl SampleWindow {
             capacity: DEFAULT_WINDOW_SAMPLES,
             slots: VecDeque::new(),
             statistics: Statistics::EMPTY,
+            schedule: SampleSchedule::default(),
         }
     }
 
@@ -143,10 +152,39 @@ impl SampleWindow {
     }
 
     /// Discard every sample: the counts go to zero and the statistics to
-    /// their empty-window values.
+    /// their empty-window values. Scheduled sampling starts over from now.
     pub(super) fn reset(&mut self) {
         self.slots.clear();
         self.statistics = Statistics::EMPTY;
+        let period = self.period();
+        self.schedule.restart(period);
+    }
+
+    /// Spacing of scheduled samples: Window_Interval / Window_Samples, but no
+    /// shorter than [`MIN_SAMPLE_PERIOD`].
+    pub(super) fn period(&self) -> Duration {
+        // Window_Samples is never zero: construction and set_capacity keep it
+        // at least one.
+        (Duration::from_secs(self.interval.into()) / self.capacity).max(MIN_SAMPLE_PERIOD)
+    }
+
+    /// Bind or remove the monotonic clock and restart the schedule. The
+    /// samples already taken stay.
+    pub(super) fn bind_clock(&mut self, clock: Option<Arc<MonotonicClock>>) {
+        let period = self.period();
+        self.schedule.bind(clock, period);
+    }
+
+    /// When the next scheduled sample is due, once a clock is bound.
+    pub(super) fn next_due(&self) -> Option<Duration> {
+        self.schedule.next_due()
+    }
+
+    /// Whether a scheduled sample is due at `now`, stepping the schedule past
+    /// it when it is. Recording the sample is the caller's job.
+    pub(super) fn take_due(&mut self, now: Duration) -> bool {
+        let period = self.period();
+        self.schedule.take_due(now, period)
     }
 
     fn recompute(&mut self) {
