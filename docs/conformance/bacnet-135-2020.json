@@ -1065,10 +1065,13 @@
     "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_multiple_serves_each_record_framed",
     "crates/bacnet-objects/src/event_log/tests.rs::log_buffer_records_are_framed_event_log_records",
     "crates/bacnet-objects/src/event_log/tests.rs::log_buffer_serves_every_event_log_datum",
-    "crates/bacnet-objects/src/trend/tests.rs::trendlog_serves_log_buffer_records_framed"
+    "crates/bacnet-objects/src/trend/tests.rs::trendlog_serves_log_buffer_records_framed",
+    "crates/bacnet-types/src/bitstring.rs::tests::log_status_follows_the_bit0_first_wire_order"
    ],
     "negative_tests": [
-     "crates/bacnet-objects/src/log_buffer.rs::tests::log_buffer_rejections_do_not_consume_sequence"
+     "crates/bacnet-objects/src/log_buffer.rs::tests::log_buffer_rejections_do_not_consume_sequence",
+     "crates/bacnet-objects/src/event_log/tests.rs::unencodable_record_is_refused_at_add_and_the_rest_still_serve",
+     "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_logs_refuse_unencodable_records_at_add"
     ],
    "benchmarks": [],
    "public_claims": [],
@@ -1078,7 +1081,9 @@
      "Trend Log Multiple holds BACnetLogMultipleRecord values: one LogValue per Log_DeviceObjectProperty member, a log status, or a time change. Its LOG_BUFFER serves each record framed as the Clause 21 production, with no status flags (#1203).",
      "LogRecordIdentity holds a u64 sequence number. These three families still count in Unsigned32 and wrap at u32::MAX; an Audit Log's identities come from its record store and wrap at u64::MAX (BACNET-12-AUDIT-LOG-BUFFER, #1092).",
      "Each family stores its own Clause 21 record: Trend Log a BACnetLogRecord with optional StatusFlags, Event Log a BACnetEventLogRecord, Trend Log Multiple a BACnetLogMultipleRecord. BACnetObject::log_buffer_internal lends the buffer to ReadRange, which encodes each record as a page reaches it (#1233).",
-     "An Event Log notification record holds the encoded ConfirmedEventNotification parameters, which bacnet-services' EventNotificationRequest writes and reads. The server does not log notifications into an Event Log by itself; the application adds records."
+     "An Event Log notification record holds the encoded ConfirmedEventNotification parameters, which bacnet-services' EventNotificationRequest writes and reads. The server does not log notifications into an Event Log by itself; the application adds records.",
+     "Log statuses are the typed LogStatus flags, sent bit 0 first: log-disabled 05 80, buffer-purged 05 40, log-interrupted 05 20. Trend Log status flags are a StatusFlags value.",
+     "add_record and the trend hooks refuse a record that would not encode before any change, so LogBufferRecords::encode_record cannot fail and every stored record can be served."
     ]
   },
   {
@@ -1121,7 +1126,9 @@
     "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::a_disabled_log_accepts_the_poll_without_a_record",
     "crates/bacnet-objects/src/database/trend_poll/any_value_tests.rs::read_values_map_to_their_datum_or_an_any_value",
     "crates/bacnet-objects/src/database/trend_poll/any_value_tests.rs::a_character_string_and_a_double_are_logged_and_read_back_exactly",
-    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::members_of_other_datatypes_are_logged_as_any_values"
+    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::members_of_other_datatypes_are_logged_as_any_values",
+    "crates/bacnet-objects/src/database/trend_poll/any_value_tests.rs::oversized_and_uncarriable_values_log_a_failure",
+    "crates/bacnet-objects/src/database/trend_poll/any_value_tests.rs::a_polled_value_too_long_to_page_logs_value_too_long"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/trend_log_clock_tests.rs::unusable_acquisition_clock_preserves_records_and_schedule_then_retries",
@@ -1160,7 +1167,8 @@
      "Each Trend Log Multiple member resolves through ObjectDatabase::local_device as a Trend Log reference does. A member naming another device, or whose read fails, logs its own failure value; one naming instance 4194303 logs PROPERTY / NO_PROPERTY_SPECIFIED.",
      "A reference with an array index reads that element behind the ReadProperty gate the Averaging sampler shares: an index on a non-array logs PROPERTY / PROPERTY_IS_NOT_AN_ARRAY, one past the end logs INVALID_ARRAY_INDEX. An index that isn't Unsigned leaves the log unpolled (#1205).",
      "Only POLLED logs with a nonzero Log_Interval and at least one member are polled. Trend Log Multiple triggered acquisition, Align_Intervals, Interval_Offset and intrinsic reporting are not modeled.",
-     "Both pollers log a value with no alternative of its own (CharacterString, Double, Date, ObjectIdentifier, OctetString, a whole array, a framed constructed value) as any-value holding the encoding a ReadProperty of it carries. A BitString logs as bitstring-value, and only a NULL value logs as null-value (#1236)."
+     "Both pollers log a value with no alternative of its own (CharacterString, Double, Date, ObjectIdentifier, OctetString, a whole array, a framed constructed value) as any-value holding the encoding a ReadProperty of it carries. A BitString logs as bitstring-value, and only a NULL value logs as null-value (#1236).",
+     "An any-value holds at most ANY_VALUE_MAX_OCTETS (256) octets; a longer value logs PROPERTY / VALUE_TOO_LONG and one no record could carry logs SERVICES / OTHER, so the log never refuses a polled record."
     ]
   },
   {
@@ -1207,6 +1215,11 @@
      "crates/bacnet-encoding/src/constructed/tests/log_record.rs::consecutive_log_records_decode_by_returned_offset",
      "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_kinds_have_exact_bytes_and_round_trip",
      "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::consecutive_event_log_records_decode_by_returned_offset",
+     "crates/bacnet-encoding/src/constructed/tests/log_record.rs::log_record_bit_strings_put_bit0_in_the_top_bit",
+     "crates/bacnet-encoding/src/constructed/tests/log_record.rs::log_record_from_a_peer_keeps_a_five_octet_integer",
+     "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::log_multiple_record_from_a_peer_keeps_wide_integers",
+     "crates/bacnet-server/src/handlers/tests/read_range_log_records.rs::trend_log_read_range_pages_records_under_the_byte_budget",
+     "crates/bacnet-server/src/handlers/tests/read_range_log_records.rs::read_range_serves_the_records_left_after_a_refused_add",
      "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::log_multiple_record_values_have_exact_bytes_and_round_trip",
      "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::log_multiple_record_every_alternative_round_trips",
      "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::consecutive_log_multiple_records_decode_by_returned_offset",
@@ -1239,12 +1252,14 @@
      "Another list property or an absent, malformed, or misaligned timestamp identity view fails PROPERTY / LIST_ITEM_NOT_TIMESTAMPED for By Time; an unnumbered or misaligned sequence identity view fails PROPERTY / LIST_ITEM_NOT_NUMBERED for By Sequence.",
      "ReadRange applies the object-owned BACnetARRAY classification after a whole-property read, so an unknown property keeps UNKNOWN_PROPERTY and every index on these BACnetLIST LOG_BUFFER properties fails PROPERTY / PROPERTY_IS_NOT_AN_ARRAY.",
      "A target that is not a BACnetLIST fails SERVICES / PROPERTY_IS_NOT_A_LIST before either identity check (#1025).",
-     "This implementation fully encodes every selected item without a separate response/PDU cap, so MORE_ITEMS remains FALSE. Response-size pagination/segmentation, persistence/restart, and complete ReadRange/log conformance remain deferred. No runtime PICS/service bit is changed.",
+     "Persistence/restart and complete ReadRange/log conformance remain deferred. No runtime PICS/service bit is changed.",
      "Trend Log Multiple LOG_BUFFER items are BACnetLogMultipleRecord encodings: a context-tagged timestamp and log data, each member value under its own tag 0 to 8. All three range forms return them byte for byte (#1203).",
      "Reference Index and Reference Sequence Number decode as Unsigned64, and First Sequence Number encodes and decodes as Unsigned64, because the stack hosts Audit Log (Clauses 15.8.1.1.4.1.1, 15.8.1.1.4.2.1 and 15.8.1.2.7, #1092). An Event or Trend log holds no sequence above 2^32 - 1, so such a reference reads empty instead of failing to decode.",
      "An Audit Log's LOG_BUFFER uses the same selection and page budget over identities built from its record store (BACNET-12-AUDIT-LOG-BUFFER). Its items are encoded only as a page reaches them.",
      "Trend Log and Event Log items are BACnetLogRecord and BACnetEventLogRecord encodings, read from the object's record buffer through BACnetObject::log_buffer_internal and encoded only where a page reaches them. All three range forms return them byte for byte (#1233).",
-     "Trend Log Multiple, Trend Log and Event Log objects answer ReadProperty of LOG_BUFFER with PROPERTY / READ_ACCESS_DENIED, so RP, RPM (inline, also for ALL and REQUIRED), local and endpoint reads all refuse it; ReadRange is the only way to read the records (#1237)."
+     "Trend Log Multiple, Trend Log and Event Log objects answer ReadProperty of LOG_BUFFER with PROPERTY / READ_ACCESS_DENIED, so RP, RPM (inline, also for ALL and REQUIRED), local and endpoint reads all refuse it; ReadRange is the only way to read the records (#1237).",
+     "Trend Log and Event Log records page under the ReadRangeBudget byte cap as other lists do: a page ends at the last whole record that fits and sets MORE_ITEMS, and a backward page keeps the newest records.",
+     "The record decoders keep INTEGER values as i64 and ENUMERATED and Unsigned values as u64, up to eight octets, since a peer's log need not hold them to 32 bits."
     ]
   },
   {
@@ -1266,7 +1281,8 @@
     "crates/bacnet-objects/src/audit/log_metadata.rs::tests::property_metadata_log_exact_sets_and_indexed_list",
     "crates/bacnet-server/src/handlers/tests/read_rpm/audit_log.rs::rpm_audit_log_indexed_reads_and_list_bytes_are_unchanged",
     "crates/bacnet-server/src/handlers/tests/property_metadata/audit_log.rs::rpm_audit_log_metadata_selectors_preserve_bytes_and_budgets",
-    "crates/bacnet-server/src/pics/property_metadata_tests/audit_log.rs::pics_audit_log_property_metadata_is_exact"
+    "crates/bacnet-server/src/pics/property_metadata_tests/audit_log.rs::pics_audit_log_property_metadata_is_exact",
+    "crates/bacnet-encoding/src/constructed/audit_record.rs::tests::audit_record_log_status_has_bit0_first_wire_bytes"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/handlers/tests/read_range_audit_log.rs::audit_log_buffer_refuses_read_property_and_indexes_but_read_range_serves_it",
@@ -1286,7 +1302,8 @@
     "Sequence numbers are Unsigned64 and wrap from u64::MAX to 1. Selection follows insertion order, never numeric order, so a wrapped ring pages correctly. The ReadRange codec carries the wider references and First Sequence Number (BACNET-15-READ-RANGE-LOG-BUFFER).",
     "A page encodes only the records it reaches, so a narrow window over a 10,000-record ring does not encode the rest. The server's ReadRangeBudget bounds items and bytes as for the other logs.",
     "Not covered: Buffer_Size writes, and a network route to purge the ring.",
-    "The other logs (Trend Log Multiple, Trend Log, Event Log) refuse ReadProperty of Log_Buffer the same way, through the same helper (BACNET-15-READ-RANGE-LOG-BUFFER, #1237)."
+    "The other logs (Trend Log Multiple, Trend Log, Event Log) refuse ReadProperty of Log_Buffer the same way, through the same helper (BACNET-15-READ-RANGE-LOG-BUFFER, #1237).",
+    "A log-status record shares the other logs' LogStatus codec: log-disabled is 05 80. Records an earlier release persisted in the old bit order read log-disabled back as log-interrupted."
    ]
   },
   {

@@ -2108,7 +2108,23 @@ An Event Log record is a `BACnetEventLogRecord`: a timestamp and an
 encoded parameters of a ConfirmedEventNotification request
 (`bacnet_services::alarm_event::EventNotificationRequest::encode` writes them,
 `decode` reads them back). `EventLogObject::add_record` takes one. A Trend Log
-record stays a `BACnetLogRecord`, whose `LogDatum::SignedValue` is an `i32`.
+record stays a `BACnetLogRecord`; its optional `status_flags` is a
+`StatusFlags`.
+
+Every record kind, the Audit Log's included, carries a log status as the
+typed `bacnet_types::bitstring::LogStatus` flags (`LOG_DISABLED`,
+`BUFFER_PURGED`, `LOG_INTERRUPTED`). The codecs send bit 0 first, as for
+every BACnet bit string: log-disabled is `05 80`, buffer-purged `05 40`,
+log-interrupted `05 20`. `LogDatum` and `LogValue` keep INTEGER values as
+`i64` and ENUMERATED and Unsigned values as `u64`. Clause 21 lets a logging
+device hold these to 32 bits but doesn't require it, so a record read from a
+peer may carry wider values, and the decoders accept up to eight octets.
+
+`add_record` and the trend hooks refuse a record that would not encode (an
+any-value or notification whose tags don't balance, a bit string with
+impossible padding) with its encoding error, before anything changes. So
+`LogBufferRecords::encode_record` cannot fail, and one bad record can't break
+every ReadRange window over the log.
 
 Trend Log Multiple, Trend Log and Event Log objects list `Log_Buffer` in their
 Property_List, but ReadProperty and ReadPropertyMultiple answer it with
@@ -2129,7 +2145,12 @@ ReadRange ACK's `item_data` record by record. The poller logs a value whose
 datatype has no alternative of its own (a CharacterString, Double, Date,
 ObjectIdentifier, whole array and so on) as `AnyValue` holding the value's
 own encoding, the bytes a ReadProperty of it carries; NULL is logged only
-for a NULL value.
+for a NULL value. An any-value holds at most
+`bacnet_objects::log_buffer::ANY_VALUE_MAX_OCTETS` (256) octets of encoding.
+A longer value is logged as a `PROPERTY / VALUE_TOO_LONG` failure, so a Trend
+Log record stays small enough for a ReadRange page on a 480-octet APDU. A
+value no record could carry is logged as `SERVICES / OTHER`. Records an
+application adds itself are not capped.
 
 The pre-1.0 `BACnetObject` contract has two fallible trend hooks:
 `add_trend_record` for Trend Log records and `add_trend_multiple_record` for
