@@ -262,10 +262,19 @@ use bacnet_encoding::apdu::*;
 ### NPDU
 
 ```rust
-use bacnet_encoding::npdu::{NpduHeader, encode_npdu, decode_npdu};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, NpduDecodeError, encode_npdu, decode_npdu};
 
 // Handles source/destination network addresses, hop count, priority
 ```
+
+DADR and SADR are capped at `NpduAddress::MAX_MAC_LEN` (18) octets, the same
+limit as `BACnetAddress::MAX_MAC_LEN` and the longest MAC any built-in data
+link uses (B/IPv6) (#1141). `encode_npdu` refuses a longer address with
+`Error::Encoding`. `decode_npdu` returns `NpduDecodeError`: a DLEN or SLEN past
+the cap is `AddressTooLong { field, length, dnet }`, checked before the address
+octets are read, and every other malformation is `Malformed(Error)`. The error
+converts into `Error` (an over-long address becomes `Error::OutOfRange`), so `?`
+still works in functions that return `Result<_, Error>`.
 
 ---
 
@@ -1471,9 +1480,18 @@ before the local send and does not depend on it, so in BBMD mode an `Err` from
 Network layer routing, router tables, and the multi-port router.
 
 ```rust
-use bacnet_network::network_layer::NetworkLayer;
+use bacnet_network::layer::NetworkLayer;
 use bacnet_network::router::BACnetRouter;
 ```
+
+An inbound NPDU whose DLEN or SLEN is past `NpduAddress::MAX_MAC_LEN` is
+refused before anything else happens to it (#1141). `NetworkLayer` discards it
+and counts it in `address_length_drops()`; a non-router has no reject message
+to send. `BACnetRouter` neither forwards nor delivers it, counts it in its own
+`address_length_drops()`, and, when the NPDU names a specific DNET, answers the
+sender with Reject-Message-To-Network reason 6 (`ADDRESSING_ERROR`, Clause
+6.4.4) for that DNET, as it does for a DNET it cannot reach. A global broadcast
+or an NPDU without a DNET is dropped without a reject.
 
 ---
 
@@ -2044,7 +2062,14 @@ let staging = StagingObject::new(
 ```
 
 Staging targets are local-only Binary Output, Binary Value, or Binary Lighting
-Output objects. The server applies stage changes through its ordinary local
+Output objects. A written target naming another device is refused with
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. One naming the Device the server answers
+for is the local reference it stands for: the server drops that Device member
+before the Staging object decodes the value, on WriteProperty,
+WritePropertyMultiple and `write_local`, and it reads back without it (#1136).
+`StagingObject` itself can't tell which Device holds it, so written directly
+or configured through `StagingConfig` it refuses every Device member. The
+server applies stage changes through its ordinary local
 write notification path at `priority_for_writing`, completing the bounded local
 plan during write handling without remote I/O. A target failure sets source
 `Reliability` to `UNRELIABLE_OTHER`; a later fully successful current plan
@@ -3518,6 +3543,33 @@ later retries; a configured Device binding keeps its fixed next hop. The former
 public `ServerTsm` type and its unused transaction methods have been removed
 without a compatibility alias. `CovAckResult` remains available at its existing
 `bacnet_server::server` path.
+
+### Undelivered event notification counters
+
+`BACnetServer::event_notification_counters()` returns an
+`EventNotificationCounters` snapshot: lifetime totals of event notifications the
+server did not deliver, each saturating at `u64::MAX`, zero for a new server and
+still readable after `stop()`. Fields are sampled independently.
+
+```rust
+let counters = server.event_notification_counters();
+counters.notification_class_missing; // no Notification Class with that number
+counters.recipient_list_unavailable; // its Recipient_List could not be read
+counters.recipient_list_invalid;     // the list did not decode as a whole
+counters.recipient_list_too_long;    // a custom class served more than 32 destinations
+counters.confirmed_no_invoke_id;     // no invoke ID free for a confirmed notification
+counters.confirmed_rejected;         // the recipient answered Error, Reject or Abort
+counters.confirmed_unanswered;       // no acknowledgment after the last retry
+```
+
+The four recipient-list fields count transitions, event and acknowledgment
+notifications alike, whose Notification Class lookup failed closed: one per
+`RecipientLookupOutcome` that suppresses delivery, alongside the warning each
+one logs. `NoConfiguredDestinations` and `NoMatchingDestinations` are
+configured behaviour and are not counted, nor are notifications held back by
+DCC or Event_Enable. The three confirmed fields count notifications to one
+recipient; a reservation refused because the server is stopping is not
+counted.
 
 ### Concurrency
 

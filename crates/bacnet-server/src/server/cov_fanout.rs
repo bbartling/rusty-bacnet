@@ -15,6 +15,7 @@ pub(super) struct CovFanout<T: TransportPort + 'static> {
     cov_in_flight: Arc<Semaphore>,
     pub(super) notification_transactions: Arc<NotificationTransactions>,
     comm_state: Arc<AtomicU8>,
+    event_suppressions: Arc<super::event_suppression::EventSuppressions>,
     config: Arc<ServerConfig>,
 }
 
@@ -27,29 +28,28 @@ impl<T: TransportPort + 'static> Clone for CovFanout<T> {
             cov_in_flight: Arc::clone(&self.cov_in_flight),
             notification_transactions: Arc::clone(&self.notification_transactions),
             comm_state: Arc::clone(&self.comm_state),
+            event_suppressions: Arc::clone(&self.event_suppressions),
             config: Arc::clone(&self.config),
         }
     }
 }
 
 impl<T: TransportPort + 'static> CovFanout<T> {
+    /// Own the handles of `ctx`, plus the event counters the background
+    /// tasks' EventNotification sends move.
     pub(super) fn new(
-        db: &Arc<RwLock<ObjectDatabase>>,
-        network: &Arc<NetworkLayer<T>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        cov_in_flight: &Arc<Semaphore>,
-        notification_transactions: &Arc<NotificationTransactions>,
-        comm_state: &Arc<AtomicU8>,
-        config: &ServerConfig,
+        ctx: &CovNotifyContext<'_, T>,
+        event_suppressions: &Arc<super::event_suppression::EventSuppressions>,
     ) -> Self {
         Self {
-            db: Arc::clone(db),
-            cov_table: Arc::clone(cov_table),
-            network: Arc::clone(network),
-            cov_in_flight: Arc::clone(cov_in_flight),
-            notification_transactions: Arc::clone(notification_transactions),
-            comm_state: Arc::clone(comm_state),
-            config: Arc::new(config.clone()),
+            db: Arc::clone(ctx.db),
+            cov_table: Arc::clone(ctx.cov_table),
+            network: Arc::clone(ctx.network),
+            cov_in_flight: Arc::clone(ctx.cov_in_flight),
+            notification_transactions: Arc::clone(ctx.notification_transactions),
+            comm_state: Arc::clone(ctx.comm_state),
+            event_suppressions: Arc::clone(event_suppressions),
+            config: Arc::new(ctx.config.clone()),
         }
     }
 
@@ -80,6 +80,7 @@ impl<T: TransportPort + 'static> CovFanout<T> {
             learned_routers,
             notification_transactions: &self.notification_transactions,
             device_bindings,
+            suppressions: &self.event_suppressions,
             retry_timeout_ms: self.config.cov_retry_timeout_ms,
             local_apdu_capacity: self.config.max_apdu_length,
         }

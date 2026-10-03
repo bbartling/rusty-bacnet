@@ -494,6 +494,8 @@ pub struct BACnetServer<T: TransportPort> {
     /// Valid replacement and explicit stop abort and join before clearing it.
     dcc_timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     dcc_outcomes: Arc<dcc_outcomes::DccOutcomes>,
+    /// Lifetime totals of undelivered event notifications (#1142).
+    event_suppressions: Arc<event_suppression::EventSuppressions>,
     mutation_decisions: Arc<crate::mutation::MutationDecisions>,
     dispatch_task: Option<JoinHandle<()>>,
     request_tasks: Arc<request_tasks::RequestTasks>,
@@ -582,6 +584,8 @@ mod event_message_policy;
 pub(crate) mod event_notification_payload;
 mod event_notifications;
 mod event_recipient_route;
+mod event_suppression;
+pub use event_suppression::EventNotificationCounters;
 pub(crate) mod event_timestamp;
 mod handles;
 mod learned_router_cache;
@@ -739,6 +743,8 @@ mod schedule_write_tests;
 mod segmentation_tests;
 #[cfg(test)]
 mod staging_cov_tests;
+#[cfg(test)]
+mod staging_reference_write_tests;
 #[cfg(test)]
 mod table_13_1_cov_tests;
 #[cfg(test)]

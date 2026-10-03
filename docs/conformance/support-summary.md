@@ -13,7 +13,7 @@
 | Dimension | Value | Count |
 |---|---|---|
 | Priority | P0 | 20 |
-| Priority | P1 | 94 |
+| Priority | P1 | 95 |
 | Priority | P2 | 5 |
 | Priority | P3 | 4 |
 | Status | deferred-pending-owner-decision | 2 |
@@ -26,7 +26,7 @@
 | Status | implementation-present-needs-timeout-tests | 1 |
 | Status | implementation-present-needs-window-tests | 1 |
 | Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 66 |
+| Status | supported-with-clause-evidence | 67 |
 | Status | unknown-pending-source-review | 4 |
 | Status | unsupported-by-design | 3 |
 
@@ -39,6 +39,7 @@
 | `BACNET-12-SCHEDULE-LOCAL-REFERENCES` | Clause 12.24 Table 12-28 (printed308/PDF310), output continuation (printed309/PDF311), reference property (printed311/PDF313); Clause21 BACnetDeviceObjectPropertyReference (printed891/PDF893) | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-12-SCHEDULE-EVALUATION` | Clause 12.24.4 Present_Value, 12.24.6 Effective_Period, 12.24.7 Weekly_Schedule, 12.24.8 Exception_Schedule and 12.24.9 Schedule_Default; Clause 21 BACnetSpecialEvent and BACnetTimeValue; Clause 12 note on unspecified dates | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-SCHEDULE-WRITES` | Clause 12.24.6 Effective_Period, 12.24.7 Weekly_Schedule and 12.24.8 Exception_Schedule (printed310-311/PDF312-313), 12.24.10 List_Of_Object_Property_References and 12.24.11 Priority_For_Writing (printed311/PDF313), recalculation and Present_Value writability in 12.24.4 (printed309/PDF311), 12.24.14 Out_Of_Service (printed312/PDF314); Clauses 15.1, 15.2, 15.9.1.3 and 15.10; Clause 21 BACnetDailySchedule, BACnetSpecialEvent and BACnetDateRange | P1 | supported-with-clause-evidence | 7 |
+| `BACNET-12-STAGING-TARGET-REFERENCES` | Clause 12.62.14 Target_References (printed616/PDF618); Clause 21 BACnetDeviceObjectReference (printed891/PDF893) | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-SCHEDULE-RELIABILITY` | Clause 12.24.13 Reliability, 12.24.12 Status_Flags and 12.24.14 Out_Of_Service (printed311-312/PDF313-314); output rule in 12.24.4 (printed309/PDF311); reference writes in 12.24.10 (printed311/PDF313) | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-12-AUDIT-REPORTER-DELAY` | Clause 12.63 / Table 12-82, printed page 619 / PDF page 621; Maximum_Send_Delay and Send_Now printed pages 621-622 / PDF pages 623-624; Clause 19.6.6 and Table 19-5 (partial-profile loss filtering remains unresolved) | P1 | in-progress | 5 |
 | `BACNET-15-WP-OUTBOUND-PRIORITY` | Clause 15.9.1.1 Priority, printed page 752 / PDF page 754; inbound error and noncommandable rules printed page 753 / PDF page 755 | P1 | in-progress | 2 |
@@ -49,8 +50,8 @@
 | `BACNET-5-TSM-SERVER` | Clause 5.4.5 | P1 | implementation-present-needs-state-machine-audit | 1 |
 | `BACNET-5-SEGMENTATION-WINDOW` | Clauses 5.2-5.4 | P1 | implementation-present-needs-window-tests | 1 |
 | `BACNET-5-ROUTED-PATH-LIMIT` | Clauses 5.2.1.2, 6.4.4, and 19.4 | P1 | implementation-present-needs-conformance-tests | 1 |
-| `BACNET-6-NPDU-CONTROL` | Clause 6.2 | P1 | implementation-present-needs-negative-tests | 1 |
-| `BACNET-6-ROUTER-MESSAGES` | Clauses 6.4-6.6 | P1 | implementation-present-needs-conformance-tests | 1 |
+| `BACNET-6-NPDU-CONTROL` | Clause 6.2 | P1 | implementation-present-needs-negative-tests | 2 |
+| `BACNET-6-ROUTER-MESSAGES` | Clauses 6.4-6.6 | P1 | implementation-present-needs-conformance-tests | 2 |
 | `BACNET-7-ETHERNET-LLC` | Clause 7 | P2 | implementation-present-needs-platform-tests | 2 |
 | `BACNET-8-ARCNET` | Clause 8 | P3 | unknown-pending-source-review | 0 |
 | `BACNET-9-MSTP-FRAMES` | Clause 9.3 | P2 | implementation-present-needs-source-review | 2 |
