@@ -70,6 +70,8 @@ Row counts by priority and status are not committed, so concurrent ledger PRs me
 | `BACNET-12-ACCESS-ZONE-OUT-OF-SERVICE-SIMULATION` | Clause 12.32, Table 12-37 footnote 1, Clauses 12.32.7 and 12.32.9 to 12.32.11, Clause 15.9.1.3 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-ACCESS-POINT-OUT-OF-SERVICE-EVENTS` | Clause 12.31, Clauses 12.31.8 and 12.31.27 to 12.31.29, Clause 13.1, Table 13-1 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-ACCESS-ZONE-OCCUPANCY` | Clause 12.32, Table 12-37, Clauses 12.32.6, 12.32.8 and 12.32.10 to 12.32.15 | P1 | supported-with-clause-evidence | 1 |
+| `BACNET-12-ACCESS-ZONE-INTRINSIC-REPORTING` | Clause 12.32, Table 12-37, Clauses 12.32.25 to 12.32.37, Clause 13.3.2, Table 13-5 | P1 | supported-with-clause-evidence | 1 |
+| `BACNET-12-ACCESS-ZONE-ENTRY-EXIT-POINTS` | Clause 12.32, Table 12-37, Clauses 12.32.23 and 12.32.24 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-ACCESS-POINT-AUTHENTICATION-AND-CREDENTIAL` | Clause 12.31, Table 12-36, Clauses 12.31.8, 12.31.9, 12.31.27.1 and 12.31.30, Table 13-1 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-ACCESS-POINT-POLICY-AND-AUTHORIZATION` | Clause 12.31, Table 12-36, Clauses 12.31.10, 12.31.11, 12.31.14 and 12.31.33, Table K-10 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-21-DEVICE-OBJECT-REFERENCE-DEVICE-MEMBER` | Clause 21 BACnetDeviceObjectReference and BACnetDeviceObjectPropertyReference, Clause 15.9.1.3 | P1 | supported-with-clause-evidence | 2 |

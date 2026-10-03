@@ -659,6 +659,8 @@ mod shutdown;
 #[cfg(test)]
 mod access_door_pulse_task_tests;
 #[cfg(test)]
+mod access_zone_event_tests;
+#[cfg(test)]
 mod acknowledge_alarm_tests;
 #[cfg(test)]
 mod active_cov_subscriptions_tests;
@@ -760,6 +762,8 @@ mod life_safety_cov_tests;
 mod life_safety_operation_replay_tests;
 #[cfg(test)]
 mod life_safety_operation_tests;
+#[cfg(test)]
+mod list_element_event_tests;
 #[cfg(test)]
 mod local_network_number_tests;
 #[cfg(test)]

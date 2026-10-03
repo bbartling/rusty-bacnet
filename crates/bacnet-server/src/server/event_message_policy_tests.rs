@@ -20,6 +20,10 @@ fn builtin_intrinsic_objects() -> Vec<Box<dyn BACnetObject>> {
         Box::new(MultiStateInputObject::new(41, "localized multistate input", 3).unwrap()),
         Box::new(MultiStateOutputObject::new(41, "localized multistate output", 3).unwrap()),
         Box::new(MultiStateValueObject::new(41, "localized multistate value", 3).unwrap()),
+        Box::new(
+            bacnet_objects::access_control::AccessZoneObject::new(41, "localized access zone")
+                .unwrap(),
+        ),
     ]
 }
 
@@ -78,9 +82,9 @@ fn committed_properties(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<Prope
 }
 
 #[test]
-fn all_nine_builtin_families_store_each_policy_message_in_only_its_coordinate() {
+fn all_ten_builtin_families_store_each_policy_message_in_only_its_coordinate() {
     let objects = builtin_intrinsic_objects();
-    assert_eq!(objects.len(), 9);
+    assert_eq!(objects.len(), 10);
 
     for object in objects {
         let oid = object.object_identifier();

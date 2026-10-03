@@ -122,6 +122,7 @@ pub(crate) fn project_intrinsic_payload(
             | ObjectType::BINARY_VALUE
             | ObjectType::MULTI_STATE_INPUT
             | ObjectType::MULTI_STATE_VALUE
+            | ObjectType::ACCESS_ZONE
                 if event_type == EventType::CHANGE_OF_STATE =>
             {
                 project_builtin_change_of_state(object, object_type)?
@@ -200,14 +201,26 @@ fn project_builtin_out_of_range(
     })
 }
 
+/// The property a built-in CHANGE_OF_STATE source watches, whose value
+/// New_State carries (Clause 13.3.2): Present_Value, except on an Access
+/// Zone, which watches Occupancy_State (Clause 12.32.6). An Access Door
+/// watching Door_Alarm_State (#1149) adds its row here and a
+/// `DoorAlarmState` arm below.
+fn watched_property(object_type: ObjectType) -> PropertyIdentifier {
+    match object_type {
+        ObjectType::ACCESS_ZONE => PropertyIdentifier::OCCUPANCY_STATE,
+        _ => PropertyIdentifier::PRESENT_VALUE,
+    }
+}
+
 fn project_builtin_change_of_state(
     object: &dyn BACnetObject,
     object_type: ObjectType,
 ) -> Option<NotificationParameters> {
-    let present_value = object
-        .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+    let watched = object
+        .read_property(watched_property(object_type), None)
         .ok()?;
-    let new_state = match (object_type, present_value) {
+    let new_state = match (object_type, watched) {
         (ObjectType::BINARY_INPUT | ObjectType::BINARY_VALUE, PropertyValue::Enumerated(value))
             if value <= 1 =>
         {
@@ -217,6 +230,9 @@ fn project_builtin_change_of_state(
             ObjectType::MULTI_STATE_INPUT | ObjectType::MULTI_STATE_VALUE,
             PropertyValue::Unsigned(value),
         ) if value > 0 => BACnetPropertyStates::UnsignedValue(u32::try_from(value).ok()?),
+        (ObjectType::ACCESS_ZONE, PropertyValue::Enumerated(value)) => {
+            BACnetPropertyStates::ZoneOccupancyState(value)
+        }
         _ => return None,
     };
     Some(NotificationParameters::ChangeOfState {
@@ -262,39 +278,19 @@ fn project_builtin_reliability(
     else {
         return None;
     };
-    let present = object
-        .read_property(PropertyIdentifier::PRESENT_VALUE, None)
-        .ok()?;
-    validate_builtin_present_value(object_type, &present)?;
-
     let mut property_values = Vec::new();
-    append_property_value(
-        &mut property_values,
-        PropertyIdentifier::PRESENT_VALUE,
-        None,
-        &present,
-    )?;
-    match object_type {
-        ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT => {
-            let feedback = object
-                .read_property(PropertyIdentifier::FEEDBACK_VALUE, None)
-                .ok()?;
-            validate_builtin_feedback_value(object_type, &feedback)?;
-            append_property_value(
-                &mut property_values,
-                PropertyIdentifier::FEEDBACK_VALUE,
-                None,
-                &feedback,
-            )?;
+    for &property in reliability_report_properties(object_type)? {
+        let value = object.read_property(property, None).ok()?;
+        match property {
+            PropertyIdentifier::PRESENT_VALUE => {
+                validate_builtin_present_value(object_type, &value)?
+            }
+            PropertyIdentifier::FEEDBACK_VALUE => {
+                validate_builtin_feedback_value(object_type, &value)?
+            }
+            _ => matches!(value, PropertyValue::Enumerated(_)).then_some(())?,
         }
-        ObjectType::ANALOG_INPUT
-        | ObjectType::ANALOG_OUTPUT
-        | ObjectType::ANALOG_VALUE
-        | ObjectType::BINARY_INPUT
-        | ObjectType::BINARY_VALUE
-        | ObjectType::MULTI_STATE_INPUT
-        | ObjectType::MULTI_STATE_VALUE => {}
-        _ => return None,
+        append_property_value(&mut property_values, property, None, &value)?;
     }
 
     Some(NotificationParameters::ChangeOfReliability {
@@ -302,6 +298,27 @@ fn project_builtin_reliability(
         status_flags: required_status_flags(object)?,
         property_values,
     })
+}
+
+/// The properties a built-in source's CHANGE_OF_RELIABILITY notification
+/// carries, in the order Table 13-5 lists them for its object type. An
+/// Access Door (#1149) adds Door_Alarm_State then Present_Value.
+fn reliability_report_properties(object_type: ObjectType) -> Option<&'static [PropertyIdentifier]> {
+    match object_type {
+        ObjectType::ANALOG_INPUT
+        | ObjectType::ANALOG_OUTPUT
+        | ObjectType::ANALOG_VALUE
+        | ObjectType::BINARY_INPUT
+        | ObjectType::BINARY_VALUE
+        | ObjectType::MULTI_STATE_INPUT
+        | ObjectType::MULTI_STATE_VALUE => Some(&[PropertyIdentifier::PRESENT_VALUE]),
+        ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT => Some(&[
+            PropertyIdentifier::PRESENT_VALUE,
+            PropertyIdentifier::FEEDBACK_VALUE,
+        ]),
+        ObjectType::ACCESS_ZONE => Some(&[PropertyIdentifier::OCCUPANCY_STATE]),
+        _ => None,
+    }
 }
 
 fn project_event_enrollment_normal(

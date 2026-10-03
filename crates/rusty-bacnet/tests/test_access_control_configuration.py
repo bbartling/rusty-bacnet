@@ -2,9 +2,10 @@
 
 add_access_door(door_members=...), add_access_point(access_doors=...) and
 add_credential_data_input(supported_formats=...) set arrays that are
-read-only over the network (#1249). add_access_point also takes the policy
-count, the supported authorization modes and Priority_For_Writing, which are
-read-only over the network too (#1307).
+read-only over the network (#1249), and add_access_zone(entry_points=...,
+exit_points=...) the zone's lists of Access Points (#1306). add_access_point
+also takes the policy count, the supported authorization modes and
+Priority_For_Writing, which are read-only over the network too (#1307).
 """
 
 from __future__ import annotations
@@ -29,6 +30,15 @@ from rusty_bacnet import (
 LOCK = ObjectIdentifier(ObjectType.BINARY_OUTPUT, 1)
 REMOTE_DEVICE = ObjectIdentifier(ObjectType.DEVICE, 99)
 REMOTE_DOOR = ObjectIdentifier(ObjectType.ACCESS_DOOR, 4)
+LOBBY_POINT = ObjectIdentifier(ObjectType.ACCESS_POINT, 1)
+REMOTE_POINT = ObjectIdentifier(ObjectType.ACCESS_POINT, 4)
+
+# A BACnetDeviceObjectReference: device identifier [0] when present, object
+# identifier [1]. Entry_Points and Exit_Points still read as octets (#1344).
+LOBBY_POINT_REFERENCE = bytes([0x1C, 0x08, 0x40, 0x00, 0x01])
+REMOTE_POINT_REFERENCE = bytes(
+    [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x08, 0x40, 0x00, 0x04]
+)
 
 
 # Each registration method and its keyword-only arguments.
@@ -43,6 +53,7 @@ KEYWORDS = (
             "priority_for_writing",
         ],
     ),
+    ("add_access_zone", ["entry_points", "exit_points"]),
     ("add_credential_data_input", ["supported_formats"]),
 )
 
@@ -163,6 +174,48 @@ class AccessControlConfigurationTests(unittest.TestCase):
                         ObjectIdentifier(ObjectType.ACCESS_POINT, instance), doors, 0
                     )
                 self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
+        finally:
+            await server.stop()
+
+    def test_entry_and_exit_points_reach_the_lists_and_name_points_only(self) -> None:
+        asyncio.run(self._entry_and_exit_points())
+
+    async def _entry_and_exit_points(self) -> None:
+        server = make_server()
+        server.add_access_zone(
+            1,
+            "Building A",
+            entry_points=[LOBBY_POINT, (REMOTE_DEVICE, REMOTE_POINT)],
+            exit_points=[(REMOTE_DEVICE, REMOTE_POINT)],
+        )
+        server.add_access_zone(2, "Building B")
+        with self.assertRaises(BacnetProtocolError) as raised:
+            server.add_access_zone(3, "Wrong", exit_points=[REMOTE_DOOR])
+        self.assert_value_out_of_range(raised.exception)
+        with self.assertRaises(ValueError):
+            server.add_access_zone(
+                3, "Wrong", entry_points=[(REMOTE_DOOR, LOBBY_POINT)]
+            )
+        await server.start()
+        try:
+            zone = ObjectIdentifier(ObjectType.ACCESS_ZONE, 1)
+            entry = PropertyIdentifier.ENTRY_POINTS
+            exit_ = PropertyIdentifier.EXIT_POINTS
+            # A list of context-tagged references reads back as its octets.
+            self.assertEqual(
+                (await server.read_property(zone, entry)).value,
+                LOBBY_POINT_REFERENCE + REMOTE_POINT_REFERENCE,
+            )
+            self.assertEqual(
+                (await server.read_property(zone, exit_)).value, REMOTE_POINT_REFERENCE
+            )
+            bare = ObjectIdentifier(ObjectType.ACCESS_ZONE, 2)
+            self.assertEqual((await server.read_property(bare, entry)).value, [])
+            with self.assertRaises(BacnetProtocolError) as raised:
+                await server.read_property(
+                    ObjectIdentifier(ObjectType.ACCESS_ZONE, 3), entry
+                )
+            self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
         finally:
             await server.stop()
 
