@@ -2,7 +2,7 @@
 """Print one CHANGELOG.md section as release notes (#943).
 
     changelog_notes.py --version 0.12.0 [--changelog CHANGELOG.md] [--allow-empty]
-    changelog_notes.py --version 0.12.0 --max-chars 125000 --full-url URL
+    changelog_notes.py --version 0.12.0 --github --max-chars 125000 --full-url URL
 
 A section runs from its `## [<name>]` heading to the next level-2 heading,
 ignoring headings inside fenced code blocks. The heading itself is left out.
@@ -15,6 +15,11 @@ GitHub refuses release bodies over 125,000 characters. With --max-chars, a
 longer section is cut at the last blank line that fits and ends with a link to
 the full changelog (--full-url). The result is never longer than --max-chars,
 and a code block the cut leaves open is closed.
+
+Issue numbers are Forgejo's, and GitHub would link a bare #1134 to its own
+item of that number. With --github (the GitHub release copy, #1188), a
+zero-width space after each issue reference's # stops that, and a first line
+says where the numbers live; code, link targets and fenced blocks keep theirs.
 """
 
 import argparse
@@ -25,6 +30,12 @@ from pathlib import Path
 HEADING = re.compile(r"^## \[([^\]]+)\]")
 FENCE = re.compile(r"^\s*(```|~~~)")
 FENCE_RUN = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
+# Code spans and link targets, which GitHub doesn't autolink and a reader may copy.
+PROTECTED = re.compile(r"(`+[^`]*`+|\]\([^)]*\))")
+# An issue reference GitHub would autolink: # and digits, not inside a word,
+# path, link text or character reference.
+ISSUE_REF = re.compile(r"(?<![\w&/\[])#(\d+)\b")
+GITHUB_NOTE = "_Issue numbers refer to the project's Forgejo tracker, not to this repository's issues._"
 
 
 class NotesError(Exception):
@@ -60,6 +71,26 @@ def extract(text, name):
     if not body.strip():
         raise EmptySection(f"CHANGELOG.md's '## [{name}]' section is empty")
     return body + "\n"
+
+
+def github_refs(body):
+    """body with issue references GitHub won't autolink, led by GITHUB_NOTE if there were any."""
+    out = []
+    in_fence = False
+    changed = False
+    for line in body.split("\n"):
+        if FENCE.match(line):
+            in_fence = not in_fence
+        if in_fence or FENCE.match(line):
+            out.append(line)
+            continue
+        parts = PROTECTED.split(line)
+        for i in range(0, len(parts), 2):  # odd indexes are the protected spans
+            parts[i], count = ISSUE_REF.subn(r"#&#8203;\1", parts[i])
+            changed = changed or count > 0
+        out.append("".join(parts))
+    text = "\n".join(out)
+    return f"{GITHUB_NOTE}\n\n{text}" if changed else text
 
 
 def open_fence(text):
@@ -110,6 +141,7 @@ def main(argv=None):
     parser.add_argument("--max-chars", type=int, help="cut longer notes to this many characters")
     parser.add_argument("--full-url", help="link to the full changelog, required with --max-chars")
     parser.add_argument("--allow-empty", action="store_true", help="an empty section gives a placeholder")
+    parser.add_argument("--github", action="store_true", help="keep GitHub from linking issue numbers to its own")
     args = parser.parse_args(argv)
     if args.max_chars is not None and not args.full_url:
         parser.error("--max-chars needs --full-url")
@@ -122,6 +154,8 @@ def main(argv=None):
             if not args.allow_empty:
                 raise
             body = f"No changes are listed under {name} yet.\n"
+        if args.github:
+            body = github_refs(body)
         if args.max_chars is not None:
             body = truncate(body, args.max_chars, args.full_url)
     except (NotesError, OSError) as err:

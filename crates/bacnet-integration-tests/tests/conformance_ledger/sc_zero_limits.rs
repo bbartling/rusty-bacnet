@@ -99,7 +99,10 @@ fn zero_limit_docs_keep_capacity_policy_separate_from_immutable_identity_closeou
     assert!(!closeout.contains("#519"));
     assert!(closeout.contains("bde599405c38e2ceb62e23ee628a0f15d1ac9fe2"));
     assert_eq!(closeout.matches("\n| A").count(), 6);
-    for path in ["CHANGELOG.md", "docs/rust-api.md", "docs/python-api.md"] {
+    // The short changelog entry (#1188) only links the evidence; the API
+    // docs carry the policy wording.
+    assert!(read_published_doc("CHANGELOG.md").contains("#received-zero-capacity-admission"));
+    for path in ["docs/rust-api.md", "docs/python-api.md"] {
         let body = read_published_doc(path);
         assert!(body.contains("received-zero-capacity-admission"), "{path}");
         let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
