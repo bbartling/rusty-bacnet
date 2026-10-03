@@ -9,7 +9,9 @@
 //! single reference, so neither an array index nor the list services apply.
 //!
 //! An accepted write empties the sample window (Table 12-5, footnote 1) and a
-//! refused one leaves it alone, so Attempted_Samples shows which happened.
+//! refused one leaves it alone, so Attempted_Samples shows which happened. The
+//! server then samples the stored local reference (#1144) one spacing later:
+//! 900 s / 15 samples, so 60 s of paused time.
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_encoding::constructed::encode_device_object_property_reference;
@@ -166,6 +168,15 @@ async fn fill_window(h: &Harness, count: u64) {
     assert_eq!(read(h, ATTEMPTED).await, PropertyValue::Unsigned(count));
 }
 
+/// Move the paused clock on by `seconds` and let the server run, without
+/// moving the clock further.
+async fn advance(seconds: u64) {
+    tokio::time::advance(Duration::from_secs(seconds)).await;
+    for _ in 0..32 {
+        tokio::task::yield_now().await;
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn write_property_takes_a_reference_naming_this_device_as_a_local_reference() {
     let mut h = start().await;
@@ -178,6 +189,17 @@ async fn write_property_takes_a_reference_naming_this_device_as_a_local_referenc
     assert_reference(&h, PropertyIdentifier::PRESENT_VALUE, None, "Present_Value").await;
     // Accepted, so the window was emptied.
     assert_eq!(read(&h, ATTEMPTED).await, PropertyValue::Unsigned(0));
+    // The server samples AV-1 through the stored local reference: a valid
+    // sample of its Present_Value, 0.0, one spacing later.
+    advance(60).await;
+    assert_eq!(
+        read(&h, PropertyIdentifier::VALID_SAMPLES).await,
+        PropertyValue::Unsigned(1)
+    );
+    assert_eq!(
+        read(&h, PropertyIdentifier::AVERAGE_VALUE).await,
+        PropertyValue::Real(0.0)
+    );
 
     // An element of an array property keeps its index.
     let slot = reference(PropertyIdentifier::PRIORITY_ARRAY, Some(8), local());

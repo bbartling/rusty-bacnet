@@ -1985,8 +1985,8 @@ window (below) starts the spacing over. The spacing never drops below
 so that window spans more than Window_Interval. A referenced object or property
 that doesn't exist, an array index on a property that isn't an array, a failed
 read, or a value of a datatype the object can't average counts as a missed
-attempt. References are always local: a device-qualified write is refused. The
-server's monotonic operation task does this through
+attempt. References are always local: a written reference naming another
+device is refused (see below). The server's monotonic operation task does this through
 `ObjectDatabase::sample_due_averaging_objects`, which an application driving
 its own database can call as well.
 
