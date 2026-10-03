@@ -4,9 +4,10 @@
 //! Like [`AuditLogPersistence`](crate::audit::AuditLogPersistence), the
 //! storage belongs to the application. The forwarder loads it once, when it is
 //! built, and saves both lists whenever either changes. Saves run on the
-//! forwarder's own writer thread, never while the database guard is held
-//! ([`crate::durable`]). Each saved Subscribed_Recipients entry carries the
-//! whole minutes it had left at the save.
+//! forwarder's own writer thread. The bundled server waits for them with the
+//! database guard dropped; a write nobody staged waits where it is
+//! ([`crate::durable`] lists those paths). Each saved Subscribed_Recipients
+//! entry carries the whole minutes it had left at the save.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
@@ -60,15 +61,16 @@ const HEADER_LEN: usize = LENGTH_AT + 4;
 /// A full Recipient_List of the longest destinations is 1,504 octets and a
 /// full Subscribed_Recipients 1,184; anything much larger is not a file this
 /// backend wrote.
-const MAX_FILE_BYTES: u64 = 64 * 1024;
+pub(super) const MAX_FILE_BYTES: u64 = 64 * 1024;
 
 /// A file holding one forwarder's lists, replaced whole on each save.
 ///
 /// A save writes a sibling `.tmp` file, synchronizes it, renames it over the
 /// old one and then synchronizes the directory, so a failed save leaves the
-/// previous lists in place and a completed one survives a power loss. (On
-/// Windows the directory is not synchronized: see the
-/// [`durable`](crate::durable) module.) The file holds a magic tag, the
+/// previous lists in place and a completed one survives a power loss. Once
+/// the rename succeeds the save has landed: a directory sync that fails is
+/// logged, not returned. (On Windows the directory is not synchronized: see
+/// the [`durable`](crate::durable) module.) The file holds a magic tag, the
 /// forwarder's object identifier, whether a Recipient_List follows, the
 /// encoded Recipient_List with its length, and the encoded
 /// Subscribed_Recipients. It does not coordinate between processes.
@@ -202,7 +204,9 @@ impl NotificationForwarderPersistence for FileNotificationForwarderPersistence {
         file.sync_all()?;
         drop(file);
         fs::rename(&temporary, &self.path)?;
-        sync_parent_dir(&self.path)?;
+        // The new lists are in place, so the save has landed whatever the
+        // directory sync finds.
+        sync_parent_dir(&self.path);
         Ok(())
     }
 }

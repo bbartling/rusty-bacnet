@@ -4,7 +4,7 @@ use super::*;
 use std::sync::mpsc;
 use std::task::Wake;
 use std::thread::ThreadId;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// A storage stand-in whose saves block until the test lets each one go.
 struct Gate {
@@ -197,8 +197,65 @@ fn a_directory_sync_follows_a_rename() {
     let path = dir.join("state");
     std::fs::write(dir.join("state.tmp"), b"x").unwrap();
     std::fs::rename(dir.join("state.tmp"), &path).unwrap();
-    sync_parent_dir(&path).unwrap();
-    // A bare file name syncs the working directory.
-    sync_parent_dir(Path::new("state")).unwrap();
+    sync_parent_dir(&path);
+    // A bare file name syncs the working directory, and a directory that is
+    // gone is logged: the save it follows has landed either way.
+    sync_parent_dir(Path::new("state"));
     let _ = std::fs::remove_dir_all(&dir);
+    sync_parent_dir(&path);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_filesystem_that_cannot_sync_a_directory_is_passed_over() {
+    let error = std::io::Error::from_raw_os_error;
+    for code in [libc::EINVAL, libc::ENOTSUP, libc::EOPNOTSUPP, libc::EBADF] {
+        assert!(directory_sync_unsupported(&error(code)), "errno {code}");
+    }
+    // Other failures are real, and are logged as such.
+    for code in [libc::EIO, libc::ENOSPC, libc::EACCES] {
+        assert!(!directory_sync_unsupported(&error(code)), "errno {code}");
+    }
+    assert!(!directory_sync_unsupported(&std::io::Error::other(
+        "no errno"
+    )));
+}
+
+#[test]
+fn a_staged_lifetime_counts_from_the_end_of_the_save() {
+    let (gate, handle) = gate();
+    let mut writer = writer(&gate);
+    // Dropped before the writer, so a failed assertion lets a held save go
+    // instead of leaving the writer's drop waiting for it.
+    let handle = handle;
+    let submitted = Instant::now();
+    let ticket = writer.submit(1);
+    assert_eq!(handle.started.recv_timeout(WAIT).unwrap(), 1);
+    // A save still running never outlives the lifetime.
+    assert!(!ticket.outlived_at(submitted + STAGED_WRITE_LIFETIME * 10));
+    // The save takes longer than the lifetime.
+    std::thread::sleep(STAGED_WRITE_LIFETIME + Duration::from_millis(100));
+    handle.release.send(Ok(())).unwrap();
+    writer.wait_idle();
+    let after = Instant::now();
+    // Counted from submission the lifetime would be over; counted from the
+    // end of the save it has only begun.
+    assert!(!ticket.outlived_at(submitted + STAGED_WRITE_LIFETIME + Duration::from_millis(50)));
+    assert!(ticket.outlived_at(after + STAGED_WRITE_LIFETIME));
+}
+
+#[test]
+fn a_ticket_recognizes_only_its_own_wait() {
+    let (gate, handle) = gate();
+    let mut writer = writer(&gate);
+    let handle = handle;
+    let first = writer.submit(1);
+    let second = writer.submit(2);
+    for _ in 0..2 {
+        handle.started.recv_timeout(WAIT).unwrap();
+        handle.release.send(Ok(())).unwrap();
+    }
+    writer.wait_idle();
+    assert!(first.issued(&first.wait()));
+    assert!(!first.issued(&second.wait()));
 }

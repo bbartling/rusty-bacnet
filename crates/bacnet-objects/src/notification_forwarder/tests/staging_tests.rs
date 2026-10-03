@@ -3,18 +3,19 @@
 
 use super::storage::{block_on, persistent, MemoryPersistence, WAIT};
 use super::*;
-use crate::durable::{DurableWrites, StageStep};
+use crate::durable::{DurableWrites, SaveWait, StageStep, STAGED_WRITE_LIFETIME};
 use bacnet_types::enums::PropertyIdentifier as P;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
-fn staged(step: StageStep) -> crate::durable::SaveWait {
+fn staged(step: StageStep) -> SaveWait {
     match step {
         StageStep::Staged(wait) => wait,
         other => panic!("expected a staged write, got {other:?}"),
     }
 }
 
-fn busy(step: StageStep) -> crate::durable::SaveWait {
+fn busy(step: StageStep) -> SaveWait {
     match step {
         StageStep::Busy(wait) => wait,
         other => panic!("expected a busy forwarder, got {other:?}"),
@@ -31,6 +32,17 @@ fn write(
         framed_subscriptions(list),
         None,
     )
+}
+
+/// Stage a Subscribed_Recipients write of `list`, wait for its save, and
+/// return the wait to release it with.
+fn stage_saved(
+    nf: &mut NotificationForwarderObject,
+    list: &[BACnetEventNotificationSubscription],
+) -> SaveWait {
+    let wait = staged(nf.stage_write(P::SUBSCRIBED_RECIPIENTS, None, &framed_subscriptions(list)));
+    block_on(wait.clone());
+    wait
 }
 
 #[test]
@@ -54,11 +66,12 @@ fn a_staged_write_saves_while_the_forwarder_serves_the_old_list() {
         framed_subscriptions(&old)
     );
     held.go.send(()).unwrap();
-    block_on(wait);
+    block_on(wait.clone());
 
     // The write takes the saved list without saving again.
     write(&mut nf, &new).unwrap();
-    nf.release_staged_write();
+    nf.release_staged_write(&wait);
+    nf.wait_for_saves();
     assert_eq!(nf.subscriptions(), new);
     assert_eq!(storage.saved(), new);
     assert_eq!(storage.saves(), 2);
@@ -73,17 +86,13 @@ fn a_staged_write_whose_save_fails_is_refused_and_the_old_list_stays() {
     write(&mut nf, &old).unwrap();
     storage.fail.store(true, Ordering::SeqCst);
     let new = [subscription(device(8), 2, 20)];
-    block_on(staged(nf.stage_write(
-        P::SUBSCRIBED_RECIPIENTS,
-        None,
-        &framed_subscriptions(&new),
-    )));
+    let wait = stage_saved(&mut nf, &new);
     assert_refused(
         write(&mut nf, &new),
         ErrorClass::DEVICE,
         ErrorCode::OPERATIONAL_PROBLEM,
     );
-    nf.release_staged_write();
+    nf.release_staged_write(&wait);
     assert_eq!(nf.subscriptions(), old);
     assert_eq!(storage.saved(), old);
     assert_eq!(counters.failed_saves(), 1);
@@ -95,29 +104,31 @@ fn a_second_write_waits_until_the_first_has_landed() {
     let mut nf = persistent(&storage);
     let first = [subscription(device(7), 1, 10)];
     let second = [subscription(device(8), 1, 10)];
+    // The first save is held while the second request stages, so the second
+    // finds the forwarder busy however slowly the test runs.
+    let held = storage.hold();
     let wait = staged(nf.stage_write(
         P::SUBSCRIBED_RECIPIENTS,
         None,
         &framed_subscriptions(&first),
     ));
+    held.started.recv_timeout(WAIT).unwrap();
     let queued = busy(nf.stage_write(
         P::RECIPIENT_LIST,
         None,
         &framed_destinations(&[destination(device(3), 1, false)]),
     ));
-    block_on(wait);
+    drop(held.go);
+    block_on(wait.clone());
     // Saved, but not yet taken: the second still waits.
     assert!(!queued.is_ready());
     write(&mut nf, &first).unwrap();
-    nf.release_staged_write();
+    nf.release_staged_write(&wait);
     block_on(queued);
-    block_on(staged(nf.stage_write(
-        P::SUBSCRIBED_RECIPIENTS,
-        None,
-        &framed_subscriptions(&second),
-    )));
+    let wait = stage_saved(&mut nf, &second);
     write(&mut nf, &second).unwrap();
-    nf.release_staged_write();
+    nf.release_staged_write(&wait);
+    nf.wait_for_saves();
     assert_eq!(nf.subscriptions(), second);
     assert_eq!(storage.saved(), second);
 }
@@ -125,27 +136,94 @@ fn a_second_write_waits_until_the_first_has_landed() {
 #[test]
 fn a_staged_write_its_request_never_made_leaves_storage_with_the_served_list() {
     let storage = Arc::new(MemoryPersistence::default());
-    let (clock, set) = manual_clock();
     let mut nf = persistent(&storage);
-    nf.bind_monotonic_clock_internal(Some(clock));
     let served = [subscription(device(7), 1, 10)];
     write(&mut nf, &served).unwrap();
     let never = [subscription(device(9), 1, 10)];
-    block_on(staged(nf.stage_write(
-        P::SUBSCRIBED_RECIPIENTS,
-        None,
-        &framed_subscriptions(&never),
-    )));
-    // The request failed before its write; storage holds the staged list.
-    nf.release_staged_write();
+    let wait = stage_saved(&mut nf, &never);
     assert_eq!(storage.saved(), never);
-    // The next operation task call saves the served list, without waiting
-    // for the minute.
-    set(Duration::from_secs(1));
-    nf.advance_monotonic_time_internal(Duration::from_secs(1));
+    // The request failed before its write. Releasing it saves the served
+    // list at once, with no operation task call, so a restart right after
+    // serves what the forwarder served.
+    nf.release_staged_write(&wait);
     nf.wait_for_saves();
     assert_eq!(storage.saved(), served);
     assert_eq!(nf.subscriptions(), served);
+    drop(nf);
+    assert_eq!(persistent(&storage).subscriptions(), served);
+}
+
+#[test]
+fn a_released_staged_write_whose_save_failed_saves_nothing_more() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nf = persistent(&storage);
+    let served = [subscription(device(7), 1, 10)];
+    write(&mut nf, &served).unwrap();
+    storage.fail.store(true, Ordering::SeqCst);
+    let wait = stage_saved(&mut nf, &[subscription(device(9), 1, 10)]);
+    storage.fail.store(false, Ordering::SeqCst);
+    // Storage still holds the served list, so there is nothing to put back.
+    nf.release_staged_write(&wait);
+    nf.wait_for_saves();
+    assert_eq!(storage.saves(), 1);
+    assert_eq!(storage.saved(), served);
+}
+
+#[test]
+fn a_release_from_another_request_leaves_the_staged_write_alone() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nf = persistent(&storage);
+    let first = [subscription(device(7), 1, 10)];
+    let second = [subscription(device(8), 1, 10)];
+    let earlier = stage_saved(&mut nf, &first);
+    write(&mut nf, &first).unwrap();
+    nf.release_staged_write(&earlier);
+    // A second request stages; its save is held, so it holds the forwarder.
+    let held = storage.hold();
+    let wait = staged(nf.stage_write(
+        P::SUBSCRIBED_RECIPIENTS,
+        None,
+        &framed_subscriptions(&second),
+    ));
+    held.started.recv_timeout(WAIT).unwrap();
+    // The first request releasing again, late, does not drop it.
+    nf.release_staged_write(&earlier);
+    let queued = busy(nf.stage_write(P::RECIPIENT_LIST, None, &framed_destinations(&[])));
+    assert!(!queued.is_ready());
+    drop(held.go);
+    block_on(wait.clone());
+    write(&mut nf, &second).unwrap();
+    nf.release_staged_write(&wait);
+    nf.wait_for_saves();
+    // Each write took its own staged save: no save in place, no correction.
+    assert_eq!(storage.saves(), 2);
+    assert_eq!(storage.saved(), second);
+}
+
+#[test]
+fn a_slow_save_keeps_its_staged_write_for_a_lifetime_after_it_finishes() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nf = persistent(&storage);
+    let list = [subscription(device(7), 1, 10)];
+    let held = storage.hold();
+    let staged_at = Instant::now();
+    let wait = staged(nf.stage_write(P::SUBSCRIBED_RECIPIENTS, None, &framed_subscriptions(&list)));
+    held.started.recv_timeout(WAIT).unwrap();
+    // The save takes longer than a staged write's whole lifetime.
+    std::thread::sleep(STAGED_WRITE_LIFETIME + Duration::from_millis(100));
+    held.go.send(()).unwrap();
+    block_on(wait.clone());
+    // A lifetime has passed since the write was staged, but the save has
+    // only just finished, so the staged write still holds the forwarder.
+    let past_staging = staged_at + STAGED_WRITE_LIFETIME + Duration::from_millis(50);
+    let storage_now = nf.storage.as_mut().unwrap();
+    assert!(storage_now.busy_at(past_staging).is_some());
+    // The write takes the staged save; it is not saved again in place.
+    write(&mut nf, &list).unwrap();
+    nf.release_staged_write(&wait);
+    nf.wait_for_saves();
+    assert_eq!(nf.subscriptions(), list);
+    assert_eq!(storage.saves(), 1);
 }
 
 #[test]
@@ -154,18 +232,15 @@ fn a_write_nobody_staged_supersedes_a_staged_one() {
     let mut nf = persistent(&storage);
     let staged_list = [subscription(device(7), 1, 10)];
     let direct = [subscription(device(8), 1, 10)];
-    block_on(staged(nf.stage_write(
-        P::SUBSCRIBED_RECIPIENTS,
-        None,
-        &framed_subscriptions(&staged_list),
-    )));
+    let wait = stage_saved(&mut nf, &staged_list);
     // A write made without staging, by application code holding the guard,
     // saves in place and drops the staged list.
     write(&mut nf, &direct).unwrap();
     assert_eq!(storage.saved(), direct);
     // The staged write's request arrives late: it saves again, and wins.
     write(&mut nf, &staged_list).unwrap();
-    nf.release_staged_write();
+    nf.release_staged_write(&wait);
+    nf.wait_for_saves();
     assert_eq!(nf.subscriptions(), staged_list);
     assert_eq!(storage.saved(), staged_list);
 }
@@ -175,25 +250,17 @@ fn a_forgotten_staged_write_frees_the_forwarder() {
     let storage = Arc::new(MemoryPersistence::default());
     let mut nf = persistent(&storage);
     let list = [subscription(device(7), 1, 10)];
-    block_on(staged(nf.stage_write(
-        P::SUBSCRIBED_RECIPIENTS,
-        None,
-        &framed_subscriptions(&list),
-    )));
+    let _forgotten = stage_saved(&mut nf, &list);
     let waiting =
         busy(nf.stage_write(P::SUBSCRIBED_RECIPIENTS, None, &framed_subscriptions(&list)));
     // Its request never comes back. Once the staged write's lifetime is
     // over, the operation task drops it and the waiting request goes on.
-    std::thread::sleep(Duration::from_millis(400));
+    std::thread::sleep(STAGED_WRITE_LIFETIME + Duration::from_millis(100));
     nf.advance_monotonic_time_internal(Duration::ZERO);
     block_on(waiting);
-    block_on(staged(nf.stage_write(
-        P::SUBSCRIBED_RECIPIENTS,
-        None,
-        &framed_subscriptions(&list),
-    )));
+    let wait = stage_saved(&mut nf, &list);
     write(&mut nf, &list).unwrap();
-    nf.release_staged_write();
+    nf.release_staged_write(&wait);
     assert_eq!(nf.subscriptions(), list);
 }
 
@@ -274,6 +341,7 @@ fn an_operation_task_save_returns_while_storage_is_held() {
     set(MINUTE);
     // The lapse queues a save; the call returns while storage still holds
     // it, so the operation task never keeps the database guard for a save.
+    // Storage stays held until the call returns or the long wait runs out.
     let (returned_tx, returned) = std::sync::mpsc::channel();
     let returned_in_time = std::thread::scope(|scope| {
         scope.spawn(|| {
@@ -283,7 +351,7 @@ fn an_operation_task_save_returns_while_storage_is_held() {
         held.started
             .recv_timeout(WAIT)
             .expect("the lapse save started");
-        let in_time = returned.recv_timeout(Duration::from_millis(500)).is_ok();
+        let in_time = returned.recv_timeout(WAIT).is_ok();
         drop(held.go);
         in_time
     });

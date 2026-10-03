@@ -448,7 +448,7 @@ impl Request<'_> {
         let deleted_oid = DeleteObjectRequest::decode(&self.req.service_request)
             .ok()
             .map(|r| r.object_identifier);
-        let result = {
+        let (result, removed) = {
             let mut db = db.write().await;
             let removed_status = deleted_oid.and_then(|oid| {
                 db.get(&oid)
@@ -464,15 +464,24 @@ impl Request<'_> {
                     true,
                 );
             }
-            let result = handlers::handle_delete_object(&mut db, &self.req.service_request);
+            let (result, removed) =
+                match handlers::handle_delete_object(&mut db, &self.req.service_request) {
+                    Ok(removed) => (Ok(()), Some(removed)),
+                    Err(error) => (Err(error), None),
+                };
             if result.is_ok() {
                 if let Some(status) = removed_status {
                     status.set_configured(false);
                 }
             }
             audit.lifecycle_completed(&mut db, &result);
-            result
+            (result, removed)
         };
+        // Dropping an object that saves its state waits for its queued saves,
+        // so drop it with the guard released and off the async workers.
+        if let Some(removed) = removed {
+            tokio::task::spawn_blocking(move || drop(removed));
+        }
         match result {
             Ok(()) => {
                 // Clean up COV subscriptions for the deleted object

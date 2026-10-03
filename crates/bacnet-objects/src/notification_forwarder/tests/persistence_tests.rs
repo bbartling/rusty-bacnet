@@ -320,3 +320,60 @@ fn file_persistence_keeps_a_forwarder_list_across_a_rebuild() {
     assert!(!path.with_file_name("lists.tmp").exists());
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
+
+#[test]
+fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
+    use crate::notification_forwarder::persistence::MAX_FILE_BYTES;
+    use crate::subscribed_recipients::MAX_SUBSCRIBED_RECIPIENTS;
+    let path = temp_file();
+    let storage = FileNotificationForwarderPersistence::new(&path).unwrap();
+    let forwarder = ObjectIdentifier::new(ObjectType::NOTIFICATION_FORWARDER, 1).unwrap();
+    let refusal = |storage: &FileNotificationForwarderPersistence| {
+        storage.load(forwarder).unwrap_err().to_string()
+    };
+    // Both lists at their caps load.
+    let destinations: Vec<_> = (0..MAX_RECIPIENT_LIST_DESTINATIONS as u32)
+        .map(|n| destination(device(n), n, false))
+        .collect();
+    let subscriptions: Vec<_> = (0..MAX_SUBSCRIBED_RECIPIENTS as u32)
+        .map(|n| subscription(device(n), n, 10))
+        .collect();
+    let full = ForwarderSnapshot {
+        recipient_list: Some(destinations.clone()),
+        subscribed_recipients: subscriptions.clone(),
+    };
+    storage.save(forwarder, &full).unwrap();
+    assert_eq!(storage.load(forwarder).unwrap().unwrap(), full);
+
+    // One entry past either cap is refused. The backend saves what it is
+    // given, so a file like this can only come from elsewhere.
+    let mut too_many = destinations;
+    too_many.push(destination(device(999), 1, false));
+    let past_recipient_cap = ForwarderSnapshot {
+        recipient_list: Some(too_many),
+        ..full.clone()
+    };
+    let mut too_many = subscriptions;
+    too_many.push(subscription(device(999), 1, 10));
+    let past_subscription_cap = ForwarderSnapshot {
+        subscribed_recipients: too_many,
+        ..full.clone()
+    };
+    for past_cap in [past_recipient_cap, past_subscription_cap] {
+        storage.save(forwarder, &past_cap).unwrap();
+        assert!(refusal(&storage).contains("more entries than the cap"));
+    }
+
+    // A file past the size cap is refused before any of it is decoded; one
+    // at the cap is read, and here refused for what it holds.
+    storage.save(forwarder, &full).unwrap();
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes.resize(usize::try_from(MAX_FILE_BYTES).unwrap() + 1, 0);
+    std::fs::write(&path, &bytes).unwrap();
+    assert!(refusal(&storage).contains("too large"));
+    bytes.pop();
+    std::fs::write(&path, &bytes).unwrap();
+    let at_cap = refusal(&storage);
+    assert!(!at_cap.contains("too large"), "{at_cap}");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}

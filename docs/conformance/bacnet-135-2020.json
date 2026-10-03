@@ -3387,7 +3387,13 @@
     "crates/bacnet-objects/src/durable/tests.rs::dropping_the_writer_waits_for_queued_saves",
     "crates/bacnet-objects/src/durable/tests.rs::the_done_hook_sees_every_result",
     "crates/bacnet-objects/src/durable/tests.rs::a_save_wait_wakes_its_task_when_the_save_runs",
-    "crates/bacnet-objects/src/durable/tests.rs::a_directory_sync_follows_a_rename"
+    "crates/bacnet-objects/src/durable/tests.rs::a_directory_sync_follows_a_rename",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_release_from_another_request_leaves_the_staged_write_alone",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_slow_save_keeps_its_staged_write_for_a_lifetime_after_it_finishes",
+    "crates/bacnet-objects/src/durable/tests.rs::a_staged_lifetime_counts_from_the_end_of_the_save",
+    "crates/bacnet-objects/src/durable/tests.rs::a_ticket_recognizes_only_its_own_wait",
+    "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::a_write_property_multiple_stopped_before_its_list_write_puts_the_served_list_back",
+    "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::deleting_a_forwarder_while_its_save_is_held_leaves_the_database_available"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/event_notification_subscription.rs::event_notification_subscription_refuses_truncated_and_malformed_elements",
@@ -3407,7 +3413,10 @@
     "crates/rusty-bacnet/tests/test_notification_forwarder.py::NotificationForwarderServerTests::test_a_failed_save_is_counted",
     "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_staged_write_whose_save_fails_is_refused_and_the_old_list_stays",
     "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::a_list_that_cannot_be_saved_is_refused_on_the_wire_and_the_old_list_stays",
-    "crates/bacnet-objects/src/durable/tests.rs::a_panicking_save_fails_its_ticket_and_the_writer_goes_on"
+    "crates/bacnet-objects/src/durable/tests.rs::a_panicking_save_fails_its_ticket_and_the_writer_goes_on",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_released_staged_write_whose_save_failed_saves_nothing_more",
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::file_persistence_refuses_a_file_past_its_size_or_entry_caps",
+    "crates/bacnet-objects/src/durable/tests.rs::a_filesystem_that_cannot_sync_a_directory_is_passed_over"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3434,11 +3443,14 @@
     "Between writes the operation task, which calls the object each second, saves the list when an entry lapses and at most once a minute while the served minutes differ from the saved copy. A saved entry so carries at most about a minute more than it had left, and repeated restarts still run it out.",
     "A failed save logs a warning, counts in ForwarderSaveCounters::failed_saves (a handle shared with the object, from save_counters) and is retried a minute later.",
     "Python BACnetServer.forwarder_save_counters() returns each forwarder's failed_saves by instance while the server runs; the totals count from registration.",
-    "Saves run on the forwarder's own writer thread, one at a time, never while the database guard is held (bacnet_objects::durable).",
+    "Saves run on the forwarder's own writer thread, one at a time (bacnet_objects::durable). The server awaits them without the database guard; application code writing a list through the database waits in place.",
     "The server stages each WriteProperty, AddListElement, RemoveListElement and write_local list write: the forwarder queues the save, the server awaits it without the guard, and the write takes the saved list or is refused.",
     "WritePropertyMultiple attempts stage the same way unless a mutation_authorizer is configured; then the authorizer sees each attempt under the guard, and the attempt saves in place.",
     "The operation task's lapse and minute saves coalesce on the writer, so a burst costs one save of the latest lists. A staged write holds the forwarder until its request takes or drops it; a second one waits.",
-    "The file backend synchronizes the directory after its rename, except on Windows, where std cannot open a directory. Dropping the forwarder waits for queued saves."
+    "The file backend synchronizes the directory after its rename, except on Windows, where std cannot open a directory. Dropping the forwarder waits for queued saves.",
+    "A staged write its request never makes is dropped, and the forwarder queues a save of the lists it serves at once. A request releases only the staged write it made.",
+    "A staged write waits for its request for 10 s from the end of its save. DeleteObject drops a removed forwarder on a blocking thread after releasing the guard.",
+    "Once the rename succeeds the save has landed: a directory sync the filesystem does not support is skipped, and any other sync failure is logged, not returned."
    ]
   },
   {

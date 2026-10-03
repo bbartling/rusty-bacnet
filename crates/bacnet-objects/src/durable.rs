@@ -22,9 +22,27 @@
 //!   saves, coalesces: a queued save the thread has not started is replaced by
 //!   the newer one, so a burst costs one save of the latest state.
 //!
-//! A caller that holds the guard and cannot drop it, such as application code
-//! writing through the database, gets the same outcome: the object queues the
-//! save and waits for it where it is.
+//! Some paths still wait for a save while the guard is held. They get the
+//! same outcome through the same writer; the object just queues the save and
+//! waits for it where it is:
+//!
+//! - a write nobody staged: application code writing through the database,
+//!   and a WritePropertyMultiple attempt when a mutation authorizer is
+//!   configured, since the authorizer sees each attempt only as the handler
+//!   reaches it under the guard;
+//! - an in-place change to an Audit Log, such as `add_record`, which first
+//!   lets a staged commit land, waiting for it if it is still running.
+//!
+//! Dropping an object waits for the saves it has queued. The server's
+//! DeleteObject therefore drops a removed object on a blocking thread after
+//! releasing the guard; application code that removes one should do the
+//! same.
+//!
+//! The writer's thread is a plain `std` thread with no Tokio runtime, so a
+//! storage implementation that needs one brings its own handle. A storage
+//! call that panics fails that save. An object starts the thread with its
+//! first save and keeps it, parked while idle, until the object is dropped:
+//! one thread per object that has saved.
 //!
 //! # Adding an object
 //!
@@ -53,17 +71,19 @@ use std::future::Future;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::task::{Context, Poll, Waker};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
-/// How long a staged write whose save has run may wait for its request.
-/// Past it the request is taken to be gone, and the object drops the staged
-/// state at the next stage or operation task call.
+/// How long a staged write may wait for its request once its save has run.
+/// It counts from the end of the save, so a slow save never uses it up. Past
+/// it the request is taken to be gone, and the object drops the staged state
+/// at the next stage or operation task call.
 #[cfg(not(test))]
 pub(crate) const STAGED_WRITE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(10);
 /// Short in tests, so one can watch a forgotten staged write go.
@@ -171,6 +191,8 @@ pub(crate) struct SaveTicket {
 #[derive(Default)]
 struct TicketSlot {
     outcome: Mutex<Outcome>,
+    /// When the save finished; set before `done`.
+    finished_at: OnceLock<Instant>,
     done: Arc<Event>,
 }
 
@@ -186,6 +208,7 @@ enum Outcome {
 impl SaveTicket {
     fn complete(&self, result: Result<(), Error>) {
         *lock(&self.slot.outcome) = Outcome::Done(result);
+        let _ = self.slot.finished_at.set(Instant::now());
         self.slot.done.set();
     }
 
@@ -197,6 +220,26 @@ impl SaveTicket {
     /// A future that resolves once the save has run.
     pub(crate) fn wait(&self) -> SaveWait {
         SaveWait::new(Arc::clone(&self.slot.done))
+    }
+
+    /// Whether `wait` is the one [`wait`](Self::wait) hands out for this
+    /// save, so a request releasing a staged write can show it staged it.
+    pub(crate) fn issued(&self, wait: &SaveWait) -> bool {
+        Arc::ptr_eq(&self.slot.done, &wait.event)
+    }
+
+    /// Whether, at `now`, a staged write waiting on this save has outlived
+    /// [`STAGED_WRITE_LIFETIME`]. The lifetime starts when the save finishes;
+    /// a save still running never outlives it.
+    pub(crate) fn outlived_at(&self, now: Instant) -> bool {
+        self.slot.finished_at.get().is_some_and(|finished| {
+            now.saturating_duration_since(*finished) >= STAGED_WRITE_LIFETIME
+        })
+    }
+
+    /// [`outlived_at`](Self::outlived_at) now.
+    pub(crate) fn outlived(&self) -> bool {
+        self.outlived_at(Instant::now())
     }
 
     /// Whether the save succeeded, once it has run.
@@ -411,24 +454,50 @@ fn run_job<S>(shared: &Shared<S>, job: Job<S>) {
 /// Make a rename or a newly created file in `path`'s directory durable by
 /// synchronizing the directory.
 ///
+/// Call it once the file is in place. By then the save has landed: memory
+/// takes the saved state, so storage and memory agree, and this never fails
+/// the save. A filesystem that cannot synchronize a directory (`EINVAL`,
+/// `ENOTSUP`, `EOPNOTSUPP` or `EBADF`, as some network and FUSE filesystems
+/// answer) is passed over quietly, as PostgreSQL does. Any other error is
+/// logged as a warning: the save stands, but a power loss right after it
+/// may bring back the previous file.
+///
 /// On Unix this opens the directory and calls `fsync` on it. Windows cannot
 /// open a directory through `std::fs`, so there the call does nothing: NTFS
 /// journals the rename, but a power loss right after it may still bring back
 /// the previous file.
-pub(crate) fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
+pub(crate) fn sync_parent_dir(path: &Path) {
     #[cfg(unix)]
     {
         let parent = match path.parent() {
             Some(parent) if !parent.as_os_str().is_empty() => parent,
             _ => Path::new("."),
         };
-        std::fs::File::open(parent)?.sync_all()
+        let result = std::fs::File::open(parent).and_then(|directory| directory.sync_all());
+        if let Err(error) = result {
+            if directory_sync_unsupported(&error) {
+                tracing::debug!(directory = %parent.display(), %error, "Directory sync not supported here");
+            } else {
+                tracing::warn!(
+                    directory = %parent.display(),
+                    %error,
+                    "Could not synchronize the directory after a save; the save stands"
+                );
+            }
+        }
     }
     #[cfg(not(unix))]
-    {
-        let _ = path;
-        Ok(())
-    }
+    let _ = path;
+}
+
+/// Whether a directory sync failed only because the filesystem cannot
+/// synchronize a directory.
+#[cfg(unix)]
+fn directory_sync_unsupported(error: &std::io::Error) -> bool {
+    // ENOTSUP and EOPNOTSUPP are one value on Linux, two on macOS.
+    error.raw_os_error().is_some_and(|code| {
+        [libc::EINVAL, libc::ENOTSUP, libc::EOPNOTSUPP, libc::EBADF].contains(&code)
+    })
 }
 
 /// What [`DurableWrites::stage_write`] gave its caller.
@@ -438,7 +507,8 @@ pub enum StageStep {
     /// The object queued a save of the state the write would leave, and keeps
     /// that state aside. Await the wait without the database guard, then make
     /// the write as usual: the object takes the saved state, or refuses the
-    /// write if the save failed.
+    /// write if the save failed. Keep a clone of the wait to release the
+    /// staged write with.
     Staged(SaveWait),
     /// Another request's staged write holds the object. Await the wait, then
     /// stage again.
@@ -467,9 +537,12 @@ pub trait DurableWrites {
     ) -> StageStep;
 
     /// The request that staged a write is done, whether or not the write
-    /// reached the object. A staged state the write never took is dropped,
-    /// and storage is brought back to the state the object serves.
-    fn release_staged_write(&mut self);
+    /// reached the object. `staged` is the wait [`StageStep::Staged`] gave
+    /// it; a staged write some other request made since is left alone. A
+    /// staged state the write never took is dropped, and a save of the state
+    /// the object serves is queued at once, so storage follows the object
+    /// again.
+    fn release_staged_write(&mut self, staged: &SaveWait);
 }
 
 #[cfg(test)]

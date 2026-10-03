@@ -149,9 +149,10 @@ impl AuditLogPersistence for FileAuditLogPersistence {
             return Err(error.into());
         }
         // A slot this commit created exists only once its directory entry is
-        // durable too.
+        // durable too. The commit has landed by now, so a sync that fails is
+        // logged rather than failing it.
         if created {
-            crate::durable::sync_parent_dir(path)?;
+            crate::durable::sync_parent_dir(path);
         }
         Ok(())
     }

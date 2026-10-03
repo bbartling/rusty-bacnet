@@ -17,14 +17,14 @@
 //! request then committing in place.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use super::*;
-use crate::durable::{
-    DurableWrites, Event, SaveTicket, SaveWait, SaveWriter, StageStep, STAGED_WRITE_LIFETIME,
-};
+use crate::durable::{DurableWrites, Event, SaveTicket, SaveWait, SaveWriter, StageStep};
 
 /// Outcomes of batches settled before their requests came back for them.
+/// Past it the oldest is dropped and its request is refused with
+/// OPERATIONAL_PROBLEM. That needs more than 16 batches settled while their
+/// requests are all still away, which is not expected in practice.
 const MAX_SETTLED: usize = 16;
 
 /// What staging an Audit notification batch gave the caller.
@@ -77,7 +77,6 @@ pub(super) struct StagedCommit {
     /// Set when the commit is taken or dropped, for a request that found the
     /// log busy.
     released: Arc<Event>,
-    staged_at: Instant,
 }
 
 /// A batch settled before its request finished it.
@@ -178,15 +177,14 @@ impl AuditLogObject {
 
     /// The wait for a staged commit that still holds the log: a batch's
     /// while its commit runs, a write's until its request takes or drops it
-    /// (or [`STAGED_WRITE_LIFETIME`] after its commit ran). A batch whose
-    /// commit ran is settled, and a forgotten write dropped.
+    /// (or [`STAGED_WRITE_LIFETIME`](crate::durable::STAGED_WRITE_LIFETIME)
+    /// after its commit finished). A batch whose commit ran is settled, and a
+    /// forgotten write dropped.
     fn make_way(&mut self) -> Option<SaveWait> {
         let commit = self.staged.as_ref()?;
         let holds = match commit.kind {
             StagedKind::Batch { .. } => !commit.ticket.is_done(),
-            StagedKind::Write { .. } => {
-                !commit.ticket.is_done() || commit.staged_at.elapsed() < STAGED_WRITE_LIFETIME
-            }
+            StagedKind::Write { .. } => !commit.ticket.outlived(),
         };
         if holds {
             return Some(match commit.kind {
@@ -207,7 +205,6 @@ impl AuditLogObject {
             ticket,
             kind,
             released: Arc::default(),
-            staged_at: Instant::now(),
         });
         saved
     }
@@ -327,7 +324,7 @@ impl AuditLogObject {
         let finished = commit.ticket.is_done()
             && match commit.kind {
                 StagedKind::Batch { .. } => true,
-                StagedKind::Write { .. } => commit.staged_at.elapsed() >= STAGED_WRITE_LIFETIME,
+                StagedKind::Write { .. } => commit.ticket.outlived(),
             };
         if finished {
             self.settle_staged();
@@ -379,11 +376,10 @@ impl DurableWrites for AuditLogObject {
         ))
     }
 
-    fn release_staged_write(&mut self) {
-        if matches!(
-            self.staged.as_ref().map(|commit| &commit.kind),
-            Some(StagedKind::Write { .. })
-        ) {
+    fn release_staged_write(&mut self, staged: &SaveWait) {
+        if self.staged.as_ref().is_some_and(|commit| {
+            matches!(commit.kind, StagedKind::Write { .. }) && commit.ticket.issued(staged)
+        }) {
             self.settle_staged();
         }
     }

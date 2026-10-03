@@ -1589,12 +1589,14 @@ configure both lists over the network. `storage_path` keeps both lists in
 one file, replaced whole when either list changes and at most once a minute
 while the Subscribed_Recipients entries count down, so the lists and each
 entry's remaining minutes survive a restart; without it the lists live in
-memory only. Saves run on a thread of their own, so a slow disk never holds up
-the server's other requests. Every well-formed ConfirmedEventNotification is
-acknowledged, whether or not a forwarder takes it; a retransmission of one
-already received is acknowledged again but not forwarded again. One
-notification goes to at most 64 destinations across all the forwarders, and
-the server ignores a confirmed request sent by broadcast.
+memory only. Saves run on a thread of their own, and the server waits for a
+list write's save without holding the object database, so a slow disk does not
+hold up its other requests. A list write whose request fails before it lands
+puts the saved lists back to the served ones at once. Every well-formed
+ConfirmedEventNotification is acknowledged, whether or not a forwarder takes
+it; a retransmission of one already received is acknowledged again but not
+forwarded again. One notification goes to at most 64 destinations across all
+the forwarders, and the server ignores a confirmed request sent by broadcast.
 
 `recipients` seeds Recipient_List with `Destination` mappings, typed as the
 `Destination` TypedDict in the stub. `recipient` takes the mapping the Audit

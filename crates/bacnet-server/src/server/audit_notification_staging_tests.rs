@@ -14,9 +14,9 @@ use bacnet_types::enums::AuditOperation;
 use super::super::*;
 use super::{count, dispatch, notification, oid, request_bytes, FixedClock};
 
+/// Long enough for any wait here, including a reader that expects the
+/// database while a commit runs: a loaded runner cannot fail it.
 const WAIT: Duration = Duration::from_secs(10);
-/// How long a reader may wait for the database while a commit runs.
-const READ_WITHIN: Duration = Duration::from_millis(500);
 
 /// Audit Log storage whose commits can fail, or wait until the test lets
 /// each one go.
@@ -111,8 +111,8 @@ async fn a_confirmed_notification_commits_while_the_database_stays_available() {
 
     // While the commit runs the database answers readers and writers, the log
     // still serves its committed records, and nothing is acknowledged.
-    let records = tokio::time::timeout(READ_WITHIN, count(&db, sink)).await;
-    let writable = tokio::time::timeout(READ_WITHIN, db.write()).await.is_ok();
+    let records = tokio::time::timeout(WAIT, count(&db, sink)).await;
+    let writable = tokio::time::timeout(WAIT, db.write()).await.is_ok();
     let acknowledged_early = sending.is_finished();
     go.send(()).unwrap();
     let response = sending.await.unwrap().unwrap();

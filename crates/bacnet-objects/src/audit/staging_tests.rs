@@ -356,7 +356,7 @@ fn a_staged_log_enable_write_commits_off_the_lock_and_is_taken_by_the_write() {
         PropertyValue::Boolean(true)
     );
     go.send(()).unwrap();
-    block_on(wait);
+    block_on(wait.clone());
     log.write_property(
         PropertyIdentifier::LOG_ENABLE,
         None,
@@ -364,7 +364,7 @@ fn a_staged_log_enable_write_commits_off_the_lock_and_is_taken_by_the_write() {
         None,
     )
     .unwrap();
-    log.release_staged_write();
+    log.release_staged_write(&wait);
     assert!(!log.log_enable());
     assert_eq!(log.generation(), generation + 1);
     assert_eq!(storage.commits.load(Ordering::SeqCst), 2);
@@ -375,14 +375,15 @@ fn a_staged_log_enable_write_commits_off_the_lock_and_is_taken_by_the_write() {
 fn a_staged_log_enable_write_its_request_dropped_leaves_storage_with_the_served_log() {
     let (mut log, storage) = log();
     let generation = log.generation();
-    block_on(staged_write(log.stage_write(
+    let wait = staged_write(log.stage_write(
         PropertyIdentifier::LOG_ENABLE,
         None,
         &PropertyValue::Boolean(false),
-    )));
+    ));
+    block_on(wait.clone());
     assert!(!storage.committed().log_enable);
     // The request failed before its write reached the log.
-    log.release_staged_write();
+    log.release_staged_write(&wait);
     log.wait_for_commits();
     let committed = storage.committed();
     assert!(committed.log_enable);

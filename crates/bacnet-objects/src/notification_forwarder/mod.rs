@@ -64,7 +64,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 
 use crate::common::{self, read_common_properties};
-use crate::durable::{DurableWrites, StageStep};
+use crate::durable::{DurableWrites, SaveWait, StageStep};
 use crate::notification_class::recipient_list;
 use crate::subscribed_recipients::SubscribedRecipients;
 use crate::traits::{BACnetObject, MonotonicClock};
@@ -326,9 +326,8 @@ impl NotificationForwarderObject {
         };
         let base = self.list_writes;
         if let Some(claimed) = self
-            .storage
-            .as_mut()
-            .and_then(|storage| storage.claim(property, &value, base))
+            .with_storage(|storage, _| storage.claim(property, &value, base))
+            .flatten()
         {
             self.install(claimed.map_err(refused)?);
             return Ok(());
@@ -344,12 +343,24 @@ impl NotificationForwarderObject {
 
     /// After time passes, keep storage current (see the module docs).
     fn after_time_passed(&mut self, lapsed: bool) -> bool {
-        if let Some(mut storage) = self.storage.take() {
-            let now = self.subscribed_recipients.current_time();
-            storage.keep_current(now, lapsed, || self.snapshot(None));
-            self.storage = Some(storage);
-        }
+        let now = self.subscribed_recipients.current_time();
+        self.with_storage(|storage, served| storage.keep_current(now, lapsed, served));
         lapsed
+    }
+
+    /// Run `f` on storage, handing it the lists the forwarder serves; then,
+    /// if `f` dropped a staged write, queue the save that puts storage back
+    /// to the served lists. `None` without persistence.
+    fn with_storage<R>(
+        &mut self,
+        f: impl FnOnce(&mut saving::Storage, &dyn Fn() -> ForwarderSnapshot) -> R,
+    ) -> Option<R> {
+        let mut storage = self.storage.take()?;
+        let served = || self.snapshot(None);
+        let result = f(&mut storage, &served);
+        storage.correct(served);
+        self.storage = Some(storage);
+        Some(result)
     }
 }
 
@@ -364,14 +375,10 @@ impl DurableWrites for NotificationForwarderObject {
             property,
             PropertyIdentifier::RECIPIENT_LIST | PropertyIdentifier::SUBSCRIBED_RECIPIENTS
         );
-        let Some(storage) = self
-            .storage
-            .as_mut()
-            .filter(|_| listed && array_index.is_none())
-        else {
+        if !listed || array_index.is_some() || self.storage.is_none() {
             return StageStep::Skip;
-        };
-        if let Some(wait) = storage.busy() {
+        }
+        if let Some(wait) = self.with_storage(|storage, _| storage.busy()).flatten() {
             return StageStep::Busy(wait);
         }
         let Ok(next) = self.next_list(property, value.clone()) else {
@@ -388,10 +395,8 @@ impl DurableWrites for NotificationForwarderObject {
         )
     }
 
-    fn release_staged_write(&mut self) {
-        if let Some(storage) = &mut self.storage {
-            storage.release();
-        }
+    fn release_staged_write(&mut self, staged: &SaveWait) {
+        self.with_storage(|storage, _| storage.release(staged));
     }
 }
 
@@ -530,9 +535,7 @@ impl BACnetObject for NotificationForwarderObject {
 
     fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
         self.subscribed_recipients.bind_monotonic_clock(clock);
-        if let Some(storage) = &mut self.storage {
-            storage.clock_changed();
-        }
+        self.with_storage(|storage, _| storage.clock_changed());
     }
 
     fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {

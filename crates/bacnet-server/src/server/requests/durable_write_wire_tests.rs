@@ -16,6 +16,7 @@ use bacnet_objects::notification_forwarder::{
 };
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::common::BACnetPropertyValue;
+use bacnet_services::object_mgmt::DeleteObjectRequest;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
@@ -28,11 +29,16 @@ use std::sync::{mpsc, Mutex as StdMutex};
 use std::time::Duration;
 
 const WAIT: Duration = Duration::from_secs(10);
-/// How long a reader may wait for the database while a save runs.
-const READ_WITHIN: Duration = Duration::from_millis(500);
+/// How long the authorizer test watches the database stay held. Only a test
+/// that expects the guard held uses a short wait; the others use [`WAIT`],
+/// so a loaded runner cannot fail them.
+const HELD_FOR: Duration = Duration::from_millis(500);
 const SIMPLE_ACK_ADD: [u8; 3] = [0x20, 5, 8];
 const SIMPLE_ACK_WRITE: [u8; 3] = [0x20, 5, 15];
 const SIMPLE_ACK_WPM: [u8; 3] = [0x20, 5, 16];
+const SIMPLE_ACK_DELETE: [u8; 3] = [0x20, 5, 11];
+/// The first octet of an Error PDU.
+const ERROR_PDU: u8 = 0x50;
 
 /// Forwarder storage whose saves can fail, or wait until the test lets each
 /// one go.
@@ -131,12 +137,13 @@ async fn fixture(storage: &Arc<HeldStorage>) -> (Arc<Fixture>, ObjectIdentifier)
 
 /// Send `request`, hold its save, and check that the database answers a
 /// reader and a writer while the save runs. Returns the response and whether
-/// the database answered both in time.
+/// the database answered both, each `within` the given time.
 async fn while_saving(
     fixture: &Arc<Fixture>,
     storage: &HeldStorage,
     service: ConfirmedServiceChoice,
     request: Bytes,
+    within: Duration,
 ) -> (Vec<u8>, bool) {
     let (started, go) = storage.hold();
     let sending = tokio::spawn({
@@ -147,10 +154,10 @@ async fn while_saving(
         .await
         .unwrap()
         .expect("the save started");
-    let readable = tokio::time::timeout(READ_WITHIN, fixture.db.read())
+    let readable = tokio::time::timeout(within, fixture.db.read())
         .await
         .is_ok();
-    let writable = tokio::time::timeout(READ_WITHIN, fixture.db.write())
+    let writable = tokio::time::timeout(within, fixture.db.write())
         .await
         .is_ok();
     go.send(()).unwrap();
@@ -167,7 +174,7 @@ async fn an_add_list_element_save_runs_while_the_database_stays_available() {
         None,
         &framed(&[subscription(7)]),
     );
-    let (response, available) = while_saving(&fixture, &storage, ADD, request).await;
+    let (response, available) = while_saving(&fixture, &storage, ADD, request, WAIT).await;
     assert_eq!(response, SIMPLE_ACK_ADD);
     assert!(available, "the database was held while the forwarder saved");
     assert_eq!(
@@ -201,6 +208,7 @@ async fn a_recipient_list_write_property_save_runs_while_the_database_stays_avai
         &storage,
         ConfirmedServiceChoice::WRITE_PROPERTY,
         request.freeze(),
+        WAIT,
     )
     .await;
     assert_eq!(response, SIMPLE_ACK_WRITE);
@@ -267,6 +275,7 @@ async fn a_write_property_multiple_stages_a_list_write_that_follows_another_atte
         &storage,
         ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
         request,
+        WAIT,
     )
     .await;
     assert_eq!(response, SIMPLE_ACK_WPM);
@@ -287,6 +296,7 @@ async fn a_write_property_multiple_save_runs_while_the_database_stays_available(
         &storage,
         ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
         wpm_request(nf),
+        WAIT,
     )
     .await;
     assert_eq!(response, SIMPLE_ACK_WPM);
@@ -324,6 +334,7 @@ async fn a_write_property_multiple_under_an_authorizer_saves_in_place() {
         &storage,
         ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
         wpm_request(nf),
+        HELD_FOR,
     )
     .await;
     assert_eq!(response, SIMPLE_ACK_WPM);
@@ -362,4 +373,103 @@ async fn a_list_that_cannot_be_saved_is_refused_on_the_wire_and_the_old_list_sta
             .await,
         PropertyValue::ApplicationData(framed(&[subscription(7)]))
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_write_property_multiple_stopped_before_its_list_write_puts_the_served_list_back() {
+    let storage = Arc::new(HeldStorage::default());
+    let (fixture, nf) = fixture(&storage).await;
+    // The first attempt fails, since Description takes a character string,
+    // so the list write after it, staged and already saved, never reaches
+    // the forwarder.
+    let mut unsigned = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_unsigned(&mut unsigned, 1);
+    let request = wpm(
+        nf,
+        vec![
+            BACnetPropertyValue {
+                property_identifier: PropertyIdentifier::DESCRIPTION,
+                property_array_index: None,
+                value: unsigned.to_vec(),
+                priority: None,
+            },
+            subscriptions_attempt(),
+        ],
+    );
+    let response = wire(
+        &fixture,
+        ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+        request,
+    )
+    .await;
+    assert_eq!(response[0], ERROR_PDU, "the first attempt was refused");
+    // Storage goes back to the lists the forwarder serves at once: this
+    // fixture runs no operation task to do it later.
+    let restored = tokio::time::timeout(WAIT, async {
+        while storage.saves.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        restored.is_ok(),
+        "storage kept a list the forwarder never served"
+    );
+    assert_eq!(
+        storage.saved.lock().unwrap().clone().unwrap(),
+        ForwarderSnapshot::default()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deleting_a_forwarder_while_its_save_is_held_leaves_the_database_available() {
+    let storage = Arc::new(HeldStorage::default());
+    let (fixture, nf) = fixture(&storage).await;
+    // A list write stages, and its save is held on the forwarder's writer.
+    let (started, go) = storage.hold();
+    let writing = tokio::spawn({
+        let fixture = Arc::clone(&fixture);
+        let request = list_request(
+            nf,
+            PropertyIdentifier::SUBSCRIBED_RECIPIENTS,
+            None,
+            &framed(&[subscription(7)]),
+        );
+        async move { wire(&fixture, ADD, request).await }
+    });
+    tokio::task::spawn_blocking(move || started.recv_timeout(WAIT))
+        .await
+        .unwrap()
+        .expect("the save started");
+    // Dropping the removed forwarder waits for that save, so DeleteObject
+    // drops it off the guard: it is answered, and the database stays
+    // available, while the save is still held.
+    let mut request = BytesMut::new();
+    DeleteObjectRequest {
+        object_identifier: nf,
+    }
+    .encode(&mut request);
+    let deleting = tokio::spawn({
+        let fixture = Arc::clone(&fixture);
+        async move {
+            wire(
+                &fixture,
+                ConfirmedServiceChoice::DELETE_OBJECT,
+                request.freeze(),
+            )
+            .await
+        }
+    });
+    let deleted = tokio::time::timeout(WAIT, deleting).await;
+    let readable = tokio::time::timeout(WAIT, fixture.db.read()).await.is_ok();
+    go.send(()).unwrap();
+    assert_eq!(
+        deleted
+            .expect("DeleteObject was answered while the save was held")
+            .unwrap(),
+        SIMPLE_ACK_DELETE
+    );
+    assert!(readable, "the database was held while the save ran");
+    // The list write then finds its forwarder gone.
+    assert_eq!(writing.await.unwrap()[0], ERROR_PDU);
 }

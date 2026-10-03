@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::durable::StageStep;
+use bacnet_objects::durable::{SaveWait, StageStep};
 use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_services::wpm::{WritePropertyMultipleCursor, WritePropertyMultipleEvent};
 use bacnet_services::write_property::WritePropertyRequest;
@@ -185,20 +185,22 @@ impl DurableTarget {
     }
 }
 
-/// The objects a request staged writes on.
+/// The objects a request staged writes on, each with the wait its stage
+/// gave, which shows the object the stage is this request's.
 #[must_use = "release staged writes in the critical section that makes them"]
-pub(super) struct StagedWrites(Vec<ObjectIdentifier>);
+pub(super) struct StagedWrites(Vec<(ObjectIdentifier, SaveWait)>);
 
 impl StagedWrites {
     /// Release every staged write. Call it under the guard of the critical
-    /// section that made the writes, after the writes.
+    /// section that made the writes, after the writes. An object whose
+    /// staged write was not taken saves the state it serves at once.
     pub(super) fn release(self, db: &mut ObjectDatabase) {
-        for oid in self.0 {
+        for (oid, staged) in self.0 {
             if let Some(writes) = db
                 .get_mut(&oid)
                 .and_then(|object| object.durable_writes_internal())
             {
-                writes.release_staged_write();
+                writes.release_staged_write(&staged);
             }
         }
     }
@@ -215,7 +217,7 @@ pub(super) async fn stage(
     for target in targets {
         // One staged write per object: its request's later writes to the
         // object save in place.
-        if staged.contains(&target.oid) {
+        if staged.iter().any(|(oid, _)| *oid == target.oid) {
             continue;
         }
         loop {
@@ -234,8 +236,8 @@ pub(super) async fn stage(
             };
             match step {
                 StageStep::Staged(saved) => {
-                    saved.await;
-                    staged.push(target.oid);
+                    saved.clone().await;
+                    staged.push((target.oid, saved));
                     break;
                 }
                 StageStep::Busy(wait) => {
