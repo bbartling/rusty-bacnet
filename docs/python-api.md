@@ -2596,6 +2596,34 @@ the exact pending registrations after owned resources have been released. The
 registration gate reopens after terminal cleanup. Role access and status share the
 lifecycle lock, so they cannot observe a half-published session.
 
+### Endpoint Groups and the read work limit
+
+`add_group(instance, name, members=None)` registers a Group before start.
+`members` uses the `read_property_multiple` spec shape,
+`[(object_id, [(property_id, array_index), ...]), ...]`, and the server role
+rebuilds Present_Value from it on every read, one result per member. A member
+with an empty property list, or one that reports a Group or Global Group's
+Present_Value, raises `ValueError` when it is added.
+
+Each owner takes a keyword-only `read_work_limit=256`: the result rows one
+ReadProperty served by the server role may expand. A read counts its own row,
+and a Group's Present_Value adds a row for every member property after ALL,
+REQUIRED and OPTIONAL expand. A read over the limit is answered with an Abort
+carrying OUT_OF_RESOURCES (a peer `BACnetClient` raises `BacnetAbortError` with
+`reason == 9`) before any member is read. Zero raises `ValueError`, negative or
+native-overflow values raise `OverflowError`, all in the constructor. It is the
+endpoint counterpart of `BACnetServer`'s `rpm_max_result_elements`; see
+[RPM budgets](rpm-budget.md).
+
+```python
+endpoint = BipEndpoint(device_instance=1001, port=0, read_work_limit=2)
+endpoint.add_analog_input(instance=1, name="Zone Temp")
+ai = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
+# Present_Value and Object_Name of AI 1: three rows, over the limit of 2.
+endpoint.add_group(1, "Zone", [(ai, [(PropertyIdentifier.PRESENT_VALUE, None),
+                                     (PropertyIdentifier.OBJECT_NAME, None)])])
+```
+
 ### Endpoint ReadPropertyMultiple
 
 `await client.read_property_multiple(address, specs)` shares standalone RPM's

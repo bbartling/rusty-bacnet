@@ -73,18 +73,19 @@ class EndpointStubParityTests(unittest.TestCase):
                            "port", "broadcast_address", "network_number",
                            "network_port_instance", "max_apdu", "segmentation",
                            "services", "device_uuid", "queue_capacity",
-                           "apdu_timeout_ms", "apdu_retries", "registered_network_port"]),
+                           "apdu_timeout_ms", "apdu_retries", "registered_network_port",
+                           "read_work_limit"]),
             (ScEndpoint, ["device_instance", "sc_hub", "sc_vmac", "sc_ca_cert",
                           "sc_client_cert", "sc_client_key", "sc_device_uuid",
                           "device_name", "vendor_id", "sc_heartbeat_interval_ms",
                           "sc_heartbeat_timeout_ms", "network_number",
                           "network_port_instance", "max_apdu", "segmentation",
-                          "services", "queue_capacity"]),
+                          "services", "queue_capacity", "read_work_limit"]),
             (MstpEndpoint, ["device_instance", "serial_port", "device_name", "vendor_id",
                             "mstp_baud", "mstp_mac", "mstp_max_master",
                             "mstp_max_info_frames", "max_apdu", "segmentation",
                             "services", "device_uuid", "queue_capacity",
-                            "apdu_timeout_ms", "apdu_retries"]),
+                            "apdu_timeout_ms", "apdu_retries", "read_work_limit"]),
         ]
         for cls, expected in cases:
             with self.subTest(cls=cls.__name__):
@@ -119,6 +120,7 @@ class EndpointStubParityTests(unittest.TestCase):
                 "add_analog_value",
                 "add_binary_input",
                 "add_binary_value",
+                "add_group",
             ):
                 with self.subTest(cls=cls.__name__, method=name):
                     params = list(inspect.signature(getattr(cls, name)).parameters)

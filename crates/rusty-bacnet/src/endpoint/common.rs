@@ -11,19 +11,35 @@ use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::audit::ObjectAuditPolicy;
 use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::group::GroupObject;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::constructed::ReadAccessSpecification;
 use bacnet_types::enums::{ErrorClass, ErrorCode, Segmentation, ServiceSupported};
 use pyo3::exceptions::PyValueError;
 use pyo3::{PyErr, PyResult};
 
 use crate::errors::to_py_err;
-use crate::types::PySegmentation;
+use crate::types::{py_to_rpm_specs, PyReadAccessSpec, PySegmentation};
 
 /// Parse an IPv4 string at construction time (ValueError before bind).
 pub(crate) fn parse_ipv4(value: &str, field: &str) -> PyResult<Ipv4Addr> {
     value
         .parse()
         .map_err(|e| PyValueError::new_err(format!("invalid {field}: {e}")))
+}
+
+/// Validate the server role's read work limit (#1250): the result rows one
+/// ReadProperty may expand, a Group's member rows included.
+///
+/// Zero is a ValueError here, at construction, so the native
+/// `EndpointSession::new` refusal of a zero limit is never reached at start.
+pub(crate) fn parse_read_work_limit(read_work_limit: usize) -> PyResult<usize> {
+    if read_work_limit == 0 {
+        return Err(PyValueError::new_err(
+            "read_work_limit must be greater than zero",
+        ));
+    }
+    Ok(read_work_limit)
 }
 
 /// Validate the single durable device UUID (one source for transport+identity).
@@ -185,6 +201,11 @@ pub(crate) enum PendingObject {
         instance: u32,
         name: String,
     },
+    Group {
+        instance: u32,
+        name: String,
+        members: Vec<ReadAccessSpecification>,
+    },
 }
 
 impl PendingObject {
@@ -209,6 +230,11 @@ impl PendingObject {
                 name,
                 audit_policy,
             } => make_binary_value(*instance, name, *audit_policy),
+            Self::Group {
+                instance,
+                name,
+                members,
+            } => make_group(*instance, name, members),
         }
     }
 }
@@ -296,5 +322,44 @@ pub(crate) fn make_binary_value(
 ) -> PyResult<Box<dyn BACnetObject>> {
     let mut object = BinaryValueObject::new(instance, name).map_err(to_py_err)?;
     object.set_audit_policy(audit_policy);
+    Ok(Box::new(object))
+}
+
+/// Validate an `add_group` call and keep its params for the pending set.
+///
+/// `members` takes the `read_property_multiple` spec shape, so the binding
+/// reuses that conversion; `None` is a Group with no members.
+pub(crate) fn pending_group(
+    instance: u32,
+    name: &str,
+    members: Option<Vec<PyReadAccessSpec>>,
+) -> PyResult<PendingObject> {
+    let members = py_to_rpm_specs(members.unwrap_or_default());
+    make_group(instance, name, &members)?;
+    Ok(PendingObject::Group {
+        instance,
+        name: name.to_string(),
+        members,
+    })
+}
+
+/// Create a pending Group object with its List_Of_Group_Members in order.
+///
+/// Each member goes through `GroupObject::add_member`: a member listing no
+/// properties, or one reporting another group's Present_Value, is a
+/// ValueError naming its position.
+fn make_group(
+    instance: u32,
+    name: &str,
+    members: &[ReadAccessSpecification],
+) -> PyResult<Box<dyn BACnetObject>> {
+    let mut object = GroupObject::new(instance, name).map_err(to_py_err)?;
+    for (position, member) in members.iter().enumerate() {
+        object.add_member(member.clone()).map_err(|_| {
+            PyValueError::new_err(format!(
+                "group member {position} must list properties and must not report a group's Present_Value"
+            ))
+        })?;
+    }
     Ok(Box::new(object))
 }
