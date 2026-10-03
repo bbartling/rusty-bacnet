@@ -153,6 +153,7 @@ mod property_metadata;
 mod pulse_converter_writes;
 mod read_event_arrays;
 mod read_range;
+mod read_range_audit_log;
 mod read_range_time;
 mod read_rpm;
 mod reference_writes;

@@ -4,8 +4,8 @@ fn selected(
     backwards: bool,
     property: u32,
     index: Option<u32>,
-    sequences: Option<&[u32]>,
-) -> PreparedReadRange {
+    sequences: Option<&[u64]>,
+) -> PreparedReadRange<'static> {
     PreparedReadRange {
         request: ReadRangeRequest {
             object_identifier: ObjectIdentifier::new(ObjectType::TREND_LOG, 1).unwrap(),
@@ -16,11 +16,7 @@ fn selected(
                 count: if backwards { -3 } else { 3 },
             }),
         },
-        items: vec![
-            PropertyValue::Unsigned(1),
-            PropertyValue::Unsigned(2),
-            PropertyValue::Unsigned(3),
-        ],
+        items: RangeItems::Values(values()),
         selection: SignedRangeSelection::from_range(3, 0..3),
         first_sequence_number: sequences.map(|s| s[0]),
         identities: sequences.map(|s| {
@@ -46,6 +42,14 @@ fn selected(
                 .collect()
         }),
     }
+}
+
+fn values() -> Vec<PropertyValue> {
+    vec![
+        PropertyValue::Unsigned(1),
+        PropertyValue::Unsigned(2),
+        PropertyValue::Unsigned(3),
+    ]
 }
 
 #[test]
@@ -96,7 +100,7 @@ fn bounded_encode_calls_defer_failures_and_preserve_output_on_current_error() {
                 }
             }
             if calls > 0 {
-                assert_eq!(order[0], selected.items[if backwards { 2 } else { 0 }]);
+                assert_eq!(order[0], values()[if backwards { 2 } else { 0 }]);
             }
         }
     }
@@ -113,26 +117,28 @@ fn exact_envelopes_include_property_index_and_changing_first_sequence_widths() {
             Some(65536),
             Some(u32::MAX),
         ] {
-            for sequences in [[u32::MAX, 255, 256], [1, 65536, 65535], [256, 1, u32::MAX]] {
+            // Audit Log identities pass 2^32 - 1, so the last set needs
+            // five- and eight-octet first sequence numbers.
+            for sequences in [
+                [u64::from(u32::MAX), 255, 256],
+                [1, 65536, 65535],
+                [256, 1, u64::from(u32::MAX)],
+                [1 << 32, 1, u64::MAX],
+            ] {
                 for backwards in [false, true] {
                     let selected = selected(backwards, property, index, Some(&sequences));
                     // Independent field-width arithmetic: OID=5, flags=3, count=2,
-                    // opening/closing tags=2; unsigned/enumerated fields add tag+width.
-                    let width = |x: u32| {
-                        if x <= 255 {
-                            1
-                        } else if x <= 65535 {
-                            2
-                        } else if x <= 16777215 {
-                            3
-                        } else {
-                            4
-                        }
-                    };
-                    let fixed = 12 + 1 + width(property) + index.map_or(0, |i| 1 + width(i));
+                    // opening/closing tags=2; unsigned/enumerated fields add tag+width,
+                    // and a content longer than four octets adds one length octet.
+                    let width =
+                        |x: u64| (u64::BITS - x.leading_zeros()).div_ceil(8).max(1) as usize;
+                    let tagged = |x: u64| width(x) + if width(x) > 4 { 2 } else { 1 };
+                    let fixed = 12
+                        + tagged(u64::from(property))
+                        + index.map_or(0, |i| tagged(u64::from(i)));
                     for n in [1, 2, 3] {
                         let first = if backwards { 3 - n } else { 0 };
-                        let bytes = fixed + n * 2 + 1 + width(sequences[first]);
+                        let bytes = fixed + n * 2 + tagged(sequences[first]);
                         let mut output = BytesMut::new();
                         let result = append_page_with(
                             &selected,
@@ -147,7 +153,7 @@ fn exact_envelopes_include_property_index_and_changing_first_sequence_widths() {
                         // directional first item (or earlier candidate) did not fit.
                         let first_over = (1..=n).find(|m| {
                             let start = if backwards { 3 - m } else { 0 };
-                            fixed + m * 2 + 1 + width(sequences[start]) > bytes
+                            fixed + m * 2 + tagged(sequences[start]) > bytes
                         });
                         if let Some(m) = first_over {
                             if m == 1 {
@@ -168,7 +174,7 @@ fn exact_envelopes_include_property_index_and_changing_first_sequence_widths() {
                         assert_eq!(ack.first_sequence_number, Some(sequences[first]));
                         assert_eq!(ack.item_count, n as u32);
                         let mut expected = BytesMut::new();
-                        for item in &selected.items[if backwards { 3 - n..3 } else { 0..n }] {
+                        for item in &values()[if backwards { 3 - n..3 } else { 0..n }] {
                             encode_property_value(&mut expected, item).unwrap();
                         }
                         assert_eq!(ack.item_data, expected);

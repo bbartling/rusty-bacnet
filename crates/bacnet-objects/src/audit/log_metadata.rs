@@ -11,13 +11,15 @@ use crate::property_metadata::{
 use super::AuditLogObject;
 
 // Canonical effective rows for Audit Log (type 61, Clause 12.64 Table 12-83).
-// Order preserves the legacy property_list projection; PROPERTY_LIST is
-// appended so the projection helper omits it while required_properties keeps
-// it. Only implemented rows are described: table rows the object does not
-// serve (Log_Buffer, intrinsic-reporting,
-// Audit_Level, Tags, Profile_*) stay absent until dispatch exists. Enable
-// carries the table W code; Description carries the table O code and the only
-// other network write route.
+// Order preserves the legacy property_list projection, with Log_Buffer in its
+// table position after Buffer_Size; PROPERTY_LIST is appended so the
+// projection helper omits it while required_properties keeps it. Only
+// implemented rows are described: table rows the object does not serve
+// (intrinsic-reporting, Audit_Level, Tags, Profile_*) stay absent until
+// dispatch exists. Log_Buffer is present but served only by ReadRange and
+// AuditLogQuery, so ReadProperty and RPM answer it with READ_ACCESS_DENIED.
+// Enable carries the table W code; Description carries the table O code and
+// the only other network write route.
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -25,6 +27,7 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::LOG_ENABLE, RequiredWrite, None, Always),
     PropertyMetadata::new(P::BUFFER_SIZE, RequiredRead, None, ReadOnly),
+    crate::log_buffer::LOG_BUFFER_METADATA,
     PropertyMetadata::new(P::RECORD_COUNT, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::TOTAL_RECORD_COUNT, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
@@ -240,6 +243,7 @@ mod tests {
             P::OBJECT_TYPE,
             P::LOG_ENABLE,
             P::BUFFER_SIZE,
+            P::LOG_BUFFER,
             P::RECORD_COUNT,
             P::TOTAL_RECORD_COUNT,
             P::STATUS_FLAGS,
@@ -251,6 +255,7 @@ mod tests {
             P::OBJECT_TYPE,
             P::LOG_ENABLE,
             P::BUFFER_SIZE,
+            P::LOG_BUFFER,
             P::RECORD_COUNT,
             P::TOTAL_RECORD_COUNT,
             P::STATUS_FLAGS,
@@ -287,7 +292,12 @@ mod tests {
                 "{:?}",
                 row.property_identifier
             );
-            object.read_property(row.property_identifier, None).unwrap();
+            let read = object.read_property(row.property_identifier, None);
+            if row.property_identifier == P::LOG_BUFFER {
+                assert_error(read.unwrap_err(), ErrorCode::READ_ACCESS_DENIED);
+            } else {
+                read.unwrap();
+            }
         }
         assert!(!required.contains(&P::DESCRIPTION));
 
@@ -296,7 +306,7 @@ mod tests {
             .filter(|&&p| !matches!(p, P::OBJECT_IDENTIFIER | P::OBJECT_NAME | P::OBJECT_TYPE))
             .map(|p| PropertyValue::Enumerated(p.to_raw()))
             .collect();
-        assert_eq!(wire.len(), 7);
+        assert_eq!(wire.len(), 8);
         assert!(object.is_array_property(P::PROPERTY_LIST));
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, None).unwrap(),
@@ -337,6 +347,16 @@ mod tests {
                 "{p:?}"
             );
             assert_eq!(object.is_writable_property(p), writable, "{p:?}");
+            if p == P::LOG_BUFFER {
+                // Present but readable only by ReadRange; writes are denied.
+                assert_error(
+                    object
+                        .write_property(p, None, PropertyValue::List(vec![]), None)
+                        .unwrap_err(),
+                    ErrorCode::WRITE_ACCESS_DENIED,
+                );
+                continue;
+            }
             // Writing back the current value is a no-op success for both
             // writable rows and needs no clock; read-only rows deny access.
             let before = object.read_property(p, None).unwrap();
@@ -382,7 +402,7 @@ mod tests {
                 object
                     .write_property(p, None, PropertyValue::Null, None)
                     .unwrap_err(),
-                if matches!(p, P::LOG_BUFFER | P::RELIABILITY) {
+                if p == P::RELIABILITY {
                     ErrorCode::UNKNOWN_PROPERTY
                 } else {
                     ErrorCode::WRITE_ACCESS_DENIED
@@ -391,7 +411,7 @@ mod tests {
         }
         assert_error(
             object.read_property(P::LOG_BUFFER, None).unwrap_err(),
-            ErrorCode::UNKNOWN_PROPERTY,
+            ErrorCode::READ_ACCESS_DENIED,
         );
         assert_error(
             object.read_property(P::RELIABILITY, None).unwrap_err(),

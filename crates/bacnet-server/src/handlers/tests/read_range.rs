@@ -33,7 +33,7 @@ pub(super) fn time(hour: u8) -> Time {
     }
 }
 
-pub(super) fn identity(sequence_number: u32, hour: u8) -> LogRecordIdentity {
+pub(super) fn identity(sequence_number: u64, hour: u8) -> LogRecordIdentity {
     LogRecordIdentity::new(sequence_number, DATE, time(hour)).unwrap()
 }
 
@@ -156,7 +156,7 @@ pub(super) fn assert_ack(
     ack: &ReadRangeAck,
     expected: &[PropertyValue],
     flags: (bool, bool, bool),
-    first_sequence_number: Option<u32>,
+    first_sequence_number: Option<u64>,
 ) {
     assert_eq!(ack.item_count, expected.len() as u32);
     assert_eq!(ack.item_data, encoded_items(expected));
@@ -290,7 +290,11 @@ fn empty_and_unbounded_lists_have_only_included_endpoint_flags() {
 #[test]
 fn by_sequence_uses_exact_wrapped_identity_without_sorting() {
     let items = unsigned_items(&[u32::MAX as u64, 1, 2]);
-    let identities = vec![identity(u32::MAX, 1), identity(1, 2), identity(2, 3)];
+    let identities = vec![
+        identity(u64::from(u32::MAX), 1),
+        identity(1, 2),
+        identity(2, 3),
+    ];
     let (db, oid) = list_db(PropertyIdentifier::LOG_BUFFER, items, Some(identities));
 
     let positive = call(
@@ -324,7 +328,7 @@ fn by_sequence_uses_exact_wrapped_identity_without_sorting() {
         &negative,
         &unsigned_items(&[u32::MAX as u64, 1]),
         (true, false, false),
-        Some(u32::MAX),
+        Some(u64::from(u32::MAX)),
     );
 
     let absent = call(
@@ -559,6 +563,7 @@ fn item_encoding_error_keeps_response_byte_for_byte_unchanged() {
     let mut response = BytesMut::from(&b"existing-response"[..]);
     let before = response.clone();
     let mut encoded = 0;
+    let items = super::super::read_range::RangeItems::Values(items);
     let error = super::super::read_range::append_read_range_ack_with(
         &request,
         &items,

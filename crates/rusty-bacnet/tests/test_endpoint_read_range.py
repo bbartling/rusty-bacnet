@@ -3,12 +3,13 @@ import asyncio
 import ast
 import inspect
 from pathlib import Path
+import tempfile
 import unittest
 
 import rusty_bacnet
 from rusty_bacnet import (
     BACnetClient, BACnetServer, BipEndpoint, EndpointClient, BacnetError,
-    ObjectIdentifier, ObjectType, PropertyIdentifier,
+    BacnetProtocolError, ObjectIdentifier, ObjectType, PropertyIdentifier,
 )
 
 
@@ -78,6 +79,33 @@ class EndpointReadRangeTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await endpoint.close()
             await target.stop()
+
+    async def test_audit_log_buffer_reads_only_through_read_range(self):
+        # An Audit Log's Log_Buffer is open to ReadRange and AuditLogQuery
+        # only (Clause 12.64.10, #1092), and its sequence numbers and
+        # positions are Unsigned64, so references past 2^32 - 1 are accepted.
+        with tempfile.TemporaryDirectory() as directory:
+            target = BACnetServer(9125, interface="127.0.0.1", port=0)
+            target.add_audit_log(1, "Audit", str(Path(directory) / "audit"), buffer_size=4)
+            await target.start()
+            try:
+                address = await target.local_address()
+                log = ObjectIdentifier(ObjectType.AUDIT_LOG, 1)
+                pid = PropertyIdentifier.LOG_BUFFER
+                async with BACnetClient(interface="127.0.0.1", port=0, apdu_timeout_ms=1000) as client:
+                    with self.assertRaises(BacnetProtocolError) as refused:
+                        await client.read_property(address, log, pid)
+                    # PROPERTY (2) / READ_ACCESS_DENIED (27).
+                    self.assertEqual((refused.exception.error_class, refused.exception.error_code), (2, 27))
+                    for options in ({}, {"range_type": "sequence", "reference_seq": 1 << 40, "count": 1},
+                                    {"range_type": "position", "reference_index": 1 << 33, "count": -1}):
+                        with self.subTest(options=options):
+                            result = await client.read_range(address, log, pid, **options)
+                            self.assertEqual(result["item_count"], 0)
+                            self.assertEqual(result["item_data"], b"")
+                            self.assertIsNone(result["first_sequence_number"])
+            finally:
+                await target.stop()
 
     def test_signatures_and_installed_stub_share_exact_shape(self):
         self.assertEqual(inspect.signature(EndpointClient.read_range), inspect.signature(BACnetClient.read_range))

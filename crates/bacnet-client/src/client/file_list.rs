@@ -301,7 +301,7 @@ mod tests {
         }
     }
 
-    fn ack(request: &ReadRangeRequest, item_count: u32, first: Option<u32>) -> ReadRangeAck {
+    fn ack(request: &ReadRangeRequest, item_count: u32, first: Option<u64>) -> ReadRangeAck {
         ReadRangeAck {
             object_identifier: request.object_identifier,
             property_identifier: request.property_identifier,
