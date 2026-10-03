@@ -368,3 +368,55 @@ async fn pre_admitted_segmented_response_sends_one_abort_and_releases_exact_leas
 
 #[path = "endpoint_operation_tests.rs"]
 mod operation_tests;
+
+/// A routed destination names one device, as a client's routed confirmed
+/// request does (#1278). DNET 0, DNET 65535 or an empty DADR fails with
+/// `Error::Encoding` before a transaction is reserved, whether the router is
+/// known or reached by local broadcast, while DNET 65534 prepares normally.
+#[tokio::test]
+async fn routed_destination_to_no_single_device_fails_before_registration() {
+    let (endpoint_transport, _peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let mut endpoint = EndpointIngress::new(endpoint_transport, 2);
+    let ingress = endpoint.start().await.unwrap();
+    let coordinator = Arc::new(OutboundTransactionCoordinator::new());
+    let requester =
+        EndpointRequester::new(ingress.egress.clone(), Arc::clone(&coordinator), config()).unwrap();
+    let prepare = |destination| {
+        requester.prepare_read_property(
+            destination,
+            Vec::new(),
+            object_identifier(),
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+        )
+    };
+    let routed = |destination_network, destination_mac: &[u8]| EndpointApduDestination::Routed {
+        destination_network,
+        destination_mac: MacAddr::from_slice(destination_mac),
+        router_mac: MacAddr::from_slice(&[0x02]),
+    };
+    let via_broadcast = |destination_network, destination_mac: &[u8]| {
+        EndpointApduDestination::RoutedViaLocalBroadcast {
+            destination_network,
+            destination_mac: MacAddr::from_slice(destination_mac),
+        }
+    };
+
+    for (dnet, dadr) in [(0, &[3][..]), (u16::MAX, &[3]), (100, &[])] {
+        for destination in [routed(dnet, dadr), via_broadcast(dnet, dadr)] {
+            let refused = prepare(destination.clone()).err();
+            assert!(
+                matches!(refused, Some(Error::Encoding(_))),
+                "{destination:?}: {refused:?}"
+            );
+            assert_eq!(coordinator.active_count().unwrap(), 0);
+            assert_eq!(requester.inner.tsm.lock().unwrap().pending_count(), 0);
+        }
+    }
+    let prepared = prepare(routed(u16::MAX - 1, &[3])).unwrap();
+    assert_eq!(coordinator.active_count().unwrap(), 1);
+    drop(prepared);
+    assert_eq!(coordinator.active_count().unwrap(), 0);
+
+    endpoint.stop().await.unwrap();
+}
