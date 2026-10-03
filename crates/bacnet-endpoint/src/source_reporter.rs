@@ -529,6 +529,10 @@ impl BACnetObject for SourceReporter {
     fn add_event_log_record(&mut self, record: BACnetEventLogRecord) -> Result<(), Error> {
         self.wrapped.add_event_log_record(record)
     }
+
+    fn refresh_log_window_internal(&mut self) -> bool {
+        self.wrapped.refresh_log_window_internal()
+    }
 }
 
 #[cfg(test)]

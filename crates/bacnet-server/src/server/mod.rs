@@ -801,6 +801,8 @@ pub(crate) mod test_transport;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod truncated_request_wire_tests;
+#[cfg(test)]
 mod value_cov_increment_tests;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {

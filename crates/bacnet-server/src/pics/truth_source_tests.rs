@@ -399,7 +399,6 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
     use bacnet_objects::averaging::AveragingObject;
     use bacnet_objects::database::ObjectDatabase;
     use bacnet_types::enums::ObjectType;
-    use bacnet_types::primitives::ObjectIdentifier;
 
     fn assert_exactly(
         obj: &mut dyn BACnetObject,
@@ -443,12 +442,9 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
         }
     }
 
-    let reference_value = PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(
-            ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 5).unwrap(),
-        ),
-        PropertyValue::Enumerated(PropertyIdentifier::PRESENT_VALUE.to_raw()),
-    ]);
+    // [0] analog-input 5, [1] present-value: the Clause 21 members (#1312).
+    let reference_value =
+        PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x05, 0x19, 0x55]);
 
     let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
     // Count must cover the adjustment below: 2.0 / 1.5 takes one pulse off.
@@ -609,6 +605,13 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
                 PropertyIdentifier::RECORD_COUNT,
                 PropertyIdentifier::DESCRIPTION,
                 PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY,
+                // Logging_Type, the window, alignment and Trigger (#1235).
+                PropertyIdentifier::LOGGING_TYPE,
+                PropertyIdentifier::START_TIME,
+                PropertyIdentifier::STOP_TIME,
+                PropertyIdentifier::ALIGN_INTERVALS,
+                PropertyIdentifier::INTERVAL_OFFSET,
+                PropertyIdentifier::TRIGGER,
             ][..],
         ),
     ];

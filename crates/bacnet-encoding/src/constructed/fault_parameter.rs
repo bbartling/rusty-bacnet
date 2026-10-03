@@ -256,7 +256,7 @@ pub fn decode_fault_parameters(
                         "fault-life-safety: list-of-fault-values exceeds limit",
                     ));
                 }
-                let (v, p) = decode_app_enumerated(data, pos, what)?;
+                let (v, p) = decode_app_enumerated::<u32>(data, pos, what)?;
                 fault_values.push(LifeSafetyState::from_raw(v));
                 pos = p;
             }
