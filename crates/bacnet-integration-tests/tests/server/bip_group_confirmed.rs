@@ -3,7 +3,8 @@
 //! The same request sent to the server's own address is answered.
 //!
 //! Loopback broadcast to 127.255.255.255 reaches a local socket on Linux but
-//! not on macOS, so the test checks first and skips where it cannot.
+//! not on macOS. Linux is where this test is the B/IP real-socket evidence, so
+//! there it fails if the probe does not get through; elsewhere it skips.
 
 use bacnet_encoding::apdu::{
     decode_apdu, encode_apdu, Apdu, ConfirmedRequest as ConfirmedRequestPdu, SimpleAck,
@@ -30,6 +31,8 @@ use tokio::time::{timeout, Duration};
 
 const DEVICE: u32 = 6301;
 const LOOPBACK_BROADCAST: Ipv4Addr = Ipv4Addr::new(127, 255, 255, 255);
+/// The OS whose loopback delivers 127.255.255.255, where the test has to run.
+const EVIDENCE_OS: bool = cfg!(target_os = "linux");
 
 /// `apdu` in an NPDU, in a BVLL frame with `function`.
 fn bvll(function: BvlcFunction, apdu: &Apdu, expecting_reply: bool) -> Vec<u8> {
@@ -99,24 +102,30 @@ fn apdu_of(datagram: &[u8]) -> Option<Apdu> {
 }
 
 /// Whether a datagram sent to the loopback broadcast address reaches a socket
-/// bound to 0.0.0.0 on this host.
+/// bound to 0.0.0.0 on this host. On the evidence OS the probe keeps trying
+/// for ten seconds, so a loaded runner does not read as one that cannot.
 async fn loopback_broadcast_is_delivered() -> bool {
     let receiver = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await.unwrap();
     let port = receiver.local_addr().unwrap().port();
     let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     sender.set_broadcast(true).unwrap();
-    if sender
-        .send_to(b"probe", (LOOPBACK_BROADCAST, port))
-        .await
-        .is_err()
-    {
-        return false;
-    }
     let mut datagram = [0u8; 8];
-    matches!(
-        timeout(Duration::from_secs(1), receiver.recv_from(&mut datagram)).await,
-        Ok(Ok((5, _))) if &datagram[..5] == b"probe"
-    )
+    for _ in 0..if EVIDENCE_OS { 10 } else { 1 } {
+        if sender
+            .send_to(b"probe", (LOOPBACK_BROADCAST, port))
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        if matches!(
+            timeout(Duration::from_secs(1), receiver.recv_from(&mut datagram)).await,
+            Ok(Ok((5, _))) if &datagram[..5] == b"probe"
+        ) {
+            return true;
+        }
+    }
+    false
 }
 
 async fn server() -> BACnetServer<BipTransport> {
@@ -156,6 +165,9 @@ async fn present_value(server: &BACnetServer<BipTransport>) -> PropertyValue {
 #[tokio::test]
 async fn an_original_unicast_sent_to_the_broadcast_address_is_not_answered() {
     if !loopback_broadcast_is_delivered().await {
+        if EVIDENCE_OS {
+            panic!("Linux delivers 127.255.255.255 to a local socket, and this test needs it");
+        }
         eprintln!("skipping: this host does not deliver 127.255.255.255 to a local socket");
         return;
     }

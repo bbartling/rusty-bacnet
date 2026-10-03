@@ -46,7 +46,7 @@ pub use access::AsBip;
 pub use fanout::{FanoutCounters, FanoutPolicy};
 #[cfg(test)]
 use ingress::{admitted_delivery, Delivery};
-use ingress::{handle_datagram, IngressAddresses};
+use ingress::{broadcast_is_own_address, handle_datagram, IngressAddresses};
 #[cfg(test)]
 use io::handle_bvll_message;
 use io::{send_register_foreign_device, RecvContext};
@@ -660,6 +660,13 @@ impl TransportPort for BipTransport {
             None if wildcard_bind => route_ip.unwrap_or(Ipv4Addr::LOCALHOST),
             None => self.interface,
         };
+        if broadcast_is_own_address(self.broadcast_address, local_ip, &local_unicast_ips) {
+            warn!(
+                broadcast = %self.broadcast_address,
+                "B/IP broadcast address is one of this host's own addresses; \
+                 broadcasts sent to it reach no other node"
+            );
+        }
 
         self.port = local_port;
         self.local_mac = encode_bip_mac(local_ip.octets(), local_port);

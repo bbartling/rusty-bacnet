@@ -278,21 +278,35 @@ async fn sends_naming_network_zero_are_refused_before_any_frame() {
         network: 0,
         mac_address: MacAddr::from_slice(&[7]),
     };
+    // Each refusal names the value and the local form of that send.
     let refusals = [
-        net.broadcast_to_network(&apdu, 0, false, priority).await,
-        net.send_apdu_routed(&apdu, 0, &[7], &[2], false, priority)
+        (
+            net.broadcast_to_network(&apdu, 0, false, priority).await,
+            "use broadcast_apdu",
+        ),
+        (
+            net.send_apdu_routed(&apdu, 0, &[7], &[2], false, priority)
+                .await,
+            "use send_apdu",
+        ),
+        (
+            net.send_apdu_routed_via_local_broadcast(&apdu, 0, &[7], false, priority)
+                .await,
+            "use send_apdu",
+        ),
+        (
+            net.send_apdu_on_issuance(&apdu, &[2], Some(&network_zero), false, priority, || {
+                panic!("a refused response is never issued")
+            })
             .await,
-        net.send_apdu_routed_via_local_broadcast(&apdu, 0, &[7], false, priority)
-            .await,
-        net.send_apdu_on_issuance(&apdu, &[2], Some(&network_zero), false, priority, || {
-            panic!("a refused response is never issued")
-        })
-        .await,
+            "pass no destination",
+        ),
     ];
-    for refusal in refusals {
+    for (refusal, local_form) in refusals {
         let message = refusal.unwrap_err().to_string();
         assert!(
-            message.contains("dest_network 0 is not a network number"),
+            message.contains("dest_network 0 is not a network number")
+                && message.contains(local_form),
             "{message}"
         );
     }

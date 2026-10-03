@@ -59,8 +59,13 @@ async fn receiver() -> (Receiver, mpsc::Receiver<ReceivedNpdu>) {
 }
 
 fn original_unicast() -> BytesMut {
+    original_unicast_to(LOCAL_VMAC)
+}
+
+fn original_unicast_to(destination_vmac: Bip6Vmac) -> BytesMut {
     let mut buf = BytesMut::new();
-    encode_bvlc6_original_unicast(&mut buf, &SENDER_VMAC, &LOCAL_VMAC, CONFIRMED_REQUEST).unwrap();
+    encode_bvlc6_original_unicast(&mut buf, &SENDER_VMAC, &destination_vmac, CONFIRMED_REQUEST)
+        .unwrap();
     buf
 }
 
@@ -141,4 +146,25 @@ async fn original_unicast_takes_its_group_flag_from_the_destination() {
         let npdu = rx.try_recv().expect("dispatch hands the NPDU up");
         assert_eq!(npdu.link_layer_group, group, "{destination} {os:?}");
     }
+}
+
+/// A directed frame that names another node's virtual address is dropped,
+/// even at this node's own unicast address (U.3).
+#[tokio::test]
+async fn original_unicast_for_another_vmac_is_dropped() {
+    let (receiver, mut rx) = receiver().await;
+    let other = original_unicast_to([0x00, 0x05, 0x16]);
+    receiver
+        .handle_datagram(&other, &datagram(&other, local_ip(), None))
+        .await;
+    assert!(rx.try_recv().is_err());
+
+    let ours = original_unicast();
+    receiver
+        .handle_datagram(&ours, &datagram(&ours, local_ip(), None))
+        .await;
+    assert!(
+        rx.try_recv().is_ok(),
+        "the same frame for this VMAC is handed up"
+    );
 }

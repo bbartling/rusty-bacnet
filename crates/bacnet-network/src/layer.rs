@@ -252,14 +252,12 @@ pub(crate) fn is_global_broadcast(destination: Option<&NpduAddress>) -> bool {
 
 /// Refuse a caller-supplied destination network that no NPDU may name.
 /// Network numbers start at 1 (Clause 6.2.2.1); the local network is reached
-/// with no DNET at all.
-pub(crate) fn check_destination_network(network: u16) -> Result<(), Error> {
+/// with no DNET at all, and `local_form` tells the caller how to do that.
+pub(crate) fn check_destination_network(network: u16, local_form: &str) -> Result<(), Error> {
     if network == 0 {
-        return Err(Error::Encoding(
-            "dest_network 0 is not a network number; reach the local network without a DNET \
-             (send_apdu or broadcast_apdu)"
-                .into(),
-        ));
+        return Err(Error::Encoding(format!(
+            "dest_network 0 is not a network number; {local_form}"
+        )));
     }
     Ok(())
 }
@@ -465,7 +463,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
-        check_destination_network(dest_network)?;
+        check_destination_network(dest_network, "use broadcast_apdu for the local network")?;
         if dest_network == 0xFFFF {
             return Err(Error::Encoding(
                 "dest_network 0xFFFF is reserved for global broadcasts; use broadcast_global_apdu instead".into(),
@@ -642,7 +640,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         expecting_reply: bool,
         priority: NetworkPriority,
     ) -> Result<BytesMut, Error> {
-        check_destination_network(dest_network)?;
+        check_destination_network(dest_network, "use send_apdu for a local device")?;
         let npdu = Npdu {
             is_network_message: false,
             expecting_reply,

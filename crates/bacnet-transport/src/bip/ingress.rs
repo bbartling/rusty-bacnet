@@ -52,9 +52,11 @@ impl Delivery {
 /// node on the subnet, so a confirmed request in it would draw an answer from
 /// each of them.
 ///
-/// Where the configured broadcast address is also one of this node's own
-/// addresses, as in a loopback test, the BVLC function picks the reading. The
-/// handler reports the delivery returned here as an Original-Unicast-NPDU's
+/// Where an interface bind's configured broadcast address is also its own
+/// address, as in a loopback test, the BVLC function picks the reading. A
+/// wildcard bind never counts the configured broadcast address as its own, so
+/// there an Original-Unicast-NPDU sent to it is dropped. The handler reports
+/// the delivery returned here as an Original-Unicast-NPDU's
 /// `link_layer_group`, so the flag and this check cannot disagree.
 pub(super) fn admitted_delivery(
     function: BvlcFunction,
@@ -92,6 +94,18 @@ pub(super) fn admitted_delivery(
         f if f == BvlcFunction::FORWARDED_NPDU => broadcast.or(unicast),
         _ => unicast,
     }
+}
+
+/// Whether the configured broadcast address is one of this host's own
+/// non-loopback addresses, as on a /32 or point-to-point link set up by
+/// mistake. Broadcasts sent there reach only this host. Loopback tests use the
+/// same setup on purpose, so loopback addresses don't count.
+pub(super) fn broadcast_is_own_address(
+    broadcast: Ipv4Addr,
+    local_ip: Ipv4Addr,
+    unicast_ips: &[Ipv4Addr],
+) -> bool {
+    !broadcast.is_loopback() && (broadcast == local_ip || unicast_ips.contains(&broadcast))
 }
 
 /// This node's own addresses, which an inbound datagram's destination is

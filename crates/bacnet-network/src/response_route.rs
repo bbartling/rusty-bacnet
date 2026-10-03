@@ -77,7 +77,10 @@ pub(crate) fn encode_response_npdu(
     priority: NetworkPriority,
 ) -> Result<BytesMut, Error> {
     if let Some(destination) = destination {
-        crate::layer::check_destination_network(destination.network)?;
+        crate::layer::check_destination_network(
+            destination.network,
+            "pass no destination (no DNET) for a local peer",
+        )?;
     }
     let npdu = Npdu {
         destination: destination.cloned(),

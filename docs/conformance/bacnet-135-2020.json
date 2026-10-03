@@ -6537,7 +6537,8 @@
     "crates/bacnet-transport/src/bip/original_tests.rs::original_unicast_npdu_uses_udp_sender_source_mac_and_ignores_self",
     "crates/bacnet-transport/src/bip/group_delivery_tests.rs::original_unicast_sent_to_a_broadcast_address_is_dropped",
     "crates/bacnet-transport/src/bip/group_delivery_tests.rs::original_unicast_takes_its_group_flag_from_the_delivery",
-    "crates/bacnet-transport/src/bip/group_delivery_tests.rs::the_function_decides_where_the_broadcast_address_is_the_local_one"
+    "crates/bacnet-transport/src/bip/group_delivery_tests.rs::the_function_decides_where_the_broadcast_address_is_the_local_one",
+    "crates/bacnet-transport/src/bip/group_delivery_tests.rs::a_broadcast_address_that_is_a_host_address_is_flagged_unless_loopback"
    ],
    "benchmarks": [
     "benchmarks/benches/bip_latency.rs",
@@ -6551,7 +6552,8 @@
    "notes": [
     "Generic BVLL envelope coverage exists. J-04 Original-NPDU evidence covers UDP sender B/IP MAC delivery to the upper layer and self-originated frame suppression. Directed reply-path integration remains open.",
     "An Original-Unicast-NPDU sent to the configured or limited broadcast address, or flagged as a group delivery by Windows, is dropped before the network layer with no BVLC-Result (J.2.11, J.3). Its link_layer_group comes from the same delivery check.",
-    "Where the configured broadcast address is also the local address, as in loopback tests, the BVLC function decides: Original-Unicast reads as unicast and Original-Broadcast as broadcast."
+    "Where the configured broadcast address is also the local address, as in loopback tests, the BVLC function decides: Original-Unicast reads as unicast and Original-Broadcast as broadcast.",
+    "A B/IP port logs a warning at start when its broadcast address is one of the host's own non-loopback addresses, since broadcasts sent there reach no other node."
    ]
   },
   {
@@ -6932,7 +6934,8 @@
     "crates/bacnet-transport/src/bip6/socket.rs::tests",
     "crates/bacnet-transport/tests/ipv6_selected_link_multi.rs (explicit external two-link fixture)",
     "crates/bacnet-transport/src/bip6/group_delivery_tests.rs::original_unicast_sent_to_a_multicast_group_is_dropped",
-    "crates/bacnet-transport/src/bip6/group_delivery_tests.rs::original_unicast_takes_its_group_flag_from_the_destination"
+    "crates/bacnet-transport/src/bip6/group_delivery_tests.rs::original_unicast_takes_its_group_flag_from_the_destination",
+    "crates/bacnet-transport/src/bip6/group_delivery_tests.rs::original_unicast_for_another_vmac_is_dropped"
    ],
    "benchmarks": [
     "benchmarks/benches/bip6_latency.rs",

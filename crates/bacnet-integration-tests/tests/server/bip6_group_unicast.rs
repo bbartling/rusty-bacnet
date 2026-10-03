@@ -4,7 +4,8 @@
 //!
 //! The test sends to FF02::BAC0 on the loopback interface. macOS loops that
 //! back to a local socket; a Linux loopback without the multicast flag does
-//! not, so the test checks first and skips where it cannot.
+//! not. macOS is where this test is the B/IPv6 real-socket evidence, so there
+//! it fails if the probe does not get through; elsewhere it skips.
 
 use super::bip6_group_confirmed::{database, npdu, who_is, write_present_value, DEVICE};
 use bacnet_encoding::apdu::{decode_apdu, Apdu, SimpleAck};
@@ -23,6 +24,8 @@ use tokio::net::UdpSocket;
 use tokio::time::{timeout, Duration};
 
 const CLIENT_VMAC: [u8; 3] = [0x0A, 0x0B, 0x0C];
+/// The OS whose loopback carries FF02::BAC0, where the test has to run.
+const EVIDENCE_OS: bool = cfg!(target_os = "macos");
 
 /// The loopback interface's index, looked up by its usual names.
 #[allow(unsafe_code)]
@@ -49,7 +52,9 @@ fn socket(address: Ipv6Addr, index: u32) -> std::io::Result<UdpSocket> {
 }
 
 /// Whether a datagram sent to FF02::BAC0 on the loopback interface reaches a
-/// local socket that joined the group there.
+/// local socket that joined the group there. On the evidence OS the probe
+/// keeps trying for ten seconds, so a loaded runner does not read as one that
+/// cannot.
 async fn loopback_multicast_is_delivered(index: u32) -> bool {
     let Ok(receiver) = socket(Ipv6Addr::UNSPECIFIED, index) else {
         return false;
@@ -65,14 +70,19 @@ async fn loopback_multicast_is_delivered(index: u32) -> bool {
         return false;
     };
     let group = SocketAddrV6::new(BACNET_IPV6_MULTICAST_LINK_LOCAL, port, 0, index);
-    if sender.send_to(b"probe", group).await.is_err() {
-        return false;
-    }
     let mut datagram = [0u8; 8];
-    matches!(
-        timeout(Duration::from_secs(1), receiver.recv_from(&mut datagram)).await,
-        Ok(Ok((5, _))) if &datagram[..5] == b"probe"
-    )
+    for _ in 0..if EVIDENCE_OS { 10 } else { 1 } {
+        if sender.send_to(b"probe", group).await.is_err() {
+            return false;
+        }
+        if matches!(
+            timeout(Duration::from_secs(1), receiver.recv_from(&mut datagram)).await,
+            Ok(Ok((5, _))) if &datagram[..5] == b"probe"
+        ) {
+            return true;
+        }
+    }
+    false
 }
 
 /// The APDU in one datagram the server sent, if it carries one.
@@ -95,14 +105,19 @@ async fn present_value(server: &BACnetServer<Bip6Transport>) -> PropertyValue {
 
 #[tokio::test]
 async fn an_original_unicast_sent_to_the_multicast_group_is_not_answered() {
-    let Some(index) = loopback_index() else {
-        eprintln!("skipping: no loopback interface found by name");
-        return;
+    let delivered = match loopback_index() {
+        Some(index) => loopback_multicast_is_delivered(index)
+            .await
+            .then_some(index),
+        None => None,
     };
-    if !loopback_multicast_is_delivered(index).await {
+    let Some(index) = delivered else {
+        if EVIDENCE_OS {
+            panic!("macOS loops FF02::BAC0 back on lo0, and this test needs it");
+        }
         eprintln!("skipping: this host does not loop FF02::BAC0 back on the loopback interface");
         return;
-    }
+    };
     let mut server = BACnetServer::generic_builder()
         .database(database())
         .transport(Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(DEVICE)))

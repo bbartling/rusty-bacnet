@@ -145,3 +145,21 @@ async fn the_function_decides_where_the_broadcast_address_is_the_local_one() {
         assert_eq!(npdu.link_layer_group, group, "{function:?}");
     }
 }
+
+#[test]
+fn a_broadcast_address_that_is_a_host_address_is_flagged_unless_loopback() {
+    let other = Ipv4Addr::new(192, 0, 2, 11);
+    for (broadcast, own, flagged) in [
+        (LOCAL, vec![LOCAL], true),
+        (other, vec![LOCAL, other], true),
+        (SUBNET_BROADCAST, vec![LOCAL], false),
+        (Ipv4Addr::BROADCAST, vec![LOCAL], false),
+        (Ipv4Addr::LOCALHOST, vec![Ipv4Addr::LOCALHOST], false),
+    ] {
+        assert_eq!(
+            broadcast_is_own_address(broadcast, LOCAL, &own),
+            flagged,
+            "{broadcast} {own:?}"
+        );
+    }
+}
