@@ -1641,9 +1641,16 @@ WriteProperty and WritePropertyMultiple give a property that
 `BACnetObject::is_list_property` reports as a BACnetLIST, written whole, to the
 object as a `PropertyValue::List` of any length: a value with no octets is the
 empty list (Clause 20.2.17), so Alarm_Values can be cleared, and one element is
-a list of one. `write_local_encoded` and a Command's writes decode the same way.
-Any other property still needs a value: no octets is
-`PROPERTY/INVALID_DATA_ENCODING`, and one element arrives alone (#1328).
+a list of one. The object judges the list, so an empty value on a read-only list
+is its `PROPERTY/WRITE_ACCESS_DENIED`, and on a list it doesn't serve
+`PROPERTY/UNKNOWN_PROPERTY`. A few properties the server decodes for the object
+arrive as their raw octets in `PropertyValue::ApplicationData` instead, lists
+among them: Recipient_List, Subscribed_Recipients,
+List_Of_Object_Property_References, and the Loop and Pulse Converter references.
+The object decides what an empty value means there (an empty
+Setpoint_Reference holds no reference). For any other property, no octets is
+`PROPERTY/INVALID_DATA_ENCODING` and one element arrives alone.
+`write_local_encoded` and a Command's writes decode the same way (#1328).
 
 AddListElement and RemoveListElement edit only properties that
 `BACnetObject::is_list_property` reports as a BACnetLIST. The default follows the

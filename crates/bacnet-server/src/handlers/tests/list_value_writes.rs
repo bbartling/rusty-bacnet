@@ -3,11 +3,14 @@
 //! at every length: no octets is the empty list (Clause 20.2.17), and one
 //! element is a list of one. So Alarm_Values clears over the wire on the
 //! multi-state objects and the Access Zone, and the multi-state objects take
-//! a one-element write. A property that is not a list still needs a value:
-//! no octets stays PROPERTY / INVALID_DATA_ENCODING (Clause 15.9.1.3).
+//! a one-element write. The object judges a list write it can't take, so an
+//! empty value on a read-only list or one the object lacks gets the object's
+//! refusal. A scalar property still needs a value: no octets stays PROPERTY
+//! / INVALID_DATA_ENCODING (Clause 15.9.1.3).
 
 use super::*;
 use bacnet_objects::access_control::AccessZoneObject;
+use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::life_safety::LifeSafetyZoneObject;
 use bacnet_objects::loop_obj::LoopObject;
 use bacnet_objects::multistate::{MultiStateInputObject, MultiStateValueObject};
@@ -242,5 +245,29 @@ fn empty_value_on_a_read_only_list_is_write_access_denied() {
             (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED, 0),
             "{service}"
         );
+    }
+}
+
+#[test]
+fn empty_value_on_a_list_the_object_lacks_is_unknown_property() {
+    // Date_List and Log_Buffer are lists on every object type, and
+    // Alarm_Values on all but the CharacterString and BitString Values, so
+    // the empty value reaches an Analog Value, which serves none of them.
+    let mut db = ObjectDatabase::new();
+    let av = AnalogValueObject::new(1, "AV-1", 62).unwrap();
+    let oid = av.object_identifier();
+    db.add(Box::new(av)).unwrap();
+    for (service, write) in SERVICES {
+        for property in [
+            PropertyIdentifier::DATE_LIST,
+            ALARM_VALUES,
+            PropertyIdentifier::LOG_BUFFER,
+        ] {
+            assert_eq!(
+                list_refusal(write(&mut db, oid, property, &[])),
+                (ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY, 0),
+                "{service} {property:?}"
+            );
+        }
     }
 }

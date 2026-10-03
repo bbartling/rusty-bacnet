@@ -1,7 +1,7 @@
 ---
 section: Fixed
 ---
-- **Wire:** WriteProperty and WritePropertyMultiple can clear a list property
-  such as Alarm_Values with an empty value, and the multi-state objects take a
-  one-element Alarm_Values: a list property reaches the object as a list at
-  every length (#1328).
+- **Wire:** WriteProperty and WritePropertyMultiple hand a list property to the
+  object as a list at every length, so an empty value clears Alarm_Values; an
+  empty write to a read-only or unserved list is now WRITE_ACCESS_DENIED or
+  UNKNOWN_PROPERTY, not INVALID_DATA_ENCODING (#1328).

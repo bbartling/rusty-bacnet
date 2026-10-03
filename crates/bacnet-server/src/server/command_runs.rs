@@ -213,6 +213,8 @@ impl<T: TransportPort + 'static> RunHost for CommandRunner<T> {
         // expects.
         let mut encoded = BytesMut::new();
         encode_property_value(&mut encoded, &command.property_value)?;
+        // A read guard of its own: an object's list classification is fixed,
+        // so it still holds when the write takes its guard.
         let list = self
             .db
             .read()

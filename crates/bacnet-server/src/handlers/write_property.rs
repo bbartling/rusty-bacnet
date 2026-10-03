@@ -337,11 +337,20 @@ fn invalid_data_encoding_error() -> Error {
 
 /// Decode the complete propertyValue payload handed to an object write arm.
 ///
-/// `list` says whether the target object holds `property` as a BACnetLIST
-/// ([`BACnetObject::is_list_property`]). Such a property written whole reaches
-/// the object as a `PropertyValue::List` whatever its length, so an empty
-/// value clears it and one element arrives as a list of one rather than as
-/// that element alone. Any other property needs at least one element.
+/// A few properties come first and reach their object as it decodes them
+/// itself: raw octets in `PropertyValue::ApplicationData` (Recipient_List,
+/// Subscribed_Recipients, List_Of_Object_Property_References and the other
+/// cases below), or one chunk per array element. Each such arm says what an
+/// empty value means; a Setpoint_Reference with no octets, for one, holds no
+/// reference.
+///
+/// Everything else goes through the generic loop. There, `list` says
+/// whether the target object holds `property` as a BACnetLIST
+/// ([`BACnetObject::is_list_property`]). Such a property written whole
+/// reaches the object as a `PropertyValue::List` whatever its length, so an
+/// empty value clears it and one element arrives as a list of one rather
+/// than as that element alone. For a property that isn't a list, an empty
+/// value is INVALID_DATA_ENCODING.
 ///
 /// [`BACnetObject::is_list_property`]: bacnet_objects::traits::BACnetObject::is_list_property
 pub(crate) fn decode_write_property_value(
