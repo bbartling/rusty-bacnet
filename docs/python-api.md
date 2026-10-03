@@ -1512,7 +1512,10 @@ Subscribed_Recipients in one file, replaced whole when the list changes and
 at most once a minute while its entries count down, so the list and each
 entry's remaining minutes survive a restart; without it the list lives in
 memory only. Every well-formed ConfirmedEventNotification is acknowledged,
-whether or not a forwarder takes it.
+whether or not a forwarder takes it; a retransmission of one already received
+is acknowledged again but not forwarded again. One notification goes to at
+most 64 destinations across all the forwarders, and the server ignores a
+confirmed request sent by broadcast.
 
 `initial_source` is required and becomes the Alert Enrollment object's
 read-only `Present_Value`. This is an intentional breaking correction; there
@@ -2446,6 +2449,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `unconfirmed_send_failed` | Unconfirmed notifications the transport refused to send, once per destination; the other destinations are still served |
 | `apdu_too_large` | Notifications not sent to one destination because they exceed the local APDU size (notifications are never segmented); usually a forwarded copy of one that arrived segmented |
 | `received_not_forwarded` | Received event notifications that decoded but that no Notification Forwarder took; a confirmed one is still acknowledged |
+| `forwarding_cap_dropped` | Destinations a notification was not forwarded to because it already had 64 across the Notification Forwarders, one per destination dropped |
 
 The first four count event and acknowledgment notifications alike, once per
 transition. A class whose list is empty, or whose destinations all filter the

@@ -3,7 +3,8 @@ use super::*;
 
 /// The server handles a confirmed-request task owns: object database,
 /// network, COV state, segmented-send state, notification and DCC state, the
-/// mutation decision log and the server config. Cloning clones each `Arc`, so
+/// record of received confirmed event notifications, the mutation decision
+/// log and the server config. Cloning clones each `Arc`, so
 /// a spawned request task takes exactly the handles it needs to outlive
 /// dispatch.
 pub(super) struct RequestServices<T: TransportPort + 'static> {
@@ -20,6 +21,7 @@ pub(super) struct RequestServices<T: TransportPort + 'static> {
     pub(super) dcc_timer: Arc<Mutex<dcc_timer::TimerSlot>>,
     pub(super) dcc_outcomes: Arc<dcc_outcomes::DccOutcomes>,
     pub(super) event_suppressions: Arc<super::event_suppression::EventSuppressions>,
+    pub(super) confirmed_event_repeats: Arc<super::event_forwarding_repeats::ConfirmedEventRepeats>,
     pub(super) mutation_decisions: Arc<crate::mutation::MutationDecisions>,
     pub(super) config: Arc<ServerConfig>,
 }
@@ -40,6 +42,7 @@ impl<T: TransportPort + 'static> Clone for RequestServices<T> {
             dcc_timer: Arc::clone(&self.dcc_timer),
             dcc_outcomes: Arc::clone(&self.dcc_outcomes),
             event_suppressions: Arc::clone(&self.event_suppressions),
+            confirmed_event_repeats: Arc::clone(&self.confirmed_event_repeats),
             mutation_decisions: Arc::clone(&self.mutation_decisions),
             config: Arc::clone(&self.config),
         }
@@ -155,6 +158,7 @@ impl<T: TransportPort + 'static> RequestServices<T> {
             dcc_timer: Arc::new(Mutex::new(dcc_timer::TimerSlot::default())),
             dcc_outcomes: Arc::new(dcc_outcomes::DccOutcomes::default()),
             event_suppressions: Arc::default(),
+            confirmed_event_repeats: Arc::default(),
             mutation_decisions: Arc::new(crate::mutation::MutationDecisions::default()),
             config: Arc::new(config),
         }
@@ -216,6 +220,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             dcc_timer: Arc::clone(&self.dcc_timer),
             dcc_outcomes: Arc::clone(&self.dcc_outcomes),
             event_suppressions: Arc::clone(&self.event_suppressions),
+            // The server keeps no handle on the dispatch loop's record, so
+            // these handles start their own.
+            confirmed_event_repeats: Arc::default(),
             mutation_decisions: Arc::clone(&self.mutation_decisions),
             config: Arc::new(self.config.clone()),
         }

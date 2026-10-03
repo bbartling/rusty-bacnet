@@ -83,6 +83,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             dcc_timer: _,
             dcc_outcomes: _,
             event_suppressions: _,
+            confirmed_event_repeats,
             mutation_decisions,
             config,
         } = services;
@@ -418,11 +419,28 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             // The sender's acknowledgment depends only on the request being
             // well formed; forwarding runs after the response and its outcome
-            // never reaches the sender (Clause 12.51).
+            // never reaches the sender (Clause 12.51). A retransmission of a
+            // notification already received is answered again but not
+            // offered to the forwarders again (#1259).
             s if s == ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION => {
                 match ForwardedEventNotification::decode(&req.service_request) {
                     Ok(notification) => {
-                        received_event = Some(notification);
+                        if confirmed_event_repeats.first_receipt(
+                            super::request_peer::canonical_requester(
+                                source_mac,
+                                source_network.as_ref(),
+                            ),
+                            invoke_id,
+                            &req.service_request,
+                            Instant::now(),
+                        ) {
+                            received_event = Some(notification);
+                        } else {
+                            debug!(
+                                invoke_id,
+                                "Retransmitted ConfirmedEventNotification answered, not forwarded again"
+                            );
+                        }
                         simple_ack()
                     }
                     // As the client rejects one it cannot read.
@@ -679,8 +697,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .await;
         }
         if let Some(notification) = received_event {
-            // A confirmed request is never broadcast (Clause 6.3), so it is
-            // taken as addressed to this device alone.
+            // The dispatch loop drops a confirmed request that arrives by
+            // broadcast (Clause 5.4.5.1), so this one was addressed to this
+            // device alone.
             Self::forward_event_notification(
                 &services.event_delivery(),
                 notification,
