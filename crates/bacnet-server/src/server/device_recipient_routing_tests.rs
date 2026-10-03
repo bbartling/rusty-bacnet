@@ -2,7 +2,7 @@ use super::device_bindings::{
     DeviceBindingTable, ObservationOutcome, MAX_DEVICE_BINDINGS, OBSERVED_BINDING_TTL,
 };
 use super::event_recipient_routing_tests::{
-    destination_for, distribute_from_database_with_bindings, npdu_destination,
+    destination_for, distribute_counted, distribute_from_database_with_bindings, npdu_destination,
     LITERAL_BROADCAST_MAC,
 };
 use super::*;
@@ -140,18 +140,28 @@ async fn unknown_stale_invalid_and_capacity_rejected_devices_emit_zero_frames() 
         ObservationOutcome::Refreshed
     );
 
-    let (broadcasts, unicasts) = distribute(
-        &[
+    let (broadcasts, unicasts, counters) = distribute_counted(
+        binding_database(&[
             (unknown, false),
             (stale, false),
             (invalid, false),
             (rejected, false),
-        ],
-        table,
+        ]),
+        Arc::new(RwLock::new(table)),
+        0,
     )
     .await;
     assert!(broadcasts.is_empty());
     assert!(unicasts.is_empty());
+    // A Device the full table refused is as unbound as one never seen (#1160).
+    assert_eq!(
+        counters,
+        EventNotificationCounters {
+            device_recipient_unbound: 3,
+            recipient_unroutable: 1,
+            ..Default::default()
+        }
+    );
 }
 
 #[tokio::test]

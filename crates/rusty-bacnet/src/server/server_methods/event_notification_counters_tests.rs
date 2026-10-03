@@ -13,9 +13,12 @@ fn every_event_notification_counter_reaches_python_under_its_rust_name() {
         recipient_list_unavailable: 2,
         recipient_list_invalid: 3,
         recipient_list_too_long: 4,
-        confirmed_no_invoke_id: 5,
-        confirmed_rejected: 6,
-        confirmed_unanswered: 7,
+        device_recipient_unbound: 5,
+        recipient_unroutable: 6,
+        confirmed_broadcast_recipient: 7,
+        confirmed_no_invoke_id: 8,
+        confirmed_rejected: 9,
+        confirmed_unanswered: 10,
     };
     assert_eq!(
         event_notification_counter_entries(counters),
@@ -24,9 +27,12 @@ fn every_event_notification_counter_reaches_python_under_its_rust_name() {
             ("recipient_list_unavailable", 2),
             ("recipient_list_invalid", 3),
             ("recipient_list_too_long", 4),
-            ("confirmed_no_invoke_id", 5),
-            ("confirmed_rejected", 6),
-            ("confirmed_unanswered", 7),
+            ("device_recipient_unbound", 5),
+            ("recipient_unroutable", 6),
+            ("confirmed_broadcast_recipient", 7),
+            ("confirmed_no_invoke_id", 8),
+            ("confirmed_rejected", 9),
+            ("confirmed_unanswered", 10),
         ])
     );
 }

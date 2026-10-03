@@ -83,6 +83,7 @@ impl Fixture {
             &self.txs,
             &ctx,
             &crate::router::control_policy::ControlGate::permissive(),
+            &crate::router::local_control::LocalControl::default(),
         )
         .await;
         for (index, rx) in self.rxs.iter_mut().enumerate() {

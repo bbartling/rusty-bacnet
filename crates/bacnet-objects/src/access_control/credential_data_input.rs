@@ -1,3 +1,7 @@
+use bacnet_encoding::constructed::encode_authentication_factor;
+use bacnet_types::constructed::BACnetAuthenticationFactor;
+use bacnet_types::enums::AuthenticationFactorType;
+
 use super::*;
 
 // CredentialDataInputObject (type 37)
@@ -6,17 +10,17 @@ use super::*;
 /// BACnet Credential Data Input object (type 37).
 ///
 /// Represents a credential reader device (card reader, biometric scanner, etc.).
-/// Its Present_Value is a BACnetAuthenticationFactor *structure* (Clause
-/// 12.36), not an enumerated status: Authentication_Status — the
-/// BACnetAuthenticationStatus property whose values run 0=not-ready,
-/// 1=ready, … — belongs to the Access Point object (Clause 12.31,
-/// Table 12-36).
+/// Its Present_Value is the last factor read, a `BACnetAuthenticationFactor`
+/// (Clause 12.36.4), and Update_Time a `BACnetTimeStamp` (Clause 12.36.11);
+/// both go out in their Clause 21 forms. The enumerated
+/// BACnetAuthenticationStatus belongs to the Access Point's
+/// Authentication_Status (Clause 12.31, Table 12-36), not here.
 pub struct CredentialDataInputObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    present_value: u32, // BACnetAuthenticationFactor structure (12.36), stored raw
-    update_time: ([u8; 4], [u8; 4]), // (Date, Time) as raw bytes
+    present_value: BACnetAuthenticationFactor,
+    update_time: BACnetTimeStamp,
     supported_formats: Vec<u64>,
     supported_format_classes: Vec<u64>,
     status_flags: StatusFlags,
@@ -26,14 +30,22 @@ pub struct CredentialDataInputObject {
 
 impl CredentialDataInputObject {
     /// Create a new Credential Data Input object.
+    ///
+    /// Until the first read, Present_Value is the UNDEFINED factor (format
+    /// class 0, no value octets) and Update_Time the unspecified date and
+    /// time (Clauses 12.36.4 and 12.36.11).
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::CREDENTIAL_DATA_INPUT, instance)?;
         Ok(Self {
             oid,
             name: name.into(),
             description: String::new(),
-            present_value: 0, // empty factor placeholder (see field note)
-            update_time: ([0xFF, 0xFF, 0xFF, 0xFF], [0xFF, 0xFF, 0xFF, 0xFF]),
+            present_value: BACnetAuthenticationFactor {
+                format_type: AuthenticationFactorType::UNDEFINED,
+                format_class: 0,
+                value: Vec::new(),
+            },
+            update_time: never_updated(),
             supported_formats: Vec::new(),
             supported_format_classes: Vec::new(),
             status_flags: StatusFlags::empty(),
@@ -42,15 +54,20 @@ impl CredentialDataInputObject {
         })
     }
 
-    /// Set Update_Time, the moment the reader last updated Present_Value.
+    /// Record a factor the reader has read: Present_Value takes `factor` and
+    /// Update_Time `update_time`, together, since Clause 12.36.11 moves
+    /// Update_Time on every Present_Value update. Reading the same factor
+    /// again is such an update.
     ///
-    /// A change of it triggers a SubscribeCOV notification (Table 13-1).
-    /// Over the network the property stays read-only.
-    pub fn set_update_time(&mut self, date: Date, time: Time) {
-        self.update_time = (
-            [date.year, date.month, date.day, date.day_of_week],
-            [time.hour, time.minute, time.second, time.hundredths],
-        );
+    /// A change of Update_Time triggers a SubscribeCOV notification
+    /// (Table 13-1). Over the network both properties stay read-only.
+    pub fn set_present_value(
+        &mut self,
+        factor: BACnetAuthenticationFactor,
+        update_time: BACnetTimeStamp,
+    ) {
+        self.present_value = factor;
+        self.update_time = update_time;
     }
 }
 
@@ -76,25 +93,11 @@ impl BACnetObject for CredentialDataInputObject {
                 ObjectType::CREDENTIAL_DATA_INPUT.to_raw(),
             )),
             p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value))
+                let mut buf = BytesMut::new();
+                encode_authentication_factor(&mut buf, &self.present_value);
+                Ok(PropertyValue::ApplicationData(buf.to_vec()))
             }
-            p if p == PropertyIdentifier::UPDATE_TIME => {
-                let (d, t) = &self.update_time;
-                Ok(PropertyValue::List(vec![
-                    PropertyValue::Date(Date {
-                        year: d[0],
-                        month: d[1],
-                        day: d[2],
-                        day_of_week: d[3],
-                    }),
-                    PropertyValue::Time(Time {
-                        hour: t[0],
-                        minute: t[1],
-                        second: t[2],
-                        hundredths: t[3],
-                    }),
-                ]))
-            }
+            p if p == PropertyIdentifier::UPDATE_TIME => timestamp_value(&self.update_time),
             p if p == PropertyIdentifier::SUPPORTED_FORMATS => Ok(PropertyValue::List(
                 self.supported_formats
                     .iter()

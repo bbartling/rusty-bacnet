@@ -12,7 +12,14 @@ async fn deliver(
     txs: &[mpsc::Sender<SendRequest>],
     ctx: &IngressContext,
 ) {
-    handle_network_message(table, txs, ctx, &control_policy::ControlGate::permissive()).await;
+    handle_network_message(
+        table,
+        txs,
+        ctx,
+        &control_policy::ControlGate::permissive(),
+        &LocalControl::default(),
+    )
+    .await;
 }
 
 #[tokio::test]

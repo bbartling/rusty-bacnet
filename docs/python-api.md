@@ -2030,6 +2030,13 @@ simulated or not (Clause 12.26.14).
 
 ```python
 server.add_elevator_group(instance=1, name="Elevator Bank A")
+# Optional Machine_Room_ID: must name a Positive Integer Value object, else a
+# BacnetProtocolError (VALUE_OUT_OF_RANGE). Read-only over the network.
+server.add_elevator_group(
+    instance=2,
+    name="Elevator Bank B",
+    machine_room_id=ObjectIdentifier(ObjectType.POSITIVE_INTEGER_VALUE, 5),
+)
 server.add_escalator(instance=1, name="Escalator 1")
 server.add_lift(instance=1, name="Elevator 1", num_floors=10)
 ```
@@ -2339,6 +2346,9 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `recipient_list_unavailable` | Transitions sent nowhere because reading the class's Recipient_List failed |
 | `recipient_list_invalid` | Transitions sent nowhere because the Recipient_List did not decode as a whole (no decodable prefix is used) |
 | `recipient_list_too_long` | Transitions sent nowhere because a custom class served more than 32 destinations |
+| `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired |
+| `recipient_unroutable` | Matched recipients skipped because they can't be routed as written: a Device identifier that isn't a Device (or a binding unusable on this link), or a MAC on network 65535 |
+| `confirmed_broadcast_recipient` | Matched recipients skipped because they ask for confirmed notifications at a broadcast address, which only unconfirmed requests may use (Clause 6.3) |
 | `confirmed_no_invoke_id` | Confirmed notifications to one recipient not sent because no invoke ID was free |
 | `confirmed_rejected` | Confirmed notifications the recipient answered with an Error, Reject or Abort |
 | `confirmed_unanswered` | Confirmed notifications with no acknowledgment after the last retry |
@@ -2348,8 +2358,10 @@ transition. A class whose list is empty, or whose destinations all filter the
 transition out by day, time or transition, is configured behaviour and is not
 counted. Neither are notifications held back by DeviceCommunicationControl or
 Event_Enable, nor confirmed reservations refused while the server stops. The
-binding builds the dict from an exhaustive pattern over the Rust struct, like
-`cov_counters()`.
+three route fields (#1160) count once per skipped destination, and the
+transition's other destinations are still served; the warning logged with each
+skip gives the finer reason. The binding builds the dict from an exhaustive
+pattern over the Rust struct, like `cov_counters()`.
 
 #### `local_address() -> str`
 
