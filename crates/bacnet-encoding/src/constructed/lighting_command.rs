@@ -68,8 +68,8 @@ fn unsigned_field<T: TryFrom<u64> + Default>(
 /// - any other malformed field (a missing operation, a REAL not four octets
 ///   long, an Unsigned with no contents octets): [`Error::Decoding`];
 /// - a well-formed command whose operation or fade time needs more than 32
-///   bits, or whose priority more than 8: [`Error::OutOfRange`], naming the
-///   first such field. A malformed field anywhere takes precedence.
+///   bits, or whose priority needs more than 8: [`Error::OutOfRange`], naming
+///   the first such field. A malformed field anywhere takes precedence.
 ///
 /// Leading zero octets in an Unsigned or ENUMERATED are accepted;
 /// [`encode_lighting_command`] always writes the shortest form.
