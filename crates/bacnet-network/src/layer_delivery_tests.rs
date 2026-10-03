@@ -245,6 +245,92 @@ async fn router_preserves_link_group_for_ultimate_network_unicast() {
 }
 
 #[test]
+fn global_broadcast_npdu_has_dnet_ffff() {
+    use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+    use bacnet_types::enums::NetworkPriority;
+
+    let npdu = Npdu {
+        is_network_message: false,
+        expecting_reply: false,
+        priority: NetworkPriority::NORMAL,
+        destination: Some(NpduAddress {
+            network: 0xFFFF,
+            mac_address: MacAddr::new(),
+        }),
+        source: None,
+        hop_count: 255,
+        payload: Bytes::from_static(&[0xAA]),
+        ..Npdu::default()
+    };
+
+    let mut buf = bytes::BytesMut::new();
+    encode_npdu(&mut buf, &npdu).unwrap();
+    let decoded = decode_npdu(Bytes::from(buf)).unwrap();
+    let dest = decoded.destination.unwrap();
+    assert_eq!(dest.network, 0xFFFF);
+    assert!(dest.mac_address.is_empty());
+    assert_eq!(decoded.hop_count, 255);
+}
+
+#[test]
+fn routed_send_encodes_dnet_dadr() {
+    use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+    use bacnet_types::enums::NetworkPriority;
+
+    let npdu = Npdu {
+        is_network_message: false,
+        expecting_reply: true,
+        priority: NetworkPriority::NORMAL,
+        destination: Some(NpduAddress {
+            network: 100,
+            mac_address: MacAddr::from_slice(&[1, 2, 3, 4, 5, 6]),
+        }),
+        source: None,
+        hop_count: 255,
+        payload: Bytes::from_static(&[0xAA, 0xBB]),
+        ..Npdu::default()
+    };
+
+    let mut buf = bytes::BytesMut::new();
+    encode_npdu(&mut buf, &npdu).unwrap();
+    let decoded = decode_npdu(Bytes::from(buf)).unwrap();
+    let dest = decoded.destination.unwrap();
+    assert_eq!(dest.network, 100);
+    assert_eq!(dest.mac_address.as_slice(), &[1, 2, 3, 4, 5, 6]);
+    assert_eq!(decoded.hop_count, 255);
+    assert!(decoded.expecting_reply);
+}
+
+#[test]
+fn broadcast_to_network_encodes_specific_dnet() {
+    use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+    use bacnet_types::enums::NetworkPriority;
+
+    let npdu = Npdu {
+        is_network_message: false,
+        expecting_reply: false,
+        priority: NetworkPriority::NORMAL,
+        destination: Some(NpduAddress {
+            network: 42,
+            mac_address: MacAddr::new(),
+        }),
+        source: None,
+        hop_count: 255,
+        payload: Bytes::from_static(&[0xCC]),
+        ..Npdu::default()
+    };
+
+    let mut buf = bytes::BytesMut::new();
+    encode_npdu(&mut buf, &npdu).unwrap();
+    let decoded = decode_npdu(Bytes::from(buf)).unwrap();
+    let dest = decoded.destination.unwrap();
+    assert_eq!(dest.network, 42);
+    assert!(dest.mac_address.is_empty());
+    assert_eq!(decoded.hop_count, 255);
+    assert!(!decoded.expecting_reply);
+}
+
+#[test]
 fn broadcast_to_network_rejects_dnet_ffff() {
     let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let net = NetworkLayer::new(transport);

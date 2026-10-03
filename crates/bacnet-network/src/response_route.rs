@@ -78,7 +78,8 @@ pub(crate) fn encode_response_npdu(
 ) -> Result<BytesMut, Error> {
     if let Some(destination) = destination {
         crate::layer::check_destination(
-            destination,
+            destination.network,
+            &destination.mac_address,
             "pass no destination (no DNET) for a local peer",
         )?;
     }
