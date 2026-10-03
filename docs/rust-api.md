@@ -3853,17 +3853,27 @@ notification, its `Port_Filter` (absent unless configured with
 `set_port_filter`) enables Port_ID 0, the server's one port. It sends a copy to
 each `Recipient_List` destination whose days, times and transitions admit the
 notification and to each live `Subscribed_Recipients` entry, confirmed or not
-as the destination asks. A copy differs from the received notification only in
-its process identifier: the rest goes on octet for octet, whatever the
-character set of its message text. Copies go through the same send path, route
+as the destination asks. A forwarder that cannot serve
+`Process_Identifier_Filter` or `Local_Forwarding_Only` as Clause 12.51 types
+them takes nothing, and a `Recipient_List` or `Subscribed_Recipients` that does
+not decode, or runs past its cap, gives no destinations. A copy differs from
+the received notification only in its process identifier: the rest goes on
+octet for octet, whatever the character set of its message text.
+`ForwardedEventNotification::decode` checks the request's structure without
+decoding the text or event values, and refuses anything after the event values. Copies go through the same send path, route
 skips and counters as the server's own notifications. Notifications are never
 sent segmented, so a copy longer than the local APDU capacity, such as one of a
 notification that arrived segmented, is not sent to that destination and counts
 in `apdu_too_large`; the other destinations are still served.
 
 No copy goes by global broadcast, a notification received by global broadcast
-is not forwarded, a received notification is not broadcast back onto the local
-network, and one received by broadcast goes to no node on the local network.
+(`ReceivedApdu::global_broadcast`) is not forwarded, a received notification is
+not broadcast back onto the local network, and one received by broadcast goes
+to no node on the local network. A ConfirmedEventNotification is treated as
+addressed to this device alone, and a recipient address that names the local
+network by its number is treated as remote. These skips are configured
+behaviour and move no counter. DeviceCommunicationControl's
+DISABLE_INITIATION stops every copy.
 A destination naming the server's own Device object hands the copy to the
 forwarders that have not yet taken it, and across such a chain each
 destination (recipient, process identifier and confirmation) gets one copy.

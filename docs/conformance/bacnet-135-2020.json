@@ -3021,9 +3021,9 @@
   },
   {
    "id": "BACNET-12-NOTIFICATION-FORWARDER-FORWARDING",
-   "standard_anchor": "Clause 12.51 and Table 12-58 (printed 497-503, PDF 499-505; loop rules (a) to (e), Clauses 12.51.7, 12.51.10 to 12.51.12); Clause 13.2.5.1; Clauses 13.8 and 13.9; Clause 21 BACnetProcessIdSelection and BACnetPortPermission; local licensed source inspected as page images",
+   "standard_anchor": "Clause 12.51, Table 12-58; Clauses 13.2.5.1, 13.8 and 13.9; Clause 21",
    "priority": "P1",
-   "requirement_summary": "A Notification Forwarder sends each event notification it takes on to its Recipient_List and Subscribed_Recipients destinations with only the process identifier changed, confirmed or not as each destination asks. It takes a notification when in service, when Process_Identifier_Filter is NULL or matches, when Local_Forwarding_Only allows the notification's origin and when Port_Filter enables the receiving port. No copy goes by global broadcast, a global broadcast is not forwarded, and a received notification is not sent back onto its network by broadcast nor, when it came by broadcast, to any node there. A confirmed notification is acknowledged whatever forwarding then does.",
+   "summary": "Notification Forwarder objects send each received or local event notification they take on to their Recipient_List and Subscribed_Recipients, applying the Clause 12.51 filters and loop rules.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/notification_forwarder/selection.rs::forwarding_targets",
@@ -3079,24 +3079,19 @@
     "CHANGELOG.md #1225"
    ],
    "notes": [
-    "The server offers each received ConfirmedEventNotification and UnconfirmedEventNotification to every NOTIFICATION_FORWARDER object, bundled or custom, read through its properties.",
-    "A forwarder that cannot serve Process_Identifier_Filter or Local_Forwarding_Only as Clause 12.51 types them takes nothing; a Recipient_List or Subscribed_Recipients that does not decode, or runs past its cap, gives no destinations.",
-    "A copy keeps the received request octet for octet after the process identifier, so message text in any character set and event values of a type the stack does not model pass through.",
-    "Recipient_List entries filter by day, time and transition as a Notification Class's do; every live Subscribed_Recipients entry gets a copy. A destination named twice gets one copy.",
-    "The server is a single-port node, so a received notification arrives through Port_ID 0. Port_Filter is absent unless the application sets it, and then that port must be enabled.",
-    "ReceivedApdu::global_broadcast marks an NPDU sent to DNET 65535; forwarders ignore such a notification.",
-    "A ConfirmedEventNotification is taken as unicast, since a confirmed request is never broadcast.",
-    "A recipient address that names the local network by its number is treated as remote.",
-    "A Notification Class recipient naming this device's Device object passes the notification to the local forwarders with that recipient's process identifier instead of being skipped as an unbound Device.",
-    "A destination naming this device passes the copy to the forwarders that have not yet taken it, so each forwarder takes a notification once.",
-    "The confirmed sender gets its SimpleACK once the request decodes and before any copy is sent. A request that does not decode draws Reject INVALID_PARAMETER_DATA_TYPE.",
-    "Copies go through the server's one EventNotification send path, with its route skips, invoke-ID reservation, retries and EventNotificationCounters. Loop-rule skips are not counted. DCC DISABLE_INITIATION stops copies.",
-    "Recipient_List writes are kept in memory only, as a Notification Class's are; Clause 12.51.8 asks for the list to survive a restart.",
-    "A forwarded unconfirmed copy whose send fails counts in EventNotificationCounters::unconfirmed_send_failed, as the server's own notifications do.",
-    "Across a chain inside the device each destination (recipient, process identifier and confirmation) gets one copy, however many forwarders name it.",
-    "A received notification that decodes but that no forwarder takes counts in EventNotificationCounters::received_not_forwarded; a confirmed one is still acknowledged.",
-    "Notifications are never sent segmented: a copy longer than the local APDU capacity is not sent to that destination and counts in EventNotificationCounters::apdu_too_large, and the other destinations are still served.",
-    "ForwardedEventNotification ends the request at the closing tag that matches the event-values opening tag: anything after it, or empty event values, does not decode."
+    "Every received event notification, and each local one whose Notification Class names this device's Device object, goes to every NOTIFICATION_FORWARDER object, bundled or custom, read through its properties.",
+    "A copy keeps the received request octet for octet after the process identifier, so text in any character set and event values the stack does not model pass through.",
+    "The server is a single-port node: a received notification arrives through Port_ID 0, and Port_Filter is absent unless the application sets one.",
+    "Every well-formed ConfirmedEventNotification is acknowledged before any copy is sent, whether or not a forwarder takes it; one that does not decode draws Reject INVALID_PARAMETER_DATA_TYPE.",
+    "Within one device a forwarder takes a notification once and a destination gets one copy, however many chained forwarders name it."
+   ],
+   "gaps": [
+    "#1256: Recipient_List writes are kept in memory only, so a restart loses them.",
+    "#1257: a ConfirmedEventNotification is treated as unicast, since confirmed requests carry no broadcast addressing.",
+    "#1258: a recipient address that names the local network by its number is treated as remote by the loop rules.",
+    "#1259: fan-out across several forwarders, and repeats of a confirmed notification, are bounded only by each list's cap.",
+    "#1260: Python cannot set Recipient_List or Port_Filter locally.",
+    "#1270: Subscribed_Recipients saves run while the ObjectDatabase write lock is held."
    ]
   },
   {
