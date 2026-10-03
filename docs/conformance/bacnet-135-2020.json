@@ -577,8 +577,8 @@
     "A routed source matches only a routed entry, by network and full address, never by the router's MAC; a direct entry matches only unrouted traffic. An empty time-sync or DCC list denies all; the DCC list needs `DccPolicy::RequirePassword`."
    ],
    "gaps": [
-    "Python servers cannot set `TimeSyncPolicy` and run the default (no issue)",
-    "No user guide section documents `TimeSyncPolicy`; only its rustdoc does (no issue)"
+    "#1292: Python servers cannot set `TimeSyncPolicy` and run the default",
+    "#1292: No user guide section documents `TimeSyncPolicy`; only its rustdoc does"
    ]
   },
   {
