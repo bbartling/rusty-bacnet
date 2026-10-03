@@ -1,55 +1,64 @@
-//! Making the writes of a Command object's action list (Clause 12.10).
+//! Making the writes a Command or Channel object's Present_Value write
+//! queues: a Command's action list (Clause 12.10) or a Channel's value for
+//! each of its members (Clause 12.53, in `channel`).
 //!
-//! A Present_Value write that selects a list with commands sets In_Process
-//! and leaves a [`CommandRun`] on the Command object (#1150). Whatever commits
-//! that write takes the run under the same guard and owns it from then on: it
-//! has to finish the run, or In_Process stays TRUE and every later
-//! Present_Value write is refused BUSY (#1178). Each owner finishes it in the
-//! way it can:
+//! A Present_Value write that selects a list with commands sets In_Process,
+//! and one that a Channel distributes sets Write_Status IN_PROGRESS; either
+//! leaves a [`CommandRun`] on the object (#1150, #1151). Whatever commits that
+//! write takes the run under the same guard and owns it from then on: it has
+//! to finish the run, or the object stays busy and every later Present_Value
+//! write is refused BUSY (#1178). Each owner finishes it in the way it can:
 //!
 //! - the bundled server runs it as a task beside the request that wrote it
 //!   (`server::command_runs`);
-//! - [`tick_schedules`](crate::schedule::tick_schedules) runs the lists its
+//! - [`tick_schedules`](crate::schedule::tick_schedules) runs the runs its
 //!   writes start before it returns ([`run_unattached`]);
 //! - the synchronous WriteProperty and WritePropertyMultiple handlers have no
-//!   task to wait out a post delay in, so they end the run at once with every
-//!   command unsuccessful ([`end_unmade`]).
+//!   task to wait out a delay in, so they end the run at once as unsuccessful
+//!   ([`end_unmade`]).
 //!
-//! [`execute`] is the sequence every runner shares: the commands in list
-//! order, each through the owner's write path, each outcome recorded under a
-//! generation check, the post delay after each attempt, a stop at a failure
-//! that quits, then the end of the run.
+//! [`execute`] is the sequence every runner shares. A Command's commands go
+//! in list order, each through the owner's write path, each outcome recorded
+//! under a generation check, the post delay after each attempt, a stop at a
+//! failure that quits, then the end of the run. A Channel's members go in
+//! delay order through the same write path. A run a write starts is admitted
+//! through `chain`, which stops runs that feed back into themselves.
 
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_objects::command::CommandRun;
+use bacnet_objects::command::{CommandRun, RunPlan};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::constructed::BACnetActionCommand;
+use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::RwLock;
 use tracing::debug;
 
+mod chain;
+mod channel;
 mod unattached;
 
+pub(crate) use chain::admit;
 pub(crate) use unattached::run_unattached;
 
 /// What a runner needs from the component that owns its runs.
 pub(crate) trait RunHost: Sync {
-    /// The database holding the Command objects and their targets.
+    /// The database holding the Command and Channel objects and their
+    /// targets.
     fn database(&self) -> &Arc<RwLock<ObjectDatabase>>;
 
-    /// Make one command's write on behalf of Command `source`, as a
-    /// WriteProperty carrying its value would, and start any run that write
-    /// queued. Returns whether the write was accepted.
+    /// Make one write on behalf of `run`'s object, as a WriteProperty
+    /// carrying `command`'s value would, and start any run that write queued
+    /// ([`admit`]). A Channel member's write is made as a command too.
     fn write(
         &self,
-        source: ObjectIdentifier,
+        run: &CommandRun,
         command: &BACnetActionCommand,
-    ) -> impl Future<Output = bool> + Send;
+    ) -> impl Future<Output = Result<(), Error>> + Send;
 
-    /// The Command's run state changed under `db`, the guard that changed it.
+    /// The object's run state changed under `db`, the guard that changed it.
     fn committed(
         &self,
         db: &ObjectDatabase,
@@ -69,10 +78,10 @@ pub(crate) trait RunHost: Sync {
 pub(crate) struct Unfinished {
     source: ObjectIdentifier,
     generation: u64,
-    /// The first command not yet made and recorded.
+    /// The first command, or member, not yet written.
     next: usize,
     len: usize,
-    /// Whether every command made so far succeeded.
+    /// Whether every write made so far succeeded.
     all_succeeded: bool,
 }
 
@@ -82,20 +91,24 @@ impl Unfinished {
             source: run.source,
             generation: run.generation,
             next: 0,
-            len: run.commands.len(),
+            len: match &run.plan {
+                RunPlan::Actions(commands) => commands.len(),
+                RunPlan::Channel(distribution) => distribution.members.len(),
+            },
             all_succeeded: true,
         }
     }
 
-    /// The Command the run belongs to.
+    /// The object the run belongs to.
     pub(crate) fn source(&self) -> ObjectIdentifier {
         self.source
     }
 
-    /// End the run where it stood: the commands it never made read
-    /// unsuccessful, In_Process returns to FALSE, and All_Writes_Successful
-    /// is TRUE only if every command was made and succeeded. Nothing changes
-    /// once the Command has moved on to another generation.
+    /// End the run where it stood, as successful only if every write was
+    /// made and succeeded. A Command's commands never made read unsuccessful
+    /// and In_Process returns to FALSE; a Channel's Write_Status becomes
+    /// SUCCESSFUL or FAILED. Nothing changes once the object has moved on to
+    /// another generation.
     pub(crate) fn end(self, db: &mut ObjectDatabase) {
         if let Some(object) = db.get_mut(&self.source) {
             for index in self.next..self.len {
@@ -109,8 +122,9 @@ impl Unfinished {
     }
 }
 
-/// Take the runs that Present_Value writes queued on Command objects among
-/// `oids`, under the guard that committed those writes. The caller owns them.
+/// Take the runs that Present_Value writes queued on Command and Channel
+/// objects among `oids`, under the guard that committed those writes. The
+/// caller owns them.
 pub(crate) fn take_runs(db: &mut ObjectDatabase, oids: &[ObjectIdentifier]) -> Vec<CommandRun> {
     oids.iter()
         .filter_map(|oid| {
@@ -120,20 +134,21 @@ pub(crate) fn take_runs(db: &mut ObjectDatabase, oids: &[ObjectIdentifier]) -> V
         .collect()
 }
 
-/// End the runs that Present_Value writes queued on Command objects among
-/// `oids` without making any of their writes, for an owner that can't run
-/// them. Each ends at once as unsuccessful, so none is left in process.
+/// End the runs that Present_Value writes queued on Command and Channel
+/// objects among `oids` without making any of their writes, for an owner
+/// that can't run them. Each ends at once as unsuccessful, so none is left
+/// busy.
 pub(crate) fn end_unmade(db: &mut ObjectDatabase, oids: &[ObjectIdentifier]) {
     for run in take_runs(db, oids) {
         debug!(
-            command = %run.source,
-            "Ending a Command run without its writes: this path can't run lists"
+            source = %run.source,
+            "Ending a run without its writes: this path can't make them"
         );
         Unfinished::start(&run).end(db);
     }
 }
 
-/// Make `run`'s commands in order, then end it.
+/// Make `run`'s writes, then end it.
 ///
 /// The returned future owns the run from this call: dropping it before the
 /// run ends, unpolled included, hands where the run stood to
@@ -147,31 +162,44 @@ pub(crate) fn execute<H: RunHost>(
         left: Some(Unfinished::start(&run)),
     };
     async move {
-        let mut all_succeeded = true;
-        for (index, command) in run.commands.iter().enumerate() {
-            let Some(success) = make(host, &run, index, command).await else {
-                // The Command changed under the run; whatever replaced it owns
-                // In_Process now.
-                owner.release();
-                return;
-            };
-            all_succeeded &= success;
-            if let Some(left) = &mut owner.left {
-                left.next = index + 1;
-                left.all_succeeded = all_succeeded;
+        let ended = match &run.plan {
+            RunPlan::Actions(commands) => run_actions(host, &run, commands, &mut owner).await,
+            RunPlan::Channel(distribution) => {
+                channel::distribute(host, &run, distribution, &mut owner).await
             }
-            // Clause 12.10.8: the delay follows every attempt, failed or not,
-            // and comes before the next write or the end of the run.
-            if let Some(delay) = command.post_delay {
-                tokio::time::sleep(Duration::from_secs(u64::from(delay))).await;
-            }
-            if !success && command.quit_on_failure {
-                break;
-            }
+        };
+        // `None`: the object changed under the run, and whatever replaced it
+        // owns its run state now.
+        if let Some(all_succeeded) = ended {
+            complete(host, run.source, run.generation, all_succeeded).await;
         }
-        complete(host, run.source, run.generation, all_succeeded).await;
         owner.release();
     }
+}
+
+/// Make a Command's commands in order: whether all succeeded, or `None` once
+/// the run is stale.
+async fn run_actions<H: RunHost>(
+    host: &H,
+    run: &CommandRun,
+    commands: &[BACnetActionCommand],
+    owner: &mut Owner<'_, H>,
+) -> Option<bool> {
+    let mut all_succeeded = true;
+    for (index, command) in commands.iter().enumerate() {
+        let success = make(host, run, index, command).await?;
+        all_succeeded &= success;
+        owner.progress(index + 1, all_succeeded);
+        // Clause 12.10.8: the delay follows every attempt, failed or not,
+        // and comes before the next write or the end of the run.
+        if let Some(delay) = command.post_delay {
+            tokio::time::sleep(Duration::from_secs(u64::from(delay))).await;
+        }
+        if !success && command.quit_on_failure {
+            break;
+        }
+    }
+    Some(all_succeeded)
 }
 
 /// Holds where a run stands until it ends.
@@ -181,6 +209,14 @@ struct Owner<'h, H: RunHost> {
 }
 
 impl<H: RunHost> Owner<'_, H> {
+    /// `next` writes have been made, all successful if `all_succeeded`.
+    fn progress(&mut self, next: usize, all_succeeded: bool) {
+        if let Some(left) = &mut self.left {
+            left.next = next;
+            left.all_succeeded = all_succeeded;
+        }
+    }
+
     /// The run ended, or went stale: nothing is left to hand back.
     fn release(&mut self) {
         self.left = None;
@@ -219,7 +255,19 @@ async fn make<H: RunHost>(
         db.local_device().is_local(command.device_identifier)
     };
     let success = if local {
-        host.write(run.source, command).await
+        match host.write(run, command).await {
+            Ok(()) => true,
+            Err(error) => {
+                debug!(
+                    command = %run.source,
+                    target = %command.object_identifier,
+                    property = ?command.property_identifier,
+                    %error,
+                    "Command write failed"
+                );
+                false
+            }
+        }
     } else {
         debug!(
             command = %run.source,
@@ -245,8 +293,8 @@ async fn make<H: RunHost>(
     Some(success)
 }
 
-/// End a run: In_Process back to FALSE and All_Writes_Successful set,
-/// reported through the host.
+/// End a run: a Command's In_Process back to FALSE and All_Writes_Successful
+/// set, or a Channel's Write_Status set, reported through the host.
 pub(crate) async fn complete<H: RunHost>(
     host: &H,
     source: ObjectIdentifier,

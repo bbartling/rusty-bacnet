@@ -46,12 +46,15 @@ pub(crate) fn schedule_instant(frame: ClockFrame) -> Option<(SpecificDate, Time)
 /// A running server evaluates schedules itself every 60 seconds and fans COV
 /// out for the objects they write; this entry point evaluates without COV.
 ///
-/// A write to a Command object's Present_Value starts its list, and this call
-/// runs it before returning, post delays included: each command is made as
-/// the bare WriteProperty handler would make it, with the Command as the
-/// initiating object, and a list that writes another Command starts that one
-/// too (#1178). Dropping the future first ends each unfinished list as
-/// unsuccessful, so no Command is left in process.
+/// A write to a Command object's Present_Value starts its list, and one to a
+/// Channel object's Present_Value starts passing the value to its members.
+/// This call runs either before returning, post delays and Execution_Delay
+/// included: each write is made as the bare WriteProperty handler would make
+/// it, with the Command or Channel as the initiating object, and a write that
+/// reaches another Command or Channel starts that run too (#1178, #1151). A
+/// run that would start an object already above it is ended as failed rather
+/// than started. Dropping the future first ends each unfinished run as
+/// unsuccessful, so no Command is left in process and no Channel IN_PROGRESS.
 pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>) {
     let runs = {
         let mut db_w = db.write().await;
@@ -220,3 +223,7 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "schedule_command_tests.rs"]
 mod command_tests;
+
+#[cfg(test)]
+#[path = "schedule_channel_tests.rs"]
+mod channel_tests;

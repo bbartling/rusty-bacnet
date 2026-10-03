@@ -15,22 +15,49 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
 
 mod metadata;
 
-/// The list a Present_Value write started, for the server to run.
+/// The writes a Present_Value write queued, for the server to make: a
+/// Command object's selected list, or a Channel object's value for each of
+/// its members.
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandRun {
-    /// The Command object; its generation guards every report back.
+    /// The commanding object; its generation guards every report back.
     pub source: ObjectIdentifier,
     /// The generation the write started.
     pub generation: u64,
-    /// The selected list's commands, in the order they're made.
-    pub commands: Vec<BACnetActionCommand>,
+    /// What the run writes.
+    pub plan: RunPlan,
+    /// The objects whose runs led to this one, outermost first. The object
+    /// leaves it empty; the server fills it in when one run's write starts
+    /// another, so a run that would start its own object again is caught.
+    pub chain: Arc<[ObjectIdentifier]>,
+}
+
+/// The next run generation. One counter serves every Command and Channel in
+/// the process, so a run left over from an object that was removed never
+/// matches the object that took its place.
+pub(crate) fn next_generation() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// What a [`CommandRun`] writes.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum RunPlan {
+    /// A Command object's selected list: its commands, in the order they're
+    /// made (Clause 12.10).
+    Actions(Vec<BACnetActionCommand>),
+    /// A Channel object's value and the members it goes to (Clause 12.53).
+    Channel(crate::channel::ChannelDistribution),
 }
 
 /// BACnet Command object: runs the action list Present_Value selects.
@@ -45,7 +72,8 @@ pub struct CommandObject {
     action_text: Option<Vec<String>>,
     status_flags: StatusFlags,
     reliability: Reliability,
-    /// Bumped by every Present_Value write and Action change.
+    /// A fresh [`next_generation`] at every Present_Value write and Action
+    /// change.
     generation: u64,
     /// The Action element (zero-based) whose commands are being made.
     running: Option<usize>,
@@ -67,7 +95,7 @@ impl CommandObject {
             action_text: None,
             status_flags: StatusFlags::empty(),
             reliability: Reliability::NO_FAULT_DETECTED,
-            generation: 0,
+            generation: next_generation(),
             running: None,
             pending_run: None,
         })
@@ -93,7 +121,7 @@ impl CommandObject {
             texts.resize(action.len(), String::new());
         }
         self.action = action;
-        self.generation = self.generation.wrapping_add(1);
+        self.generation = next_generation();
         self.in_process = false;
         self.running = None;
         self.pending_run = None;
@@ -127,7 +155,7 @@ impl CommandObject {
             _ => return Err(common::value_out_of_range_error()),
         };
         self.present_value = selected;
-        self.generation = self.generation.wrapping_add(1);
+        self.generation = next_generation();
         let commands = index.map_or_else(Vec::new, |i| self.action[i].commands.clone());
         if commands.is_empty() {
             self.all_writes_successful = true;
@@ -139,7 +167,8 @@ impl CommandObject {
         self.pending_run = Some(CommandRun {
             source: self.oid,
             generation: self.generation,
-            commands,
+            plan: RunPlan::Actions(commands),
+            chain: Arc::from([]),
         });
         Ok(())
     }

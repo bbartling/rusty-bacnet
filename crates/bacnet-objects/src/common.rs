@@ -383,7 +383,9 @@ pub(crate) fn value_out_of_range_error() -> bacnet_types::error::Error {
     )
 }
 
+mod encoded_elements;
 mod list_element;
+pub(crate) use encoded_elements::{chunks, decode_element, decode_elements};
 #[cfg(test)]
 pub(crate) use list_element::assert_list_element_refused;
 pub(crate) use list_element::at_list_element;

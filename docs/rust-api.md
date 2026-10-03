@@ -1914,10 +1914,10 @@ whatever order the Devices were added in (#1204):
   notifications, the startup APDU capacity check, the APDU_Timeout an Audit Log
   sink uses on receipt, and the services the standalone PICS reports.
 - **Device-qualified references** go through `local_device().is_local`: Trend
-  Log polling, Event Enrollment references, Command action lists, the Schedule,
-  Staging and Averaging reference rewrites, and an Audit Log's forwarding
-  parent. A reference naming another Device in the same database still points
-  at another device.
+  Log polling, Event Enrollment references, Command action lists, the
+  Schedule, Channel, Staging and Averaging reference rewrites, and an Audit
+  Log's forwarding parent. A reference naming another Device in the same
+  database still points at another device.
 - **Audit and endpoint identity** need `local_device` to be a concrete built-in
   Device: target Audit Reporters, the endpoint's source Audit Reporter and
   endpoint Device writes. It names this device in audit records, owns the Audit
@@ -1931,7 +1931,7 @@ When the only Device has the wildcard instance there is a selected Device but
 no concrete identity, so Audit, endpoint Device writes, local command sources
 and Audit Log forwarding refuse to start or stay unconfigured.
 
-### Object Types (63)
+### Object Types (64)
 
 #### Core I/O (9)
 
@@ -2413,10 +2413,11 @@ when Present_Value moves by the writable `COV_Increment` (default 0), when
 Status_Flags changes (including a target-plan completion that changes
 Reliability), or when Present_Stage changes.
 
-#### Lighting & Color (4)
+#### Lighting & Color (5)
 
 | Type | Constructor |
 |------|-------------|
+| `ChannelObject` | `::new(instance, name, channel_number)` |
 | `LightingOutputObject` | `::new(instance, name)` |
 | `BinaryLightingOutputObject` | `::new(instance, name)` |
 | `ColorObject` | `::new(instance, name)` |
@@ -2429,6 +2430,57 @@ Lighting Output's `Default_Fade_Time`, `Default_Ramp_Rate` and
 A fade time outside 100 to 86,400,000 ms, or a rate or increment outside 0.1
 to 100.0, is refused with VALUE_OUT_OF_RANGE (Clauses 12.54.16 to 12.54.18).
 Both lighting objects serve `Current_Command_Priority`.
+
+A Channel passes each value written to its Present_Value on to its members
+(Clause 12.53, #1151). Give it the members with `ChannelObject::set_members`,
+each a `BACnetDeviceObjectPropertyReference` to an object in this device, then
+optionally one delay in milliseconds per member with `set_execution_delay`
+and the control groups with `set_control_groups`. All three are writable
+arrays on the network too. The member list and Execution_Delay always keep the
+same size: a write of index 0 to either resizes both, as does a whole write of
+the member list, while a whole write of Execution_Delay must give exactly one
+delay per member (VALUE_OUT_OF_RANGE otherwise). A member naming another
+Device is refused with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED; one naming the
+server's own Device is stored as the local reference it stands for.
+
+Present_Value takes any primitive value or a lighting command framed in
+context tag 0, at priority 1 to 16 (Last_Priority reads 16 when the write
+carried none). Write_Status then reads IN_PROGRESS, and any Present_Value
+write is OBJECT / BUSY until the members are done. A running server writes
+each member through the `write_local` path with the Channel as the initiating
+object, at the priority the write carried, once that member's delay has passed;
+every delay counts from the same start. The value is first converted to the
+datatype of the member property's current value by the Table 12-63 rules (a
+REAL 1.0 reaches a Binary Output as ACTIVE, a Multi-state Output as state 1).
+Readings of the rules: an Unsigned or ENUMERATED value above 2147483647
+fails for INTEGER, REAL and Double members. A REAL or Double going to an
+integer type keeps its integer part if it lies in 0 to 2147483000 (Unsigned,
+ENUMERATED) or -2147483000 to 2147483000 (INTEGER; the upper bound Rules 5
+and 6 print with a digit missing is read as 2147483000). A Double fits a REAL
+up to `f32::MAX`. NaN and the infinities fail every conversion that has a
+range, while rounding to a REAL's precision never fails.
+A value that can't be converted, or a member that refuses the write, makes
+Write_Status FAILED once every member has been tried; otherwise it reads
+SUCCESSFUL. A NULL a member refuses as the wrong datatype isn't a failure, so
+one Channel can relinquish commandable members alongside others. With no
+members Write_Status stays IDLE, empty references (instance 4194303) are
+skipped, and while Out_Of_Service is TRUE the value is kept but not passed on.
+Reliability and Allow_Group_Delay_Inhibit aren't served, and inbound WriteGroup,
+which addresses Channels by Channel_Number and Control_Groups, isn't executed
+yet.
+
+Channel runs are owned as Command runs are (#1178). Without a server,
+`tick_schedules` runs a distribution its Schedule writes start before it
+returns, delays included, and ends it FAILED if its future is dropped first.
+The bare `handle_write_property` and `handle_write_property_multiple` handlers
+end it at once as FAILED, without writing the members. The endpoint responder
+refuses a Channel's Present_Value write with WRITE_ACCESS_DENIED.
+
+A run that one Command's or Channel's write starts in another carries the
+objects above it. If it would start an object already in that chain, as two
+Channels naming each other would after their delays, or would have more than
+eight runs above it, it isn't started: it ends as failed at once and the write
+that started it fails with OBJECT / BUSY, so such a loop stops after one round.
 
 #### Life Safety (2)
 

@@ -53,7 +53,7 @@ fn unknown_writes_classify_every_builtin_with_null_and_ordinary_values() {
         // Network Port already distinguished absent indexed properties before #870.
         let expected = match object.object_identifier().object_type() {
             ObjectType::NETWORK_PORT => ErrorCode::UNKNOWN_PROPERTY,
-            ObjectType::STAGING => ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+            ObjectType::STAGING | ObjectType::CHANNEL => ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
             _ => ErrorCode::WRITE_ACCESS_DENIED,
         };
         for index in [0, 1] {

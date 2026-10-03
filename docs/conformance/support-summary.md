@@ -79,7 +79,7 @@ Row counts by priority and status are not committed, so concurrent ledger PRs me
 | `BACNET-12-NOTIFICATION-FORWARDER-WITHDRAWAL` | Clause 12.51 (pp. 497-503), Table 12-58 (p. 500); Clause 13.2.5.1 (p. 643); Clause 21 BACnetEventNotificationSubscription and BACnetProcessIdSelection productions (pp. 904, 924) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-FORWARDER-SUBSCRIBED-RECIPIENTS` | Clause 12.51.9 and Table 12-58 (Subscribed_Recipients, printed 500-502, PDF 502-504); Clause 21 BACnetEventNotificationSubscription (printed 904, PDF 906); Clauses 15.1.1.3, 15.1.2, 15.2.1.3 and 15.2.2; local licensed source inspected | P1 | supported-with-clause-evidence | 3 |
 | `BACNET-12-NOTIFICATION-FORWARDER-FORWARDING` | Clause 12.51, Table 12-58; Clauses 13.2.5.1, 13.8 and 13.9; Clause 21 | P1 | supported-with-clause-evidence | 3 |
-| `BACNET-12-CHANNEL-WITHDRAWAL` | Clause 12.53 (pp. 508-517), Table 12-62 (pp. 509-510) | P1 | unsupported-by-design | 0 |
+| `BACNET-12-CHANNEL-OBJECT` | Clauses 12.53 and 21; Tables 12-62 and 12-63 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-15-WRITEGROUP-SERVER-WITHDRAWAL` | Clause 15.11 (pp. 757-758); Clause 19.2.1.6 (p. 809) | P1 | unsupported-by-design | 0 |
 | `BACNET-12-RECIPIENT-LIST-FRAMING` | Clause 12.21, Clause 21 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-EVENT-PARAMETERS-FRAMING` | Clause 12.12, Clause 21 | P1 | supported-with-clause-evidence | 1 |

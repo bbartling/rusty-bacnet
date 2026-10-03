@@ -115,6 +115,7 @@ mod averaging_window_writes;
 mod binary_lighting_operations;
 mod binary_lighting_relinquish_default;
 mod calendar_date_list;
+mod channel_present_value_writes;
 mod command_present_value_writes;
 mod cov_multiple_admission;
 mod cov_multiple_parameters;
