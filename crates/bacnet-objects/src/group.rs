@@ -5,11 +5,13 @@
 //! - StructuredViewObject (type 29) — Clause 12.29
 
 use bacnet_encoding::constructed::{
-    encode_device_object_property_reference, encode_property_access_result,
+    encode_device_object_property_reference, encode_device_object_reference,
+    encode_property_access_result,
 };
 use bacnet_types::bitstring::status_flags_from_bacnet;
 use bacnet_types::constructed::{
-    AccessResult, BACnetDeviceObjectPropertyReference, BACnetPropertyAccessResult,
+    AccessResult, BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
+    BACnetPropertyAccessResult,
 };
 use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
@@ -322,7 +324,8 @@ impl BACnetObject for GlobalGroupObject {
 ///
 /// Provides a hierarchical view of BACnet objects. NODE_TYPE classifies
 /// the node role, SUBORDINATE_LIST holds child object references, and
-/// SUBORDINATE_ANNOTATIONS provides per-child descriptions.
+/// SUBORDINATE_ANNOTATIONS provides per-child descriptions. Both are arrays
+/// (Table 12-34): index 0 reads the size and each index from 1 one element.
 pub struct StructuredViewObject {
     oid: ObjectIdentifier,
     name: String,
@@ -331,8 +334,9 @@ pub struct StructuredViewObject {
     pub node_type: u32,
     /// Node subtype — optional character string.
     pub node_subtype: String,
-    /// Child object identifiers.
-    pub subordinate_list: Vec<ObjectIdentifier>,
+    /// Child object references, served as BACnetDeviceObjectReference
+    /// elements; one without a device names an object in this device.
+    pub subordinate_list: Vec<BACnetDeviceObjectReference>,
     /// Per-child annotations (parallel to subordinate_list).
     pub subordinate_annotations: Vec<String>,
 }
@@ -352,9 +356,14 @@ impl StructuredViewObject {
         })
     }
 
-    /// Add a subordinate object with an annotation.
-    pub fn add_subordinate(&mut self, oid: ObjectIdentifier, annotation: impl Into<String>) {
-        self.subordinate_list.push(oid);
+    /// Add a subordinate with an annotation. An [`ObjectIdentifier`] alone
+    /// names an object in this device.
+    pub fn add_subordinate(
+        &mut self,
+        reference: impl Into<BACnetDeviceObjectReference>,
+        annotation: impl Into<String>,
+    ) {
+        self.subordinate_list.push(reference.into());
         self.subordinate_annotations.push(annotation.into());
     }
 }
@@ -387,18 +396,25 @@ impl BACnetObject for StructuredViewObject {
             p if p == PropertyIdentifier::NODE_SUBTYPE => {
                 Ok(PropertyValue::CharacterString(self.node_subtype.clone()))
             }
-            p if p == PropertyIdentifier::SUBORDINATE_LIST => Ok(PropertyValue::List(
+            p if p == PropertyIdentifier::SUBORDINATE_LIST => common::read_array(
                 self.subordinate_list
                     .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
+                    .map(|reference| {
+                        let mut encoded = BytesMut::new();
+                        encode_device_object_reference(&mut encoded, reference);
+                        PropertyValue::ApplicationData(encoded.to_vec())
+                    })
                     .collect(),
-            )),
-            p if p == PropertyIdentifier::SUBORDINATE_ANNOTATIONS => Ok(PropertyValue::List(
+                array_index,
+            ),
+            p if p == PropertyIdentifier::SUBORDINATE_ANNOTATIONS => common::read_array(
                 self.subordinate_annotations
                     .iter()
-                    .map(|a| PropertyValue::CharacterString(a.clone()))
+                    .cloned()
+                    .map(PropertyValue::CharacterString)
                     .collect(),
-            )),
+                array_index,
+            ),
             _ => Err(common::unknown_property_error()),
         }
     }
