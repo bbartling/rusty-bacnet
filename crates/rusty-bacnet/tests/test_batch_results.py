@@ -97,7 +97,7 @@ class BatchResultTests(unittest.IsolatedAsyncioTestCase):
                     wire, remote = await receive(peer)
                     body = b"\x0c" + ((8 << 22) | 9123).to_bytes(4, "big")
                     # A nested property error and a structurally framed reserved
-                    # application tag. The latter cannot decode to PropertyValue.
+                    # application tag, which PropertyValue holds as its octets.
                     body += b"\x1e\x29\x1c\x5e\x91\x02\x91\x20\x5f"
                     body += b"\x29\x4d\x4e\xd0\x4f\x1f"
                     await reply(peer, remote, bytes([0x30, wire[8], 14]) + body)
@@ -108,13 +108,13 @@ class BatchResultTests(unittest.IsolatedAsyncioTestCase):
                     values = item["results"][0]["results"]
                     self.assertEqual(values[0]["error"], (rb.ErrorClass.PROPERTY, rb.ErrorCode.UNKNOWN_PROPERTY))
                     self.assertIsNone(values[0]["value"])
-                    self.assertEqual(values[1]["value"], b"\xd0")
+                    self.assertEqual(values[1]["value"], rb.PropertyValue.application_data(b"\xd0"))
                     self.assertIsNone(values[1]["error"])
                 finally:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
 
-    async def test_read_value_decode_error_is_typed_item_error(self):
+    async def test_read_value_without_a_typed_form_is_its_octets(self):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
             peer.bind(("127.0.0.1", 0))
             peer.setblocking(False)
@@ -123,11 +123,13 @@ class BatchResultTests(unittest.IsolatedAsyncioTestCase):
                 task = asyncio.ensure_future(client.read_property_from_devices(requests(METHODS[0], [9123])))
                 try:
                     wire, remote = await receive(peer)
+                    # A well-framed reserved application tag is no error: the
+                    # value comes back as the octets the device sent.
                     await reply(peer, remote, bytes([0x30, wire[8], 12]) + wire[10:] + b"\x3e\xd0\x3f")
                     item = (await asyncio.wait_for(task, 2))[0]
                     self.assertEqual(item["request_index"], 0)
-                    self.assertIsNone(item["value"])
-                    self.assertIsInstance(item["error"], rb.BacnetError)
+                    self.assertEqual(item["value"], rb.PropertyValue.application_data(b"\xd0"))
+                    self.assertIsNone(item["error"])
                 finally:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)

@@ -12,8 +12,6 @@ pub struct AccessRightsObject {
     name: String,
     description: String,
     global_identifier: u64,
-    positive_access_rules_count: u32,
-    negative_access_rules_count: u32,
     status_flags: StatusFlags,
     reliability: Reliability,
 }
@@ -27,8 +25,6 @@ impl AccessRightsObject {
             name: name.into(),
             description: String::new(),
             global_identifier: 0,
-            positive_access_rules_count: 0,
-            negative_access_rules_count: 0,
             status_flags: StatusFlags::empty(),
             reliability: Reliability::NO_FAULT_DETECTED,
         })
@@ -63,12 +59,13 @@ impl BACnetObject for AccessRightsObject {
             p if p == PropertyIdentifier::GLOBAL_IDENTIFIER => {
                 Ok(PropertyValue::Unsigned(self.global_identifier))
             }
-            p if p == PropertyIdentifier::POSITIVE_ACCESS_RULES => Ok(PropertyValue::Unsigned(
-                self.positive_access_rules_count as u64,
-            )),
-            p if p == PropertyIdentifier::NEGATIVE_ACCESS_RULES => Ok(PropertyValue::Unsigned(
-                self.negative_access_rules_count as u64,
-            )),
+            // Both are BACnetARRAYs of BACnetAccessRule (Table 12-39). The
+            // object models no rules, so each is an empty array.
+            p if p == PropertyIdentifier::POSITIVE_ACCESS_RULES
+                || p == PropertyIdentifier::NEGATIVE_ACCESS_RULES =>
+            {
+                common::read_array(Vec::new(), array_index)
+            }
             _ => Err(common::unknown_property_error()),
         }
     }

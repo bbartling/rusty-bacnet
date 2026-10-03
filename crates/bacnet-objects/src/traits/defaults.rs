@@ -38,46 +38,50 @@ pub(super) fn cov_reported_properties_default(
 }
 
 /// The default array/list classification behind
-/// [`super::BACnetObject::is_array_property`], keyed by the Clause 12 property
-/// tables. Three identifier classes:
+/// [`super::BACnetObject::is_array_property`]: every property that a Clause 12
+/// object table of the 2020 standard (Tables 12-2 to 12-83) types as a
+/// BACnetARRAY, whether or not the stack serves it yet. A client shapes a
+/// remote value from it through [`super::standard_array_property`], and the
+/// built-in objects don't override it, so the two agree. An indexed read of a
+/// listed property an object doesn't hold fails as an unknown property.
 ///
-/// - **Identifier-stable BACnetARRAY** properties admit an index on every
-///   object type that defines them: OBJECT_LIST (Table 12-13), PROPERTY_LIST
-///   (every table), STATE_TEXT (Tables 12-21/12-22/12-23), PRIORITY
-///   (Table 12-24), WEEKLY_SCHEDULE / EXCEPTION_SCHEDULE (Table 12-28),
-///   EVENT_TIME_STAMPS / EVENT_MESSAGE_TEXTS (Table 12-2 family),
-///   PRIORITY_ARRAY (the commandable family), TAGS (Annex Y),
-///   SUBORDINATE_LIST / SUBORDINATE_ANNOTATIONS (Table 12-34),
-///   GROUP_MEMBERS / GROUP_MEMBER_NAMES (Table 12-57; Elevator/Lift also type
-///   GROUP_MEMBERS BACnetARRAY), STAGES / STAGE_NAMES / TARGET_REFERENCES
-///   (Table 12-80), MONITORED_OBJECTS (Table 12-82), PORT_FILTER
-///   (Table 12-58), AUTHENTICATION_FACTORS / ASSIGNED_ACCESS_RIGHTS
-///   (Table 12-40, the only table carrying either), DOOR_MEMBERS
-///   (Table 12-30), ACCESS_DOORS (Table 12-36), SUPPORTED_FORMATS /
-///   SUPPORTED_FORMAT_CLASSES (Table 12-43), and EXECUTION_DELAY /
-///   CONTROL_GROUPS (Table 12-62); each of those six appears in that one
-///   table only.
-/// - **Type-dependent** identifiers classify by `object_type`: ACTION is
-///   BACnetARRAY\[N\] on Command (Table 12-12) but a single BACnetAction on Loop
-///   (Table 12-20), and ACTION_TEXT, its parallel array of descriptions, is
-///   classified on Command, the only type that has it; ALARM_VALUES /
-///   FAULT_VALUES are BACnetARRAY\[N\] on
-///   CharacterString Value (Table 12-44) and BitString Value (Table 12-47) but
-///   BACnetLIST on the multi-state, life-safety, and access families;
-///   LIST_OF_OBJECT_PROPERTY_REFERENCES is
-///   BACnetARRAY\[N\] on Channel (Table 12-62) but BACnetLIST on Schedule
-///   (Table 12-28) and Timer (Table 12-75); PRESENT_VALUE is
-///   BACnetARRAY\[N\] of BACnetPropertyAccessResult on Global Group
-///   (Table 12-57) but scalar elsewhere.
-/// - **Everything else** — scalars and the identifier-stable BACnetLIST
-///   properties DATE_LIST (Table 12-11), LIST_OF_GROUP_MEMBERS
-///   (Table 12-17), RECIPIENT_LIST (Table 12-24), LOG_BUFFER
-///   (Tables 12-29/12-31), DEVICE_ADDRESS_BINDING and
-///   ACTIVE_COV_SUBSCRIPTIONS (Table 12-13) — takes no index: Clause 12.1.5.2
-///   makes ReadRange the only positional access to a BACnetLIST. Array-typed
-///   identifiers whose object types are not modeled in-tree (e.g.
-///   EVENT_MESSAGE_TEXTS_CONFIG) stay
-///   rejected until their object-side modeling lands.
+/// - **Identifier-stable** arrays are arrays on every object type that has
+///   them, so the object type isn't consulted. Beside the universal
+///   PROPERTY_LIST and TAGS, they are: the Device's OBJECT_LIST,
+///   STRUCTURED_OBJECT_LIST and CONFIGURATION_FILES (Table 12-13); the
+///   event-reporting EVENT_TIME_STAMPS, EVENT_MESSAGE_TEXTS and
+///   EVENT_MESSAGE_TEXTS_CONFIG; the commandable PRIORITY_ARRAY,
+///   COMMAND_TIME_ARRAY and VALUE_SOURCE_ARRAY; STATE_TEXT (Tables 12-21 to
+///   12-23); PRIORITY (Table 12-24); WEEKLY_SCHEDULE and EXCEPTION_SCHEDULE
+///   (Table 12-28); SHED_LEVELS and SHED_LEVEL_DESCRIPTIONS (Table 12-32); the
+///   SUBORDINATE_LIST, SUBORDINATE_ANNOTATIONS, SUBORDINATE_TAGS,
+///   SUBORDINATE_NODE_TYPES and SUBORDINATE_RELATIONSHIPS of Table 12-34;
+///   DOOR_MEMBERS (Table 12-30); ACCESS_DOORS and the AUTHENTICATION_POLICY_LIST
+///   and AUTHENTICATION_POLICY_NAMES pair (Table 12-36); the
+///   POSITIVE_ACCESS_RULES and NEGATIVE_ACCESS_RULES of Table 12-39;
+///   AUTHENTICATION_FACTORS and ASSIGNED_ACCESS_RIGHTS (Table 12-40);
+///   SUPPORTED_FORMATS and SUPPORTED_FORMAT_CLASSES (Table 12-43); BIT_TEXT
+///   (Table 12-47); GROUP_MEMBERS (Tables 12-57 and 12-76) and
+///   GROUP_MEMBER_NAMES (Table 12-57); PORT_FILTER (Table 12-58);
+///   EXECUTION_DELAY and CONTROL_GROUPS (Table 12-62); IP_DNS_SERVER,
+///   IPV6_DNS_SERVER and LINK_SPEEDS (Table 12-71); STATE_CHANGE_VALUES
+///   (Table 12-75); the Lift's FLOOR_TEXT, CAR_DOOR_TEXT, CAR_DOOR_STATUS,
+///   CAR_DOOR_COMMAND, LANDING_DOOR_STATUS, MAKING_CAR_CALL,
+///   REGISTERED_CAR_CALL and ASSIGNED_LANDING_CALLS (Table 12-77); STAGES,
+///   STAGE_NAMES and TARGET_REFERENCES (Table 12-80); and MONITORED_OBJECTS
+///   (Table 12-82).
+/// - **Type-dependent** identifiers are arrays on some object types only:
+///   ACTION and its descriptions ACTION_TEXT on Command (Table 12-12; Loop's
+///   ACTION is a single value); ALARM_VALUES and FAULT_VALUES on
+///   CharacterString Value and BitString Value (Tables 12-44 and 12-47; lists
+///   on the multi-state, life-safety, access and timer types);
+///   LIST_OF_OBJECT_PROPERTY_REFERENCES on Channel (Table 12-62; a list on
+///   Schedule); LOG_DEVICE_OBJECT_PROPERTY on Trend Log Multiple (Table 12-35;
+///   a single reference on Trend Log); and PRESENT_VALUE on Global Group
+///   (Table 12-57).
+///
+/// Everything else, the BACnetLIST properties included, takes no array index:
+/// Clause 12.1.5.2 leaves ReadRange as the only positional access to a list.
 ///
 /// Like [`historical_writable_default`] this is a free function (not a
 /// per-object override) so the default trait method can delegate to it
@@ -88,61 +92,78 @@ pub(super) fn array_property_default(
     object_type: ObjectType,
     property: PropertyIdentifier,
 ) -> bool {
+    use PropertyIdentifier as P;
     match property {
-        PropertyIdentifier::OBJECT_LIST
-        | PropertyIdentifier::PROPERTY_LIST
-        | PropertyIdentifier::STATE_TEXT
-        | PropertyIdentifier::PRIORITY
-        | PropertyIdentifier::WEEKLY_SCHEDULE
-        | PropertyIdentifier::EXCEPTION_SCHEDULE
-        | PropertyIdentifier::EVENT_TIME_STAMPS
-        | PropertyIdentifier::EVENT_MESSAGE_TEXTS
-        | PropertyIdentifier::PRIORITY_ARRAY
-        | PropertyIdentifier::TAGS
-        | PropertyIdentifier::SUBORDINATE_LIST
-        | PropertyIdentifier::SUBORDINATE_ANNOTATIONS
-        | PropertyIdentifier::GROUP_MEMBERS
-        | PropertyIdentifier::GROUP_MEMBER_NAMES
-        | PropertyIdentifier::STAGES
-        | PropertyIdentifier::STAGE_NAMES
-        | PropertyIdentifier::MONITORED_OBJECTS
-        | PropertyIdentifier::TARGET_REFERENCES
-        | PropertyIdentifier::PORT_FILTER
-        | PropertyIdentifier::AUTHENTICATION_FACTORS
-        | PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS
-        | PropertyIdentifier::DOOR_MEMBERS
-        | PropertyIdentifier::ACCESS_DOORS
-        | PropertyIdentifier::SUPPORTED_FORMATS
-        | PropertyIdentifier::SUPPORTED_FORMAT_CLASSES
-        | PropertyIdentifier::EXECUTION_DELAY
-        | PropertyIdentifier::CONTROL_GROUPS => true,
-        PropertyIdentifier::ACTION | PropertyIdentifier::ACTION_TEXT => {
-            object_type == ObjectType::COMMAND
-        }
-        PropertyIdentifier::ALARM_VALUES | PropertyIdentifier::FAULT_VALUES => matches!(
+        P::PROPERTY_LIST
+        | P::TAGS
+        | P::OBJECT_LIST
+        | P::STRUCTURED_OBJECT_LIST
+        | P::CONFIGURATION_FILES
+        | P::EVENT_TIME_STAMPS
+        | P::EVENT_MESSAGE_TEXTS
+        | P::EVENT_MESSAGE_TEXTS_CONFIG
+        | P::PRIORITY_ARRAY
+        | P::COMMAND_TIME_ARRAY
+        | P::VALUE_SOURCE_ARRAY
+        | P::STATE_TEXT
+        | P::PRIORITY
+        | P::WEEKLY_SCHEDULE
+        | P::EXCEPTION_SCHEDULE
+        | P::SHED_LEVELS
+        | P::SHED_LEVEL_DESCRIPTIONS
+        | P::SUBORDINATE_LIST
+        | P::SUBORDINATE_ANNOTATIONS
+        | P::SUBORDINATE_TAGS
+        | P::SUBORDINATE_NODE_TYPES
+        | P::SUBORDINATE_RELATIONSHIPS
+        | P::DOOR_MEMBERS
+        | P::ACCESS_DOORS
+        | P::AUTHENTICATION_POLICY_LIST
+        | P::AUTHENTICATION_POLICY_NAMES
+        | P::POSITIVE_ACCESS_RULES
+        | P::NEGATIVE_ACCESS_RULES
+        | P::AUTHENTICATION_FACTORS
+        | P::ASSIGNED_ACCESS_RIGHTS
+        | P::SUPPORTED_FORMATS
+        | P::SUPPORTED_FORMAT_CLASSES
+        | P::BIT_TEXT
+        | P::GROUP_MEMBERS
+        | P::GROUP_MEMBER_NAMES
+        | P::PORT_FILTER
+        | P::EXECUTION_DELAY
+        | P::CONTROL_GROUPS
+        | P::IP_DNS_SERVER
+        | P::IPV6_DNS_SERVER
+        | P::LINK_SPEEDS
+        | P::STATE_CHANGE_VALUES
+        | P::FLOOR_TEXT
+        | P::CAR_DOOR_TEXT
+        | P::CAR_DOOR_STATUS
+        | P::CAR_DOOR_COMMAND
+        | P::LANDING_DOOR_STATUS
+        | P::MAKING_CAR_CALL
+        | P::REGISTERED_CAR_CALL
+        | P::ASSIGNED_LANDING_CALLS
+        | P::STAGES
+        | P::STAGE_NAMES
+        | P::TARGET_REFERENCES
+        | P::MONITORED_OBJECTS => true,
+        P::ACTION | P::ACTION_TEXT => object_type == ObjectType::COMMAND,
+        P::ALARM_VALUES | P::FAULT_VALUES => matches!(
             object_type,
             ObjectType::CHARACTERSTRING_VALUE | ObjectType::BITSTRING_VALUE
         ),
-        PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
-            object_type == ObjectType::CHANNEL
-        }
-        PropertyIdentifier::VALUE_SOURCE_ARRAY => matches!(
-            object_type,
-            ObjectType::ANALOG_OUTPUT
-                | ObjectType::ANALOG_VALUE
-                | ObjectType::BINARY_OUTPUT
-                | ObjectType::BINARY_VALUE
-                | ObjectType::MULTI_STATE_OUTPUT
-                | ObjectType::MULTI_STATE_VALUE
-        ),
-        PropertyIdentifier::PRESENT_VALUE => object_type == ObjectType::GLOBAL_GROUP,
+        P::LIST_OF_OBJECT_PROPERTY_REFERENCES => object_type == ObjectType::CHANNEL,
+        P::LOG_DEVICE_OBJECT_PROPERTY => object_type == ObjectType::TREND_LOG_MULTIPLE,
+        P::PRESENT_VALUE => object_type == ObjectType::GLOBAL_GROUP,
         _ => false,
     }
 }
 
 /// The default BACnetLIST classification behind
-/// [`super::BACnetObject::is_list_property`], keyed by the property datatypes
-/// in the Clause 12 object tables. Two identifier classes:
+/// [`super::BACnetObject::is_list_property`]: every property that a Clause 12
+/// object table of the 2020 standard types as a BACnetLIST, read by clients
+/// through [`super::standard_list_property`]. Two identifier classes:
 ///
 /// - **Identifier-stable BACnetLIST** properties are lists on every object
 ///   type that defines them: DATE_LIST (Table 12-11); the Device lists of

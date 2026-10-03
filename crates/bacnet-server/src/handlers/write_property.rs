@@ -285,7 +285,7 @@ fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
 
 /// At the existing indexed-write gate, effective absence takes precedence over
 /// array classification (local error-order policy for Clauses 15.9/15.10).
-fn check_write_array_index(
+pub(crate) fn check_write_array_index(
     object: &dyn bacnet_objects::traits::BACnetObject,
     property: PropertyIdentifier,
     index: Option<u32>,

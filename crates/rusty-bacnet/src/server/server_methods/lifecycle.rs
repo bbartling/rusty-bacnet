@@ -419,16 +419,22 @@ impl BACnetServer {
     /// selects an existing local initiator. Tracked writes require a concrete
     /// local Device, which retains correction ownership.
     ///
-    /// Delegates to the server-owned [`write_local`](server::BACnetServer::write_local)
-    /// entry point so a local write fires the same post-write COV and event
-    /// notifications as a network `WriteProperty`. `OBJECT_NAME` writes are
+    /// The value is encoded as a network `WriteProperty` would carry it and
+    /// handed to [`write_local_encoded`](server::BACnetServer::write_local_encoded),
+    /// which decodes it as the WriteProperty handler does and then takes the
+    /// server-owned [`write_local`](server::BACnetServer::write_local) path. So
+    /// any value a network write takes works here, including whatever
+    /// `read_property` returns, and a local write fires the same post-write
+    /// COV and event notifications as a network one. `OBJECT_NAME` writes are
     /// routed through the database name index — a duplicate name is rejected
     /// up front and a successful rename refreshes the index — so local writes
     /// obey the same uniqueness and lookup invariants as the network handlers.
     ///
     /// Errors are surfaced as `BacnetProtocolError` (with `error_class`/
     /// `error_code`) for parity with the network path — e.g. an unknown object
-    /// yields `UNKNOWN_OBJECT` rather than a generic `RuntimeError`.
+    /// yields `UNKNOWN_OBJECT` rather than a generic `RuntimeError`, and an
+    /// array index on a property that isn't an array yields
+    /// `PROPERTY_IS_NOT_AN_ARRAY`.
     ///
     /// The server lock is held for the whole call (including the post-write
     /// COV/event sends), so concurrent Python calls on the same `BACnetServer`
@@ -457,14 +463,17 @@ impl BACnetServer {
             });
 
         let future = async move {
-            // Hold the server guard for the duration of the call: `write_local`
+            let mut encoded = bytes::BytesMut::new();
+            bacnet_encoding::primitives::encode_property_value(&mut encoded, &prop_value)
+                .map_err(to_py_err)?;
+            // Hold the server guard for the duration of the call: the write
             // borrows `srv` and runs the post-write COV/event trigger path,
             // so the server must stay alive across the await.
             let guard = inner.lock().await;
             let srv = guard
                 .as_ref()
                 .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
-            srv.write_local(&oid, pid, array_index, prop_value, priority, source)
+            srv.write_local_encoded(&oid, pid, array_index, &encoded, priority, source)
                 .await
                 .map_err(to_py_err)
         };

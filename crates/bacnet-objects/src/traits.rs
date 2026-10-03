@@ -67,17 +67,20 @@ impl CovReportedProperty {
     }
 }
 
-/// Whether the standard's object tables type `property` as a BACnetARRAY on
-/// `object_type`: the answer the default [`BACnetObject::is_array_property`]
-/// gives. A client can ask it about a remote object, before or without any
-/// value, to learn the property's shape.
+/// Whether the stack's classification table marks `property` as a BACnetARRAY
+/// on `object_type`: the answer the default [`BACnetObject::is_array_property`]
+/// gives, and every built-in object's. The table holds every property a Clause
+/// 12 object table of the 2020 standard types as an array, served or not. A
+/// client can ask it about a remote object, before or without any value, to
+/// learn the property's shape; a vendor-defined array isn't in it.
 pub fn standard_array_property(object_type: ObjectType, property: PropertyIdentifier) -> bool {
     array_property_default(object_type, property)
 }
 
-/// Whether the standard's object tables type `property` as a BACnetLIST on
-/// `object_type`: the answer the default [`BACnetObject::is_list_property`]
-/// gives, usable for a remote object as [`standard_array_property`] is.
+/// Whether the stack's classification table marks `property` as a BACnetLIST
+/// on `object_type`: the answer the default [`BACnetObject::is_list_property`]
+/// gives, and every built-in object's, covering every list of the 2020 object
+/// tables. Usable for a remote object as [`standard_array_property`] is.
 pub fn standard_list_property(object_type: ObjectType, property: PropertyIdentifier) -> bool {
     list_property_default(object_type, property)
 }
@@ -355,10 +358,12 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// `array_property_default`): identifier-stable arrays are admitted
     /// without consulting the object type, the identifiers whose datatype
     /// changes with the object type (ACTION, ALARM_VALUES / FAULT_VALUES,
-    /// LIST_OF_OBJECT_PROPERTY_REFERENCES, PRESENT_VALUE) classify by
-    /// `object_identifier().object_type()`, and everything else — scalars and
-    /// BACnetLIST properties — rejects the index. Object implementations with
-    /// vendor or per-instance array properties override.
+    /// LIST_OF_OBJECT_PROPERTY_REFERENCES, LOG_DEVICE_OBJECT_PROPERTY,
+    /// PRESENT_VALUE) classify by `object_identifier().object_type()`, and
+    /// everything else — scalars and BACnetLIST properties — rejects the
+    /// index. The built-in objects keep the default, so clients that classify
+    /// with [`standard_array_property`] agree with them; object
+    /// implementations with vendor array properties override.
     fn is_array_property(&self, property: PropertyIdentifier) -> bool {
         array_property_default(self.object_identifier().object_type(), property)
     }
@@ -379,8 +384,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// object type, and the identifiers whose datatype changes with the object
     /// type (ALARM_VALUES / FAULT_VALUES, LIST_OF_OBJECT_PROPERTY_REFERENCES,
     /// PRESENT_VALUE, MEMBER_OF) classify by `object_identifier().object_type()`.
-    /// Object implementations with vendor or per-instance list properties
-    /// override.
+    /// The built-in objects keep the default; object implementations with
+    /// vendor list properties override.
     fn is_list_property(&self, property: PropertyIdentifier) -> bool {
         list_property_default(self.object_identifier().object_type(), property)
     }

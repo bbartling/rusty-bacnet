@@ -60,8 +60,8 @@ impl PyCovNotification {
 
     /// List of property values as dicts with `property_id`, `array_index`, `value`.
     ///
-    /// Each value decodes as a `read_property` result does; octets that don't
-    /// decode come back as `bytes`.
+    /// Each value decodes as a `read_property` result does; octets whose
+    /// framing is broken come back as `bytes`.
     #[getter]
     fn values(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let list = PyList::empty(py);

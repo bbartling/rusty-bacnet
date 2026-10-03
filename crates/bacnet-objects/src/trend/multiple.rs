@@ -171,12 +171,14 @@ impl BACnetObject for TrendLogMultipleObject {
             p if p == PropertyIdentifier::LOGGING_TYPE => {
                 Ok(PropertyValue::Enumerated(self.logging_type))
             }
-            p if p == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => Ok(PropertyValue::List(
+            // A BACnetARRAY on this object type (Table 12-35).
+            p if p == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => crate::common::read_array(
                 self.log_device_object_property
                     .iter()
                     .map(reference_value)
                     .collect(),
-            )),
+                array_index,
+            ),
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }

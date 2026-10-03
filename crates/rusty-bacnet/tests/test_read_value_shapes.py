@@ -36,6 +36,8 @@ MSV_1 = ObjectIdentifier(ObjectType.MULTI_STATE_VALUE, 1)
 NC_1 = ObjectIdentifier(ObjectType.NOTIFICATION_CLASS, 1)
 NF_1 = ObjectIdentifier(ObjectType.NOTIFICATION_FORWARDER, 1)
 LC_1 = ObjectIdentifier(ObjectType.LOAD_CONTROL, 1)
+NP_1 = ObjectIdentifier(ObjectType.NETWORK_PORT, 1)
+LIFT_1 = ObjectIdentifier(ObjectType.LIFT, 1)
 GROUP_1 = ObjectIdentifier(ObjectType.GROUP, 1)
 GROUP_2 = ObjectIdentifier(ObjectType.GROUP, 2)
 WILDCARD_DEVICE = ObjectIdentifier(ObjectType.DEVICE, 4194303)
@@ -82,6 +84,8 @@ def make_server() -> BACnetServer:
     server.add_load_control(1, "LC-1")
     server.add_group(1, "Zone", GROUP_MEMBERS)
     server.add_group(2, "Empty")
+    server.add_bip_network_port(1, "NP-1", udp_port=0)
+    server.add_lift(1, "Lift-1", 1)
     return server
 
 
@@ -168,6 +172,16 @@ class ClientReadShapeTests(unittest.IsolatedAsyncioTestCase):
         value = await self.read(MSV_1, P.STATE_TEXT)
         self.assertEqual(value, PropertyValue.list([PropertyValue.character_string("State 1")]))
         self.assertEqual(await self.read(MSV_1, P.STATE_TEXT, 1), PropertyValue.character_string("State 1"))
+        # Arrays that only some object types carry: the default DNS server of
+        # a B/IP Network Port, and a one-floor, one-door Lift's arrays.
+        self.assertEqual(await self.read(NP_1, P.IP_DNS_SERVER),
+                         PropertyValue.list([PropertyValue.octet_string(bytes(4))]))
+        for prop in (P.FLOOR_TEXT, P.CAR_DOOR_STATUS, P.CAR_DOOR_COMMAND):
+            with self.subTest(property=prop):
+                value = await self.read(LIFT_1, prop)
+                self.assertEqual(value.tag, "list")
+                self.assertEqual(len(value.value), 1)
+                self.assertEqual(await self.read(LIFT_1, prop, 0), PropertyValue.unsigned(1))
 
     async def test_recipient_lists_keep_every_destination(self) -> None:
         for oid in (NC_1, NF_1):

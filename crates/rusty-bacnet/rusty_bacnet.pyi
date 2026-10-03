@@ -1290,17 +1290,20 @@ class PropertyValue:
 
     A read result (``read_property``, ``read_property_multiple``, a
     ``CovNotification`` value and ``BACnetServer.read_property``) keeps every
-    element of the value:
+    element of the value; only broken framing raises:
 
     - Any context-tagged content (a Recipient_List, a Group's Present_Value,
-      a Port_Filter, a timestamp) is ``application_data`` holding the octets
-      exactly as served.
-    - A whole read (no ``array_index``) of a property the standard types as an
-      array or list on that object type is a ``list`` at every length, 0 and
-      1 included.
+      a Port_Filter, a timestamp), or content this type has no form for (a
+      UCS-4, DBCS or JIS string, bad UTF-8, an ENUMERATED past 32 bits), is
+      ``application_data`` holding the octets exactly as served.
+    - A whole read (no ``array_index``) of a property the stack's
+      classification table marks as an array or list on that object type
+      (every BACnetARRAY and BACnetLIST of the 2020 object tables) is a
+      ``list`` at every length, 0 and 1 included.
     - Any other read is the bare value when it holds one element, and a
       ``list`` in wire order when it holds none or several (a date-time is
-      a date and then a time).
+      a date and then a time). An indexed read is one element under these
+      rules: ``Stages[1]`` is a list, ``Port_Filter[2]`` application_data.
     """
 
     @staticmethod
@@ -1423,7 +1426,7 @@ class CovNotification:
     def values(self) -> Any:
         """List of property value change entries: dicts with ``property_id``,
         ``array_index`` and ``value``. ``value`` is a ``PropertyValue`` shaped
-        as a read result is, or ``bytes`` when the octets don't decode."""
+        as a read result is, or ``bytes`` when the octets' framing is broken."""
         ...
 
     def __repr__(self) -> str: ...
@@ -2991,7 +2994,9 @@ class BACnetServer:
         property returns: a Group's Present_Value is rebuilt from its
         members, Device instance 4194303 names this server's Device, and the
         Device's COV subscription lists are live. An unknown object or
-        property raises ``BacnetProtocolError`` with the network error.
+        property raises ``BacnetProtocolError`` with the network error, and a
+        Group whose member rows exceed ``rpm_max_result_elements`` raises
+        ``BacnetAbortError`` (reason 9, OUT_OF_RESOURCES).
         """
         ...
 
@@ -3009,6 +3014,9 @@ class BACnetServer:
 
         A source object must exist in the database. Tracked commands require a
         concrete server Device; corrections retain the original Device owner.
+        The value is encoded and decoded as a network WriteProperty's would
+        be, so any value a network write takes works, including whatever
+        ``read_property`` returns, and array-index errors match the network's.
         """
         ...
 

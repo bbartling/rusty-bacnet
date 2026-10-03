@@ -206,10 +206,6 @@ impl BACnetObject for NetworkPortObject {
         }
     }
 
-    fn is_array_property(&self, property: PropertyIdentifier) -> bool {
-        property == PropertyIdentifier::PROPERTY_LIST
-            || (self.bip.is_some() && property == PropertyIdentifier::IP_DNS_SERVER)
-    }
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_object(self)
     }

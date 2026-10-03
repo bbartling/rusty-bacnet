@@ -88,6 +88,42 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         handlers::read_property_value(&db, Some(&view), plan)
     }
 
+    /// Write one local property from its encoded value: the octets a network
+    /// WriteProperty would carry for it.
+    ///
+    /// The octets take the steps the WriteProperty handler takes before an
+    /// object sees a value. An array index is refused as it is over the
+    /// network (UNKNOWN_PROPERTY for a property the object doesn't hold,
+    /// PROPERTY_IS_NOT_AN_ARRAY for one that isn't an array), and the octets
+    /// are decoded with that handler's per-property framing, which hands a
+    /// Schedule's Effective_Period or a Staging's Stages to the object in the
+    /// form it decodes. The value then takes the [`write_local`](Self::write_local)
+    /// path, with its COV, event and audit work. A value read with
+    /// [`read_local`](Self::read_local) and encoded therefore writes back, and
+    /// any value a network client could write is accepted here.
+    pub async fn write_local_encoded(
+        &self,
+        oid: &ObjectIdentifier,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: &[u8],
+        priority: Option<u8>,
+        source: crate::LocalCommandSource,
+    ) -> Result<(), Error> {
+        self.active_network()?;
+        {
+            let db = self.db.read().await;
+            let object = db.get(oid).ok_or_else(|| Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+            })?;
+            handlers::check_write_array_index(object, property, array_index)?;
+        }
+        let value = handlers::decode_write_property_value(property, array_index, value)?;
+        self.write_local(oid, property, array_index, value, priority, source)
+            .await
+    }
+
     /// Create a cloneable handle for unsolicited I-Am announcements.
     pub fn i_am_broadcaster(&self) -> IAmBroadcaster<T> {
         IAmBroadcaster {
@@ -114,3 +150,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .generate()
     }
 }
+
+#[cfg(test)]
+#[path = "local_encoded_writes_tests.rs"]
+mod local_encoded_writes_tests;

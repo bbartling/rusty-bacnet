@@ -28,16 +28,6 @@ use bacnet_types::primitives::PropertyValue;
 use super::door_values as values;
 use crate::common;
 
-/// The per-door arrays of Table 12-77 that the Lift serves.
-pub(super) const ARRAYS: [PropertyIdentifier; 6] = [
-    PropertyIdentifier::ASSIGNED_LANDING_CALLS,
-    PropertyIdentifier::MAKING_CAR_CALL,
-    PropertyIdentifier::REGISTERED_CAR_CALL,
-    PropertyIdentifier::CAR_DOOR_STATUS,
-    PropertyIdentifier::CAR_DOOR_COMMAND,
-    PropertyIdentifier::LANDING_DOOR_STATUS,
-];
-
 /// The per-door state of one lift car, every array one element per car door.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct CarDoors {
