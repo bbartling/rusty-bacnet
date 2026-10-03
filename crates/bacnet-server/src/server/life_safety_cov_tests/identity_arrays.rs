@@ -1,10 +1,10 @@
 use super::*;
 use bacnet_objects::analog::AnalogValueObject;
-use bacnet_services::common::PropertyReference;
 use bacnet_services::cov::SubscribeCOVPropertyRequest;
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
+use bacnet_types::constructed::PropertyReference;
 
 fn object() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 8).unwrap()

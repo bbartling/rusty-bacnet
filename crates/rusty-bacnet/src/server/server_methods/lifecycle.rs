@@ -292,7 +292,7 @@ impl BACnetServer {
     /// Get the retained server instance's last bound address as a string.
     /// This remains a snapshot during interrupted shutdown; successful stop clears it.
     ///
-    /// For BIP: "ip:port", for IPv6: "[ip]:port", for SC: hex-encoded VMAC.
+    /// For BIP: `ip:port`, for IPv6: `[ip]:port`, for SC: hex-encoded VMAC.
     fn local_address<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let transport_type = self.transport_type.clone();
@@ -395,7 +395,7 @@ impl BACnetServer {
     /// up front and a successful rename refreshes the index — so local writes
     /// obey the same uniqueness and lookup invariants as the network handlers.
     ///
-    /// Errors are surfaced as [`BacnetProtocolError`] (with `error_class`/
+    /// Errors are surfaced as `BacnetProtocolError` (with `error_class`/
     /// `error_code`) for parity with the network path — e.g. an unknown object
     /// yields `UNKNOWN_OBJECT` rather than a generic `RuntimeError`.
     ///

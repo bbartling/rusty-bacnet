@@ -41,8 +41,10 @@ cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --feature
 step "clippy (PyO3 bindings)"; cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
 step "clippy and rustdoc (each published crate, default features; no_std bacnet-types)"
 bash scripts/ci/check-default-features.sh
-step "rustdoc (every macOS feature)"
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$features"
+step "rustdoc (every macOS feature, private items)"
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --document-private-items --features "$features"
+step "rustdoc (PyO3 bindings, private items)"
+RUSTDOCFLAGS="-D warnings" cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
 if ! "$quick"; then
   cargo nextest --version >/dev/null 2>&1 \
     || { echo "error: cargo-nextest not found; cargo install cargo-nextest --locked" >&2; exit 1; }

@@ -2,8 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn rpm_default_work_budget_aborts_whole_service() {
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
     use bacnet_types::{enums::AbortReason, error::Error};
 
     let mut server = make_server().await;
@@ -122,8 +121,7 @@ async fn write_property_to_server() {
 
 #[tokio::test]
 async fn read_property_multiple_from_server() {
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let mut server = make_server().await;
     let mut client = make_client().await;

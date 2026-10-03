@@ -35,11 +35,11 @@ async fn cov_lifetime_one_second_initial_wire_remains_positive() {
     );
 }
 
-use bacnet_services::common::PropertyReference;
 use bacnet_services::cov::SubscribeCOVRequest;
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
+use bacnet_types::constructed::PropertyReference;
 
 #[derive(Clone, Copy)]
 enum Family {

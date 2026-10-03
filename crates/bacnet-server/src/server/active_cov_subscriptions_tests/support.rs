@@ -8,21 +8,19 @@ use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
 use bacnet_encoding::{primitives, tags};
 use bacnet_objects::analog::AnalogValueObject;
 pub(super) use bacnet_objects::device::{DeviceConfig, DeviceObject};
-use bacnet_services::common::PropertyReference;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
-use bacnet_services::rpm::{
-    ReadAccessSpecification, ReadPropertyMultipleACK, ReadPropertyMultipleRequest,
-};
+use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 pub(super) use bacnet_types::constructed::{
     BACnetAddress, BACnetCOVMultipleSubscription, BACnetCOVReference, BACnetCOVSubscription,
     BACnetCOVSubscriptionSpecification, BACnetObjectPropertyReference, BACnetRecipient,
     BACnetRecipientProcess,
 };
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
 const DEVICE_INSTANCE: u32 = 813;
 pub(super) const ACTIVE: PropertyIdentifier = PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS;

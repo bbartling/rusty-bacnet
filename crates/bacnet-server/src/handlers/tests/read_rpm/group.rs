@@ -3,18 +3,18 @@ use bacnet_objects::{
     group::{GlobalGroupObject, GroupObject, StructuredViewObject},
     traits::BACnetObject,
 };
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
-use bacnet_types::constructed::{AccessResult, BACnetDeviceObjectPropertyReference};
+use bacnet_types::constructed::{
+    AccessResult, BACnetDeviceObjectPropertyReference, PropertyReference, ReadAccessSpecification,
+};
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
 const EMPTY: &[u8] = &[];
 
 // Shared RP-vs-RPM parity plus budget parity over one case table.
-type ExpectedRead = Result<&'static [u8], ErrorCode>;
+pub(super) type ExpectedRead = Result<&'static [u8], ErrorCode>;
 
-fn assert_cases(
+pub(super) fn assert_cases(
     db: &ObjectDatabase,
     oid: ObjectIdentifier,
     cases: &[(P, Option<u32>, ExpectedRead)],
@@ -146,25 +146,46 @@ fn rpm_group_indexed_reads_and_bytes_are_unchanged() {
     for configured in [false, true] {
         let mut object = GroupObject::new(7, "GRP-7").unwrap();
         if configured {
-            let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-            let ai2 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap();
-            object.add_member(ai1);
-            object.add_member(ai2);
-            object.present_value.push(PropertyValue::Enumerated(3));
+            for instance in [1, 2] {
+                object
+                    .add_member(ReadAccessSpecification {
+                        object_identifier: ObjectIdentifier::new(
+                            ObjectType::ANALOG_INPUT,
+                            instance,
+                        )
+                        .unwrap(),
+                        list_of_property_references: vec![PropertyReference {
+                            property_identifier: P::PRESENT_VALUE,
+                            property_array_index: None,
+                        }],
+                    })
+                    .unwrap();
+            }
         }
         write_common(&mut object, configured);
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
-        // Independent application-value bytes pin the existing projection.
-        // List_Of_Group_Members and Present_Value are BACnetLIST
-        // (Table 12-17), so any index is PROPERTY_IS_NOT_AN_ARRAY.
+        // Independent bytes pin the projection. List_Of_Group_Members and
+        // Present_Value are BACnetLIST (Table 12-17), so any index is
+        // PROPERTY_IS_NOT_AN_ARRAY. The members are ReadAccessSpecifications
+        // (#1134); neither AI is in this database, so each Present_Value
+        // result carries OBJECT / UNKNOWN_OBJECT.
         let members: &[u8] = if configured {
-            &[0xC4, 0, 0, 0, 1, 0xC4, 0, 0, 0, 2]
+            &[
+                0x0C, 0, 0, 0, 1, 0x1E, 0x09, 85, 0x1F, 0x0C, 0, 0, 0, 2, 0x1E, 0x09, 85, 0x1F,
+            ]
         } else {
             EMPTY
         };
-        let present_value: &[u8] = if configured { &[0x91, 3] } else { EMPTY };
+        let present_value: &[u8] = if configured {
+            &[
+                0x0C, 0, 0, 0, 1, 0x1E, 0x29, 85, 0x5E, 0x91, 1, 0x91, 31, 0x5F, 0x1F, 0x0C, 0, 0,
+                0, 2, 0x1E, 0x29, 85, 0x5E, 0x91, 1, 0x91, 31, 0x5F, 0x1F,
+            ]
+        } else {
+            EMPTY
+        };
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             (P::LIST_OF_GROUP_MEMBERS, None, Ok(members)),
             (

@@ -275,7 +275,7 @@ impl DeviceTable {
             .map(|e| &e.device)
     }
 
-    /// Segmentation capability knowledge for the local row [`get_by_mac`]
+    /// Segmentation capability knowledge for the local row [`get_by_mac`](Self::get_by_mac)
     /// selects, or `None` when no local row matches. Coherent with request
     /// sizing: both consult the same row under one shared borrow.
     pub(crate) fn local_peer_segmentation(&self, mac: &[u8]) -> Option<PeerSegmentation> {
@@ -287,6 +287,8 @@ impl DeviceTable {
 
     /// Segmentation capability knowledge for the routed row
     /// [`get_by_network_address`] selects, or `None` when no row matches.
+    ///
+    /// [`get_by_network_address`]: Self::get_by_network_address
     pub(crate) fn routed_peer_segmentation(
         &self,
         network: u16,

@@ -2022,7 +2022,9 @@ Access_Event_Tag and Access_Event_Time on an Access Point; Update_Time on a
 Credential Data Input; and Requested_Shed_Level, Start_Time and Shed_Duration
 on a Load Control. While a door's Out_Of_Service is TRUE, clients can write
 its Door_Status, Lock_Status and Door_Alarm_State to simulate it (Table 12-30
-footnote 1); returning it to service brings back the door's own values.
+footnote 1); returning it to service brings back the door's own values. A
+door's Secured_Status follows its command, Door_Status and Lock_Status,
+simulated or not (Clause 12.26.14).
 
 #### Transportation
 

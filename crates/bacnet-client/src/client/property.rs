@@ -110,7 +110,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     pub async fn read_property_multiple(
         &self,
         destination_mac: &[u8],
-        specs: Vec<bacnet_services::rpm::ReadAccessSpecification>,
+        specs: Vec<bacnet_types::constructed::ReadAccessSpecification>,
     ) -> Result<bacnet_services::rpm::ReadPropertyMultipleACK, Error> {
         use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
 
@@ -135,7 +135,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     pub async fn read_property_multiple_from_device(
         &self,
         device_instance: u32,
-        specs: Vec<bacnet_services::rpm::ReadAccessSpecification>,
+        specs: Vec<bacnet_types::constructed::ReadAccessSpecification>,
     ) -> Result<bacnet_services::rpm::ReadPropertyMultipleACK, Error> {
         let (mac, routing) = self.resolve_device(device_instance).await?;
 
