@@ -3,6 +3,8 @@
 
 import contextlib
 import io
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -92,9 +94,32 @@ class ParseFragmentTests(unittest.TestCase):
             with self.subTest(section=section):
                 self.assertEqual(self.parse("1-x.md", fragment(section, "- Entry.")).section, section)
 
-    def test_nested_bullets_and_paragraphs_stay_in_one_entry(self):
-        body = ["- Lead.", "  - Nested one.", "    deeper.", "", "  A second paragraph."]
+    def test_wrapped_lines_stay_in_one_entry(self):
+        body = ["- Lead sentence that wraps", "  onto a second line (#7)."]
         self.assertEqual(self.parse("7-x.md", fragment("Added", *body)).text, "\n".join(body) + "\n")
+
+    def test_nested_bullet_is_rejected(self):
+        for nested in ("  - Nested.", "  * Nested.", "  + Nested.", "  1. Numbered.", "    - Deeper."):
+            with self.subTest(nested=nested):
+                self.assert_rejected("7-x.md", fragment("Added", "- Lead.", nested), r"7-x.md:5: no nested bullets")
+
+    def test_second_paragraph_is_rejected(self):
+        self.assert_rejected("7-x.md", fragment("Added", "- Lead.", "", "  More."), r"7-x.md:5: keep the entry to one paragraph")
+
+    def test_length_cap(self):
+        for section, cap in (("Fixed", cl.ENTRY_CAP), ("Migration notes", cl.MIGRATION_CAP)):
+            with self.subTest(section=section):
+                # A wrapped line's break and indent count as one space.
+                lines = ["- " + "a" * (cap - 10), "  " + "b" * 9]
+                self.assertEqual(cl.entry_length("\n".join(lines)), cap)
+                self.parse("7-x.md", fragment(section, *lines))
+                longer = [lines[0] + "a", lines[1]]
+                self.assert_rejected("7-x.md", fragment(section, *longer), rf"is {cap + 1} characters; keep it to {cap}")
+
+    def test_link_targets_and_wrapping_do_not_count(self):
+        entry = "- See [the ledger](docs/conformance/" + "a" * 400 + ".md#anchor)\n  for detail (#7)."
+        self.assertEqual(cl.entry_length(entry), len("See the ledger for detail (#7)."))
+        self.parse("7-x.md", fragment("Fixed", *entry.split("\n")))
 
     def test_blank_line_after_front_matter_is_allowed(self):
         self.assertEqual(self.parse("7-x.md", fragment("Added", "", "- Entry.")).text, "- Entry.\n")
@@ -117,7 +142,7 @@ class ParseFragmentTests(unittest.TestCase):
     def test_one_bullet_only(self):
         self.assert_rejected("1-x.md", fragment("Fixed", "- One.", "- Two."), r"1-x.md:5: indent continuation")
         self.assert_rejected("1-x.md", fragment("Fixed", "- One.", "not indented"), "indent continuation")
-        self.assert_rejected("1-x.md", fragment("Fixed", "- One.", "", "- Two."), "indent continuation")
+        self.assert_rejected("1-x.md", fragment("Fixed", "- One.", "", "- Two."), "one paragraph")
         self.assert_rejected("1-x.md", fragment("Fixed", "* Star."), "starting with '- '")
         self.assert_rejected("1-x.md", fragment("Fixed", "-   "), "trailing whitespace")
         self.assert_rejected("1-x.md", fragment("Fixed", "- "), "trailing whitespace")
@@ -344,6 +369,140 @@ class AssembleTests(unittest.TestCase):
             with self.subTest(args=args), Repo(fragments={"1-a.md": fragment("Added", "- A.")}) as repo:
                 with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
                     repo.run("assemble", *args)
+
+
+
+# Git without the user's or the system's config, so signing or hooks set there
+# can't affect the scratch repositories.
+GIT_ENV = {
+    **os.environ,
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_AUTHOR_NAME": "Test",
+    "GIT_AUTHOR_EMAIL": "test@example.invalid",
+    "GIT_COMMITTER_NAME": "Test",
+    "GIT_COMMITTER_EMAIL": "test@example.invalid",
+}
+
+
+class GitRepo(Repo):
+    """A Repo that is also a git repository on branch dev, with no remote."""
+
+    def __init__(self):
+        super().__init__()
+        self.git("init", "-q", "-b", "dev")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "start")
+
+    def git(self, *args):
+        out = subprocess.run(["git", *args], cwd=self.root, env=GIT_ENV, check=True, capture_output=True, text=True)
+        return out.stdout.strip()
+
+    def commit_fragment(self, name, text, message):
+        """Write a fragment and commit it on the current branch."""
+        (self.dir / name).write_text(text, encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def merge_fragment(self, name, text, branch, into="dev"):
+        """Add a fragment on a new branch and merge it with a merge commit; return that commit."""
+        self.git("checkout", "-q", "-b", branch)
+        self.commit_fragment(name, text, f"add {name}")
+        self.git("checkout", "-q", into)
+        self.git("merge", "-q", "--no-ff", "-m", f"Merge {branch}", branch)
+        return self.git("rev-parse", "HEAD")
+
+
+def link(sha):
+    return f"([{sha[:7]}](https://github.com/jscott3201/rusty-bacnet/commit/{sha}))"
+
+
+class CommitLinkTests(unittest.TestCase):
+    def test_entries_link_the_commit_that_brought_them_into_dev(self):
+        with GitRepo() as repo:
+            merge = repo.merge_fragment("5-a.md", fragment("Fixed", "- Fix 5", "  wrapped (#5)."), "fix-5")
+            # Committed straight to dev: that commit brought it in.
+            direct = repo.commit_fragment("6-b.md", fragment("Fixed", "- Fix 6 (#6)."), "add 6-b")
+            # Not committed anywhere yet: no link and no error.
+            (repo.dir / "7-c.md").write_text(fragment("Fixed", "- Fix 7 (#7)."), encoding="utf-8")
+            code, out, err = repo.run("assemble", "--version", "1.1.0", "--date", "2026-10-02")
+            self.assertEqual((code, err), (0, ""), out)
+            text = repo.changelog.read_text(encoding="utf-8")
+            self.assertIn(
+                "### Fixed\n\n"
+                f"- Fix 5\n  wrapped (#5). {link(merge)}\n\n"
+                f"- Fix 6 (#6). {link(direct)}\n\n"
+                "- Fix 7 (#7).\n\n## [1.0.0]",
+                text,
+            )
+            # The release workflow's notes extractor takes the linked entries as they are.
+            self.assertIn(link(merge), changelog_notes.extract(text, "1.1.0"))
+
+    def test_the_merge_commit_wins_over_the_branch_commit(self):
+        with GitRepo() as repo:
+            merge = repo.merge_fragment("5-a.md", fragment("Fixed", "- Fix 5."), "fix-5")
+            self.assertNotEqual(merge, repo.git("rev-parse", "fix-5"))
+            self.assertIn(f"- Fix 5. {link(merge)}\n", repo.run("preview")[1])
+
+    def test_a_fragment_added_again_links_the_latest_addition(self):
+        with GitRepo() as repo:
+            repo.merge_fragment("5-a.md", fragment("Fixed", "- Old 5."), "old-5")
+            (repo.dir / "5-a.md").unlink()
+            repo.git("commit", "-q", "-am", "release")
+            again = repo.merge_fragment("5-a.md", fragment("Fixed", "- New 5."), "new-5")
+            self.assertIn(f"- New 5. {link(again)}\n", repo.run("preview")[1])
+
+    def test_a_fragment_merged_through_another_branch_links_dev_merge(self):
+        with GitRepo() as repo:
+            repo.git("checkout", "-q", "-b", "side")
+            repo.merge_fragment("5-a.md", fragment("Fixed", "- Fix 5."), "fix-5", into="side")
+            repo.git("checkout", "-q", "dev")
+            repo.git("merge", "-q", "--no-ff", "-m", "Merge side", "side")
+            # dev's merge of side brought it into dev, not the merge into side.
+            self.assertIn(f"- Fix 5. {link(repo.git('rev-parse', 'HEAD'))}\n", repo.run("preview")[1])
+
+    def test_a_bulk_move_of_fragments_links_none_of_them(self):
+        with GitRepo() as repo:
+            merge = repo.merge_fragment("5-a.md", fragment("Fixed", "- Fix 5."), "fix-5")
+            for i in range(cl.BULK_ADDS + 1):
+                (repo.dir / f"{100 + i}-moved.md").write_text(fragment("Fixed", f"- Moved {i}."), encoding="utf-8")
+            repo.git("add", "-A")
+            repo.git("commit", "-q", "-m", "move every entry into fragments")
+            out = repo.run("preview")[1]
+            self.assertIn(f"- Fix 5. {link(merge)}\n", out)
+            self.assertIn("- Moved 0.\n", out)
+            self.assertEqual(out.count("commit/"), 1)
+            # One fragment fewer is an ordinary commit, and every entry links.
+            repo.git("rm", "-q", f"changelog.d/{100 + cl.BULK_ADDS}-moved.md")
+            repo.git("commit", "-q", "-m", "drop one")
+            repo.git("reset", "-q", "--soft", "HEAD~2")
+            repo.git("commit", "-q", "-m", "move one fewer")
+            self.assertEqual(repo.run("preview")[1].count("commit/"), cl.BULK_ADDS + 1)
+
+    def test_shallow_clone_gets_no_links(self):
+        # A shallow clone's oldest commit seems to add every file, so it proves nothing.
+        with GitRepo() as repo:
+            repo.merge_fragment("5-a.md", fragment("Fixed", "- Fix 5."), "fix-5")
+            clone = Path(repo.root, "clone")
+            repo.git("clone", "-q", "--depth", "1", f"file://{repo.root}", str(clone))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(cl.main(["--root", str(clone), "preview"]), 0)
+            self.assertIn("- Fix 5.\n", out.getvalue())
+            self.assertNotIn("commit/", out.getvalue())
+
+    def test_a_directory_inside_another_repository_gets_no_links(self):
+        with GitRepo() as repo:
+            repo.merge_fragment("5-a.md", fragment("Fixed", "- Fix 5."), "fix-5")
+            inner = Path(repo.root, "inner")
+            (inner / "changelog.d").mkdir(parents=True)
+            (inner / "changelog.d" / "5-a.md").write_text(fragment("Fixed", "- Fix 5."), encoding="utf-8")
+            self.assertEqual(cl.commit_links(inner, cl.load_fragments(inner / "changelog.d")), {})
+
+    def test_outside_git_there_are_no_links(self):
+        with Repo(fragments={"5-a.md": fragment("Fixed", "- A.")}) as repo:
+            self.assertEqual(cl.commit_links(repo.root, cl.load_fragments(repo.dir)), {})
 
 
 if __name__ == "__main__":

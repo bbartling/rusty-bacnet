@@ -68,8 +68,9 @@ async fn dcc_source_exact_full_bytes_and_fail_closed_wire() {
             }
         }
     }
-    // Direct matching also uses full bytes, independently of the wire fixture's MAC.
-    for length in [1, 32, 33, 255] {
+    // Direct matching also uses full bytes, independently of the wire fixture's
+    // MAC, up to the longest entry a restriction holds (#1157).
+    for length in [1, 6, NpduAddress::MAX_MAC_LEN - 1, NpduAddress::MAX_MAC_LEN] {
         let address = vec![1; length];
         let restriction =
             DccSourceRestriction::new(vec![DccSource::Direct(address.clone())]).unwrap();
@@ -78,6 +79,9 @@ async fn dcc_source_exact_full_bytes_and_fail_closed_wire() {
         other[length - 1] = 2;
         assert!(!restriction.allows(&other, None));
         assert!(!restriction.allows(&address[..length - 1], None));
+        let mut longer = address.clone();
+        longer.push(1);
+        assert!(!restriction.allows(&longer, None));
         for (network, mac) in [
             (0, address.clone()),
             (65535, address.clone()),

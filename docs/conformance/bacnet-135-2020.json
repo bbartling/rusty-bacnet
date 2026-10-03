@@ -2550,7 +2550,9 @@
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests.rs::active_cov_read_only_list_scope_local_read_and_stop",
     "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_read_property",
     "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_read_property_multiple_inline",
-    "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_write_property_and_write_property_multiple"
+    "crates/bacnet-server/src/handlers/tests/array_index_gating.rs::list_properties_reject_indexed_write_property_and_write_property_multiple",
+    "crates/bacnet-server/src/cov/active.rs::tests::active_cov_subscriber_address_holds_to_the_bacnet_address_bound",
+    "crates/bacnet-encoding/src/constructed/tests/cov_subscription.rs::cov_subscription_recipient_mac_holds_to_the_bacnet_address_bound"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2573,7 +2575,8 @@
     "ReadRange (#1046) reads through the same Device view and request-local projection, one COV table sample per request, and cuts the frame with decode_cov_subscription, so its pages are runs of the ReadProperty value (BACNET-15-READ-RANGE-TARGET-KIND).",
     "Limits: raw ObjectDatabase/DeviceObject reads and low-level RP/RPM/ReadRange helpers follow raw declared presence (empty when present), while EndpointResponder exposes neither COV list, and SubscribeCOVPropertyMultiple contexts belong to Active_COV_Multiple_Subscriptions (#814) and are not listed.",
     "The shared local Device selector chooses the lowest instance independently of hash and insertion order (#832); both insertion orders are covered across wildcard RP/RPM/read_local, both live lists, discovery and ordinary/Single/Multiple notification identity.",
-    "Concrete instances precede the maximum wildcard; wildcard-only and no-Device fallbacks are preserved. This is local determinism for a multi-Device database, not a relaxation of Clause 12.11. Device membership changes after startup do not rebind the discovery limiter. This is not a full COV or BTL claim."
+    "Concrete instances precede the maximum wildcard; wildcard-only and no-Device fallbacks are preserved. This is local determinism for a multi-Device database, not a relaxation of Clause 12.11. Device membership changes after startup do not rebind the discovery limiter. This is not a full COV or BTL claim.",
+    "#1156: COV admission refuses a subscriber whose reported address (its direct MAC or routed source) is longer than BACnetAddress::MAX_MAC_LEN, so every listed subscription encodes; the COV subscription codecs refuse a longer recipient MAC in both directions."
    ]
    },
    {
@@ -2827,7 +2830,7 @@
    "id": "BACNET-12-RECIPIENT-LIST-FRAMING",
    "standard_anchor": "Clause 12.21, Clause 21",
    "priority": "P1",
-   "requirement_summary": "Notification Class Recipient_List reads and writes use the Clause 21 BACnetDestination framing: seven application-tagged members in the order Clause 21 gives (a BACnetDaysOfWeek and a time window first, the recipient fourth) concatenated as a BACnetLIST, with BACnetRecipient discriminated by context tag (device [0] primitive ObjectIdentifier, address [1] constructed BACnetAddress of application Unsigned16 + OCTET STRING). The list holds at most 32 destinations (#1098): a WriteProperty, WritePropertyMultiple or write_local that would leave more fails with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY naming the first destination past the cap, and add_destination refuses the same way. An address recipient carries a MAC of at most 18 octets (BACnetAddress::MAX_MAC_LEN, #1124): a longer one does not decode, so a write fails with PROPERTY / INVALID_DATA_TYPE, AddListElement names that element, and add_destination refuses it with the same code. Routing holds every Notification Class, custom objects included, to the 32-destination cap and routes nothing from a longer list (#1124). Only the framed form is a Recipient_List value: the pre-#152 flat form fails with PROPERTY / INVALID_DATA_TYPE (#1125).",
+   "requirement_summary": "Notification Class Recipient_List reads and writes use the Clause 21 BACnetDestination framing: seven application-tagged members in the order Clause 21 gives (a BACnetDaysOfWeek and a time window first, the recipient fourth) concatenated as a BACnetLIST, with BACnetRecipient discriminated by context tag (device [0] primitive ObjectIdentifier, address [1] constructed BACnetAddress of application Unsigned16 + OCTET STRING). The list holds at most 32 destinations (#1098): a WriteProperty, WritePropertyMultiple or write_local that would leave more fails with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY naming the first destination past the cap, and add_destination refuses the same way. An address recipient carries a MAC of at most 18 octets (BACnetAddress::MAX_MAC_LEN, #1124): a longer one does not decode, so a write fails with PROPERTY / INVALID_DATA_TYPE, AddListElement names that element, and add_destination refuses it with the same code. Every BACnetRecipient codec holds that bound in both directions (#1156): decode_recipient refuses a longer MAC wherever a recipient travels, and encode_recipient and the encoders built on it refuse to write one. Routing holds every Notification Class, custom objects included, to the 32-destination cap and routes nothing from a longer list (#1124). Only the framed form is a Recipient_List value: the pre-#152 flat form fails with PROPERTY / INVALID_DATA_TYPE (#1125).",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-encoding/src/constructed/recipient.rs",
@@ -2854,7 +2857,8 @@
     "crates/bacnet-objects/src/notification_class/tests/recipient_list.rs",
     "crates/bacnet-objects/src/notification_class/tests/recipient_list_cap.rs",
     "crates/bacnet-server/src/server/requests/mutation_list_element_number_tests.rs::write_property_of_a_recipient_list_past_the_cap_is_no_space",
-    "crates/bacnet-encoding/src/constructed/tests/recipient.rs::recipient_mac_longer_than_the_bound_rejected",
+    "crates/bacnet-encoding/src/constructed/tests/recipient.rs::recipient_mac_bound_holds_in_both_directions",
+    "crates/bacnet-services/src/enrollment_summary_width_tests.rs::enrollment_filter_recipient_mac_holds_to_the_bacnet_address_bound",
     "crates/bacnet-objects/src/notification_class/tests/recipient_list.rs::recipient_list_flat_form_write_refused",
     "crates/bacnet-objects/src/notification_class/tests/recipient_list_cap.rs::recipient_list_mac_past_the_bound_is_refused",
     "crates/bacnet-objects/src/notification_class/tests/routed_list.rs::custom_class_past_the_cap_routes_none_of_its_list",
@@ -2879,9 +2883,10 @@
      "#1098: Recipient_List is capped at 32 destinations (MAX_RECIPIENT_LIST_DESTINATIONS), four times the AE-CRL-B minimum of 8 (Annex K.2.25). A device destination encodes in at most 27 octets and an address destination with a MAC of up to 6 octets in at most 35, so a full list is at most 1,120 octets and a ReadProperty of it fits one 1476-octet B/IP APDU; each event transition fans out to at most 32 notifications per class.",
      "A write checks destinations in order and refuses the first past the cap before decoding it, as Date_List does. The recipient_list field is private: recipient_list() reads it and add_destination returns Result, so nothing local grows the list past the cap. Before, the list was unbounded up to the 10,000-item framed decoder limit, past which a write failed with INVALID_DATA_TYPE.",
      "#1124: an address MAC is at most 18 octets (BACnetAddress::MAX_MAC_LEN). Clause 21 leaves the OCTET STRING unbounded; the longest network-layer address in Table 6-2 is 7 octets (LonTalk Neuron_ID), and the longest link address this stack uses is the 18-octet B/IPv6 form (IPv6 address and UDP port).",
-     "A destination's recipient decodes through decode_configured_recipient, which refuses a longer MAC, so a WriteProperty or WritePropertyMultiple fails with PROPERTY / INVALID_DATA_TYPE and an AddListElement with a ChangeList-Error naming the element; add_destination refuses with the same code so a stored list stays decodable.",
-     "A destination is then at most 47 octets and a full list at most 1,504. Routing applies MAX_RECIPIENT_LIST_DESTINATIONS to every class: a custom NOTIFICATION_CLASS object serving a longer list yields RecipientListTooLong, the server logs a warning, counts the transition in EventNotificationCounters::recipient_list_too_long (#1142) and sends nothing for that transition (never a prefix), and decoding stops at the first destination past the cap.",
-     "GetEnrollmentSummary membership still reads the list as configured. The generic decode_recipient stays unbounded for now: COV subscription lists and audit records report source addresses learned off the network, and the stack must read back what it encodes. Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, so those learned addresses fit the bound; holding decode_recipient to it as well is follow-up work (#1156).",
+     "A destination's recipient decodes through decode_recipient, which refuses a longer MAC, so a WriteProperty or WritePropertyMultiple fails with PROPERTY / INVALID_DATA_TYPE and an AddListElement with a ChangeList-Error naming the element; add_destination refuses with the same code so a stored list stays decodable.",
+     "A destination is then at most 47 octets and a full list at most 1,504. Routing applies MAX_RECIPIENT_LIST_DESTINATIONS to every class: a custom NOTIFICATION_CLASS object serving a longer list yields RecipientListTooLong, the server logs a warning, counts the transition in EventNotificationCounters::recipient_list_too_long (#1142) and sends nothing for that transition (never a prefix), and decoding stops at the first destination past the cap. GetEnrollmentSummary membership still reads the list as configured.",
+     "#1156: decode_recipient itself holds to the bound, so the separate decode_configured_recipient is gone. COV subscription lists, audit notifications and records, and the GetEnrollmentSummary enrollment filter decode through it, and every recipient encoder (encode_recipient, encode_destination and its list form, the COV subscription encoders, the audit notification encoder) refuses a longer MAC before writing anything.",
+     "The ValueSource and AuditLogQuery address codecs share the same check (check_decoded_mac_len, check_encoded_mac_len). Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, and COV admission and remote command origins refuse a longer direct MAC, so nothing the stack stores fails to encode.",
      "#1160: a destination that matches but is skipped while its route is resolved now also counts, once per destination, in EventNotificationCounters: device_recipient_unbound (a Device with no configured or unexpired observed binding), recipient_unroutable (a Device identifier that is not a Device, a binding unusable on the link, or a MAC on network 65535) and confirmed_broadcast_recipient (confirmed notifications asked for at a broadcast address, skipped before an invoke ID is reserved). The transition's other destinations are still served."
     ]
   },
@@ -3928,7 +3933,7 @@
    "audit_log_forwarding_immediate": "RB-22a, Refs #345, remains open. Source inspected locally: 135-2020 Clause 12.64 PDF pp. 626-630 (printed 624-628), Clauses 19.6.7.2-.3 PDF pp. 827-828 (printed 825-826); paraphrase only. Conditional read-only Member_Of, Delete_On_Forward FALSE, Issue_Confirmed_Notifications TRUE and Reliability share Property_List/RPM/PICS metadata. Startup validates remote Audit Log identity and configured unicast route; configuration failure is visible without forwarding I/O. Confirmed receipt records and dedupe remain atomic in schema v2; unconfirmed receipt adds no receipt. Receipt-only/no-content-change batches do not forward. Original service bytes survive; a fresh outer transaction uses the existing notification owner, 64 shared active Audit permits, one total three-second deadline, no queue/retry/segmentation, and joined shutdown. Communication failure cannot roll back local commit/response or delete records. No durable pending progress or restart replay. Isolated complete-record cycle evidence is not global cross-peer deduplication or distributed cycle prevention. This supersedes earlier no-forwarding exclusions only for the stated inbound-batch subset; local status/time-change/purge records, Delete_On_Forward TRUE, multiple parents, Python parity, full Audit/BIBB/BTL and issue closure remain excluded. See docs/audit-log-forwarding.md and docs/rust-api.md.",
    "standard_anchor": "Clauses 13.19-13.21; Clause 21.2.1, Clause 21.2.3, Clause 21.3.1, BACnetAuditNotification, BACnetAuditLogQueryParameters, and BACnetAuditOperationFlags productions",
    "priority": "P1",
-   "requirement_summary": "AuditNotification request payloads carry one or more typed BACnetAuditNotification values under context tag 0, while AuditLogQuery requests carry a typed by-target or by-source query alternative. The bundled server executes queries over explicitly persisted retained records and receives both ConfirmedAuditNotification and UnconfirmedAuditNotification through one explicit sink plus distinct fail-closed transport-provenance authorizers and one atomic durable merge-or-create path. Successful confirmed receipt stores a bounded exact-request identity with the built-in Audit Log snapshot; retained duplicates are silently discarded before authorization or response, while fresh success and failures retain ACK/Error behavior. Unconfirmed receipt has neither an invoke ID nor durable duplicate tracking and emits no response on any outcome. Executed bit 46 reflects only this receipt path, not notification generation, forwarding, or AR-L-A support. Within the primitive layer's u64 Unsigned domain, the codecs preserve the corrected field order, tags, and numeric domains: Unsigned64 start-at-sequence-number at tag [2] and the three-state BACnetSuccessFilter at tags [7]/[4], plus recipient alternatives, standard operation-flag bits 0-15, and proprietary bits 32-63; reject reserved flag bits, out-of-range filter values, trailing or malformed structure; bound allocation; and leave destination buffers unchanged when validation fails.",
+   "requirement_summary": "AuditNotification request payloads carry one or more typed BACnetAuditNotification values under context tag 0, while AuditLogQuery requests carry a typed by-target or by-source query alternative. The bundled server executes queries over explicitly persisted retained records and receives both ConfirmedAuditNotification and UnconfirmedAuditNotification through one explicit sink plus distinct fail-closed transport-provenance authorizers and one atomic durable merge-or-create path. Successful confirmed receipt stores a bounded exact-request identity with the built-in Audit Log snapshot; retained duplicates are silently discarded before authorization or response, while fresh success and failures retain ACK/Error behavior. Unconfirmed receipt has neither an invoke ID nor durable duplicate tracking and emits no response on any outcome. Executed bit 46 reflects only this receipt path, not notification generation, forwarding, or AR-L-A support. Within the primitive layer's u64 Unsigned domain, the codecs preserve the corrected field order, tags, and numeric domains: Unsigned64 start-at-sequence-number at tag [2] and the three-state BACnetSuccessFilter at tags [7]/[4], plus recipient alternatives, standard operation-flag bits 0-15, and proprietary bits 32-63; reject reserved flag bits, out-of-range filter values, address MACs past BACnetAddress::MAX_MAC_LEN (#1156), trailing or malformed structure; bound allocation; and leave destination buffers unchanged when validation fails.",
    "status": "implementation-present-needs-source-review",
    "code_anchors": [
     "crates/bacnet-objects/src/audit/object_policy.rs",
@@ -4213,7 +4218,9 @@
     "crates/bacnet-server/src/server/audit_policy_precommit_tests.rs::mandatory_policy_admitted_worker_is_joined_after_cancelled_stop",
     "crates/bacnet-server/src/server/audit_policy_precommit_edge_tests.rs::mandatory_policy_late_encoding_denial_releases_confirmed_lease_and_permit",
     "crates/rusty-bacnet/tests/test_object_audit_policy.py::test_unresolved_route_refuses_mandatory_policy_change_before_commit",
-    "crates/bacnet-objects/src/device/tests/audit_recipient.rs::provisioned_audit_recipient_mac_longer_than_the_bound_is_refused"
+    "crates/bacnet-objects/src/device/tests/audit_recipient.rs::provisioned_audit_recipient_mac_longer_than_the_bound_is_refused",
+    "crates/bacnet-services/src/audit/address_bound_tests.rs::audit_log_query_address_filter_holds_to_the_bacnet_address_bound",
+    "crates/bacnet-services/src/audit/address_bound_tests.rs::audit_notification_recipients_hold_to_the_bacnet_address_bound"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -4241,7 +4248,8 @@
     "Refs #782: target_multiple_reporters supersedes earlier per-slice singular target selection/live configuration exclusions only for the qualified plural target owner. Source exactly-one and remaining parent345 scope are unchanged.",
     "Refs #853: optional Target_Value [14] and Current_Value [15] preserve present empty versus absent fields, including extended tag15 exact vectors. The codec accepts structurally valid values above32 octets; target WP/list Reporter policy includes complete known0–32 octets and omits33+ whole.",
     "Actual Recipient_List WP populated-to-empty and empty-to-empty ACK/state/decoded reports distinguish encoded NULL; list observers retain independent malformed-nonempty validation. Python typed notification/query preserves empty bytes versus None. No source-WP expansion or row-status promotion.",
-    "#1124: Audit_Notification_Recipient decodes as a configured recipient, so an address MAC longer than 18 octets (BACnetAddress::MAX_MAC_LEN) fails a write with PROPERTY / INVALID_DATA_ENCODING, and provision_audit_recipient refuses one with the same code. Source and target addresses in audit records stay unbounded, as the network layer delivers them."
+    "#1124: Audit_Notification_Recipient decodes as a configured recipient, so an address MAC longer than 18 octets (BACnetAddress::MAX_MAC_LEN) fails a write with PROPERTY / INVALID_DATA_ENCODING, and provision_audit_recipient refuses one with the same code.",
+    "#1156: every BACnetAddress the audit codecs carry (the AuditLogQuery device-address filters, and an AuditNotification's two recipient fields [2] and [10]) holds to the same 18 octets in both directions: a longer one does not decode, and the encoders refuse it before writing, so an audit record that could not be reported is never stored."
    ],
    "target_device_recipient": {
     "scope": "Target portion of #728; the completed bounded source endpoint migration is recorded separately in BACNET-19-SOURCE-READ-PROPERTY. Broader Audit conformance remains open. Corrected Device recipient requirement: Clause 12.11 with 135-2020 Errata Summary 2024-04-29 item 25 (PDF page 7), preserving base O and footnotes 19-20; NULL operation semantics in 15.9/15.10/19.2; record shape Table 19-4 and BACnetRecipient in Clause 21.",
@@ -4968,7 +4976,7 @@
    "id": "BACNET-21-VALUE-SOURCE-CHOICE",
    "standard_anchor": "Clause 21 BACnetValueSource, BACnetDeviceObjectReference and BACnetAddress; Clause 20.2.1 tag framing",
    "priority": "P1",
-   "requirement_summary": "Typed ValueSource codec encodes/decodes none [0] NULL, object [1] DeviceObjectReference and address [2] BACnetAddress. Object retains optional device plus required object identifiers. The stream decoder returns the next absolute offset after one choice; required fields, primitive ranges and closing tags are validated.",
+   "requirement_summary": "Typed ValueSource codec encodes/decodes none [0] NULL, object [1] DeviceObjectReference and address [2] BACnetAddress. Object retains optional device plus required object identifiers. The stream decoder returns the next absolute offset after one choice; required fields, primitive ranges and closing tags are validated. The address alternative's MAC is at most BACnetAddress::MAX_MAC_LEN (18) octets in both directions (#1156).",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-types/src/constructed/mod.rs",
@@ -4982,6 +4990,7 @@
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_rejects_every_truncated_vector_and_invalid_start_without_panic",
     "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_rejects_malformed_choices_members_and_framing",
+    "crates/bacnet-encoding/src/constructed/tests/value_source.rs::value_source_address_mac_holds_to_the_bacnet_address_bound",
     "crates/bacnet-types/src/primitives.rs::object_identifier_new_rejects_type_overflow",
     "crates/bacnet-types/src/primitives.rs::object_identifier_addressable_rejects_type_overflow",
     "crates/bacnet-types/src/primitives.rs::object_identifier_checked_instance_boundaries"
@@ -4994,8 +5003,8 @@
    "notes": [
     "Typed-codec foundation; the bounded end-to-end #824 mechanism has separate evidence in BACNET-19-COMMAND-SOURCE-TRACKING. #823 specialized COV remains separate. Golden bytes are independently derived from Clause21 productions and Clause20.2 OID fields, not round-trip-only evidence.",
     "Generic decoding preserves any legal 10-bit OID type/22-bit instance including wildcard and non-Device optional identifiers, network0 and empty MAC. Those forms are datatype acceptance, not trusted source provenance.",
-    "ObjectIdentifier construction enforces wire widths; ValueSource encoding retains fallible MAC-length validation before output mutation. No source producer, object property-array behavior, correction authorization, specialized COV, new PropertyValue variant or exact-whole-value wrapper is added.",
-    "A complete-property writer must require end == payload.len(); concatenated consumers retain suffixes. Existing timestamp codecs are reused unchanged. Broader object/service support statuses are not promoted."
+    "ObjectIdentifier construction enforces wire widths; ValueSource encoding refuses a MAC past BACnetAddress::MAX_MAC_LEN (18 octets) before output mutation, and decoding refuses one before copying it, through the recipient codec's shared check (#1156).",
+    "No source producer, object property-array behavior, correction authorization, specialized COV, new PropertyValue variant or exact-whole-value wrapper is added. A complete-property writer must require end == payload.len(); concatenated consumers retain suffixes. Existing timestamp codecs are reused unchanged. Broader object/service support statuses are not promoted."
    ]
   },
   {
@@ -5061,7 +5070,9 @@
    "negative_tests": [
     "crates/bacnet-objects/src/command_source/tests.rs::command_source_invalid_writes_are_atomic_and_metadata_is_paired",
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/command_source.rs::command_source_local_required_identity_membership_and_owner_replacement",
-    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/command_source.rs::command_source_wire_wpm_prefix_and_create_initial_values_rollback"
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/command_source.rs::command_source_wire_wpm_prefix_and_create_initial_values_rollback",
+    "crates/bacnet-objects/src/command_source/tests.rs::remote_origin_mac_holds_to_the_bacnet_address_bound",
+    "crates/bacnet-server/src/server/requests/recipient_mac_bound_tests.rs::write_property_of_a_value_source_mac_past_the_bound_is_invalid_data_type"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -5077,7 +5088,8 @@
     "NULL retaining the relinquishing writer in its inactive slot is the selected documented inference. Context-free tracked writes and direct Priority_Array writes are denied; the unsourced AV setter is removed.",
     "WPM preserves prefix/coordinate, CreateObject rolls back initialization failure, factory AV remains unsupported, Schedule priority16 and complete target index remain unchanged, Staging generation checks remain.",
     "Endpoint inbound allowlist and custom default writer semantics are unchanged; writable decorators forward source authority. Specialized source-property COV is evidenced separately by BACNET-13-VALUE-SOURCE-COV.",
-    "No Command_Time_Array, broader object-family support or authentication claim. AV/BV/MSV tracking applies to commandable instances; their noncommandable construction modes are qualified separately by BACNET-12-VALUE-PRESENT-VALUE-ACCESS."
+    "No Command_Time_Array, broader object-family support or authentication claim. AV/BV/MSV tracking applies to commandable instances; their noncommandable construction modes are qualified separately by BACNET-12-VALUE-PRESENT-VALUE-ACCESS.",
+    "#1156: a remote origin's MAC must fit BACnetAddress::MAX_MAC_LEN (it was 255 octets), so the address Value_Source it publishes always encodes; a correction carrying a longer address does not decode and fails with PROPERTY / INVALID_DATA_TYPE, leaving the source unchanged."
    ]
   },
   {

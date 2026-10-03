@@ -162,7 +162,7 @@ impl BACnetObject for NotificationClass {
                 bacnet_encoding::constructed::encode_destination_list(
                     &mut buf,
                     &self.recipient_list,
-                );
+                )?;
                 Ok(PropertyValue::ApplicationData(buf.to_vec()))
             }
             _ => Err(common::unknown_property_error()),

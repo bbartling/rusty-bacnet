@@ -477,7 +477,8 @@ async fn target_reporter_recipient_pair_has_one_elected_owner_and_fences_every_c
         bacnet_encoding::constructed::encode_recipient(
             &mut value,
             &BACnetRecipient::Device(oid(ObjectType::DEVICE, 21)),
-        );
+        )
+        .unwrap();
         fixture
             .server
             .write_local(

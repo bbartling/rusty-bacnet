@@ -246,7 +246,8 @@ impl BACnetObject for TestNotificationClass {
                         })
                         .collect();
                     let mut list = BytesMut::new();
-                    bacnet_encoding::constructed::encode_destination_list(&mut list, &destinations);
+                    bacnet_encoding::constructed::encode_destination_list(&mut list, &destinations)
+                        .unwrap();
                     Ok(PropertyValue::ApplicationData(list.to_vec()))
                 }
             },

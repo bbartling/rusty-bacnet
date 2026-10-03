@@ -33,7 +33,7 @@ impl CustomClass {
             })
             .collect();
         let mut bytes = bytes::BytesMut::new();
-        bacnet_encoding::constructed::encode_destination_list(&mut bytes, &destinations);
+        bacnet_encoding::constructed::encode_destination_list(&mut bytes, &destinations).unwrap();
         Self::serving(PropertyValue::ApplicationData(bytes.to_vec()))
     }
 }

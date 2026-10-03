@@ -157,8 +157,9 @@ identifier; it replaces the earlier bare ObjectIdentifier payload.
 
 `bacnet_encoding::constructed::encode_value_source(&mut BytesMut, &BACnetValueSource)`
 returns `Result<(), Error>` and appends one framed CHOICE. Object-identifier widths
-are validated at construction. Unencodable MAC lengths are rejected by this codec
-before changing the buffer.
+are validated at construction. An address MAC longer than
+`BACnetAddress::MAX_MAC_LEN` (18) octets is refused with `Error::Encoding` before
+the buffer changes, and the decoder refuses one as malformed (#1156).
 `decode_value_source(&[u8], offset)` returns `Result<(BACnetValueSource, usize), Error>`;
 the second value is the next absolute offset, and suffix bytes remain available.
 A consumer decoding a complete property payload must check that this offset equals
@@ -1673,13 +1674,21 @@ framing, through the shared `bacnet-encoding` codecs.
   that brought it. `add_destination` returns `Result` and refuses past the cap
   too, and `recipient_list()` reads the list. An address recipient's MAC is at
   most `BACnetAddress::MAX_MAC_LEN` (18) octets, the B/IPv6 form (#1124):
-  `decode_destination` reads the recipient with `decode_configured_recipient`,
-  which refuses a longer one, so a write fails with PROPERTY /
-  INVALID_DATA_TYPE and `add_destination` refuses it with the same code. The
+  `decode_destination` reads the recipient with `decode_recipient`, which
+  refuses a longer one, so a write fails with PROPERTY / INVALID_DATA_TYPE and
+  `add_destination` refuses it with the same code. The
   Audit_Notification_Recipient has the same bound, refused there with PROPERTY /
-  INVALID_DATA_ENCODING. The generic `decode_recipient` takes any length, as
-  COV subscription lists and audit records report addresses learned off the
-  network. Only the framed form in `PropertyValue::ApplicationData` is a
+  INVALID_DATA_ENCODING. Every `BACnetAddress` codec holds to it (#1156):
+  `decode_recipient` wherever a recipient travels (COV subscription lists,
+  audit notifications and records, the GetEnrollmentSummary filter), the
+  ValueSource codec and the AuditLogQuery address filters, sharing
+  `check_decoded_mac_len`. Their encoders refuse a longer MAC with
+  `Error::Encoding` before writing, through `check_encoded_mac_len`, so
+  `encode_recipient`, `encode_destination(_list)` and the
+  `encode_cov_(multiple_)subscription(_list)` family return `Result`. The
+  stack stores nothing it could not encode: COV admission refuses a subscriber
+  whose address is longer, and so does a remote command origin. Only the
+  framed form in `PropertyValue::ApplicationData` is a
   Recipient_List value; the flat `PropertyValue::List` layout from before #152
   is refused (#1125). Routing holds every Notification Class, a custom object
   included, to the same cap: a class serving a longer list gets

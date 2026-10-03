@@ -409,3 +409,33 @@ fn command_source_owner_matrix_retains_original_token() {
     )
     .unwrap();
 }
+
+#[test]
+fn remote_origin_mac_holds_to_the_bacnet_address_bound() {
+    // #1156: a remote writer is published as an address Value_Source, which
+    // encodes only when its MAC fits BACnetAddress::MAX_MAC_LEN octets. The
+    // origin check keeps a longer one out, so nothing stored fails to read.
+    let origin = |len: usize| CommandOrigin::Remote {
+        actual_address: BACnetAddress {
+            network_number: 7,
+            mac_address: MacAddr::from_slice(&vec![0xA5; len]),
+        },
+        binding: CommandDeviceBinding::Unknown,
+    };
+    for (mut o, value) in objects() {
+        let longest = origin(BACnetAddress::MAX_MAC_LEN);
+        o.write_property_from(P::PRESENT_VALUE, None, value.clone(), Some(8), &longest)
+            .unwrap();
+        let BACnetValueSource::Address(published) = source(o.as_ref(), None) else {
+            panic!("address source")
+        };
+        assert_eq!(published.mac_address.len(), BACnetAddress::MAX_MAC_LEN);
+        let too_long = origin(BACnetAddress::MAX_MAC_LEN + 1);
+        assert!(too_long.validate().is_err());
+        let before = snapshot(o.as_ref());
+        assert!(o
+            .write_property_from(P::PRESENT_VALUE, None, value.clone(), Some(7), &too_long)
+            .is_err());
+        assert_eq!(snapshot(o.as_ref()), before);
+    }
+}

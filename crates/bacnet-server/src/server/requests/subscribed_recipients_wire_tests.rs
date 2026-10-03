@@ -37,7 +37,7 @@ fn device(instance: u32, minutes: u32) -> BACnetEventNotificationSubscription {
 
 fn framed(subscriptions: &[BACnetEventNotificationSubscription]) -> Vec<u8> {
     let mut buf = BytesMut::new();
-    encode_event_notification_subscription_list(&mut buf, subscriptions);
+    encode_event_notification_subscription_list(&mut buf, subscriptions).unwrap();
     buf.to_vec()
 }
 

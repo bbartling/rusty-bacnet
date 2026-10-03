@@ -16,25 +16,44 @@ entries, give each its own slug (`1092-units.md`, `1092-averaging.md`).
 ---
 section: Fixed
 ---
-- **Access Door out-of-service writes (wire):** what changed, from a user's
-  point of view, naming the issue (#1131).
-  - A nested bullet, indented two spaces.
-
-  A further paragraph, also indented two spaces.
+- **Breaking (wire):** Access Door accepts Door_Status, Lock_Status and
+  Door_Alarm_State writes while out of service (#1131).
 ```
 
 - `section` is the heading the entry goes under: `Added`, `Changed`,
   `Deprecated`, `Removed`, `Fixed`, `Security` or `Migration notes`.
 - The body is one Markdown bullet starting with `- `, exactly as it will read
-  in `CHANGELOG.md`. Indent continuation lines, nested bullets and further
-  paragraphs two spaces. Mark wire-format and breaking changes in bold, as the
-  existing entries do.
+  in `CHANGELOG.md`. Indent continuation lines two spaces.
+- Keep it short (#1188): one or two high-level sentences saying what changed
+  for a user, naming the issue. No nested bullets, no second paragraph, and no
+  datatypes, error codes or test lists: readers who want the detail follow the
+  issue or the commit. `changelog.py check` rejects an entry over 300
+  characters, or 500 under `Migration notes`, counting each line break as one
+  space and a link by its text.
+- Mark wire-format and breaking changes in bold, as above: `**Breaking
+  (wire):**`, `**Breaking (Rust API):**`, `**Wire:**`, `**Python API:**` and so
+  on.
+- A breaking change that needs user action also adds a `Migration notes`
+  fragment saying what to change, named `<issue>-<slug>-migration.md`:
+
+  ```markdown
+  ---
+  section: Migration notes
+  ---
+  - **Group (Rust API, #1134):** `GroupObject::add_member` takes a
+    `ReadAccessSpecification` and returns `Result`. `PropertyReference` and
+    `ReadAccessSpecification` moved to `bacnet_types::constructed`, with
+    their codecs in `bacnet_encoding::constructed`; update imports.
+  ```
+
 - Write relative links from the repository root (`docs/rust-api.md#bbmd`), as
   `CHANGELOG.md` will see them.
 - No trailing whitespace, and the file ends with a single newline.
 
 A release section lists its headings in the order above, and the entries
 under each by issue number, then slug; fragments without an issue come last.
+`assemble` ends each entry with a link to the GitHub commit that merged its
+fragment into dev, so don't add one yourself.
 
 Conformance ledger claims keep citing `CHANGELOG.md`, with the issue in the
 note, since that is where the entry lands at release.

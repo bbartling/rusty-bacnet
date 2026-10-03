@@ -111,7 +111,8 @@ fn encoded_destination(process_identifier: u32) -> PropertyValue {
     bacnet_encoding::constructed::encode_destination(
         &mut encoded,
         &destination(process_identifier),
-    );
+    )
+    .unwrap();
     PropertyValue::ApplicationData(encoded.to_vec())
 }
 
@@ -362,7 +363,7 @@ fn read_range_splits_framed_recipient_list_into_destinations() {
     assert_ack(&all, &items, (true, true, false), None);
     let mut framed = BytesMut::new();
     let destinations: Vec<_> = (1..=3).map(destination).collect();
-    bacnet_encoding::constructed::encode_destination_list(&mut framed, &destinations);
+    bacnet_encoding::constructed::encode_destination_list(&mut framed, &destinations).unwrap();
     assert_eq!(all.item_data, framed.to_vec());
 
     let second = call(
@@ -468,7 +469,7 @@ fn read_range_splits_subscribed_recipients_into_subscriptions() {
         },
     ];
     let mut framed = BytesMut::new();
-    encode_event_notification_subscription_list(&mut framed, &subscriptions);
+    encode_event_notification_subscription_list(&mut framed, &subscriptions).unwrap();
     let mut forwarder = crate::server::test_forwarder::TestForwarder::new(1);
     forwarder
         .subscribed_recipients
@@ -480,7 +481,7 @@ fn read_range_splits_subscribed_recipients_into_subscriptions() {
         .iter()
         .map(|subscription| {
             let mut encoded = BytesMut::new();
-            encode_event_notification_subscription(&mut encoded, subscription);
+            encode_event_notification_subscription(&mut encoded, subscription).unwrap();
             PropertyValue::ApplicationData(encoded.to_vec())
         })
         .collect();
