@@ -1,6 +1,7 @@
 //! Access Rights Positive_Access_Rules and Negative_Access_Rules (#1316):
 //! the rules the setters store and refuse, and the arrays as reads serve
-//! them.
+//! them; and Enable (#1332). `rights_writes_tests.rs` covers network writes
+//! of the arrays.
 
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
@@ -235,25 +236,71 @@ fn access_rights_rules_refuse_a_non_device_device_identifier() {
 }
 
 #[test]
-fn access_rights_rule_arrays_stay_read_only_on_the_network() {
-    let mut rights = AccessRightsObject::new(7, "AR-7").unwrap();
+fn access_rights_setters_refuse_more_rules_than_the_cap() {
     let kept = rule(Some(schedule(1)), None);
+    let mut rights = AccessRightsObject::new(7, "AR-7").unwrap();
     rights.set_positive_access_rules([kept.clone()]).unwrap();
-    for property in [P::POSITIVE_ACCESS_RULES, P::NEGATIVE_ACCESS_RULES] {
-        for (index, value) in [
-            (
-                None,
-                PropertyValue::List(vec![element(&kept), element(&kept)]),
-            ),
-            (Some(1), element(&kept)),
-            (Some(0), PropertyValue::Unsigned(3)),
-        ] {
-            assert_property_error(
-                rights.write_property(property, index, value, None),
-                ErrorCode::WRITE_ACCESS_DENIED,
-            );
-        }
+    rights.set_negative_access_rules([kept.clone()]).unwrap();
+    let too_many = vec![BACnetAccessRule::new(None, None, true); MAX_ACCESS_RULES + 1];
+    for result in [
+        rights.set_positive_access_rules(too_many.clone()),
+        rights.set_negative_access_rules(too_many),
+    ] {
+        assert!(
+            matches!(result, Err(Error::Protocol { class, code })
+                if class == ErrorClass::RESOURCES.to_raw() as u32
+                    && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32),
+            "{result:?}"
+        );
     }
-    assert_eq!(rights.positive_access_rules(), [kept]);
-    assert!(rights.negative_access_rules().is_empty());
+    assert_eq!(rights.positive_access_rules(), std::slice::from_ref(&kept));
+    assert_eq!(rights.negative_access_rules(), std::slice::from_ref(&kept));
+    // The cap itself fits.
+    let full = vec![BACnetAccessRule::new(None, None, true); MAX_ACCESS_RULES];
+    rights.set_positive_access_rules(full).unwrap();
+    assert_eq!(
+        rights
+            .read_property(P::POSITIVE_ACCESS_RULES, Some(0))
+            .unwrap(),
+        PropertyValue::Unsigned(MAX_ACCESS_RULES as u64)
+    );
+}
+
+#[test]
+fn access_rights_enable_defaults_true_and_follows_the_setter_and_writes() {
+    let mut rights = AccessRightsObject::new(7, "AR-7").unwrap();
+    assert!(rights.enable());
+    assert_eq!(
+        rights.read_property(P::LOG_ENABLE, None).unwrap(),
+        PropertyValue::Boolean(true)
+    );
+    assert!(rights.property_list().contains(&P::LOG_ENABLE));
+    assert!(rights.is_writable_property(P::LOG_ENABLE));
+
+    // Disabling the object leaves each rule's own flag as it was.
+    let kept = rule(Some(schedule(1)), Some(local(ObjectType::ACCESS_POINT, 2)));
+    rights.set_positive_access_rules([kept.clone()]).unwrap();
+    rights.set_enable(false);
+    assert!(!rights.enable());
+    assert_eq!(
+        rights.read_property(P::LOG_ENABLE, None).unwrap(),
+        PropertyValue::Boolean(false)
+    );
+    assert_eq!(rights.positive_access_rules(), std::slice::from_ref(&kept));
+
+    rights
+        .write_property(P::LOG_ENABLE, None, PropertyValue::Boolean(true), None)
+        .unwrap();
+    assert!(rights.enable());
+    for wrong in [
+        PropertyValue::Unsigned(0),
+        PropertyValue::Enumerated(0),
+        PropertyValue::Null,
+    ] {
+        assert_property_error(
+            rights.write_property(P::LOG_ENABLE, None, wrong, None),
+            ErrorCode::INVALID_DATA_TYPE,
+        );
+    }
+    assert!(rights.enable());
 }

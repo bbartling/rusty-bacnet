@@ -367,13 +367,17 @@ pub(crate) fn decode_write_property_value(
     {
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
-    // The Schedule's arrays of constructed elements reach the object as raw
-    // bytes, which it splits and decodes with the shared codecs; index 0, the
-    // array size, stays an Unsigned (#1057).
+    // The Schedule's arrays of constructed elements, and an Access Rights
+    // object's two rule arrays, reach the object as raw bytes, which it
+    // splits and decodes with the shared codecs; index 0, the array size,
+    // stays an Unsigned (#1057, #1330).
     if array_index != Some(0)
         && matches!(
             property,
-            PropertyIdentifier::WEEKLY_SCHEDULE | PropertyIdentifier::EXCEPTION_SCHEDULE
+            PropertyIdentifier::WEEKLY_SCHEDULE
+                | PropertyIdentifier::EXCEPTION_SCHEDULE
+                | PropertyIdentifier::POSITIVE_ACCESS_RULES
+                | PropertyIdentifier::NEGATIVE_ACCESS_RULES
         )
     {
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));

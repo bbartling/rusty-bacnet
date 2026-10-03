@@ -155,6 +155,7 @@ mod metadata_topology;
 mod point;
 mod point_authorization;
 mod rights;
+mod rights_writes;
 mod user;
 mod zone;
 mod zone_occupancy;
