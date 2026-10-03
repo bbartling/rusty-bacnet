@@ -4,6 +4,7 @@ use crate::mutation::{
     MutationAuthorizationContext, MutationDecision, MutationDecisions, MutationPolicy,
     MutationTarget, MutationTrust,
 };
+use bacnet_objects::command::CommandRun;
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
 use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
@@ -18,14 +19,16 @@ pub(super) enum InitialCovNotification {
 }
 
 /// Post-write work a mutating service collects while it runs, consumed after
-/// the response is built: written objects for event evaluation, COV changes
-/// and staged writes to execute.
+/// the response is built: written objects for event evaluation, COV changes,
+/// staged writes to execute and Command runs to start.
 #[derive(Default)]
 pub(super) struct MutationEffects {
     pub(super) written_oids: Vec<ObjectIdentifier>,
     pub(super) coarse_cov_oids: Vec<ObjectIdentifier>,
     pub(super) life_safety_cov_changes: Vec<LifeSafetyCovChange>,
     pub(super) staging_plans: Vec<StagingWritePlan>,
+    /// Command lists a Present_Value write started (#1150).
+    pub(super) command_runs: Vec<CommandRun>,
     /// Timestamped references to evaluate again after the post-write fanout,
     /// which may not have selected them (#856).
     pub(super) timed_revisits: Vec<crate::cov::CovSubscriptionKey>,
@@ -121,6 +124,7 @@ impl Request<'_> {
             coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
+            command_runs,
             ..
         } = effects;
         if let Err(error) = self.authorize(|| {
@@ -152,6 +156,10 @@ impl Request<'_> {
                 |oid| BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(oid)),
             );
             if let Ok(oid) = &result {
+                command_runs.extend(super::super::local_writes::take_command_runs(
+                    &mut db,
+                    std::slice::from_ref(oid),
+                ));
                 let capture = {
                     let table = cov_table.read().await;
                     if crate::life_safety_cov::is_life_safety_object(*oid) {
@@ -189,7 +197,7 @@ impl Request<'_> {
             Err(e) => self.error::<T>(&e),
         };
         // Targets a written Schedule commanded on re-evaluation.
-        schedule_cov.merge_into(coarse_cov_oids, life_safety_cov_changes);
+        schedule_cov.merge_into(coarse_cov_oids, life_safety_cov_changes, command_runs);
         response
     }
 
@@ -205,6 +213,7 @@ impl Request<'_> {
             coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
+            command_runs,
             timed_revisits,
         } = effects;
         let (outcome, exact_changes, plans, schedule_cov) = {
@@ -237,6 +246,10 @@ impl Request<'_> {
             let changes = snapshots.changes(&db, committed_oids);
             timed_revisits.extend_from_slice(observer.life_safety_queued());
             let plans = BACnetServer::<T>::take_staging_plans(&mut db, committed_oids);
+            command_runs.extend(super::super::local_writes::take_command_runs(
+                &mut db,
+                committed_oids,
+            ));
             let schedule_cov =
                 crate::schedule::reevaluate_written(&mut db, committed_oids, cov_table).await;
             (outcome, changes, plans, schedule_cov)
@@ -276,7 +289,7 @@ impl Request<'_> {
         );
         *life_safety_cov_changes = exact_changes;
         // Targets a written Schedule commanded on re-evaluation.
-        schedule_cov.merge_into(coarse_cov_oids, life_safety_cov_changes);
+        schedule_cov.merge_into(coarse_cov_oids, life_safety_cov_changes, command_runs);
         response
     }
 
@@ -520,6 +533,7 @@ impl Request<'_> {
         schedule_cov.merge_into(
             &mut effects.coarse_cov_oids,
             &mut effects.life_safety_cov_changes,
+            &mut effects.command_runs,
         );
         match result {
             Ok(()) => self.simple_ack(),

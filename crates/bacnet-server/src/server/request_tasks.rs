@@ -4,9 +4,10 @@ use std::future::{poll_fn, Future};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::task::{JoinError, JoinSet};
 
-/// Owns inbound request handlers and their independent segmented responses,
-/// not timers or notification workers started by services. The optional DCC
-/// bucket shares this native-server lifetime, independent of task registrations.
+/// Owns inbound request handlers, their independent segmented responses and
+/// the Command object runs a write starts (#1150), not timers or notification
+/// workers started by services. The optional DCC bucket shares this
+/// native-server lifetime, independent of task registrations.
 pub(super) struct RequestTasks(
     Mutex<State>,
     Admission,
@@ -27,6 +28,7 @@ struct State {
 }
 
 /// Descendants must not keep their owning JoinSet alive through a cycle.
+#[derive(Clone)]
 pub(super) struct RequestTaskSpawner(Weak<RequestTasks>);
 
 impl RequestTaskSpawner {

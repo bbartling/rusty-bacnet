@@ -145,6 +145,8 @@ jobs:
           python3 scripts/changelog.py check
       - name: Conformance ledger notes script tests
         run: python3 -m unittest discover -s scripts -p 'test_ledger_notes_split.py'
+      - name: Conformance docs merge safety
+        run: python3 -m unittest discover -s scripts -p 'test_generate_conformance_docs.py'
 
   clippy:
     name: Clippy

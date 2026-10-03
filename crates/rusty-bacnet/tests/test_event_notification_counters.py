@@ -1,4 +1,4 @@
-"""Installed-wheel event telemetry: BACnetServer.event_notification_counters() (#1142)."""
+"""Installed-wheel event telemetry: BACnetServer.event_notification_counters() (#1142, #1160)."""
 import ast
 import importlib.util
 from pathlib import Path
@@ -13,10 +13,43 @@ FIELDS = frozenset({
     "recipient_list_unavailable",
     "recipient_list_invalid",
     "recipient_list_too_long",
+    "device_recipient_unbound",
+    "recipient_unroutable",
+    "confirmed_broadcast_recipient",
     "confirmed_no_invoke_id",
     "confirmed_rejected",
     "confirmed_unanswered",
 })
+
+
+def destination(recipient: bytes, confirmed: bool) -> bytes:
+    """One framed Recipient_List entry, active all week and all day for every transition."""
+    return (b"\x82\x01\xfe"            # valid-days: every day
+            + b"\xb4\x00\x00\x00\x00"  # from-time 00:00:00.00
+            + b"\xb4\x17\x3b\x3b\x63"  # to-time 23:59:59.99
+            + recipient
+            + b"\x21\x01"              # process-identifier 1
+            + (b"\x11" if confirmed else b"\x10")
+            + b"\x82\x05\xe0")         # transitions: all three
+
+
+# device [0]: Device 99, which the server never heard from.
+UNBOUND_DEVICE = b"\x0c\x02\x00\x00\x63"
+# address [1]: a MAC on the global broadcast network 65535.
+MAC_ON_NETWORK_65535 = b"\x1e\x22\xff\xff\x65\x06\x7f\x00\x00\x01\xba\xc1\x1f"
+# address [1]: network 0 with an empty MAC, the local broadcast.
+LOCAL_BROADCAST = b"\x1e\x21\x00\x60\x1f"
+
+
+async def enable_high_limit(server, target):
+    for prop, value in [
+        (PropertyIdentifier.HIGH_LIMIT, PropertyValue.real(1)),
+        # high-limit-enable only
+        (PropertyIdentifier.LIMIT_ENABLE, PropertyValue.bit_string(6, b"\x40")),
+        # every transition enabled
+        (PropertyIdentifier.EVENT_ENABLE, PropertyValue.bit_string(5, b"\xe0")),
+    ]:
+        await server.write_property_local(target, prop, value, source_object=None)
 
 
 class EventNotificationCountersTests(unittest.IsolatedAsyncioTestCase):
@@ -32,14 +65,7 @@ class EventNotificationCountersTests(unittest.IsolatedAsyncioTestCase):
         try:
             expected = dict.fromkeys(FIELDS, 0)
             self.assertEqual(await server.event_notification_counters(), expected)
-            for prop, value in [
-                (PropertyIdentifier.HIGH_LIMIT, PropertyValue.real(1)),
-                # high-limit-enable only
-                (PropertyIdentifier.LIMIT_ENABLE, PropertyValue.bit_string(6, b"\x40")),
-                # every transition enabled
-                (PropertyIdentifier.EVENT_ENABLE, PropertyValue.bit_string(5, b"\xe0")),
-            ]:
-                await server.write_property_local(target, prop, value, source_object=None)
+            await enable_high_limit(server, target)
             self.assertEqual(await server.event_notification_counters(), expected)
 
             # NORMAL -> HIGH_LIMIT finds no Notification Class 0.
@@ -50,6 +76,34 @@ class EventNotificationCountersTests(unittest.IsolatedAsyncioTestCase):
             await server.stop()
         with self.assertRaisesRegex(RuntimeError, "^server not started$"):
             await server.event_notification_counters()
+
+    async def test_each_route_skip_is_counted_once(self):
+        server = BACnetServer(503_808, interface="127.0.0.1", port=0,
+                              broadcast_address="127.0.0.1")
+        server.add_analog_input(1, "Route skips")
+        server.add_notification_class(0, "Route skip class")
+        target = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
+        await server.start()
+        try:
+            await server.write_property_local(
+                ObjectIdentifier(ObjectType.NOTIFICATION_CLASS, 0),
+                PropertyIdentifier.RECIPIENT_LIST,
+                PropertyValue.application_data(
+                    destination(UNBOUND_DEVICE, False)
+                    + destination(MAC_ON_NETWORK_65535, False)
+                    + destination(LOCAL_BROADCAST, True)),
+                source_object=None)
+            await enable_high_limit(server, target)
+            expected = dict.fromkeys(FIELDS, 0)
+            self.assertEqual(await server.event_notification_counters(), expected)
+
+            # NORMAL -> HIGH_LIMIT matches all three destinations and skips each.
+            await server.set_present_value_local(target, PropertyValue.real(2))
+            expected.update(device_recipient_unbound=1, recipient_unroutable=1,
+                            confirmed_broadcast_recipient=1)
+            self.assertEqual(await server.event_notification_counters(), expected)
+        finally:
+            await server.stop()
 
     def test_installed_stub_shape(self):
         spec = importlib.util.find_spec("rusty_bacnet")

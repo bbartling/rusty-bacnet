@@ -12,7 +12,8 @@ use tracing::{debug, warn};
 use crate::router_table::RouterTable;
 
 use super::control_policy::{ControlClass, ControlGate};
-use super::reject::{relay_reject, send_reject, Refused};
+use super::local_control::LocalControl;
+use super::reject::{route_received_reject, send_reject, Refused};
 use super::{IngressContext, SendRequest};
 
 /// One validated Initialize-Routing-Table / Initialize-Routing-Table-Ack
@@ -99,11 +100,15 @@ const _: () = assert!(
 ///
 /// RB-09: protected controls authorize post-validation, pre-lock, lock-free
 /// via `control`. Deny is a silent drop: no mutation, relay, ACK, or Reject.
+///
+/// `local` is the router's own network-control consumer, which hears about
+/// a reject addressed to this router (#1175).
 pub(super) async fn handle_network_message(
     table: &Arc<Mutex<RouterTable>>,
     send_txs: &[mpsc::Sender<SendRequest>],
     ctx: &IngressContext,
     control: &ControlGate,
+    local: &LocalControl,
 ) {
     const MAX_LEARNED_ROUTES: usize = 256;
 
@@ -312,8 +317,10 @@ pub(super) async fn handle_network_message(
             tbl.apply_reject(rejected_net, port_idx, reason, Instant::now());
         }
 
-        // Pass it on toward the node its DNET/DADR names (#1158).
-        relay_reject(table, send_txs, ctx).await;
+        // Hand it to this router's own consumer when it is addressed here
+        // (#1175), otherwise pass it on toward the node its DNET/DADR names
+        // (#1158).
+        route_received_reject(table, send_txs, local, ctx).await;
     } else if msg_type == NetworkMessageType::ROUTER_BUSY_TO_NETWORK.to_raw() {
         // Clauses 6.4.5/6.6.3.6: an optional list of 2-octet networks. When
         // the list is absent, the router is asking that traffic be held back

@@ -2395,6 +2395,9 @@ class EventNotificationCounters(TypedDict):
     recipient_list_unavailable: int
     recipient_list_invalid: int
     recipient_list_too_long: int
+    device_recipient_unbound: int
+    recipient_unroutable: int
+    confirmed_broadcast_recipient: int
     confirmed_no_invoke_id: int
     confirmed_rejected: int
     confirmed_unanswered: int
@@ -2672,7 +2675,14 @@ class BACnetServer:
     ) -> None: ...
 
     # --- Building/transportation ---
-    def add_elevator_group(self, instance: int, name: str) -> None: ...
+    def add_elevator_group(
+        self,
+        instance: int,
+        name: str,
+        machine_room_id: Optional[ObjectIdentifier] = None,
+    ) -> None:
+        """Add an Elevator Group; machine_room_id must be a Positive Integer Value."""
+        ...
     def add_escalator(self, instance: int, name: str) -> None: ...
     def add_lift(self, instance: int, name: str, num_floors: int) -> None: ...
     def add_staging(
@@ -2919,10 +2929,14 @@ class BACnetServer:
         Notification Class lookup failed closed: the class is missing, its
         Recipient_List can't be read or decoded, or it serves more than 32
         destinations. An empty or fully filtered list, DCC and Event_Enable are
-        not counted. The confirmed fields count notifications to one recipient
-        that found no free invoke ID, were answered with an Error, Reject or
-        Abort, or drew no acknowledgment after the last retry. Fields are
-        sampled independently. Raises RuntimeError before start and after stop.
+        not counted. The next three count matched destinations skipped while
+        their route was resolved: a Device recipient with no current binding,
+        a recipient that can't be routed as configured, and a confirmed
+        recipient at a broadcast address. The confirmed fields count
+        notifications to one recipient that found no free invoke ID, were
+        answered with an Error, Reject or Abort, or drew no acknowledgment
+        after the last retry. Fields are sampled independently. Raises
+        RuntimeError before start and after stop.
         """
         ...
 

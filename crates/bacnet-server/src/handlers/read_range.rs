@@ -185,7 +185,14 @@ pub fn handle_read_range(
     service_data: &[u8],
     response: &mut BytesMut,
 ) -> Result<(), Error> {
-    let selected = prepare_read_range(db, None, ReadRangeRequest::decode(service_data)?)?;
+    let selected = prepare_read_range(db, None, ReadRangeRequest::decode(service_data)?).map_err(
+        |failure| match failure {
+            ReadRangeFailure::Service(error) => error,
+            ReadRangeFailure::Bytes | ReadRangeFailure::Work => {
+                unreachable!("a read with no limit ran past one")
+            }
+        },
+    )?;
     append_read_range_ack_with(
         &selected.request,
         &selected.items,
@@ -211,8 +218,8 @@ pub(crate) fn handle_read_range_budgeted(
 /// executor-owned Device definitions and the request-local COV lists that
 /// ReadProperty serves, so both services read the same value.
 ///
-/// Observe one request outcome, never a page-budget failure. The hook
-/// captures identity/result only; delivery must follow guard release.
+/// Observe one request outcome, never a page-budget or work-limit failure.
+/// The hook captures identity/result only; delivery must follow guard release.
 pub(crate) fn read_range_request_observed(
     db: &ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
@@ -224,15 +231,13 @@ pub(crate) fn read_range_request_observed(
     let target = request.object_identifier;
     let property = request.property_identifier;
     let index = request.property_array_index;
-    let result = prepare_read_range(db, view, request)
-        .map_err(ReadRangeFailure::Service)
-        .and_then(|selected| {
-            page::append_page_with(&selected, response, budget, encode_property_value)
-        });
+    let result = prepare_read_range(db, view, request).and_then(|selected| {
+        page::append_page_with(&selected, response, budget, encode_property_value)
+    });
     let result = match result {
         Ok(()) => Ok(()),
         Err(ReadRangeFailure::Service(error)) => Err(error),
-        Err(ReadRangeFailure::Bytes) => return Err(ReadRangeFailure::Bytes),
+        Err(failure) => return Err(failure),
     };
     completed(target, property, index, &result);
     result.map_err(ReadRangeFailure::Service)
@@ -258,27 +263,31 @@ fn read_range_items(
     view: Option<&DeviceReadContext<'_>>,
     object: &dyn BACnetObject,
     request: &ReadRangeRequest,
-) -> Result<Vec<PropertyValue>, Error> {
+) -> Result<Vec<PropertyValue>, ReadRangeFailure> {
     let property = request.property_identifier;
     let index = request.property_array_index;
     if index.is_some() && !object.is_array_property(property) {
         // Read the whole property first so an unknown one keeps its error.
         object.read_property(property, None)?;
-        return Err(Error::Protocol {
+        return Err(ReadRangeFailure::Service(Error::Protocol {
             class: ErrorClass::PROPERTY.to_raw() as u32,
             code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
-        });
+        }));
     }
     let value = group_present_value::read_served_property(db, view, object, property, index)?;
     // An indexed array element is never a list: 135-2020 defines no
     // BACnetARRAY of BACnetLIST property.
     if index.is_some() || !object.is_list_property(property) {
-        return Err(Error::Protocol {
+        return Err(ReadRangeFailure::Service(Error::Protocol {
             class: ErrorClass::SERVICES.to_raw() as u32,
             code: ErrorCode::PROPERTY_IS_NOT_A_LIST.to_raw() as u32,
-        });
+        }));
     }
-    items::list_items(request.object_identifier.object_type(), property, value)
+    Ok(items::list_items(
+        request.object_identifier.object_type(),
+        property,
+        value,
+    )?)
 }
 
 /// Select the request's page from one read of the target list. A running
@@ -289,7 +298,7 @@ fn prepare_read_range(
     db: &ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
     request: ReadRangeRequest,
-) -> Result<PreparedReadRange, Error> {
+) -> Result<PreparedReadRange, ReadRangeFailure> {
     let stored = db.get(&request.object_identifier).ok_or(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
@@ -318,13 +327,13 @@ fn prepare_read_range(
             count,
         }) => {
             if request.property_identifier != PropertyIdentifier::LOG_BUFFER {
-                return Err(list_item_not_numbered());
+                return Err(list_item_not_numbered().into());
             }
             let identities = object
                 .log_record_identities_internal()
                 .ok_or_else(list_item_not_numbered)?;
             if identities.len() != items.len() {
-                return Err(list_item_not_numbered());
+                return Err(list_item_not_numbered().into());
             }
             let reference = identities
                 .iter()
@@ -340,7 +349,7 @@ fn prepare_read_range(
             count,
         }) => {
             if request.property_identifier != PropertyIdentifier::LOG_BUFFER {
-                return Err(list_item_not_timestamped());
+                return Err(list_item_not_timestamped().into());
             }
             resident_identities = object.log_record_identities_internal();
             select_time_range(

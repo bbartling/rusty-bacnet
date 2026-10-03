@@ -1,4 +1,5 @@
 use super::device_bindings::{BindingFreshness, DeviceResolution};
+use super::event_suppression::EventSuppression;
 use super::*;
 use bacnet_objects::notification_class::local_day_and_time;
 use bacnet_types::bitstring::DaysOfWeek;
@@ -104,16 +105,6 @@ impl RecipientRoute {
         }
     }
 
-    pub(super) fn permits_confirmed(&self) -> bool {
-        matches!(
-            self,
-            Self::LocalUnicast(_)
-                | Self::BoundLocalUnicast { .. }
-                | Self::RemoteUnicast { .. }
-                | Self::BoundRoutedUnicast { .. }
-        )
-    }
-
     pub(super) fn into_confirmed(self) -> Option<ConfirmedRecipientRoute> {
         let (canonical_peer, local_target, remote, freshness) = match self {
             Self::LocalUnicast(mac) => (canonical_direct_peer(&mac), Some(mac), None, None),
@@ -150,47 +141,51 @@ impl RecipientRoute {
         })
     }
 
-    /// Log only bounded classification data for unusable recipients.
-    pub(super) fn is_deliverable(&self, notification_class: u32) -> bool {
-        match self {
+    /// The counter a matched destination on this route moves when it is
+    /// skipped, or `None` when the route can carry the notification. Logs only
+    /// bounded classification data. Each route shape has exactly one outcome,
+    /// so a skipped destination counts once.
+    pub(super) fn skip(
+        &self,
+        confirmed: bool,
+        notification_class: u32,
+    ) -> Option<EventSuppression> {
+        let (reason, suppression) = match self {
             Self::LocalUnicast(_)
             | Self::BoundLocalUnicast { .. }
-            | Self::LocalBroadcast
-            | Self::RemoteBroadcast(_)
-            | Self::GlobalBroadcast
             | Self::RemoteUnicast { .. }
-            | Self::BoundRoutedUnicast { .. } => true,
+            | Self::BoundRoutedUnicast { .. } => return None,
+            Self::LocalBroadcast | Self::RemoteBroadcast(_) | Self::GlobalBroadcast
+                if !confirmed =>
+            {
+                return None
+            }
+            // Clause 6.3 restricts broadcast to Unconfirmed-Request-PDUs, and
+            // downgrading would drop the acknowledgment the recipient was
+            // configured to require, so both are skips.
+            Self::LocalBroadcast | Self::RemoteBroadcast(_) | Self::GlobalBroadcast => {
+                warn!(
+                    notification_class,
+                    "Recipient requests confirmed notifications at a broadcast address; \
+                     Clause 6.3 permits only unconfirmed PDUs there, skipping"
+                );
+                return Some(EventSuppression::ConfirmedBroadcastRecipient);
+            }
             Self::ContradictoryGlobal => {
                 warn!(
                     notification_class,
                     "Skipping recipient: global broadcast network has a unicast address"
                 );
-                false
+                return Some(EventSuppression::RecipientUnroutable);
             }
-            Self::UnknownDevice => {
-                warn!(
-                    notification_class,
-                    reason = "unknown",
-                    "Skipping Device recipient: binding is unusable"
-                );
-                false
-            }
-            Self::StaleDevice => {
-                warn!(
-                    notification_class,
-                    reason = "stale",
-                    "Skipping Device recipient: binding is unusable"
-                );
-                false
-            }
-            Self::InvalidDevice => {
-                warn!(
-                    notification_class,
-                    reason = "invalid",
-                    "Skipping Device recipient: binding is unusable"
-                );
-                false
-            }
-        }
+            Self::UnknownDevice => ("unknown", EventSuppression::DeviceRecipientUnbound),
+            Self::StaleDevice => ("stale", EventSuppression::DeviceRecipientUnbound),
+            Self::InvalidDevice => ("invalid", EventSuppression::RecipientUnroutable),
+        };
+        warn!(
+            notification_class,
+            reason, "Skipping Device recipient: binding is unusable"
+        );
+        Some(suppression)
     }
 }

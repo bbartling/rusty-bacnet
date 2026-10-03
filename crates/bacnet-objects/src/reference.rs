@@ -2,7 +2,9 @@
 //! properties (Clause 21 production): Loop `Controlled_Variable_Reference`,
 //! `Manipulated_Variable_Reference`, `Setpoint_Reference` (Clause 12.17, the
 //! last as the optional member of `BACnetSetpointReference`) and Pulse
-//! Converter `Input_Reference` (Clause 12.23).
+//! Converter `Input_Reference` (Clause 12.23). The Averaging
+//! `Object_Property_Reference` (Clause 12.5.13) shares it through
+//! [`ReferenceFrame::Device`]: its production may carry a Device member.
 //!
 //! Three input shapes are accepted, and nothing else:
 //!
@@ -27,9 +29,12 @@
 //! Error pairings follow Clause 15.9.1.3 and the object's existing arms: a
 //! value of the wrong BACnet datatype is PROPERTY / INVALID_DATA_TYPE, and a
 //! framed form the production's codec rejects is PROPERTY /
-//! INVALID_DATA_ENCODING.
+//! INVALID_DATA_ENCODING. Under [`ReferenceFrame::Device`] a Device member is
+//! valid encoding, so it is refused as PROPERTY /
+//! OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED instead (#1153).
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
@@ -46,6 +51,13 @@ pub(crate) enum ReferenceFrame {
     /// Also accept the `BACnetSetpointReference` opening/closing tag 0 frame
     /// (Loop Setpoint_Reference's Clause 21 production).
     Setpoint,
+    /// The device-qualified members of `BACnetDeviceObjectPropertyReference`
+    /// (Averaging Object_Property_Reference). The object samples only its
+    /// own device, so a reference with a Device member is refused as
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. It can't tell which Device holds
+    /// it, so the bundled server drops a Device member naming its own Device
+    /// before the value gets here (#1153).
+    Device,
 }
 
 /// Build the local (flat `List`) read form of a reference property: object
@@ -155,11 +167,15 @@ fn decode_legacy_list(items: &[PropertyValue]) -> Result<BACnetObjectPropertyRef
 /// \[0\] frame with NO inner members is the production's absent-alternative
 /// (the member is OPTIONAL; Clause 12.17 Setpoint_Reference uses the fixed
 /// value in Setpoint when no reference exists) and clears, exactly like a
-/// `Null` write.
+/// `Null` write. `Device` decodes the device-qualified production instead
+/// (see [`decode_local_device_reference`]).
 fn decode_framed(
     bytes: &[u8],
     frame: ReferenceFrame,
 ) -> Result<Option<BACnetObjectPropertyReference>, Error> {
+    if frame == ReferenceFrame::Device {
+        return decode_local_device_reference(bytes).map(Some);
+    }
     let bare = bacnet_encoding::constructed::decode_object_property_reference(bytes);
     match (bare, frame) {
         (Ok(reference), _) => Ok(Some(reference)),
@@ -169,8 +185,32 @@ fn decode_framed(
                 Err(_) => Err(common::invalid_data_encoding_error()),
             }
         }
-        (Err(_), ReferenceFrame::Bare) => Err(common::invalid_data_encoding_error()),
+        (Err(_), _) => Err(common::invalid_data_encoding_error()),
     }
+}
+
+/// Strict decode of exactly one `BACnetDeviceObjectPropertyReference`, held
+/// to this device: a reference that decodes but names a Device is
+/// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and anything that doesn't decode in
+/// full is INVALID_DATA_ENCODING.
+fn decode_local_device_reference(bytes: &[u8]) -> Result<BACnetObjectPropertyReference, Error> {
+    let (reference, end) =
+        bacnet_encoding::constructed::decode_device_object_property_reference(bytes, 0)
+            .map_err(|_| common::invalid_data_encoding_error())?;
+    if end != bytes.len() {
+        return Err(common::invalid_data_encoding_error());
+    }
+    if reference.device_identifier.is_some() {
+        return Err(common::protocol_error(
+            ErrorClass::PROPERTY,
+            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+        ));
+    }
+    Ok(BACnetObjectPropertyReference {
+        object_identifier: reference.object_identifier,
+        property_identifier: reference.property_identifier,
+        property_array_index: reference.property_array_index,
+    })
 }
 
 #[cfg(test)]

@@ -31,6 +31,8 @@ pub struct LightingOutputObject {
     blink_warn_enable: bool,
     egress_time: u32,
     egress_active: bool,
+    /// Default_Fade_Time in milliseconds, within 100..=86_400_000.
+    default_fade_time: u32,
     /// Default_Ramp_Rate in percent per second, within 0.1..=100.0.
     default_ramp_rate: f32,
     /// Default_Step_Increment in percent, within 0.1..=100.0.
@@ -59,6 +61,7 @@ impl LightingOutputObject {
             blink_warn_enable: false,
             egress_time: 0,
             egress_active: false,
+            default_fade_time: *DEFAULT_FADE_TIME_MS.start(),
             default_ramp_rate: 100.0,
             default_step_increment: 1.0,
             out_of_service: false,
@@ -95,6 +98,21 @@ impl LightingOutputObject {
         Ok(())
     }
 
+    /// Set Default_Fade_Time, the milliseconds a fade request without its own
+    /// fade time takes. A new object uses 100, the shortest fade the clause
+    /// allows, as Default_Ramp_Rate starts at its fastest rate.
+    ///
+    /// Clause 12.54.16 bounds it to 100..=86_400_000 (one day); a value
+    /// outside that range is refused with VALUE_OUT_OF_RANGE and the property
+    /// is left unchanged. WriteProperty applies the same check.
+    pub fn set_default_fade_time(&mut self, milliseconds: u32) -> Result<(), Error> {
+        if !DEFAULT_FADE_TIME_MS.contains(&milliseconds) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.default_fade_time = milliseconds;
+        Ok(())
+    }
+
     /// Set Default_Ramp_Rate, the percent-per-second rate a ramp request
     /// without its own rate uses. A new object uses 100.0.
     ///
@@ -117,6 +135,9 @@ impl LightingOutputObject {
         Ok(())
     }
 }
+
+/// The Default_Fade_Time range of Clause 12.54.16, in milliseconds.
+const DEFAULT_FADE_TIME_MS: std::ops::RangeInclusive<u32> = 100..=86_400_000;
 
 /// Check a Default_Ramp_Rate or Default_Step_Increment value, which share the
 /// 0.1..=100.0 range.
@@ -179,7 +200,9 @@ impl BACnetObject for LightingOutputObject {
             p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
                 Ok(PropertyValue::Real(self.relinquish_default))
             }
-            p if p == PropertyIdentifier::DEFAULT_FADE_TIME => Ok(PropertyValue::Unsigned(0)),
+            p if p == PropertyIdentifier::DEFAULT_FADE_TIME => {
+                Ok(PropertyValue::Unsigned(u64::from(self.default_fade_time)))
+            }
             p if p == PropertyIdentifier::DEFAULT_RAMP_RATE => {
                 Ok(PropertyValue::Real(self.default_ramp_rate))
             }
@@ -265,8 +288,15 @@ impl BACnetObject for LightingOutputObject {
             return Err(common::invalid_data_type_error());
         }
 
-        // DEFAULT_RAMP_RATE and DEFAULT_STEP_INCREMENT go through the
-        // range-checked setters.
+        // DEFAULT_FADE_TIME, DEFAULT_RAMP_RATE and DEFAULT_STEP_INCREMENT go
+        // through the range-checked setters. A fade time too large for the
+        // setter's u32 is past the range too.
+        if property == PropertyIdentifier::DEFAULT_FADE_TIME {
+            if let PropertyValue::Unsigned(v) = value {
+                return self.set_default_fade_time(common::u64_to_u32(v)?);
+            }
+            return Err(common::invalid_data_type_error());
+        }
         if property == PropertyIdentifier::DEFAULT_RAMP_RATE {
             if let PropertyValue::Real(v) = value {
                 return self.set_default_ramp_rate(v);

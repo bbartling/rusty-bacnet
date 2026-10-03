@@ -15,7 +15,9 @@ use crate::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyPresenceCondition, PropertyWriteCapability,
 };
 use crate::traits::BACnetObject;
+use cov_increment::CovIncrement;
 
+mod cov_increment;
 mod metadata;
 
 // ---------------------------------------------------------------------------
@@ -36,6 +38,16 @@ mod metadata;
 /// property (the numeric value types, whose tables require it): a field that
 /// starts at NO_UNITS and reads as Enumerated, a `units` getter and a
 /// validated `set_units` setter. Units has no network write route.
+///
+/// The optional `cov_increment` entry names the COV_Increment datatype of the
+/// numeric value types (`u64` for Unsigned, `f64` for Double). It adds a
+/// writable COV_Increment row starting at 0, a validated `set_cov_increment`
+/// setter, and the `cov_increment` answer the server's COV change detection
+/// compares Present_Value moves against.
+///
+/// Every generated type serves Current_Command_Priority from its priority
+/// array: the 1-based slot Present_Value comes from, or NULL when
+/// Relinquish_Default is in effect.
 macro_rules! define_value_object_commandable {
     (
         name: $struct_name:ident,
@@ -50,6 +62,7 @@ macro_rules! define_value_object_commandable {
         rd_validate: $rd_validate:expr,
         copy_type: $is_copy:tt,
         $(units: $units_ty:ty,)?
+        $(cov_increment: $cov_ty:ty,)?
         property_metadata: $property_metadata:expr
         $(,)?
     ) => {
@@ -66,6 +79,10 @@ macro_rules! define_value_object_commandable {
             priority_array: [Option<$val_type>; 16],
             relinquish_default: $val_type,
             $(units: $units_ty,)?
+            $(
+            /// COV_Increment in the table's datatype.
+            cov_increment: $cov_ty,
+            )?
         }
 
         impl $struct_name {
@@ -83,6 +100,7 @@ macro_rules! define_value_object_commandable {
                     priority_array: Default::default(),
                     relinquish_default: $default,
                     $(units: <$units_ty>::NO_UNITS,)?
+                    $(cov_increment: <$cov_ty as CovIncrement>::ZERO,)?
                 })
             }
 
@@ -127,6 +145,21 @@ macro_rules! define_value_object_commandable {
                 Ok(())
             }
             )?
+
+            $(
+            /// Set COV_Increment, the smallest Present_Value change that
+            /// sends a COV notification. A new object uses 0, so any change
+            /// notifies.
+            ///
+            /// WriteProperty goes through the same check. A Large Analog
+            /// Value refuses a negative or non-finite increment with
+            /// VALUE_OUT_OF_RANGE and keeps the old one; every Unsigned value
+            /// is a valid increment.
+            pub fn set_cov_increment(&mut self, increment: $cov_ty) -> Result<(), Error> {
+                self.cov_increment = <$cov_ty as CovIncrement>::validate(increment)?;
+                Ok(())
+            }
+            )?
         }
 
         impl BACnetObject for $struct_name {
@@ -163,9 +196,17 @@ macro_rules! define_value_object_commandable {
                     p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
                         Ok(($rd_wrap)(&self.relinquish_default))
                     }
+                    p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
+                        Ok(common::current_command_priority(&self.priority_array))
+                    }
                     $(
                     p if p == PropertyIdentifier::UNITS => {
                         Ok(PropertyValue::Enumerated(<$units_ty>::to_raw(self.units)))
+                    }
+                    )?
+                    $(
+                    p if p == PropertyIdentifier::COV_INCREMENT => {
+                        Ok(<$cov_ty as CovIncrement>::to_property(self.cov_increment))
                     }
                     )?
                     _ => Err(common::unknown_property_error()),
@@ -203,6 +244,12 @@ macro_rules! define_value_object_commandable {
                     let extracted = ($prop_to_pv)(value)?;
                     return self.set_relinquish_default(extracted);
                 }
+                $(
+                if property == PropertyIdentifier::COV_INCREMENT {
+                    let increment = <$cov_ty as CovIncrement>::from_property(value)?;
+                    return self.set_cov_increment(increment);
+                }
+                )?
                 if let Some(result) =
                     common::write_out_of_service(&mut self.out_of_service, property, &value)
                 {
@@ -228,6 +275,12 @@ macro_rules! define_value_object_commandable {
             fn supports_cov(&self) -> bool {
                 true
             }
+
+            $(
+            fn cov_increment(&self) -> Option<f64> {
+                Some(<$cov_ty as CovIncrement>::as_f64(self.cov_increment))
+            }
+            )?
 
             fn is_writable_property(&self, property: PropertyIdentifier) -> bool {
                 crate::property_metadata::is_writable_in_metadata($property_metadata, property)
@@ -369,6 +422,7 @@ define_value_object_commandable! {
     rd_validate: (|_: &i32| -> Result<(), Error> { Ok(()) }),
     copy_type: copy,
     units: EngineeringUnits,
+    cov_increment: u64,
     property_metadata: metadata::INTEGER_VALUE_BASE,
 }
 
@@ -388,6 +442,7 @@ define_value_object_commandable! {
     rd_validate: (|_: &u64| -> Result<(), Error> { Ok(()) }),
     copy_type: copy,
     units: EngineeringUnits,
+    cov_increment: u64,
     property_metadata: metadata::POSITIVE_INTEGER_VALUE_BASE,
 }
 
@@ -413,6 +468,7 @@ define_value_object_commandable! {
     }),
     copy_type: copy,
     units: EngineeringUnits,
+    cov_increment: f64,
     property_metadata: metadata::LARGE_ANALOG_VALUE_BASE,
 }
 
@@ -551,6 +607,12 @@ const TIME_VALUE_PROPERTY_METADATA: &[PropertyMetadata] = &[
         PropertyConformance::Optional,
         Some(PropertyPresenceCondition::Commandable),
         PropertyWriteCapability::Always,
+    ),
+    PropertyMetadata::new(
+        PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
+        PropertyConformance::Optional,
+        Some(PropertyPresenceCondition::Commandable),
+        PropertyWriteCapability::ReadOnly,
     ),
     PropertyMetadata::new(
         PropertyIdentifier::PROPERTY_LIST,

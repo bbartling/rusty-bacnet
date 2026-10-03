@@ -4,11 +4,12 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
-use bacnet_types::enums::{ObjectType, PropertyIdentifier as P};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P};
+use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use tracing::warn;
 
-use super::ObjectDatabase;
+use super::{LocalDevice, ObjectDatabase};
 use crate::traits::BACnetObject;
 
 /// Local maximum idle/configuration reconciliation delay and failure backoff.
@@ -22,6 +23,8 @@ struct Configuration {
     reference: PropertyValue,
     target: ObjectIdentifier,
     property: P,
+    /// The reference's optional Device member.
+    device: Option<ObjectIdentifier>,
 }
 
 struct Schedule {
@@ -61,6 +64,15 @@ impl TrendPollSchedule {
 impl ObjectDatabase {
     /// Poll due local TrendLog references synchronously and return the next wait.
     ///
+    /// Only this database is read. A reference whose Device member names
+    /// another device (see [`ObjectDatabase::local_device`]) is never read
+    /// here, even when a same-numbered local object exists: each due poll
+    /// logs a failure record for it instead, PROPERTY /
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A local read that fails logs a
+    /// failure record with the error a ReadProperty of it would report:
+    /// OBJECT / UNKNOWN_OBJECT for a missing object, or the read's own error
+    /// (#1183).
+    ///
     /// The caller must hold exclusive database access for this whole call. The
     /// bound monotonic clock drives scheduling; the shared Device clock provides
     /// each actual acquisition timestamp. Without either clock an attempt cannot
@@ -79,6 +91,7 @@ impl ObjectDatabase {
             return RECONCILE;
         };
         let mut eligible = HashSet::new();
+        let local = self.local_device();
         for oid in self.find_by_type(ObjectType::TREND_LOG) {
             let Some(configuration) = self.get(&oid).and_then(configuration) else {
                 continue;
@@ -105,15 +118,12 @@ impl ObjectDatabase {
             }
             let target = entry.configuration.target;
             let property = entry.configuration.property;
+            let device = entry.configuration.device;
             let accepted = self
                 .clock_frame()
                 .filter(|frame| frame.is_valid_actual_datetime())
                 .map(|frame| {
-                    let datum = self
-                        .get(&target)
-                        .and_then(|target| target.read_property(property, None).ok())
-                        .map(|value| property_value_to_log_datum(&value))
-                        .unwrap_or(LogDatum::NullValue);
+                    let datum = self.acquire(local, device, target, property);
                     let record = BACnetLogRecord {
                         date: frame.local_date,
                         time: frame.local_time,
@@ -155,6 +165,46 @@ impl ObjectDatabase {
             remaining
         }
     }
+
+    /// One acquisition: the datum read from `target`'s `property`, or the
+    /// failure that stopped the read (Clause 12.25, Log_Buffer).
+    fn acquire(
+        &self,
+        local: LocalDevice,
+        device: Option<ObjectIdentifier>,
+        target: ObjectIdentifier,
+        property: P,
+    ) -> LogDatum {
+        if !local.is_local(device) {
+            // Reading another device's property is not supported here.
+            return failure(
+                ErrorClass::PROPERTY,
+                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+            );
+        }
+        let Some(target) = self.get(&target) else {
+            return failure(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT);
+        };
+        match target.read_property(property, None) {
+            Ok(value) => property_value_to_log_datum(&value),
+            Err(Error::Protocol { class, code } | Error::Structured { class, code, .. }) => {
+                LogDatum::Failure {
+                    error_class: class,
+                    error_code: code,
+                }
+            }
+            // An error with no BACnet class and code reports as ReadProperty
+            // would answer it.
+            Err(_) => failure(ErrorClass::SERVICES, ErrorCode::OTHER),
+        }
+    }
+}
+
+fn failure(class: ErrorClass, code: ErrorCode) -> LogDatum {
+    LogDatum::Failure {
+        error_class: u32::from(class.to_raw()),
+        error_code: u32::from(code.to_raw()),
+    }
 }
 
 fn configuration(object: &dyn BACnetObject) -> Option<Configuration> {
@@ -175,18 +225,25 @@ fn configuration(object: &dyn BACnetObject) -> Option<Configuration> {
     let PropertyValue::List(items) = &reference else {
         return None;
     };
-    let [PropertyValue::ObjectIdentifier(target), PropertyValue::Unsigned(property), ..] =
+    let [PropertyValue::ObjectIdentifier(target), PropertyValue::Unsigned(property), rest @ ..] =
         items.as_slice()
     else {
         return None;
     };
-    // Retain the existing local, unindexed read behavior. The full reference is
-    // compared for scheduling ownership, without adding remote/indexed support.
+    // A Device member that isn't an identifier can't be told local or remote.
+    let device = match rest.get(1) {
+        None | Some(PropertyValue::Null) => None,
+        Some(PropertyValue::ObjectIdentifier(device)) => Some(*device),
+        Some(_) => return None,
+    };
+    // Retain the existing unindexed read behavior. The full reference is
+    // compared for scheduling ownership, without adding indexed support.
     Some(Configuration {
         interval,
         logging_type,
         target: *target,
         property: P::from_raw(*property as u32),
+        device,
         reference,
     })
 }

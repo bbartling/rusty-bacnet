@@ -12,6 +12,7 @@ mod action_list;
 mod assigned_landing_calls;
 mod calendar;
 mod cov_subscription;
+mod event_notification_subscription;
 mod event_parameter;
 mod fault_parameter;
 mod landing_call_status;
@@ -22,6 +23,7 @@ mod property_access_result;
 mod read_access;
 mod recipient;
 mod schedule;
+mod shed_level;
 mod staging;
 mod value_source;
 

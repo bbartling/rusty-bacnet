@@ -32,7 +32,7 @@ impl BACnetObject for Probe {
     fn supports_cov(&self) -> bool {
         true
     }
-    fn cov_increment(&self) -> Option<f32> {
+    fn cov_increment(&self) -> Option<f64> {
         Some(2.0)
     }
     fn read_property(&self, p: PropertyIdentifier, i: Option<u32>) -> Result<PropertyValue, Error> {

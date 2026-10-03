@@ -38,7 +38,7 @@ fn pics_load_control_property_metadata_is_exact() {
                 .write_property(
                     P::REQUESTED_SHED_LEVEL,
                     None,
-                    PropertyValue::List(vec![PropertyValue::Unsigned(50)]),
+                    PropertyValue::ApplicationData(vec![0x09, 50]),
                     None,
                 )
                 .unwrap();

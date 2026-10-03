@@ -154,3 +154,32 @@ async fn confirmed_notification_refused_while_stopping_is_not_counted() {
     assert!(harness.unicast_frames().is_empty());
     assert_eq!(counters(&harness), EventNotificationCounters::default());
 }
+
+/// A confirmed destination skipped at route resolution counts there, before
+/// any invoke ID is reserved, never as a confirmed transaction failure (#1160).
+#[tokio::test]
+async fn confirmed_route_skips_reserve_no_invoke_id() {
+    let unknown = ObjectIdentifier::new(ObjectType::DEVICE, 42).unwrap();
+    let harness = Harness::new(
+        vec![
+            destination_for(address_recipient(0, &[]), true),
+            destination_for(address_recipient(1000, &[]), true),
+            destination_for(BACnetRecipient::Device(unknown), true),
+            destination_for(address_recipient(65535, &TARGET), true),
+        ],
+        60_000,
+    )
+    .await;
+    harness.distribute().await;
+    assert!(harness.unicast_frames().is_empty() && harness.broadcast_frames().is_empty());
+    assert_eq!(harness.notification_transactions.active_count(), 0);
+    assert_eq!(
+        counters(&harness),
+        EventNotificationCounters {
+            device_recipient_unbound: 1,
+            recipient_unroutable: 1,
+            confirmed_broadcast_recipient: 2,
+            ..Default::default()
+        }
+    );
+}

@@ -303,8 +303,8 @@ impl BACnetObject for PulseConverterObject {
         true
     }
 
-    fn cov_increment(&self) -> Option<f32> {
-        Some(self.cov_increment)
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
     }
 
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {

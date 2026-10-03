@@ -47,6 +47,9 @@ pub(crate) struct EventEnrollmentProjectionSnapshot {
     monitored_value: PropertyValue,
     parameters: BACnetEventParameter,
     status_flags: CapturedStatusFlags,
+    /// The FLOATING_LIMIT setpoint the evaluator read. It is present only
+    /// when the evaluator resolved the setpoint reference to this device, so
+    /// the projection never resolves that reference a second way (#1184).
     setpoint_value: Option<f32>,
 }
 
@@ -363,7 +366,6 @@ fn project_event_enrollment_normal(
         (
             EventType::FLOATING_LIMIT,
             BACnetEventParameter::FloatingLimit {
-                setpoint_reference,
                 low_diff_limit,
                 high_diff_limit,
                 ..
@@ -376,9 +378,6 @@ fn project_event_enrollment_normal(
                 || !low_diff_limit.is_finite()
                 || !high_diff_limit.is_finite()
             {
-                return None;
-            }
-            if setpoint_reference.device_identifier.is_some() {
                 return None;
             }
             let setpoint_value = snapshot.setpoint_value?;
