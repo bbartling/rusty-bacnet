@@ -3922,6 +3922,8 @@
     "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::every_deliverable_route_moves_no_counter",
     "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_recipient_list_takes_framed_writes_up_to_the_cap",
     "crates/bacnet-server/src/server/local_network_number_tests.rs::notification_class_and_forwarded_copies_to_this_network_go_without_a_dnet",
+    "crates/bacnet-server/src/server/local_network_number_tests/localize.rs::localize_takes_only_routes_naming_this_network_as_local",
+    "crates/bacnet-server/src/server/local_network_number_tests/localize.rs::a_confirmed_notification_to_this_network_is_completed_by_the_direct_ack",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_recipient_lists_read_as_the_destinations_written",
     "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{recipient_lists_read_as_the_destinations_written,equality_and_repr_follow_the_element_production}"
    ],
@@ -3947,7 +3949,9 @@
     "crates/bacnet-encoding/src/constructed/tests/recipient.rs::recipient_mac_bound_holds_in_both_directions",
     "crates/bacnet-services/src/enrollment_summary_width_tests.rs::enrollment_filter_recipient_mac_holds_to_the_bacnet_address_bound",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::FallbackTests::test_a_value_that_is_not_the_expected_production_keeps_its_octets",
-    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{a_value_that_is_not_the_expected_production_falls_back,empty_values_and_other_properties_keep_the_generic_shape}"
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{a_value_that_is_not_the_expected_production_falls_back,empty_values_and_other_properties_keep_the_generic_shape}",
+    "crates/bacnet-server/src/server/local_network_number_tests/localize.rs::localize_leaves_every_route_alone_while_the_number_is_unknown",
+    "crates/bacnet-server/src/server/local_network_number_tests/localize.rs::a_device_bound_at_the_broadcast_mac_on_this_network_is_unroutable"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3971,6 +3975,7 @@
      "The ValueSource and AuditLogQuery address codecs share the same check (check_decoded_mac_len, check_encoded_mac_len). Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, and COV admission and remote command origins refuse a longer direct MAC, so nothing the stack stores fails to encode.",
      "A Notification Forwarder's Recipient_List takes the same framed writes and cap.",
      "A recipient naming the local network's known number, as an address or a routed Device binding, is sent with no DNET: a unicast to its MAC, or a local broadcast for an empty or link broadcast MAC.",
+     "A Device binding routed to the local network's known number at the link broadcast MAC is skipped and counts in recipient_unroutable, as a local binding at that MAC does.",
      "Python reads either object's Recipient_List as a list of Destination mappings with every key, the form add_notification_forwarder takes; a value that doesn't decode as destinations stays application_data octets."
     ]
   },
@@ -8588,7 +8593,7 @@
     "Positive Number fences cover UNKNOWN, BDT/FDT admission/refusal, alternate-sender compatibility, precedence and representative invalid/routed controls; registration NAKs retain DBTN attempts and the timer retries registration.",
     "An ordinary client ReadProperty completes during live Number controls, and awaited stop permits exclusive socket rebind before client Drop. No configured client number, new registration policy or complete Annex J claim is added.",
     "Standalone-client MS/TP LoopbackSerial tests in Tokio and DedicatedThread modes reuse the full-server/endpoint fixture: they decode complete broadcast DNER NNI frames behind the same positive FIFO fences, complete the client's own ReadProperty to the peer while a post-enqueue Number producer is held, and release the producer and serial owner on canceled stop and bare drop. Simulator evidence only, with no RS-485 timing or hardware claim.",
-    "The full server and standalone client publish the number they hold on NetworkLayer::local_network_number for event routing to read without a lock; with a registered port the copy is taken from the port's state under the database write lock that changed it, so the two never disagree."
+    "The full server publishes the number it holds on NetworkLayer::local_network_number, where its event routing reads it without a lock; with a registered port the copy is taken from the port's state under the database write lock that changed it, so the two never disagree. The standalone client publishes its learned number on its own layer, which nothing in the client reads."
    ]
   },
   {

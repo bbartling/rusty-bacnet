@@ -386,3 +386,5 @@ async fn notification_class_and_forwarded_copies_to_this_network_go_without_a_dn
     assert_eq!(counters, EventNotificationCounters::default());
     started.stop().await;
 }
+
+mod localize;

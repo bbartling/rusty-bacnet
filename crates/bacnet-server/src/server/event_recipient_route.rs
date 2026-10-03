@@ -24,6 +24,7 @@ pub(super) fn system_utc_recipient_filter_time(now: Duration) -> (DaysOfWeek, Ti
 }
 
 /// The transport action selected for one matched Notification Class recipient.
+#[derive(Debug, PartialEq, Eq)]
 pub(super) enum RecipientRoute {
     LocalUnicast(MacAddr),
     BoundLocalUnicast {
@@ -85,8 +86,10 @@ impl RecipientRoute {
     /// local broadcast or a unicast to the MAC (Clause 6.5.1). A non-routing
     /// node drops an NPDU whose DNET names a network (Clause 6.5.2.1), so a
     /// routed form might never arrive. A link broadcast MAC is a local
-    /// broadcast for an address and unusable for a Device binding, as on a
-    /// local binding. With the number unknown every route stays as it is.
+    /// broadcast for an address. For a Device binding it names no single
+    /// device, so the binding is unusable ([`Self::InvalidDevice`], skipped
+    /// as unroutable), as a local binding at that MAC is. With the number
+    /// unknown every route stays as it is.
     pub(super) fn localize(
         self,
         local_network: Option<u16>,

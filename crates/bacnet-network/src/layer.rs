@@ -596,8 +596,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
 
     /// The number of the network this layer's one port is attached to, as
     /// the owner of its Number controls last published it, and unknown until
-    /// then. The full server and the standalone client publish here; clone
-    /// the handle to publish from another task.
+    /// then. The full server and the standalone client publish into their own
+    /// layers internally; a stack built directly on this layer publishes its
+    /// own, and can clone the handle to publish from another task.
     pub fn local_network_number(&self) -> &LocalNetworkNumber {
         &self.local_network_number
     }
