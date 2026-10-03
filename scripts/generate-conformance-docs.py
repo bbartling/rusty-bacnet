@@ -6,9 +6,8 @@ Rows may use the lean schema or the old one; ledger_schema.py reads both.
 conformance link check (check_ledger_links.py).
 
 With --check this also verifies that every test anchor in the ledger resolves
-(see check_ledger_anchors.py). A row's notes may be one string or an array of
-entries, which the docs print joined with single spaces (see
-ledger_notes_split.py)."""
+(see check_ledger_anchors.py). A row's notes are an array of entries, which the
+docs print joined with single spaces."""
 
 from __future__ import annotations
 
@@ -18,7 +17,6 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import check_ledger_anchors
-from ledger_notes_split import notes_text
 import check_ledger_links
 import check_ledger_style
 import ledger_schema
@@ -124,7 +122,7 @@ def pics_draft(data: dict) -> str:
             "BACNET-12-PROPERTY-METADATA-CORE",
             "BACNET-13-LIFE-SAFETY-OPERATION",
         }:
-            lines.append(f"| `{row['id']}` | {row['standard_anchor']} | {row['status']} | {notes_text(row['notes'])} |")
+            lines.append(f"| `{row['id']}` | {row['standard_anchor']} | {row['status']} | {ledger_schema.notes_text(row)} |")
     lines.append("")
     return "\n".join(lines)
 

@@ -161,6 +161,13 @@ class SchemaReaders(unittest.TestCase):
         with self.assertRaises(TypeError):
             ledger_schema.gaps({"id": "X", "gaps": "#1: x."})
 
+    def test_notes_read_as_their_entries_joined(self):
+        self.assertEqual(ledger_schema.notes_text({"notes": ["One.", "Two."]}), "One. Two.")
+        self.assertEqual(ledger_schema.notes_text({"notes": []}), "")
+        for bad in ("One. Two.", ["One.", 2], None):
+            with self.assertRaises(TypeError):
+                ledger_schema.notes_text({"id": "X", "notes": bad})
+
 
 if __name__ == "__main__":
     unittest.main()
