@@ -73,12 +73,14 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 use crate::layer::{is_group_delivery, AdmissionReceiver, QueueAdmissionCounters, ReceivedApdu};
+use crate::layer::{AdmissionSender, ReceivedNetworkControl};
 use crate::router_table::RouterTable;
 use bacnet_transport::port::TransportProvenance;
 
 mod control_messages;
 pub mod control_policy;
 mod forwarding;
+mod local_control;
 mod reject;
 
 use control_messages::handle_network_message;
@@ -86,6 +88,7 @@ pub use control_policy::{ControlAuthContext, ControlAuthorizer, ControlClass};
 pub use control_policy::{ControlDecisionCounters, ControlGate, ControlPolicy};
 pub use control_policy::{ControlServiceCounters, ControlTrust};
 use forwarding::{forward_broadcast, forward_unicast};
+use local_control::LocalControl;
 use reject::{refuse_address_too_long, route_refusal, send_reject, Refused};
 
 /// A send request to be forwarded on a port.
@@ -338,6 +341,8 @@ pub struct BACnetRouter {
     aging_task: Option<JoinHandle<()>>,
     /// NPDUs refused for a DLEN or SLEN past `NpduAddress::MAX_MAC_LEN`.
     address_length_drops: Arc<AtomicU64>,
+    /// Last sequence given to a control for the router's own consumer.
+    network_control_ingress_sequence: Arc<AtomicU64>,
 }
 
 impl BACnetRouter {
@@ -410,7 +415,7 @@ impl BACnetRouter {
         authorizer: Option<control_policy::ControlAuthorizer>,
     ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>), Error> {
         let gate = Arc::new(control_policy::ControlGate::new(policy, authorizer));
-        Self::start_dispatch_with_control(ports, false, gate)
+        Self::start_dispatch_with_control(ports, false, gate, None)
             .await
             .map(|(router, rx, _)| (router, rx))
     }
@@ -441,6 +446,7 @@ impl BACnetRouter {
             ports,
             track_depth,
             Arc::new(control_policy::ControlGate::permissive()),
+            None,
         )
         .await
     }
@@ -449,6 +455,7 @@ impl BACnetRouter {
         mut ports: Vec<RouterPort<T>>,
         track_depth: bool,
         control: Arc<control_policy::ControlGate>,
+        network_control: Option<AdmissionSender<ReceivedNetworkControl>>,
     ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>, QueueAdmissionCounters), Error> {
         let mut table = RouterTable::new();
 
@@ -567,11 +574,22 @@ impl BACnetRouter {
 
         let mut dispatch_tasks = Vec::new();
         let address_length_drops = Arc::new(AtomicU64::new(0));
+        let network_control_ingress_sequence = Arc::new(AtomicU64::new(0));
+        let local_control = Arc::new(LocalControl::new(
+            port_networks
+                .iter()
+                .copied()
+                .zip(port_local_macs.iter().cloned())
+                .collect(),
+            network_control,
+            Arc::clone(&network_control_ingress_sequence),
+        ));
 
         for (port_idx, mut rx) in port_receivers.into_iter().enumerate() {
             let table = Arc::clone(&table);
             let discovery = Arc::clone(&discovery);
             let control = Arc::clone(&control);
+            let local_control = Arc::clone(&local_control);
             let address_length_drops = Arc::clone(&address_length_drops);
             let local_tx = local_tx.clone();
             let send_txs = Arc::clone(&send_txs);
@@ -596,7 +614,12 @@ impl BACnetRouter {
                                     npdu,
                                 };
                                 dispatch_network_message(
-                                    &table, &discovery, &send_txs, &ctx, &control,
+                                    &table,
+                                    &discovery,
+                                    &send_txs,
+                                    &ctx,
+                                    &control,
+                                    &local_control,
                                 )
                                 .await;
                                 continue;
@@ -641,8 +664,12 @@ impl BACnetRouter {
                                 if let Some(route) = route {
                                     // Check reachability before forwarding (spec 6.6.3.6)
                                     if let Some(reason) = route_refusal(reachability) {
-                                        let refused =
-                                            Refused::frame(&send_txs[port_idx], &received, &npdu);
+                                        let refused = Refused::frame(
+                                            &send_txs[port_idx],
+                                            port_network,
+                                            &received,
+                                            &npdu,
+                                        );
                                         send_reject(&refused, dest_net, reason);
                                         continue;
                                     }
@@ -711,7 +738,12 @@ impl BACnetRouter {
                                         );
                                     }
                                     send_reject(
-                                        &Refused::frame(&send_txs[port_idx], &received, &npdu),
+                                        &Refused::frame(
+                                            &send_txs[port_idx],
+                                            port_network,
+                                            &received,
+                                            &npdu,
+                                        ),
                                         dest_net,
                                         RejectMessageReason::NOT_DIRECTLY_CONNECTED,
                                     );
@@ -731,6 +763,7 @@ impl BACnetRouter {
                             refuse_address_too_long(
                                 &send_txs[port_idx],
                                 port_idx,
+                                port_network,
                                 &received,
                                 &e,
                                 &address_length_drops,
@@ -785,6 +818,7 @@ impl BACnetRouter {
                 sender_tasks,
                 aging_task: Some(aging_task),
                 address_length_drops,
+                network_control_ingress_sequence,
             },
             local_rx,
             counters,
@@ -836,8 +870,9 @@ impl BACnetRouter {
 /// Clauses 6.4.19–6.4.20) always take local treatment, where their
 /// non-routed address restrictions are enforced. Reject-Message-To-Network
 /// (Clause 6.6.3.5) also always takes local treatment: it updates the local
-/// table and relays toward the origin, and must never be re-routed or
-/// answered with another reject.
+/// table, then either reaches `local` (when addressed to this router) or is
+/// relayed toward the node it names, and is never answered with another
+/// reject.
 ///
 /// Network messages never enter the local APDU queue here. Directed-forward
 /// paths mutate nothing and take no policy decision; APDUs never arrive here.
@@ -847,6 +882,7 @@ async fn dispatch_network_message(
     send_txs: &[mpsc::Sender<SendRequest>],
     ctx: &IngressContext,
     control: &control_policy::ControlGate,
+    local: &LocalControl,
 ) {
     let msg_type = match ctx.npdu.message_type {
         Some(t) => t,
@@ -857,7 +893,7 @@ async fn dispatch_network_message(
         || msg_type == NetworkMessageType::NETWORK_NUMBER_IS.to_raw()
         || msg_type == NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()
     {
-        handle_network_message(table, send_txs, ctx, control).await;
+        handle_network_message(table, send_txs, ctx, control, local).await;
         return;
     }
 
@@ -866,7 +902,7 @@ async fn dispatch_network_message(
         None => false,
     };
     if !directed_elsewhere {
-        handle_network_message(table, send_txs, ctx, control).await;
+        handle_network_message(table, send_txs, ctx, control, local).await;
         return;
     }
 
