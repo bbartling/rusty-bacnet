@@ -3,10 +3,11 @@
 //!
 //! The write only queues the run: under the guard that commits it, the
 //! Command object checks the number, sets In_Process and leaves a
-//! [`CommandRun`] for the server to take (`take_command_runs`). Each run then
-//! goes into the server's request task set as its own task, so neither the
-//! request that wrote Present_Value nor `write_local` waits for it, post
-//! delays included, and `stop` cancels it with the other request work.
+//! [`CommandRun`], which the server takes there and owns from then on
+//! (`crate::command_lists`). Each run then goes into the server's request
+//! task set as its own task, so neither the request that wrote Present_Value
+//! nor `write_local` waits for it, post delays included, and `stop` cancels
+//! it with the other request work.
 //!
 //! The commands are made one at a time, in list order, each through the
 //! same [`LocalWriter`] path as `write_local`: priorities, command-source
@@ -18,6 +19,7 @@
 use super::local_writes::{LocalWrite, LocalWriter};
 use super::request_tasks::RequestTaskSpawner;
 use super::*;
+use crate::command_lists::{RunHost, Unfinished};
 use bacnet_objects::command::CommandRun;
 use bacnet_types::constructed::BACnetActionCommand;
 
@@ -98,10 +100,11 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
             let runner = self.clone();
             self.tasks.spawn(async move {
                 let (source, generation) = (run.source, run.generation);
-                let execution = std::panic::AssertUnwindSafe(runner.execute(run));
+                let execution =
+                    std::panic::AssertUnwindSafe(crate::command_lists::execute(&runner, run));
                 if execution.catch_unwind().await.is_err() {
                     warn!(command = %source, "Command run panicked; ending it as failed");
-                    runner.complete(source, generation, false).await;
+                    crate::command_lists::complete(&runner, source, generation, false).await;
                 }
             });
         }
@@ -121,83 +124,14 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
             config: &self.config,
         }
     }
+}
 
-    /// Make the run's commands in order, then end it.
-    async fn execute(&self, run: CommandRun) {
-        let mut all_succeeded = true;
-        for (index, command) in run.commands.iter().enumerate() {
-            let Some(success) = self.make(&run, index, command).await else {
-                // The Command changed under the run; whatever replaced it
-                // owns In_Process now.
-                return;
-            };
-            all_succeeded &= success;
-            // Clause 12.10.8: the delay follows every attempt, failed or not,
-            // and comes before the next write or the end of the run.
-            if let Some(delay) = command.post_delay {
-                tokio::time::sleep(Duration::from_secs(u64::from(delay))).await;
-            }
-            if !success && command.quit_on_failure {
-                break;
-            }
-        }
-        self.complete(run.source, run.generation, all_succeeded)
-            .await;
+impl<T: TransportPort + 'static> RunHost for CommandRunner<T> {
+    fn database(&self) -> &Arc<RwLock<ObjectDatabase>> {
+        &self.db
     }
 
-    /// Make command `index` and record its outcome. `None` once the run is
-    /// stale.
-    async fn make(
-        &self,
-        run: &CommandRun,
-        index: usize,
-        command: &BACnetActionCommand,
-    ) -> Option<bool> {
-        let local = {
-            let db = self.db.read().await;
-            if db
-                .get(&run.source)
-                .and_then(|object| object.command_generation_internal())
-                != Some(run.generation)
-            {
-                return None;
-            }
-            // Clause 12.10.8 leaves writes to other devices optional. This
-            // server makes local ones only, so a command naming another
-            // Device fails like any refused write. Naming this Device is the
-            // same as naming none.
-            db.local_device().is_local(command.device_identifier)
-        };
-        let success = if local {
-            self.write(run.source, command).await
-        } else {
-            debug!(
-                command = %run.source,
-                device = ?command.device_identifier,
-                "Command list names another device; this server writes locally only"
-            );
-            false
-        };
-        let recorded = {
-            let mut db = self.db.write().await;
-            let recorded = db.get_mut(&run.source).is_some_and(|object| {
-                object.record_command_write_internal(run.generation, index, success)
-            });
-            if recorded {
-                let capture = self.cov_table.read().await.timed_capture(run.source);
-                capture.run(&db);
-            }
-            recorded
-        };
-        if !recorded {
-            return None;
-        }
-        BACnetServer::<T>::fire_cov_notifications(&self.writer().cov_context(), &run.source).await;
-        Some(success)
-    }
-
-    /// Write one command's value through the local write path; whether it
-    /// was accepted.
+    /// Write one command's value through the local write path.
     async fn write(&self, source: ObjectIdentifier, command: &BACnetActionCommand) -> bool {
         // The value reaches the target as a WriteProperty carrying the same
         // octets would, so constructed values take the shape the object
@@ -246,22 +180,18 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
         }
     }
 
-    /// End a run: In_Process back to FALSE and All_Writes_Successful set,
-    /// reported to property subscribers.
-    async fn complete(&self, source: ObjectIdentifier, generation: u64, all_succeeded: bool) {
-        let completed = {
-            let mut db = self.db.write().await;
-            let completed = db.get_mut(&source).is_some_and(|object| {
-                object.complete_command_run_internal(generation, all_succeeded)
-            });
-            if completed {
-                let capture = self.cov_table.read().await.timed_capture(source);
-                capture.run(&db);
-            }
-            completed
-        };
-        if completed {
-            BACnetServer::<T>::fire_cov_notifications(&self.writer().cov_context(), &source).await;
-        }
+    /// Timestamped references capture the change under its guard (#856).
+    async fn committed(&self, db: &ObjectDatabase, source: ObjectIdentifier) {
+        let capture = self.cov_table.read().await.timed_capture(source);
+        capture.run(db);
     }
+
+    /// Property subscribers hear of In_Process and All_Writes_Successful.
+    async fn report(&self, source: ObjectIdentifier) {
+        BACnetServer::<T>::fire_cov_notifications(&self.writer().cov_context(), &source).await;
+    }
+
+    /// The server cancels its runs only from `stop()`, which leaves them where
+    /// they stood; a panic is ended in [`Self::start`].
+    fn abandoned(&self, _left: Unfinished) {}
 }

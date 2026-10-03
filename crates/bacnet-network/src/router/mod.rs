@@ -73,7 +73,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 use crate::layer::{is_group_delivery, AdmissionReceiver, QueueAdmissionCounters, ReceivedApdu};
-use crate::layer::{AdmissionSender, ReceivedNetworkControl};
+use crate::layer::{link_source_fits, AdmissionSender, ReceivedNetworkControl};
 use crate::router_table::RouterTable;
 use bacnet_transport::port::TransportProvenance;
 
@@ -341,7 +341,8 @@ pub struct BACnetRouter {
     sender_tasks: Vec<JoinHandle<()>>,
     /// Background task that purges stale learned routes.
     aging_task: Option<JoinHandle<()>>,
-    /// NPDUs refused for a DLEN or SLEN past `NpduAddress::MAX_MAC_LEN`.
+    /// NPDUs refused for a link-layer source MAC, DLEN or SLEN past
+    /// `NpduAddress::MAX_MAC_LEN`.
     address_length_drops: Arc<AtomicU64>,
     /// Last sequence given to a control for the router's own consumer.
     network_control_ingress_sequence: Arc<AtomicU64>,
@@ -385,15 +386,20 @@ impl BACnetRouter {
         self.control.snapshot()
     }
 
-    /// NPDUs refused on any port since start because their DLEN or SLEN was
-    /// past [`NpduAddress::MAX_MAC_LEN`](bacnet_encoding::npdu::NpduAddress::MAX_MAC_LEN)
-    /// (#1141). Saturates at `u64::MAX`.
+    /// NPDUs refused on any port since start because an address in them was
+    /// past [`NpduAddress::MAX_MAC_LEN`](bacnet_encoding::npdu::NpduAddress::MAX_MAC_LEN):
+    /// their DLEN or SLEN (#1141), or the link-layer source MAC the port's
+    /// transport reported (#1198). Saturates at `u64::MAX`.
     ///
-    /// Such an NPDU is neither forwarded nor delivered locally. When it names
-    /// a specific DNET, the router also answers the sender with
+    /// Such an NPDU is neither forwarded nor delivered locally, and a network
+    /// message in it changes no route. When its DLEN or SLEN is the long one
+    /// and it names a specific DNET, the router also answers the sender with
     /// Reject-Message-To-Network reason 6, `ADDRESSING_ERROR` (Clause 6.4.4),
     /// the way it rejects a DNET it cannot reach. A global broadcast, or an
-    /// NPDU without a DNET, is only dropped.
+    /// NPDU without a DNET, is only dropped. So is a frame from an over-long
+    /// link-layer source MAC: that is a fault in the transport, not in the
+    /// NPDU, and the router sends nothing back to such a MAC. No built-in
+    /// transport reports one.
     pub fn address_length_drops(&self) -> u64 {
         self.address_length_drops.load(Ordering::Relaxed)
     }
@@ -550,6 +556,9 @@ impl BACnetRouter {
 
             let task = tokio::spawn(async move {
                 while let Some(received) = rx.recv().await {
+                    if !link_source_fits(&received.source_mac, &address_length_drops) {
+                        continue;
+                    }
                     match decode_npdu(received.npdu.clone()) {
                         Ok(npdu) => {
                             if npdu.is_network_message {

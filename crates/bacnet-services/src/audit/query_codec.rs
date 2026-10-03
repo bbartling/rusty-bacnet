@@ -50,7 +50,7 @@ fn validate(request: &AuditLogQueryRequest) -> Result<(), Error> {
         } => (address, *successful_actions_only),
     };
     if let Some(address) = address {
-        check_encoded_mac_len(address, "AuditLogQuery device address")?;
+        check_encoded_mac_len(&address.mac_address, "AuditLogQuery device address")?;
     }
     validate_filter(filter)
 }

@@ -481,6 +481,10 @@ use bacnet_services::who_am_i::{WhoAmIRequest, YouAreRequest};
 `device_identifier` (which must name a Device object) and `device_mac_address`; at
 least one of those two must be present. Both `encode` methods are fallible and both
 `decode` methods reject missing fields, context-tagged layouts and trailing data.
+`device_mac_address` is the MAC the matching device takes on the port the request
+arrived on (Clauses 16.11.3.1.5 and 16.11.4), so it is held to
+`BACnetAddress::MAX_MAC_LEN` (18 octets) in both directions (#1200): `decode`
+refuses a longer one and `encode` returns `Error::Encoding` without writing.
 
 ### Virtual Terminal
 
@@ -1514,6 +1518,14 @@ with Reject-Message-To-Network reason 6 (`ADDRESSING_ERROR`, Clause 6.4.4) for
 that DNET, as it does a DNET it cannot reach. A global broadcast or an NPDU
 without a DNET is dropped without a reject.
 
+Both also drop a frame whose link-layer source MAC, as the transport reports
+it, is longer than `NpduAddress::MAX_MAC_LEN`, before decoding it, and count it
+in the same `address_length_drops()` (#1198). Nothing answers such a frame, and
+a router learns no route from it. No built-in transport reports a MAC that long
+(B/IP, BACnet/SC and Ethernet use 6 octets, MS/TP 1, B/IPv6 18), so only a
+custom `TransportPort` can, and every address the stack learns off the network
+fits a `BACnetAddress`.
+
 `BACnetRouter` sends each Reject-Message-To-Network it originates to whoever
 first sent the refused NPDU (Clause 6.4.4, #1158). An NPDU that arrived
 with SNET/SADR came through another router: the reject carries that SNET/SADR
@@ -2173,9 +2185,20 @@ returns to FALSE, with All_Writes_Successful TRUE only if every write
 succeeded. The server writes to its own objects only, so a command naming
 another Device fails. A Schedule writing a Command's Present_Value starts the
 run as well. Command takes SubscribeCOVProperty but not SubscribeCOV, so a
-client can follow In_Process. A run that `stop()` cuts short isn't resumed,
-and a Command used without the server keeps its queued run, and In_Process
-TRUE, until something takes it.
+client can follow In_Process. A run that `stop()` cuts short isn't resumed.
+
+Whatever commits a Present_Value write owns the run it starts and finishes it,
+so no path leaves a Command in process (#1178). Without a server,
+`tick_schedules` runs the lists its Schedule writes start before it returns,
+post delays included, making each command as the bare WriteProperty handler
+would with the Command as the initiating object; dropping its future first
+ends each unfinished run as unsuccessful. The bare `handle_write_property` and
+`handle_write_property_multiple` handlers are synchronous and make no writes
+for a Command: the run a Present_Value write starts ends at once, with
+In_Process FALSE, All_Writes_Successful FALSE and every command's
+`write_successful` FALSE. The endpoint responder refuses a Command's
+Present_Value write with WRITE_ACCESS_DENIED, as it does every write other
+than the Device's Description and Audit recipient.
 
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
 Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and

@@ -834,7 +834,8 @@
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/npdu/address_bound_tests.rs::{over_long_address_length_is_refused_for_either_field,over_long_length_is_refused_before_the_address_is_read,source_refusal_reports_the_npdu_dnet,destination_refusal_carries_the_source_behind_it,address_too_long_reads_as_out_of_range,encoder_refuses_an_address_past_the_bound_for_either_field}",
-    "crates/bacnet-network/src/address_bound_tests.rs::non_router_drops_and_counts_an_over_long_address_in_either_field"
+    "crates/bacnet-network/src/address_bound_tests.rs::non_router_drops_and_counts_an_over_long_address_in_either_field",
+    "crates/bacnet-network/src/link_source_bound_tests.rs::non_router_drops_and_counts_a_frame_from_an_over_long_source_mac"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -847,7 +848,8 @@
     "Reserved-bit negative tests remain required: reserved control bits still only log a warning. #1141 covers malformed address lengths. The NPDU codec holds DLEN and SLEN to NpduAddress::MAX_MAC_LEN, 18 octets, the same bound as BACnetAddress::MAX_MAC_LEN (#1124).",
     "Table 6-2 (Clause 6.2.2.2) needs at most 7 octets for any standard data link, and the longest MAC this stack serves is the 18-octet B/IPv6 form. decode_npdu refuses a longer length with NpduDecodeError::AddressTooLong before reading the address octets, whether or not they are present, and reports the NPDU's DNET when it has one.",
     "For an over-long DADR it also reports the SNET/SADR behind it, read past the DLEN octets the frame announces, when a complete and valid one is there (#1158), so the router can address its reject; encode_npdu refuses a longer address with Error::Encoding (the limit was 255).",
-    "The non-router NetworkLayer drops such an NPDU before APDU or control admission and counts it in address_length_drops(); a non-router sends no reject. The router side is under BACNET-6-ROUTER-MESSAGES. Tests feed hand-built wire bytes for each address field: 19 and 255 are refused, 1, 6 and 18 decode and re-encode unchanged."
+    "The non-router NetworkLayer drops such an NPDU before APDU or control admission and counts it in address_length_drops(); a non-router sends no reject. The router side is under BACNET-6-ROUTER-MESSAGES. Tests feed hand-built wire bytes for each address field: 19 and 255 are refused, 1, 6 and 18 decode and re-encode unchanged.",
+    "#1198: NetworkLayer drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN before decoding it and counts it in address_length_drops(). No built-in transport reports one (B/IP, BACnet/SC and Ethernet use 6 octets, MS/TP 1, B/IPv6 18), so only a custom TransportPort can, and every address learned off the network fits a BACnetAddress."
    ]
   },
   {
@@ -869,7 +871,8 @@
    "negative_tests": [
     "crates/bacnet-network/src/address_bound_tests.rs::{router_rejects_an_over_long_address_toward_a_dnet_with_reason_6,router_drops_an_over_long_broadcast_or_local_npdu_without_a_reject}",
     "crates/bacnet-network/src/reject_route_tests.rs::{router_falls_back_to_a_local_unicast_when_the_sadr_is_too_long,router_sends_no_reject_when_the_snet_sadr_is_its_own_port}",
-    "crates/bacnet-network/src/router/reject_tests.rs::{relay_drops_a_received_reject_it_cannot_route,a_reject_for_another_node_or_a_denied_one_skips_the_routers_consumer,send_reject_sends_nothing_when_the_originator_is_the_router}"
+    "crates/bacnet-network/src/router/reject_tests.rs::{relay_drops_a_received_reject_it_cannot_route,a_reject_for_another_node_or_a_denied_one_skips_the_routers_consumer,send_reject_sends_nothing_when_the_originator_is_the_router}",
+    "crates/bacnet-network/src/link_source_bound_tests.rs::router_drops_and_counts_a_frame_from_an_over_long_source_mac"
    ],
    "benchmarks": [
     "benchmarks/src/bin/bacnet_router.rs"
@@ -896,7 +899,8 @@
     "No in-tree setup needs that receiver (#1175): a client or server attached through a LoopbackTransport port runs its own NetworkLayer, so rejects for its requests reach its own control receiver.",
     "#1219: a refused NPDU whose SNET is another of the router's directly connected networks gets its reject out the port attached to that network, as a local unicast to the SADR with no DNET (Clause 6.5.4).",
     "#1219: a refused NPDU whose SNET/SADR is the router's own address on one of its networks draws no reject.",
-    "#1220: BACnetRouter::start takes RouterOptions, which turns on the tracked local APDU receiver, the RB-09 control policy and authorizer, and the network-control receiver in any combination. A loopback test starts a router with all three."
+    "#1220: BACnetRouter::start takes RouterOptions, which turns on the tracked local APDU receiver, the RB-09 control policy and authorizer, and the network-control receiver in any combination. A loopback test starts a router with all three.",
+    "#1198: the router drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN on any port before decoding it, counts it in address_length_drops() and sends nothing back. Such a frame is not delivered or forwarded and teaches no route; a test shows a route announced from a 19-octet MAC is not learned."
    ]
   },
   {
@@ -2236,24 +2240,43 @@
     "crates/bacnet-server/src/server/requests/mutations.rs",
     "crates/bacnet-server/src/committed_cov.rs",
     "crates/bacnet-server/src/device_view.rs",
-    "crates/bacnet-endpoint/src/source_reporter.rs"
+    "crates/bacnet-endpoint/src/source_reporter.rs",
+    "crates/bacnet-server/src/command_lists.rs",
+    "crates/bacnet-server/src/command_lists/unattached.rs",
+    "crates/bacnet-server/src/schedule.rs",
+    "crates/bacnet-server/src/handlers/write_property.rs",
+    "crates/rusty-bacnet/src/types/action_list.rs",
+    "crates/rusty-bacnet/src/server/server_methods/registration.rs",
+    "crates/rusty-bacnet/rusty_bacnet.pyi"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/command_action_wire_tests.rs::{command_present_value_write_runs_the_selected_list_on_local_targets,command_write_during_a_run_is_busy_and_the_post_delay_holds_the_next_write,command_rewriting_the_same_value_runs_the_list_again,command_zero_or_an_empty_list_writes_nothing_and_succeeds_at_once}",
     "crates/bacnet-server/src/server/command_action_run_tests.rs::{command_run_starts_from_write_local_and_write_property_multiple,command_run_writing_another_command_starts_its_list,command_property_subscribers_see_in_process_rise_and_fall,command_run_starts_when_a_schedule_writes_present_value}",
     "crates/bacnet-objects/src/command/tests.rs::{command_present_value_write_queues_the_selected_list_and_busies_the_object,command_zero_and_an_empty_list_complete_at_once,command_action_text_serves_one_text_per_list_and_follows_the_action_size,command_takes_property_subscriptions_but_not_subscribe_cov}",
     "crates/bacnet-objects/src/command/metadata.rs::tests::property_metadata_command_action_text_row_follows_action_once_set",
-    "crates/bacnet-endpoint/src/source_reporter_command_run_tests.rs::command_run_hooks_and_property_cov_admission_survive_wrapping"
+    "crates/bacnet-endpoint/src/source_reporter_command_run_tests.rs::command_run_hooks_and_property_cov_admission_survive_wrapping",
+    "crates/bacnet-server/src/schedule_command_tests.rs::tick_schedules_runs_the_command_lists_its_writes_start",
+    "crates/bacnet-server/src/handlers/tests/command_present_value_writes.rs::{bare_write_property_ends_a_command_run_it_cannot_make,bare_write_property_multiple_ends_the_runs_its_committed_prefix_started}",
+    "crates/rusty-bacnet/src/types/action_list_tests.rs::action_command_mappings_fill_every_field_and_default_the_optional_ones",
+    "crates/rusty-bacnet/src/server/server_methods/registration_tests.rs::command_builder_applies_action_then_action_text_through_the_object_setters",
+    "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_present_value_write_runs_the_configured_list"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/command_action_wire_tests.rs::{command_quit_on_failure_stops_the_list_and_action_reads_back_the_flags,command_present_value_above_the_action_size_is_value_out_of_range,command_naming_another_device_fails_and_naming_this_device_is_local,command_writing_its_own_present_value_is_refused_busy}",
     "crates/bacnet-server/src/server/command_action_run_tests.rs::command_replaced_during_a_post_delay_leaves_the_rest_of_the_run_unmade",
-    "crates/bacnet-objects/src/command/tests.rs::{command_quit_on_failure_marks_the_commands_after_it_unsuccessful,command_present_value_above_the_action_size_is_out_of_range,command_set_action_abandons_a_run_and_its_reports_go_stale}"
+    "crates/bacnet-objects/src/command/tests.rs::{command_quit_on_failure_marks_the_commands_after_it_unsuccessful,command_present_value_above_the_action_size_is_out_of_range,command_set_action_abandons_a_run_and_its_reports_go_stale}",
+    "crates/bacnet-server/src/schedule_command_tests.rs::tick_schedules_dropped_mid_run_ends_the_command_run_unsuccessful",
+    "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_refuses_a_command_present_value_write_and_starts_no_run",
+    "crates/rusty-bacnet/src/types/action_list_tests.rs::action_command_mappings_refuse_bad_shapes_and_types",
+    "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_invalid_actions_are_refused_and_add_nothing"
    ],
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Added entry for #1150 (Command action lists run), from changelog.d/1150-command-action-execution.md",
-    "docs/rust-api.md#building-control-7 Command object"
+    "docs/rust-api.md#building-control-7 Command object",
+    "CHANGELOG.md Unreleased Fixed entry for #1178 (Command runs outside the bundled server), from changelog.d/1178-command-runs-outside-server.md",
+    "CHANGELOG.md Unreleased Added entry for #1179 (Python Command action lists), from changelog.d/1179-python-command-actions.md",
+    "docs/python-api.md#building-control Python add_command action and action_text"
    ],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1150, found in #1135). Breaking pre-1.0 wire change: Present_Value used to store any Unsigned and run nothing. Clause 12.10 and Table 12-12 were read as page images.",
@@ -2262,7 +2285,12 @@
     "Every report back is guarded by a per-object generation, so a Command replaced or deleted mid-run stops the run without completing it. No database guard is held across a write's notifications or a post delay; lock order stays database, then COV table.",
     "Runs start from WriteProperty, WritePropertyMultiple, write_local, a Schedule tick or a written Schedule's own pass (background commits collect queued runs), and from a run's write to another Command.",
     "Local policies: a command naming another Device fails like a refused write (Clause 12.10.8 makes remote writes optional), and one naming this Device is local; a post delay follows every attempt, a quitting failure included, before the run ends; failed writes leave Reliability alone (Clause 12.10.13); Command opts into SubscribeCOVProperty under Table 13-1a (SubscribeCOV stays refused, no Table 13-1 row), and the server fans COV out for the Command at the start, after each command and at the end; Action_Text is absent until CommandObject::set_action_text supplies one text per list, read-only on the network, and set_action resizes it (empty texts added, trailing texts dropped) and abandons a run in progress.",
-    "Not covered: writes to other devices; network writes of Action or Action_Text; Python bindings configuring Action or Action_Text; resuming a run that stop() cut short (In_Process stays TRUE on the stopped server); the bare handlers, tick_schedules without a server and the endpoint runtime don't run lists, so a Command written there keeps its queued run and In_Process TRUE until code takes it; intrinsic reporting on Command."
+    "Not covered: writes to other devices; network writes of Action or Action_Text; resuming a run that stop() cut short (In_Process stays TRUE on the stopped server); intrinsic reporting on Command.",
+    "Run ownership (#1178): whatever commits a Present_Value write takes the run under that guard and finishes it, so no path leaves a Command in process.",
+    "tick_schedules without a server runs the lists its writes start before it returns, post delays included: each command goes through the bare WriteProperty handler path with the Command as initiator, and a list that writes another Command starts that one beside it. Dropping the future ends each unfinished run as unsuccessful, with its unmade commands FALSE.",
+    "The synchronous handle_write_property and handle_write_property_multiple make no writes for a Command: the run ends at once with In_Process FALSE, All_Writes_Successful FALSE and every Write_Successful FALSE. A second Present_Value write in the same WritePropertyMultiple still finds the Command busy.",
+    "The endpoint responder refuses a Command Present_Value write with WRITE_ACCESS_DENIED (it writes only the Device's Description and Audit recipient), so it never starts a run.",
+    "Python (#1179): BACnetServer.add_command takes keyword-only action (lists of ActionCommand mappings) and action_text. The binding checks shapes and Python types (TypeError, ValueError); CommandObject::set_action and set_action_text refuse a priority outside 1 to 16, an unencodable value or a text count mismatch (VALUE_OUT_OF_RANGE). Write_Successful starts FALSE."
    ]
   },
   {
@@ -2546,12 +2574,16 @@
     "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_default_fade_time_starts_at_100_ms_and_takes_writes_within_its_range",
     "crates/bacnet-server/src/handlers/tests/lighting_required_rows.rs::lighting_output_default_fade_time_over_write_property",
     "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_duo_write_capabilities_match_dispatch",
-    "crates/bacnet-server/src/pics/property_metadata_tests/lighting.rs::pics_lighting_property_metadata_is_exact"
+    "crates/bacnet-server/src/pics/property_metadata_tests/lighting.rs::pics_lighting_property_metadata_is_exact",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_cov_increment_starts_at_zero_and_takes_writes",
+    "crates/bacnet-server/src/server/value_cov_increment_tests.rs::lighting_output_cov_notifies_at_and_above_its_increment_only"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/value_types/tests/required_rows.rs::non_numeric_value_types_have_no_cov_increment",
     "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_default_fade_time_setter_refuses_values_outside_its_range",
-    "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_output_writes_store_verbatim_with_range_gates"
+    "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_output_writes_store_verbatim_with_range_gates",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_cov_increment_refuses_bad_values_and_keeps_the_old_one",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::binary_lighting_output_has_no_cov_increment"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2562,7 +2594,8 @@
     "Current_Command_Priority comes from the value macro through `common::current_command_priority`, as on the analog, binary, multi-state and lighting objects. Its metadata matches Priority_Array: Optional with the Commandable presence condition, read-only.",
     "The value macro takes an optional `cov_increment` entry naming the table's datatype (`u64` for Unsigned, `f64` for Double), so only the three numeric types serve the row, with a validated `set_cov_increment` setter. Its metadata is the Analog Value shape: Optional, no presence condition, writable.",
     "`BACnetObject::cov_increment` returns an `f64` so a Double increment is compared without rounding through a REAL; a subscription's own REAL increment widens exactly. Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions report the increment in use as a REAL, so a Large Analog Value increment is narrowed there.",
-    "Default_Fade_Time starts at 100 ms, the shortest fade the range allows, as Default_Ramp_Rate starts at its fastest rate; `set_default_fade_time` applies the same range as WriteProperty. No fade operation runs: Lighting_Command is stored as opaque bytes."
+    "Default_Fade_Time starts at 100 ms, the shortest fade the range allows, as Default_Ramp_Rate starts at its fastest rate; `set_default_fade_time` applies the same range as WriteProperty. No fade operation runs: Lighting_Command is stored as opaque bytes.",
+    "Lighting Output serves a writable REAL COV_Increment, starting at 0, through `common::write_cov_increment`: a negative or non-finite value is VALUE_OUT_OF_RANGE and another datatype INVALID_DATA_TYPE. It is an optional row in Property_List, the metadata (writable) and the PICS, and a SubscribeCOV notification goes out when Present_Value moves by at least the increment. Binary Lighting Output has no COV_Increment."
    ]
   },
   {
@@ -2911,6 +2944,8 @@
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_bound_clock_drives_reads_and_expiry",
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::entries_naming_the_same_recipient_and_process_are_one_entry",
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_rewrite_keeps_the_deadline_of_each_entry_it_leaves_alone",
+    "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_rewrite_restarts_an_entry_written_two_minutes_or_more_off",
+    "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_rewrite_keeps_a_deadline_when_a_minute_boundary_falls_between_read_and_write",
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_rewrite_with_other_members_restarts_the_lifetime",
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_full_list_of_the_longest_entries_reads_in_1184_octets",
     "crates/bacnet-server/src/handlers/tests/list_element_subscriptions.rs::add_list_element_appends_new_entries_and_renews_named_ones",
@@ -2950,7 +2985,8 @@
     "Deadlines sit on the database's monotonic clock. Reads serve the whole minutes left, rounded up, and skip a lapsed entry. The server's monotonic operation task drops each entry at its deadline through advance_monotonic_time_internal.",
     "A whole-list write restarts each entry's lifetime from its Time Remaining, except an entry written exactly as it reads, which keeps its deadline. The list services write the whole list back, so an edit leaves the other entries' deadlines alone.",
     "The handler keys entries by the encoding of recipient and process identifier. A later element naming the same entry wins, and a refusal the store names on a renewed entry maps back to the request element that renewed it.",
-    "Recipients decode with decode_configured_recipient, so an address MAC over 18 octets is a malformed element (PROPERTY / INVALID_DATA_TYPE)."
+    "Recipients decode with decode_configured_recipient, so an address MAC over 18 octets is a malformed element (PROPERTY / INVALID_DATA_TYPE).",
+    "An entry written with the same recipient, process and confirmation flag, and with the minutes it reads now or one more, keeps its deadline; the one more covers a minute boundary between the handler's read and its write. Any other Time Remaining restarts the lifetime."
    ]
   },
   {
@@ -5145,8 +5181,12 @@
     "crates/bacnet-encoding/src/apdu.rs",
     "crates/bacnet-services/src"
    ],
-   "positive_tests": [],
-   "negative_tests": [],
+   "positive_tests": [
+    "crates/bacnet-services/src/who_am_i_tests.rs::you_are_mac_address_holds_to_the_bacnet_address_bound"
+   ],
+   "negative_tests": [
+    "crates/bacnet-services/src/who_am_i_tests.rs::you_are_mac_address_holds_to_the_bacnet_address_bound"
+   ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
    ],
@@ -5155,7 +5195,8 @@
     "docs/python-api.md#bacnetclient service APIs"
    ],
    "notes": [
-    "Needs service-by-service fixture coverage in later PRs."
+    "Needs service-by-service fixture coverage in later PRs.",
+    "#1200: the You-Are device MAC is the MAC the matching device takes on the port the request arrived on (Clauses 16.11.3.1.5, 16.11.4 and 19.7.2), so YouAreRequest holds it to BACnetAddress::MAX_MAC_LEN: decode refuses a longer one and encode returns Error::Encoding with the buffer unchanged."
    ]
   },
   {

@@ -9,10 +9,11 @@ use bacnet_types::enums::{
 };
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
 use pyo3::exceptions::{PyTypeError, PyValueError};
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList};
 use pyo3::PyTypeInfo;
 
 use crate::types::audit_projection::audit_log_query_ack_to_py;
+use crate::types::PyObjectIdentifier;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()

@@ -182,6 +182,38 @@ fn a_rewrite_keeps_the_deadline_of_each_entry_it_leaves_alone() {
 }
 
 #[test]
+fn a_rewrite_keeps_a_deadline_when_a_minute_boundary_falls_between_read_and_write() {
+    // Entry with 2 minutes. Read 30 seconds in: it serves 2. The next minute
+    // boundary of its countdown is at 60 seconds; the write lands after it.
+    let mut store = stored(&[device(1, 2)]);
+    store.advance_by(MINUTE / 2);
+    let mut list = store.subscriptions();
+    assert_eq!(list, [device(1, 2)]);
+    list.push(device(2, 3));
+    store.advance_by(MINUTE / 2 + NANO);
+    assert_eq!(minutes(&store), [1], "the boundary has passed");
+    store.write(framed(&list)).unwrap();
+    assert_eq!(store.next_deadline(), Some(2 * MINUTE), "not stretched");
+    assert_eq!(minutes(&store), [1, 3]);
+}
+
+#[test]
+fn a_rewrite_restarts_an_entry_written_two_minutes_or_more_off() {
+    let mut store = stored(&[device(1, 5)]);
+    store.advance_by(MINUTE / 2);
+    assert_eq!(minutes(&store), [5]);
+    for written in [3, 7] {
+        let mut store = store.clone();
+        store.write(framed(&[device(1, written)])).unwrap();
+        assert_eq!(
+            store.next_deadline(),
+            Some(MINUTE / 2 + MINUTE * written),
+            "{written}"
+        );
+    }
+}
+
+#[test]
 fn a_rewrite_with_other_members_restarts_the_lifetime() {
     let mut store = stored(&[device(1, 2), device(2, 2)]);
     store.advance_by(MINUTE / 2);
