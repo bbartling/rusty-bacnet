@@ -9,7 +9,9 @@ use tokio::time::{advance, Duration};
 async fn dcc_source_exact_full_bytes_and_fail_closed_wire() {
     use crate::server::{DccSource, DccSourceRestriction};
     let direct = vec![127, 0, 0, 1, 0xba, 0xc0];
-    let long = vec![42; 255];
+    // The longest routed source the NPDU codec carries (#1141); the reply
+    // goes back to it as DNET/DADR.
+    let long = vec![42; NpduAddress::MAX_MAC_LEN];
     let restrictions = [
         None,
         Some(DccSourceRestriction::new(vec![]).unwrap()),
@@ -30,12 +32,12 @@ async fn dcc_source_exact_full_bytes_and_fail_closed_wire() {
             ..Default::default()
         };
         let mut different_tail = long.clone();
-        different_tail[254] = 43;
+        *different_tail.last_mut().unwrap() = 43;
         for (network, address, exact) in [
             (7, long.clone(), true),
             (8, long.clone(), false),
             (7, different_tail, false),
-            (7, long[..32].to_vec(), false),
+            (7, long[..long.len() - 1].to_vec(), false),
             (7, direct.clone(), false),
         ] {
             for routed in [false, true] {
