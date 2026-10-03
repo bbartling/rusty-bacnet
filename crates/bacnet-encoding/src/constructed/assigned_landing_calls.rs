@@ -17,9 +17,9 @@ use super::floor_pairs::{decode_floor_pairs, encode_floor_pairs, PairNames};
 
 const NAMES: PairNames = PairNames {
     value: "assigned landing calls",
-    frame: "landing-calls [0]",
-    entry: "landing call",
-    second: "direction [1]",
+    frame: "assigned landing calls landing-calls",
+    floor: "landing call floor-number",
+    second: "landing call direction",
     second_oversized: "direction [1] exceeds 32 bits",
 };
 

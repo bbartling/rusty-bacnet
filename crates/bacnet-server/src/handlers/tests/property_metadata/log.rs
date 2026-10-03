@@ -23,8 +23,10 @@ fn log_objects(capacity: u32, configured: bool) -> [Box<dyn BACnetObject>; 3] {
             property_array_index: Some(2),
             device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap()),
         };
-        trend.set_log_device_object_property(Some(reference.clone()));
-        multiple.add_property_reference(reference);
+        trend
+            .set_log_device_object_property(Some(reference.clone()))
+            .unwrap();
+        multiple.add_property_reference(reference).unwrap();
         trend.set_logging_type(2);
         multiple.set_logging_type(2);
         for (log_datum, status_flags, log_data, event_datum) in [
@@ -122,10 +124,11 @@ fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
     if kind != ObjectType::EVENT_LOG {
         rows.extend([
             (P::LOGGING_TYPE, false, false),
+            // Writable on both trend objects (#1234).
             (
                 P::LOG_DEVICE_OBJECT_PROPERTY,
                 kind == ObjectType::TREND_LOG,
-                false,
+                true,
             ),
         ]);
     }

@@ -15,6 +15,7 @@ use bytes::BytesMut;
 use tracing::warn;
 
 use super::{LocalDevice, ObjectDatabase};
+use crate::device_reference::decode_property_reference;
 use crate::log_buffer::ANY_VALUE_MAX_OCTETS;
 use crate::traits::BACnetObject;
 
@@ -301,41 +302,26 @@ fn configuration(object: &dyn BACnetObject) -> Option<Configuration> {
     })
 }
 
-/// One reference as a read projects it: object, property, then optional
-/// array index and Device, each Null when absent. Anything else leaves the
-/// log unpolled: a malformed index or Device can't be honoured, nor a Device
-/// told local or remote. `wildcard_is_empty` applies the Trend Log Multiple
-/// rule for instance 4194303.
+/// One reference as a read serves it: a single
+/// BACnetDeviceObjectPropertyReference in its Clause 21 encoding (#1234).
+/// Anything else, Null included, leaves the log unpolled.
+/// `wildcard_is_empty` applies the Trend Log Multiple rule for instance
+/// 4194303.
 fn member(value: &PropertyValue, wildcard_is_empty: bool) -> Option<Member> {
-    let PropertyValue::List(items) = value else {
-        return None;
-    };
-    let [PropertyValue::ObjectIdentifier(target), PropertyValue::Unsigned(property), rest @ ..] =
-        items.as_slice()
-    else {
-        return None;
-    };
-    let index = match rest.first() {
-        None | Some(PropertyValue::Null) => None,
-        Some(PropertyValue::Unsigned(index)) => Some(u32::try_from(*index).ok()?),
-        Some(_) => return None,
-    };
-    let device = match rest.get(1) {
-        None | Some(PropertyValue::Null) => None,
-        Some(PropertyValue::ObjectIdentifier(device)) => Some(*device),
-        Some(_) => return None,
-    };
-    let property = P::from_raw(u32::try_from(*property).ok()?);
+    let reference = decode_property_reference(value).ok()?;
     let empty =
         |oid: &ObjectIdentifier| oid.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE;
-    if wildcard_is_empty && (empty(target) || device.as_ref().is_some_and(empty)) {
+    if wildcard_is_empty
+        && (empty(&reference.object_identifier)
+            || reference.device_identifier.as_ref().is_some_and(empty))
+    {
         return Some(Member::Unspecified);
     }
     Some(Member::Reference {
-        target: *target,
-        property,
-        index,
-        device,
+        target: reference.object_identifier,
+        property: P::from_raw(reference.property_identifier),
+        index: reference.property_array_index,
+        device: reference.device_identifier,
     })
 }
 

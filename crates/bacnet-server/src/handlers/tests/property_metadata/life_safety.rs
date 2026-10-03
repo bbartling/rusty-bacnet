@@ -11,7 +11,9 @@ fn point_object(configured: bool, out_of_service: bool) -> LifeSafetyPointObject
     if configured {
         object.set_description("long life safety label".repeat(100));
         object.set_direct_reading(42.5);
-        object.add_member(ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 9).unwrap());
+        object
+            .add_member(ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 9).unwrap())
+            .unwrap();
     }
     object
         .write_property(
@@ -28,7 +30,12 @@ fn zone_object(configured: bool, out_of_service: bool) -> LifeSafetyZoneObject {
     let mut object = LifeSafetyZoneObject::new(7, "LSZ-7").unwrap();
     if configured {
         object.set_description("long life safety label".repeat(100));
-        object.add_zone_member(ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 3).unwrap());
+        object
+            .add_zone_member(ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 3).unwrap())
+            .unwrap();
+        object
+            .add_member(ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 4).unwrap())
+            .unwrap();
     }
     object
         .write_property(
@@ -117,6 +124,7 @@ fn rpm_life_safety_zone_metadata_selectors_preserve_bytes_and_budgets() {
         P::OPERATION_EXPECTED,
         P::TRACKING_VALUE,
         P::ZONE_MEMBERS,
+        P::MEMBER_OF,
         P::EVENT_STATE,
         P::STATUS_FLAGS,
         P::OUT_OF_SERVICE,
@@ -138,7 +146,7 @@ fn rpm_life_safety_zone_metadata_selectors_preserve_bytes_and_budgets() {
         P::OUT_OF_SERVICE,
         P::RELIABILITY,
     ];
-    let optional = [P::DESCRIPTION];
+    let optional = [P::DESCRIPTION, P::MEMBER_OF];
     for configured in [false, true] {
         for out_of_service in [false, true] {
             let object = zone_object(configured, out_of_service);

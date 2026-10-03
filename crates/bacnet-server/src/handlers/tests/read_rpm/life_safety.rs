@@ -3,7 +3,9 @@ use bacnet_objects::{
     life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject},
     traits::BACnetObject,
 };
-use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
+use bacnet_types::constructed::{
+    BACnetDeviceObjectReference, PropertyReference, ReadAccessSpecification,
+};
 use bacnet_types::enums::{LifeSafetyMode, LifeSafetyState};
 use PropertyIdentifier as P;
 
@@ -32,7 +34,9 @@ fn rpm_life_safety_point_indexed_reads_and_list_bytes_are_unchanged() {
         let mut object = LifeSafetyPointObject::new(7, "LSP-7").unwrap();
         if configured {
             object.set_direct_reading(42.5);
-            object.add_member(ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 9).unwrap());
+            object
+                .add_member(ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 9).unwrap())
+                .unwrap();
             object.set_accepted_modes(narrowed());
         }
         let oid = object.object_identifier();
@@ -68,8 +72,9 @@ fn rpm_life_safety_point_indexed_reads_and_list_bytes_are_unchanged() {
             (
                 P::MEMBER_OF,
                 None,
+                // A BACnetDeviceObjectReference per member (#1182).
                 Ok(if configured {
-                    &[0xC4, 0x05, 0x80, 0x00, 0x09]
+                    &[0x1C, 0x05, 0x80, 0x00, 0x09]
                 } else {
                     &[]
                 }),
@@ -141,7 +146,16 @@ fn rpm_life_safety_zone_indexed_reads_and_list_bytes_are_unchanged() {
         let mut object = LifeSafetyZoneObject::new(7, "LSZ-7").unwrap();
         if configured {
             object
-                .add_zone_member(ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 3).unwrap());
+                .add_zone_member(ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 3).unwrap())
+                .unwrap();
+            // A zone held by Device 9.
+            object
+                .add_member(BACnetDeviceObjectReference {
+                    device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap()),
+                    object_identifier: ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 4)
+                        .unwrap(),
+                })
+                .unwrap();
             object.set_accepted_modes(narrowed());
             object.set_tracking_value(LifeSafetyState::ALARM);
         }
@@ -181,13 +195,27 @@ fn rpm_life_safety_zone_indexed_reads_and_list_bytes_are_unchanged() {
                 P::ZONE_MEMBERS,
                 None,
                 Ok(if configured {
-                    &[0xC4, 0x05, 0x40, 0x00, 0x03]
+                    &[0x1C, 0x05, 0x40, 0x00, 0x03]
                 } else {
                     &[]
                 }),
             ),
             (
                 P::ZONE_MEMBERS,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (
+                P::MEMBER_OF,
+                None,
+                Ok(if configured {
+                    &[0x0C, 0x02, 0x00, 0x00, 0x09, 0x1C, 0x05, 0x80, 0x00, 0x04]
+                } else {
+                    &[]
+                }),
+            ),
+            (
+                P::MEMBER_OF,
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
@@ -200,17 +228,18 @@ fn rpm_life_safety_zone_indexed_reads_and_list_bytes_are_unchanged() {
                 None,
                 Ok(&[
                     0x91, 28, 0x91, 85, 0x91, 160, 0x91, 175, 0x91, 163, 0x91, 161, 0x91, 164,
-                    0x91, 165, 0x91, 36, 0x91, 111, 0x91, 81, 0x91, 103,
+                    0x91, 165, 0x91, 159, 0x91, 36, 0x91, 111, 0x91, 81, 0x91, 103,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 12])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 13])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 175])),
             (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 164])),
-            (P::PROPERTY_LIST, Some(12), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 159])),
+            (P::PROPERTY_LIST, Some(13), Ok(&[0x91, 103])),
             (
                 P::PROPERTY_LIST,
-                Some(13),
+                Some(14),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -218,8 +247,6 @@ fn rpm_life_safety_zone_indexed_reads_and_list_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            // The optional Member_Of is not served on the zone.
-            (P::MEMBER_OF, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
         ];
         assert_indexed_cases(&db, oid, cases);
     }

@@ -361,7 +361,7 @@
     "The rewrite is the one the Schedule and Staging rows use (BACNET-12-SCHEDULE-WRITES, BACNET-12-STAGING-TARGET-REFERENCES), from the table in local_references.rs. The service decode hands the reference over as one chunk per context-tagged member, so the server joins the chunks; when they are exactly one reference whose Device member names the local Device (selected under the write's database guard, never the wildcard instance), the object gets that reference without its Device member, and anything else reaches the object as written.",
     "Local choice: a reference naming another device is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the code the Schedule, Staging, Event Enrollment, Timer, Trend Log Multiple and Life Safety clauses give for the same restriction; 12.5.13 names none, and the encoding is valid for this production, so INVALID_DATA_ENCODING no longer fit.",
     "AveragingObject written directly still refuses every Device member, since it cannot tell which Device holds it. The property holds one reference, so array indexes and the list services do not apply; the mixed case is a value with two references, refused whole.",
-    "The object stores only local references, so the server's sampler (#1144) reads only local properties; the WriteProperty wire test has it sample a reference written with this device's identifier. Audit for #1153, no change needed: Event Enrollment Object_Property_Reference (12.12.8), Log_DeviceObjectProperty on a Trend Log (12.25.8) or a Trend Log Multiple (12.30.11), Life Safety Point and Zone Member_Of and Zone_Members (12.15.29, 12.16.26, 12.16.27) and Global Group Group_Members (12.50.5) are read-only here, and a writable Group_Members would have to accept members in other devices under 12.50.5 in any case; Timer List_Of_Object_Property_References (12.57.21) and the Channel object are not implemented. Not covered: sampling a property in another device (refused)."
+    "The object stores only local references, so the server's sampler (#1144) reads only local properties; the WriteProperty wire test has it sample a reference written with this device's identifier. Log_DeviceObjectProperty on a Trend Log (12.25.8) or a Trend Log Multiple (12.30.11) is writable and takes the same local-Device rewrite. Event Enrollment Object_Property_Reference (12.12.8), Life Safety Point and Zone Member_Of and Zone_Members (12.15.29, 12.16.26, 12.16.27) and Global Group Group_Members (12.50.5) are read-only here, and a writable Group_Members would have to accept members in other devices under 12.50.5 in any case; Timer List_Of_Object_Property_References (12.57.21) and the Channel object are not implemented. Not covered: sampling a property in another device (refused)."
    ]
   },
   {
@@ -763,7 +763,10 @@
     "crates/bacnet-server/src/server/confirmed_response_lifetime_tests.rs",
     "crates/bacnet-server/src/server/confirmed_tracker_tests.rs",
     "crates/bacnet-network/src/issuance_tests.rs",
-    "crates/bacnet-server/src/server/confirmed_segmented_lifetime_tests.rs"
+    "crates/bacnet-server/src/server/confirmed_segmented_lifetime_tests.rs",
+    "crates/bacnet-server/src/server/confirmed_broadcast_tests.rs::a_confirmed_request_sent_by_broadcast_is_neither_executed_nor_answered",
+    "crates/bacnet-server/src/server/confirmed_broadcast_tests.rs::a_segment_sent_by_broadcast_draws_no_segment_ack_or_abort",
+    "crates/bacnet-integration-tests/tests/server/bip6_group_confirmed.rs::a_confirmed_request_forwarded_to_a_bip6_foreign_device_is_ignored"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -777,7 +780,8 @@
     "Refs #876: ordinary generic exact duplicate detection is pending-only, bounded to 256 entries and 64 KiB of service-request bytes per tracked entry. Unsegmented ownership retires after APDU/NPDU encoding at local network issuance or synchronous MS/TP reply handoff, before eventual transport Result.",
     "Byte-identical Invoke ID reuse then executes again. Segmented ownership moves to the child through final ACK or terminal outcome; generated terminal Abort retires at local issuance even while its send is held.",
     "Cancellation, errors and rejected spawn drop ownership. Request-task and segmented-send permits remain independent. LSO completed replay and Audit receipts are separate unchanged policies; direct leaf/incarnation keys remain in generic and LSO stores.",
-    "Deterministic full-server direct/routed controls and virtual-clock child tests are local operation evidence, not physical emission/peer receipt or #524 response affinity/control confinement. See standard-135-2020-ledger.md#ordinary-confirmed-transaction-lifetimes."
+    "Deterministic full-server direct/routed controls and virtual-clock child tests are local operation evidence, not physical emission/peer receipt or #524 response affinity/control confinement. See standard-135-2020-ledger.md#ordinary-confirmed-transaction-lifetimes.",
+    "A ConfirmedRequest whose network destination is a broadcast or multicast (ReceivedApdu::is_group) is dropped before reassembly or dispatch, with no answer, whatever the service."
    ]
   },
   {
@@ -1236,7 +1240,7 @@
      "Refs #748/#753: database-owned schedules compare the complete selection configuration, retire on structural access, and use exact hundredths under one exclusive selection/acquisition/append guard. The former external TrendLogState and mutable Box getter are removed.",
      "Successful next intervals start at actual completion without catch-up; configuration reconciliation and failed-attempt retries use a local 100 ms bound, and slow passes yield 1 ms when another entry is already due.",
      "Poller insertion failures preserve last success and retry after clock repair; SourceReporter forwards results. Constructors, records() and raw clear() retain their behavior. ReadRange By Sequence and By Time can select the resident purge status identity under BACNET-15-READ-RANGE-LOG-BUFFER.",
-     "Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, writable Log_DeviceObjectProperty purge paths, formal EventLog notification records, persistence/restart, and complete log conformance remain deferred.",
+     "Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, formal EventLog notification records, persistence/restart, and complete log conformance remain deferred.",
      "#1183: the poller reads only its own database. A Log_DeviceObjectProperty whose Device member names another device (ObjectDatabase::local_device, the rule the server's Event Enrollment evaluation shares) logs a failure record, PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, at the configured interval and is never read from a same-numbered local object; one naming this device reads locally, as one without a Device does.",
      "A failed local read now logs a failure record carrying its error (OBJECT / UNKNOWN_OBJECT for a missing object, the read's own class and code otherwise, SERVICES / OTHER for an error without one) instead of a null value, the failure choice of the Clause 12.25 Log_Buffer datum.",
      "A Device member that is not an object identifier leaves the log unpolled.",
@@ -1245,7 +1249,8 @@
      "A reference with an array index reads that element behind the ReadProperty gate the Averaging sampler shares: an index on a non-array logs PROPERTY / PROPERTY_IS_NOT_AN_ARRAY, one past the end logs INVALID_ARRAY_INDEX. An index that isn't Unsigned leaves the log unpolled (#1205).",
      "Only POLLED logs with a nonzero Log_Interval and at least one member are polled. Trend Log Multiple triggered acquisition, Align_Intervals, Interval_Offset and intrinsic reporting are not modeled.",
      "Both pollers log a value with no alternative of its own (CharacterString, Double, Date, ObjectIdentifier, OctetString, a whole array, a framed constructed value) as any-value holding the encoding a ReadProperty of it carries. A BitString logs as bitstring-value, and only a NULL value logs as null-value (#1236).",
-     "An any-value holds at most ANY_VALUE_MAX_OCTETS (256) octets; a longer value logs PROPERTY / VALUE_TOO_LONG and one no record could carry logs SERVICES / OTHER, so the log never refuses a polled record."
+     "An any-value holds at most ANY_VALUE_MAX_OCTETS (256) octets; a longer value logs PROPERTY / VALUE_TOO_LONG and one no record could carry logs SERVICES / OTHER, so the log never refuses a polled record.",
+     "A client's change to Log_DeviceObjectProperty purges the log and records BUFFER_PURGED, as a zero Record_Count write does; the poller then samples the references written."
     ]
   },
   {
@@ -1387,7 +1392,7 @@
    "id": "BACNET-12-PROPERTY-METADATA-CORE",
    "standard_anchor": "Clause 12.6, Table 12-6 (pp. 189-190); Clause 12.42, Table 12-49 (pp. 444-445); Clause 15.7.3.1 (p. 743); Annex A (pp. 964-965)",
    "priority": "P1",
-    "requirement_summary": "Executable metadata classifies each effective standard property by base R, W, or O conformance, presence condition, and implemented write capability. Time Value, Binary Input, Life Safety Point (POINT_BASE 18 rows), and Life Safety Zone (ZONE_BASE 16 rows) use the metadata for property-list compatibility, ReadPropertyMultiple special selectors, and existing PICS flags; unmigrated object types retain the legacy fallback.",
+    "requirement_summary": "Executable metadata classifies each effective standard property by base R, W, or O conformance, presence condition, and implemented write capability. Time Value, Binary Input, Life Safety Point (POINT_BASE 18 rows), and Life Safety Zone (ZONE_BASE 17 rows) use the metadata for property-list compatibility, ReadPropertyMultiple special selectors, and existing PICS flags; unmigrated object types retain the legacy fallback.",
    "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-objects/src/property_metadata.rs::PropertyMetadata",
@@ -3414,7 +3419,10 @@
     "crates/bacnet-encoding/src/constructed/port_permission.rs",
     "crates/bacnet-network/src/layer.rs::ReceivedApdu",
     "crates/rusty-bacnet/src/server/server_methods/notification_forwarder.rs::add_notification_forwarder",
-    "crates/rusty-bacnet/src/types/destination.rs::destination"
+    "crates/rusty-bacnet/src/types/destination.rs::destination",
+    "crates/bacnet-server/src/server/event_forwarding.rs::MAX_FORWARDED_DESTINATIONS",
+    "crates/bacnet-server/src/server/event_forwarding_repeats.rs::ConfirmedEventRepeats",
+    "crates/bacnet-server/src/server/lifecycle.rs"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::forwarder_sends_to_its_recipient_list_and_its_subscriptions",
@@ -3438,7 +3446,10 @@
     "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_broadcast_notification_goes_confirmed_only_off_the_receiving_network",
     "crates/rusty-bacnet/tests/test_notification_forwarder.py::NotificationForwarderServerTests::test_seeded_recipient_list_and_port_filter_read_back",
     "crates/rusty-bacnet/src/types/destination_tests.rs::required_keys_alone_give_an_always_active_destination",
-    "crates/rusty-bacnet/src/types/destination_tests.rs::every_key_reaches_its_member"
+    "crates/rusty-bacnet/src/types/destination_tests.rs::every_key_reaches_its_member",
+    "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_recipient_naming_this_network_by_number_is_local_to_the_loop_rules",
+    "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_network_number_is_remote_while_this_network_has_none",
+    "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::a_repeat_is_matched_by_source_invoke_id_and_octets"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::out_of_service_forwarder_takes_nothing",
@@ -3455,7 +3466,16 @@
     "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_received_notification_no_forwarder_takes_is_counted",
     "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_copy_longer_than_the_local_apdu_capacity_is_dropped_and_counted",
     "crates/rusty-bacnet/tests/test_notification_forwarder.py::NotificationForwarderRegistrationTests::test_refused_seeds_leave_nothing_pending",
-    "crates/rusty-bacnet/src/types/destination_tests.rs::malformed_destinations_raise_value_or_type_errors"
+    "crates/rusty-bacnet/src/types/destination_tests.rs::malformed_destinations_raise_value_or_type_errors",
+    "crates/bacnet-server/src/server/confirmed_broadcast_tests.rs::a_confirmed_request_sent_by_broadcast_is_neither_executed_nor_answered",
+    "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::destinations_past_the_cap_across_forwarders_are_dropped_and_counted",
+    "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_retransmitted_confirmed_notification_is_acknowledged_but_not_forwarded_again",
+    "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::an_entry_lasts_for_the_window_from_its_first_receipt",
+    "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::a_full_record_drops_its_oldest_entry",
+    "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::an_expired_entry_out_of_time_order_does_not_match",
+    "crates/bacnet-server/src/server/event_forwarding_cap_tests.rs::the_cap_counts_only_copies_the_loop_rules_let_through",
+    "crates/bacnet-server/src/server/event_forwarding_cap_tests.rs::a_local_notification_under_several_process_identifiers_has_one_cap",
+    "crates/bacnet-server/src/server/event_forwarding_cap_tests.rs::the_cap_warning_goes_out_at_most_once_an_interval"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3466,15 +3486,12 @@
    "notes": [
     "Every received event notification, and each local one whose Notification Class names this device's Device object, goes to every NOTIFICATION_FORWARDER object, bundled or custom, read through its properties.",
     "A copy keeps the received request octet for octet after the process identifier, so text in any character set and event values the stack does not model pass through.",
-    "The server is a single-port node: a received notification arrives through Port_ID 0, and Port_Filter is absent unless the application sets one.",
-    "Every well-formed ConfirmedEventNotification is acknowledged before any copy is sent, whether or not a forwarder takes it; one that does not decode draws Reject INVALID_PARAMETER_DATA_TYPE.",
-    "Within one device a forwarder takes a notification once and a destination gets one copy, however many chained forwarders name it."
+    "The server is a single-port node: a notification arrives through Port_ID 0, Port_Filter is absent unless set, and an address naming the registered Network Port's known Network_Number is local to the loop rules.",
+    "A well-formed ConfirmedEventNotification sent to this device alone is acknowledged before any copy goes, taken or not; a repeat within 60 s with the same source, invoke ID and octets is acknowledged, not forwarded.",
+    "Within one device a forwarder takes a notification once, a destination gets one copy, and at most 64 copies that would be sent go out across all forwarders, local or received; forwarding_cap_dropped counts the rest."
    ],
    "gaps": [
     "#1256: Recipient_List writes are kept in memory only, so a restart loses them.",
-    "#1257: a ConfirmedEventNotification is treated as unicast, since confirmed requests carry no broadcast addressing.",
-    "#1258: a recipient address that names the local network by its number is treated as remote by the loop rules.",
-    "#1259: fan-out across several forwarders, and repeats of a confirmed notification, are bounded only by each list's cap.",
     "#1270: Subscribed_Recipients saves run while the ObjectDatabase write lock is held."
    ]
   },
@@ -3879,7 +3896,6 @@
     "crates/bacnet-objects/src/reference/tests.rs::empty_setpoint_frame_clears_only_on_the_setpoint_arm",
     "crates/bacnet-objects/src/reference/tests.rs::legacy_list_accepts_unsigned_or_enumerated_property_member",
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_empty_setpoint_frame_clears_reference",
-    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_accepts_exact_shapes_and_both_member_typings",
     "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_accepts_the_framed_local_form",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::setpoint_reference_empty_frame_and_null_both_clear_over_the_wire",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::averaging_object_property_reference_over_the_wire",
@@ -3901,15 +3917,72 @@
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_device_qualified_reference_rejected_and_preserves",
     "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_write_malformed_framed_input_reference_rejected",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_write_rejections_over_the_wire_preserve_state",
-    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_rejects_bad_shapes_and_preserves_state"
+    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_rejects_bad_shapes_and_preserves_state",
+    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_refuses_the_flat_list_forms"
    ],
    "benchmarks": [],
    "public_claims": [],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#182). The four arms share one objects-layer helper (reference.rs) so the local List form (in-process compatibility) and the framed ApplicationData form (network) converge on the same strict Clause 21 decode; error pairings follow Clause 15.9.1.3: wrong value datatype is PROPERTY / INVALID_DATA_TYPE, malformed framing / device qualification / unknown trailing context tag is PROPERTY / INVALID_DATA_ENCODING (on the Averaging arm, whose production allows a Device member, that member is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED since #1153), and a mixed flat+framed element list is refused rather than reinterpreted.",
-    "Null clears, and read arms carry the reference's optional array index as a third list element. Setpoint_Reference additionally accepts the BACnetSetpointReference opening/closing tag [0] frame (unambiguous against the bare form's leading primitive [0]) while refusing unbalanced frames.",
+    "Null clears, and the Loop and Pulse Converter read arms carry the reference's optional array index as a third list element (#1312). Setpoint_Reference additionally accepts the BACnetSetpointReference opening/closing tag [0] frame (unambiguous against the bare form's leading primitive [0]) while refusing unbalanced frames.",
     "WritePropertyMultiple ordered prefix commit is proven for a reference+setpoint request failing its second property. Review round: the adversary lane's blocker on the Averaging arm (silent member drop / member retype / as-u32 truncation, newly network-reachable) is fixed by routing it through the same shared decode; the runtime+dataflow empty-frame finding is fixed by the Option-returning decode_setpoint_reference; the dataflow PICS incoherence is fixed by exact is_writable_property overrides on Pulse Converter (PRESENT_VALUE / SCALE_FACTOR / ADJUST_VALUE / INPUT_REFERENCE + DESCRIPTION / OUT_OF_SERVICE / COV_INCREMENT) and Averaging (OBJECT_PROPERTY_REFERENCE + DESCRIPTION / OUT_OF_SERVICE), which also stop advertising OBJECT_NAME on both types (no arm routes it - a truth-toward-arms PICS correction).",
-    "Limitation: reads still emit the flat application-tagged list form rather than re-framing context tags - the encode side is unchanged by this tranche; interop evidence against a second implementation remains open."
+    "Limitation: the Loop and Pulse Converter reads serve the flat application-tagged list form, not the context-tagged members; interop evidence against a second implementation is open.",
+    "Averaging Object_Property_Reference reads as the context-tagged BACnetDeviceObjectPropertyReference with no Device member; under that frame the flat list is INVALID_DATA_TYPE and a Device member naming no Device VALUE_OUT_OF_RANGE."
+   ]
+  },
+  {
+   "id": "BACNET-12-DEVICE-REFERENCE-PROPERTIES",
+   "standard_anchor": "Clauses 12.5.13, 12.12.8, 12.15.29, 12.16.26, 12.16.27, 12.25.8 and 12.30.11; Clause 21",
+   "priority": "P1",
+   "summary": "Averaging, Event Enrollment, Trend Log, Trend Log Multiple and Life Safety reference properties read, and take writes where writable, in their context-tagged Clause 21 encodings.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/device_reference.rs",
+    "crates/bacnet-objects/src/trend/references.rs",
+    "crates/bacnet-objects/src/life_safety/membership.rs",
+    "crates/bacnet-objects/src/database/trend_poll.rs",
+    "crates/bacnet-server/src/local_references.rs",
+    "crates/bacnet-server/src/event_enrollment/reference.rs::decode_reference_value"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/device_reference_tests.rs::property_reference_value_is_the_context_tagged_members",
+    "crates/bacnet-objects/src/device_reference_tests.rs::object_reference_list_is_one_encoding_per_element",
+    "crates/bacnet-objects/src/device_reference_tests.rs::decode_accepts_raw_bytes_and_the_read_shape",
+    "crates/bacnet-objects/src/event_enrollment/tests/enrollment.rs::read_object_property_reference_serves_every_member",
+    "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_write_purges_on_change_and_needs_a_clock_to",
+    "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_multiple_serves_one_encoding_per_element",
+    "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_multiple_indexed_write_checks_only_the_element_written",
+    "crates/bacnet-objects/src/life_safety/membership_tests.rs::point_member_of_keeps_a_remote_zone_and_lists_each_zone_once",
+    "crates/bacnet-server/src/handlers/tests/device_reference_reads.rs::event_enrollment_object_property_reference_is_served_framed",
+    "crates/bacnet-server/src/handlers/tests/device_reference_reads.rs::averaging_object_property_reference_is_served_framed",
+    "crates/bacnet-server/src/handlers/tests/device_reference_reads.rs::life_safety_member_lists_are_served_framed",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_reference_reads_and_writes_in_the_clause_21_form",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_multiple_reference_array_reads_and_writes",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::pollers_sample_the_references_a_client_wrote",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_multiple_index_0_write_resizes_the_array",
+    "crates/bacnet-server/src/server/log_reference_resize_tests.rs::write_local_of_index_0_resizes_the_reference_array"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/device_reference_tests.rs::decode_refuses_other_shapes_with_the_matching_error",
+    "crates/bacnet-objects/src/device_reference_tests.rs::device_member_must_be_a_device",
+    "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_setter_refuses_a_device_member_that_is_no_device",
+    "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_multiple_setter_bounds_the_array",
+    "crates/bacnet-objects/src/life_safety/membership_tests.rs::membership_refuses_other_object_types_and_device_members",
+    "crates/bacnet-objects/src/life_safety/membership_tests.rs::member_lists_stay_read_only_over_the_network",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_reference_write_refusals_change_nothing",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_multiple_reference_write_refusals_change_nothing"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#logging--trending-5 Log_DeviceObjectProperty",
+    "docs/rust-api.md#schedule--notification-6 Event Enrollment Object_Property_Reference"
+   ],
+   "notes": [
+    "An unset Averaging, Event Enrollment or Trend Log reference reads Null, since the production has no empty form.",
+    "Writes decode with the shared codec: another datatype is INVALID_DATA_TYPE, a malformed or second reference INVALID_DATA_ENCODING, and a Device member naming no Device VALUE_OUT_OF_RANGE.",
+    "Averaging and both trend objects keep their references inside this device: the server drops a Device member naming its own Device, and any other is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.",
+    "A Trend Log Multiple holds at most 64 references; an index 0 write resizes it, padding with empty elements, ones naming instance 4194303. A client's change to either trend reference purges the log.",
+    "Event Enrollment Object_Property_Reference and the Life Safety member lists are read-only over the network; the application sets them."
    ]
   },
   {
@@ -7810,7 +7883,7 @@
      "WP/WPM/write_local/live-Schedule readback snapshots retain ordered actual deltas. Whole-object Life Safety COV triggers only for Present_Value/Status_Flags and reports exactly both; property COV reports the supported subscribed property plus one Status_Flags and fans out on an actual Status_Flags change.",
      "Point and Zone both support Present_Value, Status_Flags, Tracking_Value, Silenced, and Operation_Expected; the Zone gained Tracking_Value in #1092, and a Zone reset commit may set it as a Point commit can.",
      "The built-in Point/Zone Status_Flags IN_ALARM projection from event_state is latent: no event_state setter exists, so IN_ALARM transitions are unreachable; Event_State is purely intrinsic per R1 outcome (b) with no LSO-driven change.",
-     "Initial and re-subscription notifications follow the same payload sets after ACK; cancellation is quiet. Served property model is pinned by executable metadata: Point POINT_BASE 18 rows and Zone ZONE_BASE 16 rows drive Property_List, required sets, and writability with exact PICS projection tests; Silenced and Operation_Expected are network read-only.",
+     "Initial and re-subscription notifications follow the same payload sets after ACK; cancellation is quiet. Served property model is pinned by executable metadata: Point POINT_BASE 18 rows and Zone ZONE_BASE 17 rows drive Property_List, required sets, and writability with exact PICS projection tests; Silenced and Operation_Expected are network read-only.",
      "Mode writes are checked against Accepted_Modes (#1092, BACNET-12-LIFE-SAFETY-GLOBAL-GROUP-REQUIRED-ROWS). Tracking_Value and Reliability take writes while Out_Of_Service is TRUE, and a simulated change notifies through the same snapshots (#1108, BACNET-12-LIFE-SAFETY-OUT-OF-SERVICE-SIMULATION).",
      "The application sets Present_Value and Tracking_Value at runtime through set_present_value_local and set_tracking_value_local, which notify through the write_local snapshots (#1123, BACNET-12-LIFE-SAFETY-APPLICATION-VALUES). Gaps retained: no BIBB, profile, or device-advertisement claim; broad intrinsic CHANGE_OF_LIFE_SAFETY event algorithm deferred."
     ]

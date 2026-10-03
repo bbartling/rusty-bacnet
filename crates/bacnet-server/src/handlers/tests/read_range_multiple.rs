@@ -62,7 +62,7 @@ fn polled_log() -> (ObjectDatabase, ObjectIdentifier) {
         reference(missing, PropertyIdentifier::PRESENT_VALUE, None),
         reference(av, PropertyIdentifier::PRESENT_VALUE, Some(200)),
     ] {
-        log.add_property_reference(member);
+        log.add_property_reference(member).unwrap();
     }
     log.write_property(
         PropertyIdentifier::LOG_INTERVAL,

@@ -1535,7 +1535,10 @@ Subscribed_Recipients in one file, replaced whole when the list changes and
 at most once a minute while its entries count down, so the list and each
 entry's remaining minutes survive a restart; without it the list lives in
 memory only. Every well-formed ConfirmedEventNotification is acknowledged,
-whether or not a forwarder takes it.
+whether or not a forwarder takes it; a retransmission of one already received
+is acknowledged again but not forwarded again. One notification goes to at
+most 64 destinations across all the forwarders, and the server ignores a
+confirmed request sent by broadcast.
 
 `recipients` seeds Recipient_List with `Destination` mappings, typed as the
 `Destination` TypedDict in the stub. `recipient` takes the mapping the Audit
@@ -2065,7 +2068,9 @@ write of either, of Object_Property_Reference, or of zero to Attempted_Samples
 empties the window; out-of-range values raise VALUE_OUT_OF_RANGE. An
 Object_Property_Reference written with the server's own Device in it is kept
 as the local reference it names, and one naming another device is refused with
-OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (#1153). The
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (#1153). Peers read and write it as the
+context-tagged BACnetDeviceObjectPropertyReference; the flat application-tagged
+form is refused with INVALID_DATA_TYPE (#1182). The
 statistics and counts change together and go through the server's COV path.
 SubscribeCOV on an Averaging object is refused, since Table 13-1 has no row for
 it, but a property subscription (SubscribeCOVProperty or
@@ -2542,6 +2547,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `unconfirmed_send_failed` | Unconfirmed notifications the transport refused to send, once per destination; the other destinations are still served |
 | `apdu_too_large` | Notifications not sent to one destination because they exceed the local APDU size (notifications are never segmented); usually a forwarded copy of one that arrived segmented |
 | `received_not_forwarded` | Received event notifications that decoded but that no Notification Forwarder took; a confirmed one is still acknowledged |
+| `forwarding_cap_dropped` | Destinations a notification was not forwarded to because 64 copies were already on their way across the Notification Forwarders, one per destination dropped; destinations the loop rules refuse take no room |
 
 The first four count event and acknowledgment notifications alike, once per
 transition. A class whose list is empty, or whose destinations all filter the

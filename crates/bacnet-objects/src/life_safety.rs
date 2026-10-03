@@ -57,6 +57,7 @@
 //! and leaves the object unchanged. The local `set_mode` ignores the list,
 //! because the object's own logic may move Mode outside it.
 
+use bacnet_types::constructed::BACnetDeviceObjectReference;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState,
     ObjectType, PropertyIdentifier, Reliability, SilencedState,
@@ -66,9 +67,11 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
+use crate::device_reference::object_reference_list;
 use crate::traits::{BACnetObject, LifeSafetyOperationEffect, LifeSafetyOperationOutcome};
 
 mod application;
+mod membership;
 mod metadata;
 mod out_of_service;
 mod reset;
@@ -242,8 +245,8 @@ pub struct LifeSafetyPointObject {
     operation_expected: LifeSafetyOperation,
     /// Tracking value.
     tracking_value: LifeSafetyState,
-    /// Zones this point belongs to.
-    member_of: Vec<ObjectIdentifier>,
+    /// Zones this point belongs to (Member_Of).
+    member_of: Vec<BACnetDeviceObjectReference>,
     /// Raw sensor reading.
     direct_reading: f32,
     /// Whether maintenance is required.
@@ -361,9 +364,17 @@ impl LifeSafetyPointObject {
         self.description = desc.into();
     }
 
-    /// Add a zone membership (ObjectIdentifier of a LifeSafetyZone).
-    pub fn add_member(&mut self, zone_oid: ObjectIdentifier) {
-        self.member_of.push(zone_oid);
+    /// Add a zone to Member_Of: a Life Safety Zone, in this device (an
+    /// `ObjectIdentifier` converts) or in the device the reference names.
+    ///
+    /// A zone already listed stays listed once. Any other object type, or a
+    /// Device member that isn't a Device identifier, fails with PROPERTY /
+    /// VALUE_OUT_OF_RANGE and changes nothing.
+    pub fn add_member(
+        &mut self,
+        zone: impl Into<BACnetDeviceObjectReference>,
+    ) -> Result<(), Error> {
+        membership::add(&mut self.member_of, zone.into(), membership::ZONES)
     }
 }
 
@@ -404,12 +415,7 @@ impl BACnetObject for LifeSafetyPointObject {
             p if p == PropertyIdentifier::TRACKING_VALUE => {
                 Ok(PropertyValue::Enumerated(self.tracking_value.to_raw()))
             }
-            p if p == PropertyIdentifier::MEMBER_OF => Ok(PropertyValue::List(
-                self.member_of
-                    .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                    .collect(),
-            )),
+            p if p == PropertyIdentifier::MEMBER_OF => Ok(object_reference_list(&self.member_of)),
             p if p == PropertyIdentifier::DIRECT_READING => {
                 Ok(PropertyValue::Real(self.direct_reading))
             }
@@ -557,8 +563,10 @@ pub struct LifeSafetyZoneObject {
     operation_expected: LifeSafetyOperation,
     /// Tracking value.
     tracking_value: LifeSafetyState,
-    /// Points belonging to this zone.
-    zone_members: Vec<ObjectIdentifier>,
+    /// Points and zones belonging to this zone (Zone_Members).
+    zone_members: Vec<BACnetDeviceObjectReference>,
+    /// Zones this zone belongs to (Member_Of).
+    member_of: Vec<BACnetDeviceObjectReference>,
     /// Event_State.
     event_state: EventState,
     status_flags: StatusFlags,
@@ -591,6 +599,7 @@ impl LifeSafetyZoneObject {
             operation_expected: LifeSafetyOperation::NONE,
             tracking_value: LifeSafetyState::QUIET,
             zone_members: Vec::new(),
+            member_of: Vec::new(),
             event_state: EventState::NORMAL,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
@@ -665,9 +674,31 @@ impl LifeSafetyZoneObject {
         self.description = desc.into();
     }
 
-    /// Add a point to this zone (ObjectIdentifier of a LifeSafetyPoint).
-    pub fn add_zone_member(&mut self, point_oid: ObjectIdentifier) {
-        self.zone_members.push(point_oid);
+    /// Add a member to Zone_Members: a Life Safety Point or Zone, in this
+    /// device (an `ObjectIdentifier` converts) or in the device the reference
+    /// names.
+    ///
+    /// A member already listed stays listed once. Any other object type, or a
+    /// Device member that isn't a Device identifier, fails with PROPERTY /
+    /// VALUE_OUT_OF_RANGE and changes nothing.
+    pub fn add_zone_member(
+        &mut self,
+        member: impl Into<BACnetDeviceObjectReference>,
+    ) -> Result<(), Error> {
+        membership::add(
+            &mut self.zone_members,
+            member.into(),
+            membership::ZONE_MEMBERS,
+        )
+    }
+
+    /// Add a zone to Member_Of: a Life Safety Zone this zone belongs to, with
+    /// the same refusals as [`add_zone_member`](Self::add_zone_member).
+    pub fn add_member(
+        &mut self,
+        zone: impl Into<BACnetDeviceObjectReference>,
+    ) -> Result<(), Error> {
+        membership::add(&mut self.member_of, zone.into(), membership::ZONES)
     }
 }
 
@@ -708,12 +739,10 @@ impl BACnetObject for LifeSafetyZoneObject {
             p if p == PropertyIdentifier::TRACKING_VALUE => {
                 Ok(PropertyValue::Enumerated(self.tracking_value.to_raw()))
             }
-            p if p == PropertyIdentifier::ZONE_MEMBERS => Ok(PropertyValue::List(
-                self.zone_members
-                    .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                    .collect(),
-            )),
+            p if p == PropertyIdentifier::ZONE_MEMBERS => {
+                Ok(object_reference_list(&self.zone_members))
+            }
+            p if p == PropertyIdentifier::MEMBER_OF => Ok(object_reference_list(&self.member_of)),
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
@@ -834,3 +863,6 @@ mod out_of_service_tests;
 
 #[cfg(test)]
 mod application_tests;
+
+#[cfg(test)]
+mod membership_tests;

@@ -466,40 +466,27 @@ fn trendlog_multiple_add_property_references() {
         property_identifier: pv_raw,
         property_array_index: None,
         device_identifier: None,
-    });
+    })
+    .unwrap();
     tlm.add_property_reference(BACnetDeviceObjectPropertyReference {
         object_identifier: oid2,
         property_identifier: pv_raw,
         property_array_index: Some(3),
         device_identifier: None,
-    });
+    })
+    .unwrap();
 
-    let val = tlm
-        .read_property(PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY, None)
-        .unwrap();
-    if let PropertyValue::List(refs) = val {
-        assert_eq!(refs.len(), 2);
-        // First reference
-        if let PropertyValue::List(fields) = &refs[0] {
-            assert_eq!(fields[0], PropertyValue::ObjectIdentifier(oid1));
-            assert_eq!(fields[1], PropertyValue::Unsigned(pv_raw as u64));
-            assert_eq!(fields[2], PropertyValue::Null);
-            assert_eq!(fields[3], PropertyValue::Null);
-        } else {
-            panic!("Expected List for property reference");
-        }
-        // Second reference with array index
-        if let PropertyValue::List(fields) = &refs[1] {
-            assert_eq!(fields[0], PropertyValue::ObjectIdentifier(oid2));
-            assert_eq!(fields[1], PropertyValue::Unsigned(pv_raw as u64));
-            assert_eq!(fields[2], PropertyValue::Unsigned(3));
-            assert_eq!(fields[3], PropertyValue::Null);
-        } else {
-            panic!("Expected List for property reference");
-        }
-    } else {
-        panic!("Expected List for LOG_DEVICE_OBJECT_PROPERTY");
-    }
+    // One Clause 21 encoding per element (#1234).
+    assert_eq!(
+        tlm.read_property(PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY, None)
+            .unwrap(),
+        PropertyValue::List(vec![
+            PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x01, 0x19, 0x55]),
+            PropertyValue::ApplicationData(vec![
+                0x0C, 0x00, 0x00, 0x00, 0x02, 0x19, 0x55, 0x29, 0x03
+            ]),
+        ])
+    );
 }
 
 #[test]

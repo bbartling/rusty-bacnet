@@ -43,12 +43,14 @@ fn target() -> ObjectIdentifier {
 }
 fn trend(interval: u32, capacity: u32) -> TrendLogObject {
     let mut trend = TrendLogObject::new(1, "Trend", capacity).unwrap();
-    trend.set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
-        object_identifier: target(),
-        property_identifier: P::PRESENT_VALUE.to_raw(),
-        property_array_index: None,
-        device_identifier: None,
-    }));
+    trend
+        .set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
+            object_identifier: target(),
+            property_identifier: P::PRESENT_VALUE.to_raw(),
+            property_array_index: None,
+            device_identifier: None,
+        }))
+        .unwrap();
     trend
         .write_property(
             P::LOG_INTERVAL,
@@ -309,30 +311,19 @@ fn full_reference_and_logging_mode_changes_retire_previous_selection() {
     .unwrap();
     db.poll_trend_logs();
     assert_eq!(count(&db, oid), 1);
-    for (number, fields) in [
-        vec![
-            PropertyValue::ObjectIdentifier(target()),
-            PropertyValue::Unsigned(P::DESCRIPTION.to_raw().into()),
-            PropertyValue::Null,
-            PropertyValue::Null,
-        ],
-        vec![
-            PropertyValue::ObjectIdentifier(target()),
-            PropertyValue::Unsigned(P::DESCRIPTION.to_raw().into()),
-            PropertyValue::Unsigned(3),
-            PropertyValue::Null,
-        ],
-        vec![
-            PropertyValue::ObjectIdentifier(
-                ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap(),
-            ),
-            PropertyValue::Unsigned(P::PRESENT_VALUE.to_raw().into()),
-        ],
+    for (number, changed) in [
+        BACnetDeviceObjectPropertyReference::new_local(target(), P::DESCRIPTION.to_raw()),
+        BACnetDeviceObjectPropertyReference::new_local(target(), P::DESCRIPTION.to_raw())
+            .with_index(3),
+        BACnetDeviceObjectPropertyReference::new_local(
+            ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap(),
+            P::PRESENT_VALUE.to_raw(),
+        ),
     ]
     .into_iter()
     .enumerate()
     {
-        *reference.lock().unwrap() = PropertyValue::List(fields);
+        *reference.lock().unwrap() = crate::device_reference::property_reference_value(&changed);
         db.poll_trend_logs();
         assert_eq!(count(&db, oid), number as u64 + 2);
     }
@@ -372,12 +363,14 @@ fn slow_acquisition_anchors_success_to_completion_and_yields_when_other_logs_are
     assert_eq!(db.poll_trend_logs(), Duration::from_millis(10));
     assert_eq!(count(&db, oid), 1);
     let mut second = TrendLogObject::new(2, "Second", 8).unwrap();
-    second.set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
-        object_identifier: target(),
-        property_identifier: P::PRESENT_VALUE.to_raw(),
-        property_array_index: None,
-        device_identifier: None,
-    }));
+    second
+        .set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
+            object_identifier: target(),
+            property_identifier: P::PRESENT_VALUE.to_raw(),
+            property_array_index: None,
+            device_identifier: None,
+        }))
+        .unwrap();
     second
         .write_property(P::LOG_INTERVAL, None, PropertyValue::Unsigned(1), None)
         .unwrap();
@@ -450,13 +443,15 @@ fn qualified_fixture(
         .unwrap();
     }
     let mut object = trend(u32::MAX, 16);
-    object.set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
-        object_identifier: target(),
-        property_identifier: P::PRESENT_VALUE.to_raw(),
-        property_array_index: None,
-        device_identifier: device
-            .map(|instance| ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap()),
-    }));
+    object
+        .set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
+            object_identifier: target(),
+            property_identifier: P::PRESENT_VALUE.to_raw(),
+            property_array_index: None,
+            device_identifier: device
+                .map(|instance| ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap()),
+        }))
+        .unwrap();
     db.add(Box::new(object)).unwrap();
     (db, oid)
 }
@@ -502,12 +497,14 @@ fn a_reference_without_a_device_logs_the_local_value() {
 fn a_failed_local_read_logs_the_read_error() {
     let (mut db, oid, _, _) = fixture(u32::MAX);
     let mut object = trend(u32::MAX, 16);
-    object.set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
-        object_identifier: target(),
-        property_identifier: P::LOG_BUFFER.to_raw(),
-        property_array_index: None,
-        device_identifier: None,
-    }));
+    object
+        .set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
+            object_identifier: target(),
+            property_identifier: P::LOG_BUFFER.to_raw(),
+            property_array_index: None,
+            device_identifier: None,
+        }))
+        .unwrap();
     db.add(Box::new(object)).unwrap();
     db.poll_trend_logs();
     assert_eq!(

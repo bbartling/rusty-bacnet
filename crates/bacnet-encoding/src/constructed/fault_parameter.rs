@@ -39,9 +39,12 @@ use bytes::BytesMut;
 use crate::primitives;
 use crate::tags::{self, TagClass};
 
+use super::tagged::{
+    contents, decode_app_character_string, decode_app_enumerated, decode_ctx_constructed,
+    decode_ctx_unsigned, expect_closing, expect_opening, next_is_closing,
+};
 use super::{
-    decode_app_character_string, decode_app_enumerated, decode_ctx_unsigned, decode_dopr_body,
-    decode_property_state, encode_dopr_body, encode_property_state, expect_closing, expect_opening,
+    decode_dopr_body, decode_property_state, encode_dopr_body, encode_property_state,
     validate_extended_parameters, MAX_FRAMED_ITEMS,
 };
 
@@ -164,13 +167,7 @@ fn decode_fault_normal_value(data: &[u8], offset: usize) -> Result<(f64, usize),
             format!("{what}: BOOLEAN is not a valid alternative"),
         ));
     }
-    let end = pos
-        .checked_add(t.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{what}: length overflow")))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    let content = &data[pos..end];
+    let (content, end) = contents(data, pos, t.length)?;
     let value = match t.number {
         tags::app_tag::REAL => primitives::decode_real(content)? as f64,
         tags::app_tag::UNSIGNED => primitives::decode_unsigned(content)? as f64,
@@ -218,11 +215,7 @@ pub fn decode_fault_parameters(
         1 => {
             let mut pos = expect_opening(data, pos, 0, what)?;
             let mut fault_values = Vec::new();
-            loop {
-                let (peek, _) = tags::decode_tag(data, pos)?;
-                if peek.is_closing_tag(0) {
-                    break;
-                }
+            while !next_is_closing(data, pos, 0)? {
                 if fault_values.len() >= MAX_FRAMED_ITEMS {
                     return Err(Error::decoding(
                         pos,
@@ -238,21 +231,12 @@ pub fn decode_fault_parameters(
             (F::FaultCharacterString { fault_values }, pos)
         }
         2 => {
-            let mut pos = pos;
-            let (raw, p) = decode_ctx_unsigned(data, pos, 0, what)?;
-            let vendor_id = u16::try_from(raw)
-                .map_err(|_| Error::decoding(pos, "fault-extended: vendor-id exceeds u16"))?;
-            pos = p;
-            let (raw, p) = decode_ctx_unsigned(data, pos, 1, what)?;
-            let extended_fault_type = u32::try_from(raw).map_err(|_| {
-                Error::decoding(pos, "fault-extended: extended-fault-type exceeds u32")
-            })?;
-            pos = p;
-            pos = expect_opening(data, pos, 2, what)?;
-            let (raw_params, p) = tags::extract_context_value(data, pos, 2)?;
+            let what = "BACnetFaultParameter fault-extended";
+            let (vendor_id, pos) = decode_ctx_unsigned::<u16>(data, pos, 0, what)?;
+            let (extended_fault_type, pos) = decode_ctx_unsigned::<u32>(data, pos, 1, what)?;
+            let (raw_params, pos) = decode_ctx_constructed(data, pos, 2, what)?;
             validate_extended_parameters(raw_params, "fault-extended")?;
-            pos = p;
-            pos = expect_closing(data, pos, 2, what)?;
+            let pos = expect_closing(data, pos, 2, what)?;
             (
                 F::FaultExtended {
                     vendor_id,
@@ -265,11 +249,7 @@ pub fn decode_fault_parameters(
         3 => {
             let mut pos = expect_opening(data, pos, 0, what)?;
             let mut fault_values = Vec::new();
-            loop {
-                let (peek, _) = tags::decode_tag(data, pos)?;
-                if peek.is_closing_tag(0) {
-                    break;
-                }
+            while !next_is_closing(data, pos, 0)? {
                 if fault_values.len() >= MAX_FRAMED_ITEMS {
                     return Err(Error::decoding(
                         pos,
@@ -297,11 +277,7 @@ pub fn decode_fault_parameters(
         4 => {
             let mut pos = expect_opening(data, pos, 0, what)?;
             let mut fault_values = Vec::new();
-            loop {
-                let (peek, _) = tags::decode_tag(data, pos)?;
-                if peek.is_closing_tag(0) {
-                    break;
-                }
+            while !next_is_closing(data, pos, 0)? {
                 if fault_values.len() >= MAX_FRAMED_ITEMS {
                     return Err(Error::decoding(
                         pos,

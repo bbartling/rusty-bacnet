@@ -6,7 +6,9 @@
 //! when a sample falls due (`ObjectDatabase::sample_due_averaging_objects`),
 //! and the application can feed samples of its own.
 
-use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
+};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -202,21 +204,23 @@ impl BACnetObject for AveragingObject {
             p if p == PropertyIdentifier::WINDOW_SAMPLES => {
                 Ok(PropertyValue::Unsigned(self.window.capacity().into()))
             }
-            p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => {
-                match &self.object_property_reference {
-                    None => Ok(PropertyValue::Null),
-                    Some(r) => {
-                        let mut fields = vec![
-                            PropertyValue::ObjectIdentifier(r.object_identifier),
-                            PropertyValue::Unsigned(r.property_identifier as u64),
-                        ];
-                        if let Some(idx) = r.property_array_index {
-                            fields.push(PropertyValue::Unsigned(idx as u64));
-                        }
-                        Ok(PropertyValue::List(fields))
-                    }
-                }
-            }
+            // Table 12-5 types the property as a
+            // BACnetDeviceObjectPropertyReference. The object keeps only local
+            // references, so what it serves never has a Device member; with
+            // no reference it reads Null (#1182).
+            p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => Ok(self
+                .object_property_reference
+                .as_ref()
+                .map_or(PropertyValue::Null, |r| {
+                    crate::device_reference::property_reference_value(
+                        &BACnetDeviceObjectPropertyReference {
+                            object_identifier: r.object_identifier,
+                            property_identifier: r.property_identifier,
+                            property_array_index: r.property_array_index,
+                            device_identifier: None,
+                        },
+                    )
+                })),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -245,9 +249,10 @@ impl BACnetObject for AveragingObject {
             // OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, rather than silently
             // dropping the device. The object can't tell which Device holds
             // it; the bundled server drops a Device member naming its own
-            // Device before the value gets here (#1153). The flat form keeps
-            // its historical Unsigned members (both Unsigned and Enumerated
-            // are accepted there; see reference.rs).
+            // Device before the value gets here (#1153). A Device member that
+            // isn't a Device identifier is VALUE_OUT_OF_RANGE (#1182). The flat
+            // form keeps its historical Unsigned members (both Unsigned and
+            // Enumerated are accepted there; see reference.rs).
             p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => {
                 let reference = crate::reference::decode_reference_write(
                     &value,

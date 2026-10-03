@@ -2,11 +2,11 @@
 
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
 
+use super::tagged::{decode_ctx_object_id, decode_optional_ctx};
 use crate::primitives;
-use crate::tags;
 
 /// Encode one unframed `BACnetStageLimitValue` SEQUENCE.
 pub fn encode_stage_limit_value(buf: &mut BytesMut, value: &BACnetStageLimitValue) {
@@ -73,25 +73,10 @@ pub fn decode_device_object_reference(
     data: &[u8],
     offset: usize,
 ) -> Result<(BACnetDeviceObjectReference, usize), Error> {
-    let mut offset = offset;
-    let mut device_identifier = None;
-    let (first, first_content) = tags::decode_tag(data, offset)?;
-    if first.is_context(0) {
-        let end = object_id_end(data, offset, first_content, first.length, 0)?;
-        device_identifier = Some(ObjectIdentifier::decode(&data[first_content..end])?);
-        offset = end;
-    }
-
-    let (object_tag, object_content) = tags::decode_tag(data, offset)?;
-    if !object_tag.is_context(1) || object_tag.length != 4 {
-        return Err(Error::decoding(
-            offset,
-            "device-object reference requires object-identifier [1]",
-        ));
-    }
-    let end = object_id_end(data, offset, object_content, object_tag.length, 1)?;
-    let object_identifier = ObjectIdentifier::decode(&data[object_content..end])?;
-
+    const WHAT: &str = "BACnetDeviceObjectReference";
+    let (device_identifier, offset) =
+        decode_optional_ctx(data, offset, 0, WHAT, decode_ctx_object_id)?;
+    let (object_identifier, end) = decode_ctx_object_id(data, offset, 1, WHAT)?;
     Ok((
         BACnetDeviceObjectReference {
             device_identifier,
@@ -99,28 +84,6 @@ pub fn decode_device_object_reference(
         },
         end,
     ))
-}
-
-fn object_id_end(
-    data: &[u8],
-    tag_offset: usize,
-    content: usize,
-    length: u32,
-    tag: u8,
-) -> Result<usize, Error> {
-    if length != 4 {
-        return Err(Error::decoding(
-            tag_offset,
-            format!("device-object reference [{tag}] must contain a 4-octet object identifier"),
-        ));
-    }
-    let end = content
-        .checked_add(4)
-        .ok_or_else(|| Error::decoding(content, "device-object reference length overflow"))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok(end)
 }
 
 fn pack_bits(values: &[bool]) -> (u8, Vec<u8>) {

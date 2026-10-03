@@ -13,16 +13,20 @@
 //! around the value's own tagged encoding.
 
 use super::log_fields::{
-    check_bit_string, constructed, decode_any_value, decode_failure, decode_integer,
-    decode_log_status, decode_timestamp, encode_any_value, encode_ctx_integer, encode_failure,
-    encode_log_status, encode_timestamp, primitive,
+    check_bit_string, decode_any_value, decode_failure, decode_integer, decode_log_status,
+    decode_timestamp, encode_any_value, encode_ctx_integer, encode_failure, encode_log_status,
+    encode_timestamp,
 };
+use super::tagged::{contents, decode_ctx_constructed, expect_end};
 use crate::{primitives, tags};
 use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogValue};
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
 const RECORD: &str = "BACnetLogMultipleRecord";
+const TIMESTAMP: &str = "BACnetLogMultipleRecord timestamp";
+const LOG_DATA: &str = "BACnetLogMultipleRecord log-data";
+const FAILURE_FIELD: &str = "BACnetLogMultipleRecord failure";
 
 const BOOLEAN: u8 = 0;
 const REAL: u8 = 1;
@@ -89,8 +93,8 @@ pub fn decode_log_multiple_record(
     data: &[u8],
     offset: usize,
 ) -> Result<(BACnetLogMultipleRecord, usize), Error> {
-    let (date, time, data_start) = decode_timestamp(data, offset, RECORD)?;
-    let (body, end) = constructed(data, data_start, 1, RECORD, "log-data")?;
+    let (date, time, data_start) = decode_timestamp(data, offset, TIMESTAMP)?;
+    let (body, end) = decode_ctx_constructed(data, data_start, 1, LOG_DATA)?;
     let log_data = decode_log_data(body, data_start)?;
     Ok((
         BACnetLogMultipleRecord {
@@ -105,26 +109,24 @@ pub fn decode_log_multiple_record(
 fn decode_log_data(data: &[u8], offset: usize) -> Result<LogData, Error> {
     let (tag, start) = tags::decode_tag(data, 0)?;
     let (log_data, end) = if tag.is_context(0) {
-        let (contents, end) = primitive(data, tag, start)?;
+        let (octets, end) = contents(data, start, tag.length)?;
         (
-            LogData::LogStatus(decode_log_status(contents, offset, RECORD)?),
+            LogData::LogStatus(decode_log_status(octets, offset, RECORD)?),
             end,
         )
     } else if tag.is_opening_tag(1) {
         let (list, end) = tags::extract_context_value(data, start, 1)?;
         (LogData::Values(decode_values(list, offset)?), end)
     } else if tag.is_context(2) {
-        let (contents, end) = primitive(data, tag, start)?;
-        (LogData::TimeChange(primitives::decode_real(contents)?), end)
+        let (octets, end) = contents(data, start, tag.length)?;
+        (LogData::TimeChange(primitives::decode_real(octets)?), end)
     } else {
         return Err(Error::decoding(
             offset,
             "log-data expected context [0], constructed [1], or context [2]",
         ));
     };
-    if end != data.len() {
-        return Err(Error::decoding(offset, "log-data has trailing fields"));
-    }
+    expect_end(data, end, offset, LOG_DATA)?;
     Ok(log_data)
 }
 
@@ -135,7 +137,7 @@ fn decode_values(data: &[u8], offset: usize) -> Result<Vec<LogValue>, Error> {
         let (tag, start) = tags::decode_tag(data, pos)?;
         let (value, end) = if tag.is_opening_tag(FAILURE) {
             let (body, end) = tags::extract_context_value(data, start, FAILURE)?;
-            let (error_class, error_code) = decode_failure(body, offset, RECORD)?;
+            let (error_class, error_code) = decode_failure(body, offset, FAILURE_FIELD)?;
             let value = LogValue::Failure {
                 error_class,
                 error_code,
@@ -145,8 +147,8 @@ fn decode_values(data: &[u8], offset: usize) -> Result<Vec<LogValue>, Error> {
             let (body, end) = tags::extract_context_value(data, start, ANY)?;
             (LogValue::AnyValue(decode_any_value(body)?), end)
         } else if tag.class == tags::TagClass::Context && !tag.is_opening && !tag.is_closing {
-            let (contents, end) = primitive(data, tag, start)?;
-            (decode_primitive(tag.number, contents, offset)?, end)
+            let (octets, end) = contents(data, start, tag.length)?;
+            (decode_primitive(tag.number, octets, offset)?, end)
         } else {
             return Err(Error::decoding(offset, "log-data entry has an unknown tag"));
         };

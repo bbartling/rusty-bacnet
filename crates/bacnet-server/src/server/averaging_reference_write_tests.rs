@@ -145,14 +145,10 @@ async fn assert_reference(
     index: Option<u32>,
     what: &str,
 ) {
-    let mut members = vec![
-        PropertyValue::ObjectIdentifier(av1()),
-        PropertyValue::Unsigned(property.to_raw().into()),
-    ];
-    members.extend(index.map(|index| PropertyValue::Unsigned(index.into())));
+    // The Clause 21 encoding, with no Device member (#1182).
     assert_eq!(
         read(h, REFERENCE).await,
-        PropertyValue::List(members),
+        PropertyValue::ApplicationData(reference(property, index, None)),
         "{what}"
     );
 }

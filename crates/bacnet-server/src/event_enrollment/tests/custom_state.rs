@@ -1,5 +1,5 @@
 use super::super::*;
-use super::integration::{indexed_reference_value, ReferenceValueObject};
+use super::integration::{indexed_reference_value, reference_value, ReferenceValueObject};
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::traits::BACnetObject;
@@ -206,10 +206,12 @@ fn source_less_unindexed_cov_does_not_reuse_a_retargeted_baseline() {
     let second_oid = second.object_identifier();
     db.add(Box::new(second)).unwrap();
 
-    let reference = PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(first_oid),
-        PropertyValue::Unsigned(PropertyIdentifier::PRESENT_VALUE.to_raw() as u64),
-    ]);
+    let reference = reference_value(
+        first_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        None,
+        None,
+    );
     let mut enrollment =
         ReferenceValueObject::new_for_event_type(Some(reference), EventType::CHANGE_OF_VALUE);
     enrollment
@@ -228,10 +230,12 @@ fn source_less_unindexed_cov_does_not_reuse_a_retargeted_baseline() {
         .write_property(
             PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
             None,
-            PropertyValue::List(vec![
-                PropertyValue::ObjectIdentifier(second_oid),
-                PropertyValue::Unsigned(PropertyIdentifier::PRESENT_VALUE.to_raw() as u64),
-            ]),
+            reference_value(
+                second_oid,
+                PropertyIdentifier::PRESENT_VALUE.to_raw(),
+                None,
+                None,
+            ),
             None,
         )
         .unwrap();
@@ -363,10 +367,12 @@ fn source_less_custom_enrollment_retains_unindexed_delay_behavior() {
     let target_oid = target.object_identifier();
     db.add(Box::new(target)).unwrap();
 
-    let reference = PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(target_oid),
-        PropertyValue::Unsigned(PropertyIdentifier::PRESENT_VALUE.to_raw() as u64),
-    ]);
+    let reference = reference_value(
+        target_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        None,
+        None,
+    );
     let mut enrollment = ReferenceValueObject::new(Some(reference));
     enrollment.source_supported = false;
     db.add(Box::new(enrollment)).unwrap();

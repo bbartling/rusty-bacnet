@@ -5,25 +5,10 @@
 //! apart, so a property writer can answer with the matching Clause 15.9.1.3
 //! error: a malformed member fails at once, while a well-formed member whose
 //! value doesn't fit its type is only recorded, and the codec reports it as
-//! [`Error::OutOfRange`] once the rest of the value has been checked.
+//! [`Error::OutOfRange`] once the rest of the value has been checked. The
+//! codecs read each member's contents with [`super::tagged`].
 
 use bacnet_types::error::Error;
-
-/// The content octets of a primitive member and the offset just past them.
-pub(super) fn member_content(
-    data: &[u8],
-    content: usize,
-    length: u32,
-) -> Result<(&[u8], usize), Error> {
-    let end = usize::try_from(length)
-        .ok()
-        .and_then(|length| content.checked_add(length))
-        .ok_or_else(|| Error::decoding(content, "member length overflow"))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok((&data[content..end], end))
-}
 
 /// The value of an Unsigned member's content octets, or `None` when the
 /// encoding is well formed but the value needs more than 64 bits. Empty

@@ -6,8 +6,10 @@
 //! BACnetLogMultipleRecord opens with context 0 around an application Date
 //! then an application Time, and each record kind reuses the same encodings
 //! for its log-status, failure and any-value alternatives under its own tag
-//! numbers. `record` names the record kind in error messages.
+//! numbers. `record` names the record kind in error messages, and `what`
+//! names the record kind and the field.
 
+use super::tagged::{contents, decode_ctx_constructed, expect_end};
 use super::validate_tlv_sequence;
 use crate::{primitives, tags};
 use bacnet_types::bitstring::LogStatus;
@@ -28,17 +30,12 @@ pub(super) fn encode_timestamp(buf: &mut BytesMut, date: &Date, time: &Time) {
 pub(super) fn decode_timestamp(
     data: &[u8],
     offset: usize,
-    record: &str,
+    what: &str,
 ) -> Result<(Date, Time, usize), Error> {
-    let (body, end) = constructed(data, offset, 0, record, "timestamp")?;
-    let (date, next) = application(body, 0, tags::app_tag::DATE, 4, offset, record)?;
-    let (time, last) = application(body, next, tags::app_tag::TIME, 4, offset, record)?;
-    if last != body.len() {
-        return Err(Error::decoding(
-            offset,
-            format!("{record} timestamp has trailing fields"),
-        ));
-    }
+    let (body, end) = decode_ctx_constructed(data, offset, 0, what)?;
+    let (date, next) = application(body, 0, tags::app_tag::DATE, 4, offset, what)?;
+    let (time, last) = application(body, next, tags::app_tag::TIME, 4, offset, what)?;
+    expect_end(body, last, offset, what)?;
     Ok((Date::decode(date)?, Time::decode(time)?, end))
 }
 
@@ -105,19 +102,10 @@ pub(super) fn encode_failure(buf: &mut BytesMut, tag: u8, error_class: u32, erro
 }
 
 /// The class and code in the body of a failure alternative.
-pub(super) fn decode_failure(
-    body: &[u8],
-    offset: usize,
-    record: &str,
-) -> Result<(u32, u32), Error> {
-    let (class, next) = application(body, 0, tags::app_tag::ENUMERATED, 0, offset, record)?;
-    let (code, last) = application(body, next, tags::app_tag::ENUMERATED, 0, offset, record)?;
-    if last != body.len() {
-        return Err(Error::decoding(
-            offset,
-            format!("{record} failure has trailing fields"),
-        ));
-    }
+pub(super) fn decode_failure(body: &[u8], offset: usize, what: &str) -> Result<(u32, u32), Error> {
+    let (class, next) = application(body, 0, tags::app_tag::ENUMERATED, 0, offset, what)?;
+    let (code, last) = application(body, next, tags::app_tag::ENUMERATED, 0, offset, what)?;
+    expect_end(body, last, offset, what)?;
     Ok((
         primitives::decode_unsigned_u32(class)?,
         primitives::decode_unsigned_u32(code)?,
@@ -155,40 +143,6 @@ pub(super) fn decode_any_value(body: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(body.to_vec())
 }
 
-/// The body of the constructed field `number` opening at `offset`, and the
-/// offset just past its closing tag.
-pub(super) fn constructed<'a>(
-    data: &'a [u8],
-    offset: usize,
-    number: u8,
-    record: &str,
-    field: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (tag, start) = tags::decode_tag(data, offset)?;
-    if !tag.is_opening_tag(number) {
-        return Err(Error::decoding(
-            offset,
-            format!("{record} {field} expected opening tag [{number}]"),
-        ));
-    }
-    tags::extract_context_value(data, start, number)
-}
-
-/// The contents of the primitive whose tag `tag` ends at `start`.
-pub(super) fn primitive(
-    data: &[u8],
-    tag: tags::Tag,
-    start: usize,
-) -> Result<(&[u8], usize), Error> {
-    let end = start
-        .checked_add(tag.length as usize)
-        .filter(|end| *end <= data.len())
-        .ok_or_else(|| {
-            Error::buffer_too_short(start.saturating_add(tag.length as usize), data.len())
-        })?;
-    Ok((&data[start..end], end))
-}
-
 /// The contents of the application `number` value at `pos`, with exactly
 /// `length` octets unless `length` is zero.
 fn application<'a>(
@@ -197,7 +151,7 @@ fn application<'a>(
     number: u8,
     length: u32,
     offset: usize,
-    record: &str,
+    what: &str,
 ) -> Result<(&'a [u8], usize), Error> {
     let (tag, start) = tags::decode_tag(data, pos)?;
     if tag.class != tags::TagClass::Application
@@ -206,8 +160,8 @@ fn application<'a>(
     {
         return Err(Error::decoding(
             offset,
-            format!("{record} expected application tag {number}"),
+            format!("{what}: expected application tag {number}"),
         ));
     }
-    primitive(data, tag, start)
+    contents(data, start, tag.length)
 }

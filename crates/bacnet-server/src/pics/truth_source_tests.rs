@@ -465,7 +465,7 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
             (PropertyIdentifier::SCALE_FACTOR, PropertyValue::Real(1.5)),
             (PropertyIdentifier::ADJUST_VALUE, PropertyValue::Real(2.0)),
             (PropertyIdentifier::COV_INCREMENT, PropertyValue::Real(0.5)),
-            (PropertyIdentifier::INPUT_REFERENCE, reference_value.clone()),
+            (PropertyIdentifier::INPUT_REFERENCE, reference_value),
             (
                 PropertyIdentifier::DESCRIPTION,
                 PropertyValue::CharacterString("d".into()),
@@ -514,7 +514,8 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
         &[
             (
                 PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
-                reference_value,
+                // The Clause 21 form Averaging serves (#1182).
+                PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x05, 0x19, 0x55]),
             ),
             (
                 PropertyIdentifier::DESCRIPTION,
@@ -596,6 +597,7 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
                 PropertyIdentifier::DESCRIPTION,
+                PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY,
             ][..],
         ),
         (
@@ -606,6 +608,7 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
                 PropertyIdentifier::DESCRIPTION,
+                PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY,
             ][..],
         ),
     ];

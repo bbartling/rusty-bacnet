@@ -582,6 +582,8 @@ mod dispatch;
 mod event_delivery;
 mod event_enrollment_lifecycle;
 mod event_forwarding;
+pub use event_forwarding::MAX_FORWARDED_DESTINATIONS;
+mod event_forwarding_repeats;
 mod event_message_policy;
 pub(crate) mod event_notification_payload;
 mod event_notifications;
@@ -679,6 +681,8 @@ mod command_action_run_tests;
 #[cfg(test)]
 mod command_action_wire_tests;
 #[cfg(test)]
+mod confirmed_broadcast_tests;
+#[cfg(test)]
 mod cov_background_tests;
 #[cfg(test)]
 mod cov_budget_tests;
@@ -725,6 +729,10 @@ mod event_enable_distribution_tests;
 #[cfg(test)]
 mod event_enrollment_task_tests;
 #[cfg(test)]
+mod event_forwarding_bounds_tests;
+#[cfg(test)]
+mod event_forwarding_cap_tests;
+#[cfg(test)]
 mod event_forwarding_origin_tests;
 #[cfg(test)]
 mod event_forwarding_rule_tests;
@@ -744,6 +752,8 @@ mod life_safety_cov_tests;
 mod life_safety_operation_replay_tests;
 #[cfg(test)]
 mod life_safety_operation_tests;
+#[cfg(test)]
+mod log_reference_resize_tests;
 #[cfg(test)]
 mod loop_controlled_variable_tests;
 #[cfg(test)]

@@ -410,6 +410,17 @@ pub(crate) fn decode_write_property_value(
         // Address routing and broadcast policy belong to the mutation owner.
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
+    // Log_DeviceObjectProperty reaches the log as raw reference bytes, which
+    // it decodes with the shared codec, after the handler has put any
+    // reference naming this device in its local form; a Trend Log Multiple's
+    // index 0, the array size, stays an Unsigned. An application Null alone
+    // is a Trend Log's empty reference (#1234).
+    if array_index != Some(0) && property == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY {
+        if bytes == [0x00] {
+            return Ok(PropertyValue::Null);
+        }
+        return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
+    }
     // A Notification Forwarder's Port_Filter goes one BACnetPortPermission
     // per chunk (#1225).
     if array_index != Some(0) && property == PropertyIdentifier::PORT_FILTER {

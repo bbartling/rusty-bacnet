@@ -34,7 +34,9 @@ fn pics_life_safety_point_property_metadata_is_exact() {
             if configured {
                 object.set_description("long life safety label".repeat(100));
                 object.set_direct_reading(42.5);
-                object.add_member(ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 9).unwrap());
+                object
+                    .add_member(ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 9).unwrap())
+                    .unwrap();
             }
             object
                 .write_property(
@@ -90,6 +92,7 @@ fn pics_life_safety_zone_property_metadata_is_exact() {
         (P::OPERATION_EXPECTED, false, false),
         (P::TRACKING_VALUE, false, true),
         (P::ZONE_MEMBERS, false, false),
+        (P::MEMBER_OF, true, false),
         (P::EVENT_STATE, false, false),
         (P::STATUS_FLAGS, false, false),
         (P::OUT_OF_SERVICE, false, true),
@@ -101,9 +104,11 @@ fn pics_life_safety_zone_property_metadata_is_exact() {
             let mut object = LifeSafetyZoneObject::new(7, "LSZ-7").unwrap();
             if configured {
                 object.set_description("long life safety label".repeat(100));
-                object.add_zone_member(
-                    ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 3).unwrap(),
-                );
+                object
+                    .add_zone_member(
+                        ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 3).unwrap(),
+                    )
+                    .unwrap();
             }
             object
                 .write_property(
