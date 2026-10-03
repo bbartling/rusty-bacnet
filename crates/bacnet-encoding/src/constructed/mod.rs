@@ -26,13 +26,14 @@ use bacnet_types::constructed::{
     BACnetProprietaryPropertyState,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
 
 use crate::primitives;
 use crate::tags::{self, TagClass};
 
 pub mod access_credential;
+mod action_list;
 pub mod assigned_landing_calls;
 mod audit_notification;
 mod audit_record;
@@ -56,6 +57,9 @@ pub use access_credential::{
     decode_assigned_access_rights, decode_authentication_factor,
     decode_credential_authentication_factor, encode_assigned_access_rights,
     encode_authentication_factor, encode_credential_authentication_factor,
+};
+pub use action_list::{
+    decode_action_command, decode_action_list, encode_action_command, encode_action_list,
 };
 pub use assigned_landing_calls::{decode_assigned_landing_calls, encode_assigned_landing_calls};
 pub use audit_notification::{decode_audit_notification_at, encode_audit_notification};
@@ -156,6 +160,42 @@ fn decode_ctx_unsigned(
         return Err(Error::buffer_too_short(end, data.len()));
     }
     Ok((primitives::decode_unsigned(&data[pos..end])?, end))
+}
+
+/// Decode an `ABSTRACT-SYNTAX.&Type` value framed in an opening/closing
+/// context tag `tag` pair whose content starts at `content`; returns it and
+/// the offset past the closing tag.
+///
+/// One application element decodes as itself and any other count, none
+/// included, as a [`PropertyValue::List`] (an array written or read whole). A
+/// context-tagged element decodes to [`PropertyValue::ApplicationData`], so
+/// the value re-encodes to the same octets.
+fn decode_framed_value(
+    data: &[u8],
+    content: usize,
+    tag: u8,
+    what: &str,
+) -> Result<(PropertyValue, usize), Error> {
+    let (inner, end) = tags::extract_context_value(data, content, tag)?;
+    let body = &data[..content + inner.len()];
+    let mut values = Vec::new();
+    let mut offset = content;
+    while offset < body.len() {
+        if values.len() >= MAX_FRAMED_ITEMS {
+            return Err(Error::decoding(
+                offset,
+                format!("{what}: value exceeds item limit"),
+            ));
+        }
+        let (value, next) = primitives::decode_application_value(body, offset)?;
+        values.push(value);
+        offset = next;
+    }
+    let value = match <[PropertyValue; 1]>::try_from(values) {
+        Ok([value]) => value,
+        Err(values) => PropertyValue::List(values),
+    };
+    Ok((value, end))
 }
 
 /// Decode a primitive context tag `tag` holding a 4-octet REAL.
