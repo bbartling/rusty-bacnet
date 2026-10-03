@@ -5346,7 +5346,8 @@
     "#1204: notification receipt reads the lowest Device's APDU_Timeout. Forwarding skips a parent naming the lowest Device and forwards to any other, including a Device in the same database; with only a wildcard Device it forwards nothing.",
     "FileAuditLogPersistence writes snapshot schema v3. Loading a v1 or v2 snapshot reverses the three bits of each log-status record, which 0.11.0 stored reversed, so an old log-disabled record reads back as LOG_DISABLED; the next commit saves v3.",
     "The built-in Audit Log commits on its own writer thread. The server stages each inbound batch and awaits the commit without the database guard; the batch reaches memory, and a confirmed one its SimpleACK, once records and receipt are durable.",
-    "One commit is staged per Audit Log at a time; a second batch waits for the first without the guard. A network or write_local Log_Enable change stages the same way; add_record and other in-place changes commit under the caller's guard."
+    "One commit is staged per Audit Log at a time; a second batch waits for the first without the guard. A network or write_local Log_Enable change stages the same way; add_record and other in-place changes commit under the caller's guard.",
+    "Storage holds a staged batch a moment before the log serves it: the commit returns on the writer thread, then the request applies the batch under the guard. A query made after the SimpleACK sees the batch."
    ],
    "target_device_recipient": {
     "scope": "Target portion of #728; the completed bounded source endpoint migration is recorded separately in BACNET-19-SOURCE-READ-PROPERTY. Broader Audit conformance remains open. Corrected Device recipient requirement: Clause 12.11 with 135-2020 Errata Summary 2024-04-29 item 25 (PDF page 7), preserving base O and footnotes 19-20; NULL operation semantics in 15.9/15.10/19.2; record shape Table 19-4 and BACnetRecipient in Clause 21.",
