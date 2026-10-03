@@ -1681,6 +1681,12 @@ element is new. Refusals of the request or target (authorization, object,
 property, array index, list kind, write access) name element 0, as do the
 object's refusals of what a removal leaves.
 
+On a running server a successful edit runs the object's intrinsic-reporting
+evaluation, as a WriteProperty does. An Alarm_Values edit that puts the
+watched value in or out of alarm, with Time_Delay 0, moves Event_State before
+the next periodic tick, and the transition's Status_Flags change goes to the
+object's COV subscribers.
+
 ReadRange reads only the same BACnetLIST properties. A scalar, a constructed
 single value, a whole array (Object_List, Priority_Array) or an indexed array
 element returns `SERVICES/PROPERTY_IS_NOT_A_LIST`, after the unknown object,

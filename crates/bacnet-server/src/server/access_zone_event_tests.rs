@@ -1,8 +1,9 @@
 //! Access Zone intrinsic reporting through the running server (#1305): a
 //! CHANGE_OF_STATE on Occupancy_State reaches the recipients of the zone's
 //! Notification Class once Time_Delay has run, Event_Enable withholds only
-//! the distribution, and a fault notification reports Occupancy_State, the
-//! zone's Table 13-5 property.
+//! the distribution, a fault notification reports Occupancy_State, the
+//! zone's Table 13-5 property, and a zone in alarm is listed by
+//! GetEventInformation, GetAlarmSummary and GetEnrollmentSummary.
 
 use super::event_notifications_tests::{
     decode_broadcast_notification, local_broadcast_destination, recording_transport,
@@ -237,4 +238,69 @@ async fn access_zone_fault_notification_reports_occupancy_state() {
     assert_eq!(end, property_values.len());
     assert_eq!(entry.property_identifier, P::OCCUPANCY_STATE);
     assert_eq!(entry.value, [0x91, 0x00]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn access_zone_in_alarm_is_listed_by_the_summary_services() {
+    use crate::handlers::{
+        handle_get_alarm_summary, handle_get_enrollment_summary, handle_get_event_information,
+    };
+    use bacnet_services::alarm_event::{GetEventInformationAck, GetEventInformationRequest};
+    use bacnet_services::alarm_summary::GetAlarmSummaryAck;
+    use bacnet_services::enrollment_summary::{
+        GetEnrollmentSummaryAck, GetEnrollmentSummaryRequest,
+    };
+    use bacnet_types::enums::AcknowledgmentFilter;
+
+    let (server, oid, _sent) = start(zone(0, EventTransitionBits::all())).await;
+    write(&server, oid, P::ADJUST_VALUE, PropertyValue::Signed(6)).await;
+    let db = server.database().read().await;
+
+    let mut request = BytesMut::new();
+    GetEventInformationRequest {
+        last_received_object_identifier: None,
+    }
+    .encode(&mut request);
+    let mut ack = BytesMut::new();
+    handle_get_event_information(&db, &request, &mut ack).unwrap();
+    let ack = GetEventInformationAck::decode(&ack).unwrap();
+    let [summary] = ack.list_of_event_summaries.as_slice() else {
+        panic!("one event summary, got {:?}", ack.list_of_event_summaries);
+    };
+    assert_eq!(summary.object_identifier, oid);
+    assert_eq!(summary.event_state, EventState::OFFNORMAL);
+    assert_eq!(summary.notify_type, NotifyType::ALARM);
+    assert_eq!(summary.event_enable, EventTransitionBits::all());
+
+    let mut ack = BytesMut::new();
+    handle_get_alarm_summary(&db, &mut ack).unwrap();
+    let alarms = GetAlarmSummaryAck::decode(&ack).unwrap().entries;
+    assert_eq!(
+        alarms
+            .iter()
+            .map(|entry| (entry.object_identifier, entry.alarm_state))
+            .collect::<Vec<_>>(),
+        [(oid, EventState::OFFNORMAL)]
+    );
+
+    let mut request = BytesMut::new();
+    GetEnrollmentSummaryRequest {
+        acknowledgment_filter: AcknowledgmentFilter::ALL,
+        enrollment_filter: None,
+        event_state_filter: None,
+        event_type_filter: None,
+        priority_filter: None,
+        notification_class_filter: None,
+    }
+    .encode(&mut request);
+    let mut ack = BytesMut::new();
+    handle_get_enrollment_summary(&db, &request, &mut ack).unwrap();
+    let enrollments = GetEnrollmentSummaryAck::decode(&ack).unwrap().entries;
+    let [enrollment] = enrollments.as_slice() else {
+        panic!("one enrollment, got {enrollments:?}");
+    };
+    assert_eq!(enrollment.object_identifier, oid);
+    assert_eq!(enrollment.event_type, EventType::CHANGE_OF_STATE);
+    assert_eq!(enrollment.event_state, EventState::OFFNORMAL);
+    assert_eq!(enrollment.notification_class, Some(CLASS));
 }

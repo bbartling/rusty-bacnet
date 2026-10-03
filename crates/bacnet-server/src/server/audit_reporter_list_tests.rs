@@ -27,6 +27,10 @@ fn list_request(
 async fn list_server(initial: Vec<u32>) -> Fixture {
     let fixture = server(reporter()).await;
     let mut object = MultiStateInputObject::new(1, "list", 3).unwrap();
+    // A list edit runs the object's event evaluation (#1305). Present_Value 3
+    // stays out of the alarm values these tests edit, so no transition takes
+    // a sequence number from the source the audit time stamps share.
+    object.set_present_value(3);
     object.set_alarm_values(initial);
     fixture
         .server

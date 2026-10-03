@@ -2211,8 +2211,10 @@ element that isn't an Access Door raises `BacnetProtocolError`
 (VALUE_OUT_OF_RANGE). `entry_points` and `exit_points` set an Access Zone's
 Entry_Points and Exit_Points lists in the same element forms, and an element
 that isn't an Access Point raises `BacnetProtocolError` (VALUE_OUT_OF_RANGE).
-A whole read of either list returns the references' octets. `supported_formats` takes `(format, format_class)`
-pairs, a format being a BACnetAuthenticationFactorType number or a
+A whole read of either list returns the references' octets as `bytes`, or
+`[]` while the list is empty. `supported_formats` takes
+`(format, format_class)` pairs, a format being a
+BACnetAuthenticationFactorType number or a
 `(format_type, vendor_id, vendor_format)` triple, which a CUSTOM format
 needs; an ill-formed format raises VALUE_OUT_OF_RANGE.
 

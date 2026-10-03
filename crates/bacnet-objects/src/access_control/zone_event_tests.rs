@@ -245,6 +245,58 @@ fn access_zone_goes_offnormal_after_time_delay_and_back_to_normal() {
 }
 
 #[test]
+fn access_zone_time_delay_normal_governs_only_the_return_to_normal() {
+    let mut zone = alarming_zone(1);
+    write(&mut zone, P::TIME_DELAY_NORMAL, PropertyValue::Unsigned(3)).unwrap();
+    assert_eq!(read(&zone, P::TIME_DELAY), PropertyValue::Unsigned(1));
+    assert_eq!(
+        read(&zone, P::TIME_DELAY_NORMAL),
+        PropertyValue::Unsigned(3)
+    );
+
+    // Into alarm on Time_Delay's single second.
+    adjust(&mut zone, 6);
+    assert_eq!(zone.evaluate_intrinsic_reporting(), None);
+    let offnormal = zone.tick_intrinsic_reporting().unwrap();
+    assert_eq!(
+        offnormal.change,
+        change(EventState::NORMAL, EventState::OFFNORMAL)
+    );
+    commit_test_proposal(&mut zone, offnormal);
+
+    // Out of it only after Time_Delay_Normal's three.
+    adjust(&mut zone, -3);
+    assert_eq!(zone.evaluate_intrinsic_reporting(), None);
+    assert_eq!(zone.tick_intrinsic_reporting(), None);
+    assert_eq!(zone.tick_intrinsic_reporting(), None);
+    assert_eq!(
+        zone.tick_intrinsic_reporting()
+            .map(|outcome| outcome.change),
+        Some(change(EventState::OFFNORMAL, EventState::NORMAL))
+    );
+}
+
+#[test]
+fn access_zone_alarm_values_past_the_cap_are_no_space() {
+    let cap = crate::multistate::MAX_ALARM_VALUES;
+    let mut zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
+    let full = PropertyValue::List(vec![PropertyValue::Enumerated(4); cap]);
+    write(&mut zone, P::ALARM_VALUES, full.clone()).unwrap();
+    crate::common::assert_list_element_refused(
+        write(
+            &mut zone,
+            P::ALARM_VALUES,
+            PropertyValue::List(vec![PropertyValue::Enumerated(4); cap + 1]),
+        ),
+        ErrorClass::RESOURCES,
+        ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+        u32::try_from(cap + 1).unwrap(),
+        "one past the cap",
+    );
+    assert_eq!(read(&zone, P::ALARM_VALUES), full);
+}
+
+#[test]
 fn access_zone_condition_cleared_within_time_delay_reports_nothing() {
     let mut zone = alarming_zone(3);
     adjust(&mut zone, 6);
