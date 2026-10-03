@@ -1,4 +1,5 @@
-//! Constructed values served by the Access Credential object (Clause 12.35).
+//! Constructed values served by the Access Credential object (Clause 12.35)
+//! and the Credential Data Input object (Clause 12.36).
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
@@ -36,6 +37,45 @@ pub struct BACnetAuthenticationFactor {
     pub format_class: u32,
     /// The encoded factor, such as a card number.
     pub value: Vec<u8>,
+}
+
+/// One element of a Credential Data Input's Supported_Formats array
+/// (`BACnetAuthenticationFactorFormat`, Clause 21; Clause 12.36.9).
+///
+/// The format type goes out as a context `[0]` ENUMERATED, and the two
+/// vendor members, when present, as context `[1]` and `[2]` Unsigned16
+/// values. A CUSTOM format names its vendor and that vendor's format number
+/// in them; any other format leaves them out or sets them to zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BACnetAuthenticationFactorFormat {
+    /// The format read.
+    pub format_type: AuthenticationFactorType,
+    /// For a CUSTOM format, the Vendor_Identifier of the company whose
+    /// format it is.
+    pub vendor_id: Option<u16>,
+    /// That vendor's number for the CUSTOM format.
+    pub vendor_format: Option<u16>,
+}
+
+impl BACnetAuthenticationFactorFormat {
+    /// A standard format, with neither vendor member.
+    pub const fn standard(format_type: AuthenticationFactorType) -> Self {
+        Self {
+            format_type,
+            vendor_id: None,
+            vendor_format: None,
+        }
+    }
+
+    /// A CUSTOM format defined by vendor `vendor_id` as its format
+    /// `vendor_format`.
+    pub const fn custom(vendor_id: u16, vendor_format: u16) -> Self {
+        Self {
+            format_type: AuthenticationFactorType::CUSTOM,
+            vendor_id: Some(vendor_id),
+            vendor_format: Some(vendor_format),
+        }
+    }
 }
 
 /// One element of an Access Credential's Authentication_Factors array

@@ -155,7 +155,7 @@ pub(super) fn assert_rpm_selector_bytes(
                 ..budget
             }
         ),
-        Err(super::super::rpm_budget::RpmFailure::Work)
+        Err(super::super::ReadFailure::Work)
     ));
     assert_eq!(&prefix[..], b"prefix");
     assert!(matches!(
@@ -168,7 +168,7 @@ pub(super) fn assert_rpm_selector_bytes(
                 ..budget
             }
         ),
-        Err(super::super::rpm_budget::RpmFailure::Bytes)
+        Err(super::super::ReadFailure::Bytes)
     ));
     assert_eq!(&prefix[..], b"prefix");
 }

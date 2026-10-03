@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use super::group_present_value::GroupMembers;
 use super::*;
 use bacnet_objects::log_buffer::LogRecordIdentity;
 use bacnet_objects::traits::BACnetObject;
@@ -189,14 +190,15 @@ pub fn handle_read_range(
     service_data: &[u8],
     response: &mut BytesMut,
 ) -> Result<(), Error> {
-    let selected = prepare_read_range(db, None, ReadRangeRequest::decode(service_data)?).map_err(
-        |failure| match failure {
-            ReadRangeFailure::Service(error) => error,
-            ReadRangeFailure::Bytes | ReadRangeFailure::Work => {
-                unreachable!("a read with no limit ran past one")
-            }
-        },
-    )?;
+    let unlimited = |failure| match failure {
+        ReadRangeFailure::Service(error) => error,
+        ReadRangeFailure::Bytes | ReadRangeFailure::Work => {
+            unreachable!("a read with no limit ran past one")
+        }
+    };
+    let request = ReadRangeRequest::decode(service_data)?;
+    let plan = plan_read_range(db, None, &request).map_err(unlimited)?;
+    let selected = prepare_read_range(db, None, request, plan.into_members()).map_err(unlimited)?;
     append_read_range_ack_with(
         &selected.request,
         &selected.items,
@@ -215,11 +217,30 @@ pub(crate) fn handle_read_range_budgeted(
     budget: crate::server::ReadRangeBudget,
 ) -> Result<(), ReadRangeFailure> {
     let request = ReadRangeRequest::decode(service_data).map_err(ReadRangeFailure::Service)?;
-    read_range_request_observed(db, None, request, response, budget, |_, _, _, _| {})
+    let plan = plan_read_range(db, None, &request)?;
+    read_range_request_observed(db, None, request, plan, response, budget, |_, _, _, _| {})
 }
 
-/// ReadRange evaluator over one decoded request. `view` carries the
-/// executor-owned Device definitions and the request-local COV lists that
+/// Plan a ReadRange of the object the request names: its row and, for a
+/// Group's whole Present_Value, the member rows, charged to the view's work
+/// limit before any value is read (#1172, #1213).
+pub(crate) fn plan_read_range(
+    db: &ObjectDatabase,
+    view: Option<&DeviceReadContext<'_>>,
+    request: &ReadRangeRequest,
+) -> Result<PropertyPlan, ReadRangeFailure> {
+    Ok(PropertyPlan::new(
+        db,
+        view,
+        request.object_identifier,
+        db.get(&request.object_identifier),
+        request.property_identifier,
+        request.property_array_index,
+    )?)
+}
+
+/// ReadRange evaluator over one decoded request and its plan. `view` carries
+/// the executor-owned Device definitions and the request-local COV lists that
 /// ReadProperty serves, so both services read the same value.
 ///
 /// Observe one request outcome, never a page-budget or work-limit failure.
@@ -228,6 +249,7 @@ pub(crate) fn read_range_request_observed(
     db: &ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
     request: ReadRangeRequest,
+    plan: PropertyPlan,
     response: &mut BytesMut,
     budget: crate::server::ReadRangeBudget,
     completed: impl FnOnce(ObjectIdentifier, PropertyIdentifier, Option<u32>, &Result<(), Error>),
@@ -235,7 +257,7 @@ pub(crate) fn read_range_request_observed(
     let target = request.object_identifier;
     let property = request.property_identifier;
     let index = request.property_array_index;
-    let result = prepare_read_range(db, view, request).and_then(|selected| {
+    let result = prepare_read_range(db, view, request, plan.into_members()).and_then(|selected| {
         page::append_page_with(&selected, response, budget, encode_property_value)
     });
     let result = match result {
@@ -267,6 +289,7 @@ fn read_range_items(
     view: Option<&DeviceReadContext<'_>>,
     object: &dyn BACnetObject,
     request: &ReadRangeRequest,
+    members: Option<GroupMembers>,
 ) -> Result<Vec<PropertyValue>, ReadRangeFailure> {
     let property = request.property_identifier;
     let index = request.property_array_index;
@@ -278,7 +301,8 @@ fn read_range_items(
             code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
         }));
     }
-    let value = group_present_value::read_served_property(db, view, object, property, index)?;
+    let value =
+        group_present_value::read_served_property(db, view, object, property, index, members)?;
     // An indexed array element is never a list: 135-2020 defines no
     // BACnetARRAY of BACnetLIST property.
     if index.is_some() || !object.is_list_property(property) {
@@ -303,6 +327,7 @@ fn prepare_read_range<'a>(
     db: &'a ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
     request: ReadRangeRequest,
+    members: Option<GroupMembers>,
 ) -> Result<PreparedReadRange<'a>, ReadRangeFailure> {
     let stored = db.get(&request.object_identifier).ok_or(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
@@ -313,7 +338,7 @@ fn prepare_read_range<'a>(
     let (items, mut audit_identities) = match audit::audit_log_buffer(stored, &request)? {
         Some((items, identities)) => (items, Some(identities)),
         None => (
-            RangeItems::Values(read_range_items(db, view, object, &request)?),
+            RangeItems::Values(read_range_items(db, view, object, &request, members)?),
             None,
         ),
     };

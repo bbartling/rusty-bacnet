@@ -50,10 +50,12 @@ mod file;
 mod group_present_value;
 mod list;
 mod object_mgmt;
+mod read_budget;
+pub(crate) use read_budget::ReadFailure;
 mod read_property;
 mod read_range;
 mod rpm_budget;
-pub(crate) use rpm_budget::{rpm_budgeted_request_observed, RpmFailure};
+pub(crate) use rpm_budget::RpmPlan;
 mod write_property;
 
 pub use alarm_event::*;

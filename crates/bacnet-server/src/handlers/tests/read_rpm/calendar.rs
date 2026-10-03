@@ -169,7 +169,7 @@ fn rpm_calendar_indexed_reads_and_date_list_wire_bytes() {
                 }
             }
         }
-        use crate::handlers::rpm_budget::{handle_rpm_budgeted, RpmFailure};
+        use crate::handlers::{rpm_budget::handle_rpm_budgeted, ReadFailure};
         let budget = crate::server::ReadPropertyMultipleBudget {
             max_result_elements: cases.len(),
             max_service_ack_bytes: legacy.len(),
@@ -188,7 +188,7 @@ fn rpm_calendar_indexed_reads_and_date_list_wire_bytes() {
                     ..budget
                 }
             ),
-            Err(RpmFailure::Work)
+            Err(ReadFailure::Work)
         ));
         assert_eq!(&prefix[..], b"prefix");
         assert!(matches!(
@@ -201,7 +201,7 @@ fn rpm_calendar_indexed_reads_and_date_list_wire_bytes() {
                     ..budget
                 }
             ),
-            Err(RpmFailure::Bytes)
+            Err(ReadFailure::Bytes)
         ));
         assert_eq!(&prefix[..], b"prefix");
     }

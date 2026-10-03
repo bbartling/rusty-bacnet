@@ -142,6 +142,15 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
         self
     }
 
+    /// Sets the server role's read work limit (default 256): the result rows
+    /// one ReadProperty may expand, a Group's member rows included. See
+    /// [`SessionConfig::read_work_limit`]; zero fails
+    /// [`build_session`](Self::build_session) via [`EndpointSession::new`].
+    pub fn read_work_limit(mut self, limit: usize) -> Self {
+        self.session.read_work_limit = limit;
+        self
+    }
+
     /// Sets client APDU timeout/retries (session-owned timers).
     pub fn client_timers(mut self, timeout_ms: u64, retries: u8) -> Self {
         self.session.apdu_timeout_ms = timeout_ms;

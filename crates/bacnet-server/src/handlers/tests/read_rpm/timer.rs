@@ -236,7 +236,7 @@ fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
                 }
             }
         }
-        use crate::handlers::rpm_budget::{handle_rpm_budgeted, RpmFailure};
+        use crate::handlers::{rpm_budget::handle_rpm_budgeted, ReadFailure};
         let budget = crate::server::ReadPropertyMultipleBudget {
             max_result_elements: cases.len(),
             max_service_ack_bytes: legacy.len(),
@@ -255,7 +255,7 @@ fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
                     ..budget
                 }
             ),
-            Err(RpmFailure::Work)
+            Err(ReadFailure::Work)
         ));
         assert_eq!(&prefix[..], b"prefix");
         assert!(matches!(
@@ -268,7 +268,7 @@ fn rpm_timer_indexed_reads_and_bytes_are_unchanged() {
                     ..budget
                 }
             ),
-            Err(RpmFailure::Bytes)
+            Err(ReadFailure::Bytes)
         ));
         assert_eq!(&prefix[..], b"prefix");
     }

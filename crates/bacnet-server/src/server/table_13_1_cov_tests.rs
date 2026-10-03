@@ -13,7 +13,9 @@
 //! wire instead, as the Load Control test does Requested_Shed_Level.
 //!
 //! The BACnetTimeStamp, BACnetAuthenticationFactor and BACnetShedLevel values
-//! go out in their Clause 21 forms (#1133).
+//! go out in their Clause 21 forms (#1133). A Credential Data Input's
+//! simulated Present_Value and Reliability are written over the wire while it
+//! is out of service (#1168).
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::access_control::{
@@ -25,10 +27,12 @@ use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov::{COVNotificationRequest, SubscribeCOVRequest};
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use bacnet_services::write_property::WritePropertyRequest;
-use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetShedLevel};
+use bacnet_types::constructed::{
+    BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat, BACnetShedLevel,
+};
 use bacnet_types::enums::{
     AccessEvent, AuthenticationFactorType, DoorAlarmState, DoorStatus, DoorValue, LockStatus,
-    ObjectType,
+    ObjectType, Reliability,
 };
 use bacnet_types::primitives::BACnetTimeStamp;
 
@@ -418,6 +422,110 @@ async fn credential_data_input_cov_reports_and_triggers_on_update_time() {
         encode(PropertyValue::CharacterString("lobby reader".into())),
     )
     .await;
+    h.no_notification().await;
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn credential_data_input_simulated_rows_report_and_restore() {
+    const OUT_OF_SERVICE: PropertyIdentifier = PropertyIdentifier::OUT_OF_SERVICE;
+    let oid = ObjectIdentifier::new(ObjectType::CREDENTIAL_DATA_INPUT, 1).unwrap();
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        let mut reader = CredentialDataInputObject::new(1, "CDI-1").unwrap();
+        reader
+            .set_supported_formats([(
+                BACnetAuthenticationFactorFormat::standard(AuthenticationFactorType::WIEGAND26),
+                0,
+            )])
+            .unwrap();
+        reader.set_present_value(
+            BACnetAuthenticationFactor {
+                format_type: AuthenticationFactorType::WIEGAND26,
+                format_class: 0,
+                value: vec![0x12, 0x34, 0x56],
+            },
+            stamp(7),
+        );
+        db.add(Box::new(reader)).unwrap();
+    })
+    .await;
+    // format type [0] WIEGAND26, format class [1] 0, a three-octet value [2].
+    let card = |value: [u8; 3]| [vec![0x09, 0x08, 0x19, 0x00, 0x2B], value.to_vec()].concat();
+    let report = |value: [u8; 3], flags: u8, second: u8| {
+        vec![
+            (PV, card(value)),
+            (SF, vec![0x82, 0x04, flags]),
+            (PropertyIdentifier::UPDATE_TIME, stamp_bytes(second)),
+        ]
+    };
+    let device = [0x12, 0x34, 0x56];
+    let simulated = [0x65, 0x43, 0x21];
+    assert_eq!(subscribed(&mut h, oid).await, report(device, 0x00, 7));
+
+    // In service the write is refused and nothing reports.
+    assert_eq!(
+        try_write(&mut h, oid, PV, card(simulated)).await,
+        Err(ErrorCode::WRITE_ACCESS_DENIED)
+    );
+    h.no_notification().await;
+
+    // The OUT_OF_SERVICE flag reports; then a simulated read, stamped from
+    // the Device clock, reports on its own.
+    write(
+        &mut h,
+        oid,
+        OUT_OF_SERVICE,
+        encode(PropertyValue::Boolean(true)),
+    )
+    .await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(device, 0x10, 7)
+    );
+    h.set_clock(20);
+    write(&mut h, oid, PV, card(simulated)).await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(simulated, 0x10, 20)
+    );
+    h.no_notification().await;
+
+    // A simulated fault sets FAULT and reports; Update_Time stays.
+    write(
+        &mut h,
+        oid,
+        PropertyIdentifier::RELIABILITY,
+        enumerated(Reliability::UNRELIABLE_OTHER.to_raw()),
+    )
+    .await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(simulated, 0x50, 20)
+    );
+    h.no_notification().await;
+
+    // Simulating the reader's own card later reports again.
+    h.set_clock(25);
+    write(&mut h, oid, PV, card(device)).await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(device, 0x50, 25)
+    );
+    h.no_notification().await;
+
+    // The return to service brings back the reader's read, its time and
+    // NO_FAULT_DETECTED, in one report.
+    write(
+        &mut h,
+        oid,
+        OUT_OF_SERVICE,
+        encode(PropertyValue::Boolean(false)),
+    )
+    .await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(device, 0x00, 7)
+    );
     h.no_notification().await;
     h.server.stop().await.unwrap();
 }
