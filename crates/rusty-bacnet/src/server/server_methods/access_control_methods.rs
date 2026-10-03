@@ -1,7 +1,8 @@
-//! Registration of the access-control objects whose arrays the application
-//! configures: Access Door Door_Members, Access Point Access_Doors and
-//! Credential Data Input Supported_Formats with Supported_Format_Classes
-//! (#1249). Each array is read-only over the network, so these keyword
+//! Registration of the access-control objects whose arrays and lists the
+//! application configures: Access Door Door_Members, Access Point
+//! Access_Doors and Credential Data Input Supported_Formats with
+//! Supported_Format_Classes (#1249), and Access Zone Entry_Points and
+//! Exit_Points (#1306). Each is read-only over the network, so these keyword
 //! arguments are the Python route to it. The Access Point's policy count,
 //! supported authorization modes and Priority_For_Writing are read-only
 //! too, and take keyword arguments the same way (#1307).
@@ -11,9 +12,9 @@ use bacnet_types::enums::{AuthenticationFactorType, AuthorizationMode, ErrorClas
 use bacnet_types::error::Error;
 use pyo3::exceptions::PyValueError;
 
-/// One element of Door_Members or Access_Doors as Python gives it: an object
-/// in this device, or a `(device, object)` pair naming an object in another
-/// device.
+/// One element of Door_Members, Access_Doors, Entry_Points or Exit_Points as
+/// Python gives it: an object in this device, or a `(device, object)` pair
+/// naming an object in another device.
 #[derive(FromPyObject)]
 enum PyDeviceObjectReference {
     Local(PyObjectIdentifier),
@@ -152,6 +153,27 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
+    /// Add an Access Zone object to the server (before starting).
+    ///
+    /// `entry_points` and `exit_points` set Entry_Points and Exit_Points, the
+    /// Access Points leading into and out of the zone, in the element forms
+    /// an Access Door's `door_members` takes; a pair whose device isn't a
+    /// Device raises ValueError, and a reference to anything but an Access
+    /// Point raises VALUE_OUT_OF_RANGE.
+    #[pyo3(signature = (instance, name, *, entry_points=None, exit_points=None))]
+    fn add_access_zone(
+        &self,
+        instance: u32,
+        name: &str,
+        entry_points: Option<Vec<PyDeviceObjectReference>>,
+        exit_points: Option<Vec<PyDeviceObjectReference>>,
+    ) -> PyResult<()> {
+        let entry = device_references(entry_points)?;
+        let exit = device_references(exit_points)?;
+        let obj = access_zone(instance, name, entry, exit).map_err(to_py_err)?;
+        self.push_pending(Box::new(obj))
+    }
+
     /// Add a Credential Data Input object to the server (before starting).
     ///
     /// `supported_formats` sets Supported_Formats and Supported_Format_Classes
@@ -216,6 +238,24 @@ fn access_point(
     if let Some(priority) = settings.priority_for_writing {
         // A value too wide for u8 is out of 1..=16 too.
         obj.set_priority_for_writing(u8::try_from(priority).unwrap_or(0))?;
+    }
+    Ok(obj)
+}
+
+/// Build an Access Zone, applying Entry_Points and Exit_Points through its
+/// validating setters.
+fn access_zone(
+    instance: u32,
+    name: &str,
+    entry: Option<Vec<BACnetDeviceObjectReference>>,
+    exit: Option<Vec<BACnetDeviceObjectReference>>,
+) -> Result<AccessZoneObject, Error> {
+    let mut obj = AccessZoneObject::new(instance, name)?;
+    if let Some(entry) = entry {
+        obj.set_entry_points(entry)?;
+    }
+    if let Some(exit) = exit {
+        obj.set_exit_points(exit)?;
     }
     Ok(obj)
 }

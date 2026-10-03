@@ -525,7 +525,10 @@ impl Request<'_> {
     /// AddListElement (`remove` false) or RemoveListElement. A Schedule whose
     /// references changed runs its pass at once under the same guard, as
     /// after a WriteProperty, so an added target gets the current value and a
-    /// removed one is relinquished (#1121).
+    /// removed one is relinquished (#1121). The edited object joins the
+    /// per-write event evaluation, so an Alarm_Values edit that puts the
+    /// watched value in or out of alarm starts its transition at once rather
+    /// than at the next periodic tick.
     pub(super) async fn list_element<T: TransportPort + 'static>(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
@@ -550,7 +553,7 @@ impl Request<'_> {
         )
         .await;
         let database = db;
-        let (result, schedule_cov) = {
+        let (result, written, schedule_cov) = {
             let mut db = db.write().await;
             let (result, written) = match handlers::handle_list_element_observed(
                 &mut db,
@@ -569,7 +572,7 @@ impl Request<'_> {
                 }
                 None => Default::default(),
             };
-            (result, schedule_cov)
+            (result, written, schedule_cov)
         };
         // Targets a Schedule commanded on re-evaluation.
         schedule_cov.merge_into(
@@ -577,6 +580,7 @@ impl Request<'_> {
             &mut effects.life_safety_cov_changes,
             &mut effects.command_runs,
         );
+        effects.written_oids.extend(written);
         match result {
             Ok(()) => self.simple_ack(),
             Err(e) => self.error::<T>(&e),
