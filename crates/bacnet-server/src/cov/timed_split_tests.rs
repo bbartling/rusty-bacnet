@@ -3,7 +3,7 @@
 //! sent one value per notification (#1090).
 use super::tests::{
     apdu_for, change, change_len, context, dropped, frame, histories, key, seconds, store,
-    timed_reference,
+    timed_reference, LIFETIME,
 };
 use super::*;
 
@@ -117,7 +117,7 @@ fn the_bound_spans_several_notifications_of_the_smaller_apdu_less_a_reserve() {
 
     // A subscriber with a smaller APDU shrinks the bound to two changes.
     let small = u16::try_from(apdu_for(2, 4)).unwrap();
-    h.set_apdu(&context(1), Some(small));
+    h.set_sizing(&context(1), Some(small), LIFETIME);
     for second in 11..=13 {
         h.push(&k, 1, change(second, 4));
     }
@@ -126,7 +126,7 @@ fn the_bound_spans_several_notifications_of_the_smaller_apdu_less_a_reserve() {
 
     // A larger one cannot exceed the local maximum, nor can an unknown one.
     for subscriber in [Some(u16::MAX), None] {
-        h.set_apdu(&context(1), subscriber);
+        h.set_sizing(&context(1), subscriber, LIFETIME);
         for second in 21..=29 {
             h.push(&k, 1, change(second, 4));
         }
@@ -149,7 +149,7 @@ fn the_bound_spans_several_notifications_of_the_smaller_apdu_less_a_reserve() {
     assert_eq!(h.drain(&k, 1).1.len(), 6);
     assert_eq!(dropped(&counters), 5);
     // An admission starts the reserve over.
-    h.set_apdu(&context(1), None);
+    h.set_sizing(&context(1), None, LIFETIME);
     for second in 51..=58 {
         h.push(&k, 1, change(second, 4));
     }
