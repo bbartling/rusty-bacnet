@@ -7,6 +7,10 @@
 //! run then goes into the server's request task set as its own task, so
 //! neither the request that wrote Present_Value nor `write_local` waits for
 //! it, delays included, and `stop` cancels it with the other request work.
+//! Until [`CommandRunner::start`] queues that task, the writer holds the run
+//! in a [`TakenRuns`], so a writer dropped after its commit, `write_local`
+//! under a caller's timeout for one, ends the run instead of leaving its
+//! object busy (#1324).
 //!
 //! The writes are made one at a time, each through the same [`LocalWriter`]
 //! path as `write_local`: priorities, command-source tracking, audit, COV and
@@ -28,7 +32,7 @@ use super::local_writes::{LocalWrite, LocalWriter};
 use super::remote_writes::{RemoteWrite, RemoteWriter};
 use super::request_tasks::RequestTaskSpawner;
 use super::*;
-use crate::command_lists::{RunHost, Unfinished};
+use crate::command_lists::{RunHost, TakenRuns, Unfinished};
 use bacnet_objects::command::{CommandRun, WriteFailure};
 use bacnet_types::constructed::BACnetActionCommand;
 
@@ -120,9 +124,9 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
 
     /// Start each run as its own task. A panic in a target's write path
     /// ends that run as failed rather than leaving its object busy.
-    pub(super) fn start(&self, runs: Vec<CommandRun>) {
+    pub(super) fn start(&self, runs: TakenRuns) {
         use futures_util::FutureExt;
-        for run in runs {
+        runs.hand_over(|run| {
             let mut queued = Queued {
                 runner: self.clone(),
                 left: Some(Unfinished::start(&run)),
@@ -140,7 +144,7 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
                     queued.runner.end_panicked(source, generation).await;
                 }
             });
-        }
+        });
     }
 
     /// End a run whose write panicked. Unwinding handed it to `abandoned`,

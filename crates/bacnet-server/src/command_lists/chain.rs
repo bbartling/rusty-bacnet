@@ -25,7 +25,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use tracing::debug;
 
-use super::{RunHost, Unfinished};
+use super::{RunHost, TakenRuns};
 
 /// The most runs one chain may hold above a run: a run started by a write
 /// eight runs down from a request or application write still starts, the
@@ -55,28 +55,22 @@ fn may_start(chain: &[ObjectIdentifier], source: ObjectIdentifier) -> bool {
 pub(crate) async fn admit<H: RunHost>(
     host: &H,
     parent: &CommandRun,
-    runs: Vec<CommandRun>,
-    start: impl FnOnce(Vec<CommandRun>),
+    mut runs: TakenRuns,
+    start: impl FnOnce(TakenRuns),
 ) -> Result<(), Error> {
     if runs.is_empty() {
         return Ok(());
     }
     let chain = inherited_chain(parent);
-    let mut refused = Vec::new();
-    let mut admitted = Vec::with_capacity(runs.len());
-    for mut run in runs {
-        if may_start(&chain, run.source) {
-            run.chain = Arc::clone(&chain);
-            admitted.push(run);
-        } else {
-            refused.push(run);
-        }
+    let refused = runs.split_off(|run| !may_start(&chain, run.source));
+    for run in runs.iter_mut() {
+        run.chain = Arc::clone(&chain);
     }
-    start(admitted);
+    start(runs);
     if refused.is_empty() {
         return Ok(());
     }
-    for run in &refused {
+    for run in refused.iter() {
         debug!(
             source = %parent.source,
             target = %run.source,
@@ -84,7 +78,7 @@ pub(crate) async fn admit<H: RunHost>(
             "a run would start its own object again or nest too deep; ending it as failed"
         );
     }
-    end_refused(host, &refused).await;
+    end_refused(host, refused).await;
     Err(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
         code: ErrorCode::BUSY.to_raw() as u32,
@@ -94,40 +88,18 @@ pub(crate) async fn admit<H: RunHost>(
 /// End refused runs as if none of their writes had been made: a Command's
 /// commands all read unsuccessful, a Channel's Write_Status reads FAILED.
 ///
-/// Waiting for the database can be cut short (a timeout, an abort), so the
-/// runs are held in a guard until they're ended under the write guard; a
-/// drop before then hands each one to [`RunHost::abandoned`], which ends it
-/// once it can.
-async fn end_refused<H: RunHost>(host: &H, refused: &[CommandRun]) {
-    let mut held = Held {
-        host,
-        left: refused.iter().map(Unfinished::start).collect(),
-    };
+/// Waiting for the database can be cut short (a timeout, an abort); the runs
+/// stay in their [`TakenRuns`] until they're ended under the write guard, so
+/// a drop before then still ends them once the database is free.
+async fn end_refused<H: RunHost>(host: &H, refused: TakenRuns) {
     let mut db = host.database().write().await;
-    let ended = std::mem::take(&mut held.left);
-    for left in &ended {
-        left.end(&mut db);
-    }
-    for left in &ended {
-        host.committed(&db, left.source()).await;
+    let ended = refused.end(&mut db);
+    for source in &ended {
+        host.committed(&db, *source).await;
     }
     drop(db);
-    for left in &ended {
-        host.report(left.source()).await;
-    }
-}
-
-/// Refused runs not yet ended.
-struct Held<'h, H: RunHost> {
-    host: &'h H,
-    left: Vec<Unfinished>,
-}
-
-impl<H: RunHost> Drop for Held<'_, H> {
-    fn drop(&mut self) {
-        for left in self.left.drain(..) {
-            self.host.abandoned(left);
-        }
+    for source in &ended {
+        host.report(*source).await;
     }
 }
 

@@ -32,6 +32,14 @@ fn write_pv(db: &mut ObjectDatabase, object: ObjectIdentifier, value: PropertyVa
         .unwrap();
 }
 
+/// The run `object`'s Present_Value write queued, taken as its writer takes
+/// it.
+async fn take(db: &Arc<RwLock<ObjectDatabase>>, object: ObjectIdentifier) -> TakenRuns {
+    let runs = TakenRuns::take(db, &mut *db.write().await, &[object]);
+    assert_eq!(runs.iter().count(), 1);
+    runs
+}
+
 fn read(
     db: &ObjectDatabase,
     object: ObjectIdentifier,
@@ -56,12 +64,8 @@ async fn refused_run_dropped_while_waiting_for_the_database_still_ends() {
     let mut objects = ObjectDatabase::new();
     objects.add(Box::new(channel)).unwrap();
     write_pv(&mut objects, ch1, PropertyValue::Real(1.0));
-    let run = objects
-        .get_mut(&ch1)
-        .unwrap()
-        .take_command_run_internal()
-        .unwrap();
     let db = Arc::new(RwLock::new(objects));
+    let runs = take(&db, ch1).await;
     let (started, _queued) = mpsc::unbounded_channel();
     let host = Unattached { db: &db, started };
     // CH-1's run is queued by CH-1's own write, so it's refused; the wait
@@ -69,9 +73,7 @@ async fn refused_run_dropped_while_waiting_for_the_database_still_ends() {
     let reader = db.read().await;
     let refused = tokio::time::timeout(
         Duration::from_millis(10),
-        admit(&host, &parent(ch1), vec![run], |runs| {
-            assert!(runs.is_empty())
-        }),
+        admit(&host, &parent(ch1), runs, |runs| assert!(runs.is_empty())),
     )
     .await;
     assert!(refused.is_err(), "the wait was cut short");
@@ -110,17 +112,11 @@ async fn refused_command_run_marks_every_command_unsuccessful() {
     let mut objects = ObjectDatabase::new();
     objects.add(Box::new(object)).unwrap();
     write_pv(&mut objects, cmd1, PropertyValue::Unsigned(1));
-    let run = objects
-        .get_mut(&cmd1)
-        .unwrap()
-        .take_command_run_internal()
-        .unwrap();
     let db = Arc::new(RwLock::new(objects));
+    let runs = take(&db, cmd1).await;
     let (started, _queued) = mpsc::unbounded_channel();
     let host = Unattached { db: &db, started };
-    assert!(admit(&host, &parent(cmd1), vec![run], |_| {})
-        .await
-        .is_err());
+    assert!(admit(&host, &parent(cmd1), runs, |_| {}).await.is_err());
     let objects = db.read().await;
     for property in [
         PropertyIdentifier::IN_PROCESS,
@@ -180,13 +176,9 @@ async fn unattached_channel_member_in_another_device_fails_unsent() {
         ))
         .unwrap();
     write_pv(&mut objects, ch1, PropertyValue::Real(4.0));
-    let run = objects
-        .get_mut(&ch1)
-        .unwrap()
-        .take_command_run_internal()
-        .unwrap();
     let db = Arc::new(RwLock::new(objects));
-    run_unattached(&db, vec![run]).await;
+    let runs = take(&db, ch1).await;
+    run_unattached(&db, runs).await;
     let objects = db.read().await;
     assert_eq!(
         read(&objects, ch1, PropertyIdentifier::WRITE_STATUS),

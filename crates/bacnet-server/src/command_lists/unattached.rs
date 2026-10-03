@@ -25,7 +25,7 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use tokio::sync::{mpsc, RwLock};
 
-use super::{end_when_free, execute, RunHost, Unfinished};
+use super::{end_when_free, execute, RunHost, TakenRuns, Unfinished};
 use crate::server::RemoteWriteError;
 
 /// Run `runs`, and any runs their writes start, to their ends.
@@ -36,13 +36,13 @@ use crate::server::RemoteWriteError;
 /// the queue's own guard.
 pub(crate) fn run_unattached(
     db: &Arc<RwLock<ObjectDatabase>>,
-    runs: Vec<CommandRun>,
+    runs: TakenRuns,
 ) -> impl Future<Output = ()> + Send + '_ {
     let (started, queued) = mpsc::unbounded_channel();
-    for run in runs {
+    runs.hand_over(|run| {
         // The receiver is in hand.
         let _ = started.send(run);
-    }
+    });
     let mut queue = Queue { db, queued };
     async move {
         let host = Unattached { db, started };
@@ -109,13 +109,16 @@ impl RunHost for Unattached<'_> {
                 None,
                 origin.as_ref(),
             )?;
-            super::take_runs(&mut db, &[target])
+            TakenRuns::take(self.db, &mut db, &[target])
         };
         super::admit(self, run, runs, |runs| {
-            for run in runs {
-                // The receiver lives as long as this host.
-                let _ = self.started.send(run);
-            }
+            runs.hand_over(|run| {
+                // The receiver lives as long as this host, but a run it
+                // refuses still ends rather than going unowned.
+                if let Err(refused) = self.started.send(run) {
+                    end_when_free(self.db, Unfinished::start(&refused.0));
+                }
+            });
         })
         .await
     }
