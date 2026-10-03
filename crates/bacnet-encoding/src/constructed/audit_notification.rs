@@ -1,4 +1,5 @@
-use super::{decode_recipient, encode_recipient, validate_tlv_sequence};
+use super::recipient::{check_encoded_recipient, write_recipient};
+use super::{decode_recipient, validate_tlv_sequence};
 use crate::{primitives, tags};
 use bacnet_types::constructed::{AuditPropertyReference, BACnetAuditNotification};
 use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode};
@@ -28,6 +29,8 @@ pub fn encode_audit_notification(
     }
     validate_raw_value(notification.target_value.as_deref(), "target-value")?;
     validate_raw_value(notification.current_value.as_deref(), "current-value")?;
+    check_encoded_recipient(&notification.source_device)?;
+    check_encoded_recipient(&notification.target_device)?;
 
     if let Some(timestamp) = &notification.source_timestamp {
         primitives::encode_timestamp(buf, 0, timestamp)?;
@@ -90,7 +93,7 @@ fn encode_wrapped_recipient(
     recipient: &bacnet_types::constructed::BACnetRecipient,
 ) {
     tags::encode_opening_tag(buf, field_tag);
-    encode_recipient(buf, recipient);
+    write_recipient(buf, recipient);
     tags::encode_closing_tag(buf, field_tag);
 }
 
@@ -429,7 +432,7 @@ fn decode_wrapped_recipient(
         ));
     }
     let mut canonical = BytesMut::new();
-    encode_recipient(&mut canonical, &recipient);
+    write_recipient(&mut canonical, &recipient);
     if canonical.as_ref() != body {
         return Err(Error::decoding(
             offset,

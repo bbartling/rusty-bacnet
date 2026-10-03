@@ -99,7 +99,14 @@ impl SourceRecipient {
             None => PropertyValue::Null,
             Some(recipient) => {
                 let mut bytes = bytes::BytesMut::new();
-                bacnet_encoding::constructed::encode_recipient(&mut bytes, &recipient);
+                // A MAC past BACnetAddress::MAX_MAC_LEN does not encode; the
+                // Device refuses it the same way when a write carries one.
+                bacnet_encoding::constructed::encode_recipient(&mut bytes, &recipient).map_err(
+                    |_| Error::Protocol {
+                        class: ErrorClass::PROPERTY.to_raw() as u32,
+                        code: ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32,
+                    },
+                )?;
                 PropertyValue::ApplicationData(bytes.to_vec())
             }
         };
@@ -143,8 +150,8 @@ impl SourceRecipient {
             let new_route = self.routes.resolve(&new).ok_or_else(denied)?;
             let mut old_value = bytes::BytesMut::new();
             let mut new_value = bytes::BytesMut::new();
-            bacnet_encoding::constructed::encode_recipient(&mut old_value, current);
-            bacnet_encoding::constructed::encode_recipient(&mut new_value, &new);
+            bacnet_encoding::constructed::encode_recipient(&mut old_value, current)?;
+            bacnet_encoding::constructed::encode_recipient(&mut new_value, &new)?;
             let record = BACnetAuditNotification {
                 source_timestamp: None,
                 target_timestamp: Some(timestamp),

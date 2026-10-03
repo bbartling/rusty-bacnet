@@ -127,7 +127,7 @@ impl Family {
         self.read(PropertyIdentifier::STOP_WHEN_FULL) == PropertyValue::Boolean(true)
     }
 
-    fn identities(&self) -> Vec<u32> {
+    fn identities(&self) -> Vec<u64> {
         self.object()
             .log_record_identities_internal()
             .unwrap()

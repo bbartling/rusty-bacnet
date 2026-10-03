@@ -44,7 +44,9 @@ pub enum CommandOrigin {
 
 impl CommandOrigin {
     /// Reject malformed actual writer identities; generic ValueSource claims
-    /// deliberately have a broader grammar than an actual command origin.
+    /// deliberately have a broader grammar than an actual command origin. A
+    /// remote writer's MAC must fit [`BACnetAddress::MAX_MAC_LEN`] octets, so
+    /// the Value_Source published from it always encodes (#1156).
     pub fn validate(&self) -> Result<(), Error> {
         let concrete =
             |oid: ObjectIdentifier| oid.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE;
@@ -61,7 +63,7 @@ impl CommandOrigin {
             } => {
                 actual_address.network_number != u16::MAX
                     && !actual_address.mac_address.is_empty()
-                    && actual_address.mac_address.len() <= u8::MAX as usize
+                    && actual_address.mac_address.len() <= BACnetAddress::MAX_MAC_LEN
                     && match binding {
                         CommandDeviceBinding::Unique(oid) => device(*oid),
                         _ => true,

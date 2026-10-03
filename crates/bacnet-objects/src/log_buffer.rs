@@ -26,17 +26,18 @@ pub(crate) const TOTAL_RECORD_COUNT_METADATA: PropertyMetadata =
 /// Identity views returned by [`crate::traits::BACnetObject::log_record_identities_internal`]
 /// are ordered oldest-to-newest and align element-for-element with the owning
 /// object's resident records and `LOG_BUFFER` projection. Sequence numbers are
-/// always nonzero; after `u32::MAX`, the next accepted record uses 1.
+/// always nonzero. Event and Trend logs count in Unsigned32 and wrap from
+/// `u32::MAX` to 1; Audit Log counts in Unsigned64 and wraps from `u64::MAX`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LogRecordIdentity {
-    sequence_number: u32,
+    sequence_number: u64,
     date: Date,
     time: Time,
 }
 
 impl LogRecordIdentity {
     /// Construct an identity, rejecting zero as an invalid record sequence.
-    pub fn new(sequence_number: u32, date: Date, time: Time) -> Option<Self> {
+    pub fn new(sequence_number: u64, date: Date, time: Time) -> Option<Self> {
         (sequence_number != 0).then_some(Self {
             sequence_number,
             date,
@@ -44,8 +45,8 @@ impl LogRecordIdentity {
         })
     }
 
-    /// Return this record's nonzero Unsigned32 sequence number.
-    pub fn sequence_number(&self) -> u32 {
+    /// Return this record's nonzero sequence number.
+    pub fn sequence_number(&self) -> u64 {
         self.sequence_number
     }
 
@@ -199,7 +200,7 @@ impl<R: ResidentLogRecord> LogRecordBuffer<R> {
             .map(|record| {
                 let (date, time) = record.timestamp();
                 let identity = LogRecordIdentity {
-                    sequence_number,
+                    sequence_number: u64::from(sequence_number),
                     date,
                     time,
                 };
@@ -461,7 +462,7 @@ mod tests {
                 .iter()
                 .map(LogRecordIdentity::sequence_number)
                 .collect::<Vec<_>>(),
-            vec![u32::MAX, 1, 2]
+            vec![u64::from(u32::MAX), 1, 2]
         );
 
         assert_eq!(

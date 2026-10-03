@@ -63,7 +63,9 @@ fn rpm_audit_log_forwarding_optional_metadata_and_member_of_wire() {
 #[test]
 fn rpm_audit_log_metadata_selectors_preserve_bytes_and_budgets() {
     // Independent fixtures preserve the legacy projection order; the REQUIRED
-    // set replaces the universal four with the Clause 12.64 R/W rows.
+    // set replaces the universal four with the Clause 12.64 R/W rows. Both
+    // expansions name Log_Buffer, which answers READ_ACCESS_DENIED inline
+    // (Clause 15.7.3.1.2) exactly as an explicit reference does.
     let all = [
         P::OBJECT_IDENTIFIER,
         P::OBJECT_NAME,
@@ -71,6 +73,7 @@ fn rpm_audit_log_metadata_selectors_preserve_bytes_and_budgets() {
         P::OBJECT_TYPE,
         P::LOG_ENABLE,
         P::BUFFER_SIZE,
+        P::LOG_BUFFER,
         P::RECORD_COUNT,
         P::TOTAL_RECORD_COUNT,
         P::STATUS_FLAGS,
@@ -82,6 +85,7 @@ fn rpm_audit_log_metadata_selectors_preserve_bytes_and_budgets() {
         P::OBJECT_TYPE,
         P::LOG_ENABLE,
         P::BUFFER_SIZE,
+        P::LOG_BUFFER,
         P::RECORD_COUNT,
         P::TOTAL_RECORD_COUNT,
         P::STATUS_FLAGS,

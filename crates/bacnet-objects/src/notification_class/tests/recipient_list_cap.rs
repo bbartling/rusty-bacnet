@@ -8,6 +8,7 @@ use super::super::*;
 use super::make_dest_device;
 use crate::common::assert_list_element_refused;
 use bacnet_encoding::constructed::{encode_destination, encode_destination_list};
+use bacnet_encoding::{primitives, tags};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bytes::BytesMut;
@@ -26,7 +27,7 @@ fn destinations(count: usize) -> Vec<BACnetDestination> {
 
 fn framed(list: &[BACnetDestination]) -> PropertyValue {
     let mut buf = BytesMut::new();
-    encode_destination_list(&mut buf, list);
+    encode_destination_list(&mut buf, list).unwrap();
     PropertyValue::ApplicationData(buf.to_vec())
 }
 
@@ -124,8 +125,26 @@ fn recipient_list_mac_past_the_bound_is_refused() {
         ErrorClass::PROPERTY,
         ErrorCode::INVALID_DATA_TYPE,
     );
+    // The encoder refuses the long MAC too (#1156), so its octets are built
+    // from the primitives.
+    assert!(encode_destination(&mut BytesMut::new(), &too_long).is_err());
+    let PropertyValue::ApplicationData(mut list) = framed(&[make_dest_device(10)]) else {
+        unreachable!("framed list")
+    };
+    let mut raw = BytesMut::new();
+    primitives::encode_app_bit_string(&mut raw, 1, &[too_long.valid_days.to_bacnet()]);
+    primitives::encode_app_time(&mut raw, &too_long.from_time);
+    primitives::encode_app_time(&mut raw, &too_long.to_time);
+    tags::encode_opening_tag(&mut raw, 1);
+    primitives::encode_app_unsigned(&mut raw, 1000);
+    primitives::encode_app_octet_string(&mut raw, &[0xA5; BACnetAddress::MAX_MAC_LEN + 1]);
+    tags::encode_closing_tag(&mut raw, 1);
+    primitives::encode_app_unsigned(&mut raw, too_long.process_identifier.into());
+    primitives::encode_app_boolean(&mut raw, too_long.issue_confirmed_notifications);
+    primitives::encode_app_bit_string(&mut raw, 5, &[too_long.transitions.to_bacnet()]);
+    list.extend_from_slice(&raw);
     assert_refused(
-        write(&mut nc, framed(&[make_dest_device(10), too_long])),
+        write(&mut nc, PropertyValue::ApplicationData(list)),
         ErrorClass::PROPERTY,
         ErrorCode::INVALID_DATA_TYPE,
     );
@@ -152,7 +171,7 @@ fn recipient_list_at_the_cap_reads_in_one_unsegmented_apdu() {
     };
     let encoded_len = |destination: &BACnetDestination| {
         let mut buf = BytesMut::new();
-        encode_destination(&mut buf, destination);
+        encode_destination(&mut buf, destination).unwrap();
         buf.len()
     };
     assert_eq!(encoded_len(&device), 27);

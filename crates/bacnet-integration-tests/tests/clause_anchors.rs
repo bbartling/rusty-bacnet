@@ -45,9 +45,11 @@ fn assert_anchors(path: &str, src: &str, wrong: &[&str], right: &[&str]) {
 
 #[test]
 fn changelog_anchors_corrected_in_place() {
+    // Entries wrap at any word (#1188), so compare with line breaks as spaces.
+    let changelog = CHANGELOG.split_whitespace().collect::<Vec<_>>().join(" ");
     assert_anchors(
         "CHANGELOG.md",
-        CHANGELOG,
+        &changelog,
         &["§13.2.1", "§12.15.5", "(ASHRAE 135-2020 Clause 13.5)"],
         &[
             "(ASHRAE 135-2020 Clause 12.21)",

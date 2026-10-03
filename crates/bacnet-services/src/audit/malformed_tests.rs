@@ -106,11 +106,11 @@ fn minimal_notification_has_no_per_item_sequence_wrapper() {
     let mut expected = BytesMut::new();
     tags::encode_opening_tag(&mut expected, 0);
     tags::encode_opening_tag(&mut expected, 2);
-    encode_recipient(&mut expected, &notification.source_device);
+    encode_recipient(&mut expected, &notification.source_device).unwrap();
     tags::encode_closing_tag(&mut expected, 2);
     primitives::encode_ctx_enumerated(&mut expected, 4, 0);
     tags::encode_opening_tag(&mut expected, 10);
-    encode_recipient(&mut expected, &notification.target_device);
+    encode_recipient(&mut expected, &notification.target_device).unwrap();
     tags::encode_closing_tag(&mut expected, 10);
     tags::encode_closing_tag(&mut expected, 0);
     assert_eq!(encoded, expected.as_ref());

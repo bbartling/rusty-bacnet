@@ -1,9 +1,8 @@
 ---
 section: Migration notes
 ---
-- Review [request admission configuration and migrations](docs/request-admission.md):
-  Rust public struct expansions affect exhaustive literals/patterns, small custom
-  global limits need an explicit smaller or zero reserve, and independent ordinary
-  and recovery peer quotas replace the former inclusive confirmed peer ceiling.
-  Python additions remain keyword-only. Service budget documents linked above
-  describe new `ServerConfig` fields and limits that large requests may need raised.
+- **Request admission (Rust and Python API):** exhaustive `ServerConfig`
+  literals and patterns need the new fields, a small custom global limit needs
+  an explicit smaller or zero reserve, and separate ordinary and recovery peer
+  quotas replace the confirmed peer ceiling; see
+  [request admission](docs/request-admission.md).
