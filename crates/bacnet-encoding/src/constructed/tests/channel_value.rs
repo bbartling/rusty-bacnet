@@ -79,3 +79,16 @@ fn contents_cut_short_are_a_short_buffer() {
     // An application REAL cut short reads the same way.
     assert_eq!(short(&[0x44, 0x42, 0x90]), (5, 3));
 }
+
+#[test]
+fn a_level_of_the_wrong_length_is_malformed_even_when_cut_short() {
+    // The target level [1] says three octets and holds two: the length is
+    // wrong before the missing octet matters (#1303).
+    match channel_value_end(&[0x0E, 0x09, 0x01, 0x1B, 0x42, 0x48], 0) {
+        Err(bacnet_types::error::Error::Decoding { offset, message }) => {
+            assert_eq!(offset, 3);
+            assert_eq!(message, "lighting command field 1 has 3 content octets");
+        }
+        other => panic!("expected a decoding error, got {other:?}"),
+    }
+}

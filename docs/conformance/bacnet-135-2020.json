@@ -3567,6 +3567,7 @@
    "negative_tests": [
     "crates/bacnet-server/src/server/channel_wire_tests.rs::{channel_value_no_member_can_take_fails_without_writing,channel_writing_its_own_present_value_is_refused_busy}",
     "crates/bacnet-encoding/src/constructed/tests/channel_value.rs::contents_cut_short_are_a_short_buffer",
+    "crates/bacnet-encoding/src/constructed/tests/channel_value.rs::a_level_of_the_wrong_length_is_malformed_even_when_cut_short",
     "crates/bacnet-objects/src/channel/tests.rs::{channel_stale_completion_is_ignored,channel_read_only_rows_refuse_writes}",
     "crates/bacnet-objects/src/channel/array_tests.rs::channel_member_writes_refuse_other_devices_bad_indexes_and_oversize",
     "crates/bacnet-objects/src/channel/array_tests.rs::channel_members_refuse_a_non_device_device_identifier",
@@ -5866,9 +5867,9 @@
     "Refs #847: Clause 20.2.14 ObjectIdentifier constructors and bounded wire decode establish 10-bit type and 22-bit instance widths. Safe unchecked construction and release masking are removed; infallible encoding preserves identity, including proprietary type1023 and wildcard instance.",
     "Primitive, application/context and reference codec boundary vectors plus Python rejection/valid controls provide narrow evidence. Generic ObjectType remains unrestricted; no serde API or producer behavior is added. Broader encoding status is unchanged: still needs a complete malformed fixture catalog and byte-equivalence guard for optimizations.",
     "In the shared tagged-field helpers and the codecs and formal Error bodies read with them, contents that run past the end of the data are Error::BufferTooShort; a cut-short or malformed tag header is Error::Decoding.",
-    "A fixed-size context member (object identifier, REAL, BOOLEAN) has its length checked before its contents, so a wrong length is Error::Decoding even when the data also stops early.",
+    "A fixed-size context member (object identifier, REAL, BOOLEAN, a lighting-command level) has its length checked before its contents, so a wrong length is Error::Decoding even when the data also stops early.",
     "A member cut short inside a constructed frame is caught when the frame is extracted (tags::extract_context_value), which reports Error::Decoding.",
-    "The server answers a confirmed request whose contents are cut short with SERVICES / OTHER, whichever kind its decoder reports."
+    "The server answers a ReadPropertyMultiple, SubscribeCOVProperty or ConfirmedAuditNotification cut short with SERVICES / OTHER, and a SubscribeCOVPropertyMultiple with its general error, whichever kind the decoder reports."
    ]
   },
   {
