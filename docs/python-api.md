@@ -2259,7 +2259,7 @@ counters["timed_changes_dropped"]         # timestamped COV-multiple changes los
 | `notification_bytes_sent` | APDU bytes of the notifications in `notifications_sent` |
 | `notifications_throttled_fanout` | Notifications not sent because the per-event count or byte budget ran out |
 | `notifications_throttled_peer` | Confirmed notifications not sent because the peer was at its in-flight limit |
-| `timed_changes_dropped` | Timestamped COV-multiple changes discarded for good, the running signal for a subscriber whose maximum APDU can't hold one |
+| `timed_changes_dropped` | Timestamped COV-multiple changes discarded for good, in whole or in part, the running signal for a subscriber whose maximum APDU can't hold one timestamped value |
 | `untimed_references_oversized` | Each COV-multiple report that left out an untimestamped reference too large for one notification |
 
 The binding builds the dict from an exhaustive pattern over the Rust struct, so

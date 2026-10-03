@@ -1,8 +1,8 @@
 //! Dropped timestamped COV-multiple changes: every one is counted, and the log
 //! gets one warning per context for each cause (#1039).
 //!
-//! A subscriber whose maximum APDU cannot hold one timestamped change of its
-//! references loses every such change, and a context blocked for long keeps
+//! A subscriber whose maximum APDU cannot hold one timestamped value of its
+//! references loses every such value, and a context blocked for long keeps
 //! evicting from its history bound. A warning per drop would flood the log
 //! in both cases, so after a context's first warning for a cause, later drops
 //! for that cause are only counted (and logged at debug level). The context
@@ -20,7 +20,9 @@ use super::{CovSubscriptionKey, TimedHistories};
 pub(super) enum DropReason {
     /// Evicted on overflow of the context's history bound.
     HistoryFull,
-    /// Too large for any notification to the subscriber, even on its own.
+    /// A value of the change too large for any notification to the
+    /// subscriber, even on its own; the rest of the change still goes out
+    /// (#1090).
     TooLarge,
     /// Superseded by a newer change of the reference that was delivered.
     Superseded,
@@ -31,7 +33,7 @@ impl DropReason {
         match self {
             Self::HistoryFull => "context history full",
             Self::TooLarge => {
-                "a timestamped change exceeds every notification to the subscriber on its own"
+                "a timestamped value exceeds every notification to the subscriber on its own"
             }
             Self::Superseded => "superseded by a delivered newer change",
         }

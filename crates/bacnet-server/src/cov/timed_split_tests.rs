@@ -1,5 +1,6 @@
 //! Splitting claims, the per-context bound, send turns and the subscriber's
-//! maximum APDU (#986), and owed untimestamped references (#1038).
+//! maximum APDU (#986), owed untimestamped references (#1038), and changes
+//! sent one value per notification (#1090).
 use super::tests::{
     apdu_for, change, change_len, context, dropped, frame, histories, key, seconds, store,
     timed_reference,
@@ -226,7 +227,9 @@ fn deferred_parts_return_without_eviction_and_discarded_ones_are_counted() {
     assert_eq!(seconds(&drained), [1, 2, 3]);
     let mut claim = TimedClaim::new(store.clone());
     claim.add(k.clone(), incarnation, drained);
-    claim.split_oldest(1).discard();
+    // A change whose one value fits no notification even alone is given up.
+    let part = claim.split_oldest(1);
+    assert!(part.split_values(|_, _| ValueFit::TooLarge).is_empty());
     assert_eq!(dropped(&counters), 1);
     drop(claim);
     assert_eq!(seconds(&store.lock().drain(&k, 1).1), [2, 3]);
@@ -354,4 +357,207 @@ async fn an_owed_reference_makes_its_context_due_like_a_pending_change() {
         (0, 0),
         "removal takes the mark and the wait along"
     );
+}
+
+/// A change at `second` with one value per entry of `payloads`, of that many
+/// octets each, under properties 1, 2, ... in order.
+fn change_of(second: u8, payloads: &[usize]) -> TimedChange {
+    let values = payloads
+        .iter()
+        .zip(1..)
+        .map(|(&payload, property)| COVNotificationValue {
+            property_identifier: bacnet_types::enums::PropertyIdentifier::from_raw(property),
+            property_array_index: None,
+            value: vec![0; payload],
+            time_of_change: None,
+        })
+        .collect();
+    TimedChange::new(
+        frame(second),
+        values,
+        change(second, 0).observation().clone(),
+    )
+}
+
+/// Value sizes of each change, in order.
+fn payloads(changes: &[TimedChange]) -> Vec<Vec<usize>> {
+    changes
+        .iter()
+        .map(|change| change.values().iter().map(|v| v.value.len()).collect())
+        .collect()
+}
+
+/// A claim of everything `k` has queued.
+fn claim_all(store: &TimedStore, k: &CovSubscriptionKey) -> TimedClaim {
+    let mut claim = TimedClaim::new(store.clone());
+    let (incarnation, drained) = store.lock().drain(k, 1);
+    claim.add(k.clone(), incarnation, drained);
+    claim
+}
+
+#[test]
+fn value_parts_keep_capture_order_and_rejoin_whatever_order_they_return_in() {
+    let (store, counters) = store(8, 4);
+    let (a, b) = (key(1, 1), key(1, 2));
+    for k in [&a, &b] {
+        store.lock().reset(k, 1, 0);
+    }
+    store.lock().push(&a, 1, change_of(1, &[4, 5, 6]));
+    store.lock().push(&b, 1, change_of(2, &[7]));
+    let queued = store.lock().context_bytes.get(&context(1)).copied();
+    let mut claim = claim_all(&store, &a);
+    let (incarnation, drained) = store.lock().drain(&b, 1);
+    claim.add(b.clone(), incarnation, drained);
+    let parts = claim.split_values(|_, _| ValueFit::Fits);
+    // One value each: capture order across references, then each change's
+    // own order, every value keeping its change's time (#1090).
+    let carried: Vec<_> = parts
+        .iter()
+        .map(|part| {
+            let changes = part.in_order();
+            assert_eq!(changes.len(), 1);
+            let (key, change) = changes[0];
+            assert_eq!(change.values().len(), 1);
+            let second = change.frame().local_time.second;
+            assert_eq!(
+                change.values()[0].time_of_change,
+                Some(frame(second).local_time)
+            );
+            (key.clone(), second, change.values()[0].value.len())
+        })
+        .collect();
+    assert_eq!(
+        carried,
+        [
+            (a.clone(), 1, 4),
+            (a.clone(), 1, 5),
+            (a.clone(), 1, 6),
+            (b.clone(), 2, 7),
+        ]
+    );
+    // Returned newest first, `a`'s parts rejoin as its one change, in the
+    // order captured, counting against the bound what it counted before.
+    for part in parts.into_iter().rev() {
+        drop(part);
+    }
+    assert_eq!(store.lock().context_bytes.get(&context(1)).copied(), queued);
+    // Returned oldest first, they rejoin the same way.
+    for part in claim_all(&store, &a).split_values(|_, _| ValueFit::Fits) {
+        drop(part);
+    }
+    assert_eq!(store.lock().context_bytes.get(&context(1)).copied(), queued);
+    assert_eq!(payloads(&store.lock().drain(&a, 1).1), [vec![4, 5, 6]]);
+    assert_eq!(payloads(&store.lock().drain(&b, 1).1), [vec![7]]);
+    assert_eq!(dropped(&counters), 0, "nothing was lost");
+}
+
+#[test]
+fn value_parts_rejoin_in_captured_order_from_any_return_order() {
+    let (store, counters) = store(8, 4);
+    let k = key(1, 1);
+    store.lock().reset(&k, 1, 0);
+    let whole = change_of(1, &[4, 5, 6]);
+    let bytes = |store: &TimedStore| store.lock().context_bytes.get(&context(1)).copied();
+    // Every order three parts can come back in, the middle part last
+    // included: each time they rejoin as the change, in captured order, and
+    // count against the bound exactly what the change counted.
+    for order in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        store.lock().push(&k, 1, whole.clone());
+        let mut parts: Vec<_> = claim_all(&store, &k)
+            .split_values(|_, _| ValueFit::Fits)
+            .into_iter()
+            .map(Some)
+            .collect();
+        for at in order {
+            drop(parts[at].take());
+        }
+        assert_eq!(bytes(&store), Some(whole.cost), "{order:?}");
+        let rejoined = store.lock().drain(&k, 1).1;
+        assert_eq!(payloads(&rejoined), [vec![4, 5, 6]], "{order:?}");
+        assert_eq!(rejoined[0].cost, whole.cost, "{order:?}");
+        assert_eq!(bytes(&store), None, "{order:?}");
+    }
+    // After the first value went out, the other two coming back last first
+    // still rejoin in order, counting only what is left.
+    store.lock().push(&k, 1, whole.clone());
+    let mut parts = claim_all(&store, &k)
+        .split_values(|_, _| ValueFit::Fits)
+        .into_iter();
+    let (first, second, third) = (
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+    );
+    first.commit();
+    drop(third);
+    drop(second);
+    let rest_cost = bytes(&store).expect("the rest is queued");
+    let rest = store.lock().drain(&k, 1).1;
+    assert_eq!(payloads(&rest), [vec![5, 6]]);
+    assert_eq!(rest[0].cost, rest_cost);
+    assert_eq!(rest_cost, change_cost(rest[0].values()));
+    assert_eq!(dropped(&counters), 0, "nothing was lost");
+}
+
+#[test]
+fn only_the_part_with_a_changes_last_value_delivers_the_change() {
+    let (store, counters) = store(8, 4);
+    let k = key(1, 1);
+    store.lock().reset(&k, 1, 0);
+    store.lock().push(&k, 1, change_of(1, &[4, 5]));
+    let committed = |store: &TimedStore| store.lock().histories[&k].committed;
+    let mut parts = claim_all(&store, &k)
+        .split_values(|_, _| ValueFit::Fits)
+        .into_iter();
+    let (first, second) = (parts.next().unwrap(), parts.next().unwrap());
+    // The first value went out and the second did not: the change is not
+    // delivered, and the second value returns as all that is left of it.
+    first.commit();
+    assert_eq!(committed(&store), 0);
+    drop(second);
+    let rest = store.lock().drain(&k, 1).1;
+    assert_eq!(payloads(&rest), [vec![5]]);
+    // Sent again, the rest fits on its own and delivers the change.
+    let mut claim = TimedClaim::new(store.clone());
+    claim.add(k.clone(), store.lock().histories[&k].incarnation, rest);
+    let seq = claim.in_order()[0].1.seq();
+    claim.commit();
+    assert_eq!(committed(&store), seq);
+    assert_eq!(dropped(&counters), 0);
+}
+
+#[test]
+fn a_value_too_large_alone_is_dropped_once_per_change_and_the_rest_still_goes() {
+    let (store, counters) = store(8, 4);
+    let k = key(1, 1);
+    store.lock().reset(&k, 1, 0);
+    store.lock().push(&k, 1, change_of(1, &[100, 4, 100, 3]));
+    let fit = |_: &CovSubscriptionKey, part: &TimedChange| match part.values()[0].value.len() {
+        100 => ValueFit::TooLarge,
+        3 => ValueFit::Empty,
+        _ => ValueFit::Fits,
+    };
+    let parts = claim_all(&store, &k).split_values(fit);
+    // Both oversized values are given up, counted once for their change; the
+    // value that would carry nothing is left out, uncounted.
+    assert_eq!(dropped(&counters), 1);
+    assert_eq!(parts.len(), 1);
+    let carried: Vec<_> = parts[0]
+        .in_order()
+        .iter()
+        .map(|(_, c)| (*c).clone())
+        .collect();
+    assert_eq!(payloads(&carried), [vec![4]]);
+    // The one value kept is the last sent, so it delivers the change.
+    let seq = carried[0].seq();
+    parts.into_iter().for_each(TimedClaim::commit);
+    assert_eq!(store.lock().histories[&k].committed, seq);
+    assert!(store.lock().drain(&k, 1).1.is_empty());
 }

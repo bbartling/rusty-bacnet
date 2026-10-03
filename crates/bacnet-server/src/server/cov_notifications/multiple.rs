@@ -470,7 +470,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let max_apdu_length = apdu::max_apdu_header_at_or_below(config.max_apdu_length)
                 .expect("validated local APDU capacity");
             let mut parts = parts.into_iter();
-            // Every change was too large to send, and nothing else changed.
+            // Every timestamped value was too large to send, and nothing
+            // else changed.
             let Some(first) = parts.next() else {
                 return;
             };
@@ -478,9 +479,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // uncounted, once this report holds the context, and the Ack's
             // follow-up sends the next part (#986). Deferred, not dropped:
             // requeueing them must not let the bound evict what this report
-            // planned to send. Untimestamped references of later parts are
-            // owed meanwhile, and the follow-up reads their values afresh, so
-            // a newer change to one goes in their place (#1038).
+            // planned to send. The values of a change sent one per
+            // notification rejoin there as one change (#1090). Untimestamped
+            // references of later parts are owed meanwhile, and the follow-up
+            // reads their values afresh, so a newer change to one goes in
+            // their place (#1038).
             let deferred = parts.map(|part| part.claim.without_eviction()).collect();
             let observations = carried(&first, &last_notified, true);
             let notification = first.notification;
