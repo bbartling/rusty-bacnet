@@ -5,14 +5,13 @@
 use crate::common::error_type::{decode_error_in, decode_error_pdu, encode_error_in, error_pdu};
 use bacnet_encoding::apdu::ErrorPdu;
 use bacnet_encoding::constructed::tagged::{
-    decode_ctx_constructed, decode_ctx_primitive, expect_end,
+    decode_ctx_constructed, decode_ctx_object_id, expect_end,
 };
 use bacnet_encoding::constructed::{decode_property_reference, encode_property_reference};
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::constructed::{BACnetObjectPropertyReference, PropertyReference};
 use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::{Error, ErrorDetail};
-use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 const WHAT: &str = "SubscribeCOVPropertyMultiple-Error";
@@ -67,13 +66,12 @@ impl SubscribeCOVPropertyMultipleError {
         }
         let (subscription, end) = decode_ctx_constructed(data, 0, 1, WHAT)?;
         expect_end(data, end, end, WHAT)?;
-        let (object, offset) = decode_ctx_primitive(
+        let (object_identifier, offset) = decode_ctx_object_id(
             subscription,
             0,
             0,
             "SubscribeCOVPropertyMultiple-Error monitored object identifier",
         )?;
-        let object_identifier = ObjectIdentifier::decode(object)?;
         let reference_at = offset;
         let (reference_body, offset) = decode_ctx_constructed(subscription, offset, 1, WHAT)?;
         let (reference, reference_end) = decode_property_reference(reference_body, 0)?;
@@ -139,6 +137,7 @@ impl From<SubscribeCOVPropertyMultipleError> for Error {
 mod tests {
     use super::*;
     use bacnet_types::enums::ObjectType;
+    use bacnet_types::primitives::ObjectIdentifier;
     use bytes::Bytes;
 
     fn subscription(index: Option<u32>) -> SubscribeCOVPropertyMultipleError {

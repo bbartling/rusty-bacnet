@@ -13,7 +13,7 @@ use bytes::BytesMut;
 
 use crate::common::MAX_DECODED_ITEMS;
 use bacnet_encoding::constructed::tagged::{
-    decode_ctx_object_id, decode_ctx_unsigned, next_is_context,
+    decode_ctx_object_id, decode_ctx_real, decode_ctx_unsigned, next_is_context,
 };
 use bacnet_types::constructed::PropertyReference;
 
@@ -294,12 +294,15 @@ impl SubscribeCOVPropertyMultipleRequest {
 
                 // [1] covIncrement OPTIONAL
                 let mut cov_increment = None;
-                if offset < data.len() {
-                    let (opt, new_off) = tags::decode_optional_context(data, offset, 1)?;
-                    if let Some(content) = opt {
-                        cov_increment = Some(primitives::decode_real(content)?);
-                        offset = new_off;
-                    }
+                if next_is_context(data, offset, 1)? {
+                    let (increment, end) = decode_ctx_real(
+                        data,
+                        offset,
+                        1,
+                        "SubscribeCOVPropertyMultiple COV increment",
+                    )?;
+                    cov_increment = Some(increment);
+                    offset = end;
                 }
 
                 // [2] timestamped

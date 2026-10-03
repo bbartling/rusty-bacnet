@@ -449,6 +449,75 @@ fn application_primitives_read_any_type_and_name_the_expected_one() {
 }
 
 #[test]
+fn an_application_boolean_has_no_contents_to_read() {
+    use crate::tags::app_tag;
+    // A TRUE BOOLEAN (its value in the length field) and then an Unsigned 5:
+    // the BOOLEAN's "contents" would be the Unsigned's tag octet.
+    for data in [&[0x11, 0x21, 0x05][..], &[0x10], &[0x21, 0x05]] {
+        assert_eq!(
+            decoding(decode_app_primitive(data, 0, app_tag::BOOLEAN, W)),
+            (
+                0,
+                "Thing: an application-tagged BOOLEAN has no contents to read".into()
+            ),
+            "{data:02X?}"
+        );
+    }
+}
+
+#[test]
+fn fixed_size_contents_check_their_length_first() {
+    // A `[3]` Time with its four octets.
+    assert_eq!(
+        decode_ctx_fixed(&[0x3C, 0x0C, 0x00, 0x00, 0x00], 0, 3, 4, "Time", W).unwrap(),
+        (&[0x0C, 0x00, 0x00, 0x00][..], 5)
+    );
+    // A header announcing five octets is the wrong length, even with three
+    // present; one announcing four with three present is cut short.
+    assert_eq!(
+        decoding(decode_ctx_fixed(
+            &[0x3D, 0x05, 0x0C, 0x00, 0x00],
+            0,
+            3,
+            4,
+            "Time",
+            W
+        )),
+        (
+            0,
+            "Thing: [3] Time has 5 contents octets, expected 4".into()
+        )
+    );
+    assert_eq!(
+        short(decode_ctx_fixed(
+            &[0x3C, 0x0C, 0x00, 0x00],
+            0,
+            3,
+            4,
+            "Time",
+            W
+        )),
+        (5, 4)
+    );
+    assert_eq!(
+        decoding(decode_ctx_fixed(&[0x2C, 0, 0, 0, 0], 0, 3, 4, "Time", W)),
+        (0, "Thing: expected context tag [3] Time".into())
+    );
+    // A REAL is read the same way.
+    assert_eq!(
+        decoding(decode_ctx_real(&[0x5D, 0x05, 0x42, 0x90, 0x00], 0, 5, W)),
+        (
+            0,
+            "Thing: [5] REAL has 5 contents octets, expected 4".into()
+        )
+    );
+    assert_eq!(
+        short(decode_ctx_real(&[0x5C, 0x42, 0x90, 0x00], 0, 5, W)),
+        (5, 4)
+    );
+}
+
+#[test]
 fn application_unsigned_values_narrow_to_their_width() {
     assert_eq!(
         decode_app_unsigned::<u8>(&[0x22, 0x00, 0xFF], 0, W).unwrap(),

@@ -22,9 +22,10 @@
 //! Contents that run past the end of the data fail with
 //! [`Error::BufferTooShort`]; every other refusal is [`Error::Decoding`],
 //! including a tag header cut short, which [`tags::decode_tag`] refuses. A
-//! fixed-size member (an object identifier, REAL or BOOLEAN) has its length
-//! checked against the header before its contents are read, so a wrong
-//! length is reported as such even when the data also stops early.
+//! fixed-size context-tagged member (an object identifier, REAL, BOOLEAN, or
+//! any type read with [`decode_ctx_fixed`]) has its length checked against
+//! the header before its contents are read, so a wrong length is reported as
+//! such even when the data also stops early.
 //!
 //! One exception remains: a member cut short inside a constructed frame is
 //! found while [`decode_ctx_constructed`] or `decode_framed_value` extracts
@@ -33,9 +34,10 @@
 //! fits.
 //!
 //! The helpers another crate needs are public: the peeks for an optional
-//! member, a frame's body, the context readers for contents, Unsigned or
-//! ENUMERATED values, BOOLEAN and object identifiers, the application
-//! readers, and the trailing-data check. The rest stay private to this crate.
+//! member, a frame's body, the context readers for contents, fixed-size
+//! contents, Unsigned or ENUMERATED values, REAL, BOOLEAN and object
+//! identifiers, the application readers, and the trailing-data check. The
+//! rest stay private to this crate.
 //!
 //! ```
 //! use bacnet_encoding::constructed::tagged::{decode_ctx_unsigned, expect_end, next_is_context};
@@ -81,7 +83,7 @@ pub fn next_is_context(data: &[u8], offset: usize, tag: u8) -> Result<bool, Erro
 }
 
 /// Whether an opening context tag `tag` starts at `offset`; `false` at the
-/// end of the data.
+/// end of the data. A malformed tag there is an error.
 pub fn next_is_opening(data: &[u8], offset: usize, tag: u8) -> Result<bool, Error> {
     next_tag_is(data, offset, |t| t.is_opening_tag(tag))
 }
@@ -135,6 +137,11 @@ pub(crate) fn expect_closing(
 /// Require constructed context tag `tag` at `offset`; return its body (the
 /// octets between its opening and closing tags, with nested frames balanced)
 /// and the offset past its closing tag.
+///
+/// The one exception to this module's error-kind rule: a member inside the
+/// frame whose contents run past the end of the data is found while the
+/// frame is extracted, and is [`Error::Decoding`], not
+/// [`Error::BufferTooShort`].
 pub fn decode_ctx_constructed<'a>(
     data: &'a [u8],
     offset: usize,
@@ -252,8 +259,10 @@ pub fn decode_ctx_primitive<'a>(
 }
 
 /// Require a primitive context tag `tag` at `offset` holding exactly `octets`
-/// contents octets of the type `kind` names.
-fn decode_ctx_fixed<'a>(
+/// contents octets of the type `kind` names (`"Time"`, say, for the error);
+/// return those contents and the offset past them. A header announcing any
+/// other length is [`Error::Decoding`] even when the data also stops early.
+pub fn decode_ctx_fixed<'a>(
     data: &'a [u8],
     offset: usize,
     tag: u8,
@@ -275,7 +284,7 @@ fn decode_ctx_fixed<'a>(
 }
 
 /// Require a primitive context tag `tag` at `offset` holding a REAL.
-pub(crate) fn decode_ctx_real(
+pub fn decode_ctx_real(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -496,14 +505,21 @@ fn app_kind(number: u8) -> &'static str {
 /// Require an application tag `number` (one of [`tags::app_tag`]) at
 /// `offset`; return its contents and the offset past them.
 ///
-/// Not for a BOOLEAN: its value is the tag's length field, so it has no
-/// contents to return (see [`Tag::is_boolean_true`]).
+/// A BOOLEAN is refused with [`Error::Decoding`] whatever the data holds: its
+/// value is the tag's length field, so it has no contents to return (see
+/// [`Tag::is_boolean_true`]).
 pub fn decode_app_primitive<'a>(
     data: &'a [u8],
     offset: usize,
     number: u8,
     what: &str,
 ) -> Result<(&'a [u8], usize), Error> {
+    if number == tags::app_tag::BOOLEAN {
+        return Err(Error::decoding(
+            offset,
+            format!("{what}: an application-tagged BOOLEAN has no contents to read"),
+        ));
+    }
     let (t, start) = tags::decode_tag(data, offset)?;
     if t.class != TagClass::Application || t.number != number {
         return Err(Error::decoding(

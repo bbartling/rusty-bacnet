@@ -1,10 +1,11 @@
 //! Service parameters whose contents stop before their header says (#1304).
 //!
-//! The decoders read their tagged members with
+//! These decoders read their tagged members with
 //! `bacnet_encoding::constructed::tagged`, so a member cut short is
-//! [`Error::BufferTooShort`], as it is in the constructed codecs, and a
-//! fixed-size member of the wrong length stays [`Error::Decoding`] even when
-//! the data also stops early.
+//! [`Error::BufferTooShort`], as it is in the constructed codecs. A
+//! fixed-size member of the wrong length is refused as malformed even when
+//! the data also stops early: [`Error::Decoding`], or the Reject a decoder
+//! gives that member.
 
 use bacnet_types::enums::RejectReason;
 use bacnet_types::error::Error;
@@ -112,6 +113,58 @@ fn fixed_size_members_of_the_wrong_length_stay_malformed_when_cut_short() {
         matches!(result, Err(Error::BufferTooShort { .. })),
         "{result:?}"
     );
+}
+
+/// `data`, then a primitive context `tag` whose header announces five
+/// contents octets with three present, or four with three present.
+fn wrong_and_right_length_cut(data: &[u8], tag: u8) -> [Vec<u8>; 2] {
+    let header = tag << 4 | 0x08;
+    [
+        [data, &[header | 0x05, 0x05, 0x42, 0x90, 0x00]].concat(),
+        [data, &[header | 0x04, 0x42, 0x90, 0x00]].concat(),
+    ]
+}
+
+#[test]
+fn reals_and_times_check_their_length_before_their_contents() {
+    // SubscribeCOVProperty: process 1, AV-1, property Present_Value in
+    // `[4]`, then the `[5]` COV increment.
+    let property = [
+        0x09, 0x01, 0x1C, 0x00, 0x80, 0x00, 0x01, 0x4E, 0x09, 0x55, 0x4F,
+    ];
+    let [wrong, cut] = wrong_and_right_length_cut(&property, 5);
+    let wrong = SubscribeCOVPropertyRequest::decode(&wrong);
+    assert!(matches!(wrong, Err(Error::Decoding { .. })), "{wrong:?}");
+    let cut = SubscribeCOVPropertyRequest::decode(&cut);
+    assert!(matches!(cut, Err(Error::BufferTooShort { .. })), "{cut:?}");
+
+    // SubscribeCOVPropertyMultiple: process 1, unconfirmed, then AV-1 with
+    // one reference to Present_Value and its `[1]` COV increment.
+    let multiple = [
+        0x09, 0x01, 0x19, 0x00, 0x4E, 0x0C, 0x00, 0x80, 0x00, 0x01, 0x1E, 0x0E, 0x09, 0x55, 0x0F,
+    ];
+    let [wrong, cut] = wrong_and_right_length_cut(&multiple, 1);
+    let wrong = SubscribeCOVPropertyMultipleRequest::decode(&wrong);
+    assert!(matches!(wrong, Err(Error::Decoding { .. })), "{wrong:?}");
+    let cut = SubscribeCOVPropertyMultipleRequest::decode(&cut);
+    assert!(matches!(cut, Err(Error::BufferTooShort { .. })), "{cut:?}");
+
+    // COVNotificationMultiple: process 1, Device 1, no time remaining, then
+    // AV-1 reporting Present_Value 0.0 and its `[3]` time of change. A Time
+    // of the wrong length is the notification's malformed-time Reject.
+    let notification = [
+        0x09, 0x01, 0x1C, 0x02, 0x00, 0x00, 0x01, 0x29, 0x00, 0x4E, 0x0C, 0x00, 0x80, 0x00, 0x01,
+        0x1E, 0x09, 0x55, 0x2E, 0x44, 0x00, 0x00, 0x00, 0x00, 0x2F,
+    ];
+    let [wrong, cut] = wrong_and_right_length_cut(&notification, 3);
+    let wrong = COVNotificationMultipleRequest::decode(&wrong);
+    assert!(
+        matches!(wrong, Err(Error::Reject { reason })
+            if reason == RejectReason::INVALID_DATA_ENCODING.to_raw()),
+        "{wrong:?}"
+    );
+    let cut = COVNotificationMultipleRequest::decode(&cut);
+    assert!(matches!(cut, Err(Error::BufferTooShort { .. })), "{cut:?}");
 }
 
 #[test]

@@ -1,8 +1,7 @@
 //! COV (Change of Value) services per ASHRAE 135-2020 Clauses 13.6, 13.7, 13.14 and 13.15.
 
 use bacnet_encoding::constructed::tagged::{
-    decode_ctx_boolean, decode_ctx_object_id, decode_ctx_primitive, decode_ctx_unsigned,
-    next_is_context,
+    decode_ctx_boolean, decode_ctx_object_id, decode_ctx_real, decode_ctx_unsigned, next_is_context,
 };
 use bacnet_encoding::constructed::{decode_property_reference, encode_bacnet_property_value};
 use bacnet_encoding::primitives;
@@ -248,9 +247,9 @@ impl SubscribeCOVPropertyRequest {
         // [5] covIncrement (optional)
         let mut cov_increment = None;
         if next_is_context(data, offset, 5)? {
-            let (content, end) =
-                decode_ctx_primitive(data, offset, 5, "SubscribeCOVProperty COV increment")?;
-            cov_increment = Some(primitives::decode_real(content)?);
+            let (increment, end) =
+                decode_ctx_real(data, offset, 5, "SubscribeCOVProperty COV increment")?;
+            cov_increment = Some(increment);
             offset = end;
         }
         if offset != data.len() {

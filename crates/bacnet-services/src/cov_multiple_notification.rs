@@ -14,7 +14,7 @@ use super::helpers::{
 };
 use crate::common::MAX_DECODED_ITEMS;
 use bacnet_encoding::constructed::tagged::{
-    decode_ctx_object_id, decode_ctx_primitive, decode_ctx_unsigned, next_is_context,
+    decode_ctx_fixed, decode_ctx_object_id, decode_ctx_unsigned, next_is_context,
 };
 
 // ---------------------------------------------------------------------------
@@ -314,18 +314,28 @@ impl COVNotificationMultipleRequest {
                 // [3] timeOfChange OPTIONAL — primitive context Time
                 let mut time_of_change = None;
                 if next_is_context(data, offset, 3)? {
-                    let (content, end) = decode_ctx_primitive(
-                        data,
-                        offset,
-                        3,
-                        "COVNotificationMultiple time-of-change",
-                    )?;
-                    let decoded_time = Time::decode(content).map_err(|_| {
+                    let malformed = || {
                         reject(
                             RejectReason::INVALID_DATA_ENCODING,
                             "COVNotificationMultiple time-of-change is malformed",
                         )
+                    };
+                    // The peek has read the tag, so the only other refusal
+                    // is a header of the wrong length: a malformed Time even
+                    // when the data also stops early.
+                    let (content, end) = decode_ctx_fixed(
+                        data,
+                        offset,
+                        3,
+                        4,
+                        "Time",
+                        "COVNotificationMultiple time-of-change",
+                    )
+                    .map_err(|error| match error {
+                        Error::BufferTooShort { .. } => error,
+                        _ => malformed(),
                     })?;
+                    let decoded_time = Time::decode(content).map_err(|_| malformed())?;
                     if !actual_time_is_valid(&decoded_time) {
                         return Err(reject(
                             RejectReason::INVALID_DATA_ENCODING,
