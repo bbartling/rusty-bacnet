@@ -4,6 +4,7 @@ use super::*;
 use crate::analog::{AnalogOutputObject, AnalogValueObject};
 use crate::trend::TrendLogMultipleObject;
 use bacnet_encoding::constructed::decode_log_multiple_record;
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::BACnetLogMultipleRecord;
 
 const THIS_DEVICE: u32 = 100;
@@ -87,7 +88,7 @@ fn records(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<BACnetLogMultipleR
     (0..records.record_count())
         .map(|index| {
             let mut bytes = BytesMut::new();
-            records.encode_record(index, &mut bytes).unwrap();
+            records.encode_record(index, &mut bytes);
             let (record, end) = decode_log_multiple_record(&bytes, 0).unwrap();
             assert_eq!(end, bytes.len());
             record
@@ -286,7 +287,10 @@ fn polled_records_follow_the_buffer_size_and_stop_when_full() {
         if stop_when_full {
             // The second sample would fill the buffer, so a LOG_DISABLED
             // record takes its place and later polls add nothing.
-            assert_eq!(data, vec![sample.clone(), LogData::LogStatus(0b001)]);
+            assert_eq!(
+                data,
+                vec![sample.clone(), LogData::LogStatus(LogStatus::LOG_DISABLED)]
+            );
             assert_eq!(count(&db, oid), 2);
             assert_eq!(enabled, PropertyValue::Boolean(false));
         } else {
@@ -339,7 +343,7 @@ fn a_disabled_log_accepts_the_poll_without_a_record() {
             .into_iter()
             .map(|r| r.log_data)
             .collect::<Vec<_>>(),
-        vec![LogData::LogStatus(0b001)]
+        vec![LogData::LogStatus(LogStatus::LOG_DISABLED)]
     );
     assert!(db.trend_poll.0[&oid].last_success.is_some());
 }

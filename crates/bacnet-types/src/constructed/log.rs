@@ -6,7 +6,8 @@
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-use crate::primitives::{Date, Time};
+use crate::bitstring::LogStatus;
+use crate::primitives::{Date, StatusFlags, Time};
 
 // ---------------------------------------------------------------------------
 // LogDatum (Clause 12.25.14 -- Trend Log Log_Buffer)
@@ -19,19 +20,19 @@ use crate::primitives::{Date, Time};
 /// order; the encoding crate owns that numbering.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogDatum {
-    /// A status change of the log itself: BACnetLogStatus flags, bit 0
-    /// log-disabled, bit 1 buffer-purged, bit 2 log-interrupted.
-    LogStatus(u8),
+    /// A status change of the log itself.
+    LogStatus(LogStatus),
     /// A BOOLEAN value.
     BooleanValue(bool),
     /// A REAL value.
     RealValue(f32),
-    /// An ENUMERATED value.
-    EnumValue(u32),
-    /// An Unsigned value.
+    /// An ENUMERATED value. A logging device may hold these to 32 bits but
+    /// need not, so a decoded record keeps up to 64.
+    EnumValue(u64),
+    /// An Unsigned value, up to 64 bits.
     UnsignedValue(u64),
-    /// An INTEGER value.
-    SignedValue(i32),
+    /// An INTEGER value, up to 64 bits.
+    SignedValue(i64),
     /// A BIT STRING value.
     BitstringValue {
         /// Padding bits at the end of the final octet, 0 to 7.
@@ -97,9 +98,8 @@ pub struct BACnetLogRecord {
     /// The logged datum.
     pub log_datum: LogDatum,
     /// The monitored object's Status_Flags when the value was acquired, if
-    /// recorded: bit 0 in-alarm, bit 1 fault, bit 2 overridden, bit 3
-    /// out-of-service.
-    pub status_flags: Option<u8>,
+    /// recorded.
+    pub status_flags: Option<StatusFlags>,
 }
 
 // ---------------------------------------------------------------------------
@@ -112,9 +112,8 @@ pub struct BACnetLogRecord {
 /// order; the encoding crate owns that numbering.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EventLogDatum {
-    /// A status change of the log itself: BACnetLogStatus flags, bit 0
-    /// log-disabled, bit 1 buffer-purged, bit 2 log-interrupted.
-    LogStatus(u8),
+    /// A status change of the log itself.
+    LogStatus(LogStatus),
     /// An event notification, as the encoded parameters of a
     /// ConfirmedEventNotification request: its tagged fields from the process
     /// identifier through the optional event values, with no frame around
@@ -152,12 +151,13 @@ pub enum LogValue {
     BooleanValue(bool),
     /// A REAL value.
     RealValue(f32),
-    /// An ENUMERATED value.
-    EnumValue(u32),
-    /// An Unsigned value.
+    /// An ENUMERATED value. A logging device may hold these to 32 bits but
+    /// need not, so a decoded record keeps up to 64.
+    EnumValue(u64),
+    /// An Unsigned value, up to 64 bits.
     UnsignedValue(u64),
-    /// An INTEGER value.
-    SignedValue(i32),
+    /// An INTEGER value, up to 64 bits.
+    SignedValue(i64),
     /// A BIT STRING value.
     BitstringValue {
         /// Padding bits at the end of the final octet, 0 to 7.
@@ -182,9 +182,8 @@ pub enum LogValue {
 /// What a Trend Log Multiple record carries (Clause 21's BACnetLogData).
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogData {
-    /// A status change of the log itself: BACnetLogStatus flags, bit 0
-    /// log-disabled, bit 1 buffer-purged, bit 2 log-interrupted.
-    LogStatus(u8),
+    /// A status change of the log itself.
+    LogStatus(LogStatus),
     /// One entry per Log_DeviceObjectProperty member, in member order.
     Values(Vec<LogValue>),
     /// The device clock moved by this many seconds; zero when unknown.

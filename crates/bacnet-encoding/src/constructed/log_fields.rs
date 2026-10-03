@@ -10,6 +10,7 @@
 
 use super::validate_tlv_sequence;
 use crate::{primitives, tags};
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, Time};
 use bytes::BytesMut;
@@ -42,32 +43,56 @@ pub(super) fn decode_timestamp(
 }
 
 /// Write a log status as the primitive context `tag`: a BIT STRING of three
-/// bits. Fails for a status wider than three bits.
-pub(super) fn encode_log_status(
-    buf: &mut BytesMut,
-    tag: u8,
-    status: u8,
-    record: &str,
-) -> Result<(), Error> {
-    if status & !0b111 != 0 {
-        return Err(Error::OutOfRange(format!(
-            "{record} log-status {status:#010b} exceeds three bits"
-        )));
-    }
-    primitives::encode_ctx_bit_string(buf, tag, 5, &[status << 5]);
-    Ok(())
+/// bits, log-disabled in the top bit of the octet (Clause 20.2.10).
+pub(super) fn encode_log_status(buf: &mut BytesMut, tag: u8, status: LogStatus) {
+    primitives::encode_ctx_bit_string(buf, tag, 5, &[status.to_bacnet()]);
 }
 
 /// The log status in a primitive's `contents`: exactly a three-bit BIT
 /// STRING with its padding clear.
-pub(super) fn decode_log_status(contents: &[u8], offset: usize, record: &str) -> Result<u8, Error> {
+pub(super) fn decode_log_status(
+    contents: &[u8],
+    offset: usize,
+    record: &str,
+) -> Result<LogStatus, Error> {
     match contents {
-        [5, bits] if bits & 0x1f == 0 => Ok(bits >> 5),
+        [5, bits] if bits & 0x1f == 0 => Ok(LogStatus::from_bacnet(&[*bits])),
         _ => Err(Error::decoding(
             offset,
-            format!("{record} log-status must be a three-bit BitString"),
+            format!("{record} log-status must be a canonical three-bit BitString"),
         )),
     }
+}
+
+/// Write an INTEGER of up to 64 bits as the primitive context `tag`, in the
+/// fewest octets two's complement allows.
+pub(super) fn encode_ctx_integer(buf: &mut BytesMut, tag: u8, value: i64) {
+    let octets = value.to_be_bytes();
+    // Drop leading octets that only repeat the sign of the next one.
+    let start = (0..7)
+        .find(|&i| {
+            let redundant = (octets[i] == 0x00 && octets[i + 1] & 0x80 == 0)
+                || (octets[i] == 0xFF && octets[i + 1] & 0x80 != 0);
+            !redundant
+        })
+        .unwrap_or(7);
+    tags::encode_tag(buf, tag, tags::TagClass::Context, (8 - start) as u32);
+    buf.extend_from_slice(&octets[start..]);
+}
+
+/// An INTEGER of one to eight octets. A logging device may hold integers to
+/// 32 bits but need not, so a record read from a peer can carry more.
+pub(super) fn decode_integer(contents: &[u8], offset: usize) -> Result<i64, Error> {
+    if contents.is_empty() || contents.len() > 8 {
+        return Err(Error::decoding(
+            offset,
+            format!("integer-value needs 1 to 8 octets, got {}", contents.len()),
+        ));
+    }
+    let fill = if contents[0] & 0x80 != 0 { 0xFF } else { 0x00 };
+    let mut octets = [fill; 8];
+    octets[8 - contents.len()..].copy_from_slice(contents);
+    Ok(i64::from_be_bytes(octets))
 }
 
 /// Write the error pair as constructed context `tag` around an application

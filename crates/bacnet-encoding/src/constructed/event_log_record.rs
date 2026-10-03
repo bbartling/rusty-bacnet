@@ -26,8 +26,8 @@ const TIME_CHANGE: u8 = 2;
 
 /// Encode one Event Log record.
 ///
-/// Fails, leaving `buf` unchanged, for a log status wider than three bits or
-/// notification bytes that aren't a well-formed run of tagged fields.
+/// Fails, leaving `buf` unchanged, for notification bytes that aren't a
+/// well-formed run of tagged fields.
 pub fn encode_event_log_record(
     record: &BACnetEventLogRecord,
     buf: &mut BytesMut,
@@ -36,9 +36,7 @@ pub fn encode_event_log_record(
     encode_timestamp(&mut out, &record.date, &record.time);
     tags::encode_opening_tag(&mut out, 1);
     match &record.log_datum {
-        EventLogDatum::LogStatus(status) => {
-            encode_log_status(&mut out, LOG_STATUS, *status, RECORD)?
-        }
+        EventLogDatum::LogStatus(status) => encode_log_status(&mut out, LOG_STATUS, *status),
         EventLogDatum::Notification(parameters) => {
             validate_tlv_sequence(parameters, "BACnetEventLogRecord notification")
                 .map_err(|error| Error::Encoding(error.to_string()))?;

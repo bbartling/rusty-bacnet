@@ -11,7 +11,7 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
 use bacnet_types::enums::ConfirmedServiceChoice;
-use bacnet_types::primitives::{Date, Time};
+use bacnet_types::primitives::{Date, StatusFlags, Time};
 use tokio::time::{timeout, Duration};
 
 fn assert_property_error(error: Error, expected: ErrorCode) {
@@ -280,7 +280,7 @@ fn record_with_status(value: u64) -> BACnetLogRecord {
         date: DATE,
         time: time(value as u8),
         log_datum: LogDatum::UnsignedValue(value),
-        status_flags: Some(0b0100),
+        status_flags: Some(StatusFlags::FAULT),
     }
 }
 

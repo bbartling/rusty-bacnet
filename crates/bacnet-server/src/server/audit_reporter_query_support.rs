@@ -155,7 +155,8 @@ impl AuditLogStorage for Probe {
         self.reads.fetch_add(1, Ordering::AcqRel);
         if self.mode == "bad ack" && count != 0 {
             let mut record = stored_record(1, false);
-            record.record.datum = BACnetAuditLogDatum::LogStatus(0b1000);
+            // No month 20 exists, so the ACK cannot be encoded.
+            record.record.timestamp.0.month = 20;
             return AuditLogQueryPage {
                 records: vec![record],
                 no_more_items: true,

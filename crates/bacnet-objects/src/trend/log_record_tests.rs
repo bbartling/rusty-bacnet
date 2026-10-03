@@ -1,10 +1,11 @@
 use super::*;
 use bacnet_encoding::constructed::{decode_log_multiple_record, decode_log_record};
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogDatum, LogValue};
-use bacnet_types::primitives::{Date, Time};
+use bacnet_types::primitives::{Date, StatusFlags, Time};
 use bytes::BytesMut;
 
-fn record(hour: u8, value: f32, status_flags: Option<u8>) -> BACnetLogRecord {
+fn record(hour: u8, value: f32, status_flags: Option<StatusFlags>) -> BACnetLogRecord {
     BACnetLogRecord {
         date: Date {
             year: 126,
@@ -38,7 +39,7 @@ fn served(object: &dyn BACnetObject) -> Vec<Vec<u8>> {
     (0..records.record_count())
         .map(|index| {
             let mut buf = BytesMut::new();
-            records.encode_record(index, &mut buf).unwrap();
+            records.encode_record(index, &mut buf);
             buf.to_vec()
         })
         .collect()
@@ -77,7 +78,9 @@ fn trend_logs_refuse_read_property_of_log_buffer() {
 #[test]
 fn trend_log_serves_status_flags_only_when_recorded() {
     let mut trend = TrendLogObject::new(1, "TL-1", 2).unwrap();
-    trend.add_record(record(1, 10.0, Some(0b0100))).unwrap();
+    trend
+        .add_record(record(1, 10.0, Some(StatusFlags::FAULT)))
+        .unwrap();
     trend.add_record(record(1, 20.0, None)).unwrap();
 
     let identities = trend.log_record_identities_internal().unwrap();
@@ -85,7 +88,7 @@ fn trend_log_serves_status_flags_only_when_recorded() {
     assert_eq!(identities[1].sequence_number(), 2);
     assert_eq!(identities[0].date(), identities[1].date());
     assert_eq!(identities[0].time(), identities[1].time());
-    assert_eq!(trend.records()[0].status_flags, Some(0b0100));
+    assert_eq!(trend.records()[0].status_flags, Some(StatusFlags::FAULT));
 
     let with_status = [
         timestamp(1),
@@ -99,8 +102,8 @@ fn trend_log_serves_status_flags_only_when_recorded() {
 #[test]
 fn trend_log_keeps_log_status_and_record_status_flags_as_distinct_bitstrings() {
     let mut trend = TrendLogObject::new(1, "TL-1", 1).unwrap();
-    let mut status = record(1, 0.0, Some(0b0100));
-    status.log_datum = LogDatum::LogStatus(0b101);
+    let mut status = record(1, 0.0, Some(StatusFlags::FAULT));
+    status.log_datum = LogDatum::LogStatus(LogStatus::LOG_DISABLED | LogStatus::LOG_INTERRUPTED);
     trend.add_record(status.clone()).unwrap();
 
     let served = served(&trend);
@@ -176,5 +179,57 @@ fn trend_family_identity_raw_and_served_views_stay_fifo_aligned() {
             assert_eq!(date, identity.date());
             assert_eq!(time, identity.time());
         }
+    }
+}
+
+/// A record that would not encode is refused when it is added, through the
+/// object's own method or the poller's hook, and the log keeps serving the
+/// records it already holds.
+#[test]
+fn trend_logs_refuse_unencodable_records_at_add() {
+    let stray_close = vec![0x21, 0x01, 0x0F];
+    let bad_padding = LogValue::BitstringValue {
+        unused_bits: 3,
+        data: Vec::new(),
+    };
+
+    let mut trend = TrendLogObject::new(1, "TL-1", 4).unwrap();
+    trend.add_record(record(1, 10.0, None)).unwrap();
+    let mut bad = record(2, 0.0, None);
+    bad.log_datum = LogDatum::AnyValue(stray_close.clone());
+    assert!(trend.add_record(bad.clone()).is_err());
+    bad.log_datum = bad_padding.clone().into();
+    assert!(trend.add_trend_record(bad).is_err());
+    trend.add_record(record(3, 30.0, None)).unwrap();
+
+    let mut multiple = TrendLogMultipleObject::new(1, "TLM-1", 4).unwrap();
+    multiple
+        .add_record(multiple_record(1, vec![LogValue::RealValue(10.0)]))
+        .unwrap();
+    assert!(multiple
+        .add_record(multiple_record(
+            2,
+            vec![LogValue::RealValue(1.0), LogValue::AnyValue(stray_close)],
+        ))
+        .is_err());
+    assert!(multiple
+        .add_trend_multiple_record(multiple_record(2, vec![bad_padding]))
+        .is_err());
+    multiple
+        .add_record(multiple_record(3, vec![LogValue::RealValue(30.0)]))
+        .unwrap();
+
+    for object in [&trend as &dyn BACnetObject, &multiple] {
+        assert_eq!(
+            object
+                .read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+                .unwrap(),
+            PropertyValue::Unsigned(2)
+        );
+        let served = served(object);
+        assert_eq!(served.len(), 2);
+        // The timestamp's Time octets start at offset 7: the hour.
+        assert_eq!(served[0][7], 1);
+        assert_eq!(served[1][7], 3);
     }
 }

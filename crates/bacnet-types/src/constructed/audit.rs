@@ -3,7 +3,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::{string::String, vec::Vec};
 
-use crate::bitstring::AuditOperationFlags;
+use crate::bitstring::{AuditOperationFlags, LogStatus};
 use crate::enums::{
     AuditOperation, BACnetSuccessFilter, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
 };
@@ -150,8 +150,8 @@ pub struct BACnetAuditLogRecord {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)] // Preserve the existing direct public variant shape.
 pub enum BACnetAuditLogDatum {
-    /// Three-bit BACnetLogStatus: log-disabled, buffer-purged, log-interrupted.
-    LogStatus(u8),
+    /// A status change of the log itself.
+    LogStatus(LogStatus),
     /// A bare BACnetAuditNotification wrapped by choice tag `[1]`.
     AuditNotification(BACnetAuditNotification),
     /// Clock adjustment in seconds, encoded as a four-octet REAL under `[2]`.

@@ -413,7 +413,7 @@ fn last_datum(db: &ObjectDatabase, oid: ObjectIdentifier) -> LogDatum {
     let records = db.get(&oid).unwrap().log_buffer_internal().unwrap();
     let index = records.record_count().checked_sub(1).expect("a record");
     let mut bytes = BytesMut::new();
-    records.encode_record(index, &mut bytes).unwrap();
+    records.encode_record(index, &mut bytes);
     let (record, end) = bacnet_encoding::constructed::decode_log_record(&bytes, 0).unwrap();
     assert_eq!(end, bytes.len());
     record.log_datum

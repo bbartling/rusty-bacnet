@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
     BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification,
     BACnetRecipient,
@@ -164,8 +165,11 @@ fn audit_restart_restores_exact_typed_state() {
         Some(1)
     );
     assert_eq!(
-        log.add_record(record(2, BACnetAuditLogDatum::LogStatus(0)))
-            .unwrap(),
+        log.add_record(record(
+            2,
+            BACnetAuditLogDatum::LogStatus(LogStatus::empty())
+        ))
+        .unwrap(),
         Some(2)
     );
     let expected = log.records().clone();
@@ -189,7 +193,7 @@ fn audit_capacity_eviction_and_total_wrap_are_transactional() {
         total_record_count: u64::MAX,
         records: vec![BACnetAuditLogRecordResult {
             sequence_number: u64::MAX,
-            record: record(0, BACnetAuditLogDatum::LogStatus(0)),
+            record: record(0, BACnetAuditLogDatum::LogStatus(LogStatus::empty())),
         }],
         completed_receipts: Vec::new(),
     }));
@@ -237,9 +241,10 @@ fn zero_capacity_validates_enabled_records_before_advancing_sequence() {
     let mut log = AuditLogObject::new(1, "AL-1", 0, persistence.clone()).unwrap();
     let before = persistence.snapshot.lock().unwrap().clone().unwrap();
 
-    let mut invalid_timestamp = record(1, BACnetAuditLogDatum::LogStatus(0));
+    let mut invalid_timestamp = record(1, BACnetAuditLogDatum::LogStatus(LogStatus::empty()));
     invalid_timestamp.timestamp.1.hour = 24;
-    let invalid_status = record(1, BACnetAuditLogDatum::LogStatus(0b1000));
+    let mut invalid_date = record(1, BACnetAuditLogDatum::LogStatus(LogStatus::empty()));
+    invalid_date.timestamp.0.month = 20;
     let device = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
     let mut notification = BACnetAuditNotification {
         source_timestamp: None,
@@ -270,7 +275,7 @@ fn zero_capacity_validates_enabled_records_before_advancing_sequence() {
 
     for invalid_record in [
         invalid_timestamp,
-        invalid_status,
+        invalid_date,
         invalid_notification,
         oversized_notification,
     ] {
@@ -290,12 +295,9 @@ fn zero_capacity_validates_enabled_records_before_advancing_sequence() {
     }));
     let mut disabled_log = AuditLogObject::new(2, "AL-2", 0, disabled.clone()).unwrap();
     let disabled_before = disabled.snapshot.lock().unwrap().clone().unwrap();
-    assert_eq!(
-        disabled_log
-            .add_record(record(1, BACnetAuditLogDatum::LogStatus(0b1000)))
-            .unwrap(),
-        None
-    );
+    let mut ignored = record(1, BACnetAuditLogDatum::LogStatus(LogStatus::empty()));
+    ignored.timestamp.0.month = 20;
+    assert_eq!(disabled_log.add_record(ignored).unwrap(), None);
     assert_matches_snapshot(&disabled_log, &disabled_before);
     assert_eq!(
         disabled.snapshot.lock().unwrap().as_ref(),
@@ -308,8 +310,11 @@ fn newer_slot_corruption_falls_back_but_no_valid_slot_fails_closed() {
     let base = temp_base("fallback");
     let storage = Arc::new(FileAuditLogPersistence::new(&base).unwrap());
     let mut log = AuditLogObject::new(1, "AL-1", 4, storage.clone()).unwrap();
-    log.add_record(record(1, BACnetAuditLogDatum::LogStatus(0)))
-        .unwrap();
+    log.add_record(record(
+        1,
+        BACnetAuditLogDatum::LogStatus(LogStatus::empty()),
+    ))
+    .unwrap();
     log.add_record(record(2, BACnetAuditLogDatum::TimeChange(1.0)))
         .unwrap();
     let paths = storage.slot_paths();
@@ -335,8 +340,11 @@ fn corrupted_header_falls_back_but_checksum_valid_incompatibility_is_fatal() {
     let base = temp_base("incompatible-newer");
     let storage = Arc::new(FileAuditLogPersistence::new(&base).unwrap());
     let mut log = AuditLogObject::new(1, "AL-1", 2, storage.clone()).unwrap();
-    log.add_record(record(1, BACnetAuditLogDatum::LogStatus(0)))
-        .unwrap();
+    log.add_record(record(
+        1,
+        BACnetAuditLogDatum::LogStatus(LogStatus::empty()),
+    ))
+    .unwrap();
     let paths = storage.slot_paths();
     let newest = paths[(log.generation() % 2) as usize].clone();
     drop(log);
@@ -401,11 +409,11 @@ fn persistence_identity_version_capacity_and_length_validation_fail_closed() {
         records: vec![
             BACnetAuditLogRecordResult {
                 sequence_number: 0,
-                record: record(0, BACnetAuditLogDatum::LogStatus(0)),
+                record: record(0, BACnetAuditLogDatum::LogStatus(LogStatus::empty())),
             },
             BACnetAuditLogRecordResult {
                 sequence_number: 1,
-                record: record(1, BACnetAuditLogDatum::LogStatus(0)),
+                record: record(1, BACnetAuditLogDatum::LogStatus(LogStatus::empty())),
             },
         ],
         completed_receipts: Vec::new(),
@@ -457,11 +465,12 @@ fn oversized_record_is_rejected_before_durable_or_memory_mutation() {
 
 #[test]
 fn custom_backend_cannot_bypass_record_or_snapshot_validation() {
-    let mut invalid_timestamp = record(1, BACnetAuditLogDatum::LogStatus(0));
+    let mut invalid_timestamp = record(1, BACnetAuditLogDatum::LogStatus(LogStatus::empty()));
     invalid_timestamp.timestamp.1.hour = 24;
-    let invalid_status = record(1, BACnetAuditLogDatum::LogStatus(0b1000));
+    let mut invalid_date = record(1, BACnetAuditLogDatum::LogStatus(LogStatus::empty()));
+    invalid_date.timestamp.0.month = 20;
 
-    for invalid_record in [invalid_timestamp, invalid_status] {
+    for invalid_record in [invalid_timestamp, invalid_date] {
         let loaded = Arc::new(MemoryPersistence::with_snapshot(AuditLogSnapshot {
             object_identifier: oid(1),
             generation: 1,
@@ -493,11 +502,11 @@ fn custom_backend_cannot_bypass_record_or_snapshot_validation() {
         records: vec![
             BACnetAuditLogRecordResult {
                 sequence_number: 1,
-                record: record(1, BACnetAuditLogDatum::LogStatus(0)),
+                record: record(1, BACnetAuditLogDatum::LogStatus(LogStatus::empty())),
             },
             BACnetAuditLogRecordResult {
                 sequence_number: 2,
-                record: record(2, BACnetAuditLogDatum::LogStatus(0)),
+                record: record(2, BACnetAuditLogDatum::LogStatus(LogStatus::empty())),
             },
         ],
         completed_receipts: Vec::new(),
@@ -660,14 +669,14 @@ fn clocked_enable_and_purge_statuses_persist_and_record_count_is_read_only() {
     assert!(!log.log_enable());
     assert!(matches!(
         log.records().back().unwrap().record.datum,
-        BACnetAuditLogDatum::LogStatus(0b001)
+        BACnetAuditLogDatum::LogStatus(LogStatus::LOG_DISABLED)
     ));
 
     assert_eq!(log.purge().unwrap(), 2);
     assert_eq!(log.records().len(), 1);
     assert!(matches!(
         log.records().back().unwrap().record.datum,
-        BACnetAuditLogDatum::LogStatus(0b010)
+        BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED)
     ));
 
     let snapshot = persistence.snapshot.lock().unwrap().clone().unwrap();

@@ -4,11 +4,12 @@ use bacnet_objects::{
     traits::BACnetObject,
     trend::{TrendLogMultipleObject, TrendLogObject},
 };
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventLogRecord, BACnetLogMultipleRecord,
     BACnetLogRecord, EventLogDatum, LogData, LogDatum, LogValue,
 };
-use bacnet_types::primitives::{Date, PropertyValue, Time};
+use bacnet_types::primitives::{Date, PropertyValue, StatusFlags, Time};
 use PropertyIdentifier as P;
 
 fn log_objects(capacity: u32, configured: bool) -> [Box<dyn BACnetObject>; 3] {
@@ -29,15 +30,15 @@ fn log_objects(capacity: u32, configured: bool) -> [Box<dyn BACnetObject>; 3] {
         for (log_datum, status_flags, log_data, event_datum) in [
             (
                 LogDatum::UnsignedValue(42),
-                Some(0b1010),
+                Some(StatusFlags::IN_ALARM | StatusFlags::OVERRIDDEN),
                 LogData::Values(vec![LogValue::UnsignedValue(42)]),
                 EventLogDatum::TimeChange(42.0),
             ),
             (
-                LogDatum::LogStatus(3),
+                LogDatum::LogStatus(LogStatus::LOG_DISABLED | LogStatus::BUFFER_PURGED),
                 None,
-                LogData::LogStatus(3),
-                EventLogDatum::LogStatus(3),
+                LogData::LogStatus(LogStatus::LOG_DISABLED | LogStatus::BUFFER_PURGED),
+                EventLogDatum::LogStatus(LogStatus::LOG_DISABLED | LogStatus::BUFFER_PURGED),
             ),
         ] {
             let record = BACnetLogRecord {
@@ -353,7 +354,8 @@ fn rpm_and_rp_refuse_log_buffer_while_read_range_serves_framed_records() {
             // time-change [2]: 42.0 s.
             _ => &[0x1e, 0x2c, 0x42, 0x28, 0, 0, 0x1f],
         };
-        let status = [0x1e, 0x0a, 5, 0x60, 0x1f];
+        // log-disabled and buffer-purged, bits 0 and 1, are the top two bits.
+        let status = [0x1e, 0x0a, 5, 0xc0, 0x1f];
         let expected = [&timestamp[..], first, &timestamp, &status].concat();
         let identities = object.log_record_identities_internal().unwrap();
         assert_eq!(

@@ -1,6 +1,7 @@
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
 use bacnet_encoding::constructed::encode_event_log_record;
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::EventLogDatum;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::primitives::{Date, Time};
@@ -63,7 +64,7 @@ fn served(el: &EventLogObject) -> Vec<Vec<u8>> {
     (0..records.record_count())
         .map(|index| {
             let mut buf = BytesMut::new();
-            records.encode_record(index, &mut buf).unwrap();
+            records.encode_record(index, &mut buf);
             buf.to_vec()
         })
         .collect()
@@ -140,13 +141,40 @@ fn log_buffer_records_are_framed_event_log_records() {
             0x1E, 0x2C, 0x42, 0x91, 0x00, 0x00, 0x1F, // time-change [2]: 72.5 s
         ]]
     );
-    let mut buf = BytesMut::from(&b"kept"[..]);
-    assert!(el
-        .log_buffer_internal()
-        .unwrap()
-        .encode_record(1, &mut buf)
-        .is_err());
-    assert_eq!(&buf[..], b"kept");
+}
+
+/// A record that would not encode is refused when it is added, so the log
+/// never holds one that a ReadRange window could not serve.
+#[test]
+fn unencodable_record_is_refused_at_add_and_the_rest_still_serve() {
+    let mut el = EventLogObject::new(1, "EL-1", 100).unwrap();
+    el.add_record(make_record(10, 72.5)).unwrap();
+    for log_datum in [
+        // An opening tag left open, and a value cut short.
+        EventLogDatum::Notification(vec![0x3E, 0x19, 0x05]),
+        EventLogDatum::Notification(vec![0x09]),
+    ] {
+        let bad = BACnetEventLogRecord {
+            date: make_date(),
+            time: make_time(11),
+            log_datum,
+        };
+        assert!(el.add_record(bad).is_err());
+    }
+    el.add_record(make_record(12, 73.0)).unwrap();
+    assert_eq!(el.records().len(), 2);
+    assert_eq!(
+        el.read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+            .unwrap(),
+        PropertyValue::Unsigned(2)
+    );
+    assert_eq!(
+        served(&el),
+        vec![
+            framed(&make_record(10, 72.5)),
+            framed(&make_record(12, 73.0))
+        ]
+    );
 }
 
 #[test]
@@ -199,7 +227,10 @@ fn disable_logging() {
     .unwrap();
     el.add_record(make_record(10, 72.5)).unwrap();
     assert_eq!(el.records().len(), 1);
-    assert_eq!(el.records()[0].log_datum, EventLogDatum::LogStatus(0b001));
+    assert_eq!(
+        el.records()[0].log_datum,
+        EventLogDatum::LogStatus(LogStatus::LOG_DISABLED)
+    );
 }
 
 #[test]
@@ -216,7 +247,10 @@ fn clear_buffer_via_record_count() {
     )
     .unwrap();
     assert_eq!(el.records().len(), 1);
-    assert_eq!(el.records()[0].log_datum, EventLogDatum::LogStatus(0b010));
+    assert_eq!(
+        el.records()[0].log_datum,
+        EventLogDatum::LogStatus(LogStatus::BUFFER_PURGED)
+    );
 }
 
 #[test]
@@ -308,7 +342,7 @@ fn log_buffer_serves_every_event_log_datum() {
     let records = [
         EventLogDatum::Notification(notification),
         EventLogDatum::TimeChange(-0.5),
-        EventLogDatum::LogStatus(0b100),
+        EventLogDatum::LogStatus(LogStatus::LOG_INTERRUPTED),
     ]
     .map(|log_datum| BACnetEventLogRecord {
         date: make_date(),

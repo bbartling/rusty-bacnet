@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetEventLogRecord, EventLogDatum};
 use bacnet_types::primitives::{Date, Time};
 
@@ -48,10 +49,10 @@ fn event_log_record_kinds_have_exact_bytes_and_round_trip() {
     framed_notification.extend(notification());
     framed_notification.extend([0x1F, 0x1F]);
     for (log_datum, tail) in [
-        // log-status [0]: log-disabled.
+        // log-status [0]: log-disabled, bit 0, in the top bit.
         (
-            EventLogDatum::LogStatus(0b001),
-            vec![0x1E, 0x0A, 0x05, 0x20, 0x1F],
+            EventLogDatum::LogStatus(LogStatus::LOG_DISABLED),
+            vec![0x1E, 0x0A, 0x05, 0x80, 0x1F],
         ),
         // notification [1] around the request's own fields.
         (
@@ -91,7 +92,6 @@ fn consecutive_event_log_records_decode_by_returned_offset() {
 #[test]
 fn event_log_record_rejects_unencodable_values_without_writing() {
     for log_datum in [
-        EventLogDatum::LogStatus(0b1000),
         // An opening tag left open, and a value cut short.
         EventLogDatum::Notification(vec![0x3E, 0x19, 0x05]),
         EventLogDatum::Notification(vec![0x09]),
@@ -111,7 +111,7 @@ fn event_log_record_decoder_rejects_malformed_records() {
         [&TIMESTAMP[..], &[0x1E, 0x78, 0x1F]].concat(),
         [
             &TIMESTAMP[..],
-            &[0x1E, 0x0A, 0x05, 0x20, 0x0A, 0x05, 0x20, 0x1F],
+            &[0x1E, 0x0A, 0x05, 0x80, 0x0A, 0x05, 0x80, 0x1F],
         ]
         .concat(),
         // log-status that isn't a three-bit BitString.

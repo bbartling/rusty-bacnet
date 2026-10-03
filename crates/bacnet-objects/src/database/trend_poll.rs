@@ -3,17 +3,19 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use bacnet_encoding::constructed::encode_log_multiple_record;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_types::constructed::{
     BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use bytes::BytesMut;
 use tracing::warn;
 
 use super::{LocalDevice, ObjectDatabase};
+use crate::log_buffer::ANY_VALUE_MAX_OCTETS;
 use crate::traits::BACnetObject;
 
 /// Local maximum idle/configuration reconciliation delay and failure backoff.
@@ -341,13 +343,19 @@ fn member(value: &PropertyValue, wildcard_is_empty: bool) -> Option<Member> {
 /// name, or else the any-value alternative holding the value's own encoding,
 /// the bytes a ReadProperty of it would carry (Clauses 12.25.14 and
 /// 12.30.19).
+///
+/// An any-value over [`ANY_VALUE_MAX_OCTETS`] logs PROPERTY /
+/// VALUE_TOO_LONG instead, so every record stays small enough to page. A
+/// value no record could carry (one that fails to encode, a bit string with
+/// impossible padding, framed bytes whose tags don't balance) logs SERVICES
+/// / OTHER, so the log never refuses what the poller hands it.
 fn property_value_to_log_value(value: &PropertyValue) -> LogValue {
-    match value {
+    let value = match value {
         PropertyValue::Real(v) => LogValue::RealValue(*v),
         PropertyValue::Unsigned(v) => LogValue::UnsignedValue(*v),
-        PropertyValue::Signed(v) => LogValue::SignedValue(*v),
+        PropertyValue::Signed(v) => LogValue::SignedValue(i64::from(*v)),
         PropertyValue::Boolean(v) => LogValue::BooleanValue(*v),
-        PropertyValue::Enumerated(v) => LogValue::EnumValue(*v),
+        PropertyValue::Enumerated(v) => LogValue::EnumValue(u64::from(*v)),
         PropertyValue::BitString { unused_bits, data } => LogValue::BitstringValue {
             unused_bits: *unused_bits,
             data: data.clone(),
@@ -355,12 +363,42 @@ fn property_value_to_log_value(value: &PropertyValue) -> LogValue {
         PropertyValue::Null => LogValue::NullValue,
         other => {
             let mut encoded = BytesMut::new();
-            match encode_property_value(&mut encoded, other) {
-                Ok(()) => LogValue::AnyValue(encoded.to_vec()),
+            if encode_property_value(&mut encoded, other).is_err() {
                 // A value the read could not have carried either.
-                Err(_) => failure(ErrorClass::SERVICES, ErrorCode::OTHER),
+                return failure(ErrorClass::SERVICES, ErrorCode::OTHER);
             }
+            if encoded.len() > ANY_VALUE_MAX_OCTETS {
+                return failure(ErrorClass::PROPERTY, ErrorCode::VALUE_TOO_LONG);
+            }
+            LogValue::AnyValue(encoded.to_vec())
         }
+    };
+    if !matches!(
+        value,
+        LogValue::BitstringValue { .. } | LogValue::AnyValue(_)
+    ) {
+        return value;
+    }
+    // Only these two alternatives can hold something no record carries;
+    // encoding a one-member record tells.
+    let probe = BACnetLogMultipleRecord {
+        date: Date {
+            year: 0,
+            month: 1,
+            day: 1,
+            day_of_week: 1,
+        },
+        time: Time {
+            hour: 0,
+            minute: 0,
+            second: 0,
+            hundredths: 0,
+        },
+        log_data: LogData::Values(vec![value.clone()]),
+    };
+    match encode_log_multiple_record(&probe, &mut BytesMut::new()) {
+        Ok(()) => value,
+        Err(_) => failure(ErrorClass::SERVICES, ErrorCode::OTHER),
     }
 }
 

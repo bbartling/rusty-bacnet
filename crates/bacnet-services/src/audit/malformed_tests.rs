@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_encoding::{constructed::encode_recipient, primitives, tags};
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
 use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
@@ -401,7 +402,7 @@ fn encode_query_ack(datum: BACnetAuditLogDatum) -> Vec<u8> {
 
 #[test]
 fn query_ack_rejects_unsigned_boolean_and_top_level_malformations() {
-    let canonical = encode_query_ack(BACnetAuditLogDatum::LogStatus(0));
+    let canonical = encode_query_ack(BACnetAuditLogDatum::LogStatus(LogStatus::empty()));
     let sequence = canonical
         .windows(2)
         .position(|bytes| bytes == [0x09, 1])
@@ -439,7 +440,7 @@ fn query_ack_rejects_unsigned_boolean_and_top_level_malformations() {
 
 #[test]
 fn query_ack_rejects_malformed_date_time_and_datum_choices() {
-    let canonical = encode_query_ack(BACnetAuditLogDatum::LogStatus(0b010));
+    let canonical = encode_query_ack(BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED));
 
     let date = canonical.iter().position(|byte| *byte == 0xa4).unwrap();
     let mut invalid_date = canonical.clone();
@@ -486,7 +487,7 @@ fn query_ack_nested_notification_requires_complete_consumption() {
 fn query_ack_record_list_accepts_limit_and_rejects_one_more() {
     let record = BACnetAuditLogRecordResult {
         sequence_number: 0,
-        record: query_ack(BACnetAuditLogDatum::LogStatus(0))
+        record: query_ack(BACnetAuditLogDatum::LogStatus(LogStatus::empty()))
             .records
             .pop()
             .unwrap()

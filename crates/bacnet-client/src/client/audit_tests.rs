@@ -7,6 +7,7 @@ use bacnet_services::audit::{
     BACnetAuditLogRecordResult, BACnetAuditNotification,
 };
 use bacnet_transport::loopback::LoopbackTransport;
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::BACnetRecipient;
 use bacnet_types::enums::{
     AuditOperation, BACnetSuccessFilter, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
@@ -79,7 +80,7 @@ fn query_ack() -> AuditLogQueryAck {
                         hundredths: 78,
                     },
                 ),
-                datum: BACnetAuditLogDatum::LogStatus(0b010),
+                datum: BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED),
             },
         }],
         no_more_items: true,

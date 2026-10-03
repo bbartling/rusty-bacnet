@@ -1,8 +1,9 @@
 use super::*;
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
-use bacnet_types::primitives::{Date, Time};
+use bacnet_types::primitives::{Date, StatusFlags, Time};
 
-fn record(log_datum: LogDatum, status_flags: Option<u8>) -> BACnetLogRecord {
+fn record(log_datum: LogDatum, status_flags: Option<StatusFlags>) -> BACnetLogRecord {
     BACnetLogRecord {
         date: Date {
             year: 126,
@@ -32,12 +33,12 @@ const TIMESTAMP: [u8; 12] = [
 ];
 
 /// Each kind of Trend Log record, with the bytes that follow its timestamp.
-fn kinds() -> Vec<(LogDatum, Option<u8>, Vec<u8>)> {
+fn kinds() -> Vec<(LogDatum, Option<StatusFlags>, Vec<u8>)> {
     vec![
-        // real-value [2], then status-flags [2] with FAULT set.
+        // real-value [2], then status-flags [2] with OVERRIDDEN (bit 2) set.
         (
             LogDatum::RealValue(72.5),
-            Some(0b0010),
+            Some(StatusFlags::OVERRIDDEN),
             vec![0x1E, 0x2C, 0x42, 0x91, 0x00, 0x00, 0x1F, 0x2A, 0x04, 0x20],
         ),
         // failure [8]: PROPERTY / UNKNOWN_PROPERTY.
@@ -49,9 +50,9 @@ fn kinds() -> Vec<(LogDatum, Option<u8>, Vec<u8>)> {
             None,
             vec![0x1E, 0x8E, 0x91, 0x02, 0x91, 0x20, 0x8F, 0x1F],
         ),
-        // log-status [0]: buffer-purged.
+        // log-status [0]: buffer-purged, bit 1.
         (
-            LogDatum::LogStatus(0b010),
+            LogDatum::LogStatus(LogStatus::BUFFER_PURGED),
             None,
             vec![0x1E, 0x0A, 0x05, 0x40, 0x1F],
         ),
@@ -80,6 +81,32 @@ fn log_record_kinds_have_exact_bytes_and_round_trip() {
     }
 }
 
+/// Bit 0 of a BIT STRING is the top bit of its first octet (Clause 20.2.10):
+/// log-disabled and in-alarm are the bit-0 flags of their strings.
+#[test]
+fn log_record_bit_strings_put_bit0_in_the_top_bit() {
+    for (status, octet) in [
+        (LogStatus::LOG_DISABLED, 0x80),
+        (LogStatus::LOG_DISABLED | LogStatus::BUFFER_PURGED, 0xC0),
+        (LogStatus::LOG_INTERRUPTED, 0x20),
+    ] {
+        let value = record(LogDatum::LogStatus(status), None);
+        let bytes = encoded(&value);
+        assert_eq!(&bytes[12..], &[0x1E, 0x0A, 0x05, octet, 0x1F], "{status}");
+        assert_eq!(decode_log_record(&bytes, 0).unwrap().0, value);
+    }
+    for (flags, octet) in [
+        (StatusFlags::IN_ALARM, 0x80),
+        (StatusFlags::FAULT, 0x40),
+        (StatusFlags::OUT_OF_SERVICE, 0x10),
+    ] {
+        let value = record(LogDatum::NullValue, Some(flags));
+        let bytes = encoded(&value);
+        assert_eq!(&bytes[15..], &[0x2A, 0x04, octet], "{flags}");
+        assert_eq!(decode_log_record(&bytes, 0).unwrap().0, value);
+    }
+}
+
 #[test]
 fn log_record_every_plain_datum_has_its_own_tag() {
     for (log_datum, tail) in [
@@ -87,6 +114,19 @@ fn log_record_every_plain_datum_has_its_own_tag() {
         (LogDatum::EnumValue(3), vec![0x39, 0x03]),
         (LogDatum::UnsignedValue(7), vec![0x49, 0x07]),
         (LogDatum::SignedValue(-2), vec![0x59, 0xFE]),
+        // Integers past 32 bits keep their full width, in the fewest octets.
+        (
+            LogDatum::SignedValue(-(1 << 39)),
+            vec![0x5D, 0x05, 0x80, 0x00, 0x00, 0x00, 0x00],
+        ),
+        (
+            LogDatum::SignedValue(i64::MAX),
+            vec![0x5D, 0x08, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+        ),
+        (
+            LogDatum::EnumValue(1 << 32),
+            vec![0x3D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00],
+        ),
         (
             LogDatum::BitstringValue {
                 unused_bits: 4,
@@ -116,13 +156,39 @@ fn log_record_every_plain_datum_has_its_own_tag() {
     }
 }
 
+/// A peer's log need not hold integers to 32 bits (Clause 21), so a
+/// five-octet INTEGER, even one with a redundant sign octet, decodes.
+#[test]
+fn log_record_from_a_peer_keeps_a_five_octet_integer() {
+    for (contents, value) in [
+        (&[0xFF, 0x7F, 0xFF, 0xFF, 0xFF][..], -(1i64 << 31) - 1),
+        (&[0x01, 0x00, 0x00, 0x00, 0x00][..], 1 << 32),
+        (&[0x00, 0x00, 0x00, 0x00, 0x2A][..], 42),
+    ] {
+        let mut bytes = TIMESTAMP.to_vec();
+        bytes.extend([0x1E, 0x5D, 0x05]);
+        bytes.extend(contents);
+        bytes.push(0x1F);
+        assert_eq!(
+            decode_log_record(&bytes, 0).unwrap(),
+            (record(LogDatum::SignedValue(value), None), bytes.len())
+        );
+    }
+}
+
 #[test]
 fn consecutive_log_records_decode_by_returned_offset() {
     // The first record's status flags must not swallow the next record, and
     // a record without them must stop at its datum.
-    let first = record(LogDatum::UnsignedValue(1), Some(0b1001));
+    let first = record(
+        LogDatum::UnsignedValue(1),
+        Some(StatusFlags::IN_ALARM | StatusFlags::OUT_OF_SERVICE),
+    );
     let second = record(LogDatum::NullValue, None);
-    let third = record(LogDatum::LogStatus(0b001), Some(0));
+    let third = record(
+        LogDatum::LogStatus(LogStatus::LOG_DISABLED),
+        Some(StatusFlags::empty()),
+    );
     let mut bytes = encoded(&first);
     bytes.extend(encoded(&second));
     bytes.extend(encoded(&third));
@@ -138,32 +204,33 @@ fn consecutive_log_records_decode_by_returned_offset() {
 
 #[test]
 fn log_record_rejects_unencodable_values_without_writing() {
-    for (log_datum, status_flags) in [
-        (LogDatum::LogStatus(0b1000), None),
-        (LogDatum::NullValue, Some(0b1_0000)),
-        (
-            LogDatum::BitstringValue {
-                unused_bits: 8,
-                data: vec![0],
-            },
-            None,
-        ),
-        (
-            LogDatum::BitstringValue {
-                unused_bits: 1,
-                data: Vec::new(),
-            },
-            None,
-        ),
+    for log_datum in [
+        LogDatum::BitstringValue {
+            unused_bits: 8,
+            data: vec![0],
+        },
+        LogDatum::BitstringValue {
+            unused_bits: 1,
+            data: Vec::new(),
+        },
         // A value cut short, an opening tag left open, and a stray closing tag.
-        (LogDatum::AnyValue(vec![0x44, 0x00]), None),
-        (LogDatum::AnyValue(vec![0x0E, 0x21, 0x01]), None),
-        (LogDatum::AnyValue(vec![0x21, 0x01, 0x0F]), None),
+        LogDatum::AnyValue(vec![0x44, 0x00]),
+        LogDatum::AnyValue(vec![0x0E, 0x21, 0x01]),
+        LogDatum::AnyValue(vec![0x21, 0x01, 0x0F]),
     ] {
         let mut buf = BytesMut::from(&b"kept"[..]);
-        assert!(encode_log_record(&record(log_datum, status_flags), &mut buf).is_err());
+        assert!(encode_log_record(&record(log_datum, None), &mut buf).is_err());
         assert_eq!(&buf[..], b"kept");
     }
+    // Bits a flags value retains past its defined ones are never sent.
+    let value = record(
+        LogDatum::LogStatus(LogStatus::from_bits_retain(0b1001)),
+        Some(StatusFlags::from_bits_retain(0b1_1000)),
+    );
+    assert_eq!(
+        &encoded(&value)[12..],
+        &[0x1E, 0x0A, 0x05, 0x80, 0x1F, 0x2A, 0x04, 0x80]
+    );
 }
 
 #[test]
@@ -181,6 +248,12 @@ fn log_record_decoder_rejects_malformed_records() {
         [&TIMESTAMP[..], &[0x1E, 0x0A, 0x04, 0x60, 0x1F]].concat(),
         // status-flags that aren't a four-bit BitString.
         [&TIMESTAMP[..], &[0x1E, 0x78, 0x1F, 0x2A, 0x05, 0x20]].concat(),
+        // An INTEGER of nine octets.
+        [
+            &TIMESTAMP[..],
+            &[0x1E, 0x5D, 0x09, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0x1F],
+        ]
+        .concat(),
         // A failure with a third member.
         [
             &TIMESTAMP[..],

@@ -1,6 +1,7 @@
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
 use bacnet_encoding::constructed::{decode_log_multiple_record, decode_log_record};
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogDatum, LogValue};
 use bacnet_types::primitives::{Date, Time};
 use bytes::BytesMut;
@@ -12,7 +13,7 @@ fn served(object: &dyn BACnetObject) -> Vec<Vec<u8>> {
     (0..records.record_count())
         .map(|index| {
             let mut buf = BytesMut::new();
-            records.encode_record(index, &mut buf).unwrap();
+            records.encode_record(index, &mut buf);
             buf.to_vec()
         })
         .collect()
@@ -158,7 +159,10 @@ fn trendlog_disable_logging() {
     .unwrap();
     tl.add_record(make_record(10, 72.5)).unwrap();
     assert_eq!(tl.records().len(), 1);
-    assert_eq!(tl.records()[0].log_datum, LogDatum::LogStatus(0b001));
+    assert_eq!(
+        tl.records()[0].log_datum,
+        LogDatum::LogStatus(LogStatus::LOG_DISABLED)
+    );
 }
 
 #[test]
@@ -175,7 +179,10 @@ fn trendlog_clear_buffer() {
     )
     .unwrap();
     assert_eq!(tl.records().len(), 1);
-    assert_eq!(tl.records()[0].log_datum, LogDatum::LogStatus(0b010));
+    assert_eq!(
+        tl.records()[0].log_datum,
+        LogDatum::LogStatus(LogStatus::BUFFER_PURGED)
+    );
 }
 
 #[test]
@@ -281,7 +288,10 @@ fn trendlog_log_buffer_overflow_stop_when_full() {
     let records = served_records(&tl);
     assert_eq!(records.len(), 3);
     assert_eq!(records[0].log_datum, LogDatum::RealValue(0.0));
-    assert_eq!(records[2].log_datum, LogDatum::LogStatus(0b001));
+    assert_eq!(
+        records[2].log_datum,
+        LogDatum::LogStatus(LogStatus::LOG_DISABLED)
+    );
 }
 
 #[test]
@@ -342,7 +352,7 @@ fn trendlog_log_buffer_various_datum_types() {
 
     let records = [
         (LogDatum::BooleanValue(true), None),
-        (LogDatum::EnumValue(42), Some(0b0100)),
+        (LogDatum::EnumValue(42), Some(StatusFlags::FAULT)),
         (LogDatum::NullValue, None),
         (LogDatum::AnyValue(vec![0x72, 0x00, b'x']), None),
     ]
@@ -520,7 +530,10 @@ fn trendlog_multiple_write_log_enable() {
     // Records should not be added when disabled
     tlm.add_record(make_multiple(10, 72.5)).unwrap();
     assert_eq!(tlm.records().len(), 1);
-    assert_eq!(tlm.records()[0].log_data, LogData::LogStatus(0b001));
+    assert_eq!(
+        tlm.records()[0].log_data,
+        LogData::LogStatus(LogStatus::LOG_DISABLED)
+    );
 }
 
 // ──────────────────────────────────────────────────────────────────────────

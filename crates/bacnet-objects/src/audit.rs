@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
+use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, LogStatus};
 use bacnet_types::constructed::{
     BACnetAuditLogDatum, BACnetAuditLogQueryParameters, BACnetAuditLogRecord,
     BACnetAuditLogRecordResult, BACnetAuditNotification, BACnetObjectSelector, BACnetRecipient,
@@ -112,10 +112,6 @@ pub struct AuditLogObject {
     clock: Option<Arc<dyn ClockReader>>,
 }
 
-const LOG_DISABLED_STATUS: u8 = 0b001;
-#[cfg(test)]
-const BUFFER_PURGED_STATUS: u8 = 0b010;
-
 impl AuditLogObject {
     /// Open or initialize one AuditLog using the explicitly supplied storage.
     pub fn new(
@@ -220,7 +216,7 @@ impl AuditLogObject {
             &mut prospective,
             BACnetAuditLogRecord {
                 timestamp,
-                datum: BACnetAuditLogDatum::LogStatus(BUFFER_PURGED_STATUS),
+                datum: BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED),
             },
         );
         self.commit_and_apply(prospective)?;
@@ -554,9 +550,9 @@ impl BACnetObject for AuditLogObject {
                     BACnetAuditLogRecord {
                         timestamp,
                         datum: BACnetAuditLogDatum::LogStatus(if v {
-                            0
+                            LogStatus::empty()
                         } else {
-                            LOG_DISABLED_STATUS
+                            LogStatus::LOG_DISABLED
                         }),
                     },
                 );

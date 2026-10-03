@@ -5,6 +5,7 @@ use std::sync::Arc;
 use bacnet_encoding::constructed::{
     decode_event_log_record, decode_log_multiple_record, decode_log_record,
 };
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
     LogDatum, LogValue,
@@ -22,8 +23,8 @@ use crate::trend::{TrendLogMultipleObject, TrendLogObject};
 #[path = "log_insertion_tests.rs"]
 mod insertion;
 
-const LOG_DISABLED: u8 = 0b001;
-const BUFFER_PURGED: u8 = 0b010;
+const LOG_DISABLED: LogStatus = LogStatus::LOG_DISABLED;
+const BUFFER_PURGED: LogStatus = LogStatus::BUFFER_PURGED;
 
 #[derive(Clone, Copy, Debug)]
 enum FamilyKind {
@@ -87,19 +88,12 @@ impl Family {
         }
     }
 
-    /// The newest record as ReadRange serves it, decoded back as a Trend Log
-    /// record the way [`Self::records`] maps it.
-    fn served_last(&self) -> BACnetLogRecord {
+    /// The newest record as ReadRange serves it.
+    fn served_last(&self) -> Vec<u8> {
         let records = self.object().log_buffer_internal().unwrap();
         let mut bytes = BytesMut::new();
-        records
-            .encode_record(records.record_count() - 1, &mut bytes)
-            .unwrap();
-        match self {
-            Self::Event(_) => single_event(&decode_event_log_record(&bytes, 0).unwrap().0),
-            Self::Trend(_) => decode_log_record(&bytes, 0).unwrap().0,
-            Self::TrendMultiple(_) => single(&decode_log_multiple_record(&bytes, 0).unwrap().0),
-        }
+        records.encode_record(records.record_count() - 1, &mut bytes);
+        bytes.to_vec()
     }
 
     /// Submit `record` through the trend insertion hook its family serves.
@@ -285,14 +279,35 @@ fn ordinary(hour: u8, value: u64) -> BACnetLogRecord {
     }
 }
 
-fn assert_status(object: &Family, bits: u8) {
+fn assert_status(object: &Family, status: LogStatus) {
     let records = object.records();
     let record = records.back().expect("status record");
     assert_eq!(record.date, valid_frame().local_date);
     assert_eq!(record.time, valid_frame().local_time);
-    assert_eq!(record.log_datum, LogDatum::LogStatus(bits));
+    assert_eq!(record.log_datum, LogDatum::LogStatus(status));
     assert_eq!(record.status_flags, None);
-    assert_eq!(&object.served_last(), record);
+    // On the wire log-disabled, bit 0, is the top bit of the octet
+    // (Clause 20.2.10). Every family puts the log-status [0] choice first
+    // inside its [1] field, right after the 12-octet timestamp.
+    let octet = if status == LOG_DISABLED {
+        0x80
+    } else if status == BUFFER_PURGED {
+        0x40
+    } else if status == LOG_DISABLED | BUFFER_PURGED {
+        0xC0
+    } else if status.is_empty() {
+        0x00
+    } else {
+        panic!("no wire vector for {status}")
+    };
+    let served = object.served_last();
+    assert_eq!(&served[12..], &[0x1E, 0x0A, 0x05, octet, 0x1F], "{status}");
+    let decoded = match object {
+        Family::Event(_) => single_event(&decode_event_log_record(&served, 0).unwrap().0),
+        Family::Trend(_) => decode_log_record(&served, 0).unwrap().0,
+        Family::TrendMultiple(_) => single(&decode_log_multiple_record(&served, 0).unwrap().0),
+    };
+    assert_eq!(&decoded, record);
 }
 
 fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {
@@ -471,7 +486,7 @@ fn enable_and_stop_when_full_transitions_emit_exactly_one_status() {
             .unwrap();
         assert!(transitions.enabled(), "{kind:?}");
         assert_eq!(transitions.total(), 2, "{kind:?}");
-        assert_status(&transitions, 0);
+        assert_status(&transitions, LogStatus::empty());
 
         transitions
             .write(

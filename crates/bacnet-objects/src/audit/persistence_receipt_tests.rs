@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
     BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult,
 };
@@ -96,7 +97,7 @@ fn snapshot_with_record() -> AuditLogSnapshot {
                     hundredths: 0,
                 },
             ),
-            datum: BACnetAuditLogDatum::LogStatus(0),
+            datum: BACnetAuditLogDatum::LogStatus(LogStatus::empty()),
         },
     });
     snapshot

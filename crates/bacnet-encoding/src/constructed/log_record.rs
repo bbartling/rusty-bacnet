@@ -11,13 +11,15 @@
 //! primitive context 2 holding the four-bit Status_Flags may follow.
 
 use super::log_fields::{
-    check_bit_string, constructed, decode_any_value, decode_failure, decode_log_status,
-    decode_timestamp, encode_any_value, encode_failure, encode_log_status, encode_timestamp,
-    primitive,
+    check_bit_string, constructed, decode_any_value, decode_failure, decode_integer,
+    decode_log_status, decode_timestamp, encode_any_value, encode_ctx_integer, encode_failure,
+    encode_log_status, encode_timestamp, primitive,
 };
 use crate::{primitives, tags};
+use bacnet_types::bitstring::status_flags_from_bacnet;
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
 use bacnet_types::error::Error;
+use bacnet_types::primitives::StatusFlags;
 use bytes::BytesMut;
 
 const RECORD: &str = "BACnetLogRecord";
@@ -39,25 +41,23 @@ const STATUS_FLAGS: u8 = 2;
 
 /// Encode one Trend Log record.
 ///
-/// Fails, leaving `buf` unchanged, for a log status wider than three bits,
-/// status flags wider than four, a bit string whose unused-bit count is
-/// above 7 (or nonzero with no data), or an any-value whose bytes aren't
+/// Fails, leaving `buf` unchanged, for a bit string whose unused-bit count
+/// is above 7 (or nonzero with no data) or an any-value whose bytes aren't
 /// complete tagged values.
 pub fn encode_log_record(record: &BACnetLogRecord, buf: &mut BytesMut) -> Result<(), Error> {
     let mut out = BytesMut::new();
     encode_timestamp(&mut out, &record.date, &record.time);
     tags::encode_opening_tag(&mut out, 1);
     match &record.log_datum {
-        LogDatum::LogStatus(status) => encode_log_status(&mut out, LOG_STATUS, *status, RECORD)?,
+        LogDatum::LogStatus(status) => encode_log_status(&mut out, LOG_STATUS, *status),
         LogDatum::BooleanValue(value) => primitives::encode_ctx_boolean(&mut out, BOOLEAN, *value),
         LogDatum::RealValue(value) => primitives::encode_ctx_real(&mut out, REAL, *value),
-        LogDatum::EnumValue(value) => {
-            primitives::encode_ctx_enumerated(&mut out, ENUMERATED, *value)
-        }
+        // An ENUMERATED's contents are encoded as an Unsigned's are.
+        LogDatum::EnumValue(value) => primitives::encode_ctx_unsigned(&mut out, ENUMERATED, *value),
         LogDatum::UnsignedValue(value) => {
             primitives::encode_ctx_unsigned(&mut out, UNSIGNED, *value)
         }
-        LogDatum::SignedValue(value) => primitives::encode_ctx_signed(&mut out, INTEGER, *value),
+        LogDatum::SignedValue(value) => encode_ctx_integer(&mut out, INTEGER, *value),
         LogDatum::BitstringValue { unused_bits, data } => {
             check_bit_string(*unused_bits, data)?;
             primitives::encode_ctx_bit_string(&mut out, BIT_STRING, *unused_bits, data);
@@ -74,12 +74,10 @@ pub fn encode_log_record(record: &BACnetLogRecord, buf: &mut BytesMut) -> Result
     }
     tags::encode_closing_tag(&mut out, 1);
     if let Some(flags) = record.status_flags {
-        if flags & !0b1111 != 0 {
-            return Err(Error::OutOfRange(format!(
-                "{RECORD} status-flags {flags:#010b} exceeds four bits"
-            )));
-        }
-        primitives::encode_ctx_bit_string(&mut out, STATUS_FLAGS, 4, &[flags << 4]);
+        // StatusFlags keeps in-alarm as its highest of four bits, so shifting
+        // puts it in the top bit of the octet, where the wire wants bit 0.
+        let octet = (flags & StatusFlags::all()).bits() << 4;
+        primitives::encode_ctx_bit_string(&mut out, STATUS_FLAGS, 4, &[octet]);
     }
     buf.extend_from_slice(&out);
     Ok(())
@@ -101,7 +99,7 @@ pub fn decode_log_record(data: &[u8], offset: usize) -> Result<(BACnetLogRecord,
         if tag.is_context(STATUS_FLAGS) {
             let (contents, next) = primitive(data, tag, start)?;
             status_flags = match contents {
-                [4, bits] if bits & 0x0f == 0 => Some(bits >> 4),
+                [4, bits] if bits & 0x0f == 0 => Some(status_flags_from_bacnet(&[*bits])),
                 _ => {
                     return Err(Error::decoding(
                         end,
@@ -157,9 +155,9 @@ fn decode_primitive(number: u8, contents: &[u8], offset: usize) -> Result<LogDat
             _ => return Err(Error::decoding(offset, "boolean-value must be one octet")),
         },
         REAL => LogDatum::RealValue(primitives::decode_real(contents)?),
-        ENUMERATED => LogDatum::EnumValue(primitives::decode_unsigned_u32(contents)?),
+        ENUMERATED => LogDatum::EnumValue(primitives::decode_unsigned(contents)?),
         UNSIGNED => LogDatum::UnsignedValue(primitives::decode_unsigned(contents)?),
-        INTEGER => LogDatum::SignedValue(primitives::decode_signed(contents)?),
+        INTEGER => LogDatum::SignedValue(decode_integer(contents, offset)?),
         BIT_STRING => {
             let (unused_bits, data) = primitives::decode_bit_string(contents)?;
             LogDatum::BitstringValue { unused_bits, data }

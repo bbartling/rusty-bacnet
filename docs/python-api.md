@@ -1311,7 +1311,9 @@ and `datum`. `timestamp` is `(date, time)`, where date is
 `(hour, minute, second, hundredths)`, matching the established
 `BACnetTimeStamp.date_time(...).value` convention. Datum mappings use `kind`
 values `"log_status"`, `"audit_notification"`, or `"time_change"`, with a
-same-named payload key. Nested notifications use the canonical field names
+same-named payload key. `log_status` is an int of BACnetLogStatus flags: 1
+log-disabled, 2 buffer-purged, 4 log-interrupted, decoded from the wire's
+bit order (log-disabled in the top bit of the octet). Nested notifications use the canonical field names
 listed above and include every optional key with either its decoded value or
 `None`. ACK projection is all-or-error and never returns a partial mapping.
 

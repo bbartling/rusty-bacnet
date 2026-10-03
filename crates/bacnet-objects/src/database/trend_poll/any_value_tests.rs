@@ -68,13 +68,73 @@ fn read_values_map_to_their_datum_or_an_any_value() {
     }
 }
 
+/// An any-value holds at most `ANY_VALUE_MAX_OCTETS` of encoding; a longer
+/// value logs PROPERTY / VALUE_TOO_LONG so its record stays pageable. A value
+/// no record could carry logs SERVICES / OTHER, so the log never refuses the
+/// poller's record.
+#[test]
+fn oversized_and_uncarriable_values_log_a_failure() {
+    let unsigned = |count| PropertyValue::List(vec![PropertyValue::Unsigned(1); count]);
+    let logged = |value: &PropertyValue| LogDatum::from(property_value_to_log_value(value));
+    // 128 two-octet elements fill the cap exactly; one more is too long.
+    assert_eq!(ANY_VALUE_MAX_OCTETS, 256);
+    assert_eq!(
+        logged(&unsigned(128)),
+        LogDatum::AnyValue([0x21, 0x01].repeat(128))
+    );
+    assert_eq!(
+        logged(&unsigned(129)),
+        failure(ErrorClass::PROPERTY, ErrorCode::VALUE_TOO_LONG)
+    );
+    for value in [
+        // A stray closing tag, a constructed value cut short, and padding
+        // no BIT STRING can have.
+        PropertyValue::ApplicationData(vec![0x21, 0x01, 0x0F]),
+        PropertyValue::ApplicationData(vec![0x0E, 0x21]),
+        PropertyValue::BitString {
+            unused_bits: 9,
+            data: vec![0],
+        },
+    ] {
+        assert_eq!(
+            logged(&value),
+            failure(ErrorClass::SERVICES, ErrorCode::OTHER),
+            "{value:?}"
+        );
+    }
+}
+
+/// Polling an Object_Name longer than the cap logs the failure record,
+/// which ReadRange then serves like any other.
+#[test]
+fn a_polled_value_too_long_to_page_logs_value_too_long() {
+    let (mut db, oid, _, _) = fixture(u32::MAX);
+    db.remove(&target()).unwrap();
+    db.add(Box::new(
+        AnalogValueObject::new(1, "x".repeat(300), 95).unwrap(),
+    ))
+    .unwrap();
+    let mut object = trend(u32::MAX, 16);
+    object.set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
+        object_identifier: target(),
+        property_identifier: P::OBJECT_NAME.to_raw(),
+        property_array_index: None,
+        device_identifier: None,
+    }));
+    db.add(Box::new(object)).unwrap();
+    db.poll_trend_logs();
+    assert_eq!(count(&db, oid), 1);
+    assert_eq!(
+        last_datum(&db, oid),
+        failure(ErrorClass::PROPERTY, ErrorCode::VALUE_TOO_LONG)
+    );
+}
+
 /// The record ReadRange serves for the newest sample of `oid`.
 fn last_served(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<u8> {
     let records = db.get(&oid).unwrap().log_buffer_internal().unwrap();
     let mut bytes = BytesMut::new();
-    records
-        .encode_record(records.record_count() - 1, &mut bytes)
-        .unwrap();
+    records.encode_record(records.record_count() - 1, &mut bytes);
     bytes.to_vec()
 }
 

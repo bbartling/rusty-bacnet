@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use bacnet_encoding::constructed::{
     encode_event_log_record, encode_log_multiple_record, encode_log_record,
 };
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
     LogDatum,
@@ -51,10 +52,20 @@ pub trait LogBufferRecords {
     /// The number of resident records.
     fn record_count(&self) -> usize;
 
-    /// Append the record at `index` (0 is the oldest) to `buf`. Fails,
-    /// leaving `buf` unchanged, for a record its production cannot carry.
-    fn encode_record(&self, index: usize, buf: &mut BytesMut) -> Result<(), Error>;
+    /// Append the record at `index` (0 is the oldest) to `buf`.
+    ///
+    /// Encoding cannot fail: the built-in logs refuse a record that would not
+    /// encode when it is added, and an implementation must keep that promise
+    /// too. Panics when `index` is not below
+    /// [`record_count`](Self::record_count).
+    fn encode_record(&self, index: usize, buf: &mut BytesMut);
 }
+
+/// The largest encoded value, in octets, that the trend pollers log as an
+/// any-value. A larger value (a long string, a big array) is logged as a
+/// PROPERTY / VALUE_TOO_LONG failure instead, so that one Trend Log record
+/// stays small enough for a ReadRange page on a 480-octet APDU.
+pub const ANY_VALUE_MAX_OCTETS: usize = 256;
 
 /// Stable object-owned identity for one resident log record.
 ///
@@ -102,8 +113,8 @@ impl LogRecordIdentity {
 pub(crate) trait ResidentLogRecord: Clone {
     /// The local date and time the record was acquired.
     fn timestamp(&self) -> (Date, Time);
-    /// A log-status record carrying the BACnetLogStatus `bits`.
-    fn log_status(date: Date, time: Time, bits: u8) -> Self;
+    /// A log-status record carrying `status`.
+    fn log_status(date: Date, time: Time, status: LogStatus) -> Self;
     /// Append the record's wire form to `buf`, leaving it unchanged on error.
     fn encode(&self, buf: &mut BytesMut) -> Result<(), Error>;
 }
@@ -113,11 +124,11 @@ impl ResidentLogRecord for BACnetLogRecord {
         (self.date, self.time)
     }
 
-    fn log_status(date: Date, time: Time, bits: u8) -> Self {
+    fn log_status(date: Date, time: Time, status: LogStatus) -> Self {
         Self {
             date,
             time,
-            log_datum: LogDatum::LogStatus(bits),
+            log_datum: LogDatum::LogStatus(status),
             status_flags: None,
         }
     }
@@ -132,11 +143,11 @@ impl ResidentLogRecord for BACnetEventLogRecord {
         (self.date, self.time)
     }
 
-    fn log_status(date: Date, time: Time, bits: u8) -> Self {
+    fn log_status(date: Date, time: Time, status: LogStatus) -> Self {
         Self {
             date,
             time,
-            log_datum: EventLogDatum::LogStatus(bits),
+            log_datum: EventLogDatum::LogStatus(status),
         }
     }
 
@@ -150,11 +161,11 @@ impl ResidentLogRecord for BACnetLogMultipleRecord {
         (self.date, self.time)
     }
 
-    fn log_status(date: Date, time: Time, bits: u8) -> Self {
+    fn log_status(date: Date, time: Time, status: LogStatus) -> Self {
         Self {
             date,
             time,
-            log_data: LogData::LogStatus(bits),
+            log_data: LogData::LogStatus(status),
         }
     }
 
@@ -294,11 +305,13 @@ impl<R: ResidentLogRecord> LogBufferRecords for LogRecordBuffer<R> {
         self.records.len()
     }
 
-    fn encode_record(&self, index: usize, buf: &mut BytesMut) -> Result<(), Error> {
-        self.records
-            .get(index)
-            .ok_or_else(|| Error::OutOfRange(format!("no log record at index {index}")))?
+    fn encode_record(&self, index: usize, buf: &mut BytesMut) {
+        // `LogLifecycle::try_add_ordinary` refuses a record that would not
+        // encode, the lifecycle's own status records always encode, and a
+        // resident record is never changed.
+        self.records[index]
             .encode(buf)
+            .expect("every resident log record encodes");
     }
 }
 

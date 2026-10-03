@@ -54,7 +54,11 @@ impl RangeItems<'_> {
         match self {
             Self::Values(items) => encode_value(buf, &items[index]),
             Self::AuditRecords(records) => encode_audit_log_record(&records[index].record, buf),
-            Self::LogRecords(records) => records.encode_record(index, buf),
+            // A log refuses a record at admission unless it encodes.
+            Self::LogRecords(records) => {
+                records.encode_record(index, buf);
+                Ok(())
+            }
         }
     }
 }

@@ -80,7 +80,7 @@ fn served(obj: &dyn BACnetObject) -> Vec<Vec<u8>> {
     (0..records.record_count())
         .map(|index| {
             let mut bytes = bytes::BytesMut::new();
-            records.encode_record(index, &mut bytes).unwrap();
+            records.encode_record(index, &mut bytes);
             bytes.to_vec()
         })
         .collect()
