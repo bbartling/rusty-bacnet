@@ -22,7 +22,7 @@
 //! | Raw APDU | [`NetworkLayer::start`], [`BACnetRouter::start`](crate::router::BACnetRouter::start) with [`RouterOptions::new`](crate::router::RouterOptions::new) | 256 | None | Full/Closed counted internally; no admission snapshot or depth/high-water tracking |
 //! | Tracked APDU | [`NetworkLayer::start_with_admission`], [`RouterOptions::track_admission`](crate::router::RouterOptions::track_admission) | 256 | 16 queued APDUs per key, defined below | Exact depth/high-water and Full/fairness/Closed totals via [`AdmissionReceiver::counters`] |
 //! | Raw control | [`NetworkLayer::enable_network_control_receiver`], [`RouterOptions::network_control_receiver`](crate::router::RouterOptions::network_control_receiver) | 256, separate from APDUs | None | Full/Closed counted internally; no admission snapshot or depth/high-water tracking |
-//! | Tracked control | [`NetworkLayer::enable_network_control_receiver_with_admission`] | 256, separate from APDUs | None | Exact depth/high-water and Full/Closed totals; fairness always zero |
+//! | Tracked control | [`NetworkLayer::enable_network_control_receiver_with_admission`], [`RouterOptions::network_control_receiver_with_admission`](crate::router::RouterOptions::network_control_receiver_with_admission) | 256, separate from APDUs | None | Exact depth/high-water and Full/Closed totals; fairness always zero |
 //!
 //! Raw receivers remain `tokio::sync::mpsc::Receiver`; tracked receivers are the
 //! additive [`AdmissionReceiver`] alternatives. APDU and control opt-ins are

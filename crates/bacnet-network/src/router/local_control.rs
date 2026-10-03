@@ -95,7 +95,8 @@ impl LocalControl {
 
 impl BACnetRouter {
     /// Sequence assigned to the most recent control offered to the receiver
-    /// from [`RouterOptions::network_control_receiver`](super::RouterOptions::network_control_receiver),
+    /// from [`RouterOptions::network_control_receiver`](super::RouterOptions::network_control_receiver)
+    /// or [`RouterOptions::network_control_receiver_with_admission`](super::RouterOptions::network_control_receiver_with_admission),
     /// including one the receiver dropped. Saturates at `u64::MAX`.
     pub fn network_control_ingress_sequence(&self) -> u64 {
         self.network_control_ingress_sequence.load(Ordering::SeqCst)

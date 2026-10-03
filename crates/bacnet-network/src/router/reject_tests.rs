@@ -1,7 +1,8 @@
 //! Reject addressing and relay at the send-queue level (#1158), where the
-//! port and link MAC each reject goes to are visible, and the rejects that
-//! stop at the router's own network-control consumer (#1175). The loopback
-//! tests in `crate::reject_route_tests` cover the same paths on the wire.
+//! data attributes each reject carries are visible as well as its port and
+//! link MAC, and the rejects that stop at the router's own network-control
+//! consumer (#1175). The loopback tests in `crate::reject_route_tests` cover
+//! the same paths on the wire, port and destination MAC included (#1243).
 
 use std::sync::Arc;
 
@@ -85,31 +86,6 @@ fn send_reject_addresses_the_originator_or_the_local_sender() {
 }
 
 #[test]
-fn send_reject_unicasts_an_originator_on_the_arrival_network_to_its_sadr() {
-    // SNET 1000 is the arrival port's own network (#1174): the originator is
-    // on this link, so the reject carries no DNET and goes to the SADR, not
-    // to the link sender.
-    let origin = address(1000, &[0x50, 0x51]);
-    let [arrival, other] = reject_for(Some(&origin));
-    let (npdu, mac) = only_unicast(arrival);
-    assert_eq!(npdu, [0x01, 0x80, 0x03, 0x01, 0x13, 0x88]);
-    assert_eq!(mac, origin.mac_address);
-    assert!(other.is_empty());
-}
-
-#[test]
-fn send_reject_sends_an_originator_on_another_direct_network_out_its_port() {
-    // SNET 2000 is the network on port 1, so the NPDU looped round to port 0
-    // (#1219). The reject leaves by port 1 as a local unicast to the SADR.
-    let origin = address(2000, &[0x50, 0x51]);
-    let [arrival, other] = reject_for(Some(&origin));
-    assert!(arrival.is_empty(), "nothing goes back to the link sender");
-    let (npdu, mac) = only_unicast(other);
-    assert_eq!(npdu, [0x01, 0x80, 0x03, 0x01, 0x13, 0x88]);
-    assert_eq!(mac, origin.mac_address);
-}
-
-#[test]
 fn send_reject_sends_nothing_when_the_originator_is_the_router() {
     // The router's own MAC on the arrival network, and on the other one: no
     // reject goes out on either port (#1219).
@@ -121,12 +97,6 @@ fn send_reject_sends_nothing_when_the_originator_is_the_router() {
         assert!(arrival.is_empty(), "{origin:?}");
         assert!(other.is_empty(), "{origin:?}");
     }
-
-    // Port 1's MAC paired with network 1000 is some other node on that link.
-    let origin = address(1000, &[PORT_MACS[1]]);
-    let [arrival, other] = reject_for(Some(&origin));
-    assert_eq!(only_unicast(arrival).1, origin.mac_address);
-    assert!(other.is_empty());
 }
 
 /// Direct 1000/0 and 2000/1, and 3000 learned behind [9] on port 0.

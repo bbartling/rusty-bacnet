@@ -868,9 +868,9 @@
    ],
    "positive_tests": [
     "crates/bacnet-network/src/address_bound_tests.rs::router_rejects_an_over_long_address_toward_a_dnet_with_reason_6",
-    "crates/bacnet-network/src/reject_route_tests.rs::{router_rejects_a_relayed_npdu_toward_its_snet_sadr,router_rejects_a_local_npdu_with_a_local_unicast,router_rejects_an_npdu_from_its_own_snet_with_a_local_unicast,router_rejects_an_npdu_from_its_other_snet_out_that_port,router_relays_a_received_reject_to_the_node_its_dnet_names,router_hands_a_reject_addressed_to_itself_to_its_control_receiver,chained_routers_carry_a_reject_back_to_the_originating_device}",
-    "crates/bacnet-network/src/router/reject_tests.rs::{send_reject_addresses_the_originator_or_the_local_sender,send_reject_unicasts_an_originator_on_the_arrival_network_to_its_sadr,send_reject_sends_an_originator_on_another_direct_network_out_its_port,relay_routes_a_received_reject_by_its_dnet,a_reject_addressed_to_the_router_reaches_its_consumer_and_the_table}",
-    "crates/bacnet-network/src/router/options_tests.rs::{one_start_combines_admission_tracking_a_control_policy_and_the_control_receiver,plain_options_start_a_permissive_router_without_a_control_receiver}"
+    "crates/bacnet-network/src/reject_route_tests.rs::{router_rejects_a_relayed_npdu_toward_its_snet_sadr,router_rejects_a_local_npdu_with_a_local_unicast,router_rejects_an_npdu_from_its_own_snet_with_a_local_unicast,router_rejects_a_node_with_its_other_ports_mac_at_that_mac,router_rejects_an_npdu_from_its_other_snet_out_that_port,router_relays_a_received_reject_to_the_node_its_dnet_names,router_hands_a_reject_addressed_to_itself_to_its_control_receiver,chained_routers_carry_a_reject_back_to_the_originating_device}",
+    "crates/bacnet-network/src/router/reject_tests.rs::{send_reject_addresses_the_originator_or_the_local_sender,relay_routes_a_received_reject_by_its_dnet,a_reject_addressed_to_the_router_reaches_its_consumer_and_the_table}",
+    "crates/bacnet-network/src/router/options_tests.rs::{one_start_combines_admission_tracking_a_control_policy_and_the_control_receiver,plain_options_start_a_permissive_router_without_a_control_receiver,tracked_network_control_receiver_counts_its_high_water_mark_and_drops}"
    ],
    "negative_tests": [
     "crates/bacnet-network/src/address_bound_tests.rs::{router_rejects_an_over_long_address_toward_a_dnet_with_reason_6,router_drops_an_over_long_broadcast_or_local_npdu_without_a_reject}",
@@ -904,7 +904,9 @@
     "#1219: a refused NPDU whose SNET is another of the router's directly connected networks gets its reject out the port attached to that network, as a local unicast to the SADR with no DNET (Clause 6.5.4).",
     "#1219: a refused NPDU whose SNET/SADR is the router's own address on one of its networks draws no reject.",
     "#1220: BACnetRouter::start takes RouterOptions, which turns on the tracked local APDU receiver, the RB-09 control policy and authorizer, and the network-control receiver in any combination. A loopback test starts a router with all three.",
-    "#1198: the router drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN on any port before decoding it, counts it in address_length_drops() and sends nothing back. Such a frame is not delivered or forwarded and teaches no route; a test shows a route announced from a 19-octet MAC is not learned."
+    "#1198: the router drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN on any port before decoding it, counts it in address_length_drops() and sends nothing back. Such a frame is not delivered or forwarded and teaches no route; a test shows a route announced from a 19-octet MAC is not learned.",
+    "`RouterOptions::network_control_receiver_with_admission` hands back the router's control receiver as an `AdmissionReceiver`. Its counters give queue depth, high-water mark and full and closed drops; a loopback test fills the 256-control queue.",
+    "Loopback reject tests check the MAC each unicast reject goes to as well as its bytes, through `LoopbackTransport::record_unicast_destinations`. That tells a local reject to the SADR from one to the link sender."
    ]
   },
   {

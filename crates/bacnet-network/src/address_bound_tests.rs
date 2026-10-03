@@ -96,8 +96,12 @@ async fn router_rejects_an_over_long_address_toward_a_dnet_with_reason_6() {
         let mut fixture = RouterFixture::start().await;
 
         fixture.send_from_a(&routed_frame(field, TOO_LONG)).await;
-        let (reject, broadcast) = next_from_router(&mut fixture.from_router_a).await;
-        assert!(!broadcast, "{field}: the reject is a unicast to the sender");
+        let (reject, to) = next_from_router(&mut fixture.from_router_a).await;
+        assert_eq!(
+            to.as_deref(),
+            Some(&[0x0A][..]),
+            "{field}: the reject is a unicast to the sender"
+        );
         assert!(reject.destination.is_none() && reject.source.is_none());
         assert_eq!(
             reject_of(&reject),

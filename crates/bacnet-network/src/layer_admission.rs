@@ -131,7 +131,8 @@ impl QueueAdmissionCounters {
 ///
 /// Created by [`NetworkLayer::start_with_admission`] or
 /// [`NetworkLayer::enable_network_control_receiver_with_admission`], or by
-/// [`RouterOptions::track_admission`](crate::router::RouterOptions::track_admission). The queue
+/// [`RouterOptions::track_admission`](crate::router::RouterOptions::track_admission) or
+/// [`RouterOptions::network_control_receiver_with_admission`](crate::router::RouterOptions::network_control_receiver_with_admission). The queue
 /// holds 256 items; tracked APDUs additionally have a quota of 16 queued items per
 /// source MAC (NetworkLayer) or (ingress port network number, source MAC) (router).
 /// Controls have no per-source quota. **Closed > fairness > Full** determines
