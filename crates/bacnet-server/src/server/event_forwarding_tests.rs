@@ -265,6 +265,13 @@ impl Forwarding {
         self.services.event_suppressions.snapshot()
     }
 
+    /// Give the network layer `number` as the local network's number, as
+    /// the server's startup or its Number worker publishes it.
+    pub(super) fn set_local_network(&self, number: u16) {
+        let state = bacnet_types::network_number::NetworkNumber::configured(number).unwrap();
+        self.services.network.local_network_number().publish(state);
+    }
+
     /// Configure Device `instance` as the local node at `mac`.
     pub(super) async fn bind_device(&self, instance: u32, mac: &[u8]) {
         let device = ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();

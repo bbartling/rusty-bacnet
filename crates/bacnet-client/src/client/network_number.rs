@@ -15,6 +15,7 @@ pub(super) fn spawn<T: TransportPort + 'static>(
             match control {
                 NumberControl::NumberIs { number, flag } => {
                     state.observe(number, flag);
+                    network.local_network_number().publish(state);
                 }
                 NumberControl::WhatIs => {
                     if let Some(npdu) = number_is_reply(state) {
