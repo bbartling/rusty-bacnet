@@ -160,24 +160,24 @@ fn lighting_output_lighting_properties() {
         .unwrap();
     assert_eq!(tv, PropertyValue::Real(0.0));
 
-    // LIGHTING_COMMAND
+    // LIGHTING_COMMAND: operation NONE until written.
     let lc = obj
         .read_property(PropertyIdentifier::LIGHTING_COMMAND, None)
         .unwrap();
-    assert_eq!(lc, PropertyValue::OctetString(vec![]));
+    assert_eq!(lc, PropertyValue::ApplicationData(vec![0x09, 0x00]));
 
-    // Write LIGHTING_COMMAND
+    // Write LIGHTING_COMMAND: STEP_UP (3).
     obj.write_property(
         PropertyIdentifier::LIGHTING_COMMAND,
         None,
-        PropertyValue::OctetString(vec![0x01, 0x02]),
+        PropertyValue::ApplicationData(vec![0x09, 0x03]),
         None,
     )
     .unwrap();
     let lc = obj
         .read_property(PropertyIdentifier::LIGHTING_COMMAND, None)
         .unwrap();
-    assert_eq!(lc, PropertyValue::OctetString(vec![0x01, 0x02]));
+    assert_eq!(lc, PropertyValue::ApplicationData(vec![0x09, 0x03]));
 
     // LIGHTING_COMMAND_DEFAULT_PRIORITY
     let lcdp = obj

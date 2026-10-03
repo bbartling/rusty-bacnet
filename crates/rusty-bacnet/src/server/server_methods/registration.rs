@@ -405,6 +405,10 @@ impl BACnetServer {
     }
 
     /// Add a Lighting Output object to the server (before starting).
+    ///
+    /// Its Lighting_Command reads and writes as `application_data` holding
+    /// the context-tagged BACnetLightingCommand, operation NONE until written
+    /// (#1263). The object stores a command without carrying it out.
     #[pyo3(signature = (instance, name))]
     fn add_lighting_output(&self, instance: u32, name: &str) -> PyResult<()> {
         let obj = LightingOutputObject::new(instance, name).map_err(to_py_err)?;

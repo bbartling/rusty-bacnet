@@ -3843,6 +3843,8 @@
     "crates/bacnet-objects/src/channel/array_tests.rs::{channel_member_writes_keep_execution_delay_the_same_size,channel_number_and_control_groups_writes}",
     "crates/bacnet-objects/src/channel/tests.rs::{channel_replacement_never_shares_a_run_generation,channel_allow_group_delay_inhibit_starts_false_and_takes_boolean_writes}",
     "crates/bacnet-server/src/server/channel_run_tests.rs::{channel_lighting_command_reaches_its_member_without_the_context_0_framing,channel_members_with_equal_delays_go_in_list_order}",
+    "crates/bacnet-server/src/server/lighting_command_member_tests.rs::channel_lighting_command_reaches_a_lighting_output",
+    "crates/bacnet-objects/src/lighting/command_tests.rs::lighting_output_takes_a_lighting_command_a_channel_passes_on",
     "crates/bacnet-server/src/schedule_channel_tests.rs::tick_schedules_runs_the_channel_distributions_its_writes_start",
     "crates/bacnet-server/src/server/channel_remote_write_tests.rs::{channel_writes_a_member_in_another_device_and_waits_for_its_answer,channel_null_a_member_in_another_device_refuses_as_the_wrong_datatype_succeeds,write_group_distribution_writes_a_member_in_another_device,channel_skips_the_rest_of_a_silent_device_for_the_distribution}",
     "crates/bacnet-server/src/server/channel_reliability_tests.rs::{channel_member_that_refuses_is_a_process_error_until_a_good_run_clears_it,channel_reliability_takes_a_client_value_only_out_of_service,channel_reliability_names_the_first_failure_in_write_order}",
@@ -3890,8 +3892,7 @@
     "#1322: a remote member with no fresh binding fails unsent; no targeted Who-Is is sent",
     "#1342: a remote member's datatype isn't read first, so its value goes uncoerced",
     "#1343: members are written one at a time, so an outstanding remote write delays members due after it",
-    "Python configuration of a Channel's members, delays and groups (no issue)",
-    "A Lighting Output keeps `Lighting_Command` as opaque octets, so a lighting-command value sent to it is refused (no issue)"
+    "Python configuration of a Channel's members, delays and groups (no issue)"
    ]
   },
   {
@@ -3913,6 +3914,7 @@
    "positive_tests": [
     "crates/bacnet-server/src/server/write_group_tests.rs::{write_group_plan_matches_group_and_number_per_channel_in_instance_order,write_group_writes_the_channels_in_the_group_with_each_number_at_the_entry_priority,write_group_inhibit_delay_skips_delays_only_where_the_channel_allows_it}",
     "crates/bacnet-server/src/server/channel_remote_write_tests.rs::write_group_distribution_writes_a_member_in_another_device",
+    "crates/bacnet-server/src/server/write_group_tests.rs::write_group_lighting_command_reaches_a_lighting_output",
     "crates/bacnet-services/src/write_group_tests.rs::{vector_annex_f_examples,vector_override_priority_inhibit_and_multiple_entries,vector_lighting_command_value}",
     "crates/bacnet-client/src/client/write_group_tests.rs::write_group_sends_the_request_to_a_device_or_a_broadcast",
     "crates/bacnet-objects/src/channel/tests.rs::channel_allow_group_delay_inhibit_starts_false_and_takes_boolean_writes",
@@ -4234,6 +4236,52 @@
      "Logical blink requests are retained only through a hidden internal observation for deterministic tests; a successful WPM prefix may arm or halt an operation even when a later write fails. There is no Rust/Python host callback, BACnet property, physical output, persistence, or hardware support claim.",
      "#842 removes direct Priority_Array writes: all well-formed values and indices reach read-only denial without completing or advancing an active operation. Valid same/higher Present_Value commands retain the existing halt ordering; lower-priority commands preserve the operation. Explicit elapsed-time tests cover OFF/ON/NULL array refusal without changing slots, blink count or the remaining deadline."
     ]
+  },
+  {
+   "id": "BACNET-12-LIGHTING-OUTPUT-COMMAND",
+   "standard_anchor": "Clauses 12.54, 15.9.1.3 and 21; Tables 12-64, 12-66 and 12-67",
+   "priority": "P1",
+   "summary": "Lighting Output stores and serves Lighting_Command as a typed BACnetLightingCommand checked against its operation, but doesn't carry the command out.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-types/src/constructed/lighting.rs::BACnetLightingCommand",
+    "crates/bacnet-encoding/src/constructed/lighting_command.rs::decode_lighting_command",
+    "crates/bacnet-encoding/src/constructed/lighting_command.rs::encode_lighting_command",
+    "crates/bacnet-encoding/src/constructed/channel_value.rs::channel_value_end",
+    "crates/bacnet-objects/src/lighting/command.rs",
+    "crates/bacnet-objects/src/lighting/mod.rs::LightingOutputObject",
+    "crates/bacnet-server/src/handlers/write_property.rs::decode_write_property_value"
+   ],
+   "positive_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/lighting_command.rs::{lighting_command_golden_vectors_round_trip_for_each_operation,lighting_command_decodes_at_an_offset_and_stops_at_the_next_other_tag,lighting_command_keeps_any_value_that_fits_and_re_encodes_it_shortest}",
+    "crates/bacnet-objects/src/lighting/command_tests.rs::{lighting_output_lighting_command_starts_at_none_and_serves_what_was_written,lighting_output_takes_a_lighting_command_a_channel_passes_on}",
+    "crates/bacnet-server/src/handlers/tests/lighting_command_writes.rs::lighting_command_reads_none_until_written_then_what_was_written",
+    "crates/bacnet-server/src/server/lighting_command_member_tests.rs::channel_lighting_command_reaches_a_lighting_output",
+    "crates/bacnet-server/src/server/write_group_tests.rs::write_group_lighting_command_reaches_a_lighting_output",
+    "crates/rusty-bacnet/tests/test_lighting_command.py::LightingCommandTests::{test_reads_none_until_written,test_commands_write_and_read_in_their_encoding}"
+   ],
+   "negative_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/lighting_command.rs::{lighting_command_cut_inside_a_field_is_a_short_buffer,lighting_command_wrong_tags_and_lengths_are_malformed,lighting_command_fields_too_wide_for_their_type_are_out_of_range}",
+    "crates/bacnet-encoding/src/constructed/tests/channel_value.rs::malformed_lighting_commands_are_refused",
+    "crates/bacnet-objects/src/lighting/command_tests.rs::{lighting_output_lighting_command_refuses_other_datatypes,lighting_output_lighting_command_checks_what_each_operation_takes}",
+    "crates/bacnet-server/src/handlers/tests/lighting_command_writes.rs::{lighting_command_refuses_other_datatypes_and_broken_encodings,lighting_command_checks_the_fields_each_operation_uses}",
+    "crates/rusty-bacnet/tests/test_lighting_command.py::LightingCommandTests::{test_octet_string_is_refused_and_changes_nothing,test_command_its_operation_cannot_take_is_out_of_range}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#lighting--color-5",
+    "docs/python-api.md#lighting"
+   ],
+   "notes": [
+    "Lighting_Command reads operation NONE until written, and a write of NONE is refused with VALUE_OUT_OF_RANGE.",
+    "A field the operation doesn't use is kept as written without a range check. A proprietary operation (256 to 65,535) is taken with no field checked.",
+    "FADE_TO or RAMP_TO without a target level, and a field too wide for its type, are VALUE_OUT_OF_RANGE.",
+    "A value that doesn't open with the operation field is INVALID_DATA_TYPE; octets that aren't exactly one command are INVALID_DATA_ENCODING.",
+    "A Channel value's lighting command is read by the same codec, which also requires its priority to be 1 to 16."
+   ],
+   "gaps": [
+    "A command doesn't fade, ramp, step, blink-warn or start egress: Present_Value, Tracking_Value and In_Progress don't change (no issue)"
+   ]
   },
   {
    "id": "BACNET-12-REFERENCE-PROPERTY-WRITABILITY",

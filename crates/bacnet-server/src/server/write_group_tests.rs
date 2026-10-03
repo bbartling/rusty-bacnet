@@ -431,3 +431,18 @@ async fn write_group_reads_allow_group_delay_inhibit_at_the_write() {
     assert_eq!(status(&h, 4).await, WriteStatus::SUCCESSFUL);
     assert_silent(&h);
 }
+
+#[tokio::test(start_paused = true)]
+async fn write_group_lighting_command_reaches_a_lighting_output() {
+    use crate::server::lighting_command_member_tests::{lighting_command, objects, FRAMED};
+    // CH-1 (channel 11, group 27) passes its value to LO-1's Lighting_Command.
+    let h = Harness::start_with(ServerConfig::default(), objects).await;
+    send(&h, &request(27, 10, vec![entry(11, None, FRAMED.to_vec())])).await;
+    assert_eq!(
+        present_value(&h, 1).await,
+        PropertyValue::ApplicationData(FRAMED.to_vec())
+    );
+    assert_eq!(status(&h, 1).await, WriteStatus::SUCCESSFUL);
+    assert_eq!(lighting_command(&h).await, FRAMED[1..FRAMED.len() - 1]);
+    assert_silent(&h);
+}

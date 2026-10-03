@@ -471,6 +471,8 @@ use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 Each `GroupChannelValue` carries a `u16` channel number, an optional override priority
 (1 to 16) and the already-encoded BACnetChannelValue in `value`: one
 application-tagged primitive, or a context-0 lighting command, with no wrapper tag.
+A lighting command is the `encode_lighting_command` octets between an opening and
+a closing context tag 0; its priority, when present, must be 1 to 16.
 `encode` is fallible: it rejects priorities outside 1 to 16, an empty change list and
 a value that is not a single BACnetChannelValue with `Error::Encoding`, leaving the
 buffer unchanged. `decode` enforces the same rules and rejects trailing data.
@@ -2650,6 +2652,30 @@ A fade time outside 100 to 86,400,000 ms, or a rate or increment outside 0.1
 to 100.0, is refused with VALUE_OUT_OF_RANGE (Clauses 12.54.16 to 12.54.18).
 Both lighting objects serve `Current_Command_Priority`.
 
+Lighting Output's `Lighting_Command` holds a `BACnetLightingCommand`
+(`bacnet_types::constructed`): an operation plus an optional target level, ramp
+rate, step increment, fade time and priority (#1263). It reads operation NONE
+until written. Over the network it travels as the command's context-tagged
+fields, which `bacnet_encoding::constructed::{encode_lighting_command,
+decode_lighting_command}` write and read; locally the object reads as
+`PropertyValue::ApplicationData` holding those octets, and
+`set_lighting_command` and `lighting_command` take and return the typed value.
+Each command is checked against its operation (Clause 12.54, Table 12-67):
+
+- NONE, the reserved operations 11 to 255 and anything past 65,535 are refused.
+- FADE_TO and RAMP_TO need a target level.
+- A field the operation uses must be in range: target level 0.0 to 100.0, fade
+  time (FADE_TO) 100 to 86,400,000 ms, ramp rate (RAMP_TO) and step increment
+  (the four step operations) 0.1 to 100.0, and priority 1 to 16.
+- A field the operation doesn't use is kept as written without a check, and a
+  proprietary operation (256 to 65,535) is taken as it comes.
+
+A refused command is VALUE_OUT_OF_RANGE. Any other datatype, an OCTET STRING
+included, is INVALID_DATA_TYPE, and octets that aren't exactly one command are
+INVALID_DATA_ENCODING. The object stores the command without carrying it out:
+Present_Value, Tracking_Value, In_Progress and the priority array stay as they
+are.
+
 A Channel passes each value written to its Present_Value on to its members
 (Clause 12.53, #1151). Give it the members with `ChannelObject::set_members`,
 each a `BACnetDeviceObjectPropertyReference` to an object in this device or
@@ -2672,6 +2698,8 @@ object, at the priority the write carried, once that member's delay has passed;
 every delay counts from the same start. The value is first converted to the
 datatype of the member property's current value by the Table 12-63 rules (a
 REAL 1.0 reaches a Binary Output as ACTIVE, a Multi-state Output as state 1).
+A lighting command goes only to a `Lighting_Command` member, as the command
+without its context-0 framing, which a Lighting Output takes.
 Readings of the rules: an Unsigned or ENUMERATED value above 2147483647
 fails for INTEGER, REAL and Double members. A REAL or Double going to an
 integer type keeps its integer part if it lies in 0 to 2147483000 (Unsigned,

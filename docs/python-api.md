@@ -2288,6 +2288,23 @@ server.add_lighting_output(instance=1, name="Dimmer")
 server.add_binary_lighting_output(instance=1, name="On/Off Light")
 ```
 
+A Lighting Output's `Lighting_Command` is a BACnetLightingCommand (#1263). It
+reads as `application_data` holding the command's context-tagged fields, and
+reads `b"\x09\x00"` (operation NONE) until written. Write it the same way,
+through `write_property_local` or a client's `write_property`:
+
+```python
+# FADE_TO (1), target level [1] 50.0 % (REAL 0x42480000), priority [5] 8.
+fade = PropertyValue.application_data(bytes.fromhex("0901" "1c42480000" "5908"))
+await client.write_property(address, lighting_output, PropertyIdentifier.LIGHTING_COMMAND, fade)
+```
+
+The object checks each command against its operation as the Rust API notes
+describe: NONE, a reserved operation, FADE_TO or RAMP_TO without a target
+level, or a field out of range raises `BacnetProtocolError` with
+VALUE_OUT_OF_RANGE. An `octet_string`, or any other datatype, raises
+INVALID_DATA_TYPE. The object stores the command without carrying it out.
+
 #### Life Safety
 
 ```python

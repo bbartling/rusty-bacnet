@@ -1,5 +1,6 @@
-//! Member helpers the elevator codecs share: landing calls, landing doors,
-//! assigned landing calls and car call lists.
+//! Member helpers the elevator codecs (landing calls, landing doors,
+//! assigned landing calls and car call lists) and the lighting command codec
+//! share.
 //!
 //! Each decodes primitive Unsigned members and keeps two kinds of failure
 //! apart, so a property writer can answer with the matching Clause 15.9.1.3
