@@ -1,6 +1,8 @@
 use super::super::*;
 use crate::server::test_transport::{SendMode, SentFrame, TestTransport, BIP_LOCAL_MAC};
 use bacnet_encoding::apdu::decode_apdu;
+use bacnet_encoding::constructed::decode_bacnet_property_value;
+use bacnet_encoding::constructed::decode_event_notification;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -267,7 +269,7 @@ pub(super) fn drain_notifications(sent: &StdMutex<Vec<Bytes>>) -> Vec<EventNotif
                 request.service_choice,
                 UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION
             );
-            EventNotificationRequest::decode(&request.service_request)
+            decode_event_notification(&request.service_request)
                 .expect("decode EventNotification service request")
         })
         .collect()
@@ -339,7 +341,7 @@ pub(super) fn assert_committed_reliability_notifications(
         let mut properties = Vec::new();
         let mut position = 0;
         while position < property_values.len() {
-            let (property, next) = BACnetPropertyValue::decode(property_values, position).unwrap();
+            let (property, next) = decode_bacnet_property_value(property_values, position).unwrap();
             assert!(next > position);
             properties.push(property.property_identifier);
             position = next;
@@ -409,7 +411,7 @@ async fn event_enrollment_reliability_omits_only_unavailable_monitored_entries()
     let mut identifiers = Vec::new();
     let mut position = 0;
     while position < property_values.len() {
-        let (property, next) = BACnetPropertyValue::decode(property_values, position).unwrap();
+        let (property, next) = decode_bacnet_property_value(property_values, position).unwrap();
         identifiers.push(property.property_identifier);
         position = next;
     }

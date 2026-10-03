@@ -3,11 +3,13 @@ use bacnet_types::constructed::{BACnetExtendedPropertyState, BACnetProprietaryPr
 
 fn encode_change_of_state(state: BACnetPropertyStates) -> BytesMut {
     let mut encoded = BytesMut::new();
-    NotificationParameters::ChangeOfState {
-        new_state: state,
-        status_flags: StatusFlags::IN_ALARM,
-    }
-    .encode(&mut encoded)
+    encode_notification_parameters(
+        &NotificationParameters::ChangeOfState {
+            new_state: state,
+            status_flags: StatusFlags::IN_ALARM,
+        },
+        &mut encoded,
+    )
     .unwrap();
     encoded
 }
@@ -51,7 +53,7 @@ fn change_of_state_uses_clause_21_property_state_tags() {
     for state in variants {
         let encoded = encode_change_of_state(state.clone());
         assert_eq!(
-            NotificationParameters::decode(&encoded, 0).unwrap(),
+            decode_notification_parameters(&encoded, 0).unwrap(),
             NotificationParameters::ChangeOfState {
                 new_state: state,
                 status_flags: StatusFlags::IN_ALARM,
@@ -70,11 +72,11 @@ fn change_of_state_property_values_enforce_u32() {
 
     for tag in unsigned_tags {
         assert!(
-            NotificationParameters::decode(&raw_change_of_state(tag, &[1, 0, 0, 0, 0]), 0).is_err()
+            decode_notification_parameters(&raw_change_of_state(tag, &[1, 0, 0, 0, 0]), 0).is_err()
         );
-        assert!(NotificationParameters::decode(&raw_change_of_state(tag, &[0xff; 8]), 0).is_err());
+        assert!(decode_notification_parameters(&raw_change_of_state(tag, &[0xff; 8]), 0).is_err());
 
-        let decoded = NotificationParameters::decode(
+        let decoded = decode_notification_parameters(
             &raw_change_of_state(tag, &[0, 0xff, 0xff, 0xff, 0xff]),
             0,
         )
@@ -94,13 +96,13 @@ fn change_of_state_property_values_enforce_u32() {
 #[test]
 fn change_of_state_rejects_malformed_and_reserved_property_states() {
     for content in [&[][..], &[2], &[0, 0]] {
-        assert!(NotificationParameters::decode(&raw_change_of_state(0, content), 0).is_err());
+        assert!(decode_notification_parameters(&raw_change_of_state(0, content), 0).is_err());
     }
     for tag in [26, 29, 35, 61, 62] {
-        assert!(NotificationParameters::decode(&raw_change_of_state(tag, &[0]), 0).is_err());
+        assert!(decode_notification_parameters(&raw_change_of_state(tag, &[0]), 0).is_err());
     }
 
-    let proprietary = NotificationParameters::decode(&raw_change_of_state(64, &[0xde]), 0).unwrap();
+    let proprietary = decode_notification_parameters(&raw_change_of_state(64, &[0xde]), 0).unwrap();
     assert!(matches!(
         proprietary,
         NotificationParameters::ChangeOfState {
@@ -109,7 +111,7 @@ fn change_of_state_rejects_malformed_and_reserved_property_states() {
         } if value.tag() == 64 && value.data() == [0xde] && !value.is_constructed()
     ));
 
-    let proprietary = NotificationParameters::decode(
+    let proprietary = decode_notification_parameters(
         &encode_change_of_state(BACnetPropertyStates::Other(
             BACnetProprietaryPropertyState::constructed(65, vec![0x21, 0x07]).unwrap(),
         )),
@@ -131,7 +133,7 @@ fn change_of_state_rejects_malformed_and_reserved_property_states() {
         status_flags: StatusFlags::empty(),
     };
     let mut untouched = BytesMut::from(&[0xaa][..]);
-    assert!(malformed.encode(&mut untouched).is_err());
+    assert!(encode_notification_parameters(&malformed, &mut untouched).is_err());
     assert_eq!(untouched.as_ref(), &[0xaa]);
 }
 
@@ -147,9 +149,9 @@ fn change_of_state_encoder_accounts_for_outer_nesting_atomically() {
         status_flags: StatusFlags::empty(),
     };
     let mut encoded = BytesMut::new();
-    accepted.encode(&mut encoded).unwrap();
+    encode_notification_parameters(&accepted, &mut encoded).unwrap();
     assert_eq!(
-        NotificationParameters::decode(&encoded, 0).unwrap(),
+        decode_notification_parameters(&encoded, 0).unwrap(),
         accepted
     );
 
@@ -164,15 +166,15 @@ fn change_of_state_encoder_accounts_for_outer_nesting_atomically() {
     };
 
     let mut untouched = BytesMut::from(&[0xaa][..]);
-    assert!(value.encode(&mut untouched).is_err());
+    assert!(encode_notification_parameters(&value, &mut untouched).is_err());
     assert_eq!(untouched.as_ref(), &[0xaa]);
 
     let mut raw = BytesMut::new();
     tags::encode_opening_tag(&mut raw, 1);
     tags::encode_opening_tag(&mut raw, 0);
-    bacnet_encoding::constructed::encode_property_state(&mut raw, &too_deep_state).unwrap();
+    encode_property_state(&mut raw, &too_deep_state).unwrap();
     tags::encode_closing_tag(&mut raw, 0);
     primitives::encode_ctx_bit_string(&mut raw, 1, 4, &[0]);
     tags::encode_closing_tag(&mut raw, 1);
-    assert!(NotificationParameters::decode(&raw, 0).is_err());
+    assert!(decode_notification_parameters(&raw, 0).is_err());
 }

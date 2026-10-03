@@ -637,6 +637,38 @@ fn list_target(
     Ok(current)
 }
 
+/// A reference naming this device stands for the local one, so it matches
+/// the stored member and is added in that form (#1122).
+fn localize_edits(db: &ObjectDatabase, edits: &mut Elements) {
+    if let Elements::References(members) = edits {
+        let local = db.local_device();
+        for member in members {
+            crate::local_references::localize_member(member, local);
+        }
+    }
+}
+
+/// The whole list an AddListElement (`remove` false) or RemoveListElement
+/// request would write back, computed as [`handle_list_element_observed`]
+/// computes it, or `None` when the request would be refused before the
+/// write. The server stages that write when the object saves it (#1270).
+pub(crate) fn edited_list_value(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    remove: bool,
+) -> Option<PropertyValue> {
+    let request = ListElementRequest::decode(service_data).ok()?;
+    let codec = ElementCodec::for_datatype(
+        request.object_identifier.object_type(),
+        request.property_identifier,
+    );
+    let current = list_target(db, &request, codec).ok()?;
+    let mut edits = codec.decode(&request.list_of_elements).ok()?;
+    localize_edits(db, &mut edits);
+    let stored = codec.stored(&current).ok()?;
+    stored.apply(edits, remove).ok().map(|edited| edited.value)
+}
+
 /// Decode once and observe only executable requests. The callback borrows the
 /// pre-image already needed by execution; it never causes a second property read.
 /// Target errors (lookup, read, array index, not a list) keep their precedence
@@ -670,14 +702,7 @@ pub(crate) fn handle_list_element_observed(
     let mut edits = edits.map_err(|position| {
         element_error(ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE, position)
     })?;
-    // A reference naming this device stands for the local one, so it matches
-    // the stored member and is added in that form (#1122).
-    if let Elements::References(members) = &mut edits {
-        let local = db.local_device();
-        for member in members {
-            crate::local_references::localize_member(member, local);
-        }
-    }
+    localize_edits(db, &mut edits);
     // Decode the stored list before observation or mutation.
     let stored = codec.stored(&current)?;
     before(db, &request, Some(&current));

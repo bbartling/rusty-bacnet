@@ -16,6 +16,7 @@ use super::*;
 use crate::handlers::{handle_add_list_element, handle_remove_list_element};
 use crate::server::test_transport::{SendLog, TestTransport};
 use bacnet_encoding::apdu::decode_apdu;
+use bacnet_encoding::constructed::decode_event_notification;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -270,8 +271,7 @@ fn assert_sole_notification(
                 req.service_choice,
                 UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION
             );
-            EventNotificationRequest::decode(&req.service_request)
-                .expect("decode EventNotification")
+            decode_event_notification(&req.service_request).expect("decode EventNotification")
         }
         other => panic!("{context}: expected UnconfirmedRequest, got {other:?}"),
     };

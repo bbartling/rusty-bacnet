@@ -12,7 +12,10 @@ use bacnet_types::MacAddr;
 
 mod persistence_tests;
 mod properties;
+mod recipient_list_restart_tests;
 mod selection_tests;
+mod staging_tests;
+mod storage;
 
 const MINUTE: Duration = Duration::from_secs(60);
 

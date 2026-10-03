@@ -1599,15 +1599,18 @@ server.add_event_enrollment(
 The Notification Forwarder sends each event notification the server
 receives, and each one its own objects address to its Device, on to the
 destinations its Recipient_List and Subscribed_Recipients name. Clients
-configure both lists over the network. `storage_path` keeps
-Subscribed_Recipients in one file, replaced whole when the list changes and
-at most once a minute while its entries count down, so the list and each
-entry's remaining minutes survive a restart; without it the list lives in
-memory only. Every well-formed ConfirmedEventNotification is acknowledged,
-whether or not a forwarder takes it; a retransmission of one already received
-is acknowledged again but not forwarded again. One notification goes to at
-most 64 destinations across all the forwarders, and the server ignores a
-confirmed request sent by broadcast.
+configure both lists over the network. `storage_path` keeps both lists in
+one file, replaced whole when either list changes and at most once a minute
+while the Subscribed_Recipients entries count down, so the lists and each
+entry's remaining minutes survive a restart; without it the lists live in
+memory only. Saves run on a thread of their own, and the server waits for a
+list write's save without holding the object database, so a slow disk does not
+hold up its other requests. A list write whose request fails before it lands
+puts the saved lists back to the served ones at once. Every well-formed
+ConfirmedEventNotification is acknowledged, whether or not a forwarder takes
+it; a retransmission of one already received is acknowledged again but not
+forwarded again. One notification goes to at most 64 destinations across all
+the forwarders, and the server ignores a confirmed request sent by broadcast.
 
 `recipients` seeds Recipient_List with `Destination` mappings, typed as the
 `Destination` TypedDict in the stub. `recipient` takes the mapping the Audit
@@ -1622,7 +1625,10 @@ raises `BacnetProtocolError`. `port_filter` serves Port_Filter as
 `(port_id, enabled)` pairs, one per network port; the server receives through
 Port_ID 0, and without `port_filter` the property is absent. Clients can still
 change both lists over the network, within the limits Port_Filter's writes
-allow. Subscribed_Recipients save failures are counted by
+allow. With `storage_path`, a Recipient_List a client wrote, once saved, wins
+over `recipients`; until a write sets the list, `recipients` applies at every
+start and is not saved.
+Save failures are counted by
 [`forwarder_save_counters()`](#forwarder_save_counters---dictint-forwardersavecounters).
 
 `initial_source` is required and becomes the Alert Enrollment object's
@@ -2223,6 +2229,17 @@ pairs, a format being a BACnetAuthenticationFactorType number or a
 `(format_type, vendor_id, vendor_format)` triple, which a CUSTOM format
 needs; an ill-formed format raises VALUE_OUT_OF_RANGE.
 
+`add_access_point` also takes `number_of_authentication_policies` (1 when
+omitted, never 0) and `priority_for_writing` (16 when omitted, else 1 to
+16), which set rows that are read-only over the network, and
+`supported_authorization_modes`: the BACnetAuthorizationMode numbers the
+application carries out, AUTHORIZE (0) alone when omitted, AUTHORIZE always
+among them, proprietary ones from 64 to 65535. A value outside those raises
+VALUE_OUT_OF_RANGE. Peers pick the policy in effect by writing
+Active_Authentication_Policy (1 to the policy count) and the mode by writing
+Authorization_Mode (one of the supported modes). Another value is refused
+with VALUE_OUT_OF_RANGE, and another datatype with INVALID_DATA_TYPE.
+
 Access Door, Access Point, Credential Data Input and Load Control take
 SubscribeCOV, and each report carries the values their Table 13-1 rows name:
 Door_Alarm_State on a door; Access_Event (in place of Present_Value),
@@ -2664,7 +2681,7 @@ pattern over the Rust struct, like `cov_counters()`.
 
 #### `forwarder_save_counters() -> dict[int, ForwarderSaveCounters]`
 
-Sample each Notification Forwarder's Subscribed_Recipients save counters: a
+Sample each Notification Forwarder's save counters: a
 dict keyed by forwarder instance whose values are `ForwarderSaveCounters`
 dicts with one field, `failed_saves`. It counts the saves the `storage_path`
 file refused: a write that needed one (and failed with DEVICE /
@@ -2675,7 +2692,7 @@ The totals belong to the objects, so they count from registration, saturate at
 
 ```python
 counters = await server.forwarder_save_counters()
-counters[1]["failed_saves"]  # refused saves of forwarder 1's list
+counters[1]["failed_saves"]  # refused saves of forwarder 1's lists
 ```
 
 #### `local_address() -> str`

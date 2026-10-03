@@ -47,6 +47,12 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             // The Table 12-36 required rows #1284 added.
             (P::AUTHENTICATION_STATUS, false, false),
             (P::ACCESS_EVENT_CREDENTIAL, false, false),
+            // The Table 12-36 required rows #1307 added: a client writes the
+            // policy in effect and the mode, the application the other two.
+            (P::ACTIVE_AUTHENTICATION_POLICY, false, true),
+            (P::NUMBER_OF_AUTHENTICATION_POLICIES, false, false),
+            (P::AUTHORIZATION_MODE, false, true),
+            (P::PRIORITY_FOR_WRITING, false, false),
             (P::PROPERTY_LIST, false, false),
         ],
         _ => vec![

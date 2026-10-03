@@ -40,6 +40,7 @@ use super::event_recipient_route::{system_utc_recipient_filter_time, RecipientRo
 use super::event_send::OutboundNotification;
 use super::event_suppression::EventSuppression;
 use super::*;
+use bacnet_encoding::constructed::encode_event_notification;
 use bacnet_objects::notification_class::MAX_RECIPIENT_LIST_DESTINATIONS;
 use bacnet_objects::notification_forwarder::{forwarding_targets, ForwardingInput};
 use bacnet_objects::subscribed_recipients::MAX_SUBSCRIBED_RECIPIENTS;
@@ -283,7 +284,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let mut targeted = notification.clone();
                 targeted.process_identifier = process_identifier;
                 let mut buf = BytesMut::new();
-                targeted.encode(&mut buf).map(|()| buf.freeze())
+                encode_event_notification(&targeted, &mut buf).map(|()| buf.freeze())
             };
             let outbound = OutboundNotification {
                 notification_class: notification.notification_class,

@@ -2650,12 +2650,13 @@ class BACnetServer:
         """Add a Notification Forwarder (Clause 12.51) that sends the event
         notifications this server receives on to its Recipient_List and
         Subscribed_Recipients. ``process_identifier_filter=None`` forwards every
-        process identifier. With ``storage_path``, Subscribed_Recipients is kept
-        in that file across restarts.
+        process identifier. With ``storage_path``, Recipient_List and
+        Subscribed_Recipients are kept in that file across restarts.
 
         ``recipients`` seeds Recipient_List in order; more than 32 destinations,
         or an address MAC past 18 octets, raises BacnetProtocolError, as a
-        client's write would be refused. ``port_filter`` serves Port_Filter as
+        client's write would be refused. With ``storage_path``, a
+        Recipient_List a client wrote, once saved, wins over the seed. ``port_filter`` serves Port_Filter as
         ``(port_id, enabled)`` pairs; the server receives through Port_ID 0.
         Without it Port_Filter is absent."""
     def add_trend_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
@@ -2832,6 +2833,9 @@ class BACnetServer:
         access_doors: Optional[
             list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
         ] = None,
+        number_of_authentication_policies: Optional[int] = None,
+        supported_authorization_modes: Optional[list[int]] = None,
+        priority_for_writing: Optional[int] = None,
     ) -> None:
         """Add an Access Point object to the server (before starting).
 
@@ -2840,6 +2844,18 @@ class BACnetServer:
         whose device isn't a Device object identifier raises ValueError, and a
         reference to anything but an Access Door raises BacnetProtocolError
         with VALUE_OUT_OF_RANGE; either way nothing is registered.
+
+        ``number_of_authentication_policies`` (1 when omitted, never 0) and
+        ``priority_for_writing`` (16 when omitted, else 1 to 16) set
+        Number_Of_Authentication_Policies and Priority_For_Writing, which are
+        read-only over the network. ``supported_authorization_modes`` lists
+        the BACnetAuthorizationMode numbers the application carries out, the
+        values a write of Authorization_Mode can take: AUTHORIZE (0) alone
+        when omitted, and AUTHORIZE must be in any list given; proprietary
+        modes run from 64 to 65535. A value outside those raises
+        BacnetProtocolError with VALUE_OUT_OF_RANGE. Peers write
+        Active_Authentication_Policy (1 to the policy count) and
+        Authorization_Mode (one of the supported modes).
         """
         ...
     def add_access_rights(self, instance: int, name: str) -> None: ...

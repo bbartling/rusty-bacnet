@@ -1,4 +1,6 @@
-use bacnet_objects::audit::{CompletedAuditReceipt, ConfirmedAuditNotificationOutcome};
+use bacnet_objects::audit::{
+    AuditBatchStage, CompletedAuditReceipt, ConfirmedAuditNotificationOutcome, StagedAuditBatch,
+};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::audit::AuditNotificationRequest;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
@@ -7,9 +9,9 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 /// Store one decoded and authorized notification batch in its explicit sink.
 ///
-/// Persistence is synchronous under the database writer in this bounded
-/// receiver foundation. That limits availability to the configured backend's
-/// commit latency, but keeps the durable commit and memory apply atomic.
+/// The commit runs while the caller holds the database, and the batch is in
+/// memory only once it is durable. The bundled server stages the commit
+/// instead, so it runs without the database guard (#1270).
 pub fn handle_audit_notification(
     db: &mut ObjectDatabase,
     sink: ObjectIdentifier,
@@ -74,13 +76,16 @@ pub(crate) fn has_completed_confirmed_audit_receipt(
     storage.has_completed_confirmed_receipt(key, now_unix_millis)
 }
 
-/// Atomically store one confirmed Audit batch and its completed receipt.
-pub(crate) fn handle_confirmed_audit_notification_with_receipt(
+/// Stage one decoded and authorized batch in its sink (#1270): a confirmed
+/// batch with its completed receipt, both stored atomically, or an
+/// unconfirmed one without. The commit is queued so the caller can await it
+/// without the guard and then [finish](finish_audit_notification) the batch.
+pub(crate) fn stage_audit_notification(
     db: &mut ObjectDatabase,
     sink: ObjectIdentifier,
     request: &AuditNotificationRequest,
-    receipt: CompletedAuditReceipt,
-) -> Result<(ConfirmedAuditNotificationOutcome, bool), Error> {
+    receipt: Option<CompletedAuditReceipt>,
+) -> Result<AuditBatchStage, Error> {
     if sink.object_type() != ObjectType::AUDIT_LOG {
         return Err(service_request_denied());
     }
@@ -94,17 +99,23 @@ pub(crate) fn handle_confirmed_audit_notification_with_receipt(
         }
     }
     let apdu_timeout_ms = configured_apdu_timeout(db)?;
-    let object = db
+    let storage = db
         .get_mut(&sink)
-        .expect("sink existence was checked before Device timeout lookup");
-    let storage = object
-        .audit_log_notification_sink_internal()
+        .and_then(|object| object.audit_log_notification_sink_internal())
         .expect("sink capability was checked before Device timeout lookup");
-    storage.store_confirmed_notifications_with_change(
-        &request.notifications,
-        apdu_timeout_ms,
-        receipt,
-    )
+    storage.stage_notification_batch(&request.notifications, apdu_timeout_ms, receipt)
+}
+
+/// Take a batch [`stage_audit_notification`] staged, once its commit has run.
+pub(crate) fn finish_audit_notification(
+    db: &mut ObjectDatabase,
+    sink: ObjectIdentifier,
+    staged: StagedAuditBatch,
+) -> Result<(ConfirmedAuditNotificationOutcome, bool), Error> {
+    db.get_mut(&sink)
+        .and_then(|object| object.audit_log_notification_sink_internal())
+        .ok_or_else(service_request_denied)?
+        .finish_notification_batch(staged)
 }
 
 /// The [selected Device](ObjectDatabase::selected_device)'s APDU_Timeout.

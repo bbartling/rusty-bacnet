@@ -3,6 +3,9 @@
 //! - CreateObject (Clause 15.3)
 //! - DeleteObject (Clause 15.4)
 
+use bacnet_encoding::constructed::{
+    decode_bacnet_property_value_in_list, encode_bacnet_property_value,
+};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_types::enums::ObjectType;
@@ -57,7 +60,7 @@ impl CreateObjectRequest {
         if !self.list_of_initial_values.is_empty() {
             tags::encode_opening_tag(buf, 1);
             for pv in &self.list_of_initial_values {
-                pv.encode(buf);
+                encode_bacnet_property_value(pv, buf);
             }
             tags::encode_closing_tag(buf, 1);
         }
@@ -131,7 +134,7 @@ impl CreateObjectRequest {
                     if values.len() >= MAX_DECODED_ITEMS {
                         return Err(Error::decoding(offset, "CreateObject values exceeds max"));
                     }
-                    let (pv, new_offset) = BACnetPropertyValue::decode_in_list(data, offset, 1)?;
+                    let (pv, new_offset) = decode_bacnet_property_value_in_list(data, offset, 1)?;
                     values.push(pv);
                     offset = new_offset;
                 }
