@@ -9,7 +9,7 @@ use bacnet_objects::audit::{
     AuditLogForwarding, AuditLogNotificationSink, AuditLogStorage, AuditReporterObject,
 };
 use bacnet_objects::clock::ClockReader;
-use bacnet_objects::command::CommandRun;
+use bacnet_objects::command::{CommandRun, WriteFailure};
 use bacnet_objects::durable::DurableWrites;
 use bacnet_objects::event::{
     EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
@@ -30,7 +30,7 @@ use bacnet_objects::traits::{
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
-    BACnetDeviceObjectReference, BACnetLogMultipleRecord, BACnetLogRecord,
+    BACnetDeviceObjectReference, BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord,
     BACnetObjectPropertyReference, BACnetObjectSelector,
 };
 use bacnet_types::enums::{
@@ -279,9 +279,13 @@ impl BACnetObject for SourceReporter {
             .record_command_write_internal(generation, command, success)
     }
 
-    fn complete_command_run_internal(&mut self, generation: u64, all_succeeded: bool) -> bool {
+    fn complete_command_run_internal(
+        &mut self,
+        generation: u64,
+        outcome: Result<(), WriteFailure>,
+    ) -> bool {
         self.wrapped
-            .complete_command_run_internal(generation, all_succeeded)
+            .complete_command_run_internal(generation, outcome)
     }
 
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
@@ -520,6 +524,10 @@ impl BACnetObject for SourceReporter {
 
     fn add_trend_multiple_record(&mut self, record: BACnetLogMultipleRecord) -> Result<(), Error> {
         self.wrapped.add_trend_multiple_record(record)
+    }
+
+    fn add_event_log_record(&mut self, record: BACnetEventLogRecord) -> Result<(), Error> {
+        self.wrapped.add_event_log_record(record)
     }
 
     fn refresh_log_window_internal(&mut self) -> bool {

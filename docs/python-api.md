@@ -1199,8 +1199,9 @@ answers, so the call returns once the request is sent.
 A value outside those rules raises `ValueError`, or `OverflowError` for integers that
 don't fit, before anything is sent.
 
-The Rust server executes WriteGroup on its Channel objects. The Python
-`BACnetServer` can't hold a Channel yet, so it has nothing for a WriteGroup to change.
+The Rust server executes WriteGroup on its Channel objects, whose members may
+be in other devices. The Python `BACnetServer` can't hold a Channel yet, so it
+has nothing for a WriteGroup to change.
 
 ```python
 await client.write_group(
@@ -1687,8 +1688,8 @@ record, one value per member in order; a client reads the records with
   including, the stop. Each is a `((full_year, month, day, day_of_week),
   (hour, minute, second, hundredths))` pair; every field 255 leaves that side
   open, 255 seconds or hundredths count as zero, and any other value that
-  isn't an actual date and time raises VALUE_OUT_OF_RANGE. The log records LOG_DISABLED when the window closes and
-  a clear status when it opens.
+  isn't an actual date and time raises VALUE_OUT_OF_RANGE. The log records
+  LOG_DISABLED when the window closes and a clear status when it opens.
 - `align_intervals=True` makes a polled log acquire on clock boundaries when
   Log_Interval divides a day, `interval_offset` hundredths (modulo the
   interval) after each one. The boundaries follow the device's clock, so
@@ -1710,9 +1711,19 @@ await server.write_property_local(
 Peers can write each of these properties; writing Trigger TRUE to a polled
 log raises NOT_CONFIGURED_FOR_TRIGGERED_LOGGING.
 
-An Audit Log's `storage_path` is application-owned and produces two sibling snapshot files
-with `.slot0` and `.slot1` suffixes. Reuse the same path when reopening that
-Audit Log; the server does not infer a global or working-directory location.
+Once the server runs with a valid Device clock, every event notification it
+generates (an intrinsic or Event Enrollment transition, or an acknowledgment)
+is recorded in each Event Log, stamped with that clock, even when no recipient
+takes it. A client reads the records with `read_range` on `LOG_BUFFER`. Not
+logged: notifications the server receives, notifications about an Event Log
+(from the log or from an Event Enrollment watching one), and transitions whose
+Notification Class is missing or unreadable. The Rust API's Logging & Trending
+notes give the details.
+
+An Audit Log's `storage_path` is application-owned and produces two sibling
+snapshot files with `.slot0` and `.slot1` suffixes. Reuse the same path when
+reopening that Audit Log; the server does not infer a global or
+working-directory location.
 
 #### Inbound Audit notification sink
 

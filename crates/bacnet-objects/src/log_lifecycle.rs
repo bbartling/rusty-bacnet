@@ -129,10 +129,13 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
     /// is judged at the clock's time instead.
     pub(crate) fn try_add_ordinary(&mut self, record: R) -> Result<OrdinaryAdmission, Error> {
         record.encode(&mut BytesMut::new())?;
-        let at = Some(record.timestamp())
-            .filter(|&timestamp| LogWindow::is_moment(timestamp))
-            .or_else(|| valid_timestamp(self.clock).ok());
-        self.refresh_window_at(at);
+        // A log without a window (Trend Log, Event Log) skips this step.
+        if self.window.is_some() {
+            let at = Some(record.timestamp())
+                .filter(|&timestamp| LogWindow::is_moment(timestamp))
+                .or_else(|| valid_timestamp(self.clock).ok());
+            self.refresh_window_at(at);
+        }
         let collecting = *self.enabled && self.window_open();
         let admission = self
             .buffer

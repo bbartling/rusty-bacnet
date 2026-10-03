@@ -72,10 +72,34 @@ fn database(instance: u32) -> ObjectDatabase {
     db
 }
 
-async fn wait_for_records(persistence: &MemoryPersistence, count: usize) {
+/// How many records `logger`'s Audit Log serves.
+async fn served_records(logger: &BACnetServer<bacnet_transport::bip::BipTransport>) -> usize {
+    let db = logger.database().read().await;
+    let count = db
+        .get(&oid(ObjectType::AUDIT_LOG, 1))
+        .unwrap()
+        .read_property(PropertyIdentifier::RECORD_COUNT, None)
+        .unwrap();
+    let bacnet_types::primitives::PropertyValue::Unsigned(count) = count else {
+        panic!("Record_Count is not Unsigned: {count:?}")
+    };
+    usize::try_from(count).unwrap()
+}
+
+/// Wait until `logger`'s Audit Log serves `count` records and storage holds
+/// as many.
+///
+/// Storage alone is not enough. The server commits a received batch with the
+/// database guard dropped and applies it under the guard once the commit
+/// returns (#1270), so for a moment storage holds a record no query sees yet.
+async fn wait_for_records(
+    logger: &BACnetServer<bacnet_transport::bip::BipTransport>,
+    persistence: &MemoryPersistence,
+    count: usize,
+) {
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if persistence.record_count() == count {
+            if served_records(logger).await == count && persistence.record_count() == count {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -315,7 +339,7 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
     assert!(matches!(error, Error::Protocol { class, code }
         if class == ErrorClass::PROPERTY.to_raw() as u32
             && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32));
-    wait_for_records(&persistence, 2).await;
+    wait_for_records(&logger, &persistence, 2).await;
     assert_eq!(
         target
             .database()
@@ -448,7 +472,7 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
             } else {
                 result.unwrap();
             }
-            wait_for_records(&persistence, 3 + step).await;
+            wait_for_records(&logger, &persistence, 3 + step).await;
             let snapshot = persistence.0.lock().unwrap().clone().unwrap();
             let BACnetAuditLogDatum::AuditNotification(record) =
                 &snapshot.records[2 + step].record.datum
@@ -526,7 +550,7 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
                     &[if record_access { 0x19 } else { 0x09 }, 1]
                 );
             }
-            wait_for_records(&persistence, 3 + step).await;
+            wait_for_records(&logger, &persistence, 3 + step).await;
             let snapshot = persistence.0.lock().unwrap().clone().unwrap();
             let BACnetAuditLogDatum::AuditNotification(record) =
                 &snapshot.records[2 + step].record.datum

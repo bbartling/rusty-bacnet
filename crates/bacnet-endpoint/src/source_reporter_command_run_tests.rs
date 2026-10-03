@@ -3,11 +3,11 @@
 //! leave a wrapped Command or Channel busy.
 use super::*;
 use bacnet_objects::channel::ChannelObject;
-use bacnet_objects::command::CommandObject;
+use bacnet_objects::command::{CommandObject, WriteFailure};
 use bacnet_types::constructed::{
     BACnetActionCommand, BACnetActionList, BACnetDeviceObjectPropertyReference,
 };
-use bacnet_types::enums::WriteStatus;
+use bacnet_types::enums::{Reliability, WriteStatus};
 
 #[test]
 fn channel_run_hooks_survive_wrapping() {
@@ -35,12 +35,20 @@ fn channel_run_hooks_survive_wrapping() {
         .unwrap();
     let run = object.take_command_run_internal().unwrap();
     assert_eq!(object.command_generation_internal(), Some(run.generation));
-    assert!(object.complete_command_run_internal(run.generation, false));
+    // The failure's kind reaches the Channel too (#1264).
+    let failure = Err(WriteFailure::Communication);
+    assert!(object.complete_command_run_internal(run.generation, failure));
     assert_eq!(
         object
             .read_property(PropertyIdentifier::WRITE_STATUS, None)
             .unwrap(),
         PropertyValue::Enumerated(WriteStatus::FAILED.to_raw())
+    );
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(Reliability::COMMUNICATION_FAILURE.to_raw())
     );
 }
 
@@ -81,7 +89,7 @@ fn command_run_hooks_and_property_cov_admission_survive_wrapping() {
     let run = object.take_command_run_internal().unwrap();
     assert_eq!(object.command_generation_internal(), Some(run.generation));
     assert!(object.record_command_write_internal(run.generation, 0, true));
-    assert!(object.complete_command_run_internal(run.generation, true));
+    assert!(object.complete_command_run_internal(run.generation, Ok(())));
     for (property, expected) in [
         (PropertyIdentifier::IN_PROCESS, false),
         (PropertyIdentifier::ALL_WRITES_SUCCESSFUL, true),
