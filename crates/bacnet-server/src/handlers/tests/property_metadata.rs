@@ -177,6 +177,7 @@ fn rpm_metadata_selectors_are_exact_for_time_value() {
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::PRIORITY_ARRAY,
             PropertyIdentifier::RELINQUISH_DEFAULT,
+            PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
         ]
     );
     assert_eq!(
@@ -197,6 +198,7 @@ fn rpm_metadata_selectors_are_exact_for_time_value() {
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::PRIORITY_ARRAY,
             PropertyIdentifier::RELINQUISH_DEFAULT,
+            PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
         ]
     );
 }

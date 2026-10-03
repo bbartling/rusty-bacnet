@@ -762,6 +762,8 @@ pub(crate) mod test_forwarder;
 pub(crate) mod test_transport;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod value_cov_increment_tests;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Start a server builder for a caller-supplied transport type, with default configuration and

@@ -169,7 +169,7 @@ fn assert_unique_and_canonical(object: &dyn BACnetObject) {
 fn property_metadata_contract_time_value() {
     let object = TimeValueObject::new(1, "TV-1").unwrap();
     assert_unique_and_canonical(&object);
-    assert_eq!(object.property_metadata().len(), 11);
+    assert_eq!(object.property_metadata().len(), 12);
 
     let present_value = metadata_row(&object, PropertyIdentifier::PRESENT_VALUE);
     assert_eq!(present_value.conformance, PropertyConformance::RequiredRead);
@@ -347,6 +347,7 @@ fn property_metadata_contract_property_list_projection_excludes_property_list() 
                 PropertyIdentifier::RELIABILITY,
                 PropertyIdentifier::PRIORITY_ARRAY,
                 PropertyIdentifier::RELINQUISH_DEFAULT,
+                PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
             ],
         ),
         (
@@ -547,7 +548,7 @@ fn property_metadata_migrated_date_value_exact_required_set() {
     let object = DateValueObject::new(1, "DV-1").unwrap();
     let metadata = object.property_metadata();
     assert!(matches!(metadata, Cow::Borrowed(_)));
-    assert_eq!(metadata.len(), 11);
+    assert_eq!(metadata.len(), 12);
     let required = object.required_properties();
     assert_eq!(
         required.as_ref(),

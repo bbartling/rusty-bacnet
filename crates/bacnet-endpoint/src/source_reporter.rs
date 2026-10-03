@@ -291,7 +291,7 @@ impl BACnetObject for SourceReporter {
         self.wrapped.supports_cov_property(property)
     }
 
-    fn cov_increment(&self) -> Option<f32> {
+    fn cov_increment(&self) -> Option<f64> {
         self.wrapped.cov_increment()
     }
 

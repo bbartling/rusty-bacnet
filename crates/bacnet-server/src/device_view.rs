@@ -356,7 +356,7 @@ impl BACnetObject for DeviceReadView<'_> {
     fn supports_cov_property(&self, property: P) -> bool {
         self.object.supports_cov_property(property)
     }
-    fn cov_increment(&self) -> Option<f32> {
+    fn cov_increment(&self) -> Option<f64> {
         self.object.cov_increment()
     }
     fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {

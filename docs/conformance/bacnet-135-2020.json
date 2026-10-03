@@ -2297,7 +2297,62 @@
     "Timestamps come from the database's Device clock through `clock::stamp_datetime`, shared with the File object's Modification_Date, and are all-unspecified with no clock or before the first change. COV_Period is required by footnote 2 since the object supports COV; it is a constant 0, which Clause 13.1 defines as no periodic notifications, because the server sends none.",
     "Table 13-1 reports Update_Time with the Pulse Converter's Present_Value and Status_Flags, so `cov_reported_properties_default` now lists it (reported, not a trigger). Lighting: Default_Ramp_Rate starts at 100.0 and Default_Step_Increment at 1.0, both inside the 0.1 to 100.0 range Clauses 12.54.17 and 12.54.18 set; they are writable, with matching setters.",
     "Current_Command_Priority reuses `common::current_command_priority`, which the analog, binary and multi-state outputs and values already share; on Binary Lighting Output it stays at the commanding slot through a WARN_RELINQUISH egress, since the slot holds until the egress ends.",
-    "Not covered: Lighting Output's Default_Fade_Time still reads a constant 0, below the 100 ms floor of Clause 12.54.16; Current_Command_Priority and COV_Increment on the commandable value types; periodic COV notifications; feeding Count from Input_Reference."
+    "Not covered: Lighting Output's Default_Fade_Time still reads a constant 0, below the 100 ms floor of Clause 12.54.16; Current_Command_Priority and COV_Increment on the commandable value types; periodic COV notifications; feeding Count from Input_Reference.",
+    "Lighting Output Default_Fade_Time, Current_Command_Priority on the commandable value types and COV_Increment on the numeric value types are covered by BACNET-12-REQUIRED-ROWS-VALUE-PRIORITY-COV-FADE."
+   ]
+  },
+  {
+   "id": "BACNET-12-REQUIRED-ROWS-VALUE-PRIORITY-COV-FADE",
+   "standard_anchor": "Clauses 12.37 to 12.48 with Tables 12-44 to 12-55, footnote 2 (Current_Command_Priority); Clauses 12.39, 12.43 and 12.44 with Tables 12-46, 12-50 and 12-51, footnote 3 (COV_Increment); Clause 13.1 and Table 13-1; Clause 12.54.16 and Table 12-64 (Default_Fade_Time); Clause 21 BACnetOptionalUnsigned; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
+   "priority": "P1",
+   "requirement_summary": "All 12 commandable value types serve Current_Command_Priority: the Priority_Array slot Present_Value comes from, or NULL on Relinquish_Default, read-only. Integer Value and Positive Integer Value serve a writable Unsigned COV_Increment and Large Analog Value a writable Double one, starting at 0; a negative or non-finite Double is refused with PROPERTY / VALUE_OUT_OF_RANGE and any other datatype with INVALID_DATA_TYPE. A SubscribeCOV notification for these three goes out when Present_Value moves from the last reported value by at least COV_Increment. Lighting Output serves a writable Default_Fade_Time, starting at 100 ms, that refuses values outside 100 to 86,400,000 ms with VALUE_OUT_OF_RANGE. The value-type rows are optional rows in Property_List, the property metadata, RPM ALL and OPTIONAL and the PICS; Default_Fade_Time is a required, writable row there.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/value_types/mod.rs",
+    "crates/bacnet-objects/src/value_types/metadata.rs",
+    "crates/bacnet-objects/src/value_types/cov_increment.rs",
+    "crates/bacnet-objects/src/common.rs",
+    "crates/bacnet-objects/src/traits.rs",
+    "crates/bacnet-objects/src/lighting/mod.rs",
+    "crates/bacnet-objects/src/lighting/metadata.rs",
+    "crates/bacnet-server/src/cov/prepare.rs",
+    "crates/bacnet-server/src/cov/sample.rs",
+    "crates/bacnet-server/src/server/cov_notifications.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/value_types/tests/required_rows.rs::every_value_type_serves_current_command_priority_from_its_priority_array",
+    "crates/bacnet-objects/src/value_types/tests/required_rows.rs::integer_value_types_serve_an_unsigned_cov_increment",
+    "crates/bacnet-objects/src/value_types/tests/required_rows.rs::large_analog_value_serves_a_double_cov_increment_and_refuses_bad_ones",
+    "crates/bacnet-server/src/handlers/tests/value_required_rows.rs::rpm_non_numeric_value_selectors_carry_current_command_priority",
+    "crates/bacnet-server/src/handlers/tests/value_required_rows.rs::current_command_priority_reads_over_the_wire_for_every_value_type",
+    "crates/bacnet-server/src/handlers/tests/value_required_rows.rs::integer_value_cov_increment_is_a_writable_unsigned_over_the_wire",
+    "crates/bacnet-server/src/handlers/tests/value_required_rows.rs::large_analog_value_cov_increment_is_a_writable_double_over_the_wire",
+    "crates/bacnet-server/src/handlers/tests/value_required_rows.rs::pics_value_types_list_current_command_priority_and_cov_increment",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/value_units.rs::rpm_numeric_value_selectors_carry_units",
+    "crates/bacnet-server/src/server/value_cov_increment_tests.rs::integer_value_cov_notifies_at_and_above_its_increment_only",
+    "crates/bacnet-server/src/server/value_cov_increment_tests.rs::positive_integer_value_cov_notifies_at_and_above_its_increment_only",
+    "crates/bacnet-server/src/server/value_cov_increment_tests.rs::large_analog_value_cov_notifies_at_and_above_its_double_increment_only",
+    "crates/bacnet-server/src/server/value_cov_increment_tests.rs::numeric_value_cov_increment_written_over_the_wire_takes_effect",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_default_fade_time_starts_at_100_ms_and_takes_writes_within_its_range",
+    "crates/bacnet-server/src/handlers/tests/lighting_required_rows.rs::lighting_output_default_fade_time_over_write_property",
+    "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_duo_write_capabilities_match_dispatch",
+    "crates/bacnet-server/src/pics/property_metadata_tests/lighting.rs::pics_lighting_property_metadata_is_exact"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/value_types/tests/required_rows.rs::non_numeric_value_types_have_no_cov_increment",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_default_fade_time_setter_refuses_values_outside_its_range",
+    "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_output_writes_store_verbatim_with_range_gates"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Added entry for #1111 (Current_Command_Priority, COV_Increment, Default_Fade_Time)"
+   ],
+   "notes": [
+    "Split child of BACNET-12-OBJECT-MODEL for the value-object and lighting items of #1111; each row was checked against its table image. Breaking pre-1.0 wire change: new rows in Property_List, RPM ALL and OPTIONAL and the PICS, and Default_Fade_Time reads 100 by default.",
+    "Current_Command_Priority comes from the value macro through `common::current_command_priority`, as on the analog, binary, multi-state and lighting objects. Its metadata matches Priority_Array: Optional with the Commandable presence condition, read-only.",
+    "The value macro takes an optional `cov_increment` entry naming the table's datatype (`u64` for Unsigned, `f64` for Double), so only the three numeric types serve the row, with a validated `set_cov_increment` setter. Its metadata is the Analog Value shape: Optional, no presence condition, writable.",
+    "`BACnetObject::cov_increment` returns an `f64` so a Double increment is compared without rounding through a REAL; a subscription's own REAL increment widens exactly. Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions report the increment in use as a REAL, so a Large Analog Value increment is narrowed there.",
+    "Default_Fade_Time starts at 100 ms, the shortest fade the range allows, as Default_Ramp_Rate starts at its fastest rate; `set_default_fade_time` applies the same range as WriteProperty. No fade operation runs: Lighting_Command is stored as opaque bytes."
    ]
   },
   {

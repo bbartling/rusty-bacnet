@@ -2228,6 +2228,14 @@ Reliability), or when Present_Stage changes.
 | `ColorObject` | `::new(instance, name)` |
 | `ColorTemperatureObject` | `::new(instance, name)` |
 
+Lighting Output's `Default_Fade_Time`, `Default_Ramp_Rate` and
+`Default_Step_Increment` are writable over the network and through
+`set_default_fade_time`, `set_default_ramp_rate` and
+`set_default_step_increment`. A new object uses 100 ms, 100.0 %/s and 1.0 %.
+A fade time outside 100 to 86,400,000 ms, or a rate or increment outside 0.1
+to 100.0, is refused with VALUE_OUT_OF_RANGE (Clauses 12.54.16 to 12.54.18).
+Both lighting objects serve `Current_Command_Priority`.
+
 #### Life Safety (2)
 
 | Type | Constructor |
@@ -2328,6 +2336,17 @@ Simulated values count the same as the device's.
 | `DatePatternValueObject` | `::new(instance, name)` |
 | `TimePatternValueObject` | `::new(instance, name)` |
 | `DateTimePatternValueObject` | `::new(instance, name)` |
+
+All 12 are commandable. Each serves `Current_Command_Priority`, the
+Priority_Array slot Present_Value comes from, or NULL while
+Relinquish_Default is in effect. Integer, Positive Integer and Large Analog
+Value also serve `Units` (set with `set_units`) and a writable
+`COV_Increment`, Unsigned on the two integer types and Double on Large Analog
+Value, set over the network or with `set_cov_increment`. It starts at 0, so
+every Present_Value change sends a SubscribeCOV notification; a larger
+increment holds notifications back until Present_Value has moved that far from
+the value last reported (Table 13-1). Large Analog Value refuses a negative or
+non-finite increment with VALUE_OUT_OF_RANGE.
 
 ---
 
