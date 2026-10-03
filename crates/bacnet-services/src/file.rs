@@ -1,6 +1,9 @@
 //! AtomicReadFile / AtomicWriteFile services per ASHRAE 135-2020 Clauses 14.1–14.2.
 
-use bacnet_encoding::constructed::tagged::{decode_app_primitive, decode_app_unsigned};
+use bacnet_encoding::constructed::tagged::{
+    decode_app_object_id, decode_app_primitive, decode_app_unsigned, decode_ctx_constructed,
+    next_is_opening,
+};
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::{enums::RejectReason, error::Error};
@@ -8,19 +11,11 @@ use bytes::BytesMut;
 
 use crate::common::MAX_DECODED_ITEMS;
 
-/// The contents of whatever tag starts at `offset`, with the offset past
-/// them. Neither the tag's class nor its number is checked.
-fn checked_slice<'a>(
-    content: &'a [u8],
-    offset: usize,
-    context: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (t, p) = tags::decode_tag(content, offset)?;
-    let end = p + t.length as usize;
-    if end > content.len() {
-        return Err(Error::decoding(p, format!("{context} truncated")));
-    }
-    Ok((&content[p..end], end))
+/// The application-tagged INTEGER at `offset` (a file-start-position or
+/// file-start-record) and the offset past it.
+fn decode_start(data: &[u8], offset: usize, what: &str) -> Result<(i32, usize), Error> {
+    let (octets, end) = decode_app_primitive(data, offset, tags::app_tag::SIGNED, what)?;
+    Ok((primitives::decode_signed(octets)?, end))
 }
 
 // ---------------------------------------------------------------------------
@@ -115,24 +110,16 @@ impl AtomicReadFileRequest {
         }
     }
 
-    /// Decode the request from service-request octets; fails on malformed or truncated input.
+    /// Decode the request from service-request octets; fails on malformed or truncated input,
+    /// and on a member under any tag but its application tag.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
+        let (file_identifier, offset) =
+            decode_app_object_id(data, 0, "AtomicReadFile file-identifier")?;
 
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        let file_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
-
-        let (tag, tag_end) = tags::decode_tag(data, offset)?;
-        let access = if tag.is_opening_tag(0) {
-            let (content, _) = tags::extract_context_value(data, tag_end, 0)?;
-            let (slice, inner) =
-                checked_slice(content, 0, "AtomicReadFile stream file-start-position")?;
-            let file_start_position = primitives::decode_signed(slice)?;
+        let access = if next_is_opening(data, offset, 0)? {
+            let (content, _) = decode_ctx_constructed(data, offset, 0, "AtomicReadFile stream")?;
+            let (file_start_position, inner) =
+                decode_start(content, 0, "AtomicReadFile stream file-start-position")?;
             let (requested_octet_count, _) = decode_app_unsigned::<u32>(
                 content,
                 inner,
@@ -142,11 +129,10 @@ impl AtomicReadFileRequest {
                 file_start_position,
                 requested_octet_count,
             }
-        } else if tag.is_opening_tag(1) {
-            let (content, _) = tags::extract_context_value(data, tag_end, 1)?;
-            let (slice, inner) =
-                checked_slice(content, 0, "AtomicReadFile record file-start-record")?;
-            let file_start_record = primitives::decode_signed(slice)?;
+        } else if next_is_opening(data, offset, 1)? {
+            let (content, _) = decode_ctx_constructed(data, offset, 1, "AtomicReadFile record")?;
+            let (file_start_record, inner) =
+                decode_start(content, 0, "AtomicReadFile record file-start-record")?;
             let (requested_record_count, _) = decode_app_unsigned::<u32>(
                 content,
                 inner,
@@ -197,35 +183,30 @@ impl AtomicWriteFileRequest {
         }
     }
 
-    /// Decode the request from service-request octets; fails on malformed or truncated input.
+    /// Decode the request from service-request octets; fails on malformed or truncated input,
+    /// and on a member under any tag but its application tag.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
+        let (file_identifier, offset) =
+            decode_app_object_id(data, 0, "AtomicWriteFile file-identifier")?;
 
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        let file_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
-
-        let (tag, tag_end) = tags::decode_tag(data, offset)?;
-        let access = if tag.is_opening_tag(0) {
-            let (content, _) = tags::extract_context_value(data, tag_end, 0)?;
-            let (slice, inner) =
-                checked_slice(content, 0, "AtomicWriteFile stream file-start-position")?;
-            let file_start_position = primitives::decode_signed(slice)?;
-            let (slice, _) = checked_slice(content, inner, "AtomicWriteFile stream file-data")?;
-            let file_data = slice.to_vec();
+        let access = if next_is_opening(data, offset, 0)? {
+            let (content, _) = decode_ctx_constructed(data, offset, 0, "AtomicWriteFile stream")?;
+            let (file_start_position, inner) =
+                decode_start(content, 0, "AtomicWriteFile stream file-start-position")?;
+            let (file_data, _) = decode_app_primitive(
+                content,
+                inner,
+                tags::app_tag::OCTET_STRING,
+                "AtomicWriteFile stream file-data",
+            )?;
             FileWriteAccessMethod::Stream {
                 file_start_position,
-                file_data,
+                file_data: file_data.to_vec(),
             }
-        } else if tag.is_opening_tag(1) {
-            let (content, _) = tags::extract_context_value(data, tag_end, 1)?;
-            let (slice, mut inner) =
-                checked_slice(content, 0, "AtomicWriteFile record file-start-record")?;
-            let file_start_record = primitives::decode_signed(slice)?;
+        } else if next_is_opening(data, offset, 1)? {
+            let (content, _) = decode_ctx_constructed(data, offset, 1, "AtomicWriteFile record")?;
+            let (file_start_record, mut inner) =
+                decode_start(content, 0, "AtomicWriteFile record file-start-record")?;
             let (record_count, new_inner) =
                 decode_app_unsigned::<u32>(content, inner, "AtomicWriteFile record record-count")?;
             inner = new_inner;
@@ -239,9 +220,13 @@ impl AtomicWriteFileRequest {
                         reason: RejectReason::MISSING_REQUIRED_PARAMETER.to_raw(),
                     });
                 }
-                let (slice, new_inner) =
-                    checked_slice(content, inner, &format!("AtomicWriteFile record data[{i}]"))?;
-                file_record_data.push(slice.to_vec());
+                let (record, new_inner) = decode_app_primitive(
+                    content,
+                    inner,
+                    tags::app_tag::OCTET_STRING,
+                    &format!("AtomicWriteFile record data[{i}]"),
+                )?;
+                file_record_data.push(record.to_vec());
                 inner = new_inner;
             }
             if inner < content.len() {
@@ -352,13 +337,8 @@ impl AtomicReadFileAck {
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         let (access, access_end) = if tag.is_opening_tag(0) {
             let (content, access_end) = tags::extract_context_value(data, tag_end, 0)?;
-            let (slice, inner) = decode_app_primitive(
-                content,
-                0,
-                tags::app_tag::SIGNED,
-                "AtomicReadFileAck stream file-start-position",
-            )?;
-            let file_start_position = primitives::decode_signed(slice)?;
+            let (file_start_position, inner) =
+                decode_start(content, 0, "AtomicReadFileAck stream file-start-position")?;
             let (slice, inner) = decode_app_primitive(
                 content,
                 inner,
@@ -380,13 +360,8 @@ impl AtomicReadFileAck {
             )
         } else if tag.is_opening_tag(1) {
             let (content, access_end) = tags::extract_context_value(data, tag_end, 1)?;
-            let (slice, mut inner) = decode_app_primitive(
-                content,
-                0,
-                tags::app_tag::SIGNED,
-                "AtomicReadFileAck record file-start-record",
-            )?;
-            let file_start_record = primitives::decode_signed(slice)?;
+            let (file_start_record, mut inner) =
+                decode_start(content, 0, "AtomicReadFileAck record file-start-record")?;
             let (returned_record_count, new_inner) = decode_app_unsigned::<u32>(
                 content,
                 inner,

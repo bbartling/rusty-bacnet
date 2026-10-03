@@ -595,3 +595,61 @@ fn application_enumerated_items_narrow_and_canonical_ones_refuse_padding() {
         (3, 2)
     );
 }
+
+#[test]
+fn fixed_size_application_items_check_their_length_first() {
+    let device_1 = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
+    assert_eq!(
+        decode_app_object_id(&[0xC4, 0x02, 0x00, 0x00, 0x01], 0, W).unwrap(),
+        (device_1, 5)
+    );
+    // Any other length is malformed, even when the data also stops early.
+    assert_eq!(
+        decoding(decode_app_object_id(&[0xC3, 0x02, 0x00, 0x00], 0, W)),
+        (
+            0,
+            "Thing: BACnetObjectIdentifier has 3 contents octets, expected 4".into()
+        )
+    );
+    assert_eq!(
+        decoding(decode_app_object_id(&[0xC5, 0x05, 0x02, 0x00], 0, W)),
+        (
+            0,
+            "Thing: BACnetObjectIdentifier has 5 contents octets, expected 4".into()
+        )
+    );
+    // Four announced and fewer present is a short buffer.
+    assert_eq!(
+        short(decode_app_object_id(&[0xC4, 0x02, 0x00], 0, W)),
+        (5, 3)
+    );
+    // A context tag, or another application type, is refused at the tag.
+    for wrong in [
+        [0x0C, 0x02, 0x00, 0x00, 0x01],
+        [0x24, 0x02, 0x00, 0x00, 0x01],
+    ] {
+        assert_eq!(
+            decoding(decode_app_object_id(&wrong, 0, W)),
+            (
+                0,
+                "Thing: expected application-tagged BACnetObjectIdentifier".into()
+            )
+        );
+    }
+    // A Date is read the same way.
+    assert_eq!(
+        decode_app_fixed(&[0xA4, 0x7E, 0x0A, 0x03, 0xFF], 0, 10, 4, W).unwrap(),
+        (&[0x7E, 0x0A, 0x03, 0xFF][..], 5)
+    );
+    assert_eq!(
+        decoding(decode_app_fixed(&[0xA3, 0x7E, 0x0A, 0x03], 0, 10, 4, W)),
+        (0, "Thing: Date has 3 contents octets, expected 4".into())
+    );
+    assert_eq!(
+        decoding(decode_app_fixed(&[0x11], 0, 1, 1, W)),
+        (
+            0,
+            "Thing: an application-tagged BOOLEAN has no contents to read".into()
+        )
+    );
+}

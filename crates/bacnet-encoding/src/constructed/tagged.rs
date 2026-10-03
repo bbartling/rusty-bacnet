@@ -25,7 +25,9 @@
 //! fixed-size context-tagged member (an object identifier, REAL, BOOLEAN, or
 //! any type read with [`decode_ctx_fixed`]) has its length checked against
 //! the header before its contents are read, so a wrong length is reported as
-//! such even when the data also stops early.
+//! such even when the data also stops early. So does a fixed-size
+//! application-tagged member read with [`decode_app_fixed`] or
+//! [`decode_app_object_id`].
 //!
 //! One exception remains: a member cut short inside a constructed frame is
 //! found while [`decode_ctx_constructed`] or `decode_framed_value` extracts
@@ -514,6 +516,14 @@ pub fn decode_app_primitive<'a>(
     number: u8,
     what: &str,
 ) -> Result<(&'a [u8], usize), Error> {
+    let (t, start) = app_header(data, offset, number, what)?;
+    contents(data, start, t.length)
+}
+
+/// Require an application tag `number` at `offset`; return its header and
+/// the offset of its contents. A BOOLEAN has none (see
+/// [`decode_app_primitive`]).
+fn app_header(data: &[u8], offset: usize, number: u8, what: &str) -> Result<(Tag, usize), Error> {
     if number == tags::app_tag::BOOLEAN {
         return Err(Error::decoding(
             offset,
@@ -527,7 +537,43 @@ pub fn decode_app_primitive<'a>(
             format!("{what}: expected application-tagged {}", app_kind(number)),
         ));
     }
-    contents(data, start, t.length)
+    Ok((t, start))
+}
+
+/// Require an application tag `number` at `offset` holding exactly `octets`
+/// contents octets; return them and the offset past them. As with
+/// [`decode_ctx_fixed`], a header announcing any other length is
+/// [`Error::Decoding`] even when the data also stops early.
+pub fn decode_app_fixed<'a>(
+    data: &'a [u8],
+    offset: usize,
+    number: u8,
+    octets: u32,
+    what: &str,
+) -> Result<(&'a [u8], usize), Error> {
+    let (t, start) = app_header(data, offset, number, what)?;
+    if t.length != octets {
+        return Err(Error::decoding(
+            offset,
+            format!(
+                "{what}: {} has {} contents octets, expected {octets}",
+                app_kind(number),
+                t.length
+            ),
+        ));
+    }
+    contents(data, start, octets)
+}
+
+/// Require an application-tagged object identifier, four contents octets,
+/// at `offset`.
+pub fn decode_app_object_id(
+    data: &[u8],
+    offset: usize,
+    what: &str,
+) -> Result<(ObjectIdentifier, usize), Error> {
+    let (octets, end) = decode_app_fixed(data, offset, tags::app_tag::OBJECT_IDENTIFIER, 4, what)?;
+    Ok((ObjectIdentifier::decode(octets)?, end))
 }
 
 /// Decode one application-tagged Unsigned that fits `T`. Leading zero octets

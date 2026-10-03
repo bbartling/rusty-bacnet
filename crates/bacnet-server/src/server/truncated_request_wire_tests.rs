@@ -27,12 +27,16 @@ fn answers(apdu: &Apdu, invoke_id: u8) -> bool {
     }
 }
 
-/// Send `body` as one confirmed `service` request and return the Error PDU
-/// answering it, failing on any other answer.
-async fn error_for(h: &mut Harness, service: ConfirmedServiceChoice, body: &[u8]) -> ErrorPdu {
+/// Send `body` as one confirmed `service` request and return the APDU
+/// answering it.
+pub(super) async fn answer_to(
+    h: &mut Harness,
+    service: ConfirmedServiceChoice,
+    body: &[u8],
+) -> Apdu {
     h.request(service, BytesMut::from(body)).await;
     let invoke_id = h.invoke_id;
-    let answer = tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let found = {
                 let mut frames = h.frames.lock().unwrap();
@@ -46,8 +50,17 @@ async fn error_for(h: &mut Harness, service: ConfirmedServiceChoice, body: &[u8]
         }
     })
     .await
-    .expect("an answer to the request");
-    match answer {
+    .expect("an answer to the request")
+}
+
+/// Send `body` as one confirmed `service` request and return the Error PDU
+/// answering it, failing on any other answer.
+pub(super) async fn error_for(
+    h: &mut Harness,
+    service: ConfirmedServiceChoice,
+    body: &[u8],
+) -> ErrorPdu {
+    match answer_to(h, service, body).await {
         Apdu::Error(error) => {
             assert_eq!(error.service_choice, service);
             assert_eq!(
