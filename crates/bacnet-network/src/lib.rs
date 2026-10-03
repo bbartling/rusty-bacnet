@@ -11,6 +11,12 @@ pub mod router_table;
 mod address_bound_tests;
 
 #[cfg(test)]
+mod loopback_fixture;
+
+#[cfg(test)]
+mod reject_route_tests;
+
+#[cfg(test)]
 #[path = "rb07_provenance_tests.rs"]
 mod rb07_provenance_tests;
 

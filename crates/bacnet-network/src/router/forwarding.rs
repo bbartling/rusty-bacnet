@@ -1,15 +1,11 @@
-use std::sync::atomic::AtomicU64;
-
 use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
-use bacnet_transport::port::{DataAttribute, ReceivedNpdu};
-use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
+use bacnet_transport::port::DataAttribute;
 use bacnet_types::MacAddr;
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 use tokio::sync::mpsc;
 use tracing::warn;
 
 use super::SendRequest;
-use crate::layer::count_address_length_drop;
 
 /// Build the source NpduAddress for a forwarded message.
 fn build_source(npdu: &Npdu, source_network: u16, source_mac: &[u8]) -> NpduAddress {
@@ -143,70 +139,5 @@ pub(super) fn forward_broadcast(
         }) {
             warn!(%e, "Router dropped broadcast: output channel full");
         }
-    }
-}
-
-/// Refuse an NPDU whose DLEN or SLEN is past `NpduAddress::MAX_MAC_LEN`
-/// (#1141): count it, never forward or deliver it, and reject it when it names
-/// a specific DNET.
-///
-/// Clause 6.4.4's reject reason 6 covers a DADR or SADR of invalid length, and
-/// Clause 6.6.3.5 has a router reject what it cannot relay toward a DNET. The
-/// reject takes the same shape as the unknown-DNET one: a local unicast to the
-/// sender carrying the refused DNET. A global broadcast, like everywhere else
-/// in this router, draws no reject, and an NPDU without a DNET has none to
-/// report, so both are only dropped.
-pub(super) fn refuse_address_too_long(
-    send_tx: &mpsc::Sender<SendRequest>,
-    received: &ReceivedNpdu,
-    dnet: Option<u16>,
-    drops: &AtomicU64,
-) {
-    count_address_length_drop(drops);
-    if let Some(dnet) = dnet.filter(|&dnet| dnet != 0xFFFF) {
-        send_reject(
-            send_tx,
-            &received.source_mac,
-            dnet,
-            RejectMessageReason::ADDRESSING_ERROR,
-            &received.data_attributes,
-        );
-    }
-}
-
-/// Send a Reject-Message-To-Network.
-///
-/// Locally generated, but ingress-triggered: the caller's data attributes
-/// travel with the reject instead of being silently dropped (RB-03).
-pub(super) fn send_reject(
-    send_tx: &mpsc::Sender<SendRequest>,
-    source_mac: &[u8],
-    rejected_network: u16,
-    reason: RejectMessageReason,
-    data_attributes: &[DataAttribute],
-) {
-    let mut payload = BytesMut::with_capacity(3);
-    payload.put_u8(reason.to_raw());
-    payload.put_u16(rejected_network);
-
-    let reject = Npdu {
-        is_network_message: true,
-        message_type: Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()),
-        payload: payload.freeze(),
-        ..Npdu::default()
-    };
-
-    let mut buf = BytesMut::with_capacity(8);
-    if let Err(e) = encode_npdu(&mut buf, &reject) {
-        warn!("Failed to encode Reject-Message NPDU: {e}");
-        return;
-    }
-
-    if let Err(e) = send_tx.try_send(SendRequest::unicast_with_attributes(
-        buf.freeze(),
-        MacAddr::from_slice(source_mac),
-        data_attributes,
-    )) {
-        warn!(%e, "Router dropped reject message: output channel full");
     }
 }
