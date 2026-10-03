@@ -37,8 +37,8 @@ use bacnet_objects::traits::{
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
-    BACnetDeviceObjectReference, BACnetLogRecord, BACnetObjectPropertyReference,
-    BACnetObjectSelector,
+    BACnetDeviceObjectReference, BACnetLogMultipleRecord, BACnetLogRecord,
+    BACnetObjectPropertyReference, BACnetObjectSelector,
 };
 use bacnet_types::enums::{
     AuditLevel, ErrorClass, ErrorCode, EventState, EventType, LifeSafetyOperation, ObjectType,
@@ -649,6 +649,14 @@ impl BACnetObject for Probe {
     }
     fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
         self.called("add_trend_record", (record,));
+        // An error of the wrapped object's own, unlike the default's.
+        Err(Error::Protocol {
+            class: ErrorClass::DEVICE.to_raw() as u32,
+            code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
+        })
+    }
+    fn add_trend_multiple_record(&mut self, record: BACnetLogMultipleRecord) -> Result<(), Error> {
+        self.called("add_trend_multiple_record", (record,));
         // An error of the wrapped object's own, unlike the default's.
         Err(Error::Protocol {
             class: ErrorClass::DEVICE.to_raw() as u32,

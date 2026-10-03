@@ -2,14 +2,13 @@
 
 use std::sync::Arc;
 
-use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, Time};
 
 use crate::clock::ClockReader;
 use crate::common::protocol_error;
-use crate::log_buffer::{LogRecordBuffer, OrdinaryAdmission};
+use crate::log_buffer::{LogRecordBuffer, OrdinaryAdmission, ResidentLogRecord};
 use crate::property_metadata::{
     PropertyConformance::{RequiredRead, RequiredWrite},
     PropertyMetadata,
@@ -28,16 +27,16 @@ pub(crate) const RECORD_COUNT_METADATA: PropertyMetadata =
 pub(crate) const LOG_DISABLED: u8 = 0b001;
 pub(crate) const BUFFER_PURGED: u8 = 0b010;
 
-pub(crate) struct LogLifecycle<'a> {
-    buffer: &'a mut LogRecordBuffer,
+pub(crate) struct LogLifecycle<'a, R: ResidentLogRecord> {
+    buffer: &'a mut LogRecordBuffer<R>,
     enabled: &'a mut bool,
     stop_when_full: &'a mut bool,
     clock: Option<&'a Arc<dyn ClockReader>>,
 }
 
-impl<'a> LogLifecycle<'a> {
+impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
     pub(crate) fn new(
-        buffer: &'a mut LogRecordBuffer,
+        buffer: &'a mut LogRecordBuffer<R>,
         enabled: &'a mut bool,
         stop_when_full: &'a mut bool,
         clock: Option<&'a Arc<dyn ClockReader>>,
@@ -50,10 +49,7 @@ impl<'a> LogLifecycle<'a> {
         }
     }
 
-    pub(crate) fn try_add_ordinary(
-        &mut self,
-        record: BACnetLogRecord,
-    ) -> Result<OrdinaryAdmission, Error> {
+    pub(crate) fn try_add_ordinary(&mut self, record: R) -> Result<OrdinaryAdmission, Error> {
         let admission = self
             .buffer
             .admit_ordinary(record, *self.enabled, *self.stop_when_full);
@@ -127,12 +123,8 @@ impl<'a> LogLifecycle<'a> {
     }
 
     fn insert_status(&mut self, timestamp: (Date, Time), bits: u8) {
-        self.buffer.insert_forced(BACnetLogRecord {
-            date: timestamp.0,
-            time: timestamp.1,
-            log_datum: LogDatum::LogStatus(bits),
-            status_flags: None,
-        });
+        self.buffer
+            .insert_forced(R::log_status(timestamp.0, timestamp.1, bits));
     }
 }
 

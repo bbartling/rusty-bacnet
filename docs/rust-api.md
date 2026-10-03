@@ -1953,13 +1953,22 @@ means the operation was accepted; disabled logging can ignore the ordinary
 record, zero-capacity logging can count without storing it, and a status
 transition can replace it.
 
-The pre-1.0 `BACnetObject` contract now has one fallible `add_trend_record` hook.
-The void hook and `try_add_trend_record_internal` adapter have been replaced.
-Custom implementations return their insertion result directly; the default
-returns `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`. The server poller
-retries failed insertions without advancing its last-log time. Bounded evidence
-is recorded in `BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family conformance
-is not claimed.
+A Trend Log Multiple record is a `BACnetLogMultipleRecord`: a timestamp and a
+`LogData` holding one `LogValue` per Log_DeviceObjectProperty member, a log
+status, or a time change. `TrendLogMultipleObject::add_record` takes one and
+`records()` returns them; Log_Buffer serves each one framed as Clause 21's
+BACnetLogMultipleRecord (`bacnet_encoding::constructed::encode_log_multiple_record`
+and `decode_log_multiple_record`).
+
+The pre-1.0 `BACnetObject` contract has two fallible trend hooks:
+`add_trend_record` for Trend Log records and `add_trend_multiple_record` for
+Trend Log Multiple records. The void hook and `try_add_trend_record_internal`
+adapter have been replaced. Custom implementations return their insertion result
+directly; the default returns `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
+The server poller (`ObjectDatabase::poll_trend_logs`) samples both object types
+and retries failed insertions without advancing its last-log time. Bounded
+evidence is recorded in `BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family
+conformance is not claimed.
 
 #### Audit Reporter configuration and send delay
 
