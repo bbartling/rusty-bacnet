@@ -1,4 +1,8 @@
 use super::recipient::{check_encoded_recipient, write_recipient};
+use super::tagged::{
+    decode_canonical_unsigned, decode_ctx_canonical_unsigned, decode_ctx_character_string,
+    decode_ctx_constructed, decode_ctx_primitive, decode_optional_ctx, expect_end, next_is_opening,
+};
 use super::{decode_recipient, validate_tlv_sequence};
 use crate::{primitives, tags};
 use bacnet_types::constructed::{AuditPropertyReference, BACnetAuditNotification};
@@ -117,33 +121,38 @@ pub fn decode_audit_notification_at(
     mut offset: usize,
 ) -> Result<(BACnetAuditNotification, usize), Error> {
     let source_timestamp = if next_is_opening(data, offset, 0)? {
-        let (timestamp, next) = decode_canonical_timestamp(data, offset, 0, "source-timestamp")?;
+        let (timestamp, next) =
+            decode_canonical_timestamp(data, offset, 0, "AuditNotification source-timestamp")?;
         offset = next;
         Some(timestamp)
     } else {
         None
     };
     let target_timestamp = if next_is_opening(data, offset, 1)? {
-        let (timestamp, next) = decode_canonical_timestamp(data, offset, 1, "target-timestamp")?;
+        let (timestamp, next) =
+            decode_canonical_timestamp(data, offset, 1, "AuditNotification target-timestamp")?;
         offset = next;
         Some(timestamp)
     } else {
         None
     };
 
-    let (source_device, next) = decode_wrapped_recipient(data, offset, 2, "source-device")?;
+    let (source_device, next) =
+        decode_wrapped_recipient(data, offset, 2, "AuditNotification source-device")?;
     offset = next;
 
-    let source_object = if next_is_context(data, offset, 3)? {
-        let (object, next) = decode_object(data, offset, 3, "source-object")?;
-        offset = next;
-        Some(object)
-    } else {
-        None
-    };
+    let (source_object, next) = decode_optional_ctx(
+        data,
+        offset,
+        3,
+        "AuditNotification source-object",
+        decode_object,
+    )?;
+    offset = next;
 
     let operation_offset = offset;
-    let (operation_raw, next) = decode_context_u32(data, offset, 4, "operation")?;
+    let (operation_raw, next) =
+        decode_ctx_canonical_unsigned::<u32>(data, offset, 4, "AuditNotification operation")?;
     if !valid_operation(operation_raw) {
         return Err(Error::decoding(
             operation_offset,
@@ -153,61 +162,60 @@ pub fn decode_audit_notification_at(
     let operation = AuditOperation::from_raw(operation_raw);
     offset = next;
 
-    let source_comment = if next_is_context(data, offset, 5)? {
-        let (comment, next) = decode_string(data, offset, 5, "source-comment")?;
-        offset = next;
-        Some(comment)
-    } else {
-        None
-    };
-    let target_comment = if next_is_context(data, offset, 6)? {
-        let (comment, next) = decode_string(data, offset, 6, "target-comment")?;
-        offset = next;
-        Some(comment)
-    } else {
-        None
-    };
-    let invoke_id = if next_is_context(data, offset, 7)? {
-        let (value, next) = decode_context_u8(data, offset, 7, "invoke-id")?;
-        offset = next;
-        Some(value)
-    } else {
-        None
-    };
-    let source_user_id = if next_is_context(data, offset, 8)? {
-        let (value, next) = decode_context_u16(data, offset, 8, "source-user-id")?;
-        offset = next;
-        Some(value)
-    } else {
-        None
-    };
-    let source_user_role = if next_is_context(data, offset, 9)? {
-        let (value, next) = decode_context_u8(data, offset, 9, "source-user-role")?;
-        offset = next;
-        Some(value)
-    } else {
-        None
-    };
-
-    let (target_device, next) = decode_wrapped_recipient(data, offset, 10, "target-device")?;
+    let (source_comment, next) = decode_optional_ctx(
+        data,
+        offset,
+        5,
+        "AuditNotification source-comment",
+        decode_ctx_character_string,
+    )?;
+    let (target_comment, next) = decode_optional_ctx(
+        data,
+        next,
+        6,
+        "AuditNotification target-comment",
+        decode_ctx_character_string,
+    )?;
+    let (invoke_id, next) = decode_optional_ctx(
+        data,
+        next,
+        7,
+        "AuditNotification invoke-id",
+        decode_ctx_canonical_unsigned::<u8>,
+    )?;
+    let (source_user_id, next) = decode_optional_ctx(
+        data,
+        next,
+        8,
+        "AuditNotification source-user-id",
+        decode_ctx_canonical_unsigned::<u16>,
+    )?;
+    let (source_user_role, next) = decode_optional_ctx(
+        data,
+        next,
+        9,
+        "AuditNotification source-user-role",
+        decode_ctx_canonical_unsigned::<u8>,
+    )?;
     offset = next;
 
-    let target_object = if next_is_context(data, offset, 11)? {
-        let (object, next) = decode_object(data, offset, 11, "target-object")?;
-        offset = next;
-        Some(object)
-    } else {
-        None
-    };
+    let (target_device, next) =
+        decode_wrapped_recipient(data, offset, 10, "AuditNotification target-device")?;
+    offset = next;
+
+    let (target_object, next) = decode_optional_ctx(
+        data,
+        offset,
+        11,
+        "AuditNotification target-object",
+        decode_object,
+    )?;
+    offset = next;
     let target_property = if next_is_opening(data, offset, 12)? {
-        let (body, next) = decode_constructed_body(data, offset, 12, "target-property")?;
+        const WHAT: &str = "AuditNotification target-property";
+        let (body, next) = decode_ctx_constructed(data, offset, 12, WHAT)?;
         let (property, property_end) = decode_property_reference(body)?;
-        if property_end != body.len() {
-            return Err(Error::decoding(
-                offset,
-                "AuditNotification target-property has trailing fields",
-            ));
-        }
+        expect_end(body, property_end, offset, WHAT)?;
         let mut canonical = BytesMut::new();
         encode_property_reference(&mut canonical, &property);
         if canonical.as_ref() != body {
@@ -221,29 +229,30 @@ pub fn decode_audit_notification_at(
     } else {
         None
     };
-    let target_priority = if next_is_context(data, offset, 13)? {
-        let priority_offset = offset;
-        let (priority, next) = decode_context_u8(data, offset, 13, "target-priority")?;
-        if !(1..=16).contains(&priority) {
-            return Err(Error::decoding(
-                priority_offset,
-                format!("AuditNotification target-priority {priority} is outside 1..=16"),
-            ));
-        }
-        offset = next;
-        Some(priority)
-    } else {
-        None
-    };
+    let priority_offset = offset;
+    let (target_priority, next) = decode_optional_ctx(
+        data,
+        offset,
+        13,
+        "AuditNotification target-priority",
+        decode_ctx_canonical_unsigned::<u8>,
+    )?;
+    if let Some(priority) = target_priority.filter(|priority| !(1..=16).contains(priority)) {
+        return Err(Error::decoding(
+            priority_offset,
+            format!("AuditNotification target-priority {priority} is outside 1..=16"),
+        ));
+    }
+    offset = next;
     let target_value = if next_is_opening(data, offset, 14)? {
-        let (value, next) = decode_raw_value(data, offset, 14, "target-value")?;
+        let (value, next) = decode_raw_value(data, offset, 14, "AuditNotification target-value")?;
         offset = next;
         Some(value)
     } else {
         None
     };
     let current_value = if next_is_opening(data, offset, 15)? {
-        let (value, next) = decode_raw_value(data, offset, 15, "current-value")?;
+        let (value, next) = decode_raw_value(data, offset, 15, "AuditNotification current-value")?;
         offset = next;
         Some(value)
     } else {
@@ -293,14 +302,19 @@ fn encode_property_reference(buf: &mut BytesMut, property: &AuditPropertyReferen
 }
 
 fn decode_property_reference(data: &[u8]) -> Result<(AuditPropertyReference, usize), Error> {
-    let (property, mut offset) = decode_context_u32(data, 0, 0, "target-property identifier")?;
-    let property_array_index = if next_is_context(data, offset, 1)? {
-        let (index, next) = decode_context_u64(data, offset, 1, "target-property array-index")?;
-        offset = next;
-        Some(index)
-    } else {
-        None
-    };
+    let (property, offset) = decode_ctx_canonical_unsigned::<u32>(
+        data,
+        0,
+        0,
+        "AuditNotification target-property identifier",
+    )?;
+    let (property_array_index, offset) = decode_optional_ctx(
+        data,
+        offset,
+        1,
+        "AuditNotification target-property array-index",
+        decode_ctx_canonical_unsigned::<u64>,
+    )?;
     Ok((
         AuditPropertyReference {
             property_identifier: bacnet_types::enums::PropertyIdentifier::from_raw(property),
@@ -310,133 +324,34 @@ fn decode_property_reference(data: &[u8]) -> Result<(AuditPropertyReference, usi
     ))
 }
 
-fn next_is_context(data: &[u8], offset: usize, number: u8) -> Result<bool, Error> {
-    if offset == data.len() {
-        return Ok(false);
-    }
-    let (tag, _) = tags::decode_tag(data, offset)?;
-    Ok(tag.is_context(number))
-}
-
-fn next_is_opening(data: &[u8], offset: usize, number: u8) -> Result<bool, Error> {
-    if offset == data.len() {
-        return Ok(false);
-    }
-    let (tag, _) = tags::decode_tag(data, offset)?;
-    Ok(tag.is_opening_tag(number))
-}
-
-fn decode_context_u32(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    field: &str,
-) -> Result<(u32, usize), Error> {
-    let (contents, next) =
-        decode_context(data, offset, tag, &format!("AuditNotification {field}"))?;
-    let raw = decode_canonical_unsigned(contents, offset, field)?;
-    let value = u32::try_from(raw)
-        .map_err(|_| Error::decoding(offset, format!("AuditNotification {field} exceeds u32")))?;
-    Ok((value, next))
-}
-
-fn decode_context_u64(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    field: &str,
-) -> Result<(u64, usize), Error> {
-    let (contents, next) =
-        decode_context(data, offset, tag, &format!("AuditNotification {field}"))?;
-    Ok((decode_canonical_unsigned(contents, offset, field)?, next))
-}
-
-fn decode_context_u16(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    field: &str,
-) -> Result<(u16, usize), Error> {
-    let (contents, next) =
-        decode_context(data, offset, tag, &format!("AuditNotification {field}"))?;
-    let raw = decode_canonical_unsigned(contents, offset, field)?;
-    let value = u16::try_from(raw)
-        .map_err(|_| Error::decoding(offset, format!("AuditNotification {field} exceeds u16")))?;
-    Ok((value, next))
-}
-
-fn decode_context_u8(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    field: &str,
-) -> Result<(u8, usize), Error> {
-    let (contents, next) =
-        decode_context(data, offset, tag, &format!("AuditNotification {field}"))?;
-    let raw = decode_canonical_unsigned(contents, offset, field)?;
-    let value = u8::try_from(raw)
-        .map_err(|_| Error::decoding(offset, format!("AuditNotification {field} exceeds u8")))?;
-    Ok((value, next))
-}
-
+/// An object identifier under primitive context tag `tag`. Truncated
+/// contents fail before the length is checked, so a cut-short field of any
+/// length is a short buffer.
 fn decode_object(
     data: &[u8],
     offset: usize,
     tag: u8,
-    field: &str,
+    what: &str,
 ) -> Result<(ObjectIdentifier, usize), Error> {
-    let (contents, next) =
-        decode_context(data, offset, tag, &format!("AuditNotification {field}"))?;
+    let (contents, next) = decode_ctx_primitive(data, offset, tag, what)?;
     Ok((ObjectIdentifier::decode(contents)?, next))
-}
-
-fn decode_string(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    field: &str,
-) -> Result<(String, usize), Error> {
-    let (contents, next) =
-        decode_context(data, offset, tag, &format!("AuditNotification {field}"))?;
-    Ok((primitives::decode_character_string(contents)?, next))
-}
-
-fn decode_constructed_body<'a>(
-    data: &'a [u8],
-    offset: usize,
-    tag_number: u8,
-    field: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (opening, body_start) = tags::decode_tag(data, offset)?;
-    if !opening.is_opening_tag(tag_number) {
-        return Err(Error::decoding(
-            offset,
-            format!("AuditNotification {field} expected opening tag [{tag_number}]"),
-        ));
-    }
-    tags::extract_context_value(data, body_start, tag_number)
 }
 
 fn decode_wrapped_recipient(
     data: &[u8],
     offset: usize,
     tag_number: u8,
-    field: &str,
+    what: &str,
 ) -> Result<(bacnet_types::constructed::BACnetRecipient, usize), Error> {
-    let (body, next) = decode_constructed_body(data, offset, tag_number, field)?;
+    let (body, next) = decode_ctx_constructed(data, offset, tag_number, what)?;
     let (recipient, recipient_end) = decode_recipient(body, 0)?;
-    if recipient_end != body.len() {
-        return Err(Error::decoding(
-            offset,
-            format!("AuditNotification {field} has trailing fields"),
-        ));
-    }
+    expect_end(body, recipient_end, offset, what)?;
     let mut canonical = BytesMut::new();
     write_recipient(&mut canonical, &recipient);
     if canonical.as_ref() != body {
         return Err(Error::decoding(
             offset,
-            format!("AuditNotification {field} is not canonically encoded"),
+            format!("{what} is not canonically encoded"),
         ));
     }
     Ok((recipient, next))
@@ -446,7 +361,7 @@ fn decode_canonical_timestamp(
     data: &[u8],
     offset: usize,
     tag_number: u8,
-    field: &str,
+    what: &str,
 ) -> Result<(bacnet_types::primitives::BACnetTimeStamp, usize), Error> {
     let (timestamp, next) = primitives::decode_timestamp(data, offset, tag_number)?;
     let mut canonical = BytesMut::new();
@@ -454,7 +369,7 @@ fn decode_canonical_timestamp(
     if canonical.as_ref() != &data[offset..next] {
         return Err(Error::decoding(
             offset,
-            format!("AuditNotification {field} is not canonically encoded"),
+            format!("{what} is not canonically encoded"),
         ));
     }
     Ok((timestamp, next))
@@ -464,92 +379,51 @@ fn decode_raw_value(
     data: &[u8],
     offset: usize,
     tag_number: u8,
-    field: &str,
+    what: &str,
 ) -> Result<(Vec<u8>, usize), Error> {
-    let (value, next) = decode_constructed_body(data, offset, tag_number, field)?;
-    validate_tlv_sequence(value, &format!("AuditNotification {field}"))?;
+    let (value, next) = decode_ctx_constructed(data, offset, tag_number, what)?;
+    validate_tlv_sequence(value, what)?;
     Ok((value.to_vec(), next))
 }
 
 fn decode_error(data: &[u8], offset: usize) -> Result<((ErrorClass, ErrorCode), usize), Error> {
-    let (body, next) = decode_constructed_body(data, offset, 16, "result")?;
-    let (class, body_offset) = decode_app_enumerated_u16(body, 0, "result error-class")?;
-    let (code, body_end) = decode_app_enumerated_u16(body, body_offset, "result error-code")?;
-    if body_end != body.len() {
-        return Err(Error::decoding(
-            offset,
-            "AuditNotification result has trailing fields",
-        ));
-    }
+    const WHAT: &str = "AuditNotification result";
+    let (body, next) = decode_ctx_constructed(data, offset, 16, WHAT)?;
+    let (class, body_offset) =
+        decode_app_enumerated_u16(body, 0, "AuditNotification result error-class")?;
+    let (code, body_end) =
+        decode_app_enumerated_u16(body, body_offset, "AuditNotification result error-code")?;
+    expect_end(body, body_end, offset, WHAT)?;
     Ok((
         (ErrorClass::from_raw(class), ErrorCode::from_raw(code)),
         next,
     ))
 }
 
+/// An application-tagged ENUMERATED in its shortest encoding that fits a
+/// u16. Contents cut short by the end of the data are malformed here, not a
+/// short buffer.
 fn decode_app_enumerated_u16(
     data: &[u8],
     offset: usize,
-    field: &str,
+    what: &str,
 ) -> Result<(u16, usize), Error> {
     let (tag, contents_start) = tags::decode_tag(data, offset)?;
     if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
         return Err(Error::decoding(
             offset,
-            format!("AuditNotification {field} expected application Enumerated"),
+            format!("{what} expected application Enumerated"),
         ));
     }
-    let end = contents_start
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| {
-            Error::decoding(contents_start, "AuditNotification result length overflow")
-        })?;
+    let end = contents_start.saturating_add(tag.length as usize);
     if end > data.len() {
         return Err(Error::decoding(
             contents_start,
-            format!("AuditNotification {field} is truncated"),
+            format!("{what} is truncated"),
         ));
     }
-    let raw = decode_canonical_unsigned(&data[contents_start..end], offset, field)?;
-    let value = u16::try_from(raw)
-        .map_err(|_| Error::decoding(offset, format!("AuditNotification {field} exceeds u16")))?;
+    let raw = decode_canonical_unsigned(&data[contents_start..end], offset, what)?;
+    let value =
+        u16::try_from(raw).map_err(|_| Error::decoding(offset, format!("{what} exceeds u16")))?;
     Ok((value, end))
-}
-
-fn decode_context<'a>(
-    data: &'a [u8],
-    offset: usize,
-    expected_tag: u8,
-    field: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (tag, contents_start) = tags::decode_tag(data, offset)?;
-    if !tag.is_context(expected_tag) {
-        return Err(Error::decoding(
-            offset,
-            format!("{field} expected context tag [{expected_tag}]"),
-        ));
-    }
-    let end = contents_start
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| Error::decoding(contents_start, format!("{field} length overflow")))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok((&data[contents_start..end], end))
-}
-
-fn decode_canonical_unsigned(data: &[u8], offset: usize, field: &str) -> Result<u64, Error> {
-    if data.is_empty() {
-        return Err(Error::decoding(
-            offset,
-            format!("{field} must contain at least one octet"),
-        ));
-    }
-    if data.len() > 1 && data.first() == Some(&0) {
-        return Err(Error::decoding(
-            offset,
-            format!("{field} must use the shortest Unsigned/Enumerated encoding"),
-        ));
-    }
-    primitives::decode_unsigned(data)
 }

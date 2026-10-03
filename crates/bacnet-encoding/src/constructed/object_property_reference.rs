@@ -36,6 +36,7 @@ use crate::primitives;
 use crate::tags;
 
 use super::decode_dopr_body;
+use super::tagged::{decode_ctx_constructed, expect_end};
 
 const WHAT: &str = "BACnetObjectPropertyReference";
 
@@ -70,12 +71,7 @@ pub fn decode_object_property_reference(
     data: &[u8],
 ) -> Result<BACnetObjectPropertyReference, Error> {
     let (dopr, end) = decode_dopr_body(data, 0, WHAT)?;
-    if end != data.len() {
-        return Err(Error::decoding(
-            end,
-            format!("{WHAT}: trailing content after the reference members"),
-        ));
-    }
+    expect_end(data, end, end, WHAT)?;
     if dopr.device_identifier.is_some() {
         return Err(Error::decoding(
             0,
@@ -101,20 +97,8 @@ pub fn decode_setpoint_reference(
     data: &[u8],
 ) -> Result<Option<BACnetObjectPropertyReference>, Error> {
     let what = "BACnetSetpointReference";
-    let (tag, pos) = tags::decode_tag(data, 0)?;
-    if !tag.is_opening_tag(0) {
-        return Err(Error::decoding(
-            0,
-            format!("{what}: expected opening tag [0]"),
-        ));
-    }
-    let (inner, after) = tags::extract_context_value(data, pos, 0)?;
-    if after != data.len() {
-        return Err(Error::decoding(
-            after,
-            format!("{what}: trailing content after the closing tag"),
-        ));
-    }
+    let (inner, after) = decode_ctx_constructed(data, 0, 0, what)?;
+    expect_end(data, after, after, what)?;
     if inner.is_empty() {
         return Ok(None); // setpoint-reference [0] absent (OPTIONAL member)
     }

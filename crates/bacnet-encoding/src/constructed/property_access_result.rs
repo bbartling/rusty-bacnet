@@ -14,9 +14,8 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-use super::{
-    decode_app_enumerated, decode_dopr_body, decode_framed_value, encode_dopr_body, expect_closing,
-};
+use super::tagged::{decode_app_enumerated, decode_framed_value, expect_closing};
+use super::{decode_dopr_body, encode_dopr_body};
 use crate::{primitives, tags};
 
 const WHAT: &str = "BACnetPropertyAccessResult";

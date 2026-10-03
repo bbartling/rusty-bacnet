@@ -52,11 +52,13 @@ use bytes::BytesMut;
 use crate::primitives;
 use crate::tags;
 
+use super::tagged::{
+    contents, decode_app_bit_string, decode_ctx_bit_string, decode_ctx_constructed,
+    decode_ctx_real, decode_ctx_unsigned, expect_closing, expect_opening, next_is_closing,
+};
 use super::{
-    decode_app_bit_string, decode_ctx_bit_string, decode_ctx_real, decode_ctx_unsigned,
     decode_dopr_body, decode_property_state, encode_dopr_body, encode_property_state,
-    expect_closing, expect_opening, validate_extended_parameters, validate_tlv_sequence,
-    MAX_FRAMED_ITEMS,
+    validate_extended_parameters, validate_tlv_sequence, MAX_FRAMED_ITEMS,
 };
 
 /// Context tags the Clause 21 production omits, deprecates, or reserves.
@@ -251,16 +253,11 @@ pub fn decode_event_parameter(
     let what = "BACnetEventParameter";
 
     if tag.class == tags::TagClass::Application && tag.number == tags::app_tag::OCTET_STRING {
-        let end = pos
-            .checked_add(tag.length as usize)
-            .ok_or_else(|| Error::decoding(pos, "BACnetEventParameter: length overflow"))?;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
+        let (octets, end) = contents(data, pos, tag.length)?;
         return Ok((
             EP::Opaque {
                 tag: u8::MAX,
-                data: data[pos..end].to_vec(),
+                data: octets.to_vec(),
             },
             end,
         ));
@@ -315,20 +312,12 @@ pub fn decode_event_parameter(
 
     let value = match tag.number {
         0 => {
-            let mut pos = pos;
-            let (raw, p) = decode_ctx_unsigned(data, pos, 0, what)?;
-            let time_delay = u32::try_from(raw)
-                .map_err(|_| Error::decoding(pos, "change-of-bitstring: time-delay exceeds u32"))?;
-            pos = p;
-            let (bitmask, p) = decode_ctx_bit_string(data, pos, 1, what)?;
-            pos = p;
-            pos = expect_opening(data, pos, 2, what)?;
+            let what = "BACnetEventParameter change-of-bitstring";
+            let (time_delay, pos) = decode_ctx_unsigned::<u32>(data, pos, 0, what)?;
+            let (bitmask, pos) = decode_ctx_bit_string(data, pos, 1, what)?;
+            let mut pos = expect_opening(data, pos, 2, what)?;
             let mut list_of_values = Vec::new();
-            loop {
-                let (peek, _) = tags::decode_tag(data, pos)?;
-                if peek.is_closing_tag(2) {
-                    break;
-                }
+            while !next_is_closing(data, pos, 2)? {
                 if list_of_values.len() >= MAX_FRAMED_ITEMS {
                     return Err(Error::decoding(
                         pos,
@@ -351,18 +340,11 @@ pub fn decode_event_parameter(
             )
         }
         1 => {
-            let mut pos = pos;
-            let (raw, p) = decode_ctx_unsigned(data, pos, 0, what)?;
-            let time_delay = u32::try_from(raw)
-                .map_err(|_| Error::decoding(pos, "change-of-state: time-delay exceeds u32"))?;
-            pos = p;
-            pos = expect_opening(data, pos, 1, what)?;
+            let what = "BACnetEventParameter change-of-state";
+            let (time_delay, pos) = decode_ctx_unsigned::<u32>(data, pos, 0, what)?;
+            let mut pos = expect_opening(data, pos, 1, what)?;
             let mut list_of_values = Vec::new();
-            loop {
-                let (peek, _) = tags::decode_tag(data, pos)?;
-                if peek.is_closing_tag(1) {
-                    break;
-                }
+            while !next_is_closing(data, pos, 1)? {
                 if list_of_values.len() >= MAX_FRAMED_ITEMS {
                     return Err(Error::decoding(
                         pos,
@@ -384,12 +366,9 @@ pub fn decode_event_parameter(
             )
         }
         2 => {
-            let mut pos = pos;
-            let (raw, p) = decode_ctx_unsigned(data, pos, 0, what)?;
-            let time_delay = u32::try_from(raw)
-                .map_err(|_| Error::decoding(pos, "change-of-value: time-delay exceeds u32"))?;
-            pos = p;
-            pos = expect_opening(data, pos, 1, what)?;
+            let what = "BACnetEventParameter change-of-value";
+            let (time_delay, pos) = decode_ctx_unsigned::<u32>(data, pos, 0, what)?;
+            let mut pos = expect_opening(data, pos, 1, what)?;
             let (inner, _) = tags::decode_tag(data, pos)?;
             let criteria = if inner.is_context(0) {
                 let (bits, p) = decode_ctx_bit_string(data, pos, 0, what)?;
@@ -422,22 +401,15 @@ pub fn decode_event_parameter(
             )
         }
         4 => {
-            let mut pos = pos;
-            let (raw, p) = decode_ctx_unsigned(data, pos, 0, what)?;
-            let time_delay = u32::try_from(raw)
-                .map_err(|_| Error::decoding(pos, "floating-limit: time-delay exceeds u32"))?;
-            pos = p;
-            pos = expect_opening(data, pos, 1, what)?;
-            let (setpoint_reference, p) = decode_dopr_body(data, pos, what)?;
-            pos = p;
-            pos = expect_closing(data, pos, 1, what)?;
-            let (low_diff_limit, p) = decode_ctx_real(data, pos, 2, what)?;
-            pos = p;
-            let (high_diff_limit, p) = decode_ctx_real(data, pos, 3, what)?;
-            pos = p;
-            let (deadband, p) = decode_ctx_real(data, pos, 4, what)?;
-            pos = p;
-            pos = expect_closing(data, pos, 4, what)?;
+            let what = "BACnetEventParameter floating-limit";
+            let (time_delay, pos) = decode_ctx_unsigned::<u32>(data, pos, 0, what)?;
+            let pos = expect_opening(data, pos, 1, what)?;
+            let (setpoint_reference, pos) = decode_dopr_body(data, pos, what)?;
+            let pos = expect_closing(data, pos, 1, what)?;
+            let (low_diff_limit, pos) = decode_ctx_real(data, pos, 2, what)?;
+            let (high_diff_limit, pos) = decode_ctx_real(data, pos, 3, what)?;
+            let (deadband, pos) = decode_ctx_real(data, pos, 4, what)?;
+            let pos = expect_closing(data, pos, 4, what)?;
             (
                 EP::FloatingLimit {
                     time_delay,
@@ -450,18 +422,12 @@ pub fn decode_event_parameter(
             )
         }
         5 => {
-            let mut pos = pos;
-            let (raw, p) = decode_ctx_unsigned(data, pos, 0, what)?;
-            let time_delay = u32::try_from(raw)
-                .map_err(|_| Error::decoding(pos, "out-of-range: time-delay exceeds u32"))?;
-            pos = p;
-            let (low_limit, p) = decode_ctx_real(data, pos, 1, what)?;
-            pos = p;
-            let (high_limit, p) = decode_ctx_real(data, pos, 2, what)?;
-            pos = p;
-            let (deadband, p) = decode_ctx_real(data, pos, 3, what)?;
-            pos = p;
-            pos = expect_closing(data, pos, 5, what)?;
+            let what = "BACnetEventParameter out-of-range";
+            let (time_delay, pos) = decode_ctx_unsigned::<u32>(data, pos, 0, what)?;
+            let (low_limit, pos) = decode_ctx_real(data, pos, 1, what)?;
+            let (high_limit, pos) = decode_ctx_real(data, pos, 2, what)?;
+            let (deadband, pos) = decode_ctx_real(data, pos, 3, what)?;
+            let pos = expect_closing(data, pos, 5, what)?;
             (
                 EP::OutOfRange {
                     time_delay,
@@ -473,20 +439,12 @@ pub fn decode_event_parameter(
             )
         }
         9 => {
-            let mut pos = pos;
-            let (raw, p) = decode_ctx_unsigned(data, pos, 0, what)?;
-            let vendor_id = u16::try_from(raw)
-                .map_err(|_| Error::decoding(pos, "extended: vendor-id exceeds u16"))?;
-            pos = p;
-            let (raw, p) = decode_ctx_unsigned(data, pos, 1, what)?;
-            let extended_event_type = u32::try_from(raw)
-                .map_err(|_| Error::decoding(pos, "extended: extended-event-type exceeds u32"))?;
-            pos = p;
-            pos = expect_opening(data, pos, 2, what)?;
-            let (raw_params, p) = tags::extract_context_value(data, pos, 2)?;
+            let what = "BACnetEventParameter extended";
+            let (vendor_id, pos) = decode_ctx_unsigned::<u16>(data, pos, 0, what)?;
+            let (extended_event_type, pos) = decode_ctx_unsigned::<u32>(data, pos, 1, what)?;
+            let (raw_params, pos) = decode_ctx_constructed(data, pos, 2, what)?;
             validate_extended_parameters(raw_params, "extended")?;
-            pos = p;
-            pos = expect_closing(data, pos, 9, what)?;
+            let pos = expect_closing(data, pos, 9, what)?;
             (
                 EP::Extended {
                     vendor_id,

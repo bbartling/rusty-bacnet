@@ -17,9 +17,9 @@ use bytes::BytesMut;
 
 use crate::{primitives, tags};
 
-use super::cov_subscription::{decode_ctx_boolean, decode_ctx_u32};
+use super::decode_recipient;
 use super::recipient::{check_encoded_recipient, write_recipient};
-use super::{decode_recipient, expect_closing, expect_opening};
+use super::tagged::{decode_ctx_boolean, decode_ctx_unsigned, expect_closing, expect_opening};
 
 /// Encode one bare `BACnetEventNotificationSubscription` sequence. A
 /// recipient MAC past `BACnetAddress::MAX_MAC_LEN` octets is an error,
@@ -71,9 +71,9 @@ pub fn decode_event_notification_subscription(
     let pos = expect_opening(data, offset, 0, what)?;
     let (recipient, pos) = decode_recipient(data, pos)?;
     let pos = expect_closing(data, pos, 0, what)?;
-    let (process_identifier, pos) = decode_ctx_u32(data, pos, 1, what)?;
+    let (process_identifier, pos) = decode_ctx_unsigned::<u32>(data, pos, 1, what)?;
     let (issue_confirmed_notifications, pos) = decode_ctx_boolean(data, pos, 2, what)?;
-    let (time_remaining, pos) = decode_ctx_u32(data, pos, 3, what)?;
+    let (time_remaining, pos) = decode_ctx_unsigned::<u32>(data, pos, 3, what)?;
     Ok((
         BACnetEventNotificationSubscription {
             recipient,
