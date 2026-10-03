@@ -43,13 +43,12 @@ pub(super) fn validate(
         return Ok(());
     };
     db.validate_audit_installation_internal()?;
-    let devices = db.find_by_type(ObjectType::DEVICE);
-    if devices.len() != 1 || devices[0].instance_number() == ObjectIdentifier::MAX_INSTANCE {
-        return Err(Error::Encoding(
-            "target Audit requires exactly one concrete built-in Device".into(),
-        ));
-    }
-    let device = devices[0];
+    // The local Device is the audit identity. The installed runtime refuses
+    // new Devices and protects this one, so it stays the lowest while the
+    // runtime lives.
+    let device = db.local_device().identifier().ok_or_else(|| {
+        Error::Encoding("target Audit requires a concrete built-in local Device".into())
+    })?;
     let authority = db
         .get_mut(&device)
         .and_then(|object| object.device_authority_internal())
@@ -116,7 +115,10 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
         let Some(profile) = &config.audit_reporters else {
             return Ok(None);
         };
-        let device = db.find_by_type(ObjectType::DEVICE)[0];
+        let device = db
+            .local_device()
+            .identifier()
+            .expect("validated local Device");
         let association = TargetAuditAssociation::new(
             profile
                 .reporters

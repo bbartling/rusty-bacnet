@@ -391,8 +391,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// `ClientOnly` permits trusted local changes and `ServerOnly` is rejected.
     /// Standalone BACnetClient source reporting remains unsupported.
     ///
-    /// [`start`](Self::start) requires exactly one concrete local built-in Device
-    /// matching the optional identity, and one selected Reporter capability with
+    /// [`start`](Self::start) requires a concrete built-in local Device
+    /// ([`ObjectDatabase::local_device`]: the lowest instance when the database
+    /// holds several) matching the optional identity, and one selected Reporter capability with
     /// no conflicting source Reporter. Preflight validation changes no source flags
     /// and leaves configuration retryable; post-ingress failure joins terminal cleanup.
     /// Successful startup installs the Device

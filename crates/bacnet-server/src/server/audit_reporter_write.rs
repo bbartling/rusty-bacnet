@@ -45,7 +45,7 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
             return;
         };
         let reporter = &selected_reporter.configuration;
-        let device = local_device(db);
+        let device = db.local_device().identifier();
         let route = device
             .and_then(|device| recipient(db, device))
             .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));

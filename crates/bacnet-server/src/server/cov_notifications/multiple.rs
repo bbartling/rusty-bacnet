@@ -123,17 +123,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .then(|| db.clock_frame())
                     .flatten()
                     .filter(|frame| frame.is_valid_actual_datetime());
-                (
-                    crate::local_device::selected_device(&db),
-                    clock_frame,
-                    Some(db),
-                )
+                (db.selected_device(), clock_frame, Some(db))
             } else {
-                (
-                    crate::local_device::selected_device(&*db.read().await),
-                    None,
-                    None,
-                )
+                (db.read().await.selected_device(), None, None)
             };
             let device_oid =
                 device_oid.unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
