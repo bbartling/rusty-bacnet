@@ -215,10 +215,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         .record(super::event_suppression::EventSuppression::ReceivedNotForwarded);
                 }
                 taken.extend(targets.forwarders);
-                (
-                    crate::local_device::selected_device(&db),
-                    targets.recipients,
-                )
+                (db.selected_device(), targets.recipients)
             };
             if let Some(local_device) = local_device {
                 for process_identifier in take_local(&mut recipients, local_device) {

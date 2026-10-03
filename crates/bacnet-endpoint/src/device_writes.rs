@@ -19,8 +19,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// An authorized NULL relinquishment succeeds without changing Description.
     /// Recipient writes require the complete source runtime installed by source selection.
     ///
-    /// Startup requires a server role and exactly one concrete built-in Device
-    /// in the attached database. A composed identity must match that Device and
+    /// Startup requires a server role and a concrete built-in local Device in
+    /// the attached database ([`ObjectDatabase::local_device`]: the lowest
+    /// instance when it holds several). Writes reach only that Device; any
+    /// other Device is out of scope. A composed identity must match it and
     /// contain only ReadProperty/WriteProperty service bits. Validation errors
     /// precede configuration mutation and transport startup, allowing correction
     /// and retry. The enabled Device and identity advertise exactly those two
@@ -72,13 +74,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let db = Arc::get_mut(db)
             .expect("database is unshared before startup")
             .get_mut();
-        let devices = db.find_by_type(ObjectType::DEVICE);
-        if devices.len() != 1 || devices[0].instance_number() == ObjectIdentifier::MAX_INSTANCE {
-            return Err(Error::Encoding(
-                "Device writes require exactly one concrete local Device".into(),
-            ));
-        }
-        let oid = devices[0];
+        // The write target is the selected Device, the one wildcard reads
+        // resolve to, and it must be concrete.
+        let oid = db.local_device().identifier().ok_or_else(|| {
+            Error::Encoding("Device writes require a concrete local Device".into())
+        })?;
         if self
             .identity
             .as_ref()

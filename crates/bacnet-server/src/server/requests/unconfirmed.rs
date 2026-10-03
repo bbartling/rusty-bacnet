@@ -193,7 +193,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
 
             let db = db.read().await;
-            let device_oid = crate::local_device::selected_device(&db);
+            let device_oid = db.selected_device();
 
             if let Some(device_oid) = device_oid {
                 match handlers::handle_who_has(&db, &req.service_request, device_oid) {

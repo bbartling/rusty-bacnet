@@ -115,16 +115,29 @@ async fn start_with_apdu(
     binding: Option<DeviceBinding>,
     max_apdu_length: u32,
 ) -> (BACnetServer<TestTransport>, Capture) {
+    start_on(&[local], log, binding, max_apdu_length).await
+}
+
+/// A server whose database holds a Device at each of `devices`, in order.
+async fn start_on(
+    devices: &[u32],
+    log: AuditLogObject,
+    binding: Option<DeviceBinding>,
+    max_apdu_length: u32,
+) -> (BACnetServer<TestTransport>, Capture) {
     let mut db = ObjectDatabase::new();
-    db.add(Box::new(
-        DeviceObject::new(DeviceConfig {
-            instance: local,
-            max_apdu_length,
-            ..Default::default()
-        })
-        .unwrap(),
-    ))
-    .unwrap();
+    for &instance in devices {
+        db.add(Box::new(
+            DeviceObject::new(DeviceConfig {
+                instance,
+                name: format!("Device {instance}"),
+                max_apdu_length,
+                ..Default::default()
+            })
+            .unwrap(),
+        ))
+        .unwrap();
+    }
     db.add(Box::new(log)).unwrap();
     let wire = Capture::default();
     let server = BACnetServer::start_with_clock_mode_and_bindings(

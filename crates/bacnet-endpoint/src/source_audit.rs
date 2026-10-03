@@ -66,7 +66,10 @@ impl SourceAudit {
         max_apdu: u16,
     ) -> Result<(Arc<Self>, Arc<SourceRecipient>), Error> {
         let mut database = db.try_write().expect("unshared startup database");
-        let device = database.find_by_type(ObjectType::DEVICE)[0];
+        let device = database
+            .local_device()
+            .identifier()
+            .expect("preflight local Device");
         let status = database
             .get(&selected)
             .and_then(|object| object.audit_reporter_internal())
@@ -310,8 +313,8 @@ impl SourceAudit {
                 "audited operation requires direct B/IP IPv4 unicast".into(),
             ));
         }
-        let devices = db.find_by_type(ObjectType::DEVICE);
-        if devices.len() != 1 {
+        let device = self.device;
+        if db.local_device().identifier() != Some(device) {
             status.set_configured(false);
             return Err(Error::Encoding("source Device is unavailable".into()));
         }
@@ -330,7 +333,7 @@ impl SourceAudit {
             self.failures.observe(AuditFailureContext {
                 status: Arc::clone(&status),
                 epoch,
-                device: devices[0],
+                device,
                 confirmed,
                 peer: CanonicalPeer::direct(route.as_slice()),
                 route: route.clone(),
@@ -341,7 +344,7 @@ impl SourceAudit {
         let notification = BACnetAuditNotification {
             source_timestamp: Some(timestamp),
             target_timestamp: None,
-            source_device: BACnetRecipient::Device(devices[0]),
+            source_device: BACnetRecipient::Device(device),
             source_object: None,
             operation: audit_operation,
             source_comment: None,

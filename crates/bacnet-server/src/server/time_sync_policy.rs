@@ -1,9 +1,11 @@
 //! Local opt-in inbound clock policy, independent of DCC and mutation policy.
 
+use super::dcc_policy::address_length_fits;
 use super::{BipServerBuilder, ServerBuilder, TransportPort};
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_objects::clock::ClockFrame;
+use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::error::Error;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -16,13 +18,14 @@ use std::time::{Duration, Instant};
 /// identity takes precedence; a trusted router MAC does not trust its clients.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum TimeSyncSource {
-    /// Complete transport-native MAC, only when no routed source is present.
+    /// Complete transport-native MAC (1 to [`BACnetAddress::MAX_MAC_LEN`]
+    /// octets), only when no routed source is present.
     Direct(Vec<u8>),
     /// Complete claimed routed source, independent of the immediate router.
     Routed {
         /// Source network (1..=65534).
         network: u16,
-        /// Source address (1..=255 octets).
+        /// Source address (1 to [`BACnetAddress::MAX_MAC_LEN`] octets).
         address: Vec<u8>,
     },
 }
@@ -38,8 +41,11 @@ impl TimeSyncSource {
                 address
             }
         };
-        if !(1..=255).contains(&address.len()) {
-            return Err(denied("source address must contain 1..=255 octets"));
+        if !address_length_fits(address.len()) {
+            return Err(denied(&format!(
+                "source address must contain 1..={} octets",
+                BACnetAddress::MAX_MAC_LEN
+            )));
         }
         Ok(())
     }
@@ -71,8 +77,11 @@ impl std::fmt::Debug for TimeSyncSourceRestriction {
 }
 
 impl TimeSyncSourceRestriction {
-    /// Accept at most 256 entries with 1..=255 address octets and valid networks.
-    /// These are local configuration limits, not authentication guarantees.
+    /// Accept at most 256 entries, each with 1 to [`BACnetAddress::MAX_MAC_LEN`]
+    /// (18) address octets, the longest source the network layer delivers
+    /// (#1198), so a longer entry could never match (#1266). Routed networks
+    /// must be 1..=65534. These are local configuration limits, not
+    /// authentication guarantees.
     pub fn new(sources: Vec<TimeSyncSource>) -> Result<Self, Error> {
         if sources.len() > 256 {
             return Err(denied("source restriction allows at most 256 entries"));

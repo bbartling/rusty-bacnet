@@ -279,7 +279,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 } => (snapshot.timestamp, snapshot.message_text, recipient_clock),
             };
 
-            let device_oid = crate::local_device::selected_device(&db)
+            let device_oid = db
+                .selected_device()
                 .unwrap_or_else(|| ObjectIdentifier::new(ObjectType::DEVICE, 0).unwrap());
 
             let (today, current_time) = match recipient_clock {

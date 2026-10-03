@@ -101,10 +101,54 @@ fn rejects_invalid_allowlists_at_construction() {
     }
     let source = TimeSyncSource::Routed {
         network: 65534,
-        address: vec![1; 255],
+        address: vec![1; BACnetAddress::MAX_MAC_LEN],
     };
     assert!(TimeSyncSourceRestriction::new(vec![source.clone(); 256]).is_ok());
     assert!(TimeSyncSourceRestriction::new(vec![source; 257]).is_err());
+}
+
+/// An entry holds to [`BACnetAddress::MAX_MAC_LEN`], the longest source the
+/// network layer delivers (#1266): 18 octets are accepted and matched in either
+/// form, and 19 are refused with the error shape the DCC and COV policies use.
+/// A received source past the bound gets no rate-limit key either.
+#[test]
+fn time_sync_source_entries_hold_to_the_bacnet_address_bound() {
+    let longest = BACnetAddress::MAX_MAC_LEN;
+    let entries = |length: usize| {
+        [
+            TimeSyncSource::Direct(vec![7; length]),
+            TimeSyncSource::Routed {
+                network: 65534,
+                address: vec![7; length],
+            },
+        ]
+    };
+    let restriction = TimeSyncSourceRestriction::new(entries(longest).to_vec()).unwrap();
+    let route = NpduAddress {
+        network: 65534,
+        mac_address: MacAddr::from_slice(&[7; 18]),
+    };
+    assert!(restriction.allows(&[7; 18], None));
+    assert!(restriction.allows(&[1], Some(&route)));
+    for source in entries(longest + 1) {
+        assert!(
+            matches!(TimeSyncSourceRestriction::new(vec![source.clone()]),
+                Err(Error::Encoding(m)) if m == "time sync: source address must contain 1..=18 octets"),
+            "{source:?}"
+        );
+    }
+    for (mac, route) in [
+        (&[7; 18][..], None),
+        (&[1][..], Some((65534, &[7; 18][..]))),
+    ] {
+        assert!(TimeSyncSource::from_received(&received(mac, route)).is_ok());
+    }
+    for (mac, route) in [
+        (&[7; 19][..], None),
+        (&[1][..], Some((65534, &[7; 19][..]))),
+    ] {
+        assert!(TimeSyncSource::from_received(&received(mac, route)).is_err());
+    }
 }
 
 #[test]
