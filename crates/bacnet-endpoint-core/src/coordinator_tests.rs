@@ -114,14 +114,16 @@ fn notification_abort_releases_for_reuse_and_stale_cleanup_cannot_release_replac
     let original = coordinator
         .reserve(LeaseMetadata::notification(expected_peer.clone(), SERVICE))
         .unwrap();
+    // The recipient serves the notification, so only its server-flagged
+    // Abort ends the lease.
     assert_eq!(
-        coordinator.admit(&expected_peer, &abort(original.invoke_id(), true)),
+        coordinator.admit(&expected_peer, &abort(original.invoke_id(), false)),
         Ok(AdmissionOutcome::DirectionMismatch)
     );
     assert_eq!(coordinator.active_count(), Ok(1));
     assert_admitted_kind(
         coordinator
-            .admit(&expected_peer, &abort(original.invoke_id(), false))
+            .admit(&expected_peer, &abort(original.invoke_id(), true))
             .unwrap(),
         AdmissionKind::Terminal,
     );
@@ -498,6 +500,46 @@ fn reject_and_requester_abort_are_terminal_with_required_checks() {
             .unwrap(),
         AdmissionKind::Terminal,
     );
+}
+
+/// The lease owner never changes which Abort direction ends a lease (#1155):
+/// the peer answers every lease as the responding side, so a client-direction
+/// Abort is refused without claiming the lease, and a server-flagged one ends it.
+#[test]
+fn abort_direction_is_the_same_for_every_lease_owner() {
+    let expected_peer = peer(8);
+    for metadata in [
+        requester(expected_peer.clone(), TerminalPolicy::SimpleAck),
+        LeaseMetadata::segmented_requester(
+            expected_peer.clone(),
+            SERVICE,
+            TerminalPolicy::ComplexAck,
+        ),
+        LeaseMetadata::notification(expected_peer.clone(), SERVICE),
+    ] {
+        let owner = metadata.owner();
+        let coordinator = OutboundTransactionCoordinator::new();
+        let token = coordinator.reserve(metadata).unwrap();
+        assert_eq!(
+            coordinator.admit(&expected_peer, &abort(token.invoke_id(), false)),
+            Ok(AdmissionOutcome::DirectionMismatch),
+            "{owner:?}: client-direction Abort"
+        );
+        assert_eq!(coordinator.active_count(), Ok(1), "{owner:?}");
+        assert_admitted_kind(
+            coordinator
+                .admit(&expected_peer, &abort(token.invoke_id(), true))
+                .unwrap(),
+            AdmissionKind::Terminal,
+        );
+        assert_eq!(
+            coordinator.admit(&expected_peer, &abort(token.invoke_id(), true)),
+            Ok(AdmissionOutcome::DuplicateTerminal),
+            "{owner:?}: the first server Abort claimed the lease"
+        );
+        assert_eq!(coordinator.complete(token), Ok(ReleaseOutcome::Released));
+        assert_eq!(coordinator.active_count(), Ok(0), "{owner:?}");
+    }
 }
 
 #[test]
