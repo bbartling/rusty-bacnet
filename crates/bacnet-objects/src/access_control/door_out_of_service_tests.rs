@@ -114,12 +114,9 @@ fn access_door_takes_simulated_rows_out_of_service() {
         write(&mut door, property, enumerated(raw)).unwrap();
         assert_eq!(read(&door, property), enumerated(raw), "{property:?}");
     }
-    // The simulation leaves the rows nothing simulates alone.
+    // The simulation leaves the rows nothing simulates alone. Secured_Status
+    // is derived from it instead (door_secured_status_tests.rs).
     assert_eq!(read(&door, P::PRESENT_VALUE), enumerated(0));
-    assert_eq!(
-        read(&door, P::SECURED_STATUS),
-        enumerated(DoorSecuredStatus::SECURED.to_raw())
-    );
     assert_eq!(
         read(&door, P::RELIABILITY),
         enumerated(Reliability::NO_FAULT_DETECTED.to_raw())

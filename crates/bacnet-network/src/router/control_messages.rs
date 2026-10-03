@@ -12,7 +12,7 @@ use tracing::{debug, warn};
 use crate::router_table::RouterTable;
 
 use super::control_policy::{ControlClass, ControlGate};
-use super::forwarding::send_reject;
+use super::reject::{relay_reject, send_reject, Refused};
 use super::{IngressContext, SendRequest};
 
 /// One validated Initialize-Routing-Table / Initialize-Routing-Table-Ack
@@ -312,47 +312,8 @@ pub(super) async fn handle_network_message(
             tbl.apply_reject(rejected_net, port_idx, reason, Instant::now());
         }
 
-        // Relay the reject to the originating node if SNET/SADR is present.
-        if let Some(ref source) = npdu.source {
-            let tbl = table.lock().await;
-            if let Some(route) = tbl.lookup(source.network) {
-                let dest_port = route.port_index;
-                let dest_mac = if route.directly_connected {
-                    source.mac_address.clone()
-                } else {
-                    route.next_hop_mac.clone()
-                };
-                drop(tbl);
-
-                let forwarded = Npdu {
-                    is_network_message: true,
-                    message_type: Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()),
-                    destination: Some(NpduAddress {
-                        network: source.network,
-                        mac_address: source.mac_address.clone(),
-                    }),
-                    hop_count: 255,
-                    payload: npdu.payload.clone(),
-                    ..Npdu::default()
-                };
-                let mut buf = BytesMut::with_capacity(32);
-                if let Ok(()) = encode_npdu(&mut buf, &forwarded) {
-                    if dest_mac.is_empty() {
-                        let _ =
-                            send_txs[dest_port].try_send(SendRequest::broadcast_with_attributes(
-                                buf.freeze(),
-                                ingress_attributes,
-                            ));
-                    } else {
-                        let _ = send_txs[dest_port].try_send(SendRequest::unicast_with_attributes(
-                            buf.freeze(),
-                            dest_mac,
-                            ingress_attributes,
-                        ));
-                    }
-                }
-            }
-        }
+        // Pass it on toward the node its DNET/DADR names (#1158).
+        relay_reject(table, send_txs, ctx).await;
     } else if msg_type == NetworkMessageType::ROUTER_BUSY_TO_NETWORK.to_raw() {
         // Clauses 6.4.5/6.6.3.6: an optional list of 2-octet networks. When
         // the list is absent, the router is asking that traffic be held back
@@ -833,11 +794,9 @@ pub(super) async fn handle_network_message(
             "Router rejecting unknown network message type"
         );
         send_reject(
-            &send_txs[port_idx],
-            source_mac,
+            &Refused::control(send_txs, ctx),
             0,
             RejectMessageReason::UNKNOWN_MESSAGE_TYPE,
-            ingress_attributes,
         );
     }
 }

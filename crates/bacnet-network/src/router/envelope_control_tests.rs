@@ -8,6 +8,7 @@
 
 use super::envelope_harness::*;
 use super::*;
+use crate::router_table::ReachabilityStatus;
 use bacnet_encoding::npdu::NpduAddress;
 
 // --- I-Am / Busy / Available complete-list validation ---
@@ -162,7 +163,7 @@ async fn reject_requires_exact_length_for_table_change_and_relay() {
     // Short and long tails: no table change, no relay.
     for payload in [&[1, 0x0b][..], &[1, 0x0b, 0xb8, 0xff][..]] {
         let mut npdu = control_npdu(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK, payload);
-        npdu.source = Some(NpduAddress {
+        npdu.destination = Some(NpduAddress {
             network: 4000,
             mac_address: MacAddr::from_slice(&[7]),
         });
@@ -174,12 +175,13 @@ async fn reject_requires_exact_length_for_table_change_and_relay() {
         );
     }
 
-    // Exact envelope: table changes and the reject relays toward the origin.
+    // Exact envelope: table changes and the reject relays toward the
+    // originator its DNET/DADR names (#1158).
     let mut npdu = control_npdu(
         NetworkMessageType::REJECT_MESSAGE_TO_NETWORK,
         &[1, 0x0b, 0xb8],
     );
-    npdu.source = Some(NpduAddress {
+    npdu.destination = Some(NpduAddress {
         network: 4000,
         mac_address: MacAddr::from_slice(&[7]),
     });
@@ -200,11 +202,12 @@ async fn reject_requires_exact_length_for_table_change_and_relay() {
         } => {
             assert_eq!(mac.as_slice(), &[7]);
             let decoded = decode_npdu(npdu).unwrap();
+            assert!(decoded.destination.is_none(), "4000 is directly connected");
             assert_eq!(
-                decoded.destination,
+                decoded.source,
                 Some(NpduAddress {
-                    network: 4000,
-                    mac_address: MacAddr::from_slice(&[7]),
+                    network: 1000,
+                    mac_address: MacAddr::from_slice(&[1]),
                 })
             );
             assert_eq!(data_attributes, attributes());

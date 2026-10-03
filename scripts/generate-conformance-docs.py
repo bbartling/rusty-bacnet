@@ -2,7 +2,9 @@
 """Generate draft BACnet conformance support documents from the ledger.
 
 With --check this also verifies that every test anchor in the ledger resolves
-(see check_ledger_anchors.py)."""
+(see check_ledger_anchors.py). A row's notes may be one string or an array of
+entries, which the docs print joined with single spaces (see
+ledger_notes_split.py)."""
 
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import check_ledger_anchors
+from ledger_notes_split import notes_text
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,7 +115,7 @@ def pics_draft(data: dict) -> str:
             "BACNET-12-PROPERTY-METADATA-CORE",
             "BACNET-13-LIFE-SAFETY-OPERATION",
         }:
-            lines.append(f"| `{row['id']}` | {row['standard_anchor']} | {row['status']} | {row['notes']} |")
+            lines.append(f"| `{row['id']}` | {row['standard_anchor']} | {row['status']} | {notes_text(row['notes'])} |")
     lines.append("")
     return "\n".join(lines)
 

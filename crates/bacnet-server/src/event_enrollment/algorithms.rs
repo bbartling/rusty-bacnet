@@ -14,6 +14,8 @@
 //! both into one `EventState` return and dropped every same-state result,
 //! which made a genuine same-state indication (CHANGE_OF_VALUE's only
 //! transition kind, Figure 13-10) indistinguishable from "nothing changed".
+//!
+//! [`BACnetEventParameter`]: bacnet_types::constructed::BACnetEventParameter
 
 use bacnet_types::constructed::{BACnetPropertyStates, ChangeOfValueCriteria};
 use bacnet_types::enums::{EventState, EventType};

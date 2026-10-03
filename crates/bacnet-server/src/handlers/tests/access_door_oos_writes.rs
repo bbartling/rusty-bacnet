@@ -1,12 +1,14 @@
 //! Door_Status, Lock_Status and Door_Alarm_State writes on an Access Door over
 //! WriteProperty and WritePropertyMultiple: taken while Out_Of_Service is
 //! TRUE, refused in service (Clause 12.26.9, Table 12-30 footnote 1, #1131).
+//! Also the Secured_Status a ReadProperty derives from the served values and
+//! Present_Value (Clause 12.26.14, #1148).
 
 use super::*;
 use bacnet_objects::access_control::AccessDoorObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
-use bacnet_types::enums::{DoorAlarmState, DoorStatus, LockStatus};
+use bacnet_types::enums::{DoorAlarmState, DoorStatus, DoorValue, LockStatus};
 
 /// An in-service door whose device reports it open, unlocked and held open
 /// too long.
@@ -297,4 +299,77 @@ fn door_status_row_writes_outside_their_datatypes_are_refused_unchanged() {
         write_property(&mut db, oid, property, enumerated(raw)).unwrap();
         assert_eq!(read_bytes(&db, oid, property), bytes);
     }
+}
+
+#[test]
+fn read_property_derives_secured_status_from_the_served_door() {
+    const SECURED: [u8; 2] = [0x91, 0];
+    const UNSECURED: [u8; 2] = [0x91, 1];
+    const UNKNOWN: [u8; 2] = [0x91, 2];
+    let (mut db, oid) = door_db();
+    let secured_status =
+        |db: &ObjectDatabase| read_bytes(db, oid, PropertyIdentifier::SECURED_STATUS);
+    // The device reports the door open and unlocked.
+    assert_eq!(secured_status(&db), UNSECURED);
+
+    // Out of service a client simulates a closed, locked door.
+    for (property, value) in [
+        (
+            PropertyIdentifier::OUT_OF_SERVICE,
+            PropertyValue::Boolean(true),
+        ),
+        (
+            PropertyIdentifier::DOOR_STATUS,
+            enumerated(DoorStatus::CLOSED.to_raw()),
+        ),
+    ] {
+        write_property(&mut db, oid, property, value).unwrap();
+        assert_eq!(secured_status(&db), UNSECURED, "{property:?}");
+    }
+    write_property(
+        &mut db,
+        oid,
+        PropertyIdentifier::LOCK_STATUS,
+        enumerated(LockStatus::LOCKED.to_raw()),
+    )
+    .unwrap();
+    assert_eq!(secured_status(&db), SECURED);
+
+    // An UNLOCK command unsecures the door until it is relinquished.
+    write_property(
+        &mut db,
+        oid,
+        PropertyIdentifier::PRESENT_VALUE,
+        enumerated(DoorValue::UNLOCK.to_raw()),
+    )
+    .unwrap();
+    assert_eq!(secured_status(&db), UNSECURED);
+    write_property(
+        &mut db,
+        oid,
+        PropertyIdentifier::PRESENT_VALUE,
+        PropertyValue::Null,
+    )
+    .unwrap();
+    assert_eq!(secured_status(&db), SECURED);
+
+    // A contact that can't tell whether the door is shut.
+    write_property(
+        &mut db,
+        oid,
+        PropertyIdentifier::DOOR_STATUS,
+        enumerated(DoorStatus::UNKNOWN.to_raw()),
+    )
+    .unwrap();
+    assert_eq!(secured_status(&db), UNKNOWN);
+
+    // The return to service serves the device's open, unlocked door again.
+    write_property(
+        &mut db,
+        oid,
+        PropertyIdentifier::OUT_OF_SERVICE,
+        PropertyValue::Boolean(false),
+    )
+    .unwrap();
+    assert_eq!(secured_status(&db), UNSECURED);
 }

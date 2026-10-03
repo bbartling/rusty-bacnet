@@ -271,10 +271,12 @@ DADR and SADR are capped at `NpduAddress::MAX_MAC_LEN` (18) octets, the same
 limit as `BACnetAddress::MAX_MAC_LEN` and the longest MAC any built-in data
 link uses (B/IPv6) (#1141). `encode_npdu` refuses a longer address with
 `Error::Encoding`. `decode_npdu` returns `NpduDecodeError`: a DLEN or SLEN past
-the cap is `AddressTooLong { field, length, dnet }`, checked before the address
-octets are read, and every other malformation is `Malformed(Error)`. The error
-converts into `Error` (an over-long address becomes `Error::OutOfRange`), so `?`
-still works in functions that return `Result<_, Error>`.
+the cap is `AddressTooLong { field, length, dnet, source }`, checked before the
+address octets are read, and every other malformation is `Malformed(Error)`.
+For an over-long DADR, `source` is the SNET/SADR behind it when the frame holds
+a complete, valid one, which a router needs to address its reject (#1158). The
+error converts into `Error` (an over-long address becomes `Error::OutOfRange`),
+so `?` still works in functions that return `Result<_, Error>`.
 
 ---
 
@@ -1489,10 +1491,20 @@ An inbound NPDU whose DLEN or SLEN is past `NpduAddress::MAX_MAC_LEN` is
 refused before anything else happens to it (#1141). `NetworkLayer` discards it
 and counts it in `address_length_drops()`; a non-router has no reject message
 to send. `BACnetRouter` neither forwards nor delivers it, counts it in its own
-`address_length_drops()`, and, when the NPDU names a specific DNET, answers the
-sender with Reject-Message-To-Network reason 6 (`ADDRESSING_ERROR`, Clause
-6.4.4) for that DNET, as it does for a DNET it cannot reach. A global broadcast
-or an NPDU without a DNET is dropped without a reject.
+`address_length_drops()`, and, when the NPDU names a specific DNET, rejects it
+with Reject-Message-To-Network reason 6 (`ADDRESSING_ERROR`, Clause 6.4.4) for
+that DNET, as it does a DNET it cannot reach. A global broadcast or an NPDU
+without a DNET is dropped without a reject.
+
+`BACnetRouter` sends each Reject-Message-To-Network it originates to whoever
+first sent the refused NPDU (Clause 6.4.4, #1158). An NPDU that arrived
+with SNET/SADR came through another router: the reject carries that SNET/SADR
+as its DNET/DADR, with a hop count of 255, and goes back out the arrival port
+to the router that relayed the NPDU. An NPDU without SNET/SADR draws a local
+unicast to its sender. A reason 6 reject for an over-long SADR has no
+originator to name, so it falls back to that local unicast. A received reject
+is relayed by its DNET/DADR like any routed NPDU (Clause 6.6.3.5); one without
+a DNET is addressed to the router itself and goes no further.
 
 ---
 
@@ -2183,6 +2195,14 @@ door's own three values aside, a value the application sets meanwhile replaces
 the one put aside, and the return to service serves them again, dropping the
 simulation. A simulated Door_Alarm_State sends the COV report as a real change
 does. The pulse relock runs on its timer whatever the simulated values say.
+
+A door's Secured_Status isn't stored: each read works it out from what the
+door serves (Clause 12.26.14). It reads SECURED while the door is commanded
+LOCK, isn't IN_ALARM, and its Door_Status and Lock_Status show it shut and
+locked (or UNUSED). Any other input makes it UNSECURED, so an UNLOCK or a pulse
+reads UNSECURED until it ends. A Door_Status or Lock_Status of UNKNOWN or a
+fault makes it UNKNOWN, unless another input has already made it UNSECURED.
+Simulated values count the same as the device's.
 
 #### Transportation (3)
 

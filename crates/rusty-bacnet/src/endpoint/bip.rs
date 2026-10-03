@@ -143,7 +143,7 @@ impl PyBipEndpoint {
     ///         NORMAL B/IP transport; None leaves the declaration unbound.
     ///     max_apdu: Wire-legal APDU (50/128/206/480/1024/1476).
     ///     segmentation: `Segmentation` override (default NONE, the proven value).
-    ///     services: Optional service-bit list (default [READ_PROPERTY], the
+    ///     services: Optional service-bit list (default `[READ_PROPERTY]`, the
     ///         narrow endpoint reality; wider profiles need the full server).
     ///     device_uuid: Optional 16-byte UUID (zeros allowed for BIP-only;
     ///         stored into DEVICE_UUID, single identity source).

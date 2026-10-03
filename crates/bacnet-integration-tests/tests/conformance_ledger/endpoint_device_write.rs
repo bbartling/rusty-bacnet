@@ -10,7 +10,7 @@ fn endpoint_device_write_claim_stays_within_executed_subset() {
     assert_eq!(row["status"], "in-progress");
     assert!(!row["positive_tests"].as_array().unwrap().is_empty());
     assert!(!row["negative_tests"].as_array().unwrap().is_empty());
-    let notes = row["notes"].as_str().unwrap();
+    let notes = notes_text(row);
     for boundary in [
         "Device.Description",
         "MutationAuthorizer",

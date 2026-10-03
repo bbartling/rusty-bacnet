@@ -37,6 +37,11 @@ pub const DEFAULT_DOOR_OPEN_TOO_LONG_TIME: u32 = 300;
 /// Lock_Status and Door_Alarm_State by writing them, and the door's own values
 /// come back on the return to service (Clause 12.26.9, Table 12-30 footnote 1;
 /// #1131). The module `door_out_of_service` has the details.
+///
+/// Secured_Status isn't stored: each read works it out from what the door
+/// serves (Clause 12.26.14; #1148), so it moves with every command, relock,
+/// device report and simulated value. See `secured_status` for how the
+/// inputs combine and when the answer is UNKNOWN.
 #[derive(Clone)]
 pub struct AccessDoorObject {
     oid: ObjectIdentifier,
@@ -48,7 +53,6 @@ pub struct AccessDoorObject {
     state: DoorState,
     /// The device's own door state, put aside while Out_Of_Service is TRUE.
     device_state: Option<DoorState>,
-    secured_status: DoorSecuredStatus,
     door_members: Vec<ObjectIdentifier>,
     status_flags: StatusFlags,
     /// Event_State.
@@ -85,7 +89,6 @@ impl AccessDoorObject {
             present_value: DoorValue::LOCK,
             state: DoorState::SECURE,
             device_state: None,
-            secured_status: DoorSecuredStatus::SECURED,
             door_members: Vec::new(),
             status_flags: StatusFlags::empty(),
             event_state: EventState::NORMAL,
@@ -224,6 +227,71 @@ impl AccessDoorObject {
         }
         expired
     }
+
+    /// Whether Status_Flags carries IN_ALARM, which follows Event_State
+    /// (Clause 12.26.6). The door runs no intrinsic reporting, so Event_State
+    /// stays NORMAL. Status_Flags is served from the same field, so the flag
+    /// and Secured_Status agree once an event algorithm moves it.
+    fn in_alarm(&self) -> bool {
+        self.event_state != EventState::NORMAL
+    }
+
+    /// Secured_Status, worked out from what the door serves (Clause
+    /// 12.26.14).
+    ///
+    /// Each input comes out met, failed or undetermined. One failed input
+    /// makes the door UNSECURED whatever the rest say: a door commanded to
+    /// UNLOCK isn't secure even while its contact can't tell whether it is
+    /// shut. With none failed, one undetermined input makes it UNKNOWN, and
+    /// only a door with every input met is SECURED.
+    ///
+    /// An input is undetermined only when the door's own monitor says it
+    /// can't tell: Door_Status or Lock_Status reads UNKNOWN, or reports its
+    /// input faulted (DOOR_FAULT, LOCK_FAULT). Reliability plays no part:
+    /// this door applies no fault algorithm and nothing moves it off
+    /// NO_FAULT_DETECTED. Door_Status and Lock_Status are the served values,
+    /// so while Out_Of_Service is TRUE a client's simulation moves the result
+    /// as a device report would (Clause 12.26.9).
+    fn secured_status(&self) -> DoorSecuredStatus {
+        let inputs = [
+            Some(!self.in_alarm()),
+            // Masked_Alarm_Values joins here once the door serves it (#1149):
+            // a list with any member fails the door. A door without the list
+            // has nothing to fail, so the input is met.
+            Some(self.present_value == DoorValue::LOCK),
+            door_closed(self.state.door_status),
+            door_locked(self.state.lock_status),
+        ];
+        if inputs.contains(&Some(false)) {
+            DoorSecuredStatus::UNSECURED
+        } else if inputs.contains(&None) {
+            DoorSecuredStatus::UNKNOWN
+        } else {
+            DoorSecuredStatus::SECURED
+        }
+    }
+}
+
+/// Door_Status as a Secured_Status input: met for a shut door or one with no
+/// contact fitted (CLOSED, UNUSED), undetermined (`None`) while the contact
+/// can't tell or is faulted (UNKNOWN, DOOR_FAULT), and failed for any other
+/// value, a proprietary one included.
+fn door_closed(status: DoorStatus) -> Option<bool> {
+    match status {
+        DoorStatus::CLOSED | DoorStatus::UNUSED => Some(true),
+        DoorStatus::UNKNOWN | DoorStatus::DOOR_FAULT => None,
+        _ => Some(false),
+    }
+}
+
+/// Lock_Status as a Secured_Status input, read the same way: met for LOCKED
+/// or UNUSED, undetermined for UNKNOWN or LOCK_FAULT, failed for UNLOCKED.
+fn door_locked(status: LockStatus) -> Option<bool> {
+    match status {
+        LockStatus::LOCKED | LockStatus::UNUSED => Some(true),
+        LockStatus::UNKNOWN | LockStatus::LOCK_FAULT => None,
+        _ => Some(false),
+    }
 }
 
 /// Whether `value` is one of the four BACnetDoorValue members. The
@@ -267,6 +335,16 @@ impl BACnetObject for AccessDoorObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        // Served here rather than by the shared arm so IN_ALARM comes from
+        // the door's Event_State, the flag Secured_Status reads.
+        if property == PropertyIdentifier::STATUS_FLAGS {
+            return Ok(common::compute_status_flags(
+                self.status_flags,
+                self.reliability,
+                self.out_of_service,
+                self.event_state,
+            ));
+        }
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
@@ -284,7 +362,7 @@ impl BACnetObject for AccessDoorObject {
                 Ok(PropertyValue::Enumerated(self.state.lock_status.to_raw()))
             }
             p if p == PropertyIdentifier::SECURED_STATUS => {
-                Ok(PropertyValue::Enumerated(self.secured_status.to_raw()))
+                Ok(PropertyValue::Enumerated(self.secured_status().to_raw()))
             }
             p if p == PropertyIdentifier::DOOR_ALARM_STATE => Ok(PropertyValue::Enumerated(
                 self.state.door_alarm_state.to_raw(),
@@ -422,5 +500,11 @@ impl BACnetObject for AccessDoorObject {
         Some(Box::new(self.clone()))
     }
 }
+
+// A child of this module so the tests can set the door's Event_State, which
+// no route reaches yet.
+#[cfg(test)]
+#[path = "door_secured_status_tests.rs"]
+mod secured_status_tests;
 
 // ---------------------------------------------------------------------------
