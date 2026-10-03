@@ -382,11 +382,12 @@ so another target needs only `rustup target add`, not cargo-xwin or zig.
 Rustdoc's every-feature run and the PyO3 crate's run pass
 `--document-private-items` (#1164), so a broken intra-doc link in the docs of
 a private or `pub(crate)` item fails the gate too. The flag still reports a
-public item whose docs link to a private item (`rustdoc::private_intra_doc_links`
-fires with or without it), so the every-feature run replaces the public-only
-run rather than adding a second one. Every module of the PyO3 crate is private, so without the
-flag rustdoc would check none of its docs. The per-crate default-features run
-above stays public, as docs.rs builds.
+public item whose docs link to a private item
+(`rustdoc::private_intra_doc_links` fires with or without it), so the
+every-feature run replaces the public-only run rather than adding a second
+one. Every module of the PyO3 crate is private, so without the flag rustdoc
+would check none of its docs. The per-crate default-features run above stays
+public, as docs.rs builds.
 
 The individual gates are also runnable anywhere. `FEATURES` is
 `LINUX_FEATURES` from `ci.yml`, without the serial and ethernet entries on macOS:
