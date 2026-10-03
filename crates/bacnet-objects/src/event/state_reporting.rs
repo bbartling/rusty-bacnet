@@ -1,0 +1,312 @@
+//! CHANGE_OF_STATE intrinsic reporting on an enumerated value the object
+//! works out when asked, rather than one it stores (#1305).
+//!
+//! Binary and multi-state objects watch a stored Present_Value, and
+//! `impl_builtin_intrinsic_reporting!` reads their fields directly. An Access
+//! Zone watches Occupancy_State, derived on each read from the count, the
+//! limits and Occupancy_Count_Enable (Clause 12.32.6), so there is no field
+//! to read. [`ChangeOfStateReporting`] keeps everything such an object needs
+//! for intrinsic reporting in one place:
+//!
+//! - the CHANGE_OF_STATE detector (Clause 13.3.2), whose Alarm_Values hold
+//!   members of the watched enumeration;
+//! - the history behind Event_Time_Stamps and Event_Message_Texts;
+//! - Event_Detection_Enable.
+//!
+//! It serves and takes the event rows itself, and
+//! [`impl_change_of_state_reporting!`] wires the `BACnetObject` hooks to it,
+//! asking the object for the watched value and its Reliability each time the
+//! server evaluates or ticks. An object adopts it in three steps:
+//!
+//! 1. hold a `ChangeOfStateReporting`, built with a check of which raw values
+//!    its enumeration admits;
+//! 2. offer each read and write to [`ChangeOfStateReporting::read`] and
+//!    [`ChangeOfStateReporting::write`], and take Event_State (and so the
+//!    IN_ALARM flag) from [`ChangeOfStateReporting::event_state`];
+//! 3. invoke the macro with the field and two `&self` methods returning the
+//!    watched value and the Reliability served.
+//!
+//! The server's notification payload is told separately which property an
+//! object type watches and which BACnetPropertyStates choice carries it.
+
+use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, PropertyIdentifier, Reliability};
+use bacnet_types::error::Error;
+use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
+
+use super::history::{EventHistory, EventTransitionState};
+use super::{
+    ChangeOfStateDetector, EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
+    EventTransitionCommitError, TransitionOutcome,
+};
+use crate::common::{self, read_generic_event_properties, write_generic_event_properties};
+
+/// The event state, configuration and history of one object reporting
+/// CHANGE_OF_STATE on a value it derives.
+#[derive(Debug, Clone)]
+pub(crate) struct ChangeOfStateReporting {
+    /// The detector; named as the shared event-row macros expect.
+    event_detector: ChangeOfStateDetector,
+    /// Event_Time_Stamps, Event_Message_Texts and the latest transition.
+    event_history: EventHistory,
+    /// Event_Detection_Enable: FALSE suspends the detector (Clause 13.2.2.1).
+    event_detection_enable: bool,
+    /// Whether a raw value belongs to the watched enumeration, named or
+    /// proprietary; an Alarm_Values element outside it is VALUE_OUT_OF_RANGE.
+    in_range: fn(u32) -> bool,
+}
+
+impl ChangeOfStateReporting {
+    /// Detection on, no alarm values, every transition acknowledged, and
+    /// Notification_Class 0, as the other built-in detectors start.
+    pub(crate) fn new(in_range: fn(u32) -> bool) -> Self {
+        Self {
+            event_detector: ChangeOfStateDetector::default(),
+            event_history: EventHistory::default(),
+            event_detection_enable: true,
+            in_range,
+        }
+    }
+
+    /// Event_State as served.
+    pub(crate) fn event_state(&self) -> EventState {
+        self.event_detector.event_state
+    }
+
+    /// Replace Alarm_Values, checking each value as a network write would;
+    /// a refused list leaves the one held.
+    pub(crate) fn set_alarm_values(&mut self, values: Vec<u32>) -> Result<(), Error> {
+        let values = values.into_iter().map(PropertyValue::Enumerated).collect();
+        self.event_detector.alarm_values = self.alarm_values(None, &PropertyValue::List(values))?;
+        Ok(())
+    }
+
+    /// Serve one of the event rows, or `None` for any other property.
+    pub(crate) fn read(
+        &self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+    ) -> Option<Result<PropertyValue, Error>> {
+        if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
+            return Some(Ok(PropertyValue::Boolean(self.event_detection_enable)));
+        }
+        if property == PropertyIdentifier::ALARM_VALUES {
+            return Some(Ok(PropertyValue::List(
+                self.event_detector
+                    .alarm_values
+                    .iter()
+                    .map(|&value| PropertyValue::Enumerated(value))
+                    .collect(),
+            )));
+        }
+        if let Some(result) = read_generic_event_properties!(self, property) {
+            return Some(result);
+        }
+        self.event_history.read(property, array_index)
+    }
+
+    /// Take a network write of one of the writable event rows, or `None` for
+    /// any other property. Acked_Transitions is refused with
+    /// WRITE_ACCESS_DENIED; the rows nobody writes (Event_State,
+    /// Event_Time_Stamps, Event_Message_Texts) are left to the object's
+    /// metadata, which marks them read-only.
+    pub(crate) fn write(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: &PropertyValue,
+    ) -> Option<Result<(), Error>> {
+        if property == PropertyIdentifier::ALARM_VALUES {
+            return Some(self.alarm_values(array_index, value).map(|values| {
+                self.event_detector.alarm_values = values;
+            }));
+        }
+        if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
+            let PropertyValue::Boolean(enable) = *value else {
+                return Some(Err(common::invalid_data_type_error()));
+            };
+            self.event_detection_enable = enable;
+            if !enable {
+                self.reset();
+            }
+            return Some(Ok(()));
+        }
+        write_generic_event_properties!(self, property, value.clone())
+    }
+
+    /// Back to the starting event state with detection turned off: NORMAL,
+    /// every transition acknowledged, no countdown and an empty history
+    /// (Clause 12.32.34 asks for the initial values while it stays off).
+    fn reset(&mut self) {
+        self.event_detector.event_state = EventState::NORMAL;
+        self.event_detector.acked_transitions = EventTransitionBits::all();
+        self.event_detector.pending = None;
+        self.event_detector.fault_reliability = None;
+        self.event_history.reset();
+    }
+
+    /// The values a written Alarm_Values holds: a list of Enumerated, where a
+    /// value that isn't a list is its one element, which is how WriteProperty
+    /// hands over a one-element list. An index is PROPERTY_IS_NOT_AN_ARRAY;
+    /// an element of another datatype is INVALID_DATA_TYPE and one outside
+    /// the enumeration VALUE_OUT_OF_RANGE, each naming the element.
+    fn alarm_values(
+        &self,
+        array_index: Option<u32>,
+        value: &PropertyValue,
+    ) -> Result<Vec<u32>, Error> {
+        if array_index.is_some() {
+            return Err(Error::Protocol {
+                class: ErrorClass::PROPERTY.to_raw() as u32,
+                code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
+            });
+        }
+        let items = match value {
+            PropertyValue::List(items) => items.as_slice(),
+            single => std::slice::from_ref(single),
+        };
+        let cap = crate::multistate::MAX_ALARM_VALUES;
+        if items.len() > cap {
+            let full = Error::Protocol {
+                class: ErrorClass::RESOURCES.to_raw() as u32,
+                code: ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32,
+            };
+            return Err(common::at_list_element(full, cap));
+        }
+        items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                match *item {
+                    PropertyValue::Enumerated(raw) if (self.in_range)(raw) => Ok(raw),
+                    PropertyValue::Enumerated(_) => Err(common::value_out_of_range_error()),
+                    _ => Err(common::invalid_data_type_error()),
+                }
+                .map_err(|error| common::at_list_element(error, index))
+            })
+            .collect()
+    }
+
+    /// The per-write evaluation, suspended while detection is off.
+    pub(crate) fn propose(
+        &mut self,
+        watched: u32,
+        reliability: Reliability,
+    ) -> Option<TransitionOutcome> {
+        if !self.event_detection_enable {
+            return None;
+        }
+        self.event_detector.propose(watched, reliability)
+    }
+
+    /// The one-second tick, suspended while detection is off.
+    pub(crate) fn tick(
+        &mut self,
+        watched: u32,
+        reliability: Reliability,
+    ) -> Option<TransitionOutcome> {
+        if !self.event_detection_enable {
+            return None;
+        }
+        self.event_detector.tick_proposal(watched, reliability)
+    }
+
+    /// Commit one transition through the shared kernel, then settle the
+    /// detector's countdown and fault edge.
+    pub(crate) fn commit(
+        &mut self,
+        commit: EventTransitionCommit,
+        reliability: Reliability,
+    ) -> Result<(), EventTransitionCommitError> {
+        let change = commit.change.clone();
+        EventTransitionState::new(
+            &mut self.event_detector.event_state,
+            &mut self.event_detector.acked_transitions,
+            &mut self.event_history,
+        )
+        .commit(commit)?;
+        self.event_detector.confirm_transition(&change, reliability);
+        Ok(())
+    }
+
+    /// Acknowledge the latest transition to `event_state` stamped
+    /// `timestamp`; with detection off there is nothing to acknowledge
+    /// (NO_ALARM_CONFIGURED).
+    pub(crate) fn acknowledge(
+        &mut self,
+        event_state: EventState,
+        timestamp: &BACnetTimeStamp,
+    ) -> Result<Option<EventStateChange>, Error> {
+        if !self.event_detection_enable {
+            return Err(Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::NO_ALARM_CONFIGURED.to_raw() as u32,
+            });
+        }
+        self.event_history.acknowledge_correlated_detailed(
+            &mut self.event_detector.acked_transitions,
+            event_state,
+            timestamp,
+        )
+    }
+
+    /// What GetEnrollmentSummary reports for the object.
+    pub(crate) fn enrollment_summary(&self) -> EnrollmentSummaryCapability {
+        EnrollmentSummaryCapability {
+            event_type: ChangeOfStateDetector::ALGORITHM,
+            last_transition: self.event_history.last_transition(),
+        }
+    }
+}
+
+/// Implement the `BACnetObject` intrinsic-reporting hooks of an object that
+/// holds a [`ChangeOfStateReporting`] in `$reporting`, with `$watched` and
+/// `$reliability` paths to `&self` methods returning the raw watched value
+/// and the Reliability served.
+macro_rules! impl_change_of_state_reporting {
+    ($reporting:ident, $watched:path, $reliability:path) => {
+        fn enrollment_summary_capability_internal(
+            &self,
+        ) -> Option<$crate::event::EnrollmentSummaryCapability> {
+            Some(self.$reporting.enrollment_summary())
+        }
+
+        fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            let (watched, reliability) = ($watched(self), $reliability(self));
+            self.$reporting.propose(watched, reliability)
+        }
+
+        fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            let (watched, reliability) = ($watched(self), $reliability(self));
+            self.$reporting.tick(watched, reliability)
+        }
+
+        fn commit_event_transition_internal(
+            &mut self,
+            commit: $crate::event::EventTransitionCommit,
+        ) -> Result<(), $crate::event::EventTransitionCommitError> {
+            let reliability = $reliability(self);
+            self.$reporting.commit(commit, reliability)
+        }
+
+        fn acknowledge_alarm_correlated_internal(
+            &mut self,
+            event_state: bacnet_types::enums::EventState,
+            timestamp: &bacnet_types::primitives::BACnetTimeStamp,
+        ) -> Result<(), bacnet_types::error::Error> {
+            self.$reporting
+                .acknowledge(event_state, timestamp)
+                .map(|_| ())
+        }
+
+        fn acknowledge_alarm_correlated_detailed_internal(
+            &mut self,
+            event_state: bacnet_types::enums::EventState,
+            timestamp: &bacnet_types::primitives::BACnetTimeStamp,
+        ) -> Result<Option<$crate::event::EventStateChange>, bacnet_types::error::Error> {
+            self.$reporting.acknowledge(event_state, timestamp)
+        }
+    };
+}
+
+pub(crate) use impl_change_of_state_reporting;

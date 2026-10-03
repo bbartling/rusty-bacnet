@@ -46,7 +46,18 @@ impl BACnetObject for BuiltInProjectionObject {
         _array_index: Option<u32>,
     ) -> Result<PropertyValue, bacnet_types::error::Error> {
         match property {
-            p if p == PropertyIdentifier::PRESENT_VALUE => Ok(self.present_value.clone()),
+            // An Access Zone watches Occupancy_State and serves no
+            // Present_Value; the fixture's value stands for the watched one.
+            p if p == PropertyIdentifier::OCCUPANCY_STATE
+                && self.oid.object_type() == ObjectType::ACCESS_ZONE =>
+            {
+                Ok(self.present_value.clone())
+            }
+            p if p == PropertyIdentifier::PRESENT_VALUE
+                && self.oid.object_type() != ObjectType::ACCESS_ZONE =>
+            {
+                Ok(self.present_value.clone())
+            }
             p if p == PropertyIdentifier::FEEDBACK_VALUE => {
                 self.feedback_value
                     .clone()
@@ -93,7 +104,8 @@ fn normal_payload(object: &BuiltInProjectionObject) -> NotificationParameters {
         ObjectType::BINARY_INPUT
         | ObjectType::BINARY_VALUE
         | ObjectType::MULTI_STATE_INPUT
-        | ObjectType::MULTI_STATE_VALUE => (EventType::CHANGE_OF_STATE, EventState::OFFNORMAL),
+        | ObjectType::MULTI_STATE_VALUE
+        | ObjectType::ACCESS_ZONE => (EventType::CHANGE_OF_STATE, EventState::OFFNORMAL),
         ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT => {
             (EventType::COMMAND_FAILURE, EventState::OFFNORMAL)
         }
@@ -111,7 +123,7 @@ fn normal_payload(object: &BuiltInProjectionObject) -> NotificationParameters {
     .0
 }
 
-fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> {
+fn all_ten_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> {
     vec![
         (
             BuiltInProjectionObject::new(
@@ -229,19 +241,32 @@ fn all_nine_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> 
                 feedback_value: vec![0x21, 0x02],
             },
         ),
+        (
+            // Occupancy_State ABOVE_UPPER_LIMIT (4), as zone-occupancy-state.
+            BuiltInProjectionObject::new(
+                10,
+                ObjectType::ACCESS_ZONE,
+                PropertyValue::Enumerated(4),
+                None,
+            ),
+            NotificationParameters::ChangeOfState {
+                new_state: BACnetPropertyStates::ZoneOccupancyState(4),
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
+            },
+        ),
     ]
 }
 
 #[test]
-fn all_nine_builtin_normal_families_project_exact_typed_values() {
-    for (source, expected) in all_nine_sources() {
+fn all_ten_builtin_normal_families_project_exact_typed_values() {
+    for (source, expected) in all_ten_sources() {
         assert_eq!(normal_payload(&source), expected, "source {}", source.oid);
     }
 }
 
 #[test]
 fn builtin_fault_projection_is_tag_19_with_explicit_property_order() {
-    for (source, _) in all_nine_sources() {
+    for (source, _) in all_ten_sources() {
         let payload = project_intrinsic_payload(
             &source,
             &EventStateChange {
@@ -271,16 +296,15 @@ fn builtin_fault_projection_is_tag_19_with_explicit_property_order() {
             decoded.push(entry);
             offset = next;
         }
-        let expected_properties = if matches!(
-            source.oid.object_type(),
-            ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT
-        ) {
-            vec![
+        // Table 13-5: the zone reports Occupancy_State in place of
+        // Present_Value.
+        let expected_properties = match source.oid.object_type() {
+            ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT => vec![
                 PropertyIdentifier::PRESENT_VALUE,
                 PropertyIdentifier::FEEDBACK_VALUE,
-            ]
-        } else {
-            vec![PropertyIdentifier::PRESENT_VALUE]
+            ],
+            ObjectType::ACCESS_ZONE => vec![PropertyIdentifier::OCCUPANCY_STATE],
+            _ => vec![PropertyIdentifier::PRESENT_VALUE],
         };
         assert_eq!(
             decoded

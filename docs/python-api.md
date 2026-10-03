@@ -1240,9 +1240,9 @@ answers, so the call returns once the request is sent.
 A value outside those rules raises `ValueError`, or `OverflowError` for integers that
 don't fit, before anything is sent.
 
-The Rust server executes WriteGroup on its Channel objects, whose members may
-be in other devices. The Python `BACnetServer` can't hold a Channel yet, so it
-has nothing for a WriteGroup to change.
+The Rust server and the Python `BACnetServer` execute WriteGroup on their
+Channel objects, whose members may be in other devices; `add_channel` registers
+one (see [Channels](#channels)).
 
 ```python
 await client.write_group(
@@ -1690,8 +1690,8 @@ server.add_trend_log_multiple(
     name="Multi Log",
     buffer_size=1000,
     members=[
-        {"object_identifier": ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
-         "property_identifier": PropertyIdentifier.PRESENT_VALUE},
+        # A tuple for a property here, or a mapping, which can name a device.
+        (ObjectIdentifier(ObjectType.ANALOG_INPUT, 1), PropertyIdentifier.PRESENT_VALUE),
         {"object_identifier": ObjectIdentifier(ObjectType.ANALOG_INPUT, 2),
          "property_identifier": PropertyIdentifier.PRESENT_VALUE},
     ],
@@ -1713,12 +1713,14 @@ The server's poller samples every `add_trend_log_multiple` member into one
 record, one value per member in order; a client reads the records with
 `read_range` on Log_Buffer. The keyword arguments are all optional:
 
-- `members` is a list of `DeviceObjectPropertyReference` mappings
-  (`object_identifier`, `property_identifier`, and optionally
-  `property_array_index` and `device_identifier`), at most 64. A
-  `device_identifier` that isn't a Device raises ValueError; a member naming
-  another Device logs a failure for its slot, since the server reads only its
-  own objects.
+- `members` is a list of at most 64 members, each an `(object, property)` or
+  `(object, property, array_index)` tuple for a property in this device, or a
+  `DeviceObjectPropertyReference` mapping (`object_identifier`,
+  `property_identifier`, and optionally `property_array_index` and
+  `device_identifier`), as `add_channel` takes them. A `device_identifier`
+  that isn't a Device raises ValueError. A member naming the server's own
+  Device is stored in its local form; one naming another Device logs a
+  failure for its slot, since the server reads only its own objects.
 - `log_interval` is in hundredths of a second. `logging_type` is `"polled"`
   or `"triggered"`. POLLED with no `log_interval` takes a one-minute interval;
   TRIGGERED sets Log_Interval to 0 and makes it read-only, so passing both
@@ -2303,7 +2305,70 @@ The object checks each command against its operation as the Rust API notes
 describe: NONE, a reserved operation, FADE_TO or RAMP_TO without a target
 level, or a field out of range raises `BacnetProtocolError` with
 VALUE_OUT_OF_RANGE. An `octet_string`, or any other datatype, raises
-INVALID_DATA_TYPE. The object stores the command without carrying it out.
+INVALID_DATA_TYPE. The object stores the command without carrying it out. A
+[Channel](#channels) with a `Lighting_Command` member passes on a lighting
+command written to its Present_Value: the fields above between `b"\x0e"` and
+`b"\x0f"`, the opening and closing context tag 0.
+
+#### Channels
+
+```python
+dimmer = ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 1)
+fan = ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
+server.add_channel(
+    instance=1,
+    name="Zone Scene",
+    channel_number=11,  # the number a WriteGroup names, 0 to 65535
+    members=[
+        (dimmer, PropertyIdentifier.PRESENT_VALUE),
+        # The mapping form; it can carry a device_identifier too.
+        {
+            "object_identifier": fan,
+            "property_identifier": PropertyIdentifier.PRESENT_VALUE,
+        },
+    ],
+    execution_delay=[0, 500],  # milliseconds, one per member
+    control_groups=[5, 7],  # WriteGroup groups; [0] (none) when omitted
+    allow_group_delay_inhibit=True,
+)
+```
+
+`add_channel(instance, name, channel_number, members=None,
+execution_delay=None, control_groups=None, *, allow_group_delay_inhibit=False)`
+registers a Channel. A member is an `(object, property)` or
+`(object, property, array_index)` tuple for a property in this device, or a
+`DeviceObjectPropertyReference` mapping, the shape an access rule's
+`time_range` takes: `object_identifier`, `property_identifier`, and optionally
+`property_array_index` and `device_identifier`. A member naming the server's
+own Device is stored as the local reference it stands for, as it is when a
+peer writes the list. A member in another device keeps its Device and is
+written there with a confirmed WriteProperty when the server has a binding for
+it, from `add_device_binding` or an I-Am it has heard; the value goes as
+written, without the datatype conversion local members get (see the Channel
+paragraphs under [Lighting & Color](rust-api.md#lighting--color-5)).
+`execution_delay` holds one delay in milliseconds per member (zeros when
+omitted), `control_groups` the groups whose WriteGroup the Channel takes, and
+`allow_group_delay_inhibit` whether a WriteGroup that asks for no delays skips
+them. Peers can write all of these, and Channel_Number, over the network.
+
+Once the server runs, a value written to the Channel's Present_Value, over the
+network or with `write_property_local`, goes on to each member at the write's
+priority once that member's delay has passed, converted to a local member
+property's datatype, as the Rust server does. Write_Status reads IN_PROGRESS
+until every member is done and then SUCCESSFUL or FAILED, and Reliability
+reports what kind of failure the first failed member had; another
+Present_Value write meanwhile is refused with BUSY. A
+[WriteGroup](#write-group) naming one of the Channel's groups and its number
+writes the value the same way.
+
+A wrong shape or Python type raises `TypeError`. An unknown or missing mapping
+key, a device that isn't a Device, or a mapping's index outside unsigned32
+raises `ValueError`, and a channel number, a tuple's index, a delay or a group
+outside unsigned32 raises `OverflowError`. The Channel's own checks raise
+`BacnetProtocolError`: VALUE_OUT_OF_RANGE for a channel number above 65535, a
+delay count that differs from the member count or an empty group list, and
+NO_SPACE_TO_WRITE_PROPERTY for more than 1024 members or 64 groups. Nothing is
+registered after any of them.
 
 #### Life Safety
 
@@ -2341,7 +2406,8 @@ server.add_access_point(instance=1, name="Lobby Access", access_doors=[door])
 server.add_access_credential(instance=1, name="Badge 001")
 server.add_access_user(instance=1, name="John Doe")
 server.add_access_rights(instance=1, name="Employee Access")
-server.add_access_zone(instance=1, name="Building A")
+lobby = ObjectIdentifier(ObjectType.ACCESS_POINT, 1)
+server.add_access_zone(instance=1, name="Building A", entry_points=[lobby])
 # Wiegand 26 (8) in class 0, and vendor 260's CUSTOM (2) format 7 in class 3.
 server.add_credential_data_input(
     instance=1,
@@ -2355,8 +2421,13 @@ The keyword arguments set arrays that are read-only over the network.
 this device or a `(device, object)` pair for one in another device; a pair
 whose device isn't a Device raises `ValueError`, and an `access_doors`
 element that isn't an Access Door raises `BacnetProtocolError`
-(VALUE_OUT_OF_RANGE). `supported_formats` takes `(format, format_class)`
-pairs, a format being a BACnetAuthenticationFactorType number or a
+(VALUE_OUT_OF_RANGE). `entry_points` and `exit_points` set an Access Zone's
+Entry_Points and Exit_Points lists in the same element forms, and an element
+that isn't an Access Point raises `BacnetProtocolError` (VALUE_OUT_OF_RANGE).
+A whole read of either list returns the references' octets as `bytes`, or
+`[]` while the list is empty. `supported_formats` takes
+`(format, format_class)` pairs, a format being a
+BACnetAuthenticationFactorType number or a
 `(format_type, vendor_id, vendor_format)` triple, which a CUSTOM format
 needs; an ill-formed format raises VALUE_OUT_OF_RANGE.
 
