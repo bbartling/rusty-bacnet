@@ -522,6 +522,66 @@
    ]
   },
   {
+   "id": "BACNET-16-LOCAL-INBOUND-SOURCE-POLICIES",
+   "standard_anchor": "Clauses 13.14, 13.15, 13.16, 16.1, 16.7, 16.8",
+   "priority": "P1",
+   "summary": "Opt-in local policies limit which claimed sources may set the clock, run DeviceCommunicationControl or use reserved COV slots; they are local hardening options, not requirements of the standard.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-server/src/server/time_sync_policy.rs::TimeSyncPolicy",
+    "crates/bacnet-server/src/server/time_sync_policy.rs::TimeSyncSourceRestriction",
+    "crates/bacnet-server/src/server/time_sync_policy.rs::TimeSyncLimiter",
+    "crates/bacnet-server/src/server/requests/unconfirmed.rs::apply_time_sync_request",
+    "crates/bacnet-server/src/server/dcc_policy.rs::DccSourceRestriction",
+    "crates/bacnet-server/src/server/dcc_timer.rs::replace",
+    "crates/bacnet-server/src/cov/policy.rs::CovPolicy::validate",
+    "crates/bacnet-server/src/cov/policy.rs::CovPolicy::is_peer_reserved",
+    "crates/bacnet-server/src/cov/identity.rs::CovRecipient::from_endpoint"
+   ],
+   "positive_tests": [
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_defaults_and_all_builders_validate_before_start_or_dial",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_source_entries_hold_to_the_bacnet_address_bound",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::step_cap_exact_boundary_both_directions_and_utc_local_parity",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_rates_bound_bursts_and_restore_cadence_without_denial_debits",
+    "crates/bacnet-server/src/server/requests/unconfirmed_time_sync_tests.rs::time_sync_allowlist_accepts_exact_direct_routed_and_sc_vmac_with_callback_provenance",
+    "crates/bacnet-server/src/server/dcc_policy_tests.rs::dcc_source_restriction_builds_with_the_longest_entries",
+    "crates/bacnet-server/src/server/requests/dcc_tests.rs::dcc_source_exact_full_bytes_and_fail_closed_wire",
+    "crates/bacnet-server/src/cov/policy_tests.rs::cov_policy_validate_accepts_defaults_zero_reservations_and_clamped_relations",
+    "crates/bacnet-server/src/cov/policy_tests.rs::cov_policy_reserved_macs_hold_to_the_bacnet_address_bound",
+    "crates/bacnet-server/src/cov/tests.rs::is_peer_reserved_checks_canonical_peer_identity"
+   ],
+   "negative_tests": [
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::exact_sources_and_configured_empty_do_not_fall_back_to_router",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::rejects_invalid_allowlists_at_construction",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_source_entries_hold_to_the_bacnet_address_bound",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::failed_step_does_not_spend_rate_or_coalescing_budget",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::coalescing_and_source_capacity_preserve_active_routed_identity",
+    "crates/bacnet-server/src/server/requests/unconfirmed_time_sync_tests.rs::time_sync_disabled_empty_allowlist_and_step_denials_leave_clock_and_observer_untouched",
+    "crates/bacnet-server/src/server/dcc_policy_tests.rs::dcc_source_restriction_configuration_bounds",
+    "crates/bacnet-server/src/server/dcc_policy_tests.rs::dcc_source_restriction_rejected_before_start",
+    "crates/bacnet-server/src/server/dcc_policy_tests.rs::dcc_source_denied_enable_still_occupies_recovery",
+    "crates/bacnet-server/src/cov/policy_tests.rs::cov_policy_validate_rejects_zero_limits_and_unmatchable_reservations",
+    "crates/bacnet-server/src/cov/policy_tests.rs::cov_policy_reserved_macs_hold_to_the_bacnet_address_bound",
+    "crates/bacnet-server/src/cov/policy_tests.rs::invalid_cov_policy_fails_start_before_transport"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/dcc-policy.md#optional-exact-source-restriction",
+    "docs/python-api.md#cov-policy"
+   ],
+   "notes": [
+    "Inbound TimeSynchronization and UTCTimeSynchronization are decoded, then checked against `TimeSyncPolicy`. The default sets the clock on every valid request; a refused one leaves the clock and the `on_time_sync` observer untouched.",
+    "`max_step` compares the requested time with the clock in the request's own basis, UTC through `UTC_Offset` and daylight saving, inclusive at the bound in both directions. With a cap set, an unreadable clock refuses the request.",
+    "Per-source and global token buckets and coalescing windows count both services together; a request the step cap refuses spends no budget. The source table holds `max_sources` entries (default 256) and never evicts an active one.",
+    "Entries in `TimeSyncSourceRestriction`, `DccSourceRestriction` and the `CovPolicy` reserved lists hold 1 to `BACnetAddress::MAX_MAC_LEN` (18) octets and routed networks 1 to 65534; others fail with `Error::Encoding` before startup.",
+    "A routed source matches only a routed entry, by network and full address, never by the router's MAC; a direct entry matches only unrouted traffic. An empty time-sync or DCC list denies all; the DCC list needs `DccPolicy::RequirePassword`."
+   ],
+   "gaps": [
+    "Python servers cannot set `TimeSyncPolicy` and run the default (no issue)",
+    "No user guide section documents `TimeSyncPolicy`; only its rustdoc does (no issue)"
+   ]
+  },
+  {
    "id": "BACNET-15-ENDPOINT-DEVICE-WRITE",
    "standard_anchor": "Clause 15.9; Clause 12.11 Protocol_Services_Supported",
    "priority": "P1",
@@ -1019,12 +1079,10 @@
    "positive_tests": [
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/priority_array_writes.rs::priority_array_all_twenty_profiles_trait_metadata_and_pics_are_read_only",
     "crates/bacnet-server/src/pics/tests.rs",
-    "crates/bacnet-objects/src",
-    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_source_entries_hold_to_the_bacnet_address_bound"
+    "crates/bacnet-objects/src"
    ],
    "negative_tests": [
-    "crates/bacnet-server/src/handlers/tests",
-    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_source_entries_hold_to_the_bacnet_address_bound"
+    "crates/bacnet-server/src/handlers/tests"
    ],
    "benchmarks": [
     "benchmarks/src/stress/objects.rs"
@@ -1035,8 +1093,7 @@
     "docs/rust-api.md#bacnet-objects object model"
    ],
    "notes": [
-    "Initial family row only; later work should split high-claim services and object families into detailed rows.",
-    "Inbound TimeSynchronization and UTCTimeSynchronization can pass through an optional local source allowlist, TimeSyncSourceRestriction. Each entry holds 1 to BACnetAddress::MAX_MAC_LEN (18) octets, the longest source the network layer delivers; a longer one is refused with Error::Encoding (#1266)."
+    "Initial family row only; later work should split high-claim services and object families into detailed rows."
    ]
   },
   {
