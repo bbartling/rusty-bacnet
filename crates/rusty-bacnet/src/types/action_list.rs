@@ -96,9 +96,10 @@ fn action_command(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetAction
         priority: optional_integer("priority", u8::MAX.into())?.map(|priority| priority as u8),
         post_delay: optional_integer("post_delay", u32::MAX.into())?.map(|delay| delay as u32),
         quit_on_failure: flag("quit_on_failure")?,
-        // FALSE until the command's write succeeds; a read of Action carries
-        // the flag, so the read's mapping can be given back.
-        write_successful: flag("write_successful")?,
+        // A read of Action carries this flag, so the key is taken (and
+        // type-checked) for a read mapping to be given back, but its value is
+        // ignored: only a run sets it, so a command not yet run reads FALSE.
+        write_successful: flag("write_successful").map(|_| false)?,
     })
 }
 

@@ -196,11 +196,24 @@ impl PyPropertyValue {
     }
 
     /// Create a List (array) property value from a list of PropertyValue items.
+    /// Items that are all elements of one typed constructed read (#1310)
+    /// make that typed collection, as a whole read of them would.
     #[staticmethod]
     fn list(items: Vec<PyPropertyValue>) -> Self {
-        Self::from_rust(primitives::PropertyValue::List(
-            items.into_iter().map(|pv| pv.inner).collect(),
-        ))
+        let element = items
+            .first()
+            .and_then(|first| first.element)
+            .filter(|&element| {
+                items.iter().all(|item| {
+                    item.element == Some(element)
+                        && matches!(item.inner, primitives::PropertyValue::ApplicationData(_))
+                })
+            });
+        let list = primitives::PropertyValue::List(items.into_iter().map(|pv| pv.inner).collect());
+        match element {
+            Some(element) => Self::constructed(list, element),
+            None => Self::from_rust(list),
+        }
     }
 
     /// Create an ApplicationData value from pre-encoded application-layer

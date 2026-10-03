@@ -80,7 +80,9 @@ fn action_command_mappings_fill_every_field_and_default_the_optional_ones() {
                 priority: Some(8),
                 post_delay: Some(5),
                 quit_on_failure: true,
-                write_successful: true,
+                // Taken so a read mapping can be given back, but only a run
+                // sets it.
+                write_successful: false,
                 ..plain
             }
         );

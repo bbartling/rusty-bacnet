@@ -291,13 +291,18 @@ port.tag, port.value  # ("port_permission", (1, False))
 
 These properties hold lists or arrays of constructed elements that the
 binding also takes as typed values, so their reads come back in the same
-form (#1310). A whole read's `.value` is a list of the elements, and a script
-can hand it back to the typed write; an empty collection is
-`PropertyValue.list([])`. Each element keeps the octets it was read from, so
-writing the value back (`write_property`, `write_property_local`) sends them
-unchanged. Two values are equal when they carry the same octets and the same
-element production, so a typed read doesn't equal
-`PropertyValue.application_data` of its octets.
+form (#1310). A whole read's `.value` is a list of the elements in the shape
+the typed write takes, so a script can usually hand it back to that write. The
+exceptions are a Target_References `(device, object)` pair, which
+`add_staging` refuses because it takes local targets only, and a value the
+object's own checks refuse, which raises as it would if written by hand. An
+empty collection is `PropertyValue.list([])`. Each element keeps the octets it
+was read from, so writing the value back (`write_property`,
+`write_property_local`) sends them unchanged. `PropertyValue.list` of
+elements of one collection, from indexed reads, equals the whole read. Two
+values are equal when they carry the same octets and the same element
+production, so a typed read doesn't equal `PropertyValue.application_data` of
+its octets.
 
 | Object type | Property | Element tag | Element `.value` | Typed write |
 |-------------|----------|-------------|------------------|-------------|
@@ -305,9 +310,9 @@ element production, so a typed read doesn't equal
 | Notification Forwarder | Port_Filter | `"port_permission"` | `(port_id, enabled)` | `add_notification_forwarder(port_filter=...)` |
 | Group | List_Of_Group_Members | `"read_access_specification"` | `(object_id, [(property_id, array_index), ...])` | `add_group(members=...)` |
 | Group | Present_Value | `"read_access_result"` | a `read_property_multiple` result: `{"object_id": ..., "results": [...]}` | none: the members' results |
-| Command | Action | `"action_list"` | a list of `ActionCommand` mappings with every key | `add_command(action=...)` |
-| Access Door, Access Point, Staging | Door_Members, Access_Doors, Target_References | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` when the reference names a device | `door_members=`, `access_doors=`, `target_references=` |
-| Credential Data Input | Supported_Formats | `"authentication_factor_format"` | the format type, or `(format_type, vendor_id, vendor_format)` when it has vendor members (a missing one is `None`) | `add_credential_data_input(supported_formats=...)`, paired with Supported_Format_Classes |
+| Command | Action | `"action_list"` | a list of `ActionCommand` mappings with every key | `add_command(action=...)`, which ignores `write_successful` |
+| Access Door, Access Point, Staging | Door_Members, Access_Doors, Target_References | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` when the reference names a device | `door_members=`, `access_doors=`; `target_references=` takes the `ObjectIdentifier` form only |
+| Credential Data Input | Supported_Formats | `"authentication_factor_format"` | the format type, or `(format_type, vendor_id, vendor_format)` when it has vendor members (a missing one is `None`, which the write also takes) | `add_credential_data_input(supported_formats=...)`, paired with Supported_Format_Classes |
 | Staging | Stages | `"stage_limit_value"` | `(limit, values, deadband)`, `values` a `list[bool]` | `add_staging(stages=...)` |
 
 A Group's Present_Value results, and an `ActionCommand`'s `property_value`,
@@ -2111,10 +2116,12 @@ server.add_staging(
 per element, each a list of `ActionCommand` mappings with
 `object_identifier`, `property_identifier` and `property_value`, and optionally
 `property_array_index`, `priority`, `post_delay` (seconds), `quit_on_failure`
-and `write_successful` (both False when omitted) and `device_identifier`.
-`action_text` serves Action_Text, one text per list. Both are read-only over
-the network. Action reads back as these mappings with every key, the
-Write_Successful flags included (see [typed collections](#typed-collections)). A wrong shape or Python
+(False when omitted) and `device_identifier`. `action_text` serves
+Action_Text, one text per list. Both are read-only over the network. Action
+reads back as these mappings with every key, the Write_Successful flags
+included (see [typed collections](#typed-collections)). `write_successful` is
+accepted so such a mapping can be given back, but ignored: only a run sets
+the flag, so every command starts False. A wrong shape or Python
 type raises TypeError, and an unknown or missing key raises ValueError. The
 object's own setters refuse a priority outside 1 to 16, a value with no
 encoding, or a text count that differs from the list count, raising

@@ -1091,8 +1091,8 @@ class ActionCommand(TypedDict):
     # A failed write with this set stops the rest of the list. Default False.
     quit_on_failure: NotRequired[bool]
     device_identifier: NotRequired[ObjectIdentifier | None]
-    # Set when the command's write succeeds; a read of Action carries it, so
-    # a read mapping can be given back. Default False.
+    # A read of Action carries the flag a run sets. add_command accepts it so a
+    # read mapping can be given back, but ignores it: a command starts False.
     write_successful: NotRequired[bool]
 
 
@@ -1397,7 +1397,9 @@ class PropertyValue:
         ...
     @staticmethod
     def list(items: list[PropertyValue]) -> PropertyValue:
-        """Create a List (array) value from a list of PropertyValue items."""
+        """Create a List (array) value from a list of PropertyValue items.
+        Items that are all elements of one typed constructed collection (from
+        indexed reads) make that collection, equal to its whole read."""
         ...
     @staticmethod
     def application_data(bytes: bytes) -> PropertyValue:
@@ -2947,7 +2949,7 @@ class BACnetServer:
         name: str,
         *,
         supported_formats: Optional[
-            list[tuple[int | tuple[int, int, int], int]]
+            list[tuple[int | tuple[int, int | None, int | None], int]]
         ] = None,
     ) -> None:
         """Add a Credential Data Input object to the server (before starting).
@@ -2956,8 +2958,9 @@ class BACnetServer:
         Supported_Format_Classes (read-only over the network) as
         ``(format, format_class)`` pairs. A format is a
         BACnetAuthenticationFactorType number, or a
-        ``(format_type, vendor_id, vendor_format)`` triple; a CUSTOM format
-        (2) needs the triple. A format outside the closed production, a CUSTOM
+        ``(format_type, vendor_id, vendor_format)`` triple whose vendor
+        members may each be None (absent), as a read gives them; a CUSTOM
+        format (2) needs both. A format outside the closed production, a CUSTOM
         format without its vendor members, a nonzero vendor member on another
         format or one above 65535 raises BacnetProtocolError with
         VALUE_OUT_OF_RANGE. While Out_Of_Service is TRUE a client's simulated

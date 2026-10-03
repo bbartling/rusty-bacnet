@@ -266,9 +266,13 @@ fn command_actions_read_as_the_action_commands_written() {
             [],
         ]",
         |py, action| {
+            let mut lists = action_lists_from_py(action).unwrap();
+            // The write ignores the flag; a run sets it, and a read carries it.
+            assert!(!lists[0].commands[1].write_successful);
+            lists[0].commands[1].write_successful = true;
             let mut octets = BytesMut::new();
-            for list in action_lists_from_py(action).unwrap() {
-                encode_action_list(&mut octets, &list).unwrap();
+            for list in &lists {
+                encode_action_list(&mut octets, list).unwrap();
             }
             assert_typed(
                 py,
@@ -531,5 +535,40 @@ fn equality_and_repr_follow_the_element_production() {
             .hash()
             .unwrap()
         );
+    });
+}
+
+#[test]
+fn a_list_of_one_productions_elements_is_that_typed_collection() {
+    Python::initialize();
+    Python::attach(|py| {
+        let port_filter = [0x09, 0x00, 0x19, 0x01, 0x09, 0x01, 0x19, 0x00];
+        let property = PropertyIdentifier::PORT_FILTER;
+        let element = |range: std::ops::Range<usize>| {
+            Bound::new(py, read(NF, property, Some(1), &port_filter[range])).unwrap()
+        };
+        let list = |items: Vec<Bound<'_, PyAny>>| {
+            py.get_type::<PyPropertyValue>()
+                .call_method1("list", (PyList::new(py, items).unwrap(),))
+                .unwrap()
+                .extract::<PyPropertyValue>()
+                .unwrap()
+        };
+        // Both elements: the whole read.
+        assert_eq!(
+            list(vec![element(0..4).into_any(), element(4..8).into_any()]),
+            read(NF, property, None, &port_filter)
+        );
+        // Mixed with an untyped value, or empty: a plain list.
+        let octets = Bound::new(
+            py,
+            PyPropertyValue::from_rust(PropertyValue::ApplicationData(port_filter[4..].to_vec())),
+        )
+        .unwrap();
+        assert_eq!(
+            list(vec![element(0..4).into_any(), octets.into_any()]).element,
+            None
+        );
+        assert_eq!(list(vec![]).element, None);
     });
 }

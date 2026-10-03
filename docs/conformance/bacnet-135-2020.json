@@ -331,7 +331,7 @@
     "Refs #1136. Before, every element carrying a Device identifier was refused, even one naming this device, which 12.62.14 does not permit: like 12.24.10 for the Schedule, it lets a property limited to its own device refuse only references outside it.",
     "The rewrite is the Schedule's (BACNET-12-SCHEDULE-WRITES), generalized in local_references.rs over both reference types: the server, which selects the local Device under the write's database guard, drops a Device member naming that Device from each element before the object decodes the value.",
     "A Device at the wildcard instance names no device and is never local. StagingObject written directly, or configured through StagingConfig, still refuses every Device member, since it cannot tell which Device holds it. Target_References is an array, so the list services do not apply. Not covered: targets in other devices (refused; the object issues no remote writes).",
-    "Python reads Target_References as ObjectIdentifiers, a (device, object) pair for a reference that keeps its Device member, and Stages as (limit, values, deadband) triples, the forms add_staging takes."
+    "Python reads Stages as (limit, values, deadband) triples and Target_References as ObjectIdentifiers, the forms add_staging takes, or as a (device, object) pair for a reference that keeps its Device member, which add_staging refuses as it takes local targets only."
    ]
   },
   {
@@ -2499,7 +2499,7 @@
     "A remote write leases its invoke ID from the pool confirmed notifications use, and the lease names the peer and WriteProperty. No database guard is held while it is outstanding. tick_schedules, which has no network, fails remote commands.",
     "stop() ends a cancelled run where it stood: In_Process FALSE, unmade commands FALSE, All_Writes_Successful TRUE only if every write was made and succeeded. Runs let go of while the database was busy, then ownerless ones, end once it is free.",
     "A run whose write panics ends the same way, its unmade commands FALSE, and its property subscribers hear of the end.",
-    "Python reads Action as lists of ActionCommand mappings with every key, Write_Successful included, and add_command takes those mappings back, the flag as write_successful."
+    "Python reads Action as lists of ActionCommand mappings with every key, Write_Successful included; add_command takes those mappings back and ignores write_successful, so a command starts FALSE."
    ],
    "gaps": [
     "#1322: a remote target with no fresh binding fails unsent; no targeted Who-Is is sent on a binding-cache miss",
@@ -2886,7 +2886,7 @@
     "Not covered: network writes and resizing of Supported_Formats and Supported_Format_Classes, which Table 12-43 does not require.",
     "Python sets the arrays at registration through add_access_door(door_members=...), add_access_point(access_doors=...) and add_credential_data_input(supported_formats=...). A reference is an ObjectIdentifier in this device or a (device, object) pair; a format is a type number or a (type, vendor id, vendor format) triple.",
     "Both setters, and the Python keyword arguments, refuse a reference whose device identifier is not a Device object (BACNET-21-DEVICE-OBJECT-REFERENCE-DEVICE-MEMBER).",
-    "Python reads Door_Members, Access_Doors and Supported_Formats back in the keyword arguments' forms: an ObjectIdentifier or (device, object) pair per reference, and a type number or (type, vendor id, vendor format) triple per format."
+    "Python reads Door_Members, Access_Doors and Supported_Formats back in the keyword arguments' forms: an ObjectIdentifier or (device, object) pair per reference, and a type number or (type, vendor id, vendor format) triple per format, an absent vendor member as None both ways."
    ]
   },
   {
@@ -3656,7 +3656,7 @@
     "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::a_recipient_list_write_saves_the_subscriptions_with_it",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_port_filter_reads_as_the_pairs_written",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_a_cov_notification_value_reads_typed",
-    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::port_filters_read_as_the_pairs_written_whole_and_by_index"
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{port_filters_read_as_the_pairs_written_whole_and_by_index,a_list_of_one_productions_elements_is_that_typed_collection}"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::out_of_service_forwarder_takes_nothing",

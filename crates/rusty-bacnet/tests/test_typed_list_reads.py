@@ -23,7 +23,9 @@ from typing import Any
 from rusty_bacnet import (
     BACnetClient,
     BACnetServer,
+    BacnetProtocolError,
     BipEndpoint,
+    ErrorCode,
     ObjectIdentifier,
     ObjectType,
     PropertyIdentifier,
@@ -99,13 +101,17 @@ def command(target: ObjectIdentifier, value: float, priority: int, **extra: Any)
 
 
 ACTION = [
-    [command(AO_1, 50.0, 8), command(AI_1, 21.5, 9, post_delay=0, write_successful=True)],
+    [command(AO_1, 50.0, 8), command(AI_1, 21.5, 9, post_delay=0)],
     [command(AO_1, 10.0, 8, quit_on_failure=True, device_identifier=REMOTE_DEVICE)],
 ]
+# add_command takes write_successful but ignores it: only a run sets the flag,
+# so the Command still reads back as ACTION.
+ACTION_WRITTEN = [[ACTION[0][0], {**ACTION[0][1], "write_successful": True}], ACTION[1]]
 DOOR_MEMBERS: Any = [BO_1, (REMOTE_DEVICE, REMOTE_DOOR)]
 ACCESS_DOORS: Any = [(REMOTE_DEVICE, REMOTE_DOOR)]
-# Wiegand 26 (8) in class 0, and vendor 260's CUSTOM (2) format 7 in class 3.
-SUPPORTED_FORMATS: Any = [(8, 0), ((2, 260, 7), 3)]
+# Wiegand 26 (8) in class 0, vendor 260's CUSTOM (2) format 7 in class 3, and
+# format 10 with a zero vendor id and no vendor format in class 1.
+SUPPORTED_FORMATS: Any = [(8, 0), ((2, 260, 7), 3), ((10, 0, None), 1)]
 STAGES = [(10.0, [False, True], 1.0), (20.0, [True, True], 2.0)]
 TARGET_REFERENCES = [BO_1, BV_1]
 
@@ -122,7 +128,7 @@ def make_server() -> BACnetServer:
                                       port_filter=PORT_FILTER)
     server.add_group(1, "Zone", GROUP_MEMBERS)
     server.add_group(2, "Empty")
-    server.add_command(1, "CMD-1", action=ACTION)
+    server.add_command(1, "CMD-1", action=ACTION_WRITTEN)
     server.add_access_door(1, "Main Entry", door_members=DOOR_MEMBERS)
     server.add_access_point(1, "Lobby", access_doors=ACCESS_DOORS)
     server.add_credential_data_input(1, "Card Reader", supported_formats=SUPPORTED_FORMATS)
@@ -200,17 +206,21 @@ class TypedListReadTests(unittest.IsolatedAsyncioTestCase):
 
     async def assert_list(self, oid: ObjectIdentifier, prop: PropertyIdentifier,
                           expected: list[Any], element: str) -> None:
-        """A whole read is a list of `expected`, and each index one element
-        tagged `element`."""
+        """A whole read is a list of `expected`, each index one element
+        tagged `element`, and PropertyValue.list of the elements the whole
+        read."""
         value = await self.read(oid, prop)
         self.assertEqual(value.tag, "list")
         self.assertEqual(value.value, expected)
         self.assertEqual(await self.read(oid, prop, 0), PropertyValue.unsigned(len(expected)))
+        elements = []
         for index, item in enumerate(expected, 1):
             with self.subTest(index=index):
                 one = await self.read(oid, prop, index)
                 self.assertEqual(one.tag, element)
                 self.assertEqual(one.value, item)
+                elements.append(one)
+        self.assertEqual(PropertyValue.list(elements), value)
 
     async def test_recipient_lists_read_as_the_destinations_written(self) -> None:
         recipients = await self.read(NF_1, P.RECIPIENT_LIST)
@@ -280,9 +290,18 @@ class TypedListReadTests(unittest.IsolatedAsyncioTestCase):
         )))
         copy.add_binary_output(1, "BO-1")
         copy.add_binary_value(1, "BV-1")
+        # This server's targets are local, so they read as plain identifiers;
+        # add_staging refuses a (device, object) pair, which only names a
+        # target in another device.
         copy.add_staging(1, "STG-1", 5.0, 0.0, 62, 8, await value(STG_1, P.STAGES),
                          await value(STG_1, P.TARGET_REFERENCES))
         self.assertEqual(copy._pending_registration_count(), 9)
+        # A Supported_Formats triple with a vendor member left out, as a read
+        # of another device may give it, is a value the object checks, not a
+        # type error.
+        with self.assertRaises(BacnetProtocolError) as raised:
+            copy.add_credential_data_input(2, "Refused", supported_formats=[((3, 4, None), 0)])
+        self.assertEqual(raised.exception.error_code, ErrorCode.VALUE_OUT_OF_RANGE.to_raw())
 
     async def test_a_cov_notification_value_reads_typed(self) -> None:
         notifications: asyncio.Queue[Any] = asyncio.Queue()
