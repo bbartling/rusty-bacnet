@@ -1,4 +1,4 @@
-use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::database::{LocalDevice, ObjectDatabase};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetEventParameter, FaultParameters};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier, Reliability};
@@ -55,7 +55,7 @@ pub(super) fn read_event_parameters(
 
 pub(super) fn read_fault_algorithm(
     enrollment: &dyn BACnetObject,
-    local_device_oid: Option<ObjectIdentifier>,
+    local_device: LocalDevice,
 ) -> Result<SupportedFaultAlgorithm, LocalConfigurationReadError> {
     let parameters = match enrollment.read_property(PropertyIdentifier::FAULT_PARAMETERS, None) {
         Ok(PropertyValue::ApplicationData(bytes)) => {
@@ -75,10 +75,7 @@ pub(super) fn read_fault_algorithm(
     match parameters {
         FaultParameters::FaultNone => Ok(SupportedFaultAlgorithm::None),
         FaultParameters::FaultStatusFlags { reference } => {
-            let local = reference
-                .device_identifier
-                .is_none_or(|device| Some(device) == local_device_oid);
-            if !local
+            if !local_device.is_local(reference.device_identifier)
                 || reference.property_identifier != PropertyIdentifier::STATUS_FLAGS.to_raw()
                 || reference.property_array_index.is_some()
             {
