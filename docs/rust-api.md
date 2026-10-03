@@ -3500,16 +3500,24 @@ size less the octets the encoder puts around them for the context: the request
 header, confirmed or not, the process identifier and the lifetime left at the
 context's last admission in their fewest octets, the device identifier, the
 timestamp and the list's tags, 25 to 33 octets in all (#1197). Each change counts
-its encoding, one item's framing and a fixed overhead of 32 octets for the memory
-it holds besides its values, so many tiny changes cannot outgrow the estimate. The
+its encoding and one item's framing, as if it started an item of its own. The
 context also keeps room, at most one notification's worth, for the most its
 untimestamped values have taken in one report since it was last admitted or lost
-a reference. Only on overflow, the last resort, is a change dropped: the oldest
-of the same reference first, then the oldest in the context, never a reference's
-latest. Nor is a reference's change in delivery dropped: once a change sent one
-value per notification has a part delivered, or sent as a confirmed report's
-first part, the rest of it stays queued until its last value is delivered,
-however small the subscriber's maximum APDU (#1163). Beyond the bound, a context
+a reference. Memory has a ceiling of its own (#1287): counting each change with a
+fixed 32 octets more for the memory it holds besides its values, one context
+never holds more than four notifications of the server's own maximum APDU,
+whatever its subscriber's size, so many tiny changes cannot outgrow it. The
+overhead takes no room in a notification, so with the shortest envelope a
+50-octet subscriber keeps four REAL Present_Value changes, one per notification,
+on a server whose own maximum APDU is 78 octets or more. Near the local maximum
+the ceiling binds first, and the subscription caps (`CovPolicy`) limit how many
+contexts there are, so the history as a whole stays bounded. Only on overflow
+of either limit, the last resort, is a change dropped: the oldest of the same
+reference first, then the oldest in the context, never a reference's latest.
+Nor is a reference's change in delivery dropped: once a change sent one value
+per notification has a part delivered, or sent as a confirmed report's first
+part, the rest of it stays queued until its last value is delivered, however
+small the subscriber's maximum APDU (#1163). Beyond the bound, a context
 therefore holds at most two changes per reference. Parts a confirmed report
 defers return to the queue without that check, so the bound never drops what the
 report just planned to send. Changes returned by a failed notification wait
