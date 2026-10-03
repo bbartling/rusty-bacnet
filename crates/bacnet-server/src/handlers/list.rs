@@ -557,9 +557,9 @@ pub(crate) fn handle_list_element_observed(
     // A reference naming this device stands for the local one, so it matches
     // the stored member and is added in that form (#1122).
     if let Elements::References(members) = &mut edits {
-        let local = crate::schedule_references::local_device(db);
+        let local = crate::local_references::local_device(db);
         for member in members {
-            crate::schedule_references::localize_member(member, local);
+            crate::local_references::localize_member(member, local);
         }
     }
     // Decode the stored list before observation or mutation.

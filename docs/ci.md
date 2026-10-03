@@ -24,7 +24,7 @@ both jobs of the native tests on GitHub (see [Merge evidence](#merge-evidence)).
 | Job | PR to `dev` | PR to `main` | Push to `dev` (merge) | Push to `main`, `v*` tag, weekly, manual |
 | --- | --- | --- | --- | --- |
 | CI image: build and push the job image if its tag is missing | ✓ | ✓ | ✓ | ✓ |
-| Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions | ✓ | ✓ | ✓ | ✓ |
+| Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions, changelog fragments | ✓ | ✓ | ✓ | ✓ |
 | Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ | ✓ |
 | Python bindings: `maturin develop` (maturin 1.15.0), then `python -m unittest discover -s crates/rusty-bacnet/tests` and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
@@ -396,7 +396,13 @@ bash scripts/ci/check-file-size.sh
 bash scripts/ci/test-check-no-secrets.sh && bash scripts/ci/check-no-secrets.sh
 python3 scripts/ci/test-check-msrv.py
 python3 -m unittest discover -s scripts/release
+python3 -m unittest discover -s scripts -p 'test_changelog.py'
+python3 scripts/changelog.py check
 ```
+
+`changelog.py check` validates the [changelog fragments](../changelog.d/README.md)
+and fails if `CHANGELOG.md`'s `[Unreleased]` section lists entries itself, so a
+PR that edits it directly fails the lint job.
 
 The no-secret scanner reports stable opaque path IDs and line numbers, never
 paths or matching text, because filenames can contain credentials too. Compare
@@ -443,9 +449,10 @@ dispatch on GitHub.
   [smoke test](#smoke-test) against a throwaway GitHub draft that it deletes
   again, makes the release API calls read only (see
   [Release API](#release-api-dry-run)) and publishes nothing. The notes come
-  from the workspace version's
-  `CHANGELOG.md` section if it has one, otherwise from `[Unreleased]`, which
-  may be empty:
+  from the workspace version's `CHANGELOG.md` section if it has one, otherwise
+  from the section the waiting `changelog.d/` fragments would make, which may
+  be empty. `changelog.py assemble --output` writes that into a copy, so the
+  checkout is left alone:
 
   ```bash
   tea api -X POST repos/jscott3201/rusty-bacnet/actions/workflows/release.yml/dispatches \
@@ -457,7 +464,18 @@ dispatch on GitHub.
 
 To release:
 
-1. Set the workspace version, add its `CHANGELOG.md` section, and merge.
+1. Set the workspace version, assemble its `CHANGELOG.md` section from the
+   fragments, add release highlights by hand under the new heading if the
+   release has any, and merge:
+
+   ```bash
+   python3 scripts/changelog.py preview        # what the section will hold
+   python3 scripts/changelog.py assemble --version 0.12.0 [--date 2026-10-02]
+   ```
+
+   `assemble` adds `## [0.12.0] - <date>` below `[Unreleased]`, with the
+   entries grouped by heading and ordered by issue number, and deletes the
+   fragments it used. A tag fails if any fragment is still waiting.
 2. Optionally, dispatch a dry run on the release commit first: it runs
    everything the release does, the smoke test included, without publishing.
 3. Tag the commit, on `main` or `dev`:
@@ -477,7 +495,7 @@ the release.
 | Job | What it does |
 | --- | --- |
 | CI image | Pulls `CI_IMAGE` into the VM's Docker. Only `ci.yml` builds the image, and its image job fails if `release.yml` carries another tag. |
-| Validate | Runs the release script tests (`scripts/release/test_*.py`). Checks that every publishable crate has the workspace version and, for a tag, that the tag is `v<version>` and the commit is on `dev` or `main`. For a release, checks that the publish secrets are set and runs the [preflight](#preflight), before anything is built; a dry run runs the preflight's read-only part. Extracts the notes with `changelog_notes.py`, writes `THIRD-PARTY-NOTICES`, then runs the [CI gate](#ci-gate). |
+| Validate | Runs the release script tests (`scripts/release/test_*.py`, `scripts/test_changelog.py`). Checks that every publishable crate has the workspace version and, for a tag, that the tag is `v<version>` and the commit is on `dev` or `main`. For a release, checks that the publish secrets are set and runs the [preflight](#preflight), before anything is built; a dry run runs the preflight's read-only part. For a tag, checks that no `changelog.d/` fragment is left unassembled. Extracts the notes with `changelog_notes.py`, writes `THIRD-PARTY-NOTICES`, then runs the [CI gate](#ci-gate). |
 | Crates and sdist | `cargo publish --workspace --dry-run --locked`, which packages every publishable crate and builds each against the others as published. Then the crates.io job's plan (read only), `cargo package` for the `crates` artifact, and `maturin sdist`. |
 | Wheels (linux-x86_64, linux-aarch64, macos-x86_64, macos-arm64, windows-x86_64) | `maturin build --release --locked` for CPython 3.11 to 3.14: with `--zig --compatibility manylinux2014` for Linux, `--zig` for macOS, and maturin's built-in xwin for Windows ([macOS and Windows builds](#macos-and-windows-builds)). The image has only Python 3.12; maturin uses its bundled sysconfig for the others and for macOS and Windows. |
 | CLI (linux-amd64, linux-arm64, macos-amd64, macos-arm64, windows-amd64) | Linux: `cargo zigbuild --release --locked -p bacnet-cli --features sc-tls,pcap` for `<target>.2.17`, against the image's static libpcap. `LIBPCAP_VER` gives the pcap crate libpcap's version, which its build script can't load through the linker-script shim, and must match the image's `/opt/libpcap/VERSION`. macOS: `cargo zigbuild` with `--features sc-tls`. Windows: `cargo xwin build` with `--features sc-tls` and the C runtime linked statically. |

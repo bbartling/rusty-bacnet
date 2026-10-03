@@ -10,12 +10,12 @@ pub mod handlers;
 pub mod life_safety;
 mod life_safety_cov;
 mod local_device;
+mod local_references;
 pub mod mutation;
 #[doc(hidden)]
 pub mod network_number;
 pub mod pics;
 pub mod schedule;
-mod schedule_references;
 pub mod server;
 pub mod trend_log;
 

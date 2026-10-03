@@ -34,7 +34,12 @@ fn pics_command_property_metadata_is_exact() {
             object
                 .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(3), None)
                 .unwrap();
-            object.set_action(vec![vec![1, 2, 3], vec![4, 5]]);
+            object
+                .set_action(vec![
+                    bacnet_types::constructed::BACnetActionList::default();
+                    2
+                ])
+                .unwrap();
         }
         let required = object.required_properties();
         let mut db = ObjectDatabase::new();

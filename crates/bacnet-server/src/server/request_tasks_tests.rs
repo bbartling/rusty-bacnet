@@ -24,6 +24,9 @@ mod request_admission_tests;
 #[path = "rpm_wire_tests.rs"]
 mod rpm_wire_tests;
 
+#[path = "array_element_wire_tests.rs"]
+mod array_element_wire_tests;
+
 struct SendGuard(Option<oneshot::Sender<()>>);
 
 impl Drop for SendGuard {

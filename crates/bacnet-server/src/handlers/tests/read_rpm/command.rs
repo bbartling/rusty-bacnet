@@ -2,10 +2,73 @@ use super::*;
 use bacnet_objects::{command::CommandObject, traits::BACnetObject};
 use bacnet_services::common::PropertyReference;
 use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
+use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
+/// The three Action elements the configured fixture holds, each one
+/// BACnetActionList framed in its own [0] pair (Table 12-12, Clause 21).
+/// Written out from the production tags, not produced by the codec.
+const ACTION_1: &[u8] = &[
+    0x0E, // [0] open
+    0x1C, 0x00, 0x40, 0x00, 0x01, // [1] AO-1
+    0x29, 0x55, // [2] Present_Value
+    0x4E, 0x44, 0x42, 0x48, 0x00, 0x00, 0x4F, // [4] REAL 50.0
+    0x59, 0x08, // [5] priority 8
+    0x79, 0x00, // [7] quit-on-failure FALSE
+    0x89, 0x01, // [8] write-successful TRUE
+    0x0F, // [0] close
+];
+/// An empty action list: Present_Value 2 writes nothing.
+const ACTION_2: &[u8] = &[0x0E, 0x0F];
+const ACTION_3: &[u8] = &[
+    0x0E, // [0] open
+    0x0C, 0x02, 0x00, 0x00, 0x09, // [0] Device 9
+    0x1C, 0x01, 0x40, 0x00, 0x03, // [1] BV-3
+    0x29, 0x55, // [2] Present_Value
+    0x4E, 0x91, 0x01, 0x4F, // [4] ENUMERATED 1
+    0x6A, 0x01, 0x2C, // [6] post-delay 300
+    0x79, 0x01, // [7] TRUE
+    0x89, 0x00, // [8] FALSE
+    0x0F, // [0] close
+];
+
+fn action_lists() -> Vec<BACnetActionList> {
+    let ao1 = BACnetActionCommand {
+        device_identifier: None,
+        object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap(),
+        property_identifier: P::PRESENT_VALUE,
+        property_array_index: None,
+        property_value: PropertyValue::Real(50.0),
+        priority: Some(8),
+        post_delay: None,
+        quit_on_failure: false,
+        write_successful: true,
+    };
+    let bv3 = BACnetActionCommand {
+        device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap()),
+        object_identifier: ObjectIdentifier::new(ObjectType::BINARY_VALUE, 3).unwrap(),
+        property_value: PropertyValue::Enumerated(1),
+        priority: None,
+        post_delay: Some(300),
+        quit_on_failure: true,
+        write_successful: false,
+        ..ao1.clone()
+    };
+    vec![
+        BACnetActionList {
+            commands: vec![ao1],
+        },
+        BACnetActionList::default(),
+        BACnetActionList {
+            commands: vec![bv3],
+        },
+    ]
+}
+
 #[test]
-fn rpm_command_indexed_reads_and_bytes_are_unchanged() {
+fn rpm_command_action_serves_one_action_list_per_index() {
+    let whole_action = [ACTION_1, ACTION_2, ACTION_3].concat();
     for configured in [false, true] {
         let mut object = CommandObject::new(7, "CMD-7").unwrap();
         if configured {
@@ -27,22 +90,39 @@ fn rpm_command_indexed_reads_and_bytes_are_unchanged() {
                     None,
                 )
                 .unwrap();
-            object.set_action(vec![vec![1, 2, 3], vec![4, 5]]);
+            object.set_action(action_lists()).unwrap();
         }
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
-        // Independent application-value bytes pin the existing projection.
-        type ExpectedRead = Result<&'static [u8], ErrorCode>;
-        // Action is BACnetARRAY but the object arm returns the whole list
-        // regardless of the index; the service gate admits the index and the
-        // object ignores it.
-        let action_bytes: &[u8] = if configured {
-            &[0x63, 1, 2, 3, 0x62, 4, 5]
+        // Independent application-value bytes pin the projection.
+        type ExpectedRead<'a> = Result<&'a [u8], ErrorCode>;
+        // Action is a BACnetARRAY (Table 12-12): index 0 reads the size, 1..=N
+        // one action list, and past N is INVALID_ARRAY_INDEX. The whole array
+        // is the elements' own octets back to back.
+        let action: &[(Option<u32>, ExpectedRead)] = if configured {
+            &[
+                (None, Ok(&whole_action)),
+                (Some(0), Ok(&[0x21, 3])),
+                (Some(1), Ok(ACTION_1)),
+                (Some(2), Ok(ACTION_2)),
+                (Some(3), Ok(ACTION_3)),
+                (Some(4), Err(ErrorCode::INVALID_ARRAY_INDEX)),
+                (Some(u32::MAX), Err(ErrorCode::INVALID_ARRAY_INDEX)),
+            ]
         } else {
-            &[]
+            &[
+                (None, Ok(&[])),
+                (Some(0), Ok(&[0x21, 0])),
+                (Some(1), Err(ErrorCode::INVALID_ARRAY_INDEX)),
+                (Some(u32::MAX), Err(ErrorCode::INVALID_ARRAY_INDEX)),
+            ]
         };
-        let cases: &[(P, Option<u32>, ExpectedRead)] = &[
+        let mut cases: Vec<(P, Option<u32>, ExpectedRead)> = action
+            .iter()
+            .map(|&(index, expected)| (P::ACTION, index, expected))
+            .collect();
+        cases.extend_from_slice(&[
             (
                 P::PRESENT_VALUE,
                 None,
@@ -75,10 +155,6 @@ fn rpm_command_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::ACTION, None, Ok(action_bytes)),
-            (P::ACTION, Some(0), Ok(action_bytes)),
-            (P::ACTION, Some(1), Ok(action_bytes)),
-            (P::ACTION, Some(u32::MAX), Ok(action_bytes)),
             // Table 12-12 has no Out_Of_Service (#1064), so the flag stays
             // clear.
             (P::STATUS_FLAGS, None, Ok(&[0x82, 4, 0])),
@@ -136,7 +212,7 @@ fn rpm_command_indexed_reads_and_bytes_are_unchanged() {
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-        ];
+        ]);
         let mut request = BytesMut::new();
         ReadPropertyMultipleRequest {
             list_of_read_access_specs: vec![ReadAccessSpecification {
@@ -159,7 +235,7 @@ fn rpm_command_indexed_reads_and_bytes_are_unchanged() {
         let access = &ack.list_of_read_access_results[0];
         assert_eq!(access.object_identifier, oid);
         assert_eq!(access.list_of_results.len(), cases.len());
-        for (result, &(p, i, expected)) in access.list_of_results.iter().zip(cases) {
+        for (result, &(p, i, expected)) in access.list_of_results.iter().zip(&cases) {
             assert_eq!(result.property_identifier, p);
             // These table errors identify non-arrays or absent optional rows.
             let response_index = if matches!(

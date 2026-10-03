@@ -350,7 +350,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             };
             let value = match write {
                 LocalWrite::Property { property, .. } => {
-                    crate::schedule_references::localize(&db, *oid, property, value)
+                    crate::local_references::localize(&db, *oid, property, value)
                 }
                 _ => value,
             };
