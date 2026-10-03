@@ -18,15 +18,15 @@
 //! `ChannelObject::set_execution_delay` refuses it, so writing delays never
 //! adds or drops a member.
 //!
-//! A member naming another device is refused with PROPERTY /
-//! OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, which Clause 12.53.11 allows a
-//! Channel that writes only inside its own device. The object can't tell
-//! which Device holds it, so the bundled server drops a Device identifier
-//! naming its own Device before the value gets here (#1136); a reference
-//! whose Device instance is 4194303 is an empty one, not a remote one. Ahead
-//! of both, a member whose device identifier isn't a Device object at all is
-//! refused with PROPERTY / VALUE_OUT_OF_RANGE (#1285), so the server's
-//! localizing, which compares the whole identifier, leaves it to that check.
+//! A member may name another device (Clause 12.53.11, #1264); the server
+//! writes it there. The object can't tell which Device holds it, so the
+//! bundled server drops a Device identifier naming its own Device before the
+//! value gets here (#1136), and its runner treats a member still naming this
+//! Device as local. A reference whose Device instance is 4194303 is an empty
+//! one, not a remote one. A member whose device identifier isn't a Device
+//! object at all is refused with PROPERTY / VALUE_OUT_OF_RANGE (#1285), so the
+//! server's localizing, which compares the whole identifier, leaves it to that
+//! check.
 
 use bacnet_encoding::constructed::decode_device_object_property_reference;
 use bacnet_encoding::tags::Tag;
@@ -69,16 +69,9 @@ pub(super) fn is_empty(member: &BACnetDeviceObjectPropertyReference) -> bool {
 }
 
 /// Refuse a member whose device identifier isn't a Device object (#1285),
-/// empty or not, then a member that names another device.
+/// empty or not.
 pub(super) fn check_member(member: &BACnetDeviceObjectPropertyReference) -> Result<(), Error> {
-    crate::device_reference::check_device_member(member.device_identifier)?;
-    if member.device_identifier.is_some() && !is_empty(member) {
-        return Err(common::protocol_error(
-            ErrorClass::PROPERTY,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ));
-    }
-    Ok(())
+    crate::device_reference::check_device_member(member.device_identifier)
 }
 
 fn no_space_error() -> Error {

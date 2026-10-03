@@ -3,7 +3,8 @@
 //!
 //! Each write is made as the bare WriteProperty handler would make a request
 //! carrying it, with the Command or Channel as the initiating object. There
-//! is no network here, so a command naming another device fails. There is no
+//! is no network here, so a command or Channel member naming another device
+//! fails unsent, which a Channel reports as PROCESS_ERROR. There is no
 //! COV table, notification path or task set either, so nothing is reported
 //! and the runs go on inside the caller's future: a run that writes another
 //! Command's or Channel's Present_Value starts that run beside it, and the

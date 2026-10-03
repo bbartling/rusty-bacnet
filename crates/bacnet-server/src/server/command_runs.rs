@@ -29,7 +29,7 @@ use super::remote_writes::{RemoteWrite, RemoteWriter};
 use super::request_tasks::RequestTaskSpawner;
 use super::*;
 use crate::command_lists::{RunHost, Unfinished};
-use bacnet_objects::command::CommandRun;
+use bacnet_objects::command::{CommandRun, WriteFailure};
 use bacnet_types::constructed::BACnetActionCommand;
 
 /// The server handles a run owns while it waits out post delays.
@@ -153,7 +153,14 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
             if left.end(&mut db) {
                 self.committed(&db, source).await;
             }
-        } else if crate::command_lists::complete(self, source, generation, false).await {
+        } else if crate::command_lists::complete(
+            self,
+            source,
+            generation,
+            Err(WriteFailure::Process),
+        )
+        .await
+        {
             // Nothing had ended it, so `complete` did and reported it.
             return;
         }

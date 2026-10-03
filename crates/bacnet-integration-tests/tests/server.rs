@@ -97,6 +97,8 @@ mod bbmd_discovery;
 #[cfg(feature = "ipv6")]
 #[path = "server/bip6_group_confirmed.rs"]
 mod bip6_group_confirmed;
+#[path = "server/channel_remote.rs"]
+mod channel_remote;
 #[path = "server/command_remote.rs"]
 mod command_remote;
 #[path = "server/dcc.rs"]

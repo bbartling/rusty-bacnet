@@ -511,11 +511,16 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     }
 
     /// End the current run, setting a Command's All_Writes_Successful or a
-    /// Channel's Write_Status.
+    /// Channel's Write_Status and Reliability. `outcome` is `Ok` when every
+    /// write was made and succeeded, otherwise the run's first failure.
     ///
     /// Returns whether readable state changed; a stale generation is ignored.
     #[doc(hidden)]
-    fn complete_command_run_internal(&mut self, _generation: u64, _all_succeeded: bool) -> bool {
+    fn complete_command_run_internal(
+        &mut self,
+        _generation: u64,
+        _outcome: Result<(), crate::command::WriteFailure>,
+    ) -> bool {
         false
     }
 

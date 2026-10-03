@@ -1240,8 +1240,9 @@ answers, so the call returns once the request is sent.
 A value outside those rules raises `ValueError`, or `OverflowError` for integers that
 don't fit, before anything is sent.
 
-The Rust server executes WriteGroup on its Channel objects. The Python
-`BACnetServer` can't hold a Channel yet, so it has nothing for a WriteGroup to change.
+The Rust server executes WriteGroup on its Channel objects, whose members may
+be in other devices. The Python `BACnetServer` can't hold a Channel yet, so it
+has nothing for a WriteGroup to change.
 
 ```python
 await client.write_group(

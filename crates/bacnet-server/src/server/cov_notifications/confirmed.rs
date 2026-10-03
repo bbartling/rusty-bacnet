@@ -221,8 +221,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         None => completed,
                     }
                 }
-                NotificationWorkerResult::Error | NotificationWorkerResult::Exhausted => {
-                    if result == NotificationWorkerResult::Error {
+                NotificationWorkerResult::Error(_) | NotificationWorkerResult::Exhausted => {
+                    if matches!(result, NotificationWorkerResult::Error(_)) {
                         warn!(invoke_id = id, "{label} rejected by subscriber");
                     } else {
                         warn!(
