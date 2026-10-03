@@ -55,6 +55,29 @@ under each by issue number, then slug; fragments without an issue come last.
 `assemble` ends each entry with a link to the GitHub commit that merged its
 fragment into dev, so don't add one yourself.
 
+## Pinning a commit
+
+When history can't say which commit made a change (a bulk move created the
+fragment, or a rebase rewrote it), add an optional `commit:` line after
+`section:`:
+
+```markdown
+---
+section: Fixed
+commit: 0123456789abcdef0123456789abcdef01234567
+---
+```
+
+- It takes 7 to 40 lowercase hex digits; write the full SHA.
+- `assemble` and `preview` link that commit ahead of the history lookup, even
+  in a shallow clone.
+- `check` fails when the commit is not on HEAD's first-parent history (dev's
+  merge commits). A shallow clone, such as CI's lint checkout, skips that
+  check without failing.
+- `python3 scripts/changelog_pin_commits.py [--dry-run]` pins fragments that
+  have no link where exactly one dev merge names their issue. It needs full
+  history, and running it twice changes nothing.
+
 Conformance ledger claims keep citing `CHANGELOG.md`, with the issue in the
 note, since that is where the entry lands at release.
 
