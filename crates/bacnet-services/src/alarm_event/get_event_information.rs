@@ -1,5 +1,8 @@
 use super::*;
-use crate::common::{decode_context, decode_context_bool, decode_context_enum};
+use bacnet_encoding::constructed::tagged::{
+    decode_app_unsigned, decode_ctx_boolean, decode_ctx_object_id, decode_ctx_primitive,
+    decode_ctx_unsigned,
+};
 use bacnet_types::bitstring::EventTransitionBits;
 
 fn decode_event_transition_bits(
@@ -8,7 +11,7 @@ fn decode_event_transition_bits(
     expected_tag: u8,
     field: &str,
 ) -> Result<(EventTransitionBits, usize), Error> {
-    let (content, end) = decode_context(data, offset, expected_tag, field)?;
+    let (content, end) = decode_ctx_primitive(data, offset, expected_tag, field)?;
     if content.len() != 2 || content[0] != 5 || content[1] & 0x1f != 0 {
         return Err(Error::decoding(
             offset,
@@ -16,26 +19,6 @@ fn decode_event_transition_bits(
         ));
     }
     Ok((EventTransitionBits::from_bacnet(&content[1..]), end))
-}
-
-fn decode_application_u32(data: &[u8], offset: usize, field: &str) -> Result<(u32, usize), Error> {
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::UNSIGNED {
-        return Err(Error::decoding(
-            offset,
-            format!("{field} expected application Unsigned"),
-        ));
-    }
-    let end = pos
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{field} length overflow")))?;
-    if end > data.len() {
-        return Err(Error::decoding(pos, format!("{field} truncated")));
-    }
-    let value = primitives::decode_unsigned(&data[pos..end])?;
-    let value = u32::try_from(value)
-        .map_err(|_| Error::decoding(offset, format!("{field} exceeds u32")))?;
-    Ok((value, end))
 }
 
 // GetEventInformation
@@ -63,7 +46,7 @@ impl GetEventInformationRequest {
                 last_received_object_identifier: None,
             });
         }
-        let (content, end) = decode_context(
+        let (object_identifier, end) = decode_ctx_object_id(
             data,
             0,
             0,
@@ -75,9 +58,8 @@ impl GetEventInformationRequest {
                 "GetEventInformation request contains trailing data",
             ));
         }
-        let last_received_object_identifier = Some(ObjectIdentifier::decode(content)?);
         Ok(Self {
-            last_received_object_identifier,
+            last_received_object_identifier: Some(object_identifier),
         })
     }
 }
@@ -135,18 +117,13 @@ impl GetEventInformationAck {
                 ));
             }
 
-            let (content, end) =
-                decode_context(data, offset, 0, "GetEventInformation ACK object-identifier")?;
-            let object_identifier = ObjectIdentifier::decode(content)?;
+            let (object_identifier, end) =
+                decode_ctx_object_id(data, offset, 0, "GetEventInformation ACK object-identifier")?;
             offset = end;
 
-            let (event_state, end) = decode_context_enum(
-                data,
-                offset,
-                1,
-                "GetEventInformation ACK event-state",
-                EventState::from_raw,
-            )?;
+            let (event_state, end) =
+                decode_ctx_unsigned::<u32>(data, offset, 1, "GetEventInformation ACK event-state")?;
+            let event_state = EventState::from_raw(event_state);
             offset = end;
 
             let (acknowledged_transitions, end) = decode_event_transition_bits(
@@ -184,13 +161,9 @@ impl GetEventInformationAck {
             }
             offset = next;
 
-            let (notify_type, end) = decode_context_enum(
-                data,
-                offset,
-                4,
-                "GetEventInformation ACK notify-type",
-                NotifyType::from_raw,
-            )?;
+            let (notify_type, end) =
+                decode_ctx_unsigned::<u32>(data, offset, 4, "GetEventInformation ACK notify-type")?;
+            let notify_type = NotifyType::from_raw(notify_type);
             offset = end;
 
             let (event_enable, end) = decode_event_transition_bits(
@@ -211,8 +184,11 @@ impl GetEventInformationAck {
             offset = next;
             let mut event_priorities = [0u32; 3];
             for pri in &mut event_priorities {
-                let (value, end) =
-                    decode_application_u32(data, offset, "GetEventInformation ACK event-priority")?;
+                let (value, end) = decode_app_unsigned::<u32>(
+                    data,
+                    offset,
+                    "GetEventInformation ACK event-priority",
+                )?;
                 *pri = value;
                 offset = end;
             }
@@ -237,7 +213,7 @@ impl GetEventInformationAck {
         }
 
         let (more_events, end) =
-            decode_context_bool(data, offset, 1, "GetEventInformation ACK more-events")?;
+            decode_ctx_boolean(data, offset, 1, "GetEventInformation ACK more-events")?;
         if end != data.len() {
             return Err(Error::decoding(
                 end,

@@ -1,12 +1,13 @@
 //! LifeSafetyOperation service per ASHRAE 135-2020 Clause 13.13.
 
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_object_id, decode_ctx_primitive, decode_ctx_unsigned,
+};
 use bacnet_encoding::primitives;
 use bacnet_types::enums::LifeSafetyOperation;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
-
-use crate::common::{decode_context, decode_context_u32};
 
 fn decode_requesting_source(content: &[u8]) -> Result<String, Error> {
     match content.first().copied() {
@@ -62,24 +63,27 @@ impl LifeSafetyOperationRequest {
 
         // [0] requestingProcessIdentifier
         let (requesting_process_identifier, end) =
-            decode_context_u32(data, offset, 0, "LifeSafetyOp processIdentifier")?;
+            decode_ctx_unsigned::<u32>(data, offset, 0, "LifeSafetyOp processIdentifier")?;
         offset = end;
 
         // [1] requestingSource
-        let (content, end) = decode_context(data, offset, 1, "LifeSafetyOp requestingSource")?;
+        let (content, end) =
+            decode_ctx_primitive(data, offset, 1, "LifeSafetyOp requestingSource")?;
         let requesting_source = decode_requesting_source(content)?;
         offset = end;
 
         // [2] request (BACnetLifeSafetyOperation)
-        let (request_raw, end) = decode_context_u32(data, offset, 2, "LifeSafetyOp request")?;
+        let (request_raw, end) =
+            decode_ctx_unsigned::<u32>(data, offset, 2, "LifeSafetyOp request")?;
         let request = LifeSafetyOperation::from_raw(request_raw);
         offset = end;
 
         // [3] objectIdentifier (optional)
         let mut object_identifier = None;
         if offset < data.len() {
-            let (content, end) = decode_context(data, offset, 3, "LifeSafetyOp objectIdentifier")?;
-            object_identifier = Some(ObjectIdentifier::decode(content)?);
+            let (oid, end) =
+                decode_ctx_object_id(data, offset, 3, "LifeSafetyOp objectIdentifier")?;
+            object_identifier = Some(oid);
             offset = end;
         }
         if offset != data.len() {

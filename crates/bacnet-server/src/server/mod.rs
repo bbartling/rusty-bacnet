@@ -70,8 +70,9 @@ use device_bindings::{register_configured_binding, DeviceBindingTable};
 use learned_router_cache::LearnedRouterCache;
 use lso_replay::{LsoAdmission, PendingLsoReplay};
 use notification_transactions::{
-    canonical_direct_peer, canonical_routed_peer, run_notification_worker,
-    NotificationTransactions, NotificationWorkerResult,
+    canonical_direct_peer, canonical_routed_peer, run_notification_under_dcc,
+    run_notification_worker, InitiationRestricted, NotificationTransactions,
+    NotificationWorkerResult,
 };
 use request_services::{DispatchContext, RequestOrigin, RequestServices, UnconfirmedServices};
 use requests::confirmed_response::ResponseTarget;
@@ -565,12 +566,14 @@ pub use dcc_disable_rate::DccDisableRateLimit;
 mod dcc_timer;
 pub use dcc_outcomes::DccOutcomeCounters;
 pub use dcc_policy::{DccPolicy, DccSource, DccSourceRestriction};
+mod binding_probes;
 mod device_bindings;
 mod discovery;
 #[doc(hidden)]
 pub use discovery::iam_request_for as discovery_iam_for_test;
 pub use discovery::{DiscoveryCounters, DiscoveryPolicy};
 pub(crate) use discovery::{DiscoveryLimiter, PreCheckDecision, WhoHasTarget};
+mod audit_log_purge;
 mod dispatch;
 mod durable_writes;
 mod event_delivery;
@@ -687,6 +690,8 @@ mod command_action_wire_tests;
 #[cfg(test)]
 mod command_remote_write_tests;
 #[cfg(test)]
+mod command_run_cancel_tests;
+#[cfg(test)]
 mod command_run_stop_tests;
 #[cfg(test)]
 mod confirmed_broadcast_tests;
@@ -773,6 +778,8 @@ mod loop_controlled_variable_tests;
 #[cfg(test)]
 mod loop_cov_tests;
 #[cfg(test)]
+mod notification_dcc_tests;
+#[cfg(test)]
 mod notification_transactions_tests;
 #[cfg(test)]
 mod pulse_converter_cov_tests;
@@ -780,6 +787,8 @@ mod pulse_converter_cov_tests;
 mod rb07_provenance_tests;
 #[cfg(test)]
 mod remote_write_answer_tests;
+#[cfg(test)]
+mod remote_write_discovery_tests;
 #[cfg(test)]
 mod run_cycle_tests;
 #[cfg(test)]

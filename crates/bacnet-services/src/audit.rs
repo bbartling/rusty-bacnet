@@ -59,16 +59,6 @@ pub struct AuditLogQueryRequest {
     pub requested_count: u16,
 }
 
-fn decode_canonical_unsigned(data: &[u8], offset: usize, field: &str) -> Result<u64, Error> {
-    if data.len() > 1 && data.first() == Some(&0) {
-        return Err(Error::decoding(
-            offset,
-            format!("{field} must use the shortest Unsigned/Enumerated encoding"),
-        ));
-    }
-    bacnet_encoding::primitives::decode_unsigned(data)
-}
-
 impl AuditNotificationRequest {
     /// Encode after validation, leaving `buf` unchanged on failure.
     pub fn try_encode(&self, buf: &mut BytesMut) -> Result<(), Error> {

@@ -1786,6 +1786,17 @@ snapshot files with `.slot0` and `.slot1` suffixes. Reuse the same path when
 reopening that Audit Log; the server does not infer a global or
 working-directory location.
 
+An Audit Log's Buffer_Size takes a write, from a client or through
+`write_property_local`, only while Log_Enable is FALSE; with logging on the
+write raises `WRITE_ACCESS_DENIED`. A smaller size keeps the newest records
+that fit, and a larger one keeps them all. The size written is stored with
+the log, so a reopened log keeps it and `buffer_size` sizes only a log its
+storage path does not hold yet; when the two differ the log keeps the stored
+size and logs a warning. To give a stored log a new size, turn Log_Enable off,
+write Buffer_Size and turn Log_Enable on again, or use a new storage path. Clients cannot purge an Audit Log, since its
+Record_Count is read-only; the application calls
+[`purge_audit_log`](#purge_audit_logobject_id).
+
 #### Inbound Audit notification sink
 
 ```python
@@ -2222,8 +2233,16 @@ until the list ends, and All_Writes_Successful then reads True only if every
 write succeeded. Zero, or an empty list, writes nothing. A command whose
 `device_identifier` names another device is sent there as a confirmed
 WriteProperty when the server has a binding for it, from `add_device_binding`
-or an I-Am heard in the last ten minutes; with none it fails and nothing is
-sent. `stop()` ends a run it cuts short with In_Process False.
+or an I-Am heard in the last ten minutes. With neither, the server first
+broadcasts one Who-Is for that device's instance alone, on every network or,
+for a device whose old I-Am it still holds, on the network that I-Am came
+from, and waits the APDU timeout (3 seconds) from the send for its I-Am,
+which binds it; with no I-Am the command fails and no WriteProperty is sent.
+A device gets at most one Who-Is a
+minute, so a command naming it within a minute of one that drew nothing
+fails at once, and nothing at all is sent while DeviceCommunicationControl
+restricts initiation. `stop()` ends a run it cuts short with In_Process
+False.
 
 `add_staging` validates the complete ladder and target mapping atomically; it
 does not invent stage limits, deadbands, names, priorities, or targets. Each
@@ -2342,7 +2361,9 @@ registers a Channel. A member is an `(object, property)` or
 own Device is stored as the local reference it stands for, as it is when a
 peer writes the list. A member in another device keeps its Device and is
 written there with a confirmed WriteProperty when the server has a binding for
-it, from `add_device_binding` or an I-Am it has heard; the value goes as
+it, from `add_device_binding` or an I-Am heard in the last ten minutes, or
+finds one with a Who-Is first, as for a Command's remote action (see
+[Building Control](#building-control)); the value goes as
 written, without the datatype conversion local members get (see the Channel
 paragraphs under [Lighting & Color](rust-api.md#lighting--color-5)).
 `execution_delay` holds one delay in milliseconds per member (zeros when
@@ -2747,6 +2768,27 @@ ReinitializeDevice, LifeSafety and Audit keep separate policies; this option
 neither configures endpoint Device-write authorization nor identifies certificate
 principals. See [Local mutation authorization](mutation-policy.md) for exact
 service coverage, validation precedence and exclusions.
+
+#### `purge_audit_log(object_id)`
+
+Purge an Audit Log on a running server: clear its records and append a
+BUFFER_PURGED status record, whether or not logging is enabled. The record
+also carries LOG_DISABLED while logging is off. Total_Record_Count keeps
+counting, and a confirmed notification already stored is still recognized
+when it is sent again. AuditLogQuery returns no records afterwards, since it
+returns notifications only; ReadRange shows the purge record. The purge
+reaches the log's storage before the log serves it, and the server's other
+requests carry on meanwhile. A notification batch lands whole on one side of
+the purge, in the order the two reached the log.
+
+An unknown object raises `BacnetProtocolError` with OBJECT / UNKNOWN_OBJECT,
+any object other than an Audit Log OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+and a missing clock or a failed commit DEVICE / OPERATIONAL_PROBLEM; the log is
+then left as it was. A server that is not running raises `RuntimeError`.
+
+```python
+await server.purge_audit_log(ObjectIdentifier(ObjectType.AUDIT_LOG, 1))
+```
 
 #### `comm_state() -> int`
 

@@ -2522,14 +2522,32 @@ follow In_Process.
 A command whose `device_identifier` names another device goes there as a
 confirmed WriteProperty (#1180). The address comes from the server's device
 bindings: a `DeviceBinding` registered on the builder, or an I-Am the server
-heard in the last ten minutes. The server sends no Who-Is, so a command naming
-a device it has no fresh binding for fails at once and nothing is sent. Each
-attempt waits `ServerConfig::cov_retry_timeout_ms` (3 seconds by default) for
-the answer, and only silence earns another attempt, up to three retries under
-the one invoke ID. An Error (BUSY included), Reject or Abort fails the command
-at once. Nothing is sent while DeviceCommunicationControl restricts
-initiation, and the run holds no database guard while the write is
-outstanding. Naming this server's own Device is the same as naming none.
+heard in the last ten minutes. For a device with neither, the server first
+broadcasts one Who-Is whose low and high limits are both that device's
+instance (#1322). A device it has never heard from is asked on every network
+(a global broadcast, DNET 65535). One whose stale I-Am is still held is asked
+where that I-Am came from: the local network, or the remote network it was
+routed from, where a remote network numbered as this device's own counts as
+local. If that Who-Is draws nothing, the stale I-Am is dropped, so the
+device's next Who-Is goes global. The server then waits
+`ServerConfig::cov_retry_timeout_ms`, counted from the send, for the I-Am,
+which binds the device as any I-Am does, and the write goes ahead; with no
+I-Am by then the command fails and no WriteProperty is sent. Writes that miss
+while that Who-Is is out share it and its wait. A device gets at most one
+Who-Is a minute, counted from when it went out, so a command naming it within
+a minute of one that drew nothing fails at once. At most 256 devices with a
+Who-Is out or held off are tracked, and a command needing another fails
+unsent; a device that answers frees its place at once and stays bound for
+ten minutes, so the cap limits unanswered Who-Is requests to 256 a minute.
+The wildcard instance 4194303 is never looked for. The write itself, to a
+binding routed through the local network's own number, still carries that
+DNET (#1358). Each attempt waits `ServerConfig::cov_retry_timeout_ms` (3
+seconds by default) for the answer, and only silence earns another attempt,
+up to three retries under the one invoke ID. An Error (BUSY included), Reject
+or Abort fails the command at once. Nothing is sent while
+DeviceCommunicationControl restricts initiation, a Who-Is included, and the
+run holds no database guard while the write is outstanding or waits for an
+I-Am. Naming this server's own Device is the same as naming none.
 
 A run that `stop()` cuts short isn't resumed. It ends where it stood
 (#1252): In_Process returns to FALSE, each command it hadn't made reads
@@ -2541,6 +2559,15 @@ server's own work has stopped, `stop()` also ends any run still in progress on
 the database, such as one a write made straight into the database queued.
 `stop()` doesn't wait for a database the application holds: those runs end as
 soon as it lets go.
+
+A run doesn't need `stop()` to end when the `write_local` that started it is
+dropped after its write committed, by a timeout or a `select!` (#1324). The
+write stays made, and the run, which hadn't reached its task yet, ends as if
+none of its writes were made: In_Process FALSE with every command
+unsuccessful, or a Channel's Write_Status FAILED with Reliability
+PROCESS_ERROR. It ends at once, or as soon as a database the application holds
+is free. The COV and event work the dropped call hadn't done yet is skipped
+(#1367).
 
 Whatever commits a Present_Value write owns the run it starts and finishes it,
 so no path leaves a Command in process (#1178). Without a server,
@@ -2760,20 +2787,24 @@ are skipped, and while Out_Of_Service is TRUE the value is kept but not passed
 on.
 
 A member in another device goes there as a confirmed WriteProperty, the way a
-Command's remote action does (#1264): addressed from the device bindings
-only, each attempt waiting `cov_retry_timeout_ms`, up to three retries for
-silence, nothing sent while DeviceCommunicationControl restricts initiation.
+Command's remote action does (#1264): addressed from the device bindings,
+with one targeted Who-Is and a wait of `cov_retry_timeout_ms` for the I-Am
+when the device has no fresh binding (#1322, sent and limited as for a
+Command), each attempt waiting `cov_retry_timeout_ms`, up to three
+retries for silence, nothing sent while DeviceCommunicationControl restricts
+initiation.
 The server can't read that property's datatype first, so the value goes as
 written (a lighting command only to `Lighting_Command`) and the device refuses
 a datatype it doesn't take (#1342). Members are written one at a time: while a
 remote write waits for its answer, Write_Status stays IN_PROGRESS (a
 Present_Value write, WriteGroup's included, is refused BUSY), and a member
 whose delay comes due meanwhile is written as soon as that write ends (#1343).
-A device that answers none of a write's attempts counts as offline for the
-rest of that distribution: its later members fail at once with nothing sent,
-while members in other devices and local ones are still written. A
-distribution therefore waits at most one write's attempts (four times
-`cov_retry_timeout_ms`, 12 seconds by default) per silent device. A run that
+A device that answers none of a write's attempts, or none of the Who-Is sent
+to find it, counts as offline for the rest of that distribution: its later
+members fail at once with nothing sent, while members in other devices and
+local ones are still written. A distribution therefore waits at most one
+Who-Is and one write's attempts (five times `cov_retry_timeout_ms`, 15
+seconds by default) per silent device. A run that
 `stop()` cuts short during a remote write ends FAILED and frees its invoke ID.
 Without a server, `tick_schedules` has no network, so a remote member fails
 there.
@@ -2789,7 +2820,9 @@ Reject of INVALID_PARAMETER_DATA_TYPE. A value the member itself refuses as
 out of range (VALUE_OUT_OF_RANGE) is PROCESS_ERROR: the clause leaves the
 choice open, and here only the Channel's own conversion counts against its
 configuration. COMMUNICATION_FAILURE means a remote member's device had no
-fresh binding, DCC restricted initiation, or no attempt was answered; an
+fresh binding and no I-Am answered the Who-Is for it (or none was sent, under
+the one-a-minute limit), DCC restricted initiation, or no attempt was
+answered; an
 attempt the transport failed to send waits like a silent one, so a send
 failure on every attempt lands here too. PROCESS_ERROR covers any other
 refusal (another Error code, another Reject reason, an Abort), a write the
@@ -2826,7 +2859,9 @@ the authorizer only decides confirmed services (#1319); those drops aren't
 counted in `mutation_decision_counters()`. The Channel writes make no Audit
 records (#1318), and the endpoint responder ignores WriteGroup.
 
-Channel runs are owned as Command runs are (#1178). Without a server,
+Channel runs are owned as Command runs are (#1178). A `write_local` dropped
+after the Channel took its value ends the distribution FAILED without
+`stop()`, as it ends a Command's run (#1324). Without a server,
 `tick_schedules` runs a distribution its Schedule writes start before it
 returns, delays included, and ends it FAILED if its future is dropped first.
 The bare `handle_write_property` and `handle_write_property_multiple` handlers
@@ -3435,8 +3470,11 @@ context to one follow-up, so changes held on every object go out together. Nothi
 re-sends by itself, so a subscriber that stopped answering, or keeps refusing,
 costs at most one delivery attempt per hold-off however often its objects change,
 and cannot keep the per-peer and global in-flight slots to itself. Shutdown and
-cancellation clear the mark without a hold-off. The retry timeout starts once each
-send has completed, and the transport bounds the send itself, so a report stays
+cancellation clear the mark without a hold-off, and so does DCC ending a report at
+a retry (see [Confirmed notifications under
+DeviceCommunicationControl](#confirmed-notifications-under-devicecommunicationcontrol)).
+The retry timeout starts once each send has completed, and the transport bounds
+the send itself, so a report stays
 outstanding for the transport's send bounds plus the retry cycle. The standard
 ends delivery with the confirmed-request retries (Clause 5.4.4); reporting again
 after a hold-off is local policy.
@@ -4212,8 +4250,9 @@ represents receipt only; no Audit Reporting BIBB, including AR-L-A, is claimed.
 `AuditLogObject` makes every `AuditLogPersistence::commit` call on a writer
 thread of its own, one at a time, so a custom backend never sees two calls at
 once; dropping the object waits for queued commits. The bundled server stages
-each inbound notification batch and each network or `write_local` Log_Enable
-change: the log builds the next snapshot and queues its commit, the server
+each inbound notification batch, each network or `write_local` Log_Enable or
+Buffer_Size change, and each `purge_audit_log`: the log builds the next
+snapshot and queues its commit, the server
 waits for the commit with the object database guard dropped, and only then
 does the log take the snapshot. Other requests read and write the database
 meanwhile, and the promises above hold: a batch reaches memory, and a
@@ -4235,6 +4274,50 @@ creates that slot (on Unix; on Windows `std` cannot open a directory, so that
 step is skipped). The commit has landed by then, so a filesystem that cannot
 synchronize a directory is passed over and any other failure there is logged,
 not returned.
+
+#### Buffer_Size and purging
+
+Buffer_Size takes a write, from a peer or through `write_local`, only while
+Log_Enable is FALSE (Clause 12.64.9). With logging on the write fails with
+`PROPERTY / WRITE_ACCESS_DENIED`, whatever the value. The value is an
+Unsigned up to `MAX_AUDIT_RECORDS`: another datatype is `INVALID_DATA_TYPE`,
+and a larger size, 2^32-1 included, `VALUE_OUT_OF_RANGE`. A smaller size
+keeps the newest records that fit and drops the rest without a status
+record, as the ring does when it overflows; a larger size keeps them all, and
+the current size changes nothing. The size is part of the stored snapshot:
+a reopened log keeps the size last written, and the `buffer_size` passed to
+`AuditLogObject::new` only sizes a log its storage does not hold yet. When the
+two differ the log keeps the stored size and logs a warning. To give a stored
+log a new size, turn Log_Enable off, write Buffer_Size and turn Log_Enable on
+again, or start from empty storage.
+
+Peers cannot purge an Audit Log. Its Record_Count is read-only, unlike the
+other logs' (Clause 12.64.11), so a Record_Count write fails with
+`WRITE_ACCESS_DENIED`. The application purges the log with
+`BACnetServer::purge_audit_log(&oid)`, or with `AuditLogObject::purge` on a
+log it holds itself. A purge clears the ring and appends a BUFFER_PURGED
+status record, whether or not logging is enabled, flagged LOG_DISABLED too
+while it is not (Clause 12.64.10). Total_Record_Count keeps counting, and the
+completed-receipt ledger survives, so a confirmed notification already stored
+is still a duplicate afterwards. AuditLogQuery then returns no records, since
+it returns notifications only; ReadRange shows the purge record.
+
+Both stage like a Log_Enable write, so the commit runs with the database
+guard dropped and the log serves the new state only once storage holds it.
+A WritePropertyMultiple that turns Log_Enable off and then writes
+Buffer_Size stages the two together as one commit, made off the guard as
+well; the request takes each change as it reaches it, and if it stops
+between them, storage is set back to the state the log serves.
+A commit that fails refuses the write or the purge with
+`DEVICE / OPERATIONAL_PROBLEM` and leaves the log as it was; a Log_Enable
+write whose commit fails is refused the same way. Changes to one log land one
+at a time, in the order they were staged, so a notification batch lands whole
+on one side of a purge: a batch already committing when the purge is asked for
+lands first and is purged with the rest, and one that arrives while the purge
+commits follows the purge record. `purge_audit_log` also refuses an unknown
+object with `OBJECT / UNKNOWN_OBJECT`, any object other than a built-in Audit
+Log with `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`, a missing clock with
+`DEVICE / OPERATIONAL_PROBLEM`, and any call once the server has stopped.
 
 ---
 
@@ -4569,6 +4652,41 @@ naming any network is sent routed, as it is written. The server has one port,
 so the local network is that port's; a multi-port device would need the
 network attached to each port (#863).
 
+### Confirmed notifications under DeviceCommunicationControl
+
+While DeviceCommunicationControl restricts initiation the server sends no COV
+or event notification, and that holds for the retries of a confirmed one
+already outstanding (Clause 16.1, #1327). Every attempt, the first and each
+retry, reads the communication state before it sends. An attempt that DCC
+blocks is not sent: the notification ends there, its invoke ID freed at once
+instead of after the remaining timeouts. An answer that has already taken the
+lease still ends it as usual. The server refuses the deprecated DISABLE, so
+DISABLE_INITIATION is the state that does this. What happens next depends on
+the notification:
+
+- **COV.** The report ends with no hold-off, because the subscriber did not
+  fail, and its baselines stay where they were. Timestamped history goes back
+  to its queue, and the `Max_Notification_Delay` backstop sends it once
+  communication is enabled again, at once if its delay has run out by then.
+  Untimestamped values are reported by the reference's next fanout, as a
+  change DCC held back before its first send would be. A change partly sent
+  value by value stays in delivery, so the history bound keeps the rest of it.
+  A report withdrawn before its first attempt is taken back out of the COV
+  counters, since nothing went out.
+- **Events.** Nothing in `EventNotificationCounters` moves, and the
+  notification is not sent again once communication is enabled, the same as a
+  transition DCC stops before its first send. `Acked_Transitions` keeps what
+  the transition set; delivery never changes it.
+- **Audit.** Not withdrawn. Clause 16.1 exempts Confirmed- and
+  UnconfirmedAuditNotification from DISABLE_INITIATION, and an audit
+  notification makes a single attempt with no retries, so one already sent
+  waits for its answer, and the reporter's health and backlog are untouched.
+  The server still holds back audit notifications that are due to start while
+  initiation is disabled, a known gap against that exemption (#1370).
+
+A write a Command or Channel makes in another device follows the same rule
+(see [Building Control](#building-control-7)).
+
 ### Notification forwarding
 
 A `NotificationForwarderObject` (type 51, Clause 12.51) originates no events.
@@ -4718,7 +4836,8 @@ notifications alike, whose Notification Class lookup failed closed: one per
 `RecipientLookupOutcome` that suppresses delivery, alongside the warning each
 one logs. `NoConfiguredDestinations` and `NoMatchingDestinations` are
 configured behaviour and are not counted, nor are notifications held back by
-DCC or Event_Enable. The three confirmed fields count notifications to one
+DCC or Event_Enable, a confirmed one DCC ends at a retry included. The three
+confirmed fields count notifications to one
 recipient; a reservation refused because the server is stopping is not
 counted.
 

@@ -9,11 +9,12 @@
 //! answer is written once that write ends: its delay is the least it waits
 //! (#1343).
 //!
-//! A device that answers none of a write's attempts is taken to be offline
+//! A device that answers none of a write's attempts, or none of the Who-Is
+//! sent to find it when it had no binding (#1322), is taken to be offline
 //! for the rest of the distribution: its later members fail at once as
-//! communication failures, with nothing sent, so a distribution waits out
-//! one write's retries per silent device rather than per member. Members in
-//! other devices, and local ones, are still written.
+//! communication failures, with nothing sent, so a distribution waits out at
+//! most one Who-Is and one write's retries per silent device rather than per
+//! member. Members in other devices, and local ones, are still written.
 //!
 //! For a member in this device the runner looks up the datatype of the
 //! property's current value, coerces the channel value to it (Table 12-63)
@@ -59,7 +60,8 @@ pub(super) async fn distribute<H: RunHost>(
     let mut members: Vec<&ChannelMember> = distribution.members.iter().collect();
     members.sort_by_key(|member| member.delay_ms);
     let mut outcome = Ok(());
-    // Devices that answered none of a write's attempts in this distribution.
+    // Devices that answered none of a write's attempts, or its Who-Is, in
+    // this distribution.
     let mut silent = Vec::new();
     for (written, member) in members.into_iter().enumerate() {
         if member.delay_ms > 0 {
