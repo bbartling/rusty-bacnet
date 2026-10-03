@@ -2590,7 +2590,7 @@
     "In service both writes fail with WRITE_ACCESS_DENIED. Out of service a count is an Unsigned and a Reliability an Enumerated in the BACnetReliability production, else INVALID_DATA_TYPE or VALUE_OUT_OF_RANGE.",
     "`AccessZoneObject::set_occupancy_count` updates the count set aside while out of service, and `set_reliability_internal` is refused then, as on the other Reliability carriers.",
     "The return to service serves the count set aside, a choice Clause 12.32.11 leaves to the implementation.",
-    "A simulated count moves Occupancy_State. The zone runs no intrinsic reporting and has no Table 13-1 row, so a simulated value raises no event and sends no COV report."
+    "A simulated count moves Occupancy_State, and a simulated count or Reliability can raise an event. The zone has no Table 13-1 row, so neither sends a COV report."
    ]
   },
   {
@@ -2657,12 +2657,79 @@
     "The zone always counts, so Occupancy_Count, Occupancy_Count_Enable, Adjust_Value and both limits are always served; Occupancy_State never reads NOT_SUPPORTED.",
     "Occupancy_Count_Enable and the limits are read-only on the network; `set_occupancy_count_enable` and `set_occupancy_limits` set them, a nonzero upper limit at or below the lower one being VALUE_OUT_OF_RANGE.",
     "Turning counting off zeroes the served count, the count set aside and Adjust_Value; meanwhile the application's counts are dropped and a simulated count other than zero is VALUE_OUT_OF_RANGE. Counting restarts from zero.",
-    "Adjust_Value is an Integer: in service a nonzero value is added to the count, stopping at zero, and zero clears it; out of service it is kept and the count stays as simulated.",
-    "Event_State reads NORMAL, as the zone runs no intrinsic reporting."
+    "Adjust_Value is an Integer: in service a nonzero value is added to the count, stopping at zero, and zero clears it; out of service it is kept and the count stays as simulated."
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-ZONE-INTRINSIC-REPORTING",
+   "standard_anchor": "Clause 12.32, Table 12-37, Clauses 12.32.25 to 12.32.37, Clause 13.3.2, Table 13-5",
+   "priority": "P1",
+   "summary": "An Access Zone reports CHANGE_OF_STATE on Occupancy_State against Alarm_Values after Time_Delay and sends each transition to its Notification Class recipients.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/event/state_reporting.rs",
+    "crates/bacnet-objects/src/access_control/zone.rs::AccessZoneObject",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs",
+    "crates/bacnet-server/src/server/event_notification_payload.rs::project_intrinsic_payload"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/zone_event_tests.rs::{access_zone_serves_the_event_rows,access_zone_goes_offnormal_after_time_delay_and_back_to_normal,access_zone_event_enable_gates_distribution_not_the_transition,access_zone_acknowledges_its_latest_offnormal_transition,access_zone_simulated_fault_and_count_drive_the_event_state}",
+    "crates/bacnet-server/src/server/access_zone_event_tests.rs::{access_zone_occupancy_alarm_reaches_notification_class_recipients,access_zone_event_enable_withholds_only_the_distribution,access_zone_fault_notification_reports_occupancy_state}",
+    "crates/bacnet-server/src/handlers/tests/access_zone_oos_writes.rs::alarm_values_take_occupancy_states_over_the_wire",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list,property_metadata_access_trio_write_capabilities_match_dispatch}",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_zone_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/zone_event_tests.rs::{access_zone_alarm_values_take_occupancy_states_only,access_zone_condition_cleared_within_time_delay_reports_nothing,access_zone_event_detection_enable_suspends_and_resets_reporting}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#access-control-7"
+   ],
+   "notes": [
+    "Time_Delay, Notification_Class, Alarm_Values, Event_Enable, Notify_Type, Event_Detection_Enable and Time_Delay_Normal are writable; Acked_Transitions, Event_Time_Stamps and Event_Message_Texts are read-only.",
+    "Alarm_Values takes named BACnetAccessZoneOccupancyState values and proprietary ones from 64 to 65535, else VALUE_OUT_OF_RANGE naming the element; a lone value is a one-element list.",
+    "The algorithm watches the Occupancy_State and Reliability served, so a count or fault simulated out of service raises events as a real one does.",
+    "A CHANGE_OF_STATE notification carries Occupancy_State as its `zone-occupancy-state` New_State; a CHANGE_OF_RELIABILITY one lists Occupancy_State.",
+    "Moving from one alarm value to another keeps OFFNORMAL and sends nothing, the optional re-indication of Clause 13.3.2 being left out."
    ],
    "gaps": [
-    "Intrinsic reporting on Occupancy_State (CHANGE_OF_STATE) and its event rows are not modeled (no issue)",
-    "Entry_Points and Exit_Points serve Object Identifiers, not BACnetDeviceObjectReference elements, and have no setter (no issue)"
+    "#1132: a count the application sets on the object reaches the algorithm at the next one-second tick, as no runtime route runs it at once",
+    "Event_Message_Texts_Config, Event_Algorithm_Inhibit and Event_Algorithm_Inhibit_Ref are not served (no issue)"
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-ZONE-ENTRY-EXIT-POINTS",
+   "standard_anchor": "Clause 12.32, Table 12-37, Clauses 12.32.23 and 12.32.24",
+   "priority": "P1",
+   "summary": "An Access Zone serves Entry_Points and Exit_Points as lists of BACnetDeviceObjectReference naming Access Points, which the application sets.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/zone.rs::AccessZoneObject",
+    "crates/bacnet-objects/src/device_reference.rs::object_reference_list",
+    "crates/bacnet-objects/src/device_reference.rs::check_device_member",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/zone_points_tests.rs::access_zone_entry_and_exit_points_serve_device_object_references",
+    "crates/bacnet-server/src/handlers/tests/device_reference_reads.rs::access_zone_entry_and_exit_points_are_served_framed",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_entry_and_exit_points_reach_the_zone_lists",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_entry_and_exit_points_reach_the_lists_and_name_points_only",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_array_keywords"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/zone_points_tests.rs::access_zone_points_refuse_other_objects_and_non_device_devices"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#constructed-property-framing",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "`set_entry_points` and `set_exit_points` refuse a reference to anything but an Access Point, or one whose device identifier is not a Device, with VALUE_OUT_OF_RANGE, keeping the list.",
+    "Both lists are read-only on the network: WriteProperty gets WRITE_ACCESS_DENIED.",
+    "Python sets them at registration with `add_access_zone(entry_points=..., exit_points=...)`."
    ]
   },
   {
@@ -2712,6 +2779,7 @@
     "crates/bacnet-objects/src/device_reference.rs::check_device_member",
     "crates/bacnet-objects/src/access_control/door.rs::set_door_members",
     "crates/bacnet-objects/src/access_control/point.rs::set_access_doors",
+    "crates/bacnet-objects/src/access_control/zone.rs::set_entry_points",
     "crates/bacnet-objects/src/staging.rs",
     "crates/bacnet-objects/src/group.rs::add_subordinate",
     "crates/bacnet-objects/src/channel/arrays.rs::check_member",
@@ -2723,6 +2791,7 @@
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/access_control/device_reference_tests.rs::{access_door_door_members_refuse_a_non_device_device_identifier,access_point_access_doors_refuse_a_non_device_device_identifier,access_point_event_credential_refuses_a_non_device_device_identifier,access_credential_assigned_access_rights_refuse_a_non_device_device_identifier}",
+    "crates/bacnet-objects/src/access_control/zone_points_tests.rs::access_zone_points_refuse_other_objects_and_non_device_devices",
     "crates/bacnet-objects/src/group/tests.rs::{structured_view_add_subordinate_refuses_a_non_device_device_identifier,structured_view_set_subordinates_replaces_both_arrays_or_nothing}",
     "crates/bacnet-objects/src/staging/tests.rs::target_references_refuse_a_non_device_device_identifier",
     "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::set_energy_meter_ref_refuses_objects_that_are_not_meters_atomically",

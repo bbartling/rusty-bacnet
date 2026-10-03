@@ -662,6 +662,8 @@ mod shutdown;
 #[cfg(test)]
 mod access_door_pulse_task_tests;
 #[cfg(test)]
+mod access_zone_event_tests;
+#[cfg(test)]
 mod acknowledge_alarm_tests;
 #[cfg(test)]
 mod active_cov_subscriptions_tests;

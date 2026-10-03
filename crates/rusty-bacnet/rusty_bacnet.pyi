@@ -2844,7 +2844,29 @@ class BACnetServer:
         ...
     def add_access_rights(self, instance: int, name: str) -> None: ...
     def add_access_user(self, instance: int, name: str) -> None: ...
-    def add_access_zone(self, instance: int, name: str) -> None: ...
+    def add_access_zone(
+        self,
+        instance: int,
+        name: str,
+        *,
+        entry_points: Optional[
+            list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
+        ] = None,
+        exit_points: Optional[
+            list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
+        ] = None,
+    ) -> None:
+        """Add an Access Zone object to the server (before starting).
+
+        ``entry_points`` and ``exit_points`` set Entry_Points and Exit_Points,
+        the Access Points leading into and out of the zone (read-only over
+        the network), in the element forms ``add_access_door`` takes for
+        ``door_members``. A pair whose device isn't a Device object
+        identifier raises ValueError, and a reference to anything but an
+        Access Point raises BacnetProtocolError with VALUE_OUT_OF_RANGE;
+        either way nothing is registered.
+        """
+        ...
     def add_credential_data_input(
         self,
         instance: int,

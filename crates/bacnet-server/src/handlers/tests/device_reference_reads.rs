@@ -151,3 +151,58 @@ fn life_safety_member_lists_are_served_framed() {
     );
     assert_eq!(read(&db, lsz, PropertyIdentifier::MEMBER_OF), remote);
 }
+
+#[test]
+fn access_zone_entry_and_exit_points_are_served_framed() {
+    use bacnet_objects::access_control::AccessZoneObject;
+
+    let mut db = ObjectDatabase::new();
+    let mut zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
+    zone.set_entry_points([
+        BACnetDeviceObjectReference::from(oid(ObjectType::ACCESS_POINT, 1)),
+        BACnetDeviceObjectReference {
+            device_identifier: Some(oid(ObjectType::DEVICE, 9)),
+            object_identifier: oid(ObjectType::ACCESS_POINT, 4),
+        },
+    ])
+    .unwrap();
+    zone.set_exit_points([oid(ObjectType::ACCESS_POINT, 2)])
+        .unwrap();
+    let az = zone.object_identifier();
+    db.add(Box::new(zone)).unwrap();
+
+    // Access Point 1 here, [1] alone; Access Point 4 in Device 9, [0] then
+    // [1] (#1306).
+    let entry = read(&db, az, PropertyIdentifier::ENTRY_POINTS);
+    assert_eq!(
+        entry,
+        [
+            0x1C, 0x08, 0x40, 0x00, 0x01, // [1] access-point 1
+            0x0C, 0x02, 0x00, 0x00, 0x09, // [0] device 9
+            0x1C, 0x08, 0x40, 0x00, 0x04, // [1] access-point 4
+        ]
+    );
+    assert_eq!(
+        read(&db, az, PropertyIdentifier::EXIT_POINTS),
+        [0x1C, 0x08, 0x40, 0x00, 0x02]
+    );
+    // Table 12-37 codes both R: a client's write of the served bytes is
+    // refused and changes nothing.
+    let mut request = BytesMut::new();
+    WritePropertyRequest {
+        object_identifier: az,
+        property_identifier: PropertyIdentifier::ENTRY_POINTS,
+        property_array_index: None,
+        property_value: entry.clone(),
+        priority: None,
+    }
+    .encode(&mut request)
+    .unwrap();
+    assert!(matches!(
+        sourced_wp(&mut db, &request),
+        Err(Error::Protocol { class, code })
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
+    ));
+    assert_eq!(read(&db, az, PropertyIdentifier::ENTRY_POINTS), entry);
+}

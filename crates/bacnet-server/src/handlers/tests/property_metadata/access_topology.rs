@@ -56,6 +56,21 @@ fn access_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
     objects
 }
 
+/// The zone's intrinsic-reporting rows (#1305), all optional, in metadata
+/// order.
+const ZONE_EVENT_ROWS: [P; 10] = [
+    P::TIME_DELAY,
+    P::NOTIFICATION_CLASS,
+    P::ALARM_VALUES,
+    P::EVENT_ENABLE,
+    P::ACKED_TRANSITIONS,
+    P::NOTIFY_TYPE,
+    P::EVENT_TIME_STAMPS,
+    P::EVENT_MESSAGE_TEXTS,
+    P::EVENT_DETECTION_ENABLE,
+    P::TIME_DELAY_NORMAL,
+];
+
 fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
     let all = match kind {
         ObjectType::ACCESS_DOOR => vec![
@@ -117,7 +132,10 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::ADJUST_VALUE,
             P::OCCUPANCY_UPPER_LIMIT,
             P::OCCUPANCY_LOWER_LIMIT,
-        ],
+        ]
+        .into_iter()
+        .chain(ZONE_EVENT_ROWS)
+        .collect(),
     };
     let optional = match kind {
         ObjectType::ACCESS_DOOR => vec![
@@ -138,7 +156,10 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::ADJUST_VALUE,
             P::OCCUPANCY_UPPER_LIMIT,
             P::OCCUPANCY_LOWER_LIMIT,
-        ],
+        ]
+        .into_iter()
+        .chain(ZONE_EVENT_ROWS)
+        .collect(),
     };
     let required: Vec<_> = all
         .iter()

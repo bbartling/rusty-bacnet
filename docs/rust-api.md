@@ -1866,6 +1866,11 @@ framing, through the shared `bacnet-encoding` codecs.
   declaring Present_Value's format and class puts Present_Value back to
   UNDEFINED, with Update_Time stamped from the Device clock; out of service
   that covers the simulated factor and the reader's factor put aside.
+- **Access Zone `Entry_Points` and `Exit_Points`** (Clauses 12.32.23 and
+  12.32.24) are BACnetLISTs of `BACnetDeviceObjectReference`, read-only on the
+  network. `AccessZoneObject::set_entry_points` and `set_exit_points` set
+  them and return `Result`: a reference to anything but an Access Point is
+  VALUE_OUT_OF_RANGE, and the points set before are kept.
 - **Device references**: a
   `BACnetDeviceObjectReference` whose device identifier is present must name
   a Device object (Clause 21);
@@ -1875,6 +1880,7 @@ framing, through the shared `bacnet-encoding` codecs.
   setter that stores these references refuses one that breaks the rule with
   VALUE_OUT_OF_RANGE and keeps what it held: `set_door_members`,
   `set_access_doors`, `set_access_event`'s credential,
+  `AccessZoneObject::set_entry_points` and `set_exit_points`,
   `AccessCredentialObject::set_assigned_access_rights`,
   `StructuredViewObject::add_subordinate`, `set_energy_meter_ref` and the
   Staging configuration. A Staging `Target_References` write over the network
@@ -2622,8 +2628,27 @@ Adjust_Value), and otherwise compares Occupancy_Count with the limits
 limit at or below the lower one is VALUE_OUT_OF_RANGE). Adjust_Value is the
 one writable counting row: an Integer written in service is added to the
 count (stopping at zero, and zero clears it), while out of service it is
-kept without moving the count. Event_State stays NORMAL, as the zone runs no
-intrinsic reporting.
+kept without moving the count.
+
+An Access Zone reports intrinsically on Occupancy_State with the
+CHANGE_OF_STATE algorithm (Clause 12.32). It serves the event rows the
+Multi-state Input does: Time_Delay, Notification_Class, Alarm_Values,
+Event_Enable, Acked_Transitions, Notify_Type, Event_Time_Stamps,
+Event_Message_Texts, Event_Detection_Enable and Time_Delay_Normal, the
+configuration writable over the network. Alarm_Values is a list of
+BACnetAccessZoneOccupancyState values (named, or proprietary from 64 to
+65535; anything else is VALUE_OUT_OF_RANGE), which
+`AccessZoneObject::set_alarm_values` sets too. Event_State goes OFFNORMAL
+once Occupancy_State has stayed in Alarm_Values for Time_Delay seconds,
+whether the count moves through `set_occupancy_count`, an Adjust_Value write
+or a count simulated out of service, and back to NORMAL once it has stayed
+out of them for Time_Delay_Normal; a Reliability other than
+NO_FAULT_DETECTED is FAULT. The server sends each transition to the
+recipients of the zone's Notification Class: a CHANGE_OF_STATE notification
+carries Occupancy_State as its `zone-occupancy-state` New_State, and a
+CHANGE_OF_RELIABILITY one lists Occupancy_State (Table 13-5). A count the
+application sets directly on the object is picked up by the one-second
+tick.
 
 Over the network the Access Point event values stay read-only, but writing
 its Out_Of_Service records an event on each edge (Clause 12.31.8):

@@ -6,6 +6,7 @@ use bacnet_types::enums::PropertyIdentifier as P;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
+    PropertyPresenceCondition::IntrinsicReporting,
     PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
@@ -19,8 +20,9 @@ use crate::property_metadata::{
 // exactly three rows, and Property_List is appended so the projection helper
 // omits it while required_properties keeps it. Only implemented rows are
 // described: table rows the objects do not serve (Door_Unlock_Delay_Time,
-// event/intrinsic/audit/tag/profile rows) stay absent until dispatch
-// exists. The required door rows #1073
+// the door's and point's event rows, the zone's Event_Message_Texts_Config
+// and Event_Algorithm_Inhibit pair, audit/tag/profile rows) stay absent
+// until dispatch exists. The required door rows #1073
 // added follow Relinquish_Default: Door_Pulse_Time, Door_Extended_Pulse_Time
 // and Door_Open_Too_Long_Time carry the table R code with routed Unsigned32
 // arms, so RequiredRead/Always, and Current_Command_Priority, derived from
@@ -64,11 +66,16 @@ use crate::property_metadata::{
 // code with footnote 5 and a routed Integer arm, so Optional/Always; and
 // Occupancy_Count_Enable and the two limits carry the O code with no write
 // arm (the application sets them), so Optional/ReadOnly.
+// The zone's event rows (#1305) follow the Multi-state Input's: the Table
+// 12-37 O code with footnote 3 or 7, so Optional with the IntrinsicReporting
+// presence reason. Time_Delay, Notification_Class, Alarm_Values,
+// Event_Enable, Notify_Type, Event_Detection_Enable and Time_Delay_Normal
+// have routed write arms, so Always; Acked_Transitions, Event_Time_Stamps
+// and Event_Message_Texts are kept by the event machinery, so ReadOnly.
 // Apart from the door's and the zone's footnote-1 rows, every write arm is
 // routed unconditionally and the suites pin in-service writes, so those rows
-// are Always and the metadata mirrors dispatch. Presence is None throughout: the
-// implementation models no commandable, intrinsic-reporting, or paired-text
-// gating on this family.
+// are Always and the metadata mirrors dispatch. Presence is None on every
+// other row: the family models no commandable or paired-text gating.
 // The trio is not createable at runtime (the network factory builds only the
 // eight analog/binary/multi-state input/output/value types, so the
 // is_createable=false default holds) and remains deleteable (delete denies
@@ -139,6 +146,46 @@ const ACCESS_ZONE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::ADJUST_VALUE, Optional, None, Always),
     PropertyMetadata::new(P::OCCUPANCY_UPPER_LIMIT, Optional, None, ReadOnly),
     PropertyMetadata::new(P::OCCUPANCY_LOWER_LIMIT, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::TIME_DELAY, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::NOTIFICATION_CLASS,
+        Optional,
+        Some(IntrinsicReporting),
+        Always,
+    ),
+    PropertyMetadata::new(P::ALARM_VALUES, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(P::EVENT_ENABLE, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::ACKED_TRANSITIONS,
+        Optional,
+        Some(IntrinsicReporting),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(P::NOTIFY_TYPE, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::EVENT_TIME_STAMPS,
+        Optional,
+        Some(IntrinsicReporting),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::EVENT_MESSAGE_TEXTS,
+        Optional,
+        Some(IntrinsicReporting),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::EVENT_DETECTION_ENABLE,
+        Optional,
+        Some(IntrinsicReporting),
+        Always,
+    ),
+    PropertyMetadata::new(
+        P::TIME_DELAY_NORMAL,
+        Optional,
+        Some(IntrinsicReporting),
+        Always,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 

@@ -71,6 +71,18 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::ADJUST_VALUE, true, true),
             (P::OCCUPANCY_UPPER_LIMIT, true, false),
             (P::OCCUPANCY_LOWER_LIMIT, true, false),
+            // The event rows #1305 added: the configuration is writable,
+            // the event machinery keeps the rest.
+            (P::TIME_DELAY, true, true),
+            (P::NOTIFICATION_CLASS, true, true),
+            (P::ALARM_VALUES, true, true),
+            (P::EVENT_ENABLE, true, true),
+            (P::ACKED_TRANSITIONS, true, false),
+            (P::NOTIFY_TYPE, true, true),
+            (P::EVENT_TIME_STAMPS, true, false),
+            (P::EVENT_MESSAGE_TEXTS, true, false),
+            (P::EVENT_DETECTION_ENABLE, true, true),
+            (P::TIME_DELAY_NORMAL, true, true),
             (P::PROPERTY_LIST, false, false),
         ],
     }

@@ -2,7 +2,8 @@
 
 add_access_door(door_members=...), add_access_point(access_doors=...) and
 add_credential_data_input(supported_formats=...) set arrays that are
-read-only over the network (#1249).
+read-only over the network (#1249), and add_access_zone(entry_points=...,
+exit_points=...) the zone's lists of Access Points (#1306).
 """
 
 from __future__ import annotations
@@ -27,6 +28,8 @@ from rusty_bacnet import (
 LOCK = ObjectIdentifier(ObjectType.BINARY_OUTPUT, 1)
 REMOTE_DEVICE = ObjectIdentifier(ObjectType.DEVICE, 99)
 REMOTE_DOOR = ObjectIdentifier(ObjectType.ACCESS_DOOR, 4)
+LOBBY_POINT = ObjectIdentifier(ObjectType.ACCESS_POINT, 1)
+REMOTE_POINT = ObjectIdentifier(ObjectType.ACCESS_POINT, 4)
 
 # A BACnetDeviceObjectReference: device identifier [0] when present, object
 # identifier [1].
@@ -34,17 +37,23 @@ LOCK_REFERENCE = bytes([0x1C, 0x01, 0x00, 0x00, 0x01])
 REMOTE_DOOR_REFERENCE = bytes(
     [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x07, 0x80, 0x00, 0x04]
 )
+LOBBY_POINT_REFERENCE = bytes([0x1C, 0x08, 0x40, 0x00, 0x01])
+REMOTE_POINT_REFERENCE = bytes(
+    [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x08, 0x40, 0x00, 0x04]
+)
 # Supported_Formats elements: format type [0], then vendor id [1] and vendor
 # format [2] for the CUSTOM format.
 WIEGAND26_FORMAT = bytes([0x09, 0x08])
 VENDOR_260_FORMAT = bytes([0x09, 0x02, 0x1A, 0x01, 0x04, 0x29, 0x07])
 
 
-# Each registration method and the keyword-only argument that sets its array.
+# Each registration method and the keyword-only arguments that set its arrays
+# or lists.
 ARRAY_KEYWORDS = (
-    ("add_access_door", "door_members"),
-    ("add_access_point", "access_doors"),
-    ("add_credential_data_input", "supported_formats"),
+    ("add_access_door", ["door_members"]),
+    ("add_access_point", ["access_doors"]),
+    ("add_access_zone", ["entry_points", "exit_points"]),
+    ("add_credential_data_input", ["supported_formats"]),
 )
 
 
@@ -82,25 +91,30 @@ def factor(format_type: int, format_class: int, value: bytes) -> PropertyValue:
 
 class AccessControlStubContractTests(unittest.TestCase):
     def test_runtime_and_stub_expose_the_array_keywords(self) -> None:
-        for method_name, keyword in ARRAY_KEYWORDS:
+        for method_name, keywords in ARRAY_KEYWORDS:
             with self.subTest(method=method_name):
                 parameters = inspect.signature(
                     getattr(BACnetServer, method_name)
                 ).parameters
-                self.assertEqual(list(parameters), ["self", "instance", "name", keyword])
-                self.assertIs(parameters[keyword].kind, inspect.Parameter.KEYWORD_ONLY)
-                self.assertIsNone(parameters[keyword].default)
+                self.assertEqual(
+                    list(parameters), ["self", "instance", "name", *keywords]
+                )
+                for keyword in keywords:
+                    self.assertIs(
+                        parameters[keyword].kind, inspect.Parameter.KEYWORD_ONLY
+                    )
+                    self.assertIsNone(parameters[keyword].default)
                 method = installed_stub_method(method_name)
                 self.assertEqual(
                     [argument.arg for argument in method.args.args],
                     ["self", "instance", "name"],
                 )
                 self.assertEqual(
-                    [argument.arg for argument in method.args.kwonlyargs], [keyword]
+                    [argument.arg for argument in method.args.kwonlyargs], keywords
                 )
-                [default] = method.args.kw_defaults
-                self.assertIsInstance(default, ast.Constant)
-                self.assertIsNone(default.value)
+                for default in method.args.kw_defaults:
+                    self.assertIsInstance(default, ast.Constant)
+                    self.assertIsNone(default.value)
 
 
 class AccessControlConfigurationTests(unittest.TestCase):
@@ -160,6 +174,48 @@ class AccessControlConfigurationTests(unittest.TestCase):
                         ObjectIdentifier(ObjectType.ACCESS_POINT, instance), doors, 0
                     )
                 self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
+        finally:
+            await server.stop()
+
+    def test_entry_and_exit_points_reach_the_lists_and_name_points_only(self) -> None:
+        asyncio.run(self._entry_and_exit_points())
+
+    async def _entry_and_exit_points(self) -> None:
+        server = make_server()
+        server.add_access_zone(
+            1,
+            "Building A",
+            entry_points=[LOBBY_POINT, (REMOTE_DEVICE, REMOTE_POINT)],
+            exit_points=[(REMOTE_DEVICE, REMOTE_POINT)],
+        )
+        server.add_access_zone(2, "Building B")
+        with self.assertRaises(BacnetProtocolError) as raised:
+            server.add_access_zone(3, "Wrong", exit_points=[REMOTE_DOOR])
+        self.assert_value_out_of_range(raised.exception)
+        with self.assertRaises(ValueError):
+            server.add_access_zone(
+                3, "Wrong", entry_points=[(REMOTE_DOOR, LOBBY_POINT)]
+            )
+        await server.start()
+        try:
+            zone = ObjectIdentifier(ObjectType.ACCESS_ZONE, 1)
+            entry = PropertyIdentifier.ENTRY_POINTS
+            exit_ = PropertyIdentifier.EXIT_POINTS
+            # A list of context-tagged references reads back as its octets.
+            self.assertEqual(
+                (await server.read_property(zone, entry)).value,
+                LOBBY_POINT_REFERENCE + REMOTE_POINT_REFERENCE,
+            )
+            self.assertEqual(
+                (await server.read_property(zone, exit_)).value, REMOTE_POINT_REFERENCE
+            )
+            bare = ObjectIdentifier(ObjectType.ACCESS_ZONE, 2)
+            self.assertEqual((await server.read_property(bare, entry)).value, [])
+            with self.assertRaises(BacnetProtocolError) as raised:
+                await server.read_property(
+                    ObjectIdentifier(ObjectType.ACCESS_ZONE, 3), entry
+                )
+            self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
         finally:
             await server.stop()
 
