@@ -1723,7 +1723,8 @@ framing, through the shared `bacnet-encoding` codecs.
   selects, framed in `[0]`. `CommandObject::set_action` takes
   `BACnetActionList` values and refuses a command whose priority is outside 1
   to 16 or whose value can't be encoded. All three arrays are read-only on the
-  network, and the Command stores Present_Value without running the actions.
+  network. Writing the Command's Present_Value runs the list it selects; see
+  [Building Control](#building-control-7).
 - **Load Control shed levels** (Clause 12.28): Requested_Shed_Level,
   Expected_Shed_Level and Actual_Shed_Level are `BACnetShedLevel` values, one
   context tag each: percent `[0]` or level `[1]` (Unsigned, `u64` in Rust) or
@@ -2047,6 +2048,28 @@ SubscribeCOVProperty on Controlled_Variable_Value is notified, while a Subscribe
 on the Loop carries the value in its next report without being triggered by it.
 Before the Loop is added, `LoopObject::set_controlled_variable_value` sets the
 starting value.
+
+A Command object runs one of its Action lists each time its Present_Value is
+written (Clause 12.10). Give it the lists with `CommandObject::set_action`
+before adding it, and optionally one description per list with
+`set_action_text`, which serves Action_Text and needs exactly one text per
+list; both arrays are read-only on the network. Present_Value N selects list
+N. A number above the list count is VALUE_OUT_OF_RANGE, and zero or an empty
+list writes nothing and sets All_Writes_Successful TRUE. Otherwise In_Process
+turns TRUE and All_Writes_Successful FALSE, and every Present_Value write is
+OBJECT / BUSY until the run ends. A running server makes the commands in order
+through the `write_local` path, each at its own priority with the Command as
+the initiating object, and waits out a command's `post_delay` in the run's own
+task, so the write that started the run is answered at once. Each command's
+`write_successful` flag records its outcome; a failure with `quit_on_failure`
+set stops the list and marks the rest unsuccessful. At the end In_Process
+returns to FALSE, with All_Writes_Successful TRUE only if every write
+succeeded. The server writes to its own objects only, so a command naming
+another Device fails. A Schedule writing a Command's Present_Value starts the
+run as well. Command takes SubscribeCOVProperty but not SubscribeCOV, so a
+client can follow In_Process. A run that `stop()` cuts short isn't resumed,
+and a Command used without the server keeps its queued run, and In_Process
+TRUE, until something takes it.
 
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
 Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and

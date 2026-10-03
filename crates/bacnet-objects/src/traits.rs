@@ -454,6 +454,44 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         false
     }
 
+    /// Take the action list a Command object's Present_Value write queued.
+    ///
+    /// The default keeps every other object source-compatible. The bundled
+    /// server takes it under the guard that committed the write, then makes
+    /// the writes after releasing that guard.
+    #[doc(hidden)]
+    fn take_command_run_internal(&mut self) -> Option<crate::command::CommandRun> {
+        None
+    }
+
+    /// Return the current Command run generation, if applicable.
+    #[doc(hidden)]
+    fn command_generation_internal(&self) -> Option<u64> {
+        None
+    }
+
+    /// Record how command `command` of the running list fared.
+    ///
+    /// Returns whether the run is still the current one. Implementations
+    /// ignore a stale generation, so older work can't mark a newer run.
+    #[doc(hidden)]
+    fn record_command_write_internal(
+        &mut self,
+        _generation: u64,
+        _command: usize,
+        _success: bool,
+    ) -> bool {
+        false
+    }
+
+    /// End the current Command run, setting All_Writes_Successful.
+    ///
+    /// Returns whether readable state changed; a stale generation is ignored.
+    #[doc(hidden)]
+    fn complete_command_run_internal(&mut self, _generation: u64, _all_succeeded: bool) -> bool {
+        false
+    }
+
     /// Return this object's GetEnrollmentSummary event capability.
     ///
     /// The default opts custom and downstream objects out. Implementations opt

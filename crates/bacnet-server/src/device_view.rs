@@ -347,6 +347,9 @@ impl BACnetObject for DeviceReadView<'_> {
     fn staging_generation_internal(&self) -> Option<u64> {
         self.object.staging_generation_internal()
     }
+    fn command_generation_internal(&self) -> Option<u64> {
+        self.object.command_generation_internal()
+    }
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
         self.object.enrollment_summary_capability_internal()
     }
