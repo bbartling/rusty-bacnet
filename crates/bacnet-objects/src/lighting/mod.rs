@@ -122,8 +122,8 @@ impl LightingOutputObject {
     /// the operation uses must be in range: target level 0.0 to 100.0, fade
     /// time 100 to 86,400,000 ms, ramp rate and step increment 0.1 to 100.0,
     /// priority 1 to 16. Fields it doesn't use are kept unchecked, and a
-    /// proprietary operation (256 to 65,535) is taken as it is. A refusal is
-    /// VALUE_OUT_OF_RANGE and leaves the property unchanged.
+    /// proprietary operation (256 to 65,535) has only its priority checked. A
+    /// refusal is VALUE_OUT_OF_RANGE and leaves the property unchanged.
     pub fn set_lighting_command(&mut self, command: BACnetLightingCommand) -> Result<(), Error> {
         command::check(&command)?;
         self.lighting_command = command;

@@ -2715,8 +2715,9 @@ Lighting Output's `Lighting_Command` holds a `BACnetLightingCommand`
 (`bacnet_types::constructed`): an operation plus an optional target level, ramp
 rate, step increment, fade time and priority (#1263). It reads operation NONE
 until written. Over the network it travels as the command's context-tagged
-fields, which `bacnet_encoding::constructed::{encode_lighting_command,
-decode_lighting_command}` write and read; locally the object reads as
+fields, which `bacnet_encoding::constructed::encode_lighting_command` writes and
+`decode_lighting_command_value` reads (`decode_lighting_command` reads one at
+an offset inside a larger value); locally the object reads as
 `PropertyValue::ApplicationData` holding those octets, and
 `set_lighting_command` and `lighting_command` take and return the typed value.
 Each command is checked against its operation (Clause 12.54, Table 12-67):
@@ -2726,14 +2727,16 @@ Each command is checked against its operation (Clause 12.54, Table 12-67):
 - A field the operation uses must be in range: target level 0.0 to 100.0, fade
   time (FADE_TO) 100 to 86,400,000 ms, ramp rate (RAMP_TO) and step increment
   (the four step operations) 0.1 to 100.0, and priority 1 to 16.
-- A field the operation doesn't use is kept as written without a check, and a
-  proprietary operation (256 to 65,535) is taken as it comes.
+- A field the operation doesn't use is kept as written without a check. A
+  proprietary operation (256 to 65,535) has only its priority checked, the
+  same check a Channel makes of a lighting command written to it.
 
 A refused command is VALUE_OUT_OF_RANGE. Any other datatype, an OCTET STRING
 included, is INVALID_DATA_TYPE, and octets that aren't exactly one command are
-INVALID_DATA_ENCODING. The object stores the command without carrying it out:
-Present_Value, Tracking_Value, In_Progress and the priority array stay as they
-are.
+INVALID_DATA_ENCODING, even when a field is also too wide for its type. An
+Unsigned or ENUMERATED field may open with zero octets only up to four contents
+octets. The object stores the command without carrying it out: Present_Value,
+Tracking_Value, In_Progress and the priority array stay as they are (#1384).
 
 A Channel passes each value written to its Present_Value on to its members
 (Clause 12.53, #1151). Give it the members with `ChannelObject::set_members`,

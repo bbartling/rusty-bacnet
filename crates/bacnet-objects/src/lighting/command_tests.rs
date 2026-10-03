@@ -85,10 +85,18 @@ fn lighting_output_lighting_command_refuses_other_datatypes() {
             ErrorCode::INVALID_DATA_TYPE,
         );
     }
-    // Nothing, an operation cut short, a priority cut short, and an octet
-    // after the command.
+    // Nothing, an operation cut short, a priority cut short, an octet after
+    // the command, and one after a priority too wide for an Unsigned8: the
+    // broken encoding outranks the oversized field.
     let trailing = [&FADE[..], &[0x00]].concat();
-    for broken in [&[][..], &[0x09][..], &FADE[..8], &trailing[..]] {
+    let wide_then_trailing = [0x09, 0x07, 0x5A, 0x01, 0x00, 0xFF];
+    for broken in [
+        &[][..],
+        &[0x09][..],
+        &FADE[..8],
+        &trailing[..],
+        &wide_then_trailing[..],
+    ] {
         assert_error(
             lo.write_property(LC, None, octets(broken), None),
             ErrorCode::INVALID_DATA_ENCODING,
@@ -137,6 +145,16 @@ fn lighting_output_lighting_command_checks_what_each_operation_takes() {
         BACnetLightingCommand {
             priority: Some(17),
             ..level(Op::FADE_TO, Some(50.0))
+        },
+        // A proprietary operation's priority is checked too, as a Channel
+        // checks it.
+        BACnetLightingCommand {
+            priority: Some(0),
+            ..command(Op::from_raw(256))
+        },
+        BACnetLightingCommand {
+            priority: Some(17),
+            ..command(Op::from_raw(65_535))
         },
     ];
     let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
@@ -187,9 +205,10 @@ fn lighting_output_lighting_command_checks_what_each_operation_takes() {
             fade_time: Some(1),
             ..command(Op::STEP_UP)
         },
-        // Nor is any field of a proprietary operation.
+        // Nor is any field of a proprietary operation but its priority.
         BACnetLightingCommand {
-            priority: Some(0),
+            fade_time: Some(0),
+            priority: Some(16),
             ..level(Op::from_raw(256), Some(-1.0))
         },
         command(Op::from_raw(65_535)),

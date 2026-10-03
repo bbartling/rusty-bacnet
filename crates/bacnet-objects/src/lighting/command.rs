@@ -17,16 +17,17 @@
 //! - FADE_TO and RAMP_TO need a target level, 0.0 to 100.0.
 //! - A fade time must be 100 to 86,400,000 ms where FADE_TO carries one; a
 //!   ramp rate 0.1 to 100.0 where RAMP_TO does; a step increment 0.1 to 100.0
-//!   where a step operation does; and a priority 1 to 16 on every standard
-//!   operation.
+//!   where a step operation does; and a priority 1 to 16 on every operation.
 //! - A field the operation has no use for is kept as written but not
 //!   checked, since the clause has the object ignore it.
-//! - A proprietary operation (256 to 65,535) is taken as it comes. The table
-//!   gives it no fields, so none is checked.
+//! - A proprietary operation (256 to 65,535) is taken with only its priority
+//!   checked: the table gives it no other field. The priority check matches
+//!   the one a Channel makes of the lighting commands it takes, so a command
+//!   a Channel passes on and the same command written directly fare alike.
 
 use std::ops::RangeInclusive;
 
-use bacnet_encoding::constructed::{decode_lighting_command, encode_lighting_command};
+use bacnet_encoding::constructed::{decode_lighting_command_value, encode_lighting_command};
 use bacnet_encoding::tags;
 use bacnet_types::constructed::BACnetLightingCommand;
 use bacnet_types::enums::LightingOperation;
@@ -48,14 +49,13 @@ enum Uses {
     Ramp,
     /// A step increment.
     Step,
-    /// Priority alone.
+    /// Priority alone: the warn operations, STOP and proprietary ones.
     Priority,
 }
 
-/// The fields `operation` uses: `None` for a proprietary operation, whose
-/// fields go unchecked, and an error for one that can't be written.
-fn uses(operation: LightingOperation) -> Result<Option<Uses>, Error> {
-    Ok(Some(match operation {
+/// The fields `operation` uses, or an error for one that can't be written.
+fn uses(operation: LightingOperation) -> Result<Uses, Error> {
+    Ok(match operation {
         LightingOperation::FADE_TO => Uses::Fade,
         LightingOperation::RAMP_TO => Uses::Ramp,
         LightingOperation::STEP_UP
@@ -66,9 +66,9 @@ fn uses(operation: LightingOperation) -> Result<Option<Uses>, Error> {
         | LightingOperation::WARN_OFF
         | LightingOperation::WARN_RELINQUISH
         | LightingOperation::STOP => Uses::Priority,
-        other if PROPRIETARY_OPERATIONS.contains(&other.to_raw()) => return Ok(None),
+        other if PROPRIETARY_OPERATIONS.contains(&other.to_raw()) => Uses::Priority,
         _ => return Err(common::value_out_of_range_error()),
-    }))
+    })
 }
 
 /// Refuse a present `value` outside `range`.
@@ -90,10 +90,7 @@ fn target_level(command: &BACnetLightingCommand) -> Result<(), Error> {
 /// Check `command` against what its operation takes; see the module
 /// documentation for the rules.
 pub(super) fn check(command: &BACnetLightingCommand) -> Result<(), Error> {
-    let Some(uses) = uses(command.operation)? else {
-        return Ok(());
-    };
-    match uses {
+    match uses(command.operation)? {
         Uses::Fade => {
             target_level(command)?;
             within(command.fade_time, DEFAULT_FADE_TIME_MS)?;
@@ -125,14 +122,12 @@ pub(super) fn decode_write(value: PropertyValue) -> Result<BACnetLightingCommand
         Err(_) => return Err(common::invalid_data_encoding_error()),
     }
     // The codec reports a field too wide for its type as a local OutOfRange
-    // error; any other failure is a broken encoding.
-    let (command, end) = decode_lighting_command(&bytes, 0).map_err(|error| match error {
+    // error, and only once the octets are otherwise exactly one command; any
+    // other failure is a broken encoding.
+    let command = decode_lighting_command_value(&bytes).map_err(|error| match error {
         Error::OutOfRange(_) => common::value_out_of_range_error(),
         _ => common::invalid_data_encoding_error(),
     })?;
-    if end != bytes.len() {
-        return Err(common::invalid_data_encoding_error());
-    }
     check(&command)?;
     Ok(command)
 }

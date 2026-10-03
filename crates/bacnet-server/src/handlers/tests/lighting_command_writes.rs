@@ -88,7 +88,7 @@ fn lighting_command_refuses_other_datatypes_and_broken_encodings() {
         write_raw(&mut db, oid, &[0x1C, 0x42, 0x48, 0x00, 0x00]),
         ErrorCode::INVALID_DATA_TYPE,
     );
-    let broken: [&[u8]; 5] = [
+    let broken: [&[u8]; 7] = [
         // Fields out of order: ramp rate [2] before target level [1].
         &[
             0x09, 0x02, 0x2C, 0x41, 0x20, 0x00, 0x00, 0x1C, 0x42, 0x48, 0x00, 0x00,
@@ -98,8 +98,14 @@ fn lighting_command_refuses_other_datatypes_and_broken_encodings() {
         // An undefined field [6], and an application-tagged one.
         &[0x09, 0x07, 0x69, 0x01],
         &[0x09, 0x01, 0x44, 0x42, 0x48, 0x00, 0x00],
-        // An operation with no content octets.
+        // An operation with no content octets, and STOP in five octets that
+        // open with zeros.
         &[0x08],
+        &[0x0D, 0x05, 0x00, 0x00, 0x00, 0x00, 0x0A],
+        // A priority too wide for an Unsigned8 with an application NULL after
+        // it: the broken encoding outranks the oversized field. (A lone 0xFF
+        // there would break the request's own [3] frame instead.)
+        &[0x09, 0x07, 0x5A, 0x01, 0x00, 0x00],
     ];
     for value in broken {
         assert_refused(
@@ -113,7 +119,7 @@ fn lighting_command_refuses_other_datatypes_and_broken_encodings() {
 #[test]
 fn lighting_command_checks_the_fields_each_operation_uses() {
     let (mut db, oid) = lighting_output();
-    let out_of_range: [&[u8]; 16] = [
+    let out_of_range: [&[u8]; 18] = [
         // NONE, reserved operations 11 and 255, and 65,536.
         &[0x09, 0x00],
         &[0x09, 0x0B],
@@ -141,6 +147,9 @@ fn lighting_command_checks_the_fields_each_operation_uses() {
         &[0x09, 0x07, 0x59, 0x00],
         &[0x09, 0x07, 0x59, 0x11],
         &[0x09, 0x07, 0x5A, 0x01, 0x00],
+        // Proprietary operations 256 at priority 0 and 65,535 at 17.
+        &[0x0A, 0x01, 0x00, 0x59, 0x00],
+        &[0x0A, 0xFF, 0xFF, 0x59, 0x11],
     ];
     for value in out_of_range {
         assert_refused(

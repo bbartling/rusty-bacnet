@@ -3344,7 +3344,7 @@
     "Current_Command_Priority comes from the value macro through `common::current_command_priority`, as on the analog, binary, multi-state and lighting objects. Its metadata matches Priority_Array: Optional with the Commandable presence condition, read-only.",
     "The value macro takes an optional `cov_increment` entry naming the table's datatype (`u64` for Unsigned, `f64` for Double), so only the three numeric types serve the row, with a validated `set_cov_increment` setter. Its metadata is the Analog Value shape: Optional, no presence condition, writable.",
     "`BACnetObject::cov_increment` returns an `f64` so a Double increment is compared without rounding through a REAL; a subscription's own REAL increment widens exactly. Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions report the increment in use as a REAL, so a Large Analog Value increment is narrowed there.",
-    "Default_Fade_Time starts at 100 ms, the shortest fade the range allows, as Default_Ramp_Rate starts at its fastest rate; `set_default_fade_time` applies the same range as WriteProperty. No fade operation runs: Lighting_Command is stored as opaque bytes.",
+    "Default_Fade_Time starts at 100 ms, the shortest fade the range allows, as Default_Ramp_Rate starts at its fastest rate; `set_default_fade_time` applies the same range as WriteProperty. No fade operation runs: Lighting_Command is stored typed but not carried out (#1384).",
     "Lighting Output serves a writable REAL COV_Increment, starting at 0, through `common::write_cov_increment`: a negative or non-finite value is VALUE_OUT_OF_RANGE and another datatype INVALID_DATA_TYPE. It is an optional row in Property_List, the metadata (writable) and the PICS, and a SubscribeCOV notification goes out when Present_Value moves by at least the increment. Binary Lighting Output has no COV_Increment."
    ]
   },
@@ -4478,7 +4478,7 @@
     "crates/rusty-bacnet/tests/test_lighting_command.py::LightingCommandTests::{test_reads_none_until_written,test_commands_write_and_read_in_their_encoding,test_channel_passes_a_lighting_command_on}"
    ],
    "negative_tests": [
-    "crates/bacnet-encoding/src/constructed/tests/lighting_command.rs::{lighting_command_cut_inside_a_field_is_a_short_buffer,lighting_command_wrong_tags_and_lengths_are_malformed,lighting_command_fields_too_wide_for_their_type_are_out_of_range}",
+    "crates/bacnet-encoding/src/constructed/tests/lighting_command.rs::{lighting_command_cut_inside_a_field_is_a_short_buffer,lighting_command_wrong_tags_and_lengths_are_malformed,lighting_command_fields_too_wide_for_their_type_are_out_of_range,lighting_command_unsigned_past_four_octets_with_a_leading_zero_is_malformed,lighting_command_value_must_fill_its_input_before_a_field_is_too_wide}",
     "crates/bacnet-encoding/src/constructed/tests/channel_value.rs::malformed_lighting_commands_are_refused",
     "crates/bacnet-objects/src/lighting/command_tests.rs::{lighting_output_lighting_command_refuses_other_datatypes,lighting_output_lighting_command_checks_what_each_operation_takes}",
     "crates/bacnet-server/src/handlers/tests/lighting_command_writes.rs::{lighting_command_refuses_other_datatypes_and_broken_encodings,lighting_command_checks_the_fields_each_operation_uses}",
@@ -4491,13 +4491,13 @@
    ],
    "notes": [
     "Lighting_Command reads operation NONE until written, and a write of NONE is refused with VALUE_OUT_OF_RANGE.",
-    "A field the operation doesn't use is kept as written without a range check. A proprietary operation (256 to 65,535) is taken with no field checked.",
+    "A field the operation doesn't use is kept as written without a range check. A proprietary operation (256 to 65,535) has only its priority checked, so a direct write and a Channel value agree on priority.",
     "FADE_TO or RAMP_TO without a target level, and a field too wide for its type, are VALUE_OUT_OF_RANGE.",
-    "A value that doesn't open with the operation field is INVALID_DATA_TYPE; octets that aren't exactly one command are INVALID_DATA_ENCODING.",
+    "A value that doesn't open with the operation field is INVALID_DATA_TYPE. Octets that aren't exactly one command, or an Unsigned of more than four octets that opens with zero, are INVALID_DATA_ENCODING, ahead of any oversized field.",
     "A Channel value's lighting command is read by the same codec, which also requires its priority to be 1 to 16."
    ],
    "gaps": [
-    "A command doesn't fade, ramp, step, blink-warn or start egress: Present_Value, Tracking_Value and In_Progress don't change (no issue)"
+    "#1384: a command doesn't fade, ramp, step, blink-warn or start egress; Present_Value, Tracking_Value and In_Progress don't change"
    ]
   },
   {

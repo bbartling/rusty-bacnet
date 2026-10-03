@@ -112,7 +112,9 @@ pub use landing_call_status::{
 };
 pub use landing_door_status::{decode_landing_door_status, encode_landing_door_status};
 pub use lift_car_call_list::{decode_lift_car_call_list, encode_lift_car_call_list};
-pub use lighting_command::{decode_lighting_command, encode_lighting_command};
+pub use lighting_command::{
+    decode_lighting_command, decode_lighting_command_value, encode_lighting_command,
+};
 pub use log_multiple_record::{decode_log_multiple_record, encode_log_multiple_record};
 pub use log_record::{decode_log_record, encode_log_record};
 pub use object_property_reference::{

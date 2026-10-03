@@ -2322,7 +2322,8 @@ The object checks each command against its operation as the Rust API notes
 describe: NONE, a reserved operation, FADE_TO or RAMP_TO without a target
 level, or a field out of range raises `BacnetProtocolError` with
 VALUE_OUT_OF_RANGE. An `octet_string`, or any other datatype, raises
-INVALID_DATA_TYPE. The object stores the command without carrying it out. A
+INVALID_DATA_TYPE. The object stores the command without carrying it out
+(#1384). A
 [Channel](#channels) with a `Lighting_Command` member passes on a lighting
 command written to its Present_Value: the fields above between `b"\x0e"` and
 `b"\x0f"`, the opening and closing context tag 0.

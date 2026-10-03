@@ -9,7 +9,7 @@
 
 use bacnet_types::error::Error;
 
-use super::lighting_command::decode_lighting_command;
+use super::lighting_command::decode_fields;
 use super::tagged::expect_closing;
 use crate::primitives;
 use crate::tags::{self, TagClass};
@@ -20,12 +20,14 @@ use crate::tags::{self, TagClass};
 /// The value is one well-formed application-tagged primitive of any character
 /// set, or a constructed context-\[0\] BACnetLightingCommand. The lighting
 /// command must decode (see [`decode_lighting_command`]) and close right after
-/// its last field, and its priority, when present, must be 1 to 16; its
-/// levels, fade time and operation aren't range-checked. Contents that run
-/// past the end of `data` fail with [`Error::BufferTooShort`]; any other
-/// malformed value with [`Error::Decoding`], including a level field of the
-/// wrong length that the data also cuts short, and a field too wide for its
-/// type.
+/// its last field. Then no field may be too wide for its type, and its
+/// priority, when present, must be 1 to 16; its levels, fade time and
+/// operation aren't range-checked. Contents that run past the end of `data`
+/// fail with [`Error::BufferTooShort`]; any other malformed value with
+/// [`Error::Decoding`], including a level field of the wrong length that the
+/// data also cuts short, and a field too wide for its type.
+///
+/// [`decode_lighting_command`]: super::decode_lighting_command
 pub fn channel_value_end(data: &[u8], offset: usize) -> Result<usize, Error> {
     if offset >= data.len() {
         return Err(Error::decoding(offset, "missing channel value"));
@@ -40,17 +42,18 @@ pub fn channel_value_end(data: &[u8], offset: usize) -> Result<usize, Error> {
             "a channel value is an application-tagged primitive or a context 0 lighting command",
         ));
     }
-    let (command, end) = decode_lighting_command(data, pos).map_err(|error| match error {
-        Error::OutOfRange(message) => Error::decoding(offset, message),
-        other => other,
-    })?;
+    let (command, end, oversized) = decode_fields(data, pos)?;
+    let after = expect_closing(data, end, 0, "lighting command")?;
+    if let Some(field) = oversized {
+        return Err(Error::decoding(offset, format!("lighting command {field}")));
+    }
     if let Some(priority) = command.priority.filter(|p| !(1..=16).contains(p)) {
         return Err(Error::decoding(
             offset,
             format!("lighting command priority {priority} out of range 1-16"),
         ));
     }
-    expect_closing(data, end, 0, "lighting command")
+    Ok(after)
 }
 
 /// Whether `data` is exactly one context-\[0\] lighting command, the only

@@ -14,7 +14,7 @@ use bacnet_types::error::Error;
 use bytes::BytesMut;
 
 use super::members::{narrow, unsigned_member};
-use super::tagged::{decode_ctx_primitive, decode_ctx_real, decode_optional_ctx};
+use super::tagged::{decode_ctx_primitive, decode_ctx_real, decode_optional_ctx, expect_end};
 use crate::primitives;
 
 /// The production name the decode errors carry.
@@ -38,6 +38,11 @@ pub fn encode_lighting_command(buf: &mut BytesMut, value: &BACnetLightingCommand
     }
 }
 
+/// The most contents octets an Unsigned or ENUMERATED field may have when
+/// its first octet is zero. Every field fits in 32 bits, so a longer field
+/// that opens with a zero octet isn't in its shortest form (Clause 20.2.4).
+const MAX_PADDED_OCTETS: usize = 4;
+
 /// Read the Unsigned or ENUMERATED under primitive context tag `tag` at
 /// `offset` and narrow it to `T`. A value too wide for `T` is recorded as
 /// `oversized` and read as zero, so the rest of the structure still gets
@@ -50,33 +55,28 @@ fn unsigned_field<T: TryFrom<u64> + Default>(
     oversized: &mut Option<&'static str>,
 ) -> Result<(T, usize), Error> {
     let (content, end) = decode_ctx_primitive(data, offset, tag, WHAT)?;
+    if content.len() > MAX_PADDED_OCTETS && content[0] == 0 {
+        return Err(Error::decoding(
+            offset,
+            format!(
+                "{WHAT}: [{tag}] has {} contents octets and a leading zero",
+                content.len()
+            ),
+        ));
+    }
     let value = unsigned_member(content, end - content.len())?;
     Ok((narrow(value, too_wide, oversized), end))
 }
 
-/// Decode one unframed `BACnetLightingCommand` SEQUENCE at `offset`.
-///
-/// Returns the command and the offset just past its last field. Decoding
-/// stops at the first tag that isn't the next optional field, so a caller
-/// that expects exactly one command must check that the returned offset
-/// reaches the end of its data, or the closing tag of its frame.
-///
-/// Field values aren't range-checked here; the receiver does that. Failures
-/// come in three kinds:
-///
-/// - contents that run past the end of `data`: [`Error::BufferTooShort`];
-/// - any other malformed field (a missing operation, a REAL not four octets
-///   long, an Unsigned with no contents octets): [`Error::Decoding`];
-/// - a well-formed command whose operation or fade time needs more than 32
-///   bits, or whose priority needs more than 8: [`Error::OutOfRange`], naming
-///   the first such field. A malformed field anywhere takes precedence.
-///
-/// Leading zero octets in an Unsigned or ENUMERATED are accepted;
-/// [`encode_lighting_command`] always writes the shortest form.
-pub fn decode_lighting_command(
-    data: &[u8],
-    offset: usize,
-) -> Result<(BACnetLightingCommand, usize), Error> {
+/// A decoded command, the offset just past its last field, and the first
+/// field too wide for its type, if any.
+pub(super) type Fields = (BACnetLightingCommand, usize, Option<&'static str>);
+
+/// Read the fields of one unframed `BACnetLightingCommand` at `offset`,
+/// stopping at the first tag that isn't the next optional field. A field
+/// too wide for its type is returned rather than refused, so the caller can
+/// check the rest of its input first.
+pub(super) fn decode_fields(data: &[u8], offset: usize) -> Result<Fields, Error> {
     let mut oversized = None;
     let (operation, offset) = unsigned_field::<u32>(
         data,
@@ -106,18 +106,68 @@ pub fn decode_lighting_command(
             &mut oversized,
         )
     })?;
-    if let Some(field) = oversized {
-        return Err(Error::OutOfRange(format!("{WHAT} {field}")));
+    let command = BACnetLightingCommand {
+        operation: LightingOperation::from_raw(operation),
+        target_level,
+        ramp_rate,
+        step_increment,
+        fade_time,
+        priority,
+    };
+    Ok((command, offset, oversized))
+}
+
+/// The [`Error::OutOfRange`] for a field too wide for its type.
+fn too_wide(field: &'static str) -> Error {
+    Error::OutOfRange(format!("{WHAT} {field}"))
+}
+
+/// Decode one unframed `BACnetLightingCommand` SEQUENCE at `offset`.
+///
+/// Returns the command and the offset just past its last field. Decoding
+/// stops at the first tag that isn't the next optional field, so a caller
+/// that expects exactly one command must check that the returned offset
+/// reaches the end of its data, or the closing tag of its frame. A caller
+/// whose whole input must be one command uses
+/// [`decode_lighting_command_value`] instead, which checks that before it
+/// reports a field too wide for its type.
+///
+/// Field values aren't range-checked here; the receiver does that. Failures
+/// come in three kinds:
+///
+/// - contents that run past the end of `data`: [`Error::BufferTooShort`];
+/// - any other malformed field (a missing operation, a REAL not four octets
+///   long, an Unsigned with no contents octets, or one of more than four
+///   that opens with a zero octet): [`Error::Decoding`];
+/// - a well-formed command whose operation or fade time needs more than 32
+///   bits, or whose priority needs more than 8: [`Error::OutOfRange`], naming
+///   the first such field. A malformed field anywhere takes precedence.
+///
+/// Up to four contents octets, an Unsigned or ENUMERATED may open with zero
+/// octets; [`encode_lighting_command`] always writes the shortest form.
+pub fn decode_lighting_command(
+    data: &[u8],
+    offset: usize,
+) -> Result<(BACnetLightingCommand, usize), Error> {
+    let (command, end, oversized) = decode_fields(data, offset)?;
+    match oversized {
+        Some(field) => Err(too_wide(field)),
+        None => Ok((command, end)),
     }
-    Ok((
-        BACnetLightingCommand {
-            operation: LightingOperation::from_raw(operation),
-            target_level,
-            ramp_rate,
-            step_increment,
-            fade_time,
-            priority,
-        },
-        offset,
-    ))
+}
+
+/// Decode a `BACnetLightingCommand` that fills `data`, as a WriteProperty of
+/// Lighting_Command carries it.
+///
+/// Fails as [`decode_lighting_command`] does, and with [`Error::Decoding`]
+/// when octets follow the last field. A field too wide for its type is
+/// [`Error::OutOfRange`] only when the rest of `data` is one well-formed
+/// command, so a broken input is always reported as broken.
+pub fn decode_lighting_command_value(data: &[u8]) -> Result<BACnetLightingCommand, Error> {
+    let (command, end, oversized) = decode_fields(data, 0)?;
+    expect_end(data, end, end, WHAT)?;
+    match oversized {
+        Some(field) => Err(too_wide(field)),
+        None => Ok(command),
+    }
 }

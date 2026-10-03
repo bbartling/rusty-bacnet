@@ -205,6 +205,55 @@ fn lighting_command_fields_too_wide_for_their_type_are_out_of_range() {
 }
 
 #[test]
+fn lighting_command_unsigned_past_four_octets_with_a_leading_zero_is_malformed() {
+    // Every field fits 32 bits, so five octets opening with zero aren't the
+    // shortest form: operation 1, fade time 100 and priority 8 padded so.
+    for value in [
+        &[0x0D, 0x05, 0x00, 0x00, 0x00, 0x00, 0x01][..],
+        &[0x09, 0x01, 0x4D, 0x05, 0x00, 0x00, 0x00, 0x00, 0x64],
+        &[0x09, 0x07, 0x5D, 0x05, 0x00, 0x00, 0x00, 0x00, 0x08],
+    ] {
+        match decode_lighting_command(value, 0) {
+            Err(Error::Decoding { .. }) => {}
+            other => panic!("{value:02X?}: {other:?}"),
+        }
+    }
+    // Four octets may still open with zeros.
+    let (decoded, end) = decode_lighting_command(&[0x0C, 0x00, 0x00, 0x00, 0x01], 0).unwrap();
+    assert_eq!((decoded, end), (command(Op::FADE_TO), 5));
+}
+
+#[test]
+fn lighting_command_value_must_fill_its_input_before_a_field_is_too_wide() {
+    for (value, _) in golden_vectors() {
+        let octets = encode(&value);
+        assert_eq!(decode_lighting_command_value(&octets).unwrap(), value);
+    }
+    // WARN at priority 256: too wide alone, but broken once anything follows,
+    // whether an octet past the command or a field out of order.
+    let wide = [0x09, 0x07, 0x5A, 0x01, 0x00];
+    assert!(matches!(
+        decode_lighting_command_value(&wide),
+        Err(Error::OutOfRange(_))
+    ));
+    for value in [
+        [&wide[..], &[0xFF]].concat(),
+        [&wide[..], &[0x1C, 0x42, 0x48, 0x00, 0x00]].concat(),
+    ] {
+        match decode_lighting_command_value(&value) {
+            Err(Error::Decoding { .. }) => {}
+            other => panic!("{value:02X?}: {other:?}"),
+        }
+    }
+    // The offset reader stops before the extra octet, so it can only report
+    // the oversized field.
+    assert!(matches!(
+        decode_lighting_command(&[0x09, 0x07, 0x5A, 0x01, 0x00, 0xFF], 0),
+        Err(Error::OutOfRange(_))
+    ));
+}
+
+#[test]
 fn lighting_command_keeps_any_value_that_fits_and_re_encodes_it_shortest() {
     // Leading zero octets, priority 0, a NaN target level and a fade time of
     // 1 ms all decode; ranges are the receiver's to check.

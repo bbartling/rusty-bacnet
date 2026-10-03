@@ -40,14 +40,15 @@ fn primitives_and_a_lighting_command_are_channel_values() {
 
 #[test]
 fn malformed_lighting_commands_are_refused() {
-    let bad: [&[u8]; 11] = [
+    let bad: [&[u8]; 12] = [
         // No operation field, and an empty command.
         &[0x0E, 0x1C, 0x42, 0x48, 0x00, 0x00, 0x0F],
         &[0x0E, 0x0F],
         // A priority too wide for an Unsigned8, an operation too wide for 32
-        // bits, and a constructed field.
+        // bits, operation 1 in five octets, and a constructed field.
         &[0x0E, 0x09, 0x01, 0x5A, 0x01, 0x2C, 0x0F],
         &[0x0E, 0x0D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00, 0x0F],
+        &[0x0E, 0x0D, 0x05, 0x00, 0x00, 0x00, 0x00, 0x01, 0x0F],
         &[0x0E, 0x09, 0x01, 0x1E, 0x1F, 0x0F],
         // Fields out of order.
         &[
@@ -63,7 +64,14 @@ fn malformed_lighting_commands_are_refused() {
         &[0x0E, 0x09, 0x01],
     ];
     for value in bad {
-        assert!(channel_value_end(value, 0).is_err(), "{value:02X?}");
+        // None of them is cut short, so each is a decoding error.
+        assert!(
+            matches!(
+                channel_value_end(value, 0),
+                Err(bacnet_types::error::Error::Decoding { .. })
+            ),
+            "{value:02X?}"
+        );
         assert!(!is_lighting_command_channel_value(value), "{value:02X?}");
     }
     // Any other context tag isn't a channel value at all.
