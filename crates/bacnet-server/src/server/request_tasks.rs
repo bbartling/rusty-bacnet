@@ -1,5 +1,7 @@
 use super::request_admission::{Admission, Class, Rejection};
 use super::{RequestAdmissionCounters, RequestAdmissionPolicy};
+use crate::command_lists::Unfinished;
+use bacnet_types::primitives::ObjectIdentifier;
 use std::future::{poll_fn, Future};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::task::{JoinError, JoinSet};
@@ -8,10 +10,15 @@ use tokio::task::{JoinError, JoinSet};
 /// the Command object runs a write starts (#1150), not timers or notification
 /// workers started by services. The optional DCC bucket shares this
 /// native-server lifetime, independent of task registrations.
+///
+/// The last field holds the runs let go of while the database was busy
+/// (#1252), for `stop()` to end once every task here is joined. It has its
+/// own lock: a task the runtime refuses can be dropped while `State` is held.
 pub(super) struct RequestTasks(
     Mutex<State>,
     Admission,
     Option<super::dcc_disable_rate::Bucket>,
+    Mutex<Vec<Unfinished>>,
 );
 
 impl Default for RequestTasks {
@@ -45,6 +52,28 @@ impl RequestTaskSpawner {
         if let Some(owner) = self.0.upgrade() {
             owner.spawn(task);
         }
+    }
+
+    /// Keep a run let go of while the database was busy for `stop()` to end,
+    /// or hand it back once the owner is gone.
+    pub(super) fn strand(&self, left: Unfinished) -> Result<(), Unfinished> {
+        match self.0.upgrade() {
+            Some(owner) => {
+                owner.3.lock().unwrap().push(left);
+                Ok(())
+            }
+            None => Err(left),
+        }
+    }
+
+    /// Take back `source`'s run of `generation` if it was stranded.
+    pub(super) fn unstrand(&self, source: ObjectIdentifier, generation: u64) -> Option<Unfinished> {
+        let owner = self.0.upgrade()?;
+        let mut stranded = owner.3.lock().unwrap();
+        let at = stranded
+            .iter()
+            .position(|left| left.is(source, generation))?;
+        Some(stranded.swap_remove(at))
     }
 }
 
@@ -82,7 +111,13 @@ impl RequestTasks {
             Mutex::new(State::default()),
             Admission::new(policy)?,
             None,
+            Mutex::default(),
         ))
+    }
+
+    /// The runs stranded so far, for `stop()` to end.
+    pub(super) fn take_stranded(&self) -> Vec<Unfinished> {
+        std::mem::take(&mut *self.3.lock().unwrap())
     }
 
     pub(super) fn counters(&self) -> RequestAdmissionCounters {
