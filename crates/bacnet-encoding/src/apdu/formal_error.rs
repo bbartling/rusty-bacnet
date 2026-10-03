@@ -14,12 +14,19 @@
 //! SubscribeCOVPropertyMultiple-Error (30) is a CHOICE instead: the `[0]`
 //! error alone, or a `[1]` frame holding the failed subscription's `[0]`
 //! object identifier, `[1]` property reference and `[2]` error.
+//!
+//! The members are read with the constructed codecs' shared tagged-field
+//! helpers, so a refusal has the kind and wording it has there.
 
 use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 
-use crate::constructed::decode_object_property_reference;
-use crate::{primitives, tags};
+use crate::constructed::tagged::{
+    decode_app_enumerated, decode_app_unsigned, decode_ctx_constructed, decode_ctx_object_id,
+    decode_ctx_unsigned, expect_end,
+};
+use crate::constructed::{decode_object_property_reference, decode_property_reference};
+use crate::tags;
 
 /// Decodes the members after `[0]` from an offset, returning the offset past
 /// them.
@@ -28,7 +35,9 @@ type Members = fn(&[u8], usize, &str) -> Result<usize, Error>;
 /// The class and code of `data` when it is the complete formal error body of
 /// `service`; `None` when the service has no formal body or `data` does not
 /// open with an opening tag the production starts with. A body that opens
-/// with one but is malformed is an error.
+/// with one but is malformed is an error: [`Error::BufferTooShort`] when a
+/// member's contents run past the end of `data`, [`Error::Decoding`]
+/// otherwise.
 pub(super) fn decode_formal_body(
     service: ConfirmedServiceChoice,
     data: &[u8],
@@ -58,7 +67,8 @@ pub(super) fn decode_formal_body(
         return Ok(None);
     }
     let (pair, offset) = error_type(data, 0, 0, what)?;
-    finish(data, members(data, offset, what)?, what)?;
+    let end = members(data, offset, what)?;
+    expect_end(data, end, end, what)?;
     Ok(Some(pair))
 }
 
@@ -73,63 +83,47 @@ fn subscribe_cov_property_multiple(data: &[u8]) -> Result<Option<(ErrorClass, Er
     const WHAT: &str = "SubscribeCOVPropertyMultiple-Error";
     if opens_with(data, 0) {
         let (pair, end) = error_type(data, 0, 0, WHAT)?;
-        finish(data, end, WHAT)?;
+        expect_end(data, end, end, WHAT)?;
         return Ok(Some(pair));
     }
     if !opens_with(data, 1) {
         return Ok(None);
     }
-    let (_, content_start) = tags::decode_tag(data, 0)?;
-    let (subscription, end) = tags::extract_context_value(data, content_start, 1)?;
-    finish(data, end, WHAT)?;
+    let (subscription, end) = decode_ctx_constructed(data, 0, 1, WHAT)?;
+    expect_end(data, end, end, WHAT)?;
 
-    let (content, offset) = primitive(subscription, 0, 0, WHAT)?;
-    if content.len() != 4 {
-        return Err(Error::decoding(
-            0,
-            format!("{WHAT} monitored object identifier is not four octets"),
-        ));
-    }
-    // BACnetPropertyReference: [0] property identifier, optional [1] index.
-    let (reference, offset) = constructed(subscription, offset, 1, WHAT)?;
-    let (property, mut reference_end) = primitive(reference, 0, 0, WHAT)?;
-    primitives::decode_unsigned_u32(property)?;
-    if reference_end != reference.len() {
-        let (index, index_end) = primitive(reference, reference_end, 1, WHAT)?;
-        primitives::decode_unsigned_u32(index)?;
-        reference_end = index_end;
-    }
-    finish(reference, reference_end, WHAT)?;
-    let (pair, end) = error_type(subscription, offset, 2, WHAT)?;
-    finish(subscription, end, WHAT)?;
+    // Offsets from here on are into the `[1]` body; its frame opens at 0.
+    let (_, offset) = decode_ctx_object_id(subscription, 0, 0, WHAT)?;
+    let (reference, after_reference) = decode_ctx_constructed(subscription, offset, 1, WHAT)?;
+    let (_, reference_end) = decode_property_reference(reference, 0)?;
+    expect_end(reference, reference_end, offset, WHAT)?;
+    let (pair, end) = error_type(subscription, after_reference, 2, WHAT)?;
+    expect_end(subscription, end, 0, WHAT)?;
     Ok(Some(pair))
 }
 
 /// WPM's `[1]` frame around the first failed write attempt.
 fn first_failed_write_attempt(data: &[u8], offset: usize, what: &str) -> Result<usize, Error> {
-    let (reference, end) = constructed(data, offset, 1, what)?;
+    let (reference, end) = decode_ctx_constructed(data, offset, 1, what)?;
     decode_object_property_reference(reference)?;
     Ok(end)
 }
 
 /// ChangeList's and CreateObject's `[1]` Unsigned first failed element number.
 fn first_failed_element_number(data: &[u8], offset: usize, what: &str) -> Result<usize, Error> {
-    let (number, end) = primitive(data, offset, 1, what)?;
-    primitives::decode_unsigned_u32(number)?;
+    let (_, end) = decode_ctx_unsigned::<u32>(data, offset, 1, what)?;
     Ok(end)
 }
 
 /// ConfirmedPrivateTransfer's `[1]` vendor identifier and `[2]` service
 /// number, then its optional `[3]` error parameters.
 fn private_transfer_members(data: &[u8], offset: usize, what: &str) -> Result<usize, Error> {
-    let (vendor_id, offset) = primitive(data, offset, 1, what)?;
-    primitives::decode_unsigned_u32(vendor_id)?;
-    let (service_number, offset) = primitive(data, offset, 2, what)?;
-    primitives::decode_unsigned_u32(service_number)?;
+    let (_, offset) = decode_ctx_unsigned::<u32>(data, offset, 1, what)?;
+    let (_, offset) = decode_ctx_unsigned::<u32>(data, offset, 2, what)?;
     if offset == data.len() {
         return Ok(offset);
     }
-    let (_, end) = constructed(data, offset, 3, what)?;
+    let (_, end) = decode_ctx_constructed(data, offset, 3, what)?;
     Ok(end)
 }
 
@@ -138,65 +132,19 @@ fn vt_session_identifiers(data: &[u8], offset: usize, what: &str) -> Result<usiz
     if offset == data.len() {
         return Ok(offset);
     }
-    let (sessions, end) = constructed(data, offset, 1, what)?;
+    let (sessions, end) = decode_ctx_constructed(data, offset, 1, what)?;
     let mut position = 0;
     while position < sessions.len() {
-        let (tag, content_start) = tags::decode_tag(sessions, position)?;
-        if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::UNSIGNED {
+        let (session, next) = decode_app_unsigned(sessions, position, what)?;
+        if u8::try_from(session).is_err() {
             return Err(Error::decoding(
                 position,
-                format!("{what} session identifier expected application Unsigned"),
+                format!("{what}: session identifier {session} exceeds u8"),
             ));
         }
-        let content_end = payload_end(sessions, content_start, tag.length, what)?;
-        primitives::decode_unsigned_u8(&sessions[content_start..content_end])?;
-        position = content_end;
+        position = next;
     }
     Ok(end)
-}
-
-fn finish(data: &[u8], end: usize, what: &str) -> Result<(), Error> {
-    if end != data.len() {
-        return Err(Error::decoding(end, format!("{what} has trailing content")));
-    }
-    Ok(())
-}
-
-/// The content of the context-tagged primitive `[number]` at `offset`, with
-/// the offset past it.
-fn primitive<'a>(
-    data: &'a [u8],
-    offset: usize,
-    number: u8,
-    what: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (tag, content_start) = tags::decode_tag(data, offset)?;
-    if !tag.is_context(number) {
-        return Err(Error::decoding(
-            offset,
-            format!("{what} expected context tag {number}"),
-        ));
-    }
-    let end = payload_end(data, content_start, tag.length, what)?;
-    Ok((&data[content_start..end], end))
-}
-
-/// The content of the constructed `[number]` at `offset`, with the offset
-/// past its closing tag.
-fn constructed<'a>(
-    data: &'a [u8],
-    offset: usize,
-    number: u8,
-    what: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (tag, content_start) = tags::decode_tag(data, offset)?;
-    if !tag.is_opening_tag(number) {
-        return Err(Error::decoding(
-            offset,
-            format!("{what} expected opening tag {number}"),
-        ));
-    }
-    tags::extract_context_value(data, content_start, number)
 }
 
 /// The class and code inside the constructed `[number]` at `offset`, with the
@@ -207,44 +155,12 @@ fn error_type(
     number: u8,
     what: &str,
 ) -> Result<((ErrorClass, ErrorCode), usize), Error> {
-    let (error_body, end) = constructed(data, offset, number, what)?;
-    let (class, offset) = decode_enumerated(error_body, 0, "error-class", what)?;
-    let (code, body_end) = decode_enumerated(error_body, offset, "error-code", what)?;
-    if body_end != error_body.len() {
-        return Err(Error::decoding(
-            body_end,
-            format!("{what} [{number}] has extra fields"),
-        ));
-    }
+    let (error_body, end) = decode_ctx_constructed(data, offset, number, what)?;
+    let (class, next) = decode_app_enumerated(error_body, 0, what)?;
+    let (code, body_end) = decode_app_enumerated(error_body, next, what)?;
+    expect_end(error_body, body_end, offset, what)?;
     Ok((
         (ErrorClass::from_raw(class), ErrorCode::from_raw(code)),
         end,
     ))
-}
-
-fn payload_end(data: &[u8], content_start: usize, length: u32, what: &str) -> Result<usize, Error> {
-    content_start
-        .checked_add(length as usize)
-        .filter(|end| *end <= data.len())
-        .ok_or_else(|| Error::decoding(content_start, format!("{what} payload is truncated")))
-}
-
-fn decode_enumerated(
-    data: &[u8],
-    offset: usize,
-    field: &str,
-    what: &str,
-) -> Result<(u16, usize), Error> {
-    let (tag, content_start) = tags::decode_tag(data, offset)?;
-    if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
-        return Err(Error::decoding(
-            offset,
-            format!("{what} {field} expected application Enumerated"),
-        ));
-    }
-    let end = payload_end(data, content_start, tag.length, what)?;
-    let value = primitives::decode_unsigned(&data[content_start..end])?;
-    let value = u16::try_from(value)
-        .map_err(|_| Error::decoding(content_start, format!("{field} exceeds u16")))?;
-    Ok((value, end))
 }

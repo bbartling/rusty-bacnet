@@ -72,8 +72,8 @@ pub fn decode_property_access_result(
         let (value, end) = decode_framed_value(data, content, 4, WHAT)?;
         (AccessResult::Value(value), end)
     } else if tag.is_opening_tag(5) {
-        let (class, next) = decode_app_enumerated(data, content, WHAT)?;
-        let (code, next) = decode_app_enumerated(data, next, WHAT)?;
+        let (class, next) = decode_app_enumerated::<u32>(data, content, WHAT)?;
+        let (code, next) = decode_app_enumerated::<u32>(data, next, WHAT)?;
         let class = u16::try_from(class)
             .map_err(|_| Error::decoding(content, format!("{WHAT}: error class exceeds u16")))?;
         let code = u16::try_from(code)

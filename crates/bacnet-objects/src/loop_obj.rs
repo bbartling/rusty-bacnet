@@ -19,6 +19,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use crate::common::{self, read_property_list_property};
+use crate::reference::{self, ReferenceFrame};
 use crate::traits::BACnetObject;
 
 mod metadata;
@@ -298,14 +299,20 @@ impl BACnetObject for LoopObject {
             p if p == PropertyIdentifier::OUT_OF_SERVICE => {
                 Ok(PropertyValue::Boolean(self.out_of_service))
             }
-            p if p == PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE => Ok(
-                crate::reference::reference_read_value(&self.controlled_variable_reference),
-            ),
-            p if p == PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE => Ok(
-                crate::reference::reference_read_value(&self.manipulated_variable_reference),
-            ),
+            // Each reference reads as its Clause 21 encoding (#1312); see
+            // reference.rs for the unset forms.
+            p if p == PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE => {
+                Ok(reference::object_property_reference_value(
+                    self.controlled_variable_reference.as_ref(),
+                ))
+            }
+            p if p == PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE => {
+                Ok(reference::object_property_reference_value(
+                    self.manipulated_variable_reference.as_ref(),
+                ))
+            }
             p if p == PropertyIdentifier::SETPOINT_REFERENCE => Ok(
-                crate::reference::reference_read_value(&self.setpoint_reference),
+                reference::setpoint_reference_value(self.setpoint_reference.as_ref()),
             ),
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
@@ -416,32 +423,24 @@ impl BACnetObject for LoopObject {
                     code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
                 })
             }
-            // Clause 12.17 / Clause 21 BACnetObjectPropertyReference: the
-            // write value decodes via the shared arm helper — legacy local
-            // List and framed network (context-tagged members) forms both
-            // land strictly; see reference.rs.
+            // Table 12-20 types the two variable references
+            // BACnetObjectPropertyReference: a write takes the reference's
+            // context-tagged members, or Null to clear it (reference.rs).
             p if p == PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE => {
-                self.controlled_variable_reference = crate::reference::decode_reference_write(
-                    &value,
-                    crate::reference::ReferenceFrame::Bare,
-                )?;
+                self.controlled_variable_reference =
+                    reference::decode_reference_write(&value, ReferenceFrame::Bare)?;
                 Ok(())
             }
             p if p == PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE => {
-                self.manipulated_variable_reference = crate::reference::decode_reference_write(
-                    &value,
-                    crate::reference::ReferenceFrame::Bare,
-                )?;
+                self.manipulated_variable_reference =
+                    reference::decode_reference_write(&value, ReferenceFrame::Bare)?;
                 Ok(())
             }
-            // Setpoint_Reference is typed BACnetSetpointReference (Clause
-            // 12.17): the reference may additionally arrive inside the
-            // production's opening/closing tag [0] frame on the wire.
+            // Setpoint_Reference is BACnetSetpointReference: the members
+            // framed in context tag 0, or the empty value for none.
             p if p == PropertyIdentifier::SETPOINT_REFERENCE => {
-                self.setpoint_reference = crate::reference::decode_reference_write(
-                    &value,
-                    crate::reference::ReferenceFrame::Setpoint,
-                )?;
+                self.setpoint_reference =
+                    reference::decode_reference_write(&value, ReferenceFrame::Setpoint)?;
                 Ok(())
             }
             _ => Err(crate::common::unhandled_write_error(
@@ -508,3 +507,6 @@ mod tests;
 
 #[cfg(test)]
 mod property_set_tests;
+
+#[cfg(test)]
+mod reference_tests;
