@@ -15,14 +15,20 @@
 //!   (in `channel`).
 //! - communication: a member in another device that couldn't be reached: no
 //!   fresh binding, initiation disabled by DeviceCommunicationControl, or no
-//!   answer to the first attempt or any retry.
+//!   answer to the first attempt or any retry. An attempt the transport
+//!   failed to send waits like a silent one, so a send failure on every
+//!   attempt ends here too.
 //! - process: every other refusal (an Error with another code, a Reject for
-//!   another reason, an Abort) and every write this server couldn't send.
+//!   another reason, an Abort) and every write this server couldn't start:
+//!   a value it can't encode, a request longer than one APDU, no free invoke
+//!   ID, a server stopping, or no network at all.
 //!
 //! A Command keeps only whether each write succeeded, so the kind matters to
 //! Channels alone.
 
-use bacnet_objects::command::{CommandRun, WriteFailure};
+use std::fmt;
+
+use bacnet_objects::command::{CommandRun, RunPlan, WriteFailure};
 use bacnet_types::constructed::BACnetActionCommand;
 use bacnet_types::enums::{ErrorCode, RejectReason};
 use bacnet_types::error::Error;
@@ -39,6 +45,8 @@ pub(super) struct Failed {
     pub(super) failure: WriteFailure,
     /// The target's answer, when it refused the write.
     pub(super) answer: Option<Error>,
+    /// Whether the target's device answered none of the attempts.
+    pub(super) unanswered: bool,
 }
 
 /// Make `command` on behalf of `run`: in this device, or in `device` when it
@@ -54,46 +62,64 @@ pub(super) async fn write<H: RunHost>(
             let Err(error) = host.write(run, command).await else {
                 return Ok(());
             };
-            debug!(
-                source = %run.source,
-                target = %command.object_identifier,
-                property = ?command.property_identifier,
-                %error,
-                "Write failed"
-            );
+            log_failure(run, None, command, &error);
             Failed {
                 failure: refused(&error),
                 answer: Some(error),
+                unanswered: false,
             }
         }
         Some(device) => {
             let Err(error) = host.write_remote(device, command).await else {
                 return Ok(());
             };
-            debug!(
-                source = %run.source,
-                %device,
-                target = %command.object_identifier,
-                property = ?command.property_identifier,
-                %error,
-                "Write to another device failed"
-            );
+            log_failure(run, Some(device), command, &error);
             match error {
                 RemoteWriteError::Refused(refusal) => {
                     let answer = Error::from(refusal);
                     Failed {
                         failure: refused(&answer),
                         answer: Some(answer),
+                        unanswered: false,
                     }
                 }
                 other => Failed {
                     failure: unmade(other),
                     answer: None,
+                    unanswered: other == RemoteWriteError::Unanswered,
                 },
             }
         }
     };
     Err(failed)
+}
+
+/// Log a failed write under the field a Command's (`command`) or a
+/// Channel's (`channel`) run is known by.
+fn log_failure(
+    run: &CommandRun,
+    device: Option<ObjectIdentifier>,
+    command: &BACnetActionCommand,
+    error: &dyn fmt::Display,
+) {
+    let target = command.object_identifier;
+    let property = command.property_identifier;
+    match (&run.plan, device) {
+        (RunPlan::Actions(_), None) => debug!(
+            command = %run.source, %target, ?property, %error, "Command write failed"
+        ),
+        (RunPlan::Actions(_), Some(device)) => debug!(
+            command = %run.source, %device, %target, ?property, %error,
+            "Command write to another device failed"
+        ),
+        (RunPlan::Channel(_), None) => debug!(
+            channel = %run.source, %target, ?property, %error, "Channel member write failed"
+        ),
+        (RunPlan::Channel(_), Some(device)) => debug!(
+            channel = %run.source, %device, %target, ?property, %error,
+            "Channel member write to another device failed"
+        ),
+    }
 }
 
 /// The error code `error` carries, if it's an Error answer.

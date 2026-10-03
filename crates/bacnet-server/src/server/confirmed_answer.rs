@@ -35,8 +35,11 @@ pub enum Refusal {
     Abort(AbortReason),
 }
 
-/// The error a client request answered this way reports: [`Error::Protocol`],
-/// [`Error::Reject`] or [`Error::Abort`].
+/// The error a client's WriteProperty answered this way reports:
+/// [`Error::Protocol`], [`Error::Reject`] or [`Error::Abort`]. A `Refusal`
+/// keeps only an Error's class and code, so it never becomes
+/// [`Error::Structured`], which a client reports for the services whose
+/// Error carries more.
 impl From<Refusal> for Error {
     fn from(refusal: Refusal) -> Self {
         match refusal {

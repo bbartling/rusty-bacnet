@@ -2,12 +2,13 @@
 //! WriteProperty, and how that write ends decides Write_Status and
 //! Reliability (#1264, Clauses 12.53.7, 12.53.9 and 12.53.11).
 //!
-//! Device 9 is bound to the harness peer; Device 10 has no binding. CH-5
-//! (channel 21, group 27) writes AO-1 in Device 9 at once and the local AO-2
-//! 100 ms after the distribution starts. CH-6 writes AO-1 in Device 10.
-//! Requests to Device 9 are taken from the frames the server sends and
-//! answered by hand. The clock is paused, and the server's APDU timeout is
-//! the default 3 seconds.
+//! Devices 9 and 11 are bound to the harness peer; Device 10 has no binding.
+//! CH-5 (channel 21, group 27) writes AO-1 in Device 9 at once and the local
+//! AO-2 100 ms after the distribution starts. CH-6 writes AO-1 in Device 10.
+//! CH-7 writes, in this order and all at once, AO-1 and AO-3 in Device 9,
+//! AO-4 in Device 11 and the local AO-2. Requests are taken from the frames
+//! the server sends and answered by hand. The clock is paused, and the
+//! server's APDU timeout is the default 3 seconds.
 use super::channel_wire_tests::{ch, channel, member, settled, write_channel, write_status};
 use super::command_action_wire_tests::{ao, outputs, read_db, read_wire, slot8};
 use super::command_remote_write_tests::{
@@ -24,9 +25,14 @@ use bacnet_types::enums::{Reliability, WriteStatus};
 
 /// AO-1's Present_Value in Device `instance`.
 fn remote_member(instance: u32) -> BACnetDeviceObjectPropertyReference {
+    remote_output(instance, 1)
+}
+
+/// AO-`output`'s Present_Value in Device `instance`.
+fn remote_output(instance: u32, output: u32) -> BACnetDeviceObjectPropertyReference {
     BACnetDeviceObjectPropertyReference {
         device_identifier: Some(device(instance)),
-        ..member(ao(1), PV)
+        ..member(ao(output), PV)
     }
 }
 
@@ -38,14 +44,24 @@ async fn start() -> Harness {
         db.add(Box::new(five)).unwrap();
         db.add(Box::new(channel(6, 22, vec![(remote_member(10), 0)])))
             .unwrap();
+        let seven = vec![
+            (remote_output(9, 1), 0),
+            (remote_output(9, 3), 0),
+            (remote_output(11, 4), 0),
+            (member(ao(2), PV), 0),
+        ];
+        db.add(Box::new(channel(7, 23, seven))).unwrap();
     })
     .await;
-    h.server
-        .device_bindings
-        .write()
-        .await
-        .insert_configured(DeviceBinding::local(device(9), PEER).unwrap(), |_| false)
-        .unwrap();
+    for instance in [9, 11] {
+        let binding = DeviceBinding::local(device(instance), PEER).unwrap();
+        h.server
+            .device_bindings
+            .write()
+            .await
+            .insert_configured(binding, |_| false)
+            .unwrap();
+    }
     h
 }
 
@@ -68,8 +84,9 @@ async fn fault(h: &mut Harness, instance: u32) -> bool {
     }
 }
 
-/// Wait for the one WriteProperty sent to Device 9: its invoke ID and value.
-async fn request_to_device_9(h: &Harness) -> (u8, Vec<u8>) {
+/// Wait for the one WriteProperty sent next, check it writes `object`, and
+/// return its invoke ID and value.
+async fn next_request(h: &Harness, object: ObjectIdentifier) -> (u8, Vec<u8>) {
     let sent = tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             let sent = sent_writes(h);
@@ -80,9 +97,9 @@ async fn request_to_device_9(h: &Harness) -> (u8, Vec<u8>) {
         }
     })
     .await
-    .expect("a WriteProperty to Device 9");
+    .expect("a WriteProperty to another device");
     let [(invoke_id, request)]: [(u8, WritePropertyRequest); 1] = sent.try_into().unwrap();
-    assert_eq!(request.object_identifier, ao(1));
+    assert_eq!(request.object_identifier, object);
     (invoke_id, request.property_value)
 }
 
@@ -227,7 +244,7 @@ async fn channel_member_in_another_device_that_refuses_fails_the_distribution() 
     write_channel(&mut h, 5, &PropertyValue::Real(70.0), Some(8))
         .await
         .unwrap();
-    let (invoke_id, _) = request_to_device_9(&h).await;
+    let (invoke_id, _) = next_request(&h, ao(1)).await;
     h.respond(ack(invoke_id)).await;
     assert_eq!(settled(&mut h, 5).await, WriteStatus::SUCCESSFUL);
     assert_eq!(reliability(&mut h, 5).await, Reliability::NO_FAULT_DETECTED);
@@ -247,7 +264,7 @@ async fn channel_null_a_member_in_another_device_refuses_as_the_wrong_datatype_s
         write_channel(&mut h, 5, &PropertyValue::Null, Some(8))
             .await
             .unwrap();
-        let (invoke_id, value) = request_to_device_9(&h).await;
+        let (invoke_id, value) = next_request(&h, ao(1)).await;
         assert_eq!(value, [0x00]);
         h.respond(answer(invoke_id)).await;
         assert_eq!(settled(&mut h, 5).await, WriteStatus::SUCCESSFUL);
@@ -258,7 +275,7 @@ async fn channel_null_a_member_in_another_device_refuses_as_the_wrong_datatype_s
     write_channel(&mut h, 5, &PropertyValue::Null, Some(8))
         .await
         .unwrap();
-    let (invoke_id, _) = request_to_device_9(&h).await;
+    let (invoke_id, _) = next_request(&h, ao(1)).await;
     h.respond(error(invoke_id, ErrorCode::WRITE_ACCESS_DENIED))
         .await;
     assert_eq!(settled(&mut h, 5).await, WriteStatus::FAILED);
@@ -288,6 +305,48 @@ async fn channel_member_in_another_device_that_never_answers_is_a_communication_
         Reliability::COMMUNICATION_FAILURE
     );
     assert_eq!(h.server.notification_transactions.active_count(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn channel_skips_the_rest_of_a_silent_device_for_the_distribution() {
+    let mut h = start().await;
+    let started = tokio::time::Instant::now();
+    write_channel(&mut h, 7, &PropertyValue::Real(80.0), Some(8))
+        .await
+        .unwrap();
+    // AO-1's write to Device 9 goes four times under one invoke ID, with no
+    // answer.
+    tokio::time::sleep(Duration::from_millis(11_900)).await;
+    let attempts = sent_writes(&h);
+    assert_eq!(attempts.len(), 4);
+    assert!(attempts
+        .iter()
+        .all(|(id, request)| *id == attempts[0].0 && request.object_identifier == ao(1)));
+
+    // AO-3 shares the silent device, so it fails unsent; Device 11 still
+    // gets AO-4, and the local AO-2 is written.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (invoke_id, _) = next_request(&h, ao(4)).await;
+    h.respond(ack(invoke_id)).await;
+    assert_eq!(settled(&mut h, 7).await, WriteStatus::FAILED);
+    assert!(started.elapsed() < Duration::from_millis(12_500));
+    assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
+    assert_eq!(
+        reliability(&mut h, 7).await,
+        Reliability::COMMUNICATION_FAILURE
+    );
+    assert!(sent_writes(&h).is_empty());
+
+    // The next distribution tries Device 9 again.
+    write_channel(&mut h, 7, &PropertyValue::Real(70.0), Some(8))
+        .await
+        .unwrap();
+    for output in [1, 3, 4] {
+        let (invoke_id, _) = next_request(&h, ao(output)).await;
+        h.respond(ack(invoke_id)).await;
+    }
+    assert_eq!(settled(&mut h, 7).await, WriteStatus::SUCCESSFUL);
+    assert_eq!(reliability(&mut h, 7).await, Reliability::NO_FAULT_DETECTED);
 }
 
 #[tokio::test(start_paused = true)]

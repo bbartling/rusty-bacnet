@@ -14,8 +14,8 @@ use tokio::sync::RwLock;
 // Device 20 through a configured binding. Device 20 holds AO-1, whose
 // Present_Value takes a priority write; AI-1, whose Present_Value refuses a
 // write while it is in service; and CH-5, whose Channel_Number refuses NULL
-// as the wrong datatype. The test waits on the Channels' Write_Status by
-// yielding to the runtime, never by sleeping.
+// as the wrong datatype. The test polls each Channel's Write_Status every
+// 5 ms until the distribution ends.
 // ---------------------------------------------------------------------------
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
@@ -97,7 +97,7 @@ async fn distribute(
     let in_progress = PropertyValue::Enumerated(WriteStatus::IN_PROGRESS.to_raw());
     tokio::time::timeout(Duration::from_secs(10), async {
         while read(db, channel, PropertyIdentifier::WRITE_STATUS, None).await == in_progress {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
     .await

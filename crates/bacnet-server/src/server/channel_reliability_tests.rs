@@ -5,11 +5,14 @@
 //! These use the fixtures of `channel_wire_tests`: CH-1 writes AO-1 (REAL),
 //! BO-1 (ENUMERATED), MSO-1 (three states) and CH-2's Channel_Number at
 //! once; CH-3 writes AV-1 at once, AO-9 (missing) after 100 ms and AO-2 after
-//! 200 ms. Everything is read over the wire. The clock is paused.
-use super::channel_wire_tests::{ch, settled, start, write_channel, write_wire};
-use super::command_action_wire_tests::read_wire;
+//! 200 ms. `start_ordered` sets up the Channels that pin which failure
+//! Reliability names. Everything is read over the wire until the server
+//! stops. The clock is paused.
+use super::channel_wire_tests::{ch, channel, member, settled, start, write_channel, write_wire};
+use super::command_action_wire_tests::{ao, outputs, read_db, read_wire, slot8};
 use super::cov_wire_test_support::*;
 use super::*;
+use bacnet_objects::binary::BinaryOutputObject;
 use bacnet_types::enums::{Reliability, WriteStatus};
 
 const RELIABILITY: PropertyIdentifier = PropertyIdentifier::RELIABILITY;
@@ -145,4 +148,61 @@ async fn channel_reliability_takes_a_client_value_only_out_of_service() {
         reliability(&mut h, 1).await,
         (Reliability::PROCESS_ERROR, true)
     );
+}
+
+/// A server with AO-1, AO-2 and BO-1, and three Channels whose members fail
+/// differently: AO-9 is missing (CONFIGURATION_ERROR) and BO-1 refuses
+/// ENUMERATED 2 (PROCESS_ERROR). CH-4 writes AO-9 then BO-1, CH-5 BO-1 then
+/// AO-9, both at once; CH-6 writes AO-9 at once and AO-2 after a second.
+async fn start_ordered() -> Harness {
+    let bo1 = ObjectIdentifier::new(ObjectType::BINARY_OUTPUT, 1).unwrap();
+    let ao9 = member(ao(9), PV);
+    Harness::start_with(ServerConfig::default(), move |db| {
+        outputs(db);
+        db.add(Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()))
+            .unwrap();
+        let bo1 = member(bo1, PV);
+        let channels = [
+            (4, vec![(ao9.clone(), 0), (bo1.clone(), 0)]),
+            (5, vec![(bo1, 0), (ao9.clone(), 0)]),
+            (6, vec![(ao9, 0), (member(ao(2), PV), 1000)]),
+        ];
+        for (instance, members) in channels {
+            db.add(Box::new(channel(instance, 30, members))).unwrap();
+        }
+    })
+    .await
+}
+
+#[tokio::test(start_paused = true)]
+async fn channel_reliability_names_the_first_failure_in_write_order() {
+    let mut h = start_ordered().await;
+    for (instance, first) in [
+        (4, Reliability::CONFIGURATION_ERROR),
+        (5, Reliability::PROCESS_ERROR),
+    ] {
+        let failed = distribute(&mut h, instance, PropertyValue::Unsigned(2)).await;
+        assert_eq!(failed, WriteStatus::FAILED);
+        assert_eq!(reliability(&mut h, instance).await, (first, true));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn stop_after_a_member_failed_keeps_that_failure() {
+    let mut h = start_ordered().await;
+    write_channel(&mut h, 6, &PropertyValue::Real(5.0), Some(8))
+        .await
+        .unwrap();
+    // AO-9 has failed; AO-2 waits out its second when the server stops.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    h.server.stop().await.unwrap();
+    assert_eq!(
+        read_db(&h, ch(6), PropertyIdentifier::WRITE_STATUS, None).await,
+        PropertyValue::Enumerated(WriteStatus::FAILED.to_raw())
+    );
+    assert_eq!(
+        read_db(&h, ch(6), RELIABILITY, None).await,
+        PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
+    );
+    assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Null);
 }

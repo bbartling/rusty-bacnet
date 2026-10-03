@@ -3727,8 +3727,8 @@
     "crates/bacnet-objects/src/channel/tests.rs::{channel_replacement_never_shares_a_run_generation,channel_allow_group_delay_inhibit_starts_false_and_takes_boolean_writes}",
     "crates/bacnet-server/src/server/channel_run_tests.rs::{channel_lighting_command_reaches_its_member_without_the_context_0_framing,channel_members_with_equal_delays_go_in_list_order}",
     "crates/bacnet-server/src/schedule_channel_tests.rs::tick_schedules_runs_the_channel_distributions_its_writes_start",
-    "crates/bacnet-server/src/server/channel_remote_write_tests.rs::{channel_writes_a_member_in_another_device_and_waits_for_its_answer,channel_null_a_member_in_another_device_refuses_as_the_wrong_datatype_succeeds,write_group_distribution_writes_a_member_in_another_device}",
-    "crates/bacnet-server/src/server/channel_reliability_tests.rs::{channel_member_that_refuses_is_a_process_error_until_a_good_run_clears_it,channel_reliability_takes_a_client_value_only_out_of_service}",
+    "crates/bacnet-server/src/server/channel_remote_write_tests.rs::{channel_writes_a_member_in_another_device_and_waits_for_its_answer,channel_null_a_member_in_another_device_refuses_as_the_wrong_datatype_succeeds,write_group_distribution_writes_a_member_in_another_device,channel_skips_the_rest_of_a_silent_device_for_the_distribution}",
+    "crates/bacnet-server/src/server/channel_reliability_tests.rs::{channel_member_that_refuses_is_a_process_error_until_a_good_run_clears_it,channel_reliability_takes_a_client_value_only_out_of_service,channel_reliability_names_the_first_failure_in_write_order}",
     "crates/bacnet-objects/src/channel/reliability_tests.rs::{channel_reliability_names_the_failure_and_clears_on_the_next_success,channel_write_with_nothing_to_distribute_clears_reliability,channel_reliability_is_simulated_out_of_service_and_restored_in_service,channel_takes_members_in_other_devices}",
     "crates/bacnet-server/src/command_lists/target.rs::tests::{failures_sort_into_configuration_process_and_communication,only_an_invalid_datatype_error_or_reject_refuses_the_datatype}",
     "crates/bacnet-integration-tests/tests/server/channel_remote.rs::channel_writes_members_in_another_device_over_bip"
@@ -3750,7 +3750,7 @@
     "crates/bacnet-objects/src/channel/coercion_tests.rs::nan_and_infinities_fail_every_conversion_with_a_range",
     "crates/bacnet-server/src/server/command_run_stop_tests.rs::{stop_during_a_channel_member_delay_ends_the_distribution_failed,stop_while_the_database_is_busy_ends_a_channel_distribution_failed,channel_run_no_task_starts_ends_at_once_failed,stop_ends_a_run_nothing_took}",
     "crates/bacnet-server/src/server/channel_remote_write_tests.rs::{channel_member_in_another_device_that_refuses_fails_the_distribution,channel_member_in_another_device_that_never_answers_is_a_communication_failure,channel_member_in_another_device_sends_nothing_without_initiation_or_a_binding,stop_during_an_outstanding_member_write_ends_the_distribution_failed}",
-    "crates/bacnet-server/src/server/channel_reliability_tests.rs::{channel_member_naming_a_missing_object_is_a_configuration_error,channel_value_a_member_cannot_take_is_a_configuration_error}",
+    "crates/bacnet-server/src/server/channel_reliability_tests.rs::{channel_member_naming_a_missing_object_is_a_configuration_error,channel_value_a_member_cannot_take_is_a_configuration_error,stop_after_a_member_failed_keeps_that_failure}",
     "crates/bacnet-server/src/command_lists/unattached_tests.rs::unattached_channel_member_in_another_device_fails_unsent"
    ],
    "benchmarks": [],
@@ -3761,16 +3761,16 @@
    ],
    "notes": [
     "A local member's datatype is that of its property's value; NULL, constructed values and remote members count as unknown and pass unchanged, `Lighting_Command` as a BACnetLightingCommand. Rule 3 bounds Unsigned and ENUMERATED at 2147483647.",
-    "A member naming another Device is written there by confirmed WriteProperty from the device bindings, one member at a time, so a member due meanwhile waits for the answer. One naming this Device is stored without it.",
+    "Members in other Devices get confirmed WriteProperty from the device bindings, one at a time; a device silent to one write fails its later members unsent (one retry wait per silent device). This Device's identifier is dropped.",
     "A whole `Execution_Delay` write takes exactly one delay per member (VALUE_OUT_OF_RANGE otherwise); index-0 and whole member-list writes resize both arrays. Caps are 1024 members and 64 control groups.",
     "A run that would start its own object again, or with more than eight runs above it, ends failed and its writer gets OBJECT / BUSY. `tick_schedules` runs a distribution; the bare handlers and `stop()` end it FAILED.",
-    "Reliability takes the first failed member's kind: CONFIGURATION_ERROR for an uncoercible value or an unknown-target or datatype refusal, COMMUNICATION_FAILURE for no binding, DCC or silence, else PROCESS_ERROR."
+    "Reliability names the first failed member: CONFIGURATION_ERROR for a value the Channel can't coerce (type or rule range) or an unknown-target or datatype refusal, COMMUNICATION_FAILURE for no binding, DCC or silence, else PROCESS_ERROR."
    ],
    "gaps": [
     "Intrinsic reporting and Reliability_Evaluation_Inhibit aren't served (no issue)",
     "#1322: a remote member with no fresh binding fails unsent; no targeted Who-Is is sent",
-    "A remote member's datatype isn't read first, so its value goes uncoerced (no issue)",
-    "Members are written one at a time, so an outstanding remote write delays members due after it (no issue)",
+    "#1342: a remote member's datatype isn't read first, so its value goes uncoerced",
+    "#1343: members are written one at a time, so an outstanding remote write delays members due after it",
     "Python configuration of a Channel's members, delays and groups (no issue)",
     "A Lighting Output keeps `Lighting_Command` as opaque octets, so a lighting-command value sent to it is refused (no issue)"
    ]

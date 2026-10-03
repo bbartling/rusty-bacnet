@@ -6,7 +6,14 @@
 //! (Clause 12.53.12): the members go in order of delay, list order among
 //! equal delays, each as soon as its time is reached. They go one at a time,
 //! so a member whose time comes while a write in another device waits for its
-//! answer is written once that write ends: its delay is the least it waits.
+//! answer is written once that write ends: its delay is the least it waits
+//! (#1343).
+//!
+//! A device that answers none of a write's attempts is taken to be offline
+//! for the rest of the distribution: its later members fail at once as
+//! communication failures, with nothing sent, so a distribution waits out
+//! one write's retries per silent device rather than per member. Members in
+//! other devices, and local ones, are still written.
 //!
 //! For a member in this device the runner looks up the datatype of the
 //! property's current value, coerces the channel value to it (Table 12-63)
@@ -34,7 +41,7 @@ use bacnet_objects::channel::{
 use bacnet_objects::command::{CommandRun, WriteFailure};
 use bacnet_types::constructed::BACnetActionCommand;
 use bacnet_types::enums::PropertyIdentifier;
-use bacnet_types::primitives::PropertyValue;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use tracing::debug;
 
 use super::target::{self, Failed};
@@ -52,12 +59,16 @@ pub(super) async fn distribute<H: RunHost>(
     let mut members: Vec<&ChannelMember> = distribution.members.iter().collect();
     members.sort_by_key(|member| member.delay_ms);
     let mut outcome = Ok(());
+    // Devices that answered none of a write's attempts in this distribution.
+    let mut silent = Vec::new();
     for (written, member) in members.into_iter().enumerate() {
         if member.delay_ms > 0 {
             let due = start + std::time::Duration::from_millis(member.delay_ms.into());
             tokio::time::sleep_until(due).await;
         }
-        outcome = outcome.and(write_member(host, run, distribution, member).await?);
+        // The first failure in write order stands.
+        let made = write_member(host, run, distribution, member, &mut silent).await?;
+        outcome = outcome.and(made);
         owner.progress(written + 1, outcome);
     }
     Some(outcome)
@@ -70,6 +81,7 @@ async fn write_member<H: RunHost>(
     run: &CommandRun,
     distribution: &ChannelDistribution,
     member: &ChannelMember,
+    silent: &mut Vec<ObjectIdentifier>,
 ) -> Option<Result<(), WriteFailure>> {
     let reference = &member.reference;
     let property = PropertyIdentifier::from_raw(reference.property_identifier);
@@ -97,6 +109,16 @@ async fn write_member<H: RunHost>(
             )
         }
     };
+    if let Some(device) = device.filter(|device| silent.contains(device)) {
+        debug!(
+            channel = %run.source,
+            %device,
+            target = %reference.object_identifier,
+            ?property,
+            "Channel member not sent: its device answered nothing earlier in this distribution"
+        );
+        return Some(Err(WriteFailure::Communication));
+    }
     let Ok(value) = coerce_channel_value(&distribution.value, datatype) else {
         debug!(
             channel = %run.source,
@@ -129,6 +151,11 @@ async fn write_member<H: RunHost>(
         {
             Ok(())
         }
-        Err(failed) => Err(failed.failure),
+        Err(failed) => {
+            if let Some(device) = device.filter(|_| failed.unanswered) {
+                silent.push(device);
+            }
+            Err(failed.failure)
+        }
     })
 }

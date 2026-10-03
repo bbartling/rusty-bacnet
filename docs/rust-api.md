@@ -2592,9 +2592,15 @@ only, each attempt waiting `cov_retry_timeout_ms`, up to three retries for
 silence, nothing sent while DeviceCommunicationControl restricts initiation.
 The server can't read that property's datatype first, so the value goes as
 written (a lighting command only to `Lighting_Command`) and the device refuses
-a datatype it doesn't take. Members are written one at a time: while a remote
-write waits for its answer, Write_Status stays IN_PROGRESS, and a member whose
-delay comes due meanwhile is written as soon as that write ends. A run that
+a datatype it doesn't take (#1342). Members are written one at a time: while a
+remote write waits for its answer, Write_Status stays IN_PROGRESS (a
+Present_Value write, WriteGroup's included, is refused BUSY), and a member
+whose delay comes due meanwhile is written as soon as that write ends (#1343).
+A device that answers none of a write's attempts counts as offline for the
+rest of that distribution: its later members fail at once with nothing sent,
+while members in other devices and local ones are still written. A
+distribution therefore waits at most one write's attempts (four times
+`cov_retry_timeout_ms`, 12 seconds by default) per silent device. A run that
 `stop()` cuts short during a remote write ends FAILED and frees its invoke ID.
 Without a server, `tick_schedules` has no network, so a remote member fails
 there.
@@ -2603,12 +2609,20 @@ Reliability reports how the last distribution ended (Clause 12.53.9):
 NO_FAULT_DETECTED after a SUCCESSFUL one, otherwise the kind of the first
 member that failed, in the order the members were written.
 CONFIGURATION_ERROR means the value couldn't be converted to the member's
-datatype, or the member answered UNKNOWN_OBJECT, UNKNOWN_PROPERTY,
-INVALID_ARRAY_INDEX, PROPERTY_IS_NOT_AN_ARRAY, INVALID_DATA_TYPE,
-DATATYPE_NOT_SUPPORTED or a Reject of INVALID_PARAMETER_DATA_TYPE.
-COMMUNICATION_FAILURE means a remote member's device had no fresh binding,
-DCC restricted initiation, or no attempt was answered. Any other refusal, or a
-write the server couldn't make, is PROCESS_ERROR. Reliability keeps its value
+datatype, by datatype or by a coercion rule's range, or the member answered
+UNKNOWN_OBJECT, UNKNOWN_PROPERTY, INVALID_ARRAY_INDEX,
+PROPERTY_IS_NOT_AN_ARRAY, INVALID_DATA_TYPE, DATATYPE_NOT_SUPPORTED or a
+Reject of INVALID_PARAMETER_DATA_TYPE. A value the member itself refuses as
+out of range (VALUE_OUT_OF_RANGE) is PROCESS_ERROR: the clause leaves the
+choice open, and here only the Channel's own conversion counts against its
+configuration. COMMUNICATION_FAILURE means a remote member's device had no
+fresh binding, DCC restricted initiation, or no attempt was answered; an
+attempt the transport failed to send waits like a silent one, so a send
+failure on every attempt lands here too. PROCESS_ERROR covers any other
+refusal (another Error code, another Reject reason, an Abort), a write the
+server couldn't start (a value it can't encode, a request longer than one
+APDU, no free invoke ID, a stopping server, no network), and a run cut short
+before every member was tried. Reliability keeps its value
 while a distribution runs, and Status_Flags shows FAULT whenever it isn't
 NO_FAULT_DETECTED. While Out_Of_Service is TRUE it holds what it read and
 takes a client's write of any Reliability value; back in service it shows the
@@ -4319,7 +4333,14 @@ recipients use a learned router on the first attempt and local broadcast on
 later retries; a configured Device binding keeps its fixed next hop. The former
 public `ServerTsm` type and its unused transaction methods have been removed
 without a compatibility alias. `CovAckResult` remains available at its existing
-`bacnet_server::server` path.
+`bacnet_server::server` path. A refused confirmed request ends as
+`CovAckResult::Error(Refusal)`: `Refusal::Error { class, code }` for an Error
+PDU, `Refusal::Reject(reason)` or `Refusal::Abort(reason)` otherwise (#1323).
+`Error::from(refusal)` gives the `Error::Protocol`, `Error::Reject` or
+`Error::Abort` a client's WriteProperty would report. The notification senders
+only ask whether the request was taken; a Channel member in another device
+uses the payload to tell a NULL refused as the wrong datatype, which counts as
+written, from other refusals.
 
 ### Notification forwarding
 
