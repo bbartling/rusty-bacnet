@@ -14,8 +14,6 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use bacnet_encoding::primitives::decode_application_value;
-
 use crate::errors::to_py_err;
 use crate::types::{
     parse_address, PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue, PyReadAccessSpec,
@@ -69,7 +67,7 @@ impl PyEndpointClient {
                 .read_property(&mac, oid, pid, array_index)
                 .await
                 .map_err(to_py_err)?;
-            let (value, _) = decode_application_value(&ack.property_value, 0).map_err(to_py_err)?;
+            let value = crate::types::decode_read_ack(&ack).map_err(to_py_err)?;
             Ok(PyPropertyValue::from_rust(value))
         })
     }

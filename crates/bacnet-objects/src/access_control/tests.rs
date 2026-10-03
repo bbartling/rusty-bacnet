@@ -272,20 +272,21 @@ fn access_rights_property_list() {
 }
 
 #[test]
-fn access_rights_read_rules_counts() {
+fn access_rights_read_rules_as_empty_arrays() {
     let rights = AccessRightsObject::new(1, "AR-1").unwrap();
-    assert_eq!(
-        rights
-            .read_property(PropertyIdentifier::POSITIVE_ACCESS_RULES, None)
-            .unwrap(),
-        PropertyValue::Unsigned(0)
-    );
-    assert_eq!(
-        rights
-            .read_property(PropertyIdentifier::NEGATIVE_ACCESS_RULES, None)
-            .unwrap(),
-        PropertyValue::Unsigned(0)
-    );
+    for p in [
+        PropertyIdentifier::POSITIVE_ACCESS_RULES,
+        PropertyIdentifier::NEGATIVE_ACCESS_RULES,
+    ] {
+        assert_eq!(
+            rights.read_property(p, None).unwrap(),
+            PropertyValue::List(vec![])
+        );
+        assert_eq!(
+            rights.read_property(p, Some(0)).unwrap(),
+            PropertyValue::Unsigned(0)
+        );
+    }
 }
 
 #[test]

@@ -13,7 +13,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use super::car_state::{self, CarState};
-use super::doors::{self, CarDoors};
+use super::doors::CarDoors;
 use super::energy_meter::{energy_meter_accessors, EnergyMeter};
 use super::membership::{group_membership_accessors, GroupMembership};
 use super::{checked, decode_fault_signals, direction_in_range, metadata};
@@ -436,14 +436,6 @@ impl BACnetObject for LiftObject {
                 array_index,
             )),
         }
-    }
-
-    fn is_array_property(&self, property: PropertyIdentifier) -> bool {
-        // The BACnetARRAY rows of Table 12-77 that the object serves.
-        matches!(
-            property,
-            PropertyIdentifier::PROPERTY_LIST | PropertyIdentifier::FLOOR_TEXT
-        ) || doors::ARRAYS.contains(&property)
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {

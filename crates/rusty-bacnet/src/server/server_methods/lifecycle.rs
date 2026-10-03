@@ -368,7 +368,19 @@ impl BACnetServer {
     // Runtime object access
     // -----------------------------------------------------------------------
 
-    /// Read a property from a local object in the server's database.
+    /// Read a property from a local object through the server's ReadProperty
+    /// evaluator, the one network reads use
+    /// ([`read_local`](server::BACnetServer::read_local)).
+    ///
+    /// A Group's Present_Value is rebuilt from its members, Device instance
+    /// 4194303 names the server's Device, and the Device's COV subscription
+    /// lists are live. Errors match a network read's: an unknown object or
+    /// property raises `BacnetProtocolError`.
+    ///
+    /// The value is encoded as the server sends it and decoded by the
+    /// client's rules, so it has the shape a network `read_property` of the
+    /// same property returns. The server lock is held for the read, as for
+    /// [`write_property_local`](Self::write_property_local).
     #[pyo3(signature = (object_id, property_id, array_index=None))]
     fn read_property<'py>(
         &self,
@@ -382,18 +394,21 @@ impl BACnetServer {
         let pid = property_id.to_rust();
 
         crate::py_async::future_into_py(py, async move {
-            let db_arc = {
+            let value = {
                 let guard = inner.lock().await;
                 let srv = guard
                     .as_ref()
                     .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
-                srv.database().clone()
+                srv.read_local(&oid, pid, array_index)
+                    .await
+                    .map_err(to_py_err)?
             };
-            let db = db_arc.read().await;
-            let obj = db
-                .get(&oid)
-                .ok_or_else(|| PyRuntimeError::new_err(format!("object {oid} not found")))?;
-            let value = obj.read_property(pid, array_index).map_err(to_py_err)?;
+            let mut encoded = bytes::BytesMut::new();
+            bacnet_encoding::primitives::encode_property_value(&mut encoded, &value)
+                .map_err(to_py_err)?;
+            let value =
+                crate::types::decode_read_value(oid.object_type(), pid, array_index, &encoded)
+                    .map_err(to_py_err)?;
             Ok(PyPropertyValue::from_rust(value))
         })
     }
@@ -404,16 +419,22 @@ impl BACnetServer {
     /// selects an existing local initiator. Tracked writes require a concrete
     /// local Device, which retains correction ownership.
     ///
-    /// Delegates to the server-owned [`write_local`](server::BACnetServer::write_local)
-    /// entry point so a local write fires the same post-write COV and event
-    /// notifications as a network `WriteProperty`. `OBJECT_NAME` writes are
+    /// The value is encoded as a network `WriteProperty` would carry it and
+    /// handed to [`write_local_encoded`](server::BACnetServer::write_local_encoded),
+    /// which decodes it as the WriteProperty handler does and then takes the
+    /// server-owned [`write_local`](server::BACnetServer::write_local) path. So
+    /// any value a network write takes works here, including whatever
+    /// `read_property` returns, and a local write fires the same post-write
+    /// COV and event notifications as a network one. `OBJECT_NAME` writes are
     /// routed through the database name index — a duplicate name is rejected
     /// up front and a successful rename refreshes the index — so local writes
     /// obey the same uniqueness and lookup invariants as the network handlers.
     ///
     /// Errors are surfaced as `BacnetProtocolError` (with `error_class`/
     /// `error_code`) for parity with the network path — e.g. an unknown object
-    /// yields `UNKNOWN_OBJECT` rather than a generic `RuntimeError`.
+    /// yields `UNKNOWN_OBJECT` rather than a generic `RuntimeError`, and an
+    /// array index on a property that isn't an array yields
+    /// `PROPERTY_IS_NOT_AN_ARRAY`.
     ///
     /// The server lock is held for the whole call (including the post-write
     /// COV/event sends), so concurrent Python calls on the same `BACnetServer`
@@ -442,14 +463,17 @@ impl BACnetServer {
             });
 
         let future = async move {
-            // Hold the server guard for the duration of the call: `write_local`
+            let mut encoded = bytes::BytesMut::new();
+            bacnet_encoding::primitives::encode_property_value(&mut encoded, &prop_value)
+                .map_err(to_py_err)?;
+            // Hold the server guard for the duration of the call: the write
             // borrows `srv` and runs the post-write COV/event trigger path,
             // so the server must stay alive across the await.
             let guard = inner.lock().await;
             let srv = guard
                 .as_ref()
                 .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
-            srv.write_local(&oid, pid, array_index, prop_value, priority, source)
+            srv.write_local_encoded(&oid, pid, array_index, &encoded, priority, source)
                 .await
                 .map_err(to_py_err)
         };

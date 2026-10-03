@@ -373,20 +373,22 @@ mod tests {
             object.read_property(P::GLOBAL_IDENTIFIER, None).unwrap(),
             PropertyValue::Unsigned(0)
         );
-        assert_eq!(
-            object
-                .read_property(P::POSITIVE_ACCESS_RULES, None)
-                .unwrap(),
-            PropertyValue::Unsigned(0)
-        );
-        assert_eq!(
-            object
-                .read_property(P::NEGATIVE_ACCESS_RULES, None)
-                .unwrap(),
-            PropertyValue::Unsigned(0)
-        );
-        assert!(!object.is_array_property(P::POSITIVE_ACCESS_RULES));
-        assert!(!object.is_array_property(P::NEGATIVE_ACCESS_RULES));
+        // Both rule properties are arrays, empty: the object models no rules.
+        for p in [P::POSITIVE_ACCESS_RULES, P::NEGATIVE_ACCESS_RULES] {
+            assert!(object.is_array_property(p));
+            assert_eq!(
+                object.read_property(p, None).unwrap(),
+                PropertyValue::List(vec![])
+            );
+            assert_eq!(
+                object.read_property(p, Some(0)).unwrap(),
+                PropertyValue::Unsigned(0)
+            );
+            assert_error(
+                object.read_property(p, Some(1)).unwrap_err(),
+                ErrorCode::INVALID_ARRAY_INDEX,
+            );
+        }
     }
 
     #[test]

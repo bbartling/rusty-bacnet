@@ -175,12 +175,9 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
+            // An array this object doesn't hold: absent, indexed or not.
             (P::SHED_LEVELS, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-            (
-                P::SHED_LEVELS,
-                Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
+            (P::SHED_LEVELS, Some(1), Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::FULL_DUTY_BASELINE,
                 None,
