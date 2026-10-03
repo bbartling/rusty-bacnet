@@ -121,6 +121,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<Bytes, Error> {
+        // A DADR or local source MAC that no router could carry fails here,
+        // before the path gate is reserved or awaited (#1267).
+        let routed_forwarded_npci_len = match target {
+            ConfirmedTarget::Local { .. } => None,
+            ConfirmedTarget::Routed { dest_mac, .. } => {
+                Some(forwarded_npci_len(dest_mac.len(), self.local_mac.len())?)
+            }
+        };
         // The lease serializes one active request per (immediate router, DNET)
         // and remains live through every return path, including cancellation.
         let path_lease = match target {
@@ -135,21 +143,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     .await?,
             ),
         };
-        let (routed_path_max_apdu, routed_forwarded_npci_len) = match (path_lease.as_ref(), target)
-        {
-            (
-                Some(lease),
-                ConfirmedTarget::Routed {
-                    dest_mac,
-                    dest_network: _,
-                    router_mac: _,
-                },
-            ) => (
-                Some(lease.max_apdu(dest_mac.len(), self.local_mac.len())?),
-                Some(lease.forwarded_npci_len(dest_mac.len(), self.local_mac.len())?),
-            ),
-            _ => (None, None),
-        };
+        let routed_path_max_apdu = path_lease
+            .as_ref()
+            .zip(routed_forwarded_npci_len)
+            .map(|(lease, npci_len)| lease.max_apdu(npci_len));
         let transaction_peer = target.transaction_peer();
         let tsm_mac = transaction_peer.tsm_mac;
         let unsegmented_apdu_size = 4 + service_data.len();

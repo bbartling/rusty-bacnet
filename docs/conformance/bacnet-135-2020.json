@@ -790,7 +790,8 @@
      "crates/bacnet-client/src/client/routed_path_limit_tests.rs::routed_sizing_uses_conservative_and_configured_forwarded_envelopes",
      "crates/bacnet-client/src/client/routed_path_limit_tests.rs::reason_4_completes_exact_caller_learns_bound_and_does_not_retry",
      "crates/bacnet-client/src/client/routed_path_limit_tests.rs::same_path_serializes_while_a_second_router_remains_concurrent",
-     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::capacity_cleanup_never_splits_a_held_or_waiting_same_path_gate"
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::capacity_cleanup_never_splits_a_held_or_waiting_same_path_gate",
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_path_macs_hold_to_the_npdu_address_bound"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/npdu.rs::tests::reject_message_to_network_payload_requires_exact_length",
@@ -802,7 +803,9 @@
      "crates/bacnet-client/src/client/routed_path_limit_tests.rs::cancelled_generation_quarantines_delayed_reason_4_before_next_send",
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::configured_and_learned_evidence_are_never_evicted_for_capacity",
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::control_queued_before_activation_cannot_claim_the_new_generation",
-     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::claimed_control_cannot_complete_reused_invoke_id_for_new_owner"
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::claimed_control_cannot_complete_reused_invoke_id_for_new_owner",
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_path_macs_hold_to_the_npdu_address_bound",
+     "crates/bacnet-client/src/client/routed_path_mac_bound_tests.rs::over_long_routed_path_macs_fail_before_registration_or_emission"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -813,7 +816,8 @@
      "Configured evidence and process-lifetime learned exclusive upper bounds combine by minimum. One active owner per path makes reason-4 completion owner-qualified; learning occurs only when that completion wins, and retry/window retransmission stops afterward.",
      "Path state is capped at 256 entries; deterministic idle reclamation never removes configured/learned evidence or a gate with an owner/waiter, and exhaustion fails before TSM registration. Ambiguous termination holds the same-path gate through a configuration-derived stale-control quarantine, while monotonic network-ingress sequencing prevents controls queued before activation from claiming a later generation.",
      "Malformed, unmatched, stale, wrong-router, wrong-DNET, other-reason, and direct traffic do not mutate policy. Full active probing, persistent cache, router enforcement, and unconfirmed-traffic changes remain deferred. Third-party conformance evidence is still required.",
-    "A client attached to a BACnetRouter through a LoopbackTransport port gets reason 4 rejects on its own NetworkLayer from the router's port MAC, so it needs no router-side receiver (#1175)."
+    "A client attached to a BACnetRouter through a LoopbackTransport port gets reason 4 rejects on its own NetworkLayer from the router's port MAC, so it needs no router-side receiver (#1175).",
+    "Every MAC on a routed path holds to NpduAddress::MAX_MAC_LEN (18 octets). A routed request refuses a longer DADR or local source MAC, and an empty or longer router MAC, with Error::Encoding before it reserves or waits on the path; the path configuration methods refuse such a router MAC too (#1267)."
     ]
   },
   {
@@ -1015,10 +1019,12 @@
    "positive_tests": [
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/priority_array_writes.rs::priority_array_all_twenty_profiles_trait_metadata_and_pics_are_read_only",
     "crates/bacnet-server/src/pics/tests.rs",
-    "crates/bacnet-objects/src"
+    "crates/bacnet-objects/src",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_source_entries_hold_to_the_bacnet_address_bound"
    ],
    "negative_tests": [
-    "crates/bacnet-server/src/handlers/tests"
+    "crates/bacnet-server/src/handlers/tests",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_source_entries_hold_to_the_bacnet_address_bound"
    ],
    "benchmarks": [
     "benchmarks/src/stress/objects.rs"
@@ -1029,7 +1035,8 @@
     "docs/rust-api.md#bacnet-objects object model"
    ],
    "notes": [
-    "Initial family row only; later work should split high-claim services and object families into detailed rows."
+    "Initial family row only; later work should split high-claim services and object families into detailed rows.",
+    "Inbound TimeSynchronization and UTCTimeSynchronization can pass through an optional local source allowlist, TimeSyncSourceRestriction. Each entry holds 1 to BACnetAddress::MAX_MAC_LEN (18) octets, the longest source the network layer delivers; a longer one is refused with Error::Encoding (#1266)."
    ]
   },
   {
@@ -3955,12 +3962,12 @@
    "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-client/src/read_property.rs::decode_ack",
-    "crates/bacnet-endpoint/src/source_read.rs",
-    "crates/bacnet-endpoint/src/source_read_delivery.rs",
+    "crates/bacnet-endpoint/src/source_audit.rs",
+    "crates/bacnet-endpoint/src/source_audit_delivery.rs",
     "crates/bacnet-endpoint/src/session_dispatch.rs",
-    "crates/bacnet-client/src/endpoint_read_operation.rs",
+    "crates/bacnet-client/src/endpoint_operation.rs",
     "crates/bacnet-endpoint-core/src/endpoint_ingress.rs",
-    "crates/bacnet-endpoint/src/source_read_failures.rs",
+    "crates/bacnet-endpoint/src/source_audit_failures.rs",
     "crates/bacnet-server/src/server/audit_failure_queue.rs",
     "crates/bacnet-objects/src/audit/reporter_status.rs",
     "crates/bacnet-endpoint/src/source_recipient.rs",
@@ -4506,7 +4513,7 @@
    "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-server/src/handlers/read_property.rs::handle_read_property_multiple",
-    "crates/bacnet-server/src/handlers/read_property.rs::resolve_device_wildcard",
+    "crates/bacnet-server/src/handlers/read_property.rs::resolve_read_target",
     "crates/bacnet-server/src/handlers/rpm_budget.rs::RpmPlan::read_observed"
    ],
    "positive_tests": [
@@ -5178,7 +5185,7 @@
    "requirement_summary": "Formal APDU structures, service choices, errors, rejects, aborts, and confirmed/unconfirmed service encodings are validated.",
    "status": "implementation-present-needs-conformance-tests",
    "code_anchors": [
-    "crates/bacnet-encoding/src/apdu.rs",
+    "crates/bacnet-encoding/src/apdu/mod.rs",
     "crates/bacnet-services/src"
    ],
    "positive_tests": [

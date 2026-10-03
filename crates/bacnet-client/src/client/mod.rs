@@ -846,7 +846,9 @@ mod segmented_request;
 mod transaction_cleanup;
 mod transaction_peer;
 mod transport_access;
-use routed_path_limits::{routed_path_quarantine_horizon, RoutedPathLease, RoutedPathLimits};
+use routed_path_limits::{
+    forwarded_npci_len, routed_path_quarantine_horizon, RoutedPathLease, RoutedPathLimits,
+};
 use transaction_peer::response_transaction_peer;
 
 pub use cov::CovPropertySubscription;

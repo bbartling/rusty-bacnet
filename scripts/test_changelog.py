@@ -559,9 +559,41 @@ class CommitPinTests(unittest.TestCase):
                     (repo.dir / "5-a.md").write_text(self.pin_text(pin), encoding="utf-8")
                     code, _, err = repo.run("check")
                     self.assertEqual(code, 1)
-                    self.assertIn(f"5-a.md: commit {pin} is not on HEAD's first-parent history", err)
+                    self.assertIn(f"5-a.md: commit {pin} is on no mainline's first-parent history", err)
             (repo.dir / "5-a.md").write_text(self.pin_text(start), encoding="utf-8")
             self.assertEqual(repo.run("check")[0], 0)
+
+    def test_a_pin_to_a_dev_merge_passes_on_a_branch_that_merged_dev(self):
+        with GitRepo() as repo:
+            repo.git("checkout", "-q", "-b", "feature")
+            repo.commit_fragment("7-f.md", fragment("Fixed", "- F."), "feature work")
+            repo.git("checkout", "-q", "dev")
+            merge = repo.merge_fragment("5-a.md", fragment("Fixed", "- Fix 5."), "fix-5")
+            (repo.dir / "5-a.md").write_text(self.pin_text(merge), encoding="utf-8")
+            repo.git("commit", "-q", "-am", "pin 5")
+            repo.git("checkout", "-q", "feature")
+            repo.git("merge", "-q", "--no-ff", "-m", "Merge dev", "dev")
+            self.assertEqual(repo.run("check")[0], 0)  # the pin is off feature's first-parent line
+            repo.git("branch", "-q", "-m", "dev", "upstream")
+            code, _, err = repo.run("check")  # without a dev ref, only HEAD's line counts
+            self.assertEqual(code, 1)
+            self.assertIn("5-a.md: commit", err)
+
+    def test_a_pin_to_a_dev_merge_passes_while_merging_it(self):
+        with GitRepo() as repo:
+            repo.git("checkout", "-q", "-b", "feature")
+            repo.commit_fragment("7-f.md", fragment("Fixed", "- F."), "feature work")
+            repo.git("checkout", "-q", "dev")
+            merge = repo.merge_fragment("5-a.md", fragment("Fixed", "- Fix 5."), "fix-5")
+            (repo.dir / "5-a.md").write_text(self.pin_text(merge), encoding="utf-8")
+            repo.git("commit", "-q", "-am", "pin 5")
+            repo.git("checkout", "-q", "feature")
+            repo.git("branch", "-q", "-m", "dev", "upstream")
+            repo.git("merge", "-q", "--no-ff", "--no-commit", "upstream")
+            self.assertEqual(repo.run("check")[0], 0)  # MERGE_HEAD's line holds the pin
+            repo.git("merge", "--abort")
+            (repo.dir / "5-a.md").write_text(self.pin_text(merge), encoding="utf-8")
+            self.assertEqual(repo.run("check")[0], 1)
 
     def test_a_shallow_clone_skips_the_pin_check(self):
         with GitRepo() as repo:
