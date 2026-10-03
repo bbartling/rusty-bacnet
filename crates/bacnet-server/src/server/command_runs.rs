@@ -81,6 +81,23 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
         }
     }
 
+    /// A runner over an unconfirmed request's handles, for WriteGroup.
+    pub(super) fn for_unconfirmed(services: &UnconfirmedServices<T>) -> Self {
+        Self {
+            db: Arc::clone(&services.db),
+            network: Arc::clone(&services.network),
+            cov_table: Arc::clone(&services.cov_table),
+            cov_in_flight: Arc::clone(&services.cov_in_flight),
+            notification_transactions: Arc::clone(&services.notification_transactions),
+            comm_state: Arc::clone(&services.comm_state),
+            learned_routers: Arc::clone(&services.learned_routers),
+            device_bindings: Arc::clone(&services.device_bindings),
+            event_suppressions: Arc::clone(&services.event_suppressions),
+            config: Arc::clone(&services.config),
+            tasks: services.tasks.clone(),
+        }
+    }
+
     /// A runner over a running server's own handles, for `write_local`.
     pub(super) fn for_server(server: &BACnetServer<T>) -> Self {
         let writer = server.local_writer();
@@ -142,7 +159,8 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
         }
     }
 
-    fn writer(&self) -> LocalWriter<'_, T> {
+    /// The local write path over these handles.
+    pub(super) fn writer(&self) -> LocalWriter<'_, T> {
         LocalWriter {
             db: &self.db,
             network: &self.network,

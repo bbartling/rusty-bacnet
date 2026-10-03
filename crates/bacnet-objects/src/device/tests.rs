@@ -334,7 +334,8 @@ fn read_protocol_services_supported() {
             assert!(ss.contains(ServiceSupported::READ_RANGE));
             assert!(ss.contains(ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE));
             assert!(ss.contains(ServiceSupported::UNCONFIRMED_AUDIT_NOTIFICATION));
-            assert!(!ss.contains(ServiceSupported::WRITE_GROUP));
+            // WriteGroup runs on the Channel objects (#1151).
+            assert!(ss.contains(ServiceSupported::WRITE_GROUP));
             // …and initiate-only services are not declared as executed.
             assert!(!ss.contains(ServiceSupported::I_AM));
             assert!(!ss.contains(ServiceSupported::I_HAVE));

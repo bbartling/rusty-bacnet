@@ -846,6 +846,7 @@ mod segmented_request;
 mod transaction_cleanup;
 mod transaction_peer;
 mod transport_access;
+mod write_group;
 pub(crate) use routed_path_limits::check_routed_unicast;
 use routed_path_limits::{
     check_remote_dnet, forwarded_npci_len, routed_path_quarantine_horizon, RoutedPathLease,
@@ -865,6 +866,7 @@ pub use event_notifications::{
     EventNotificationDelivery, ReceivedEventNotification, DEFAULT_EVENT_CHANNEL_CAPACITY,
     MAX_EVENT_CHANNEL_CAPACITY,
 };
+pub use write_group::WriteGroupDestination;
 
 #[cfg(test)]
 mod acknowledge_alarm_tests;

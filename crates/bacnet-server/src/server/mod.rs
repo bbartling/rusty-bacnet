@@ -547,6 +547,7 @@ impl BACnetServer<BipTransport> {
 mod clock;
 mod command_runs;
 mod time_sync_policy;
+mod write_group;
 #[cfg(test)]
 pub(crate) use clock::clocked_test_database;
 pub use clock::ClockConfig;

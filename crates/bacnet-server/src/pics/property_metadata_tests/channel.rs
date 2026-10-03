@@ -18,6 +18,7 @@ fn pics_channel_property_metadata_is_exact() {
         (P::OUT_OF_SERVICE, false, true),
         (P::LIST_OF_OBJECT_PROPERTY_REFERENCES, false, true),
         (P::EXECUTION_DELAY, true, true),
+        (P::ALLOW_GROUP_DELAY_INHIBIT, true, true),
         (P::CHANNEL_NUMBER, false, true),
         (P::CONTROL_GROUPS, false, true),
         (P::PROPERTY_LIST, false, false),
