@@ -151,17 +151,16 @@ fn foreign_reference_does_not_evaluate_same_numbered_local_object() {
             .unwrap(),
         PropertyValue::Enumerated(EventState::NORMAL.to_raw())
     );
-    let PropertyValue::List(reference) = db
-        .get(&ee_oid)
-        .unwrap()
-        .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
-        .unwrap()
-    else {
-        panic!("expected object property reference list");
-    };
+    let reference = super::super::decode_reference_value(
+        &db.get(&ee_oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
+            .unwrap(),
+    )
+    .expect("one framed reference");
     assert_eq!(
-        reference[3],
-        PropertyValue::ObjectIdentifier(ObjectIdentifier::new(ObjectType::DEVICE, 200).unwrap())
+        reference.device_identifier,
+        Some(ObjectIdentifier::new(ObjectType::DEVICE, 200).unwrap())
     );
 }
 
@@ -397,11 +396,33 @@ impl BACnetObject for ReferenceValueObject {
 }
 
 pub(super) fn indexed_reference_value(target: ObjectIdentifier, index: u32) -> PropertyValue {
-    PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(target),
-        PropertyValue::Unsigned(PropertyIdentifier::PRIORITY_ARRAY.to_raw() as u64),
-        PropertyValue::Unsigned(index as u64),
-    ])
+    reference_value(
+        target,
+        PropertyIdentifier::PRIORITY_ARRAY.to_raw(),
+        Some(index),
+        None,
+    )
+}
+
+/// A reference as an Event Enrollment read serves it: the Clause 21
+/// encoding of a BACnetDeviceObjectPropertyReference (#1182).
+pub(super) fn reference_value(
+    target: ObjectIdentifier,
+    property: u32,
+    index: Option<u32>,
+    device: Option<ObjectIdentifier>,
+) -> PropertyValue {
+    let mut encoded = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_device_object_property_reference(
+        &mut encoded,
+        &BACnetDeviceObjectPropertyReference {
+            object_identifier: target,
+            property_identifier: property,
+            property_array_index: index,
+            device_identifier: device,
+        },
+    );
+    PropertyValue::ApplicationData(encoded.to_vec())
 }
 
 #[test]
@@ -546,54 +567,49 @@ fn malformed_reference_shapes_do_not_become_local() {
     let target = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap();
     let foreign_device = ObjectIdentifier::new(ObjectType::DEVICE, 200).unwrap();
     let property = PropertyIdentifier::PRESENT_VALUE;
+    let PropertyValue::ApplicationData(good) =
+        reference_value(target, property.to_raw(), None, Some(foreign_device))
+    else {
+        unreachable!()
+    };
     let malformed = [
-        vec![
+        // The flat application-tagged form reads used to serve.
+        PropertyValue::List(vec![
             PropertyValue::ObjectIdentifier(target),
             PropertyValue::Unsigned(property.to_raw() as u64),
             PropertyValue::ObjectIdentifier(foreign_device),
-        ],
-        vec![
-            PropertyValue::ObjectIdentifier(target),
-            PropertyValue::Unsigned(property.to_raw() as u64),
-            PropertyValue::Null,
-            PropertyValue::Null,
-            PropertyValue::ObjectIdentifier(foreign_device),
-        ],
-        vec![
-            PropertyValue::ObjectIdentifier(target),
-            PropertyValue::Unsigned(property.to_raw() as u64),
-            PropertyValue::Boolean(false),
-            PropertyValue::Null,
-        ],
-        vec![
-            PropertyValue::ObjectIdentifier(target),
-            PropertyValue::Unsigned(4_194_304),
-        ],
-        vec![
-            PropertyValue::ObjectIdentifier(target),
-            PropertyValue::Unsigned(u32::MAX as u64 + 1 + property.to_raw() as u64),
-        ],
-        vec![
-            PropertyValue::ObjectIdentifier(target),
-            PropertyValue::Unsigned(property.to_raw() as u64),
-            PropertyValue::Unsigned(u32::MAX as u64 + 1),
-        ],
+        ]),
+        PropertyValue::Null,
+        // Cut inside the Device member.
+        PropertyValue::ApplicationData(good[..good.len() - 1].to_vec()),
+        // A context tag [4] after the reference.
+        PropertyValue::ApplicationData([good.clone(), vec![0x49, 0x01]].concat()),
+        // Two references.
+        PropertyValue::ApplicationData([good.clone(), good.clone()].concat()),
+        // A property identifier past the 22-bit range.
+        reference_value(target, 4_194_304, None, None),
+        // A property identifier past u32.
+        PropertyValue::ApplicationData(vec![
+            0x0C, 0x00, 0x00, 0x00, 0x03, 0x1D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x55,
+        ]),
+        // An array index past u32.
+        PropertyValue::ApplicationData(vec![
+            0x0C, 0x00, 0x00, 0x00, 0x03, 0x19, 0x55, 0x2D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00,
+        ]),
     ];
 
-    for items in malformed {
-        let enrollment = ReferenceValueObject::new(Some(PropertyValue::List(items)));
+    for value in malformed {
+        let enrollment = ReferenceValueObject::new(Some(value));
         assert!(matches!(
             super::super::read_object_property_ref(&enrollment),
             Err(super::super::LocalConfigurationReadError::Malformed)
         ));
     }
 
-    let legacy = ReferenceValueObject::new(Some(PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(target),
-        PropertyValue::Unsigned(property.to_raw() as u64),
-    ])));
+    let framed =
+        ReferenceValueObject::new(Some(reference_value(target, property.to_raw(), None, None)));
     assert_eq!(
-        super::super::read_object_property_ref(&legacy),
+        super::super::read_object_property_ref(&framed),
         Ok(super::super::MonitoredReference::local(
             target, property, None
         ))
@@ -622,10 +638,7 @@ fn malformed_retarget_does_not_resume_stale_countdown() {
     db.add(Box::new(ai)).unwrap();
 
     let property = PropertyIdentifier::PRESENT_VALUE;
-    let valid = PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(target),
-        PropertyValue::Unsigned(property.to_raw() as u64),
-    ]);
+    let valid = reference_value(target, property.to_raw(), None, None);
     let enrollment = ReferenceValueObject::new(Some(valid.clone()));
     let enrollment_oid = enrollment.object_identifier();
     db.add(Box::new(enrollment)).unwrap();
@@ -677,10 +690,8 @@ fn malformed_retarget_does_not_resume_stale_countdown() {
 #[test]
 fn invalid_reference_clears_before_other_property_failure() {
     let target = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap();
-    let mut enrollment = ReferenceValueObject::new(Some(PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(target),
-        PropertyValue::Unsigned(4_194_304),
-    ])));
+    let mut enrollment =
+        ReferenceValueObject::new(Some(reference_value(target, 4_194_304, None, None)));
     enrollment
         .event_parameters_readable
         .store(false, Ordering::SeqCst);

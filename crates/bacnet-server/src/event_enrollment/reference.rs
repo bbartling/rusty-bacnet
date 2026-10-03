@@ -1,5 +1,6 @@
+use bacnet_encoding::constructed::decode_device_object_property_reference;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::constructed::BACnetEventParameter;
+use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
 use bacnet_types::enums::{EventType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -30,6 +31,20 @@ impl MonitoredReference {
     }
 }
 
+/// The reference an Event Enrollment's Object_Property_Reference read holds:
+/// exactly one BACnetDeviceObjectPropertyReference in its Clause 21 encoding
+/// (#1182), naming a property identifier in the 22-bit range. Anything else,
+/// Null for an enrollment without a reference included, is `None`.
+pub(crate) fn decode_reference_value(
+    value: &PropertyValue,
+) -> Option<BACnetDeviceObjectPropertyReference> {
+    let PropertyValue::ApplicationData(bytes) = value else {
+        return None;
+    };
+    let (reference, end) = decode_device_object_property_reference(bytes, 0).ok()?;
+    (end == bytes.len() && reference.property_identifier <= 0x3F_FFFF).then_some(reference)
+}
+
 /// Read the object-property reference from an Event Enrollment object.
 ///
 /// `Malformed` means the required property is absent or does not contain a
@@ -38,42 +53,16 @@ pub(super) fn read_object_property_ref(
     enrollment: &dyn BACnetObject,
 ) -> Result<MonitoredReference, LocalConfigurationReadError> {
     match enrollment.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None) {
-        Ok(PropertyValue::List(ref items)) if (2..=4).contains(&items.len()) => {
-            let object_identifier = match &items[0] {
-                PropertyValue::ObjectIdentifier(oid) => *oid,
-                _ => return Err(LocalConfigurationReadError::Malformed),
-            };
-            let PropertyValue::Unsigned(property_identifier) = &items[1] else {
-                return Err(LocalConfigurationReadError::Malformed);
-            };
-            let Ok(property_identifier) = u32::try_from(*property_identifier) else {
-                return Err(LocalConfigurationReadError::Malformed);
-            };
-            if property_identifier > 0x3F_FFFF {
-                return Err(LocalConfigurationReadError::Malformed);
-            }
-            let property_identifier = PropertyIdentifier::from_raw(property_identifier);
-            let array_index = match items.get(2) {
-                None | Some(PropertyValue::Null) => None,
-                Some(PropertyValue::Unsigned(index)) => match u32::try_from(*index) {
-                    Ok(index) => Some(index),
-                    Err(_) => return Err(LocalConfigurationReadError::Malformed),
-                },
-                Some(_) => return Err(LocalConfigurationReadError::Malformed),
-            };
-            let device_identifier = match items.get(3) {
-                None | Some(PropertyValue::Null) => None,
-                Some(PropertyValue::ObjectIdentifier(oid)) => Some(*oid),
-                Some(_) => return Err(LocalConfigurationReadError::Malformed),
-            };
+        Ok(value) => {
+            let reference =
+                decode_reference_value(&value).ok_or(LocalConfigurationReadError::Malformed)?;
             Ok(MonitoredReference {
-                object_identifier,
-                property_identifier,
-                array_index,
-                device_identifier,
+                object_identifier: reference.object_identifier,
+                property_identifier: PropertyIdentifier::from_raw(reference.property_identifier),
+                array_index: reference.property_array_index,
+                device_identifier: reference.device_identifier,
             })
         }
-        Ok(_) => Err(LocalConfigurationReadError::Malformed),
         Err(error) => Err(classify_required_property_read_error(&error)),
     }
 }

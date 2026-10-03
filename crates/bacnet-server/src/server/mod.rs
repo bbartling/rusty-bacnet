@@ -753,6 +753,8 @@ mod life_safety_operation_replay_tests;
 #[cfg(test)]
 mod life_safety_operation_tests;
 #[cfg(test)]
+mod log_reference_resize_tests;
+#[cfg(test)]
 mod loop_controlled_variable_tests;
 #[cfg(test)]
 mod loop_cov_tests;

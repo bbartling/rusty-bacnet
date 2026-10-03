@@ -14,7 +14,7 @@ use crate::property_metadata::{
 // Order preserves the legacy property_list projection; PROPERTY_LIST is
 // appended so the projection helper omits it while required_properties keeps
 // it. Only implemented rows are described: table rows the objects do not
-// serve (the Zone Member_Of, Device_Type, Units, Setting,
+// serve (Device_Type, Units, Setting,
 // intrinsic-reporting/event rows, Reliability_Evaluation_Inhibit,
 // Value_Source/audit/tags/profile rows) stay absent until dispatch exists.
 // Mode carries the table W code; Accepted_Modes (R) follows it, read-only, and
@@ -55,6 +55,7 @@ const ZONE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OPERATION_EXPECTED, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::TRACKING_VALUE, RequiredRead, None, WhenOutOfService),
     PropertyMetadata::new(P::ZONE_MEMBERS, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::MEMBER_OF, Optional, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
@@ -259,6 +260,7 @@ mod tests {
             P::OPERATION_EXPECTED,
             P::TRACKING_VALUE,
             P::ZONE_MEMBERS,
+            P::MEMBER_OF,
             P::EVENT_STATE,
             P::STATUS_FLAGS,
             P::OUT_OF_SERVICE,
@@ -421,7 +423,7 @@ mod tests {
                 error,
             );
         }
-        for p in [P::MEMBER_OF, P::DEVICE_TYPE, P::ALL] {
+        for p in [P::DEVICE_TYPE, P::ALL] {
             assert!(!object.is_writable_property(p));
             assert_error(
                 object.read_property(p, None).unwrap_err(),

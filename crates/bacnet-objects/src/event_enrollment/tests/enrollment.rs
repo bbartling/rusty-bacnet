@@ -134,21 +134,34 @@ fn read_object_property_reference_some() {
         property_array_index: None,
         device_identifier: None,
     }));
-    let val = ee
-        .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
-        .unwrap();
-    if let PropertyValue::List(fields) = val {
-        assert_eq!(fields.len(), 4);
-        assert_eq!(fields[0], PropertyValue::ObjectIdentifier(ai_oid));
-        assert_eq!(
-            fields[1],
-            PropertyValue::Unsigned(PropertyIdentifier::PRESENT_VALUE.to_raw() as u64)
-        );
-        assert_eq!(fields[2], PropertyValue::Null); // no array index
-        assert_eq!(fields[3], PropertyValue::Null); // no device
-    } else {
-        panic!("Expected List");
-    }
+    // [0] analog-input 5, [1] present-value; the absent index and Device
+    // members are left out rather than sent as Null (#1182).
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
+            .unwrap(),
+        PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x05, 0x19, 0x55])
+    );
+}
+
+#[test]
+fn read_object_property_reference_serves_every_member() {
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference {
+        object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 5).unwrap(),
+        property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        property_array_index: Some(1),
+        device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 260).unwrap()),
+    }));
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
+            .unwrap(),
+        PropertyValue::ApplicationData(vec![
+            0x0C, 0x00, 0x00, 0x00, 0x05, // [0] analog-input 5
+            0x19, 0x55, // [1] present-value
+            0x29, 0x01, // [2] index 1
+            0x3C, 0x02, 0x00, 0x01, 0x04, // [3] device 260
+        ])
+    );
 }
 
 #[test]

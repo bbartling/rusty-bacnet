@@ -2006,6 +2006,14 @@ Loop's measured input has its own route,
 | `AlertEnrollmentObject` | `::new(instance, name, initial_source)` |
 | `EventEnrollmentObject` | `::new(instance, name, event_type)` |
 
+An Event Enrollment's Object_Property_Reference, set with
+`set_object_property_reference`, reads as the context-tagged
+`BACnetDeviceObjectPropertyReference` in one `PropertyValue::ApplicationData`,
+its array index and Device members present only when set (Null while unset;
+#1182), and it stays read-only over the network. The server's evaluation and
+CHANGE_OF_RELIABILITY notifications decode that encoding, so a notification's
+property values carry the reference in it.
+
 `ScheduleObject::add_object_property_reference` retains a complete local
 `BACnetObjectPropertyReference`, including its optional target array index;
 `set_object_property_references` replaces the whole list. Both return `Result`
@@ -2140,6 +2148,33 @@ A Trend Log Multiple record is a `BACnetLogMultipleRecord`: a timestamp and a
 `LogData` holding one `LogValue` per Log_DeviceObjectProperty member, a log
 status, or a time change. `TrendLogMultipleObject::add_record` takes one and
 `records()` returns them.
+
+Log_DeviceObjectProperty reads as the context-tagged
+`BACnetDeviceObjectPropertyReference` (#1234): one
+`PropertyValue::ApplicationData` on a Trend Log (Null while unset), and on a
+Trend Log Multiple a BACnetARRAY with one such value per element, which an
+array index reads singly (index 0 is the count). Both are writable over
+WriteProperty, WritePropertyMultiple and `write_local`, in that encoding: a
+Trend Log takes one reference, or Null to unset it; a Trend Log Multiple takes
+the whole array, at any length up to `trend::MAX_LOG_DEVICE_OBJECT_PROPERTIES`
+(64, RESOURCES / NO_SPACE_TO_WRITE_PROPERTY past it), or one element by index.
+An Unsigned written to index 0 resizes it: a smaller size drops the trailing
+elements, a larger one appends empty elements (Analog Input 4194303's
+Present_Value), a size past 64 is NO_SPACE_TO_WRITE_PROPERTY and another
+datatype INVALID_DATA_TYPE. A reference naming this server's Device
+is stored without the Device member; one naming another device is
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, except that a Trend Log Multiple element
+naming instance 4194303 is an empty element and kept. A Device member that
+isn't a Device identifier is VALUE_OUT_OF_RANGE, another datatype (the old flat
+application-tagged form included) INVALID_DATA_TYPE and a malformed reference
+INVALID_DATA_ENCODING. A write that changes the value purges the log, leaving a
+BUFFER_PURGED status record; without a valid clock it fails with DEVICE /
+OPERATIONAL_PROBLEM and changes nothing. The local
+`TrendLogObject::set_log_device_object_property` and
+`TrendLogMultipleObject::add_property_reference` return `Result`: they leave
+the buffer alone and may name another device (the poller logs a failure for
+it), but refuse a Device member that isn't a Device identifier, and
+`add_property_reference` a 65th reference.
 
 An Event Log record is a `BACnetEventLogRecord`: a timestamp and an
 `EventLogDatum` holding a log status, a time change, or a notification as the
@@ -2348,6 +2383,13 @@ before the object decodes the value, on WriteProperty, WritePropertyMultiple
 and `write_local`, and it reads back without it (#1153). `AveragingObject`
 itself can't tell which Device holds it, so written directly it refuses every
 Device member.
+
+Object_Property_Reference reads as the context-tagged
+`BACnetDeviceObjectPropertyReference`, a `PropertyValue::ApplicationData` with
+no Device member (Null while unset), and a write takes that encoding back
+(#1182). The flat application-tagged list reads used to serve is now
+INVALID_DATA_TYPE, and a Device member that isn't a Device identifier
+VALUE_OUT_OF_RANGE.
 
 Staging uses an explicit atomic configuration; the former stage-count-only
 constructor is intentionally removed because it could not create a valid
@@ -4008,8 +4050,20 @@ network `Mode` write naming an unlisted value fails with
 `PROPERTY / VALUE_OUT_OF_RANGE` and leaves `Mode` unchanged; the local
 `set_mode` is not checked against the list.
 
+Member_Of (Point and Zone) and Zone_Members are BACnetLISTs of
+`BACnetDeviceObjectReference` (#1182), read-only over the network: a read
+serves one `PropertyValue::ApplicationData` per member, and a member in another
+device keeps its Device member. The application fills them with
+`LifeSafetyPointObject::add_member`, `LifeSafetyZoneObject::add_member` and
+`LifeSafetyZoneObject::add_zone_member`, which take a
+`BACnetDeviceObjectReference` (an `ObjectIdentifier` converts to a local one)
+and return `Result`: a member already listed stays listed once, and another
+object type (Member_Of names Life Safety Zones, Zone_Members Points and Zones)
+or a Device member that isn't a Device identifier is
+`PROPERTY / VALUE_OUT_OF_RANGE`.
+
 This is a bounded operational-state slice with pinned partial metadata (Point
-`POINT_BASE` 18 rows, Zone `ZONE_BASE` 16 rows; exact PICS projection tests) and
+`POINT_BASE` 18 rows, Zone `ZONE_BASE` 17 rows; exact PICS projection tests) and
 network read-only `Silenced`/`Operation_Expected`/`Accepted_Modes`; not complete
 Life Safety Point/Zone tables, formal PICS/BIBB/profile/device-advertisement,
 or intrinsic `CHANGE_OF_LIFE_SAFETY` event-algorithm conformance

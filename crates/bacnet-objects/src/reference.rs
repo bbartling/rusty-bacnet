@@ -15,7 +15,9 @@
 //!    it is exactly what the service decode now produces when a peer writes
 //!    the flattened application-tagged form this stack emits on reads. The
 //!    shape is exact: extra or wrong-typed members are refused, never
-//!    silently ignored.
+//!    silently ignored. Under [`ReferenceFrame::Device`] it is refused as
+//!    INVALID_DATA_TYPE: Averaging reads serve the context-tagged form
+//!    (#1182), so nothing it emits has this shape.
 //! 3. **Framed network form** — the reference's primitive context-tagged
 //!    members \[0\]/\[1\]/\[2\] verbatim: one or more `ApplicationData` elements
 //!    (the service decode splits at context-tag boundaries, one element per
@@ -31,7 +33,8 @@
 //! framed form the production's codec rejects is PROPERTY /
 //! INVALID_DATA_ENCODING. Under [`ReferenceFrame::Device`] a Device member is
 //! valid encoding, so it is refused as PROPERTY /
-//! OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED instead (#1153).
+//! OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED instead (#1153), or as PROPERTY /
+//! VALUE_OUT_OF_RANGE when it isn't a Device identifier (#1182).
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -95,6 +98,11 @@ pub(crate) fn decode_reference_write(
         PropertyValue::Null => Ok(None),
         PropertyValue::ApplicationData(bytes) => decode_framed(bytes, frame),
         PropertyValue::List(items) => match items.first() {
+            // Averaging serves the context-tagged form, so the flat one is
+            // a value of another datatype there (#1182).
+            Some(PropertyValue::ObjectIdentifier(_)) if frame == ReferenceFrame::Device => {
+                Err(common::invalid_data_type_error())
+            }
             Some(PropertyValue::ObjectIdentifier(_)) => decode_legacy_list(items).map(Some),
             Some(PropertyValue::ApplicationData(_)) => {
                 // Mixed framed/flat element lists are a framing-level
@@ -123,12 +131,12 @@ pub(crate) fn decode_reference_write(
 /// optional third `Unsigned` array index — exactly two or three members.
 ///
 /// Member typing: the property member travels as `Enumerated` in the
-/// Loop/Pulse Converter flat form and as `Unsigned` in the Averaging flat
-/// form; both are accepted on write for cross-object compatibility (this
-/// mirrors Clause 21 where `BACnetPropertyIdentifier` is itself an
-/// ENUMERATED production, but the two flat conventions predate the framed
-/// codec and each object's read keeps its historical emission). Values past
-/// u32 (a >4-octet wire member, or an overflowing `Unsigned`) are refused.
+/// Loop/Pulse Converter flat form; an `Unsigned` one, the convention of the
+/// former Averaging flat form, decodes to the same reference (this mirrors
+/// Clause 21 where `BACnetPropertyIdentifier` is itself an ENUMERATED
+/// production, but the flat conventions predate the framed codec). Values
+/// past u32 (a >4-octet wire member, or an overflowing `Unsigned`) are
+/// refused.
 fn decode_legacy_list(items: &[PropertyValue]) -> Result<BACnetObjectPropertyReference, Error> {
     let Some(PropertyValue::ObjectIdentifier(object_identifier)) = items.first() else {
         return Err(common::invalid_data_type_error());
@@ -191,8 +199,9 @@ fn decode_framed(
 
 /// Strict decode of exactly one `BACnetDeviceObjectPropertyReference`, held
 /// to this device: a reference that decodes but names a Device is
-/// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and anything that doesn't decode in
-/// full is INVALID_DATA_ENCODING.
+/// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, one whose Device member isn't a
+/// Device identifier VALUE_OUT_OF_RANGE (#1182), and anything that doesn't
+/// decode in full is INVALID_DATA_ENCODING.
 fn decode_local_device_reference(bytes: &[u8]) -> Result<BACnetObjectPropertyReference, Error> {
     let (reference, end) =
         bacnet_encoding::constructed::decode_device_object_property_reference(bytes, 0)
@@ -200,6 +209,7 @@ fn decode_local_device_reference(bytes: &[u8]) -> Result<BACnetObjectPropertyRef
     if end != bytes.len() {
         return Err(common::invalid_data_encoding_error());
     }
+    crate::device_reference::check_device_member(reference.device_identifier)?;
     if reference.device_identifier.is_some() {
         return Err(common::protocol_error(
             ErrorClass::PROPERTY,

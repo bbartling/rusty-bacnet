@@ -41,11 +41,8 @@ fn write_raw(
 
 /// Read a property over the wire and loop-decode the flattened result the
 /// same way the write path decodes (single element → scalar, else `List`).
-fn read_prop(
-    db: &ObjectDatabase,
-    oid: ObjectIdentifier,
-    property: PropertyIdentifier,
-) -> PropertyValue {
+/// The propertyValue bytes of a ReadProperty-ACK for `property`.
+fn read_raw(db: &ObjectDatabase, oid: ObjectIdentifier, property: PropertyIdentifier) -> Vec<u8> {
     let request = ReadPropertyRequest {
         object_identifier: oid,
         property_identifier: property,
@@ -55,7 +52,15 @@ fn read_prop(
     request.encode(&mut buf);
     let mut ack_buf = BytesMut::new();
     handle_read_property(db, &buf, &mut ack_buf).unwrap();
-    let raw = ReadPropertyACK::decode(&ack_buf).unwrap().property_value;
+    ReadPropertyACK::decode(&ack_buf).unwrap().property_value
+}
+
+fn read_prop(
+    db: &ObjectDatabase,
+    oid: ObjectIdentifier,
+    property: PropertyIdentifier,
+) -> PropertyValue {
+    let raw = read_raw(db, oid, property);
     let mut values = Vec::new();
     let mut offset = 0;
     while offset < raw.len() {
@@ -388,13 +393,9 @@ fn averaging_object_property_reference_over_the_wire() {
 
     let target = reference_target();
     let present_value = PropertyIdentifier::PRESENT_VALUE.to_raw();
-    let baseline = PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(target),
-        PropertyValue::Unsigned(present_value as u64),
-    ]);
 
-    // Framed local reference lands; the Averaging read keeps its historical
-    // Unsigned member emission.
+    // Framed local reference lands, and a read serves the same Clause 21
+    // bytes: [0] analog-input 7, [1] present-value, no Device (#1182).
     write_raw(
         &mut db,
         oid,
@@ -403,8 +404,35 @@ fn averaging_object_property_reference_over_the_wire() {
     )
     .unwrap();
     assert_eq!(
-        read_prop(&db, oid, PropertyIdentifier::OBJECT_PROPERTY_REFERENCE),
-        baseline
+        read_raw(&db, oid, PropertyIdentifier::OBJECT_PROPERTY_REFERENCE),
+        [0x0C, 0x00, 0x00, 0x00, 0x07, 0x19, 0x55]
+    );
+    let baseline = read_prop(&db, oid, PropertyIdentifier::OBJECT_PROPERTY_REFERENCE);
+
+    // The flat application-tagged form reads used to serve is another
+    // datatype, and a [3] naming no Device is out of range (#1182).
+    assert_refused(
+        &mut db,
+        oid,
+        PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+        encode_value(PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(target),
+            PropertyValue::Unsigned(present_value as u64),
+        ])),
+        ErrorCode::INVALID_DATA_TYPE,
+        baseline.clone(),
+        "flat reference",
+    );
+    assert_refused(
+        &mut db,
+        oid,
+        PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+        vec![
+            0x0C, 0x00, 0x00, 0x00, 0x07, 0x19, 0x55, 0x3C, 0x00, 0x00, 0x00, 0x2A,
+        ],
+        ErrorCode::VALUE_OUT_OF_RANGE,
+        baseline.clone(),
+        "[3] naming analog-input 42",
     );
 
     // Device-qualified [3] write is refused (remote sampling is the
