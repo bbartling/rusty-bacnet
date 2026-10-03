@@ -1,3 +1,4 @@
+use crate::access_control::AccessZoneObject;
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
@@ -7,7 +8,7 @@ use bacnet_types::enums::{EventState, EventType};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 #[test]
-fn all_nine_intrinsic_families_report_implied_algorithm_and_shared_commit_coordinate() {
+fn all_ten_intrinsic_families_report_implied_algorithm_and_shared_commit_coordinate() {
     let mut objects: Vec<(Box<dyn BACnetObject>, EventType)> = vec![
         (
             Box::new(AnalogInputObject::new(1, "AI", 0).unwrap()),
@@ -43,6 +44,10 @@ fn all_nine_intrinsic_families_report_implied_algorithm_and_shared_commit_coordi
         ),
         (
             Box::new(MultiStateValueObject::new(1, "MSV", 3).unwrap()),
+            EventType::CHANGE_OF_STATE,
+        ),
+        (
+            Box::new(AccessZoneObject::new(1, "ZONE").unwrap()),
             EventType::CHANGE_OF_STATE,
         ),
     ];

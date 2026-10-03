@@ -1097,14 +1097,18 @@ class ActionCommand(TypedDict):
 
 
 class DeviceObjectPropertyReference(TypedDict):
-    """A property (``BACnetDeviceObjectPropertyReference``): a Trend Log
-    Multiple member, or the property whose value decides when an access rule
-    applies, such as a Schedule's Present_Value.
+    """A property (``BACnetDeviceObjectPropertyReference``), in this device or
+    the one ``device_identifier`` names: a Channel or Trend Log Multiple
+    member, or the property whose value decides when an access rule applies,
+    such as a Schedule's Present_Value. A member list also takes an
+    ``(object, property)`` or ``(object, property, array_index)`` tuple for a
+    property in this device, and stores a member naming the server's own
+    Device in its local form.
 
-    Unknown keys and a ``device_identifier`` that isn't a Device raise
-    ValueError; wrong types raise TypeError. The server reads only its own
-    objects, so a Trend Log Multiple member naming another Device logs a
-    failure instead of a value.
+    Unknown or missing keys, a ``device_identifier`` that isn't a Device and a
+    ``property_array_index`` outside unsigned32 raise ValueError; wrong types
+    raise TypeError. The server reads only its own objects, so a Trend Log
+    Multiple member naming another Device logs a failure instead of a value.
     """
 
     object_identifier: ObjectIdentifier
@@ -1112,10 +1116,6 @@ class DeviceObjectPropertyReference(TypedDict):
     # 0..=4294967295; one element of an array property.
     property_array_index: NotRequired[int | None]
     device_identifier: NotRequired[ObjectIdentifier | None]
-
-
-# An access rule's time range is read as any other property reference.
-AccessRuleTimeRange = DeviceObjectPropertyReference
 
 
 class AccessRule(TypedDict):
@@ -1128,7 +1128,7 @@ class AccessRule(TypedDict):
     """
 
     enable: bool
-    time_range: NotRequired[AccessRuleTimeRange | None]
+    time_range: NotRequired[DeviceObjectPropertyReference | None]
     location: NotRequired[
         ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier] | None
     ]
@@ -2707,7 +2707,25 @@ class BACnetServer:
     def add_date_time_pattern_value(self, instance: int, name: str) -> None: ...
 
     # --- Notification/logging ---
-    def add_notification_class(self, instance: int, name: str, notification_class: int = 0) -> None: ...
+    def add_notification_class(
+        self,
+        instance: int,
+        name: str,
+        notification_class: int = 0,
+        storage_path: Optional[str] = None,
+    ) -> None:
+        """Add a Notification Class (Clause 12.21). With ``storage_path``, a
+        Recipient_List a client writes is kept in that file across restarts; a
+        write whose list cannot be saved is refused with DEVICE /
+        OPERATIONAL_PROBLEM and the old list stays. Without it the list lives in
+        memory only.
+
+        ``storage_path`` is a ``str``; a ``pathlib.Path`` raises TypeError, as
+        for ``add_notification_forwarder``. Give each class a file of its own:
+        the file names the class it belongs to, so one that holds another
+        object's list, or anything this backend did not write, makes this call
+        raise BacnetError (BacnetProtocolError for a saved list a client's write
+        would be refused)."""
     def add_notification_forwarder(
         self,
         instance: int,
@@ -2738,7 +2756,13 @@ class BACnetServer:
         name: str,
         buffer_size: int = 100,
         *,
-        members: list[DeviceObjectPropertyReference] | None = None,
+        members: Optional[
+            list[
+                tuple[ObjectIdentifier, PropertyIdentifier]
+                | tuple[ObjectIdentifier, PropertyIdentifier, Optional[int]]
+                | DeviceObjectPropertyReference
+            ]
+        ] = None,
         log_interval: int | None = None,
         logging_type: Literal["polled", "triggered"] | None = None,
         start_time: tuple[tuple[int, int, int, int], tuple[int, int, int, int]] | None = None,
@@ -2749,8 +2773,11 @@ class BACnetServer:
         """Add a Trend Log Multiple (Clause 12.30) that the server polls or
         triggers, logging one value per member in each record.
 
-        ``members`` fills Log_DeviceObjectProperty in order; more than 64
-        raises BacnetProtocolError (NO_SPACE_TO_WRITE_PROPERTY), and a
+        ``members`` fills Log_DeviceObjectProperty in order, each an
+        ``(object, property)`` or ``(object, property, array_index)`` tuple
+        or a ``DeviceObjectPropertyReference`` mapping; one naming this
+        server's Device is kept in its local form. More than 64 raises
+        BacnetProtocolError (NO_SPACE_TO_WRITE_PROPERTY), and a
         ``device_identifier`` that isn't a Device raises ValueError.
         ``log_interval`` is in hundredths of a second. ``logging_type``
         ``"polled"`` with no ``log_interval`` takes a one-minute interval;
@@ -2895,6 +2922,49 @@ class BACnetServer:
     # --- Lighting ---
     def add_lighting_output(self, instance: int, name: str) -> None: ...
     def add_binary_lighting_output(self, instance: int, name: str) -> None: ...
+    def add_channel(
+        self,
+        instance: int,
+        name: str,
+        channel_number: int,
+        members: Optional[
+            list[
+                tuple[ObjectIdentifier, PropertyIdentifier]
+                | tuple[ObjectIdentifier, PropertyIdentifier, Optional[int]]
+                | DeviceObjectPropertyReference
+            ]
+        ] = None,
+        execution_delay: Optional[list[int]] = None,
+        control_groups: Optional[list[int]] = None,
+        *,
+        allow_group_delay_inhibit: bool = False,
+    ) -> None:
+        """Add a Channel; a write of its Present_Value is passed on to ``members``.
+
+        ``channel_number`` (0..=65535) is the number a WriteGroup names. Each
+        member is an ``(object, property)`` or ``(object, property,
+        array_index)`` tuple for a property in this device, or a
+        ``DeviceObjectPropertyReference`` mapping; one naming this server's
+        Device is kept in its local form, and one naming another Device is
+        written there through the server's device bindings
+        (``add_device_binding`` or a heard I-Am). ``execution_delay`` holds
+        one delay in milliseconds per member (zeros when omitted),
+        ``control_groups`` the WriteGroup groups the Channel is in (``[0]``,
+        none, when omitted), and ``allow_group_delay_inhibit`` lets a
+        WriteGroup that asks for no delays skip them. All of them are
+        writable over the network too.
+
+        A wrong shape or type raises TypeError. An unknown or missing mapping
+        key, a device that isn't a Device, or a mapping's
+        ``property_array_index`` outside unsigned32 raises ValueError; a
+        channel number, a tuple's index, a delay or a group outside
+        unsigned32 raises OverflowError. A channel number above 65535,
+        a delay count that differs from the member count or an empty group
+        list raises BacnetProtocolError with VALUE_OUT_OF_RANGE; more than
+        1024 members or 64 groups, NO_SPACE_TO_WRITE_PROPERTY. Nothing is
+        registered after any of them.
+        """
+        ...
 
     # --- Life safety ---
     def add_life_safety_point(self, instance: int, name: str) -> None: ...
@@ -2994,7 +3064,29 @@ class BACnetServer:
         """
         ...
     def add_access_user(self, instance: int, name: str) -> None: ...
-    def add_access_zone(self, instance: int, name: str) -> None: ...
+    def add_access_zone(
+        self,
+        instance: int,
+        name: str,
+        *,
+        entry_points: Optional[
+            list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
+        ] = None,
+        exit_points: Optional[
+            list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
+        ] = None,
+    ) -> None:
+        """Add an Access Zone object to the server (before starting).
+
+        ``entry_points`` and ``exit_points`` set Entry_Points and Exit_Points,
+        the Access Points leading into and out of the zone (read-only over
+        the network), in the element forms ``add_access_door`` takes for
+        ``door_members``. A pair whose device isn't a Device object
+        identifier raises ValueError, and a reference to anything but an
+        Access Point raises BacnetProtocolError with VALUE_OUT_OF_RANGE;
+        either way nothing is registered.
+        """
+        ...
     def add_credential_data_input(
         self,
         instance: int,

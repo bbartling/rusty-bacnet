@@ -318,3 +318,53 @@ fn adjust_value_writes_move_the_count_in_service_only() {
         );
     }
 }
+
+/// An AddListElement or RemoveListElement request on Alarm_Values.
+fn list_request(oid: ObjectIdentifier, elements: &[u8]) -> Vec<u8> {
+    let mut request = BytesMut::new();
+    bacnet_services::list_manipulation::ListElementRequest {
+        object_identifier: oid,
+        property_identifier: PropertyIdentifier::ALARM_VALUES,
+        property_array_index: None,
+        list_of_elements: elements.to_vec(),
+    }
+    .encode(&mut request)
+    .unwrap();
+    request.to_vec()
+}
+
+#[test]
+fn alarm_values_take_occupancy_states_over_the_wire() {
+    const ALARM: PropertyIdentifier = PropertyIdentifier::ALARM_VALUES;
+    let (mut db, oid) = zone_db();
+    // ABOVE_UPPER_LIMIT alone, then with BELOW_LOWER_LIMIT (#1305).
+    write_property(&mut db, oid, ALARM, vec![0x91, 4]).unwrap();
+    assert_eq!(read_bytes(&db, oid, ALARM), [0x91, 4]);
+    write_property_multiple(&mut db, oid, &[(ALARM, vec![0x91, 4, 0x91, 1])]).unwrap();
+    assert_eq!(read_bytes(&db, oid, ALARM), [0x91, 4, 0x91, 1]);
+    // 7 is reserved for ASHRAE, and an Unsigned is the wrong datatype; the
+    // refusal names the element and changes nothing.
+    for (value, code, element) in [
+        (vec![0x91, 4, 0x91, 7], ErrorCode::VALUE_OUT_OF_RANGE, 2),
+        (vec![0x21, 4], ErrorCode::INVALID_DATA_TYPE, 1),
+    ] {
+        assert_eq!(
+            list_refusal(write_property(&mut db, oid, ALARM, value)),
+            (ErrorClass::PROPERTY, code, element)
+        );
+        assert_eq!(read_bytes(&db, oid, ALARM), [0x91, 4, 0x91, 1]);
+    }
+
+    // The list services edit it too.
+    handle_add_list_element(&mut db, &list_request(oid, &[0x91, 2])).unwrap();
+    assert_eq!(read_bytes(&db, oid, ALARM), [0x91, 4, 0x91, 1, 0x91, 2]);
+    assert_eq!(
+        list_refusal(handle_add_list_element(
+            &mut db,
+            &list_request(oid, &[0x91, 5, 0x91, 9])
+        )),
+        (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, 2)
+    );
+    handle_remove_list_element(&mut db, &list_request(oid, &[0x91, 4, 0x91, 1])).unwrap();
+    assert_eq!(read_bytes(&db, oid, ALARM), [0x91, 2]);
+}

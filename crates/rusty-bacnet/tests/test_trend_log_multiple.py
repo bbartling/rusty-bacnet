@@ -51,6 +51,21 @@ def member(instance: int) -> dict:
     }
 
 
+def tuple_member(instance: int) -> tuple:
+    return (
+        ObjectIdentifier(ObjectType.ANALOG_INPUT, instance),
+        PropertyIdentifier.PRESENT_VALUE,
+    )
+
+
+def reference_octets(instance: int, index: int | None = None) -> bytes:
+    """AI-``instance``'s Present_Value as a BACnetDeviceObjectPropertyReference
+    with no device: object identifier [0], property identifier [1] (85) and
+    the optional array index [2]."""
+    octets = bytes([0x0C]) + instance.to_bytes(4, "big") + bytes([0x19, 0x55])
+    return octets if index is None else octets + bytes([0x29, index])
+
+
 def installed_stub_method(name: str) -> ast.FunctionDef:
     stub_path = Path(rusty_bacnet.__file__).with_suffix(".pyi")
     tree = ast.parse(stub_path.read_text(encoding="utf-8"), filename=str(stub_path))
@@ -158,6 +173,56 @@ class TrendLogMultipleConfigurationTests(unittest.TestCase):
             server.add_trend_log_multiple(1, "TLM-1", members=[ObjectType.ANALOG_INPUT])
 
 
+class TrendLogMultipleMemberFormTests(unittest.TestCase):
+    def test_tuple_and_mapping_members_and_the_own_device(self) -> None:
+        asyncio.run(self._member_forms())
+
+    async def _member_forms(self) -> None:
+        own_device = ObjectIdentifier(ObjectType.DEVICE, 1_235_002)
+        server = BACnetServer(1_235_002, interface="127.0.0.1", port=0)
+        server.add_trend_log_multiple(
+            1,
+            "TLM-1",
+            members=[
+                tuple_member(1),
+                (*tuple_member(2), 3),
+                (*tuple_member(3), None),
+                # Naming this server's Device, stored without it.
+                {**member(4), "device_identifier": own_device},
+            ],
+        )
+        with self.assertRaises(TypeError):
+            server.add_trend_log_multiple(2, "TLM-2", members=[(tuple_member(1)[0],)])
+        with self.assertRaises(OverflowError):
+            server.add_trend_log_multiple(2, "TLM-2", members=[(*tuple_member(1), -1)])
+        await server.start()
+        try:
+            elements = [
+                (
+                    await server.read_property(
+                        POLLED_LOG, PropertyIdentifier.LOG_DEVICE_OBJECT_PROPERTY, index
+                    )
+                ).value
+                for index in range(1, 5)
+            ]
+            self.assertEqual(
+                elements,
+                [
+                    reference_octets(1),
+                    reference_octets(2, 3),
+                    reference_octets(3),
+                    reference_octets(4),
+                ],
+            )
+            with self.assertRaises(BacnetProtocolError):
+                await server.read_property(
+                    ObjectIdentifier(ObjectType.TREND_LOG_MULTIPLE, 2),
+                    PropertyIdentifier.OBJECT_NAME,
+                )
+        finally:
+            await server.stop()
+
+
 class TrendLogMultipleLiveServerTests(unittest.TestCase):
     def test_polled_and_triggered_logs_configured_from_python(self) -> None:
         asyncio.run(self._exercise())
@@ -177,7 +242,8 @@ class TrendLogMultipleLiveServerTests(unittest.TestCase):
             1,
             "TLM-1",
             50,
-            members=[member(1), member(2)],
+            # A tuple member and a mapping member log the same way.
+            members=[tuple_member(1), member(2)],
             log_interval=10,
             logging_type="polled",
             start_time=((255, 255, 255, 255), (255, 255, 255, 255)),

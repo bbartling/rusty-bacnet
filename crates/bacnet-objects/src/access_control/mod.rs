@@ -194,6 +194,10 @@ mod tests;
 #[cfg(test)]
 mod typed_value_tests;
 #[cfg(test)]
+mod zone_event_tests;
+#[cfg(test)]
 mod zone_occupancy_tests;
 #[cfg(test)]
 mod zone_out_of_service_tests;
+#[cfg(test)]
+mod zone_points_tests;

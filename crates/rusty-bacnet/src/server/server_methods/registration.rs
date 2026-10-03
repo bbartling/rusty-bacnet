@@ -315,14 +315,29 @@ impl BACnetServer {
     }
 
     /// Add a Notification Class object to the server (before starting).
-    #[pyo3(signature = (instance, name, notification_class=0))]
+    ///
+    /// With `storage_path`, a Recipient_List a client writes is kept in that
+    /// file and restored when the server is built again. A write whose list
+    /// cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM, and the
+    /// old list stays. Without it the list lives in memory only. Give each
+    /// class its own file: one that holds another object's list, or that
+    /// this backend did not write, raises BacnetError here.
+    #[pyo3(signature = (instance, name, notification_class=0, storage_path=None))]
     fn add_notification_class(
         &self,
         instance: u32,
         name: &str,
         notification_class: u32,
+        storage_path: Option<&str>,
     ) -> PyResult<()> {
-        let mut nc = NotificationClass::new(instance, name).map_err(to_py_err)?;
+        let mut nc = match storage_path {
+            Some(path) => {
+                let storage =
+                    Arc::new(FileNotificationClassPersistence::new(path).map_err(to_py_err)?);
+                NotificationClass::with_persistence(instance, name, storage).map_err(to_py_err)?
+            }
+            None => NotificationClass::new(instance, name).map_err(to_py_err)?,
+        };
         nc.notification_class = notification_class;
         self.push_pending(Box::new(nc))
     }
@@ -490,13 +505,6 @@ impl BACnetServer {
     #[pyo3(signature = (instance, name))]
     fn add_access_user(&self, instance: u32, name: &str) -> PyResult<()> {
         let obj = AccessUserObject::new(instance, name).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
-
-    /// Add an Access Zone object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_access_zone(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = AccessZoneObject::new(instance, name).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 
