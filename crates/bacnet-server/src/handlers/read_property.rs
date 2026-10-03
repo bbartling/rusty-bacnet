@@ -1,7 +1,6 @@
 use super::group_present_value::GroupMembers;
 use super::rpm_budget::{self, PlannedRow};
 use super::*;
-use crate::local_device::selected_device;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::PropertyReference;
 
@@ -210,7 +209,7 @@ pub(crate) fn resolve_read_target(
             .unwrap_or(*oid);
     }
     if is_device_wildcard(oid) {
-        if let Some(device) = selected_device(db) {
+        if let Some(device) = db.selected_device() {
             return device;
         }
     }

@@ -146,7 +146,7 @@ async fn device_write_preflight_errors_are_atomic_and_retryable() {
         "client",
         "missing",
         "empty",
-        "ambiguous",
+        "lower device",
         "wildcard",
         "mismatch",
         "services",
@@ -161,7 +161,8 @@ async fn device_write_preflight_errors_are_atomic_and_retryable() {
         if case != "missing" {
             session = session.with_database(database(match case {
                 "empty" => &[],
-                "ambiguous" => &[123, 456],
+                // Device 50 is the local Device, so identity 123 is a mismatch.
+                "lower device" => &[123, 50],
                 "wildcard" => &[ObjectIdentifier::MAX_INSTANCE],
                 _ => &[123],
             }));
@@ -455,6 +456,77 @@ async fn bip_device_write_authorized_round_trip_and_service_readback() {
         bacnet_encoding::primitives::decode_application_value(&ack.property_value, 0).unwrap();
     assert_eq!(end, ack.property_value.len());
     assert_eq!(services(profile), vec![12, 15]);
+    client.stop().await.unwrap();
+    session.stop().await.unwrap();
+}
+
+/// With several Devices the lowest is this device (#1204): writes reach it,
+/// and only it advertises WriteProperty, whichever Device was added first.
+#[tokio::test]
+async fn bip_device_writes_reach_the_lowest_of_several_devices() {
+    use std::net::Ipv4Addr;
+    let mut session =
+        crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+            .role(SessionRole::ServerOnly)
+            .database(database(&[456, 123]))
+            .identity(crate::DeviceIdentity::new(123, 42).unwrap())
+            .device_writes(Arc::new(|_| true))
+            .build_session()
+            .unwrap();
+    session.start().await.unwrap();
+    let port = session.bip_local_address().unwrap().port();
+    let mut client = bacnet_client::client::BACnetClient::bip_builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .build()
+        .await
+        .unwrap();
+    let mac = bacnet_transport::bvll::encode_bip_mac([127, 0, 0, 1], port);
+    let mut value = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_character_string(&mut value, "lowest").unwrap();
+    let write = |device| {
+        client.write_property(
+            &mac,
+            oid(device),
+            PropertyIdentifier::DESCRIPTION,
+            None,
+            value.to_vec(),
+            None,
+        )
+    };
+    tokio::time::timeout(Duration::from_secs(3), write(123))
+        .await
+        .unwrap()
+        .unwrap();
+    let refused = tokio::time::timeout(Duration::from_secs(3), write(456))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            Error::Protocol { code, .. }
+                if code == bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(
+        read(&session, PropertyIdentifier::DESCRIPTION).await,
+        PropertyValue::CharacterString("lowest".into())
+    );
+    assert_eq!(
+        services(read(&session, PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED).await),
+        vec![12, 15]
+    );
+    // Device 456 keeps its broad standalone declaration.
+    let db = session.database.as_ref().unwrap().read().await;
+    let other = db
+        .get(&oid(456))
+        .unwrap()
+        .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
+        .unwrap();
+    assert_ne!(services(other), vec![12, 15]);
+    drop(db);
     client.stop().await.unwrap();
     session.stop().await.unwrap();
 }

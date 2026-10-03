@@ -20,12 +20,8 @@ fn device(instance: u32) -> Box<DeviceObject> {
 }
 
 #[tokio::test]
-async fn audit_reporter_identity_startup_requires_exactly_one_device() {
-    for devices in [
-        &[][..],
-        &[10, 11][..],
-        &[ObjectIdentifier::MAX_INSTANCE][..],
-    ] {
+async fn audit_reporter_identity_startup_requires_a_concrete_local_device() {
+    for devices in [&[][..], &[ObjectIdentifier::MAX_INSTANCE][..]] {
         assert!(
             try_server(reporter(), devices, Some(recipient()), bindings())
                 .await
@@ -52,6 +48,41 @@ async fn audit_reporter_identity_startup_requires_exactly_one_device() {
         BACnetRecipient::Device(oid(ObjectType::DEVICE, 10))
     );
     fixture.server.stop().await.unwrap();
+}
+
+/// With several Devices the lowest is this device, whichever was added first
+/// (#1204). Records name it, and the runtime keeps it the lowest: a new Device
+/// is refused and it can't be removed.
+#[tokio::test]
+async fn audit_reporter_identity_is_the_lowest_of_several_devices() {
+    let lowest = oid(ObjectType::DEVICE, 100);
+    for devices in [&[200, 100][..], &[100, 200][..]] {
+        let mut fixture = try_server(reporter(), devices, Some(recipient()), bindings())
+            .await
+            .unwrap();
+        assert_eq!(
+            health(&fixture.server).await,
+            Reliability::NO_FAULT_DETECTED
+        );
+        assert!(matches!(
+            write_value(&fixture.server, None).await,
+            Apdu::SimpleAck(_)
+        ));
+        settle().await;
+        let records = notifications(&fixture.transport.sent);
+        assert_eq!(records.len(), 1, "{devices:?}");
+        assert_eq!(
+            records[0].notifications[0].target_device,
+            BACnetRecipient::Device(lowest),
+            "{devices:?}"
+        );
+        let mut db = fixture.server.db.write().await;
+        assert!(db.add(device(50)).is_err());
+        assert!(db.remove(&lowest).is_err());
+        assert_eq!(db.local_device().identifier(), Some(lowest));
+        drop(db);
+        fixture.server.stop().await.unwrap();
+    }
 }
 
 #[tokio::test]

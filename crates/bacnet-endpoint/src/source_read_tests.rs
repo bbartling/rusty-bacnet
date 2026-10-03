@@ -264,6 +264,46 @@ async fn source_read_wire_fields_both_roles_modes_and_result_before_delivery() {
     sink.stop().await.unwrap();
 }
 
+/// With several Devices the lowest is this device (#1204): source audit starts
+/// beside a higher Device and every record names the lowest.
+#[tokio::test]
+async fn source_read_identity_is_the_lowest_of_several_devices() {
+    let (mut peer, mut requests) = network().await;
+    let (mut sink, mut records) = network().await;
+    let mut db = database(false);
+    let mut other = crate::DeviceIdentity::new(456, 42)
+        .unwrap()
+        .build_database()
+        .unwrap();
+    db.add(
+        other
+            .remove(&oid(ObjectType::DEVICE, 456))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    let mut session = session(db, SessionRole::ClientOnly, &sink);
+    session.start().await.unwrap();
+    let read = start_read(
+        &session,
+        peer.local_mac(),
+        PropertyIdentifier::OBJECT_NAME,
+        None,
+    );
+    let request = receive(&mut requests).await;
+    let (invoke, rp) = read_request(&request);
+    send(&peer, &request.source_mac, ack(invoke, &rp)).await;
+    assert!(timeout(WAIT, read).await.unwrap().unwrap().is_ok());
+    let (record, _) = notification(&receive(&mut records).await, false);
+    assert_eq!(
+        record.source_device,
+        BACnetRecipient::Device(oid(ObjectType::DEVICE, 123))
+    );
+    session.stop().await.unwrap();
+    peer.stop().await.unwrap();
+    sink.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn source_read_peer_and_local_failure_outcomes_are_not_success() {
     let (mut peer, mut requests) = network().await;
