@@ -187,10 +187,11 @@ class AccessControlConfigurationTests(unittest.TestCase):
                 ObjectIdentifier(ObjectType.ACCESS_DOOR, 2),
                 ObjectIdentifier(ObjectType.ACCESS_POINT, 2),
             ):
-                with self.assertRaises(RuntimeError):
+                with self.assertRaises(BacnetProtocolError) as raised:
                     await server.read_property(
                         refused, PropertyIdentifier.OBJECT_NAME
                     )
+                self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
         finally:
             await server.stop()
 

@@ -105,8 +105,8 @@ pub(crate) fn decode_property_reference(
 /// reference types' methods and the Python bindings apply too. These setters
 /// and write paths run this on each reference before storing any, so a
 /// refused list leaves the property as it was: Averaging
-/// Object_Property_Reference, Trend Log and Trend Log Multiple
-/// Log_DeviceObjectProperty, the Life Safety member lists (#1182), Access
+/// Object_Property_Reference, the Log_DeviceObjectProperty of a Trend Log or
+/// of a Trend Log Multiple, the Life Safety member lists (#1182), Access
 /// Door Door_Members, Access Point Access_Doors and Access_Event_Credential,
 /// Access Credential Assigned_Access_Rights, Staging Target_References,
 /// Structured View Subordinate_List, the elevator family's Energy_Meter_Ref
