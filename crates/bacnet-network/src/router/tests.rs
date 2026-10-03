@@ -42,7 +42,13 @@ async fn router_forwards_between_networks() {
         network_number: 2000,
     };
 
-    let (mut router, _local_rx) = BACnetRouter::start(vec![port_a, port_b]).await.unwrap();
+    let StartedRouter {
+        mut router,
+        apdus: _local_rx,
+        ..
+    } = BACnetRouter::start(vec![port_a, port_b], RouterOptions::new())
+        .await
+        .unwrap();
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -94,7 +100,13 @@ async fn router_table_populated_on_start() {
         },
     ];
 
-    let (mut router, _local_rx) = BACnetRouter::start(ports).await.unwrap();
+    let StartedRouter {
+        mut router,
+        apdus: _local_rx,
+        ..
+    } = BACnetRouter::start(ports, RouterOptions::new())
+        .await
+        .unwrap();
 
     let table = router.table().lock().await;
     assert_eq!(table.len(), 3);
@@ -117,7 +129,13 @@ async fn local_message_delivered_to_application() {
         network_number: 1000,
     };
 
-    let (mut router, _local_rx) = BACnetRouter::start(vec![router_port]).await.unwrap();
+    let StartedRouter {
+        mut router,
+        apdus: _local_rx,
+        ..
+    } = BACnetRouter::start(vec![router_port], RouterOptions::new())
+        .await
+        .unwrap();
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 

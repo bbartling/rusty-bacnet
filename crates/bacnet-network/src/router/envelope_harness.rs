@@ -39,13 +39,21 @@ pub(super) struct Harness {
 /// The harness router's own MAC on each port: [1] on 1000, [2] on 2000.
 pub(super) const PORT_MACS: [u8; 2] = [0x01, 0x02];
 
-fn local_control(tx: Option<AdmissionSender<ReceivedNetworkControl>>) -> LocalControl {
-    let ports = [1000, 2000]
+/// The harness router's own address on each port.
+pub(super) fn own_addresses() -> OwnAddresses {
+    let addresses = [1000, 2000]
         .into_iter()
         .zip(PORT_MACS)
-        .map(|(network, mac)| (network, MacAddr::from_slice(&[mac])))
+        .map(|(network, mac)| NpduAddress {
+            network,
+            mac_address: MacAddr::from_slice(&[mac]),
+        })
         .collect();
-    LocalControl::new(ports, tx, Arc::default())
+    OwnAddresses::new(addresses)
+}
+
+fn local_control(tx: Option<AdmissionSender<ReceivedNetworkControl>>) -> LocalControl {
+    LocalControl::new(own_addresses(), tx, Arc::default())
 }
 
 impl Harness {
