@@ -5,7 +5,7 @@ pub(super) struct TransactionPeer {
     pub(super) canonical: CanonicalPeer,
 }
 
-impl<'a> ConfirmedTarget<'a> {
+impl ConfirmedTarget<'_> {
     /// This target as it is sent once the client knows `local_network`, the
     /// number of its own network (#1358). A routed target on that network is
     /// a local one: the DADR is a MAC on this link, so the request goes there
