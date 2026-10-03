@@ -1,17 +1,17 @@
-//! References that name this device (#1122, #1136, #1153).
+//! References that name this device (#1122, #1136, #1151, #1153).
 //!
-//! Three properties hold references this server keeps inside its own device:
-//! a Schedule's List_Of_Object_Property_References (Clause 12.24.10), a
-//! Staging object's Target_References (Clause 12.62.14) and an Averaging
-//! object's Object_Property_Reference (Clause 12.5.13). Each clause lets the
-//! object stay within its own device, which permits refusing a reference to
-//! an object in some other device, and nothing more. None of these objects
-//! can tell which Device holds it, so each refuses every member that carries
-//! a Device identifier. A member whose Device identifier is this device's
-//! points inside the device, so refusing it would be stricter than the
-//! clauses allow. The server knows the local Device
-//! (`local_device::selected_device`, under the same database guard as the
-//! write), so it rewrites such a member as the local reference it denotes
+//! Four properties hold references this server keeps inside its own device:
+//! the List_Of_Object_Property_References of a Schedule (Clause 12.24.10)
+//! and of a Channel (Clause 12.53.11), a Staging object's Target_References
+//! (Clause 12.62.14) and an Averaging object's Object_Property_Reference
+//! (Clause 12.5.13). Each clause lets the object stay within its own device,
+//! which permits refusing a reference to an object in some other device, and
+//! nothing more. None of these objects can tell which Device holds it, so
+//! each refuses every member that carries a Device identifier. A member whose
+//! Device identifier is this device's points inside the device, so refusing
+//! it would be stricter than the clauses allow. The server knows the local
+//! Device (`local_device::selected_device`, under the same database guard as
+//! the write), so it rewrites such a member as the local reference it denotes
 //! before the object sees it: WriteProperty, WritePropertyMultiple,
 //! `write_local`, and, for the Schedule's list, the elements of
 //! AddListElement and RemoveListElement. A member naming any other device
@@ -80,9 +80,10 @@ type Rewrite = fn(PropertyValue, ObjectIdentifier) -> PropertyValue;
 /// [`localize_single`].
 fn rewrite(object_type: ObjectType, property: PropertyIdentifier) -> Option<Rewrite> {
     match (object_type, property) {
-        (ObjectType::SCHEDULE, PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES) => {
-            Some(localize_members::<BACnetDeviceObjectPropertyReference>)
-        }
+        (
+            ObjectType::SCHEDULE | ObjectType::CHANNEL,
+            PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES,
+        ) => Some(localize_members::<BACnetDeviceObjectPropertyReference>),
         (ObjectType::STAGING, PropertyIdentifier::TARGET_REFERENCES) => {
             Some(localize_members::<BACnetDeviceObjectReference>)
         }
@@ -430,6 +431,33 @@ mod tests {
         let enrollment = ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap();
         let named = split(member(1, Some(device(7))));
         assert_eq!(localize(&db, enrollment, REFERENCE, named.clone()), named);
+    }
+
+    #[test]
+    fn channel_members_naming_the_local_device_lose_their_device() {
+        // The rewrite keys on the identifier; Device 7 holds no Channel.
+        let db = database(7);
+        let channel = ObjectIdentifier::new(ObjectType::CHANNEL, 1).unwrap();
+        let written = encoded(&[member(1, Some(device(7))), member(2, Some(device(9)))]);
+        let expected = encoded(&[member(1, None), member(2, Some(device(9)))]);
+        assert_eq!(
+            localize(&db, channel, LIST, PropertyValue::ApplicationData(written)),
+            PropertyValue::ApplicationData(expected)
+        );
+        // One element by index, and the array size at index 0.
+        assert_eq!(
+            localize(
+                &db,
+                channel,
+                LIST,
+                PropertyValue::ApplicationData(encoded(&[member(3, Some(device(7)))]))
+            ),
+            PropertyValue::ApplicationData(encoded(&[member(3, None)]))
+        );
+        assert_eq!(
+            localize(&db, channel, LIST, PropertyValue::Unsigned(2)),
+            PropertyValue::Unsigned(2)
+        );
     }
 
     #[test]

@@ -14,7 +14,7 @@ use bacnet_objects::audit::{
     AuditReporterObject, AuditSendDelay, ObjectAuditPolicy,
 };
 use bacnet_objects::clock::{ClockFrame, ClockReader};
-use bacnet_objects::command::CommandRun;
+use bacnet_objects::command::{CommandRun, RunPlan};
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::device::{DeviceAuthority, DeviceConfig, DeviceObject};
 use bacnet_objects::event::{
@@ -394,7 +394,7 @@ impl BACnetObject for Probe {
         Some(CommandRun {
             source: self.oid,
             generation: 11,
-            commands: Vec::new(),
+            plan: RunPlan::Actions(Vec::new()),
         })
     }
     fn command_generation_internal(&self) -> Option<u64> {

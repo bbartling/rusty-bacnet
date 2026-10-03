@@ -341,14 +341,16 @@ pub(crate) fn decode_write_property_value(
     }
     // The Schedule decodes its list of references itself, an empty list
     // included (#1088), once the handler has put members naming this device
-    // in their local form (#1122).
+    // in their local form (#1122). So does a Channel, whose references are an
+    // array: index 0, the array size, stays an Unsigned (#1151).
     if matches!(
         property,
         PropertyIdentifier::RECIPIENT_LIST
             | PropertyIdentifier::VALUE_SOURCE
             | PropertyIdentifier::EFFECTIVE_PERIOD
-            | PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
-    ) {
+    ) || (property == PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
+        && array_index != Some(0))
+    {
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
     // The Schedule's arrays of constructed elements reach the object as raw

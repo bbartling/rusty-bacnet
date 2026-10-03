@@ -543,6 +543,7 @@ impl BACnetServer<BipTransport> {
     }
 }
 
+mod channel_runs;
 mod clock;
 mod command_runs;
 mod time_sync_policy;
@@ -668,6 +669,8 @@ mod averaging_reference_write_tests;
 mod averaging_sample_tests;
 #[cfg(test)]
 mod binary_lighting_task_tests;
+#[cfg(test)]
+mod channel_wire_tests;
 #[cfg(test)]
 mod command_action_run_tests;
 #[cfg(test)]

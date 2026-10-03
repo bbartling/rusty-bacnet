@@ -321,6 +321,7 @@ impl DeviceObject {
             ObjectType::TIMEPATTERN_VALUE.to_raw(),
             ObjectType::TIME_VALUE.to_raw(),
             ObjectType::ALERT_ENROLLMENT.to_raw(),
+            ObjectType::CHANNEL.to_raw(),
             ObjectType::LIGHTING_OUTPUT.to_raw(),
             ObjectType::BINARY_LIGHTING_OUTPUT.to_raw(),
             ObjectType::NETWORK_PORT.to_raw(),

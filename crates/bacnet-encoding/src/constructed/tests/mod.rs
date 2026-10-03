@@ -11,6 +11,7 @@ mod access_credential;
 mod action_list;
 mod assigned_landing_calls;
 mod calendar;
+mod channel_value;
 mod cov_subscription;
 mod event_notification_subscription;
 mod event_parameter;

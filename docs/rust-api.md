@@ -1845,7 +1845,7 @@ Enrollment evaluation (monitored, setpoint and fault references) both resolve
 references through it, so a FLOATING_LIMIT setpoint naming this device is read
 and reported like an unqualified one (#1184).
 
-### Object Types (62)
+### Object Types (63)
 
 #### Core I/O (9)
 
@@ -2268,10 +2268,11 @@ when Present_Value moves by the writable `COV_Increment` (default 0), when
 Status_Flags changes (including a target-plan completion that changes
 Reliability), or when Present_Stage changes.
 
-#### Lighting & Color (4)
+#### Lighting & Color (5)
 
 | Type | Constructor |
 |------|-------------|
+| `ChannelObject` | `::new(instance, name, channel_number)` |
 | `LightingOutputObject` | `::new(instance, name)` |
 | `BinaryLightingOutputObject` | `::new(instance, name)` |
 | `ColorObject` | `::new(instance, name)` |
@@ -2284,6 +2285,35 @@ Lighting Output's `Default_Fade_Time`, `Default_Ramp_Rate` and
 A fade time outside 100 to 86,400,000 ms, or a rate or increment outside 0.1
 to 100.0, is refused with VALUE_OUT_OF_RANGE (Clauses 12.54.16 to 12.54.18).
 Both lighting objects serve `Current_Command_Priority`.
+
+A Channel passes each value written to its Present_Value on to its members
+(Clause 12.53, #1151). Give it the members with `ChannelObject::set_members`,
+each a `BACnetDeviceObjectPropertyReference` to an object in this device, then
+optionally one delay in milliseconds per member with `set_execution_delay`
+and the control groups with `set_control_groups`. All three are writable
+arrays on the network too: a write of index 0 resizes one, and the member
+list and Execution_Delay always keep the same size. A member naming another
+Device is refused with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED; one naming the
+server's own Device is stored as the local reference it stands for.
+
+Present_Value takes any primitive value or a lighting command framed in
+context tag 0, at priority 1 to 16 (Last_Priority reads 16 when the write
+carried none). Write_Status then reads IN_PROGRESS, and any Present_Value
+write is OBJECT / BUSY until the members are done. A running server writes
+each member through the `write_local` path with the Channel as the initiating
+object, at the priority the write carried, once that member's delay has passed;
+every delay counts from the same start. The value is first converted to the
+datatype of the member property's current value by the Table 12-63 rules (a
+REAL 1.0 reaches a Binary Output as ACTIVE, a Multi-state Output as state 1).
+A value that can't be converted, or a member that refuses the write, makes
+Write_Status FAILED once every member has been tried; otherwise it reads
+SUCCESSFUL. A NULL a member refuses as the wrong datatype isn't a failure, so
+one Channel can relinquish commandable members alongside others. With no
+members Write_Status stays IDLE, empty references (instance 4194303) are
+skipped, and while Out_Of_Service is TRUE the value is kept but not passed on.
+Reliability and Allow_Group_Delay_Inhibit aren't served, and inbound WriteGroup,
+which addresses Channels by Channel_Number and Control_Groups, isn't executed
+yet.
 
 #### Life Safety (2)
 

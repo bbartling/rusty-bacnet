@@ -456,7 +456,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         false
     }
 
-    /// Take the action list a Command object's Present_Value write queued.
+    /// Take the writes a Command or Channel object's Present_Value write
+    /// queued: a Command's selected list, or a Channel's value for its
+    /// members.
     ///
     /// The default keeps every other object source-compatible. The bundled
     /// server takes it under the guard that committed the write, then makes
@@ -466,13 +468,13 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         None
     }
 
-    /// Return the current Command run generation, if applicable.
+    /// Return the current Command or Channel run generation, if applicable.
     #[doc(hidden)]
     fn command_generation_internal(&self) -> Option<u64> {
         None
     }
 
-    /// Record how command `command` of the running list fared.
+    /// Record how command `command` of a Command's running list fared.
     ///
     /// Returns whether the run is still the current one. Implementations
     /// ignore a stale generation, so older work can't mark a newer run.
@@ -486,7 +488,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         false
     }
 
-    /// End the current Command run, setting All_Writes_Successful.
+    /// End the current run, setting a Command's All_Writes_Successful or a
+    /// Channel's Write_Status.
     ///
     /// Returns whether readable state changed; a stale generation is ignored.
     #[doc(hidden)]

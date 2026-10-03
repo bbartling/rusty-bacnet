@@ -21,16 +21,29 @@ use crate::traits::BACnetObject;
 
 mod metadata;
 
-/// The list a Present_Value write started, for the server to run.
+/// The writes a Present_Value write queued, for the server to make: a
+/// Command object's selected list, or a Channel object's value for each of
+/// its members.
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandRun {
-    /// The Command object; its generation guards every report back.
+    /// The commanding object; its generation guards every report back.
     pub source: ObjectIdentifier,
     /// The generation the write started.
     pub generation: u64,
-    /// The selected list's commands, in the order they're made.
-    pub commands: Vec<BACnetActionCommand>,
+    /// What the run writes.
+    pub plan: RunPlan,
+}
+
+/// What a [`CommandRun`] writes.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum RunPlan {
+    /// A Command object's selected list: its commands, in the order they're
+    /// made (Clause 12.10).
+    Actions(Vec<BACnetActionCommand>),
+    /// A Channel object's value and the members it goes to (Clause 12.53).
+    Channel(crate::channel::ChannelDistribution),
 }
 
 /// BACnet Command object: runs the action list Present_Value selects.
@@ -139,7 +152,7 @@ impl CommandObject {
         self.pending_run = Some(CommandRun {
             source: self.oid,
             generation: self.generation,
-            commands,
+            plan: RunPlan::Actions(commands),
         });
         Ok(())
     }

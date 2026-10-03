@@ -294,8 +294,8 @@ fn read_protocol_object_types_supported() {
             assert_eq!(unused_bits, 7);
             assert_eq!(
                 data,
-                vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFD, 0xFF, 0xEB, 0xFF, 0x80],
-                "types 51 and 53 must stay clear while types 50, 52, 54, and 64 remain set"
+                vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFD, 0xFF, 0xEF, 0xFF, 0x80],
+                "type 51 must stay clear while types 50, 52, 53 (Channel), 54, and 64 remain set"
             );
         }
         _ => panic!("Expected BitString"),

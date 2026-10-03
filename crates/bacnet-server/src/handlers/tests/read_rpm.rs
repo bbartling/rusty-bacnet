@@ -6,6 +6,7 @@ mod accumulator;
 mod audit_log;
 mod averaging;
 mod calendar;
+mod channel;
 mod color;
 mod command;
 mod command_source;

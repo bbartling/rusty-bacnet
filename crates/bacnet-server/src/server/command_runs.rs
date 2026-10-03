@@ -1,29 +1,39 @@
-//! Running the action list a Command object's Present_Value write selects
-//! (Clause 12.10, #1150).
+//! Running the writes a Present_Value write queues: the action list a Command
+//! object's value selects (Clause 12.10, #1150), or a Channel object's value
+//! for each of its members (Clause 12.53, #1151, in `channel_runs`).
 //!
 //! The write only queues the run: under the guard that commits it, the
-//! Command object checks the number, sets In_Process and leaves a
-//! [`CommandRun`] for the server to take (`take_command_runs`). Each run then
-//! goes into the server's request task set as its own task, so neither the
-//! request that wrote Present_Value nor `write_local` waits for it, post
-//! delays included, and `stop` cancels it with the other request work.
+//! object checks the value, marks itself busy and leaves a [`CommandRun`]
+//! for the server to take (`take_command_runs`). Each run then goes into the
+//! server's request task set as its own task, so neither the request that
+//! wrote Present_Value nor `write_local` waits for it, delays included, and
+//! `stop` cancels it with the other request work.
 //!
-//! The commands are made one at a time, in list order, each through the
-//! same [`LocalWriter`] path as `write_local`: priorities, command-source
-//! tracking, audit, COV and the post-write event pass all apply as for any
-//! other local write. No database guard is held across a write's
-//! notifications or a post delay. A Command object's generation guards every
-//! report back, so a run whose object was replaced or reconfigured stops.
+//! The writes are made one at a time, each through the same [`LocalWriter`]
+//! path as `write_local`: priorities, command-source tracking, audit, COV and
+//! the post-write event pass all apply as for any other local write. No
+//! database guard is held across a write's notifications or a delay. The
+//! object's generation guards every report back, so a run whose object was
+//! replaced or reconfigured stops.
 
 use super::local_writes::{LocalWrite, LocalWriter};
 use super::request_tasks::RequestTaskSpawner;
 use super::*;
-use bacnet_objects::command::CommandRun;
+use bacnet_objects::command::{CommandRun, RunPlan};
 use bacnet_types::constructed::BACnetActionCommand;
+
+/// A property one write of a run commands.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct RunTarget {
+    pub(super) object: ObjectIdentifier,
+    pub(super) property: PropertyIdentifier,
+    pub(super) array_index: Option<u32>,
+    pub(super) priority: Option<u8>,
+}
 
 /// The server handles a run owns while it waits out post delays.
 pub(super) struct CommandRunner<T: TransportPort + 'static> {
-    db: Arc<RwLock<ObjectDatabase>>,
+    pub(super) db: Arc<RwLock<ObjectDatabase>>,
     network: Arc<NetworkLayer<T>>,
     cov_table: Arc<RwLock<CovSubscriptionTable>>,
     cov_in_flight: Arc<Semaphore>,
@@ -91,7 +101,7 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
     }
 
     /// Start each run as its own task. A panic in a target's write path
-    /// ends that run as failed rather than leaving its Command busy.
+    /// ends that run as failed rather than leaving its Command or Channel busy.
     pub(super) fn start(&self, runs: Vec<CommandRun>) {
         use futures_util::FutureExt;
         for run in runs {
@@ -100,7 +110,7 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
                 let (source, generation) = (run.source, run.generation);
                 let execution = std::panic::AssertUnwindSafe(runner.execute(run));
                 if execution.catch_unwind().await.is_err() {
-                    warn!(command = %source, "Command run panicked; ending it as failed");
+                    warn!(source = %source, "Command or Channel run panicked; ending it as failed");
                     runner.complete(source, generation, false).await;
                 }
             });
@@ -122,11 +132,19 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
         }
     }
 
-    /// Make the run's commands in order, then end it.
+    /// Make the run's writes, then end it.
     async fn execute(&self, run: CommandRun) {
+        match &run.plan {
+            RunPlan::Actions(commands) => self.run_actions(&run, commands).await,
+            RunPlan::Channel(distribution) => self.distribute(&run, distribution).await,
+        }
+    }
+
+    /// Make a Command's commands in order, then end the run.
+    async fn run_actions(&self, run: &CommandRun, commands: &[BACnetActionCommand]) {
         let mut all_succeeded = true;
-        for (index, command) in run.commands.iter().enumerate() {
-            let Some(success) = self.make(&run, index, command).await else {
+        for (index, command) in commands.iter().enumerate() {
+            let Some(success) = self.make(run, index, command).await else {
                 // The Command changed under the run; whatever replaced it
                 // owns In_Process now.
                 return;
@@ -201,40 +219,17 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
     /// Write one command's value through the local write path; whether it
     /// was accepted.
     async fn write(&self, source: ObjectIdentifier, command: &BACnetActionCommand) -> bool {
-        // The value reaches the target as a WriteProperty carrying the same
-        // octets would, so constructed values take the shape the object
-        // expects.
-        let mut encoded = BytesMut::new();
-        let value = encode_property_value(&mut encoded, &command.property_value).and_then(|()| {
-            handlers::decode_write_property_value(
-                command.property_identifier,
-                command.property_array_index,
-                &encoded,
-            )
-        });
-        let written = match value {
-            Ok(value) => {
-                self.writer()
-                    .write(
-                        &command.object_identifier,
-                        LocalWrite::Property {
-                            property: command.property_identifier,
-                            array_index: command.property_array_index,
-                            priority: command.priority,
-                        },
-                        value,
-                        Some(crate::LocalCommandSource::Object(source)),
-                    )
-                    .await
-            }
-            Err(error) => Err(error),
+        let target = RunTarget {
+            object: command.object_identifier,
+            property: command.property_identifier,
+            array_index: command.property_array_index,
+            priority: command.priority,
         };
-        match written {
-            // A write that starts another Command's list starts that run too.
-            Ok(runs) => {
-                self.start(runs);
-                true
-            }
+        match self
+            .write_value(source, target, &command.property_value)
+            .await
+        {
+            Ok(()) => true,
             Err(error) => {
                 debug!(
                     command = %source,
@@ -248,9 +243,49 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
         }
     }
 
-    /// End a run: In_Process back to FALSE and All_Writes_Successful set,
-    /// reported to property subscribers.
-    async fn complete(&self, source: ObjectIdentifier, generation: u64, all_succeeded: bool) {
+    /// Write `value` to a local target through the local write path, with
+    /// `source` as the initiating object.
+    pub(super) async fn write_value(
+        &self,
+        source: ObjectIdentifier,
+        target: RunTarget,
+        value: &PropertyValue,
+    ) -> Result<(), Error> {
+        // The value reaches the target as a WriteProperty carrying the same
+        // octets would, so constructed values take the shape the object
+        // expects.
+        let mut encoded = BytesMut::new();
+        encode_property_value(&mut encoded, value)?;
+        let value =
+            handlers::decode_write_property_value(target.property, target.array_index, &encoded)?;
+        let runs = self
+            .writer()
+            .write(
+                &target.object,
+                LocalWrite::Property {
+                    property: target.property,
+                    array_index: target.array_index,
+                    priority: target.priority,
+                },
+                value,
+                Some(crate::LocalCommandSource::Object(source)),
+            )
+            .await?;
+        // A write that starts another Command's or Channel's run starts that
+        // run too.
+        self.start(runs);
+        Ok(())
+    }
+
+    /// End a run: a Command's In_Process back to FALSE and
+    /// All_Writes_Successful set, or a Channel's Write_Status set, reported to
+    /// property subscribers.
+    pub(super) async fn complete(
+        &self,
+        source: ObjectIdentifier,
+        generation: u64,
+        all_succeeded: bool,
+    ) {
         let completed = {
             let mut db = self.db.write().await;
             let completed = db.get_mut(&source).is_some_and(|object| {
