@@ -162,12 +162,18 @@ impl TimedHistories {
         let Some(context) = key.multiple_context() else {
             return;
         };
-        if let Some(held) = self.context_held.get_mut(context) {
-            held.octets = held.octets.saturating_sub(released.octets);
-            held.changes = held.changes.saturating_sub(released.changes);
-            if *held == Held::default() {
-                self.context_held.remove(context);
-            }
+        let Some(held) = self.context_held.get_mut(context) else {
+            debug_assert_eq!(released, Held::default(), "released more than held");
+            return;
+        };
+        debug_assert!(
+            held.octets >= released.octets && held.changes >= released.changes,
+            "released {released:?} of {held:?}"
+        );
+        held.octets = held.octets.saturating_sub(released.octets);
+        held.changes = held.changes.saturating_sub(released.changes);
+        if *held == Held::default() {
+            self.context_held.remove(context);
         }
     }
 }

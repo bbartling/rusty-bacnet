@@ -380,31 +380,54 @@ async fn a_held_back_value_still_goes_out_after_a_newer_change() {
     for confirmed in [false, true] {
         let warnings = crate::cov::timed::DropWarningCount::default();
         let _guard = warnings.install();
-        // The bound at a 50-octet subscriber holds two or three changes. A
-        // newer change must not evict the value its predecessor still owes
-        // (#1163).
-        let mut h = tiny_harness(ServerConfig::default(), confirmed, 10).await;
+        // The bound at a 50-octet subscriber holds two or three changes.
+        // Newer changes that overflow it must not evict the value their
+        // predecessor still owes (#1163): the unconfirmed context's sends
+        // keep failing, its reports returning their changes, and the
+        // confirmed one waits for its Ack. As in the next test, three newer
+        // changes overflow the unconfirmed room and two the confirmed.
+        let mut h = tiny_harness(ServerConfig::default(), confirmed, 1).await;
         hold_back_flags(&h, confirmed, 1).await;
-        h.set_clock(2);
-        h.write_local(2.0).await;
+        let newest = if confirmed { 3 } else { 4 };
+        for second in 2..=newest {
+            if !confirmed {
+                h.fail_notification(0);
+            }
+            h.set_clock(second);
+            h.write_local(f32::from(second)).await;
+        }
+        // The overflow evicts the change after the held one, warning once.
+        assert_eq!(
+            (
+                h.server.cov_counters().timed_changes_dropped,
+                warnings.get()
+            ),
+            (1, 1),
+            "confirmed: {confirmed}"
+        );
         if confirmed {
-            // The newer change waits behind the outstanding report.
+            // The newer changes wait behind the outstanding report.
             h.no_notification().await;
             h.ack().await;
         }
-        // The held Status_Flags go first, then the newer change value by
-        // value; the reference completes at the newer change.
+        // The held Status_Flags go first, after the backstop's delay when
+        // unconfirmed, then the newer changes value by value; the reference
+        // completes at the newest.
         let mut expected = av1_apart(1.0, 1).split_off(1);
-        expected.extend(av1_apart(2.0, 2));
+        for second in 3..=newest {
+            expected.extend(av1_apart(f32::from(second), second));
+        }
         assert_eq!(
-            take(&h, 3, TINY_APDU, confirmed).await,
+            take(&h, expected.len(), TINY_APDU, confirmed).await,
             expected,
             "confirmed: {confirmed}"
         );
         h.no_notification().await;
-        assert_eq!(av1_completed(&h).await, Some(PropertyValue::Real(2.0)));
-        assert_eq!(h.server.cov_counters().timed_changes_dropped, 0);
-        assert_eq!(warnings.get(), 0, "confirmed: {confirmed}");
+        assert_eq!(
+            av1_completed(&h).await,
+            Some(PropertyValue::Real(f32::from(newest)))
+        );
+        assert_eq!(h.server.cov_counters().timed_changes_dropped, 1);
         h.server.stop().await.unwrap();
     }
 }

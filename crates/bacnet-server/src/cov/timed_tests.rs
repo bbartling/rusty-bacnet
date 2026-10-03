@@ -79,25 +79,25 @@ pub(super) fn change_len(payload: usize) -> usize {
 /// envelope is the one a context has before its admission sizes it.
 pub(super) const LIFETIME: u32 = u32::MAX;
 
-/// A maximum APDU whose `n` notifications carry `octets`, for the contexts
-/// of [`context`] sized with [`LIFETIME`] (every process identifier here
-/// takes the same octets).
-fn apdu_carrying(n: usize, octets: usize) -> usize {
-    assert_eq!(octets % n, 0, "an exact bound");
-    envelope_len(&context(1), LIFETIME) + octets / n
+/// A maximum APDU whose [`HISTORY_NOTIFICATIONS`] notifications carry
+/// `octets`, for the contexts of [`context`] sized with [`LIFETIME`] (every
+/// process identifier here takes the same octets).
+fn apdu_carrying(octets: usize) -> usize {
+    assert_eq!(octets % HISTORY_NOTIFICATIONS, 0, "an exact bound");
+    envelope_len(&context(1), LIFETIME) + octets / HISTORY_NOTIFICATIONS
 }
 
 /// A local maximum APDU whose memory ceiling holds exactly `n` changes of
 /// `payload` octets. The room for items there holds more, so at this size
 /// the ceiling is what binds.
 pub(super) fn apdu_for(n: usize, payload: usize) -> usize {
-    apdu_carrying(HISTORY_NOTIFICATIONS, n * change_len(payload))
+    apdu_carrying(n * change_len(payload))
 }
 
 /// A subscriber's maximum APDU whose room for items holds exactly `n`
 /// changes of `payload` octets, with no reserve.
 pub(super) fn subscriber_for(n: usize, payload: usize) -> u16 {
-    u16::try_from(apdu_carrying(HISTORY_NOTIFICATIONS, n * item_len(payload))).unwrap()
+    u16::try_from(apdu_carrying(n * item_len(payload))).unwrap()
 }
 
 /// Memory for exactly `n` changes of `payload` octets in one context.

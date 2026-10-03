@@ -666,15 +666,17 @@ impl TimedHistories {
         }
     }
 
-    /// Timestamped histories (or context terms, should any outlive them)
-    /// plus untimestamped references, and backstop waits held, for leak
-    /// tests.
+    /// Timestamped histories (or context terms or bound counts, should any
+    /// outlive them) plus untimestamped references, and backstop waits held,
+    /// for leak tests.
     #[cfg(test)]
     pub(crate) fn held(&self) -> (usize, usize) {
-        (
-            self.histories.len().max(self.terms.len()) + self.untimed.len(),
-            self.not_before.len(),
-        )
+        let timed = self
+            .histories
+            .len()
+            .max(self.terms.len())
+            .max(self.context_held.len());
+        (timed + self.untimed.len(), self.not_before.len())
     }
 
     /// Latest captured or conveyed observation of a live generation.
@@ -889,7 +891,7 @@ impl TimedHistories {
                 }
             }
         }
-        if let Some(context) = key.multiple_context() {
+        if let Some(context) = key.multiple_context().filter(|_| added != Held::default()) {
             self.context_held
                 .entry(context.clone())
                 .or_default()
