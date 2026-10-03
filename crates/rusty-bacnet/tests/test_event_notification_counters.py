@@ -2,6 +2,7 @@
 import ast
 import importlib.util
 from pathlib import Path
+import sys
 import unittest
 
 from rusty_bacnet import (
@@ -40,7 +41,8 @@ UNBOUND_DEVICE = b"\x0c\x02\x00\x00\x63"
 MAC_ON_NETWORK_65535 = b"\x1e\x22\xff\xff\x65\x06\x7f\x00\x00\x01\xba\xc1\x1f"
 # address [1]: network 0 with an empty MAC, the local broadcast.
 LOCAL_BROADCAST = b"\x1e\x21\x00\x60\x1f"
-# address [1]: network 0, 127.0.0.1 port 0, which the OS refuses to send to.
+# address [1]: network 0, 127.0.0.1 port 0, which macOS and Linux refuse to send
+# to. Windows accepts the send, so the test that relies on it skips there.
 UNSENDABLE_UNICAST = b"\x1e\x21\x00\x65\x06\x7f\x00\x00\x01\x00\x00\x1f"
 # address [1]: network 0, 127.0.0.1 port 1, which the OS accepts the send to.
 SENDABLE_UNICAST = b"\x1e\x21\x00\x65\x06\x7f\x00\x00\x01\x00\x01\x1f"
@@ -110,6 +112,9 @@ class EventNotificationCountersTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await server.stop()
 
+    @unittest.skipIf(sys.platform == "win32",
+                     "Windows accepts a UDP send to port 0; the Rust event routing"
+                     " tests cover the counter with a failing transport")
     async def test_a_failed_unconfirmed_send_is_counted_once_per_destination(self):
         server = BACnetServer(503_809, interface="127.0.0.1", port=0,
                               broadcast_address="127.0.0.1")
