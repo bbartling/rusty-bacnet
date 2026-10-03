@@ -84,6 +84,62 @@ fn python_door_members_and_access_doors_reach_the_arrays() {
 }
 
 #[test]
+fn python_entry_and_exit_points_reach_the_zone_lists() {
+    let here = || PyDeviceObjectReference::Local(py(ObjectType::ACCESS_POINT, 1));
+    let remote = || {
+        PyDeviceObjectReference::Remote(py(ObjectType::DEVICE, 99), py(ObjectType::ACCESS_POINT, 4))
+    };
+    let zone = access_zone(
+        1,
+        "ZONE-1",
+        references(vec![here(), remote()]),
+        references(vec![remote()]),
+    )
+    .unwrap();
+    let remote_point = BACnetDeviceObjectReference {
+        device_identifier: Some(oid(ObjectType::DEVICE, 99)),
+        object_identifier: oid(ObjectType::ACCESS_POINT, 4),
+    };
+    let mut expected = AccessZoneObject::new(1, "ZONE-1").unwrap();
+    expected
+        .set_entry_points([
+            oid(ObjectType::ACCESS_POINT, 1).into(),
+            remote_point.clone(),
+        ])
+        .unwrap();
+    expected.set_exit_points([remote_point]).unwrap();
+    for property in [
+        PropertyIdentifier::ENTRY_POINTS,
+        PropertyIdentifier::EXIT_POINTS,
+    ] {
+        assert_eq!(
+            zone.read_property(property, None).unwrap(),
+            expected.read_property(property, None).unwrap(),
+            "{property:?}"
+        );
+    }
+    // Both lists name Access Points only (#1306).
+    let door = || PyDeviceObjectReference::Local(py(ObjectType::ACCESS_DOOR, 1));
+    for (entry, exit) in [(vec![door()], vec![]), (vec![], vec![here(), door()])] {
+        let refused = access_zone(2, "ZONE-2", references(entry), references(exit))
+            .err()
+            .unwrap();
+        assert!(is_value_out_of_range(&refused), "{refused:?}");
+    }
+    // Omitted arguments keep the lists empty.
+    let zone = access_zone(3, "ZONE-3", None, None).unwrap();
+    for property in [
+        PropertyIdentifier::ENTRY_POINTS,
+        PropertyIdentifier::EXIT_POINTS,
+    ] {
+        assert_eq!(
+            zone.read_property(property, None).unwrap(),
+            PropertyValue::List(vec![])
+        );
+    }
+}
+
+#[test]
 fn python_device_reference_pairs_name_a_device() {
     Python::initialize();
     let door = py(ObjectType::ACCESS_DOOR, 4);

@@ -2386,7 +2386,8 @@ server.add_access_point(instance=1, name="Lobby Access", access_doors=[door])
 server.add_access_credential(instance=1, name="Badge 001")
 server.add_access_user(instance=1, name="John Doe")
 server.add_access_rights(instance=1, name="Employee Access")
-server.add_access_zone(instance=1, name="Building A")
+lobby = ObjectIdentifier(ObjectType.ACCESS_POINT, 1)
+server.add_access_zone(instance=1, name="Building A", entry_points=[lobby])
 # Wiegand 26 (8) in class 0, and vendor 260's CUSTOM (2) format 7 in class 3.
 server.add_credential_data_input(
     instance=1,
@@ -2400,8 +2401,13 @@ The keyword arguments set arrays that are read-only over the network.
 this device or a `(device, object)` pair for one in another device; a pair
 whose device isn't a Device raises `ValueError`, and an `access_doors`
 element that isn't an Access Door raises `BacnetProtocolError`
-(VALUE_OUT_OF_RANGE). `supported_formats` takes `(format, format_class)`
-pairs, a format being a BACnetAuthenticationFactorType number or a
+(VALUE_OUT_OF_RANGE). `entry_points` and `exit_points` set an Access Zone's
+Entry_Points and Exit_Points lists in the same element forms, and an element
+that isn't an Access Point raises `BacnetProtocolError` (VALUE_OUT_OF_RANGE).
+A whole read of either list returns the references' octets as `bytes`, or
+`[]` while the list is empty. `supported_formats` takes
+`(format, format_class)` pairs, a format being a
+BACnetAuthenticationFactorType number or a
 `(format_type, vendor_id, vendor_format)` triple, which a CUSTOM format
 needs; an ill-formed format raises VALUE_OUT_OF_RANGE.
 

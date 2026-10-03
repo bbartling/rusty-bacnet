@@ -3,6 +3,7 @@ use bacnet_types::enums::AccessZoneOccupancyState;
 use super::zone_occupancy::{adjusted, Occupancy};
 use super::zone_out_of_service::ZoneState;
 use super::*;
+use crate::event::state_reporting::ChangeOfStateReporting;
 
 // AccessZoneObject (type 36)
 // ---------------------------------------------------------------------------
@@ -16,8 +17,20 @@ use super::*;
 /// The zone counts occupancy (#1284): Occupancy_State follows
 /// Occupancy_Count, the occupancy limits and Occupancy_Count_Enable, and a
 /// client adjusts the count through Adjust_Value. The module
-/// `zone_occupancy` has the rules. The zone runs no intrinsic reporting, so
-/// Event_State stays NORMAL (Clause 12.32.8).
+/// `zone_occupancy` has the rules.
+///
+/// The zone reports intrinsically on Occupancy_State with the
+/// CHANGE_OF_STATE algorithm (Clause 12.32; #1305): Event_State goes
+/// OFFNORMAL once Occupancy_State has stayed in Alarm_Values for Time_Delay
+/// seconds and back to NORMAL once it has stayed out of them for
+/// Time_Delay_Normal, and a Reliability other than NO_FAULT_DETECTED puts it
+/// in FAULT. The event rows are served and written through
+/// `ChangeOfStateReporting`, and the server sends the notifications to the
+/// Notification Class recipients.
+///
+/// Entry_Points and Exit_Points list the Access Points leading into and out
+/// of the zone as `BACnetDeviceObjectReference` values (Clauses 12.32.23 and
+/// 12.32.24; #1306), set by the application and read-only over the network.
 ///
 /// While Out_Of_Service is TRUE a client can simulate Occupancy_Count and
 /// Reliability by writing them, and the zone's own values come back on the
@@ -35,9 +48,11 @@ pub struct AccessZoneObject {
     device_state: Option<ZoneState>,
     /// Occupancy_Count_Enable, Adjust_Value and the occupancy limits.
     occupancy: Occupancy,
-    entry_points: Vec<ObjectIdentifier>,
-    exit_points: Vec<ObjectIdentifier>,
+    entry_points: Vec<BACnetDeviceObjectReference>,
+    exit_points: Vec<BACnetDeviceObjectReference>,
     out_of_service: bool,
+    /// Intrinsic reporting on Occupancy_State.
+    reporting: ChangeOfStateReporting,
 }
 
 impl AccessZoneObject {
@@ -58,7 +73,48 @@ impl AccessZoneObject {
             entry_points: Vec::new(),
             exit_points: Vec::new(),
             out_of_service: false,
+            reporting: ChangeOfStateReporting::new(occupancy_state_in_range),
         })
+    }
+
+    /// Set Entry_Points, the Access Points leading into the zone
+    /// (Clause 12.32.23). A reference with no device identifier names an
+    /// object in this device.
+    ///
+    /// Each reference has to name an Access Point object, and its device
+    /// identifier, when given, a Device object (#1285); a list breaking
+    /// either rule is refused with VALUE_OUT_OF_RANGE and the points set
+    /// before are kept. The list is read-only over the network.
+    pub fn set_entry_points(
+        &mut self,
+        points: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
+    ) -> Result<(), Error> {
+        self.entry_points = access_points(points)?;
+        Ok(())
+    }
+
+    /// Set Exit_Points, the Access Points leading out of the zone
+    /// (Clause 12.32.24), with the checks [`Self::set_entry_points`] makes.
+    pub fn set_exit_points(
+        &mut self,
+        points: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
+    ) -> Result<(), Error> {
+        self.exit_points = access_points(points)?;
+        Ok(())
+    }
+
+    /// Set Alarm_Values, the occupancy states the zone reports as offnormal
+    /// (Clause 12.32.27). A value outside the BACnetAccessZoneOccupancyState
+    /// production, named or proprietary (64 to 65535), is refused with
+    /// VALUE_OUT_OF_RANGE and the values set before are kept. Clients can
+    /// write the list too, as they can the zone's other event configuration
+    /// (Time_Delay, Notification_Class, Event_Enable and the rest).
+    pub fn set_alarm_values(
+        &mut self,
+        states: impl IntoIterator<Item = AccessZoneOccupancyState>,
+    ) -> Result<(), Error> {
+        self.reporting
+            .set_alarm_values(states.into_iter().map(|state| state.to_raw()).collect())
     }
 
     /// Record the zone's occupancy count, as the application's counting
@@ -100,6 +156,16 @@ impl AccessZoneObject {
     /// served count against the limits (Clause 12.32.6).
     pub fn occupancy_state(&self) -> AccessZoneOccupancyState {
         self.occupancy.state(self.state.occupancy_count)
+    }
+
+    /// The value the event algorithm watches: Occupancy_State, raw.
+    fn watched_state(&self) -> u32 {
+        self.occupancy_state().to_raw()
+    }
+
+    /// The Reliability served, which the algorithm's fault check reads.
+    fn served_reliability(&self) -> Reliability {
+        self.state.reliability
     }
 
     /// A client's Adjust_Value write (Clause 12.32.13): an Integer, else
@@ -145,17 +211,19 @@ impl BACnetObject for AccessZoneObject {
         {
             return result;
         }
+        if let Some(result) = self.reporting.read(property, array_index) {
+            return result;
+        }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::ACCESS_ZONE.to_raw()))
             }
-            // OVERRIDDEN stays clear (Clause 12.32.7), and the zone runs no
-            // intrinsic reporting, so IN_ALARM does too.
+            // OVERRIDDEN stays clear (Clause 12.32.7).
             p if p == PropertyIdentifier::STATUS_FLAGS => Ok(common::compute_status_flags(
                 StatusFlags::empty(),
                 self.state.reliability,
                 self.out_of_service,
-                EventState::NORMAL,
+                self.reporting.event_state(),
             )),
             p if p == PropertyIdentifier::OUT_OF_SERVICE => {
                 Ok(PropertyValue::Boolean(self.out_of_service))
@@ -172,9 +240,6 @@ impl BACnetObject for AccessZoneObject {
             p if p == PropertyIdentifier::OCCUPANCY_STATE => {
                 Ok(PropertyValue::Enumerated(self.occupancy_state().to_raw()))
             }
-            p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
-            }
             p if p == PropertyIdentifier::OCCUPANCY_COUNT_ENABLE => {
                 Ok(PropertyValue::Boolean(self.occupancy.enabled))
             }
@@ -187,18 +252,12 @@ impl BACnetObject for AccessZoneObject {
             p if p == PropertyIdentifier::OCCUPANCY_LOWER_LIMIT => {
                 Ok(PropertyValue::Unsigned(self.occupancy.lower_limit))
             }
-            p if p == PropertyIdentifier::ENTRY_POINTS => Ok(PropertyValue::List(
-                self.entry_points
-                    .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                    .collect(),
-            )),
-            p if p == PropertyIdentifier::EXIT_POINTS => Ok(PropertyValue::List(
-                self.exit_points
-                    .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                    .collect(),
-            )),
+            p if p == PropertyIdentifier::ENTRY_POINTS => Ok(
+                crate::device_reference::object_reference_list(&self.entry_points),
+            ),
+            p if p == PropertyIdentifier::EXIT_POINTS => Ok(
+                crate::device_reference::object_reference_list(&self.exit_points),
+            ),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -236,6 +295,9 @@ impl BACnetObject for AccessZoneObject {
         if property == PropertyIdentifier::ADJUST_VALUE {
             return self.write_adjust_value(&value);
         }
+        if let Some(result) = self.reporting.write(property, array_index, &value) {
+            return result;
+        }
         match property {
             p if p == PropertyIdentifier::GLOBAL_IDENTIFIER => {
                 if let PropertyValue::Unsigned(v) = value {
@@ -261,6 +323,12 @@ impl BACnetObject for AccessZoneObject {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
 
+    crate::event::impl_change_of_state_reporting!(
+        reporting,
+        Self::watched_state,
+        Self::served_reliability
+    );
+
     /// The Reliability the zone's fault detection works out. Like the other
     /// Reliability carriers, the zone refuses it with WRITE_ACCESS_DENIED
     /// while Out_Of_Service is TRUE, so a client's simulated value stays
@@ -274,6 +342,31 @@ impl BACnetObject for AccessZoneObject {
         self.state.reliability = checked_reliability(reliability)?;
         Ok(())
     }
+}
+
+/// The references Entry_Points or Exit_Points takes: each one an Access
+/// Point, in this device or in a Device named by its device identifier, else
+/// VALUE_OUT_OF_RANGE.
+fn access_points(
+    points: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
+) -> Result<Vec<BACnetDeviceObjectReference>, Error> {
+    let points: Vec<BACnetDeviceObjectReference> = points.into_iter().map(Into::into).collect();
+    for point in &points {
+        crate::device_reference::check_device_member(point.device_identifier)?;
+        if point.object_identifier.object_type() != ObjectType::ACCESS_POINT {
+            return Err(common::value_out_of_range_error());
+        }
+    }
+    Ok(points)
+}
+
+/// Whether `raw` is a BACnetAccessZoneOccupancyState: a named state or a
+/// proprietary one from 64 to 65535 (Clause 23.1).
+fn occupancy_state_in_range(raw: u32) -> bool {
+    AccessZoneOccupancyState::ALL_NAMED
+        .iter()
+        .any(|&(_, named)| named.to_raw() == raw)
+        || (64..=65_535).contains(&raw)
 }
 
 // ---------------------------------------------------------------------------

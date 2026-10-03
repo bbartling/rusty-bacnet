@@ -2729,7 +2729,7 @@
     "In service both writes fail with WRITE_ACCESS_DENIED. Out of service a count is an Unsigned and a Reliability an Enumerated in the BACnetReliability production, else INVALID_DATA_TYPE or VALUE_OUT_OF_RANGE.",
     "`AccessZoneObject::set_occupancy_count` updates the count set aside while out of service, and `set_reliability_internal` is refused then, as on the other Reliability carriers.",
     "The return to service serves the count set aside, a choice Clause 12.32.11 leaves to the implementation.",
-    "A simulated count moves Occupancy_State. The zone runs no intrinsic reporting and has no Table 13-1 row, so a simulated value raises no event and sends no COV report."
+    "A simulated count moves Occupancy_State, and a simulated count or Reliability can raise an event. The zone has no Table 13-1 row, so neither sends a COV report."
    ]
   },
   {
@@ -2796,12 +2796,86 @@
     "The zone always counts, so Occupancy_Count, Occupancy_Count_Enable, Adjust_Value and both limits are always served; Occupancy_State never reads NOT_SUPPORTED.",
     "Occupancy_Count_Enable and the limits are read-only on the network; `set_occupancy_count_enable` and `set_occupancy_limits` set them, a nonzero upper limit at or below the lower one being VALUE_OUT_OF_RANGE.",
     "Turning counting off zeroes the served count, the count set aside and Adjust_Value; meanwhile the application's counts are dropped and a simulated count other than zero is VALUE_OUT_OF_RANGE. Counting restarts from zero.",
-    "Adjust_Value is an Integer: in service a nonzero value is added to the count, stopping at zero, and zero clears it; out of service it is kept and the count stays as simulated.",
-    "Event_State reads NORMAL, as the zone runs no intrinsic reporting."
+    "Adjust_Value is an Integer: in service a nonzero value is added to the count, stopping at zero, and zero clears it; out of service it is kept and the count stays as simulated."
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-ZONE-INTRINSIC-REPORTING",
+   "standard_anchor": "Clause 12.32, Table 12-37, Clauses 12.32.25 to 12.32.37, Clause 13.3.2, Table 13-5",
+   "priority": "P1",
+   "summary": "An Access Zone reports CHANGE_OF_STATE on Occupancy_State against Alarm_Values after Time_Delay and sends each transition to its Notification Class recipients.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/event/state_reporting.rs",
+    "crates/bacnet-objects/src/access_control/zone.rs::AccessZoneObject",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs",
+    "crates/bacnet-server/src/server/event_notification_payload.rs::project_intrinsic_payload"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/zone_event_tests.rs::{access_zone_serves_the_event_rows,access_zone_goes_offnormal_after_time_delay_and_back_to_normal,access_zone_time_delay_normal_governs_only_the_return_to_normal,access_zone_event_enable_gates_distribution_not_the_transition,access_zone_acknowledges_its_latest_offnormal_transition,access_zone_simulated_fault_and_count_drive_the_event_state}",
+    "crates/bacnet-server/src/server/access_zone_event_tests.rs::{access_zone_occupancy_alarm_reaches_notification_class_recipients,access_zone_event_enable_withholds_only_the_distribution,access_zone_fault_notification_reports_occupancy_state,access_zone_in_alarm_is_listed_by_the_summary_services}",
+    "crates/bacnet-server/src/server/list_element_event_tests.rs::alarm_values_list_edits_move_a_zone_at_once",
+    "crates/bacnet-server/src/handlers/tests/access_zone_oos_writes.rs::alarm_values_take_occupancy_states_over_the_wire",
+    "crates/bacnet-objects/src/database/tests.rs::all_ten_builtin_intrinsic_families_implement_atomic_commit",
+    "crates/bacnet-objects/src/enrollment_summary_capability_tests.rs::all_ten_intrinsic_families_report_implied_algorithm_and_shared_commit_coordinate",
+    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::{all_ten_builtin_normal_families_project_exact_typed_values,builtin_fault_projection_is_tag_19_with_explicit_property_order}",
+    "crates/bacnet-server/src/server/event_message_policy_tests.rs::all_ten_builtin_families_store_each_policy_message_in_only_its_coordinate",
+    "crates/bacnet-server/src/pics/acked_transitions_policy_tests.rs::acked_transitions_network_policy_is_uniform_on_all_supported_types",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list,property_metadata_access_trio_write_capabilities_match_dispatch}",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_zone_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/zone_event_tests.rs::{access_zone_alarm_values_take_occupancy_states_only,access_zone_alarm_values_past_the_cap_are_no_space,access_zone_condition_cleared_within_time_delay_reports_nothing,access_zone_event_detection_enable_suspends_and_resets_reporting}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#access-control-7"
+   ],
+   "notes": [
+    "Time_Delay, Notification_Class, Alarm_Values, Event_Enable, Notify_Type, Event_Detection_Enable and Time_Delay_Normal are writable; Acked_Transitions, Event_Time_Stamps and Event_Message_Texts are read-only.",
+    "Alarm_Values takes named BACnetAccessZoneOccupancyState values and proprietary ones from 64 to 65535, else VALUE_OUT_OF_RANGE naming the element. A WriteProperty of one element reaches the zone as that element alone.",
+    "The algorithm watches the Occupancy_State and Reliability served, so a count or fault simulated out of service raises events as a real one does.",
+    "A CHANGE_OF_STATE notification carries Occupancy_State as its `zone-occupancy-state` New_State; a CHANGE_OF_RELIABILITY one lists Occupancy_State.",
+    "Moving from one alarm value to another keeps OFFNORMAL and sends nothing, the optional re-indication of Clause 13.3.2 being left out."
    ],
    "gaps": [
-    "Intrinsic reporting on Occupancy_State (CHANGE_OF_STATE) and its event rows are not modeled (no issue)",
-    "Entry_Points and Exit_Points serve Object Identifiers, not BACnetDeviceObjectReference elements, and have no setter (no issue)"
+    "#1132: a count the application sets on the object reaches the algorithm at the next one-second tick, as no runtime route runs it at once",
+    "#1328: WriteProperty can't write an empty Alarm_Values list",
+    "#1329: Event_Message_Texts_Config, Event_Algorithm_Inhibit and Event_Algorithm_Inhibit_Ref are not served"
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-ZONE-ENTRY-EXIT-POINTS",
+   "standard_anchor": "Clause 12.32, Table 12-37, Clauses 12.32.23 and 12.32.24",
+   "priority": "P1",
+   "summary": "An Access Zone serves Entry_Points and Exit_Points as lists of BACnetDeviceObjectReference naming Access Points, which the application sets.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/zone.rs::AccessZoneObject",
+    "crates/bacnet-objects/src/device_reference.rs::object_reference_list",
+    "crates/bacnet-objects/src/device_reference.rs::check_device_member",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/zone_points_tests.rs::access_zone_entry_and_exit_points_serve_device_object_references",
+    "crates/bacnet-server/src/handlers/tests/device_reference_reads.rs::access_zone_entry_and_exit_points_are_served_framed",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_entry_and_exit_points_reach_the_zone_lists",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_entry_and_exit_points_reach_the_lists_and_name_points_only",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_keywords"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/zone_points_tests.rs::access_zone_points_refuse_other_objects_and_non_device_devices"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#constructed-property-framing",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "`set_entry_points` and `set_exit_points` refuse a reference to anything but an Access Point, or one whose device identifier is not a Device, with VALUE_OUT_OF_RANGE, keeping the list.",
+    "Both lists are read-only on the network: WriteProperty gets WRITE_ACCESS_DENIED.",
+    "Python sets them at registration with `add_access_zone(entry_points=..., exit_points=...)`."
    ]
   },
   {
@@ -2892,6 +2966,7 @@
     "crates/bacnet-objects/src/device_reference.rs::check_device_member",
     "crates/bacnet-objects/src/access_control/door.rs::set_door_members",
     "crates/bacnet-objects/src/access_control/point.rs::set_access_doors",
+    "crates/bacnet-objects/src/access_control/zone.rs::set_entry_points",
     "crates/bacnet-objects/src/staging.rs",
     "crates/bacnet-objects/src/access_control/rights.rs::check_access_rule",
     "crates/rusty-bacnet/src/types/property_reference.rs::check_device",
@@ -2905,6 +2980,7 @@
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/access_control/device_reference_tests.rs::{access_door_door_members_refuse_a_non_device_device_identifier,access_point_access_doors_refuse_a_non_device_device_identifier,access_point_event_credential_refuses_a_non_device_device_identifier,access_credential_assigned_access_rights_refuse_a_non_device_device_identifier}",
+    "crates/bacnet-objects/src/access_control/zone_points_tests.rs::access_zone_points_refuse_other_objects_and_non_device_devices",
     "crates/bacnet-objects/src/group/tests.rs::{structured_view_add_subordinate_refuses_a_non_device_device_identifier,structured_view_set_subordinates_replaces_both_arrays_or_nothing}",
     "crates/bacnet-objects/src/staging/tests.rs::target_references_refuse_a_non_device_device_identifier",
     "crates/bacnet-objects/src/access_control/rights_tests.rs::access_rights_rules_refuse_a_non_device_device_identifier",
@@ -5873,7 +5949,8 @@
     "crates/bacnet-server/src/server/audit_reporter_list_tests.rs::audit_reporter_list_duplicates_and_absent_elements_preserve_delta_and_preimage",
     "crates/rusty-bacnet/src/errors.rs::tests::protocol_errors_carry_their_structured_detail",
     "crates/rusty-bacnet/tests/test_list_validation.py::test_change_list_error_reaches_python_with_its_element_number",
-    "crates/bacnet-server/src/server/schedule_reference_list_tests.rs::add_commands_the_new_target_and_remove_relinquishes_the_dropped_one"
+    "crates/bacnet-server/src/server/schedule_reference_list_tests.rs::add_commands_the_new_target_and_remove_relinquishes_the_dropped_one",
+    "crates/bacnet-server/src/server/list_element_event_tests.rs::{alarm_values_list_edits_move_a_zone_at_once,alarm_values_list_edit_moves_a_multi_state_input_at_once}"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::remove_list_element_refuses_an_absent_element_and_removes_nothing",
@@ -5928,6 +6005,7 @@
     "A named element the list already held, or a refusal of what a removal leaves, is no element of the request and reports 0 (Clause 15.1.1.3.2). A refusal that names no element, from a custom object, keeps the earlier estimate: the first element the list would gain, exact for a request adding one new element.",
     "Before #1048 a named refusal passed through unmapped, so a custom object's list position went out as the request's element number. WriteProperty and WritePropertyMultiple keep the plain class/code on the wire; their Rust results now carry the detail.",
     "A pure-duplicate AddListElement still writes the unchanged list, so the object's write-access check applies. Audit observation is unchanged in kind: an executable request that fails (not found, datatype, object refusal) is recorded with its error and pre-image, and malformed elements stay silent. CreateObject-Error, which has the same shape, and the other structured error bodies are BACNET-21-STRUCTURED-ERROR-BODIES (#1047), which generalized Error::ChangeList into Error::Structured.",
+    "A successful edit runs the object's per-write event evaluation, as WriteProperty does: an Alarm_Values edit with Time_Delay 0 moves Event_State at once, and a transition it starts gets the COV fanout the periodic task would give it.",
     "Subscribed_Recipients has its own codec and matcher: an element names the entry with the same recipient and process identifier, an add renews that entry in place, and a refusal on a renewed entry names the request element that renewed it. Its evidence is under BACNET-12-FORWARDER-SUBSCRIBED-RECIPIENTS."
    ]
   },
@@ -8493,8 +8571,8 @@
     "crates/bacnet-server/src/server/lifecycle.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-objects/src/database/tests.rs::all_nine_builtin_intrinsic_families_implement_atomic_commit",
-    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::all_nine_builtin_normal_families_project_exact_typed_values",
+    "crates/bacnet-objects/src/database/tests.rs::all_ten_builtin_intrinsic_families_implement_atomic_commit",
+    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::all_ten_builtin_normal_families_project_exact_typed_values",
     "crates/bacnet-server/src/server/event_notifications_custom_tests.rs::custom_immediate_proposal_commits_exact_history_before_distribution",
     "crates/bacnet-server/src/server/event_notifications_custom_tests.rs::custom_delayed_proposal_commits_exact_history_before_distribution",
     "crates/bacnet-server/src/server/event_notifications_custom_tests.rs::custom_local_commit_survives_distribution_gates",

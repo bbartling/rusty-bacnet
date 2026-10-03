@@ -11,6 +11,7 @@ use bacnet_types::enums::{EventState, EventType, NotifyType, Reliability};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 pub(crate) mod history;
+pub(crate) mod state_reporting;
 
 /// A detected change in event state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1051,6 +1052,7 @@ impl CommandFailureDetector {
 #[cfg(test)]
 pub(crate) use history::commit_test_proposal;
 pub(crate) use history::impl_builtin_intrinsic_reporting;
+pub(crate) use state_reporting::impl_change_of_state_reporting;
 
 #[cfg(test)]
 mod fault_tests;

@@ -35,10 +35,12 @@
 //! FAULT from the Reliability served, so a simulated fault sets it, and
 //! Occupancy_State follows the count served, so a simulated count moves it
 //! (12.32.10). An Adjust_Value write is kept but leaves the simulated count
-//! alone. The zone runs no intrinsic reporting (no CHANGE_OF_STATE
-//! algorithm) and has no Table 13-1 row, so a simulated value raises no event
-//! and sends no SubscribeCOV report. Anything reading these properties sees
-//! the simulation as it would see the zone.
+//! alone. The CHANGE_OF_STATE algorithm watches the Occupancy_State and
+//! Reliability served (#1305), so a simulated count can raise an offnormal
+//! event and a simulated fault a FAULT one, as item (f) of 12.32.10 asks. The
+//! zone has no Table 13-1 row, so neither sends a SubscribeCOV report.
+//! Anything reading these properties sees the simulation as it would see the
+//! zone.
 
 use bacnet_types::enums::{PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
