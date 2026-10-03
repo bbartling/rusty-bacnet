@@ -1279,6 +1279,7 @@
      "crates/bacnet-encoding/src/constructed/log_record.rs::decode_log_record",
      "crates/bacnet-encoding/src/constructed/event_log_record.rs::encode_event_log_record",
      "crates/bacnet-encoding/src/constructed/event_log_record.rs::decode_event_log_record",
+     "crates/bacnet-encoding/src/constructed/event_notification/tolerant.rs::decode_event_notification_tolerant",
      "crates/bacnet-services/src/read_range.rs::RangeSpec",
      "crates/bacnet-cli/src/commands/read_range.rs::read_range_cmd"
    ],
@@ -1302,6 +1303,7 @@
      "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_kinds_have_exact_bytes_and_round_trip",
      "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::consecutive_event_log_records_decode_by_returned_offset",
      "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_notification_records_round_trip_typed_event_values",
+     "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_drops_a_message_text_it_cannot_read",
      "crates/bacnet-encoding/src/constructed/tests/log_record.rs::log_record_bit_strings_put_bit0_in_the_top_bit",
      "crates/bacnet-encoding/src/constructed/tests/log_record.rs::log_record_from_a_peer_keeps_a_five_octet_integer",
      "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::log_multiple_record_from_a_peer_keeps_wide_integers",
@@ -1351,7 +1353,8 @@
      "Trend Log Multiple, Trend Log and Event Log objects answer ReadProperty of LOG_BUFFER with PROPERTY / READ_ACCESS_DENIED, so RP, RPM (inline, also for ALL and REQUIRED), local and endpoint reads all refuse it; ReadRange is the only way to read the records (#1237).",
      "Trend Log and Event Log records page under the ReadRangeBudget byte cap as other lists do: a page ends at the last whole record that fits and sets MORE_ITEMS, and a backward page keeps the newest records.",
      "The record decoders keep INTEGER values as i64 and ENUMERATED and Unsigned values as u64, up to eight octets, since a peer's log need not hold them to 32 bits.",
-     "The CLI's read-range picks the record decoder by the log object's type and prints each record's timestamp, datum and Trend Log status flags; anything from the first record that does not decode is shown as hex."
+     "The CLI's read-range picks the record decoder by the log object's type and prints each record's timestamp, datum and Trend Log status flags; anything from the first record that does not decode is shown as hex.",
+     "An Event Log notification record whose message text does not decode reads with no message text, as the client reads a received notification; any other malformed notification fails the record."
     ]
   },
   {

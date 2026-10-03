@@ -21,7 +21,7 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, NotifyType, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
+use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 use serde::Serialize;
 
 use super::read::{decode_and_format, format_application_values, hex};
@@ -120,7 +120,7 @@ fn trend_log_row(data: &[u8], offset: usize) -> Result<(LogRecordRow, usize), Er
     let row = LogRecordRow {
         timestamp: timestamp(record.date, record.time),
         datum: log_datum(&record.log_datum),
-        status_flags: record.status_flags.map(|flags| flags.to_string()),
+        status_flags: record.status_flags.map(status_flags),
     };
     Ok((row, next))
 }
@@ -183,6 +183,15 @@ fn timestamp(date: Date, time: Time) -> String {
         output::format_property_value(&PropertyValue::Date(date)),
         output::format_property_value(&PropertyValue::Time(time))
     )
+}
+
+/// The set flags by name; empty when none is set.
+fn status_flags(flags: StatusFlags) -> String {
+    if flags.is_empty() {
+        String::new()
+    } else {
+        flags.to_string()
+    }
 }
 
 fn log_status(status: LogStatus) -> String {

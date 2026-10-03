@@ -94,8 +94,8 @@ pub use cov_subscription::{
 };
 pub use event_log_record::{decode_event_log_record, encode_event_log_record};
 pub use event_notification::{
-    decode_event_notification, decode_notification_parameters, encode_event_notification,
-    encode_notification_parameters,
+    decode_event_notification, decode_event_notification_tolerant, decode_notification_parameters,
+    encode_event_notification, encode_notification_parameters,
 };
 pub use event_notification_subscription::{
     decode_event_notification_subscription, encode_event_notification_subscription,

@@ -265,6 +265,25 @@ fn event_log_record_rejects_unencodable_values_without_writing() {
                 }],
             },
         ),
+        // Bit strings the decoder would refuse: eight unused bits, and
+        // unused bits with no octets to hold them.
+        notification_with(
+            EventType::CHANGE_OF_BITSTRING,
+            NotificationParameters::ChangeOfBitstring {
+                referenced_bitstring: (8, vec![0xA0]),
+                status_flags: StatusFlags::empty(),
+            },
+        ),
+        notification_with(
+            EventType::CHANGE_OF_VALUE,
+            NotificationParameters::ChangeOfValue {
+                new_value: ChangeOfValueChoice::ChangedBits {
+                    unused_bits: 3,
+                    data: vec![],
+                },
+                status_flags: StatusFlags::empty(),
+            },
+        ),
     ] {
         let mut buf = BytesMut::from(&b"kept"[..]);
         let value = record(EventLogDatum::Notification(notification));
@@ -309,6 +328,33 @@ fn event_log_record_decoder_rejects_notifications_that_are_not_requests() {
     trailing.extend([0xD9, 0x01]);
     for parameters in [&[0x09, 0x01][..], cut, &trailing] {
         let bytes = framed(parameters);
+        assert!(decode_event_log_record(&bytes, 0).is_err(), "{bytes:02X?}");
+    }
+}
+
+/// A message text whose characters don't decode (here one in the DBCS
+/// character set) is dropped, as the client drops it from a received
+/// notification, and the rest of the record still reads. A text that isn't
+/// framed as the one field before the notify type still fails the record.
+#[test]
+fn event_log_record_drops_a_message_text_it_cannot_read() {
+    // The notify type [8] starts at offset 22 of the request.
+    let with_text = |text: &[u8]| {
+        let mut parameters = NOTIFICATION.to_vec();
+        parameters.splice(22..22, text.iter().copied());
+        framed(&parameters)
+    };
+    let bytes = with_text(&[0x7A, 0x01, b'A']);
+    assert_eq!(
+        decode_event_log_record(&bytes, 0).unwrap(),
+        (
+            record(EventLogDatum::Notification(notification())),
+            bytes.len()
+        )
+    );
+    // Two text fields, and a text with no charset octet.
+    for text in [&[0x7A, 0x01, b'A', 0x7A, 0x01, b'A'][..], &[0x78]] {
+        let bytes = with_text(text);
         assert!(decode_event_log_record(&bytes, 0).is_err(), "{bytes:02X?}");
     }
 }

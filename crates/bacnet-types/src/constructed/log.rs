@@ -117,6 +117,10 @@ pub enum EventLogDatum {
     LogStatus(LogStatus),
     /// An event notification: the parameters of the ConfirmedEventNotification
     /// request, from the process identifier through the optional event values.
+    ///
+    /// An ACK_NOTIFICATION is encoded without its ack-required, from-state and
+    /// event values, so the record ReadRange serves (and decodes back) has
+    /// them as `false`, NORMAL and `None`, whatever the stored request held.
     Notification(EventNotificationRequest),
     /// The device clock moved by this many seconds; zero when unknown.
     TimeChange(f32),

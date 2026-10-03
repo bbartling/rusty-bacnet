@@ -7,7 +7,7 @@ use bacnet_types::constructed::{
     BACnetLogRecord, LogValue,
 };
 use bacnet_types::enums::{AuditOperation, EventState, EventType};
-use bacnet_types::primitives::{BACnetTimeStamp, StatusFlags};
+use bacnet_types::primitives::BACnetTimeStamp;
 use bytes::BytesMut;
 
 const DATE: Date = Date {
@@ -94,7 +94,7 @@ fn trend_log_records_show_datum_and_status_flags() {
             row(8, "72.5", Some("IN_ALARM")),
             row(9, "log-status BUFFER_PURGED", None),
             row(10, "failure PROPERTY/VALUE_TOO_LONG", None),
-            row(11, "\"ok\"", Some("()")),
+            row(11, "\"ok\"", Some("")),
         ]
     );
     assert_eq!(records.undecoded, None);

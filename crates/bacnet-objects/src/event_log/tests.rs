@@ -196,6 +196,15 @@ fn unencodable_record_is_refused_at_add_and_the_rest_still_serve() {
                 }],
             },
         ),
+        // A bit string with more than seven unused bits, which the record
+        // decoder would refuse.
+        (
+            EventType::CHANGE_OF_BITSTRING,
+            NotificationParameters::ChangeOfBitstring {
+                referenced_bitstring: (8, vec![0xA0]),
+                status_flags: StatusFlags::empty(),
+            },
+        ),
     ] {
         let bad = BACnetEventLogRecord {
             date: make_date(),

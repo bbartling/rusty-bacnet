@@ -2,6 +2,6 @@
 section: Changed
 ---
 - **Breaking (Rust API):** `EventLogDatum::Notification` holds a typed
-  `EventNotificationRequest` instead of encoded bytes. The request, its event
-  values and `BACnetPropertyValue` move to bacnet-types, with their codecs in
-  bacnet-encoding (#1276).
+  `EventNotificationRequest`, now in bacnet-types with its codec in
+  bacnet-encoding. `decode_event_log_record` refuses a notification that isn't
+  a valid request, but drops an unreadable message text (#1276).

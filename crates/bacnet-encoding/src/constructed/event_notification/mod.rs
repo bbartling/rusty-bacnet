@@ -36,9 +36,11 @@ mod parameters_decode;
 mod parameters_encode;
 mod property_states;
 mod structured;
+mod tolerant;
 
 pub use parameters_decode::decode_notification_parameters;
 pub use parameters_encode::encode_notification_parameters;
+pub use tolerant::decode_event_notification_tolerant;
 
 /// Append the encoded request parameters to `buf`; `buf` is unchanged if validation fails.
 pub fn encode_event_notification(

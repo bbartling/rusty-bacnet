@@ -10,7 +10,7 @@
 
 use super::log_fields::{decode_log_status, decode_timestamp, encode_log_status, encode_timestamp};
 use super::tagged::{contents, decode_ctx_constructed, expect_end};
-use super::{decode_event_notification, encode_event_notification};
+use super::{decode_event_notification_tolerant, encode_event_notification};
 use crate::{primitives, tags};
 use bacnet_types::constructed::{BACnetEventLogRecord, EventLogDatum};
 use bacnet_types::error::Error;
@@ -55,8 +55,11 @@ pub fn encode_event_log_record(
 /// Decode one Event Log record starting at `offset`, returning it and the
 /// offset just past it.
 ///
-/// A notification decodes in full, so a record whose notification is
-/// malformed fails as a whole.
+/// A notification decodes in full, so a record whose notification isn't a
+/// valid request fails as a whole. The one exception is a message text whose
+/// characters don't decode, such as one in a character set this stack doesn't
+/// support: the notification reads with no message text, as a received
+/// notification does at the client ([`decode_event_notification_tolerant`]).
 pub fn decode_event_log_record(
     data: &[u8],
     offset: usize,
@@ -82,7 +85,7 @@ fn decode_datum(data: &[u8], offset: usize) -> Result<EventLogDatum, Error> {
         (EventLogDatum::LogStatus(status), end)
     } else if tag.is_opening_tag(NOTIFICATION) {
         let (parameters, end) = tags::extract_context_value(data, start, NOTIFICATION)?;
-        let notification = decode_event_notification(parameters)?;
+        let notification = decode_event_notification_tolerant(parameters)?;
         (EventLogDatum::Notification(notification), end)
     } else if tag.is_context(TIME_CHANGE) {
         let (octets, end) = contents(data, start, tag.length)?;

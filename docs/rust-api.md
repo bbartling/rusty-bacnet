@@ -2206,8 +2206,14 @@ request. `EventLogObject::add_record` takes one. The request, its
 are functions in `bacnet_encoding::constructed`: `encode_event_notification` /
 `decode_event_notification`, `encode_notification_parameters` /
 `decode_notification_parameters`, and `encode_bacnet_property_value` /
-`decode_bacnet_property_value`. A Trend Log record stays a `BACnetLogRecord`;
-its optional `status_flags` is a `StatusFlags`.
+`decode_bacnet_property_value`. `decode_event_notification_tolerant` reads a
+request whose message text doesn't decode (a character set the stack doesn't
+support, for one) with no message text; the client uses it for received
+notifications and `decode_event_log_record` for a record's notification, which
+otherwise has to be a valid request. The request codec writes an
+ACK_NOTIFICATION without its ack-required, from-state and event values, so
+ReadRange serves such a record without them. A Trend Log record stays a `BACnetLogRecord`; its optional
+`status_flags` is a `StatusFlags`.
 
 Every record kind, the Audit Log's included, carries a log status as the
 typed `bacnet_types::bitstring::LogStatus` flags (`LOG_DISABLED`,

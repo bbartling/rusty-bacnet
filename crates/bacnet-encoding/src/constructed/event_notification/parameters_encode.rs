@@ -1,4 +1,5 @@
 use super::*;
+use crate::constructed::log_fields::check_bit_string;
 
 /// Encode a context-tagged `BACnetStatusFlags`: four defined bits, so four unused bits, with
 /// `IN_ALARM` in the content octet's top bit.
@@ -45,13 +46,10 @@ fn encode_into(params: &NotificationParameters, buf: &mut BytesMut) -> Result<()
             referenced_bitstring,
             status_flags,
         } => {
+            let (unused_bits, data) = referenced_bitstring;
+            check_bit_string(*unused_bits, data, "ChangeOfBitstring referenced-bitstring")?;
             tags::encode_opening_tag(buf, 0);
-            primitives::encode_ctx_bit_string(
-                buf,
-                0,
-                referenced_bitstring.0,
-                &referenced_bitstring.1,
-            );
+            primitives::encode_ctx_bit_string(buf, 0, *unused_bits, data);
             encode_status_flags(buf, 1, *status_flags);
             tags::encode_closing_tag(buf, 0);
         }
@@ -77,6 +75,7 @@ fn encode_into(params: &NotificationParameters, buf: &mut BytesMut) -> Result<()
             tags::encode_opening_tag(buf, 0);
             match new_value {
                 ChangeOfValueChoice::ChangedBits { unused_bits, data } => {
+                    check_bit_string(*unused_bits, data, "ChangeOfValue changed-bits")?;
                     primitives::encode_ctx_bit_string(buf, 0, *unused_bits, data);
                 }
                 ChangeOfValueChoice::ChangedValue(v) => {
