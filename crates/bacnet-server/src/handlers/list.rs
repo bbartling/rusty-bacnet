@@ -281,18 +281,9 @@ impl Elements {
                 })
             }
             (Self::Destinations(stored), Self::Destinations(edits)) => {
-                let (list, added) = edit(
-                    stored,
-                    edits,
-                    remove,
-                    |buf, destination| {
-                        encode_destination(buf, destination);
-                        Ok(())
-                    },
-                    |_| true,
-                )?;
+                let (list, added) = edit(stored, edits, remove, encode_destination, |_| true)?;
                 let mut bytes = BytesMut::new();
-                encode_destination_list(&mut bytes, &list);
+                encode_destination_list(&mut bytes, &list)?;
                 Ok(Edited {
                     value: PropertyValue::ApplicationData(bytes.to_vec()),
                     added,
@@ -351,7 +342,7 @@ impl Elements {
                 // an entry past its cap and names it.
                 let (list, added) = edit_subscriptions(stored, edits, remove)?;
                 let mut bytes = BytesMut::new();
-                encode_event_notification_subscription_list(&mut bytes, &list);
+                encode_event_notification_subscription_list(&mut bytes, &list)?;
                 Ok(Edited {
                     value: PropertyValue::ApplicationData(bytes.to_vec()),
                     added,
@@ -465,7 +456,10 @@ fn edit_subscriptions(
 ) -> Result<(Vec<BACnetEventNotificationSubscription>, Added), Error> {
     let key = |subscription: &BACnetEventNotificationSubscription| {
         let mut buf = BytesMut::new();
-        encode_recipient(&mut buf, &subscription.recipient);
+        // Stored entries and request elements both decode through the bounded
+        // recipient decoder (#1156), so each one encodes.
+        encode_recipient(&mut buf, &subscription.recipient)
+            .expect("decoded recipients fit BACnetAddress::MAX_MAC_LEN");
         buf.extend_from_slice(&subscription.process_identifier.to_be_bytes());
         buf.freeze()
     };

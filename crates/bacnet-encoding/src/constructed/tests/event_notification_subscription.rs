@@ -45,7 +45,7 @@ fn event_notification_subscription_round_trips_golden_elements() {
         (ADDRESS_SUBSCRIPTION, address_subscription()),
     ] {
         let mut buf = BytesMut::new();
-        encode_event_notification_subscription(&mut buf, &subscription);
+        encode_event_notification_subscription(&mut buf, &subscription).unwrap();
         assert_eq!(&buf[..], bytes);
         assert_eq!(
             decode_event_notification_subscription(bytes, 0).unwrap(),
@@ -60,7 +60,8 @@ fn event_notification_subscription_list_walks_one_element_at_a_time() {
     encode_event_notification_subscription_list(
         &mut list,
         &[address_subscription(), device_subscription()],
-    );
+    )
+    .unwrap();
     assert_eq!(
         &list[..],
         [ADDRESS_SUBSCRIPTION, DEVICE_SUBSCRIPTION].concat()
@@ -136,7 +137,7 @@ fn event_notification_subscription_takes_the_longest_configured_mac() {
         time_remaining: 1,
     };
     let mut buf = BytesMut::new();
-    encode_event_notification_subscription(&mut buf, &subscription);
+    encode_event_notification_subscription(&mut buf, &subscription).unwrap();
     assert_eq!(
         decode_event_notification_subscription(&buf, 0).unwrap(),
         (subscription, buf.len())

@@ -198,3 +198,7 @@ pub(super) fn budgets(keywords: BudgetKeywords) -> PyResult<Budgets> {
         get_event_information_budget,
     })
 }
+
+#[cfg(test)]
+#[path = "constructor_budgets_tests.rs"]
+mod tests;

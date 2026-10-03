@@ -39,12 +39,15 @@ class DccConstructorTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "source restriction"):
                         BACnetServer(123, transport=transport, dcc_policy=policy,
                                      dcc_source_restriction=restriction)
-            for restriction in [[(None, b"")], [(None, b"x" * 256)], [(0, b"x")],
+            # An entry is 1 to 18 octets, BACnetAddress::MAX_MAC_LEN (#1157).
+            for restriction in [[(None, b"")], [(None, b"x" * 19)], [(7, b"x" * 19)],
+                                [(None, b"x" * 256)], [(0, b"x")],
                                 [(65535, b"x")], [(7, b"")], [(None, b"x")] * 257]:
                 with self.assertRaises(ValueError):
                     BACnetServer(123, transport=transport, dcc_policy="require_password",
                                  dcc_password="required", dcc_source_restriction=restriction)
-            for restriction in [[], [(None, b"x")], [(65534, b"x" * 255)] * 256]:
+            for restriction in [[], [(None, b"x")], [(None, b"x" * 18)],
+                                [(65534, b"x" * 18)] * 256]:
                 BACnetServer(123, transport=transport, dcc_policy="require_password",
                              dcc_password="required", dcc_source_restriction=restriction,
                              sc_device_uuid=bytes.fromhex("8e62ac46d7084226913776a32b619315"),

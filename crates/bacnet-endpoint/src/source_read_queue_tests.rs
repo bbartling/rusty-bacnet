@@ -192,7 +192,7 @@ async fn source_recipient_full_egress_fails_one_sibling_after_commit_without_ret
         mac_address: MacAddr::from_slice(&peer_mac),
     });
     let mut bytes = BytesMut::new();
-    bacnet_encoding::constructed::encode_recipient(&mut bytes, &next);
+    bacnet_encoding::constructed::encode_recipient(&mut bytes, &next).unwrap();
     {
         let mut db = session.database.as_ref().unwrap().write().await;
         db.get_mut(&oid(ObjectType::DEVICE, 123))

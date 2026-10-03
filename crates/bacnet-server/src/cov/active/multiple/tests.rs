@@ -265,7 +265,8 @@ fn active_cov_multiple_projection_groups_contexts_and_omits_deleted_objects() {
                 vec![spec(av(1), vec![cov_ref(PV, None, Some(0.5), true)])],
             ),
         ],
-    );
+    )
+    .unwrap();
     let routed_recipient = BACnetRecipient::Address(BACnetAddress {
         network_number: 7,
         mac_address: MacAddr::from_slice(&[0x33]),

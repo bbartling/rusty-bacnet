@@ -1,6 +1,6 @@
 //! GetEnrollmentSummary service per ASHRAE 135-2020 Clause 13.11.
 
-use bacnet_encoding::constructed::{decode_recipient, encode_recipient};
+use bacnet_encoding::constructed::{check_encoded_mac_len, decode_recipient, encode_recipient};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_types::constructed::BACnetRecipient;
@@ -63,7 +63,9 @@ impl GetEnrollmentSummaryRequest {
     ///
     /// # Panics
     ///
-    /// Panics if a filter contains a value outside its service-defined range.
+    /// Panics if a filter contains a value outside its service-defined range,
+    /// or an enrollment-filter address whose MAC is longer than
+    /// `BACnetAddress::MAX_MAC_LEN` octets.
     pub fn encode(&self, buf: &mut BytesMut) {
         self.try_encode(buf)
             .expect("invalid GetEnrollmentSummary request");
@@ -91,13 +93,20 @@ impl GetEnrollmentSummaryRequest {
                 "EnrollmentSummary priorityFilter minimum exceeds maximum".into(),
             ));
         }
+        if let Some(RecipientProcess {
+            recipient: BACnetRecipient::Address(address),
+            ..
+        }) = &self.enrollment_filter
+        {
+            check_encoded_mac_len(address, "EnrollmentSummary enrollmentFilter")?;
+        }
         // [0] acknowledgmentFilter
         primitives::encode_ctx_enumerated(buf, 0, self.acknowledgment_filter.to_raw());
         // [1] enrollmentFilter (optional, constructed)
         if let Some(ref ef) = self.enrollment_filter {
             tags::encode_opening_tag(buf, 1);
             tags::encode_opening_tag(buf, 0);
-            encode_recipient(buf, &ef.recipient);
+            encode_recipient(buf, &ef.recipient)?;
             tags::encode_closing_tag(buf, 0);
             primitives::encode_ctx_unsigned(buf, 1, ef.process_identifier as u64);
             tags::encode_closing_tag(buf, 1);
