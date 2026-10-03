@@ -2526,6 +2526,15 @@ the database, such as one a write made straight into the database queued.
 `stop()` doesn't wait for a database the application holds: those runs end as
 soon as it lets go.
 
+A run doesn't need `stop()` to end when the `write_local` that started it is
+dropped after its write committed, by a timeout or a `select!` (#1324). The
+write stays made, and the run, which hadn't reached its task yet, ends as if
+none of its writes were made: In_Process FALSE with every command
+unsuccessful, or a Channel's Write_Status FAILED with Reliability
+PROCESS_ERROR. It ends at once, or as soon as a database the application holds
+is free. The COV and event work the dropped call hadn't done yet is skipped
+(#1367).
+
 Whatever commits a Present_Value write owns the run it starts and finishes it,
 so no path leaves a Command in process (#1178). Without a server,
 `tick_schedules` runs the lists its Schedule writes start before it returns,
@@ -2805,7 +2814,9 @@ the authorizer only decides confirmed services (#1319); those drops aren't
 counted in `mutation_decision_counters()`. The Channel writes make no Audit
 records (#1318), and the endpoint responder ignores WriteGroup.
 
-Channel runs are owned as Command runs are (#1178). Without a server,
+Channel runs are owned as Command runs are (#1178). A `write_local` dropped
+after the Channel took its value ends the distribution FAILED without
+`stop()`, as it ends a Command's run (#1324). Without a server,
 `tick_schedules` runs a distribution its Schedule writes start before it
 returns, delays included, and ends it FAILED if its future is dropped first.
 The bare `handle_write_property` and `handle_write_property_multiple` handlers

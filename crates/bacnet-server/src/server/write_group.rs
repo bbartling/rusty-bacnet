@@ -46,8 +46,9 @@ use super::command_runs::CommandRunner;
 use super::local_writes::{LocalWrite, LocalWriter};
 use super::request_services::UnconfirmedServices;
 use super::*;
+use crate::command_lists::TakenRuns;
 use crate::mutation::MutationPolicy;
-use bacnet_objects::command::{CommandRun, RunPlan};
+use bacnet_objects::command::RunPlan;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::write_group::WriteGroupRequest;
 
@@ -102,7 +103,7 @@ pub(super) fn allows_delay_inhibit(object: &dyn BACnetObject) -> bool {
 }
 
 /// Zero the member delays of the distribution `channel` queued in `runs`.
-pub(super) fn skip_delays(runs: &mut [CommandRun], channel: ObjectIdentifier) {
+pub(super) fn skip_delays(runs: &mut TakenRuns, channel: ObjectIdentifier) {
     for run in runs.iter_mut().filter(|run| run.source == channel) {
         if let RunPlan::Channel(distribution) = &mut run.plan {
             for member in &mut distribution.members {
@@ -152,7 +153,7 @@ async fn write_channel<T: TransportPort + 'static>(
     writer: &LocalWriter<'_, T>,
     request: &WriteGroupRequest,
     write: &GroupWrite<'_>,
-) -> Result<Vec<CommandRun>, Error> {
+) -> Result<TakenRuns, Error> {
     let value = handlers::decode_write_property_value(
         PropertyIdentifier::PRESENT_VALUE,
         None,
