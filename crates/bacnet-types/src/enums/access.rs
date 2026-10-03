@@ -247,6 +247,30 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// Whether an access rule's time range is checked: the time-range
+    /// specifier of a `BACnetAccessRule` (Clause 21; Clause 12.34.9.1). Only
+    /// these two values exist.
+    pub struct AccessRuleTimeRangeSpecifier(u32);
+
+    /// The rule names a property that decides when it applies.
+    const SPECIFIED = 0;
+    /// The rule applies at any time.
+    const ALWAYS = 1;
+}
+
+bacnet_enum! {
+    /// Whether an access rule is tied to one place: the location specifier of
+    /// a `BACnetAccessRule` (Clause 21; Clause 12.34.9.1). Only these two
+    /// values exist.
+    pub struct AccessRuleLocationSpecifier(u32);
+
+    /// The rule names an Access Point or Access Zone.
+    const SPECIFIED = 0;
+    /// The rule holds at every access point.
+    const ALL = 1;
+}
+
+bacnet_enum! {
     /// BACnet access passback mode (Clause 12.32).
     pub struct AccessPassbackMode(u32);
 

@@ -2230,6 +2230,45 @@ Active_Authentication_Policy (1 to the policy count) and the mode by writing
 Authorization_Mode (one of the supported modes). Another value is refused
 with VALUE_OUT_OF_RANGE, and another datatype with INVALID_DATA_TYPE.
 
+`add_access_rights` takes `positive_access_rules` and `negative_access_rules`,
+lists of `AccessRule` mappings for Positive_Access_Rules and
+Negative_Access_Rules, both read-only over the network:
+
+```python
+# Access Zone 3 in Device 99.
+remote_zone = (
+    ObjectIdentifier(ObjectType.DEVICE, 99),
+    ObjectIdentifier(ObjectType.ACCESS_ZONE, 3),
+)
+server.add_access_rights(
+    instance=3,
+    name="Lobby Weekdays",
+    positive_access_rules=[
+        {
+            # When: Schedule 1's Present_Value; leave out for any time.
+            "time_range": {
+                "object_identifier": ObjectIdentifier(ObjectType.SCHEDULE, 1),
+                "property_identifier": PropertyIdentifier.PRESENT_VALUE,
+            },
+            # Where: an Access Point or Access Zone; leave out for anywhere.
+            "location": ObjectIdentifier(ObjectType.ACCESS_POINT, 1),
+            "enable": True,
+        },
+    ],
+    negative_access_rules=[{"location": remote_zone, "enable": True}],
+)
+```
+
+`enable` is required. A `time_range` mapping takes `object_identifier`,
+`property_identifier` and the optional `property_array_index` and
+`device_identifier`; a `location` takes the forms `door_members` does. A
+missing or `None` member makes the rule apply at any time (ALWAYS) or at every
+access point (ALL). A wrong type raises `TypeError`; an unknown or missing key,
+or a device that isn't a Device, raises `ValueError`; a location naming
+another object type raises `BacnetProtocolError` (VALUE_OUT_OF_RANGE). Each
+rule reads back as `application_data` holding its BACnetAccessRule octets. The
+server stores and serves the rules; it doesn't evaluate them.
+
 Access Door, Access Point, Credential Data Input and Load Control take
 SubscribeCOV, and each report carries the values their Table 13-1 rows name:
 Door_Alarm_State on a door; Access_Event (in place of Present_Value),
