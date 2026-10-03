@@ -3066,6 +3066,7 @@
     "crates/bacnet-server/src/cov/timed.rs",
     "crates/bacnet-server/src/cov/timed/claim.rs",
     "crates/bacnet-server/src/cov/timed/owed.rs",
+    "crates/bacnet-server/src/cov/timed/bound.rs",
     "crates/bacnet-server/src/cov/confirmed.rs",
     "crates/bacnet-server/src/server/cov_notifications/confirmed.rs",
     "crates/bacnet-server/src/server/cov_notifications/revisit.rs",
@@ -3321,6 +3322,10 @@
     "crates/bacnet-server/src/server/cov_timed_value_split_tests.rs::a_value_whose_send_fails_goes_out_again_alone_at_the_deadline",
     "crates/bacnet-server/src/server/cov_timed_value_split_tests.rs::a_rejected_confirmed_value_goes_out_again_before_the_rest_of_its_change",
     "crates/bacnet-server/src/cov/timed_split_tests.rs::a_value_too_large_alone_is_dropped_once_per_change_and_the_rest_still_goes",
+    "crates/bacnet-server/src/server/cov_timed_value_split_tests.rs::a_held_back_value_still_goes_out_after_a_newer_change",
+    "crates/bacnet-server/src/server/cov_timed_value_split_tests.rs::only_a_real_overflow_drops_a_change_and_never_the_one_in_delivery",
+    "crates/bacnet-server/src/cov/timed_split_tests.rs::the_bound_keeps_a_change_in_delivery_until_its_last_value_is_delivered",
+    "crates/bacnet-server/src/cov/timed_split_tests.rs::a_change_is_in_delivery_only_once_a_part_of_it_went_out",
     "crates/bacnet-server/src/cov/timed/drops.rs::each_cause_warns_once_per_context_until_it_is_admitted_afresh",
     "crates/bacnet-server/src/server/cov_timed_capture_order_tests.rs::a_confirmed_latest_change_too_large_for_any_notification_never_stalls_the_context",
     "crates/bacnet-server/src/server/cov_timed_capture_order_tests.rs::a_reference_completes_when_the_part_carrying_its_latest_change_is_sent",
@@ -3441,7 +3446,9 @@
     "A failure of the request itself (inconsistent or out-of-range lifetime and delay, authorization) and a refusal at the first reference keep and report nothing. Issue #1102 makes a missing clock a failure of the reference, not the request: Timestamped is an option each COV reference carries (Clause 13.16.3.1), Clause 13.16.2 keeps the general error for failures before any reference is processed, and the general error table (13.16.3.2.1) covers only context resources, lifetime and delay.",
     "A timestamped reference while the Device has no valid clock is therefore refused itself, after its object and property checks, and named in the first-failed-subscription error with SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED; the references before it are kept and reported and those after it are not processed.",
     "Neither error table has a row for it: Clause 18.5 defines that code for service parameters that would need functionality the device lacks, and Clause 16.1.1.3 pairs it with a device without a clock. The general row for a context that cannot be created never fires and stays documented only (#1102 item 2): a context exists only while it holds references and has no storage or limit of its own, so a new context whose first reference finds no room gets the per-reference RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT error.",
-    "It ties to the empty-spec context materialization gap below; revisit it if contexts get their own storage or limit. A cancellation validates nothing and removes every listed reference. CovSubscriptionTable::subscribe_multiple returns Err(MultipleRefusal) with the error, the refused position and the kept snapshots."
+    "It ties to the empty-spec context materialization gap below; revisit it if contexts get their own storage or limit. A cancellation validates nothing and removes every listed reference. CovSubscriptionTable::subscribe_multiple returns Err(MultipleRefusal) with the error, the refused position and the kept snapshots.",
+    "Issue #1163 keeps a change in delivery out of the local bound's eviction. A change sent one value per notification (#1090) is in delivery from when a part of it is delivered, or sent as a confirmed report's first part with the rest deferred, until its last value is delivered; each reference marks only the change a part last went out ahead of.",
+    "Eviction takes neither that change nor a reference's newest, so at a 50-octet subscriber, where the bound holds about one Present_Value and Status_Flags change, a value held back by a failed send or a deferral still goes out after a newer change, and timed_changes_dropped moves only on a real overflow, for a change not yet begun. Beyond the bound a context holds at most two changes per reference. The bound and this exemption are local policy."
    ]
   },
   {
