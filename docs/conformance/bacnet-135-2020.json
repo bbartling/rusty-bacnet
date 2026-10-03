@@ -774,7 +774,8 @@
      "The path key is immediate-router MAC plus DNET, separate from discovery state. Unknown paths use a 228-octet NPDU envelope; the forwarded NPCI allowance includes destination and source fields using the client's local transport MAC, so six-octet addresses leave 207 APDU octets and an explicitly configured 1497-octet path leaves 1476 before peer or local-link constraints.",
      "Configured evidence and process-lifetime learned exclusive upper bounds combine by minimum. One active owner per path makes reason-4 completion owner-qualified; learning occurs only when that completion wins, and retry/window retransmission stops afterward.",
      "Path state is capped at 256 entries; deterministic idle reclamation never removes configured/learned evidence or a gate with an owner/waiter, and exhaustion fails before TSM registration. Ambiguous termination holds the same-path gate through a configuration-derived stale-control quarantine, while monotonic network-ingress sequencing prevents controls queued before activation from claiming a later generation.",
-     "Malformed, unmatched, stale, wrong-router, wrong-DNET, other-reason, and direct traffic do not mutate policy. Full active probing, persistent cache, router enforcement, and unconfirmed-traffic changes remain deferred. Third-party conformance evidence is still required."
+     "Malformed, unmatched, stale, wrong-router, wrong-DNET, other-reason, and direct traffic do not mutate policy. Full active probing, persistent cache, router enforcement, and unconfirmed-traffic changes remain deferred. Third-party conformance evidence is still required.",
+    "A client attached to a BACnetRouter through a LoopbackTransport port gets reason 4 rejects on its own NetworkLayer from the router's port MAC, so it needs no router-side receiver (#1175)."
     ]
   },
   {
@@ -823,13 +824,13 @@
    ],
    "positive_tests": [
     "crates/bacnet-network/src/address_bound_tests.rs::router_rejects_an_over_long_address_toward_a_dnet_with_reason_6",
-    "crates/bacnet-network/src/reject_route_tests.rs::{router_rejects_a_relayed_npdu_toward_its_snet_sadr,router_rejects_a_local_npdu_with_a_local_unicast,router_relays_a_received_reject_to_the_node_its_dnet_names,chained_routers_carry_a_reject_back_to_the_originating_device}",
-    "crates/bacnet-network/src/router/reject_tests.rs::{send_reject_addresses_the_originator_or_the_local_sender,relay_routes_a_received_reject_by_its_dnet}"
+    "crates/bacnet-network/src/reject_route_tests.rs::{router_rejects_a_relayed_npdu_toward_its_snet_sadr,router_rejects_a_local_npdu_with_a_local_unicast,router_rejects_an_npdu_from_its_own_snet_with_a_local_unicast,router_relays_a_received_reject_to_the_node_its_dnet_names,router_hands_a_reject_addressed_to_itself_to_its_control_receiver,chained_routers_carry_a_reject_back_to_the_originating_device}",
+    "crates/bacnet-network/src/router/reject_tests.rs::{send_reject_addresses_the_originator_or_the_local_sender,send_reject_unicasts_an_originator_on_the_arrival_network_to_its_sadr,relay_routes_a_received_reject_by_its_dnet,a_reject_addressed_to_the_router_reaches_its_consumer_and_the_table}"
    ],
    "negative_tests": [
     "crates/bacnet-network/src/address_bound_tests.rs::{router_rejects_an_over_long_address_toward_a_dnet_with_reason_6,router_drops_an_over_long_broadcast_or_local_npdu_without_a_reject}",
     "crates/bacnet-network/src/reject_route_tests.rs::router_falls_back_to_a_local_unicast_when_the_sadr_is_too_long",
-    "crates/bacnet-network/src/router/reject_tests.rs::relay_drops_a_received_reject_it_cannot_route"
+    "crates/bacnet-network/src/router/reject_tests.rs::{relay_drops_a_received_reject_it_cannot_route,a_reject_for_another_node_or_a_denied_one_skips_the_routers_consumer}"
    ],
    "benchmarks": [
     "benchmarks/src/bin/bacnet_router.rs"
@@ -837,7 +838,8 @@
    "public_claims": [
     "docs/architecture.md#multi-network-routing router model",
     "docs/rust-api.md#bacnet-network over-long DADR/SADR handling (#1141)",
-    "docs/rust-api.md#bacnet-network reject addressing and relay (#1158)"
+    "docs/rust-api.md#bacnet-network reject addressing and relay (#1158)",
+    "docs/rust-api.md#bacnet-network rejects addressed to the router and its control receiver (#1174, #1175)"
    ],
    "notes": [
     "Needs in-memory or Docker multi-network conformance evidence.",
@@ -848,7 +850,10 @@
     "For reason 6, decode_npdu reports the SNET/SADR behind an over-long DADR. When the SADR is the over-long field, or nothing usable follows the DADR, the originator cannot be addressed, and the reject falls back to a local unicast to the link sender, the only node that can be told.",
     "A received reject is relayed by its DNET/DADR through the normal forwarding path (Clauses 6.5 and 6.6.3.5): stripped and unicast to the DADR when the DNET is directly connected, otherwise passed to the next hop with one hop spent.",
     "One with no DNET, the global DNET, the arrival network or an unrouted DNET stops at this router, and nothing answers a reject. Before #1158 the relay took the received reject's SNET/SADR for the originator.",
-    "Loopback tests compare every reject byte for byte, relayed and local, for each call site that originates one, plus the reason-6 fallback, the relay, and a two-router chain that carries a reject from the far router back to the device."
+    "Loopback tests compare every reject byte for byte, relayed and local, for each call site that originates one, plus the reason-6 fallback, the relay, and a two-router chain that carries a reject from the far router back to the device.",
+    "#1174: a refused NPDU whose SNET is the arrival port's own network gets its reject as a local unicast to the SADR, with no DNET (Clause 6.5.4). A non-router would discard it with a DNET (Clause 6.5.2.1).",
+    "#1175: a received reject with no DNET, or whose DADR is the router's own MAC on the port for its DNET, is addressed to the router. It updates the table, is not relayed, and reaches the receiver from BACnetRouter::start_with_network_control_receiver as a ReceivedNetworkControl.",
+    "No in-tree setup needs that receiver (#1175): a client or server attached through a LoopbackTransport port runs its own NetworkLayer, so rejects for its requests reach its own control receiver."
    ]
   },
   {
