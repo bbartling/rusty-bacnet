@@ -119,27 +119,10 @@ fn channel_member_writes_keep_execution_delay_the_same_size() {
 }
 
 #[test]
-fn channel_member_writes_refuse_other_devices_bad_indexes_and_oversize() {
+fn channel_member_writes_refuse_bad_indexes_and_oversize_and_take_other_devices() {
     let mut channel = configured();
     let list = P::LIST_OF_OBJECT_PROPERTY_REFERENCES;
     let before = read(&channel, list);
-    let remote = BACnetDeviceObjectPropertyReference {
-        device_identifier: Some(device(9)),
-        ..member(1)
-    };
-    for (index, value) in [
-        (None, encoded(&[member(1), remote.clone()])),
-        (Some(1), encoded(std::slice::from_ref(&remote))),
-    ] {
-        assert_property_error(
-            channel.write_property(list, index, PropertyValue::ApplicationData(value), None),
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        );
-    }
-    assert_property_error(
-        channel.set_members(vec![remote]),
-        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-    );
     assert_property_error(
         channel.write_property(
             list,
@@ -298,7 +281,7 @@ fn channel_members_refuse_a_non_device_device_identifier() {
     let list = P::LIST_OF_OBJECT_PROPERTY_REFERENCES;
     let before = read(&channel, list);
     // Another object type in the device member is no Device (#1285), so it is
-    // out of range before the remote-device rule, even at the empty instance.
+    // out of range, even at the empty instance.
     for not_a_device in [
         oid(ObjectType::ANALOG_VALUE, 9),
         oid(ObjectType::CHANNEL, ObjectIdentifier::WILDCARD_INSTANCE),
@@ -328,4 +311,27 @@ fn channel_members_refuse_a_non_device_device_identifier() {
         ..member(1)
     };
     channel.set_members(vec![member(1), empty]).unwrap();
+
+    // A member in another device is taken (Clause 12.53.11, #1264), whole,
+    // by index and through the setter.
+    let remote = BACnetDeviceObjectPropertyReference {
+        device_identifier: Some(device(9)),
+        ..member(1)
+    };
+    let whole = encoded(&[member(1), remote.clone()]);
+    channel
+        .write_property(list, None, PropertyValue::ApplicationData(whole), None)
+        .unwrap();
+    let one = encoded(std::slice::from_ref(&remote));
+    channel
+        .write_property(list, Some(1), PropertyValue::ApplicationData(one), None)
+        .unwrap();
+    assert_eq!(
+        read(&channel, list),
+        PropertyValue::List(vec![
+            PropertyValue::ApplicationData(encoded(std::slice::from_ref(&remote))),
+            PropertyValue::ApplicationData(encoded(std::slice::from_ref(&remote))),
+        ])
+    );
+    channel.set_members(vec![remote]).unwrap();
 }
