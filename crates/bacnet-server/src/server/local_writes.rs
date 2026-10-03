@@ -519,6 +519,16 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             LocalWrite::Property { property, .. } if property == PropertyIdentifier::OBJECT_NAME
         );
         let life_safety = crate::life_safety_cov::is_life_safety_object(*oid);
+        // A write the object saves first saves here, without the guard.
+        let durable = match write {
+            LocalWrite::Property {
+                property,
+                array_index,
+                ..
+            } => super::durable_writes::DurableTarget::local(*oid, property, array_index, &value),
+            _ => Vec::new(),
+        };
+        let staged = super::durable_writes::stage(self.db, durable).await;
         let (exact_changes, staging_plans, mut command_runs, schedule_cov) = {
             let mut db = self.db.write().await;
             let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_oid(&db, *oid);
@@ -677,6 +687,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                     ),
                 }
             });
+            staged.release(&mut db);
             if let Err(error) = result {
                 if let Some(audit) = &mut audit {
                     audit.failed(&mut db, &error);

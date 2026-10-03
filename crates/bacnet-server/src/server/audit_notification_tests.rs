@@ -572,3 +572,6 @@ fn sc_builder_exposes_the_same_explicit_receiver_policy() {
 
 #[path = "audit_notification_receipt_tests.rs"]
 mod receipt_tests;
+
+#[path = "audit_notification_staging_tests.rs"]
+mod staging_tests;

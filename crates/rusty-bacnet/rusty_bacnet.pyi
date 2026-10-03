@@ -2650,12 +2650,13 @@ class BACnetServer:
         """Add a Notification Forwarder (Clause 12.51) that sends the event
         notifications this server receives on to its Recipient_List and
         Subscribed_Recipients. ``process_identifier_filter=None`` forwards every
-        process identifier. With ``storage_path``, Subscribed_Recipients is kept
-        in that file across restarts.
+        process identifier. With ``storage_path``, Recipient_List and
+        Subscribed_Recipients are kept in that file across restarts.
 
         ``recipients`` seeds Recipient_List in order; more than 32 destinations,
         or an address MAC past 18 octets, raises BacnetProtocolError, as a
-        client's write would be refused. ``port_filter`` serves Port_Filter as
+        client's write would be refused. With ``storage_path``, a
+        Recipient_List a client wrote, once saved, wins over the seed. ``port_filter`` serves Port_Filter as
         ``(port_id, enabled)`` pairs; the server receives through Port_ID 0.
         Without it Port_Filter is absent."""
     def add_trend_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
