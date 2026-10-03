@@ -26,6 +26,9 @@ use crate::event_enrollment::{CommittedEventEnrollmentDelivery, CommittedEventEn
 mod recipient_lookup;
 use recipient_lookup::matched_recipients_or_log;
 
+use super::event_suppression::EventSuppression;
+use super::notification_transactions::NotificationReserveError;
+
 /// Read one exact committed transition coordinate through the object contract.
 ///
 /// Required properties are projected while the caller still owns the database
@@ -255,6 +258,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             learned_routers,
             notification_transactions,
             device_bindings,
+            suppressions,
             retry_timeout_ms,
             local_apdu_capacity,
         } = ctx;
@@ -355,6 +359,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 ),
                 notification_class,
                 transition,
+                suppressions,
             ) else {
                 return;
             };
@@ -461,7 +466,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
                 ) {
                     Ok(reservation) => reservation,
+                    // Stopping closes the adapter, which is not a delivery
+                    // failure, so it is not counted.
+                    Err(NotificationReserveError::Closed) => {
+                        debug!("Server stopping; confirmed EventNotification not sent");
+                        continue;
+                    }
                     Err(error) => {
+                        suppressions.record(EventSuppression::ConfirmedNoInvokeId);
                         warn!(%error, "No free invoke ID for confirmed EventNotification");
                         continue;
                     }
@@ -487,6 +499,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
                 let network = Arc::clone(network);
                 let learned_routers = Arc::clone(learned_routers);
+                let suppressions = Arc::clone(suppressions);
                 let timeout = Duration::from_millis(retry_timeout_ms);
                 let apdu_retries = DEFAULT_APDU_RETRIES;
                 notification_transactions.spawn(async move {
@@ -577,12 +590,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             debug!(invoke_id = id, "EventNotification acknowledged");
                         }
                         NotificationWorkerResult::Error => {
+                            suppressions.record(EventSuppression::ConfirmedRejected);
                             warn!(invoke_id = id, "EventNotification rejected by recipient");
                         }
-                        NotificationWorkerResult::Exhausted => warn!(
-                            invoke_id = id,
-                            "EventNotification failed after {} retries", apdu_retries
-                        ),
+                        NotificationWorkerResult::Exhausted => {
+                            suppressions.record(EventSuppression::ConfirmedUnanswered);
+                            warn!(
+                                invoke_id = id,
+                                "EventNotification failed after {} retries", apdu_retries
+                            );
+                        }
                         NotificationWorkerResult::Closed => {}
                     }
                 });

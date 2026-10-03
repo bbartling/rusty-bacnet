@@ -21,6 +21,8 @@ use bacnet_types::enums::{EventState, EventType};
 use bytes::Bytes;
 use std::borrow::Cow;
 
+mod suppression_counters;
+
 /// One recorded unicast send: destination MAC and NPDU bytes.
 type UnicastFrame = (Vec<u8>, Bytes);
 
@@ -103,12 +105,24 @@ async fn distribute_from_database(db: ObjectDatabase) -> (Vec<Bytes>, Vec<Unicas
 }
 
 pub(super) async fn distribute_from_database_with_bindings(
-    mut db: ObjectDatabase,
+    db: ObjectDatabase,
     device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
 ) -> (Vec<Bytes>, Vec<UnicastFrame>) {
+    let (broadcasts, unicasts, _) = distribute_counted(db, device_bindings, 0).await;
+    (broadcasts, unicasts)
+}
+
+/// [`distribute_from_database_with_bindings`] under the given DCC state, also
+/// returning the undelivered-notification counters the transition moved.
+async fn distribute_counted(
+    mut db: ObjectDatabase,
+    device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
+    comm_state: u8,
+) -> (Vec<Bytes>, Vec<UnicastFrame>, EventNotificationCounters) {
     let (transport, sent) = routing_transport();
     let network = Arc::new(NetworkLayer::new(transport));
-    let comm_state = Arc::new(AtomicU8::new(0));
+    let comm_state = Arc::new(AtomicU8::new(comm_state));
+    let suppressions = Arc::default();
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
 
     db.add(Box::new(
@@ -141,6 +155,7 @@ pub(super) async fn distribute_from_database_with_bindings(
             learned_routers: &learned_routers,
             notification_transactions: &notifications,
             device_bindings: &device_bindings,
+            suppressions: &suppressions,
             retry_timeout_ms: 1000,
             local_apdu_capacity: 1476,
         },
@@ -176,7 +191,7 @@ pub(super) async fn distribute_from_database_with_bindings(
         .into_iter()
         .map(|frame| (frame.mac.to_vec(), frame.npdu))
         .collect();
-    (broadcasts, unicasts)
+    (broadcasts, unicasts, suppressions.snapshot())
 }
 
 enum TestRecipientList {
@@ -263,6 +278,11 @@ impl BACnetObject for TestNotificationClass {
 }
 
 async fn distribute_non_matched_case(case: &str) -> (Vec<Bytes>, Vec<UnicastFrame>) {
+    distribute_from_database(non_matched_database(case)).await
+}
+
+/// A database whose Notification Class 0 lookup gives the named outcome.
+fn non_matched_database(case: &str) -> ObjectDatabase {
     let mut db = clocked_test_database();
     match case {
         "missing-class" => {}
@@ -294,7 +314,7 @@ async fn distribute_non_matched_case(case: &str) -> (Vec<Bytes>, Vec<UnicastFram
         }
         _ => unreachable!("test case is fixed"),
     }
-    distribute_from_database(db).await
+    db
 }
 
 #[tokio::test]

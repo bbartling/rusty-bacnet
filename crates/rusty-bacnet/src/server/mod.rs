@@ -167,6 +167,7 @@ mod server_methods {
     mod cov_counters;
     mod cov_policy;
     mod dcc_outcomes;
+    mod event_notification_counters;
     mod file_configuration;
     mod life_safety_methods;
     mod lifecycle;

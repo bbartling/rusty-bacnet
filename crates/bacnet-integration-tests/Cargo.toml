@@ -11,7 +11,6 @@ ipv6 = ["bacnet-transport/ipv6"]
 ethernet = ["bacnet-transport/ethernet"]
 
 [dev-dependencies]
-syn = { version = "2", features = ["full"] }
 bacnet-types.workspace = true
 bacnet-encoding.workspace = true
 bacnet-services.workspace = true

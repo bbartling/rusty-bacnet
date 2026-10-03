@@ -4,6 +4,7 @@ use bacnet_objects::schedule::{
 };
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{BACnetCalendarEntry, BACnetObjectPropertyReference};
+use bacnet_types::enums::Reliability;
 use bacnet_types::primitives::Time;
 
 #[test]

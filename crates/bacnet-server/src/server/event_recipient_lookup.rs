@@ -3,12 +3,19 @@ use bacnet_objects::notification_class::{RecipientLookupOutcome, MAX_RECIPIENT_L
 use bacnet_types::constructed::BACnetRecipient;
 use tracing::{debug, warn};
 
-/// Log a bounded lookup diagnostic and expose only successful selections.
+use super::super::event_suppression::{EventSuppression, EventSuppressions};
+
+/// Log a bounded lookup diagnostic, count an outcome that fails closed, and
+/// expose only successful selections.
 pub(super) fn matched_recipients_or_log(
     outcome: RecipientLookupOutcome,
     notification_class: u32,
     transition: EventTransition,
+    suppressions: &EventSuppressions,
 ) -> Option<Vec<(BACnetRecipient, u32, bool)>> {
+    if let Some(suppression) = EventSuppression::from_lookup(&outcome) {
+        suppressions.record(suppression);
+    }
     match outcome {
         RecipientLookupOutcome::NotificationClassMissing => {
             warn!(
