@@ -1,6 +1,7 @@
 //! SubscribeCOVPropertyMultiple and COVNotificationMultiple services
 //! per ASHRAE 135-2020 Clauses 13.16–13.18.
 
+use bacnet_encoding::constructed::{decode_property_reference, encode_property_reference};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 #[cfg(test)]
@@ -10,7 +11,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::{decode_context, decode_context_u32, PropertyReference, MAX_DECODED_ITEMS};
+use crate::common::{decode_context, decode_context_u32, MAX_DECODED_ITEMS};
+use bacnet_types::constructed::PropertyReference;
 
 #[path = "cov_multiple_helpers.rs"]
 mod helpers;
@@ -135,7 +137,7 @@ impl SubscribeCOVPropertyMultipleRequest {
             for cov_ref in &spec.list_of_cov_references {
                 // [0] monitoredProperty (BACnetPropertyReference)
                 tags::encode_opening_tag(buf, 0);
-                cov_ref.monitored_property.encode(buf);
+                encode_property_reference(buf, &cov_ref.monitored_property);
                 tags::encode_closing_tag(buf, 0);
                 // [1] covIncrement OPTIONAL
                 if let Some(inc) = cov_ref.cov_increment {
@@ -275,7 +277,7 @@ impl SubscribeCOVPropertyMultipleRequest {
                         "SubscribeCOVPropertyMultiple expected opening tag 0 for property ref",
                     ));
                 }
-                let (prop_ref, new_off) = PropertyReference::decode(data, tag_end)?;
+                let (prop_ref, new_off) = decode_property_reference(data, tag_end)?;
                 validate_decoded_property_identifier(
                     prop_ref.property_identifier,
                     "SubscribeCOVPropertyMultiple monitored property",

@@ -17,11 +17,12 @@ use super::mutation_tests::{oid, Fixture};
 use super::*;
 use crate::mutation::MutationPolicy;
 use bacnet_encoding::npdu::decode_npdu;
-use bacnet_services::common::{BACnetPropertyValue, PropertyReference};
+use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
 use bacnet_services::object_mgmt::{CreateObjectRequest, ObjectSpecifier};
+use bacnet_types::constructed::PropertyReference;
 
 const CREATE: ConfirmedServiceChoice = ConfirmedServiceChoice::CREATE_OBJECT;
 const SCPM: ConfirmedServiceChoice = ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE;

@@ -9,11 +9,11 @@ use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::primitives::decode_application_value;
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::{ReadAccessSpecification, ReadResultElement};
+use bacnet_services::rpm::ReadResultElement;
 use bacnet_services::who_is::WhoIsRequest;
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_transport::bvll::encode_bip_mac;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, UnconfirmedServiceChoice};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;

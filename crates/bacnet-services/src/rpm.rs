@@ -1,29 +1,21 @@
 //! ReadPropertyMultiple service per ASHRAE 135-2020 Clause 15.7.
 
+use bacnet_encoding::constructed::{
+    decode_read_access_specification, encode_read_access_specification,
+};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
+use bacnet_types::constructed::ReadAccessSpecification;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::{
-    extract_property_value, PropertyReference, PropertyValueBoundary, MAX_DECODED_ITEMS,
-};
+use crate::common::{extract_property_value, PropertyValueBoundary, MAX_DECODED_ITEMS};
 
 // ---------------------------------------------------------------------------
 // ReadPropertyMultipleRequest
 // ---------------------------------------------------------------------------
-
-/// A single object + list of property references.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReadAccessSpecification {
-    /// Object to read from.
-    pub object_identifier: ObjectIdentifier,
-    /// Properties to read from that object; may name the special ALL, REQUIRED or OPTIONAL
-    /// selectors.
-    pub list_of_property_references: Vec<PropertyReference>,
-}
 
 /// ReadPropertyMultiple-Request service parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,14 +38,7 @@ impl ReadPropertyMultipleRequest {
             ));
         }
         for spec in &self.list_of_read_access_specs {
-            // [0] object-identifier
-            primitives::encode_ctx_object_id(buf, 0, &spec.object_identifier);
-            // [1] list-of-property-references (opening/closing)
-            tags::encode_opening_tag(buf, 1);
-            for prop_ref in &spec.list_of_property_references {
-                prop_ref.encode(buf);
-            }
-            tags::encode_closing_tag(buf, 1);
+            encode_read_access_specification(buf, spec);
         }
         Ok(())
     }
@@ -71,55 +56,9 @@ impl ReadPropertyMultipleRequest {
                 ));
             }
 
-            // [0] object-identifier
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            if !tag.is_context(0) {
-                return Err(Error::decoding(
-                    offset,
-                    "RPM request expected context tag 0",
-                ));
-            }
-            let end = pos + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(pos, "RPM request truncated at object-id"));
-            }
-            let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-            offset = end;
-
-            // [1] list-of-property-references (opening tag 1)
-            let (tag, tag_end) = tags::decode_tag(data, offset)?;
-            if !tag.is_opening_tag(1) {
-                return Err(Error::decoding(
-                    offset,
-                    "RPM request expected opening tag 1",
-                ));
-            }
-            offset = tag_end;
-
-            let mut prop_refs = Vec::new();
-            loop {
-                if offset >= data.len() {
-                    return Err(Error::decoding(offset, "RPM request missing closing tag 1"));
-                }
-                if prop_refs.len() >= MAX_DECODED_ITEMS {
-                    return Err(Error::decoding(offset, "RPM property refs exceeds max"));
-                }
-                // Check for closing tag 1
-                let (tag, tag_end) = tags::decode_tag(data, offset)?;
-                if tag.is_closing_tag(1) {
-                    offset = tag_end;
-                    break;
-                }
-                // Decode property reference starting from current offset (not tag_end)
-                let (pr, new_offset) = PropertyReference::decode(data, offset)?;
-                prop_refs.push(pr);
-                offset = new_offset;
-            }
-
-            specs.push(ReadAccessSpecification {
-                object_identifier,
-                list_of_property_references: prop_refs,
-            });
+            let (spec, next) = decode_read_access_specification(data, offset)?;
+            specs.push(spec);
+            offset = next;
         }
 
         Ok(Self {
@@ -163,6 +102,16 @@ pub struct ReadPropertyMultipleACK {
 }
 
 impl ReadAccessResult {
+    /// Append the whole result: the object identifier in context tag `[0]`,
+    /// then each element between an opening and a closing tag `[1]`.
+    pub fn encode(&self, buf: &mut BytesMut) {
+        Self::encode_header(buf, &self.object_identifier);
+        for elem in &self.list_of_results {
+            elem.encode(buf);
+        }
+        Self::encode_footer(buf);
+    }
+
     /// Encode an object's identifier and opening list-of-results tag.
     pub fn encode_header(buf: &mut BytesMut, object_identifier: &ObjectIdentifier) {
         primitives::encode_ctx_object_id(buf, 0, object_identifier);
@@ -199,11 +148,7 @@ impl ReadPropertyMultipleACK {
     /// Encode the acknowledgment parameters into `buf`.
     pub fn encode(&self, buf: &mut BytesMut) {
         for result in &self.list_of_read_access_results {
-            ReadAccessResult::encode_header(buf, &result.object_identifier);
-            for elem in &result.list_of_results {
-                elem.encode(buf);
-            }
-            ReadAccessResult::encode_footer(buf);
+            result.encode(buf);
         }
     }
 

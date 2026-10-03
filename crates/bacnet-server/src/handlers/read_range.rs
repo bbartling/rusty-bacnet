@@ -254,6 +254,8 @@ struct PreparedReadRange {
 /// whole array also reads as a list, and a constructed single value can read
 /// as framed bytes.
 fn read_range_items(
+    db: &ObjectDatabase,
+    view: Option<&DeviceReadContext<'_>>,
     object: &dyn BACnetObject,
     request: &ReadRangeRequest,
 ) -> Result<Vec<PropertyValue>, Error> {
@@ -267,7 +269,7 @@ fn read_range_items(
             code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
         });
     }
-    let value = object.read_property(property, index)?;
+    let value = group_present_value::read_served_property(db, view, object, property, index)?;
     // An indexed array element is never a list: 135-2020 defines no
     // BACnetARRAY of BACnetLIST property.
     if index.is_some() || !object.is_list_property(property) {
@@ -294,7 +296,7 @@ fn prepare_read_range(
     })?;
     let served = view.map(|view| view.object(stored));
     let object: &dyn BACnetObject = served.as_ref().map_or(stored, |served| served);
-    let items = read_range_items(object, &request)?;
+    let items = read_range_items(db, view, object, &request)?;
 
     let mut resident_identities = None;
     let (selection, first_sequence_number) = match &request.range {

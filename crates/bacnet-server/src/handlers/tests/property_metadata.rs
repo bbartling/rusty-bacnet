@@ -27,8 +27,8 @@ use bacnet_objects::audit::AuditReporterObject;
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
 use bacnet_objects::value_types::TimeValueObject;
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleACK};
+use bacnet_services::rpm::ReadPropertyMultipleACK;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
 fn make_metadata_db() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
