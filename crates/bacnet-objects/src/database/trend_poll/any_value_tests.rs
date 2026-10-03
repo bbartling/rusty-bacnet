@@ -115,12 +115,14 @@ fn a_polled_value_too_long_to_page_logs_value_too_long() {
     ))
     .unwrap();
     let mut object = trend(u32::MAX, 16);
-    object.set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
-        object_identifier: target(),
-        property_identifier: P::OBJECT_NAME.to_raw(),
-        property_array_index: None,
-        device_identifier: None,
-    }));
+    object
+        .set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
+            object_identifier: target(),
+            property_identifier: P::OBJECT_NAME.to_raw(),
+            property_array_index: None,
+            device_identifier: None,
+        }))
+        .unwrap();
     db.add(Box::new(object)).unwrap();
     db.poll_trend_logs();
     assert_eq!(count(&db, oid), 1);
@@ -167,12 +169,14 @@ fn a_character_string_and_a_double_are_logged_and_read_back_exactly() {
         ),
     ] {
         let mut object = trend(u32::MAX, 16);
-        object.set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
-            object_identifier: target,
-            property_identifier: property.to_raw(),
-            property_array_index: None,
-            device_identifier: None,
-        }));
+        object
+            .set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
+                object_identifier: target,
+                property_identifier: property.to_raw(),
+                property_array_index: None,
+                device_identifier: None,
+            }))
+            .unwrap();
         db.add(Box::new(object)).unwrap();
         db.poll_trend_logs();
 

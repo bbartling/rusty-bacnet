@@ -361,7 +361,8 @@
     "The rewrite is the one the Schedule and Staging rows use (BACNET-12-SCHEDULE-WRITES, BACNET-12-STAGING-TARGET-REFERENCES), from the table in local_references.rs. The service decode hands the reference over as one chunk per context-tagged member, so the server joins the chunks; when they are exactly one reference whose Device member names the local Device (selected under the write's database guard, never the wildcard instance), the object gets that reference without its Device member, and anything else reaches the object as written.",
     "Local choice: a reference naming another device is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the code the Schedule, Staging, Event Enrollment, Timer, Trend Log Multiple and Life Safety clauses give for the same restriction; 12.5.13 names none, and the encoding is valid for this production, so INVALID_DATA_ENCODING no longer fit.",
     "AveragingObject written directly still refuses every Device member, since it cannot tell which Device holds it. The property holds one reference, so array indexes and the list services do not apply; the mixed case is a value with two references, refused whole.",
-    "The object stores only local references, so the server's sampler (#1144) reads only local properties; the WriteProperty wire test has it sample a reference written with this device's identifier. Audit for #1153, no change needed: Event Enrollment Object_Property_Reference (12.12.8), Log_DeviceObjectProperty on a Trend Log (12.25.8) or a Trend Log Multiple (12.30.11), Life Safety Point and Zone Member_Of and Zone_Members (12.15.29, 12.16.26, 12.16.27) and Global Group Group_Members (12.50.5) are read-only here, and a writable Group_Members would have to accept members in other devices under 12.50.5 in any case; Timer List_Of_Object_Property_References (12.57.21) and the Channel object are not implemented. Not covered: sampling a property in another device (refused)."
+    "The object stores only local references, so the server's sampler (#1144) reads only local properties; the WriteProperty wire test has it sample a reference written with this device's identifier. Audit for #1153, no change needed: Event Enrollment Object_Property_Reference (12.12.8), Log_DeviceObjectProperty on a Trend Log (12.25.8) or a Trend Log Multiple (12.30.11), Life Safety Point and Zone Member_Of and Zone_Members (12.15.29, 12.16.26, 12.16.27) and Global Group Group_Members (12.50.5) are read-only here, and a writable Group_Members would have to accept members in other devices under 12.50.5 in any case; Timer List_Of_Object_Property_References (12.57.21) and the Channel object are not implemented. Not covered: sampling a property in another device (refused).",
+    "Trend Log and Trend Log Multiple Log_DeviceObjectProperty writes take the same local-Device rewrite; Event Enrollment Object_Property_Reference and the Life Safety member lists stay read-only."
    ]
   },
   {
@@ -1245,7 +1246,8 @@
      "A reference with an array index reads that element behind the ReadProperty gate the Averaging sampler shares: an index on a non-array logs PROPERTY / PROPERTY_IS_NOT_AN_ARRAY, one past the end logs INVALID_ARRAY_INDEX. An index that isn't Unsigned leaves the log unpolled (#1205).",
      "Only POLLED logs with a nonzero Log_Interval and at least one member are polled. Trend Log Multiple triggered acquisition, Align_Intervals, Interval_Offset and intrinsic reporting are not modeled.",
      "Both pollers log a value with no alternative of its own (CharacterString, Double, Date, ObjectIdentifier, OctetString, a whole array, a framed constructed value) as any-value holding the encoding a ReadProperty of it carries. A BitString logs as bitstring-value, and only a NULL value logs as null-value (#1236).",
-     "An any-value holds at most ANY_VALUE_MAX_OCTETS (256) octets; a longer value logs PROPERTY / VALUE_TOO_LONG and one no record could carry logs SERVICES / OTHER, so the log never refuses a polled record."
+     "An any-value holds at most ANY_VALUE_MAX_OCTETS (256) octets; a longer value logs PROPERTY / VALUE_TOO_LONG and one no record could carry logs SERVICES / OTHER, so the log never refuses a polled record.",
+     "A client's change to Log_DeviceObjectProperty purges the log and records BUFFER_PURGED, as a zero Record_Count write does; the poller then samples the references written."
     ]
   },
   {
@@ -3761,7 +3763,6 @@
     "crates/bacnet-objects/src/reference/tests.rs::empty_setpoint_frame_clears_only_on_the_setpoint_arm",
     "crates/bacnet-objects/src/reference/tests.rs::legacy_list_accepts_unsigned_or_enumerated_property_member",
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_empty_setpoint_frame_clears_reference",
-    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_accepts_exact_shapes_and_both_member_typings",
     "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_accepts_the_framed_local_form",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::setpoint_reference_empty_frame_and_null_both_clear_over_the_wire",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::averaging_object_property_reference_over_the_wire",
@@ -3783,7 +3784,8 @@
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_device_qualified_reference_rejected_and_preserves",
     "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_write_malformed_framed_input_reference_rejected",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_write_rejections_over_the_wire_preserve_state",
-    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_rejects_bad_shapes_and_preserves_state"
+    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_rejects_bad_shapes_and_preserves_state",
+    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_refuses_the_flat_list_forms"
    ],
    "benchmarks": [],
    "public_claims": [],
@@ -3791,7 +3793,61 @@
     "Split child of BACNET-12-OBJECT-MODEL (#182). The four arms share one objects-layer helper (reference.rs) so the local List form (in-process compatibility) and the framed ApplicationData form (network) converge on the same strict Clause 21 decode; error pairings follow Clause 15.9.1.3: wrong value datatype is PROPERTY / INVALID_DATA_TYPE, malformed framing / device qualification / unknown trailing context tag is PROPERTY / INVALID_DATA_ENCODING (on the Averaging arm, whose production allows a Device member, that member is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED since #1153), and a mixed flat+framed element list is refused rather than reinterpreted.",
     "Null clears, and read arms carry the reference's optional array index as a third list element. Setpoint_Reference additionally accepts the BACnetSetpointReference opening/closing tag [0] frame (unambiguous against the bare form's leading primitive [0]) while refusing unbalanced frames.",
     "WritePropertyMultiple ordered prefix commit is proven for a reference+setpoint request failing its second property. Review round: the adversary lane's blocker on the Averaging arm (silent member drop / member retype / as-u32 truncation, newly network-reachable) is fixed by routing it through the same shared decode; the runtime+dataflow empty-frame finding is fixed by the Option-returning decode_setpoint_reference; the dataflow PICS incoherence is fixed by exact is_writable_property overrides on Pulse Converter (PRESENT_VALUE / SCALE_FACTOR / ADJUST_VALUE / INPUT_REFERENCE + DESCRIPTION / OUT_OF_SERVICE / COV_INCREMENT) and Averaging (OBJECT_PROPERTY_REFERENCE + DESCRIPTION / OUT_OF_SERVICE), which also stop advertising OBJECT_NAME on both types (no arm routes it - a truth-toward-arms PICS correction).",
-    "Limitation: reads still emit the flat application-tagged list form rather than re-framing context tags - the encode side is unchanged by this tranche; interop evidence against a second implementation remains open."
+    "Limitation: the Loop and Pulse Converter reads serve the flat application-tagged list form, not the context-tagged members; interop evidence against a second implementation is open.",
+    "Averaging Object_Property_Reference reads as the context-tagged BACnetDeviceObjectPropertyReference with no Device member; under that frame the flat list is INVALID_DATA_TYPE and a Device member naming no Device VALUE_OUT_OF_RANGE."
+   ]
+  },
+  {
+   "id": "BACNET-12-DEVICE-REFERENCE-PROPERTIES",
+   "standard_anchor": "Clauses 12.5.13, 12.12.8, 12.15.29, 12.16.26, 12.16.27, 12.25.8 and 12.30.11; Clause 21",
+   "priority": "P1",
+   "summary": "Averaging, Event Enrollment, Trend Log, Trend Log Multiple and Life Safety reference properties read, and take writes where writable, in their context-tagged Clause 21 encodings.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/device_reference.rs",
+    "crates/bacnet-objects/src/trend/references.rs",
+    "crates/bacnet-objects/src/life_safety/membership.rs",
+    "crates/bacnet-objects/src/database/trend_poll.rs",
+    "crates/bacnet-server/src/local_references.rs",
+    "crates/bacnet-server/src/event_enrollment/reference.rs::decode_reference_value"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/device_reference_tests.rs::property_reference_value_is_the_context_tagged_members",
+    "crates/bacnet-objects/src/device_reference_tests.rs::object_reference_list_is_one_encoding_per_element",
+    "crates/bacnet-objects/src/device_reference_tests.rs::decode_accepts_raw_bytes_and_the_read_shape",
+    "crates/bacnet-objects/src/event_enrollment/tests/enrollment.rs::read_object_property_reference_serves_every_member",
+    "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_write_purges_on_change_and_needs_a_clock_to",
+    "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_multiple_serves_one_encoding_per_element",
+    "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_multiple_indexed_write_checks_only_the_element_written",
+    "crates/bacnet-objects/src/life_safety/membership_tests.rs::point_member_of_keeps_a_remote_zone_and_lists_each_zone_once",
+    "crates/bacnet-server/src/handlers/tests/device_reference_reads.rs::event_enrollment_object_property_reference_is_served_framed",
+    "crates/bacnet-server/src/handlers/tests/device_reference_reads.rs::averaging_object_property_reference_is_served_framed",
+    "crates/bacnet-server/src/handlers/tests/device_reference_reads.rs::life_safety_member_lists_are_served_framed",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_reference_reads_and_writes_in_the_clause_21_form",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_multiple_reference_array_reads_and_writes",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::pollers_sample_the_references_a_client_wrote"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/device_reference_tests.rs::decode_refuses_other_shapes_with_the_matching_error",
+    "crates/bacnet-objects/src/device_reference_tests.rs::device_member_must_be_a_device",
+    "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_setter_refuses_a_device_member_that_is_no_device",
+    "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_multiple_setter_bounds_the_array",
+    "crates/bacnet-objects/src/life_safety/membership_tests.rs::membership_refuses_other_object_types_and_device_members",
+    "crates/bacnet-objects/src/life_safety/membership_tests.rs::member_lists_stay_read_only_over_the_network",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_reference_write_refusals_change_nothing",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_multiple_reference_write_refusals_change_nothing"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#logging--trending-5 Log_DeviceObjectProperty",
+    "docs/rust-api.md#schedule--notification-6 Event Enrollment Object_Property_Reference"
+   ],
+   "notes": [
+    "An unset Averaging, Event Enrollment or Trend Log reference reads Null, since the production has no empty form.",
+    "Writes decode with the shared codec: another datatype is INVALID_DATA_TYPE, a malformed or second reference INVALID_DATA_ENCODING, and a Device member naming no Device VALUE_OUT_OF_RANGE.",
+    "Averaging and both trend objects keep their references inside this device: the server drops a Device member naming its own Device, and any other is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.",
+    "A Trend Log Multiple holds at most 64 references and refuses an index 0 write; an element naming instance 4194303 is empty. A client's change to either trend reference purges the log.",
+    "Event Enrollment Object_Property_Reference and the Life Safety member lists are read-only over the network; the application sets them."
    ]
   },
   {

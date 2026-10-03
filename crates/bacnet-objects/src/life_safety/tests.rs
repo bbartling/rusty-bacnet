@@ -386,17 +386,18 @@ fn point_add_member_and_read() {
     let mut pt = LifeSafetyPointObject::new(1, "LSP-1").unwrap();
     let zone1 = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 1).unwrap();
     let zone2 = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_ZONE, 2).unwrap();
-    pt.add_member(zone1);
-    pt.add_member(zone2);
+    pt.add_member(zone1).unwrap();
+    pt.add_member(zone2).unwrap();
 
     let val = pt
         .read_property(PropertyIdentifier::MEMBER_OF, None)
         .unwrap();
+    // One BACnetDeviceObjectReference per zone, [1] alone for a local one.
     assert_eq!(
         val,
         PropertyValue::List(vec![
-            PropertyValue::ObjectIdentifier(zone1),
-            PropertyValue::ObjectIdentifier(zone2),
+            PropertyValue::ApplicationData(vec![0x1C, 0x05, 0x80, 0x00, 0x01]),
+            PropertyValue::ApplicationData(vec![0x1C, 0x05, 0x80, 0x00, 0x02]),
         ])
     );
 }
@@ -565,9 +566,9 @@ fn zone_add_zone_member_and_read() {
     let pt1 = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap();
     let pt2 = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 2).unwrap();
     let pt3 = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 3).unwrap();
-    z.add_zone_member(pt1);
-    z.add_zone_member(pt2);
-    z.add_zone_member(pt3);
+    z.add_zone_member(pt1).unwrap();
+    z.add_zone_member(pt2).unwrap();
+    z.add_zone_member(pt3).unwrap();
 
     let val = z
         .read_property(PropertyIdentifier::ZONE_MEMBERS, None)
@@ -575,9 +576,9 @@ fn zone_add_zone_member_and_read() {
     assert_eq!(
         val,
         PropertyValue::List(vec![
-            PropertyValue::ObjectIdentifier(pt1),
-            PropertyValue::ObjectIdentifier(pt2),
-            PropertyValue::ObjectIdentifier(pt3),
+            PropertyValue::ApplicationData(vec![0x1C, 0x05, 0x40, 0x00, 0x01]),
+            PropertyValue::ApplicationData(vec![0x1C, 0x05, 0x40, 0x00, 0x02]),
+            PropertyValue::ApplicationData(vec![0x1C, 0x05, 0x40, 0x00, 0x03]),
         ])
     );
 }
@@ -741,7 +742,7 @@ fn life_safety_property_metadata_drives_required_sets() {
     assert!(!point.is_createable());
     let zone = LifeSafetyZoneObject::new(1, "LSZ-1").unwrap();
     assert!(matches!(zone.property_metadata(), Cow::Borrowed(_)));
-    assert_eq!(zone.property_metadata().len(), 16);
+    assert_eq!(zone.property_metadata().len(), 17);
     assert_eq!(zone.required_properties().len(), 15);
     assert!(zone
         .required_properties()

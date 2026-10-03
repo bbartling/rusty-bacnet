@@ -11,9 +11,11 @@ use bacnet_types::enums::{
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
-use super::{multiple_metadata, reference_value};
+use super::multiple_metadata;
+use super::references::{self, MAX_LOG_DEVICE_OBJECT_PROPERTIES};
 use crate::clock::ClockReader;
 use crate::common::{self, read_property_list_property};
+use crate::device_reference;
 use crate::log_buffer::{
     log_buffer_read_denied, LogBufferRecords, LogRecordBuffer, LogRecordIdentity,
 };
@@ -72,9 +74,70 @@ impl TrendLogMultipleObject {
         self.lifecycle().try_add_ordinary(record).map(|_| ())
     }
 
-    /// Add a property reference to the monitored list.
-    pub fn add_property_reference(&mut self, reference: BACnetDeviceObjectPropertyReference) {
+    /// Append a reference to Log_DeviceObjectProperty as local configuration:
+    /// the log buffer is left as it is.
+    ///
+    /// A reference may name another device; the poller then logs a failure
+    /// in its slot of each record instead of reading it. A Device member that
+    /// isn't a Device identifier fails with PROPERTY / VALUE_OUT_OF_RANGE, and
+    /// a reference past [`MAX_LOG_DEVICE_OBJECT_PROPERTIES`] with RESOURCES /
+    /// NO_SPACE_TO_WRITE_PROPERTY; either leaves the array unchanged.
+    pub fn add_property_reference(
+        &mut self,
+        reference: BACnetDeviceObjectPropertyReference,
+    ) -> Result<(), Error> {
+        device_reference::check_device_member(reference.device_identifier)?;
+        if self.log_device_object_property.len() >= MAX_LOG_DEVICE_OBJECT_PROPERTIES {
+            return Err(references::no_space_error());
+        }
         self.log_device_object_property.push(reference);
+        Ok(())
+    }
+
+    /// A client's write of Log_DeviceObjectProperty (#1234).
+    ///
+    /// A whole write replaces the array, at any length up to
+    /// [`MAX_LOG_DEVICE_OBJECT_PROPERTIES`]; an indexed write replaces one
+    /// element, and index 0 (the size) is WRITE_ACCESS_DENIED. Each written
+    /// reference goes through [`references::check_written`], where an element
+    /// naming instance 4194303 is an empty one. A new value purges the buffer,
+    /// leaving a BUFFER_PURGED status record, which is the first of the two
+    /// actions Clause 12.30.11 offers; without a valid clock the purge fails
+    /// with DEVICE / OPERATIONAL_PROBLEM and nothing changes. Writing the value
+    /// already held changes nothing.
+    fn write_log_device_object_property(
+        &mut self,
+        array_index: Option<u32>,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        let mut candidate = self.log_device_object_property.clone();
+        match array_index {
+            None => {
+                let written = device_reference::decode_property_references(&value)?;
+                if written.len() > MAX_LOG_DEVICE_OBJECT_PROPERTIES {
+                    return Err(references::no_space_error());
+                }
+                for reference in &written {
+                    references::check_written(reference, true)?;
+                }
+                candidate = written;
+            }
+            Some(0) => return Err(common::write_access_denied_error()),
+            Some(index) => {
+                let slot = usize::try_from(index - 1)
+                    .ok()
+                    .and_then(|slot| candidate.get_mut(slot))
+                    .ok_or_else(common::invalid_array_index_error)?;
+                let reference = device_reference::decode_property_reference(&value)?;
+                references::check_written(&reference, true)?;
+                *slot = reference;
+            }
+        }
+        if candidate != self.log_device_object_property {
+            self.lifecycle().purge()?;
+            self.log_device_object_property = candidate;
+        }
+        Ok(())
     }
 
     /// Get the current buffer contents.
@@ -171,12 +234,14 @@ impl BACnetObject for TrendLogMultipleObject {
             p if p == PropertyIdentifier::LOGGING_TYPE => {
                 Ok(PropertyValue::Enumerated(self.logging_type))
             }
-            p if p == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => Ok(PropertyValue::List(
+            // A BACnetARRAY: one Clause 21 encoding per element (#1234).
+            p if p == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => common::read_array(
                 self.log_device_object_property
                     .iter()
-                    .map(reference_value)
+                    .map(device_reference::property_reference_value)
                     .collect(),
-            )),
+                array_index,
+            ),
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }
@@ -190,7 +255,7 @@ impl BACnetObject for TrendLogMultipleObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
@@ -231,13 +296,16 @@ impl BACnetObject for TrendLogMultipleObject {
                 code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
             });
         }
+        if property == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY {
+            return self.write_log_device_object_property(array_index, value);
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            _array_index,
+            array_index,
         ))
     }
 

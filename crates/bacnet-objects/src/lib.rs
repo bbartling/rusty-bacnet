@@ -14,6 +14,7 @@ pub mod command_source;
 pub(crate) mod common;
 pub mod database;
 pub mod device;
+pub(crate) mod device_reference;
 pub mod elevator;
 pub mod event;
 pub mod event_enrollment;

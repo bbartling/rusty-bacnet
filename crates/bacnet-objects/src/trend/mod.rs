@@ -22,8 +22,10 @@ use crate::traits::BACnetObject;
 mod metadata;
 mod multiple;
 mod multiple_metadata;
+mod references;
 
 pub use multiple::TrendLogMultipleObject;
+pub use references::MAX_LOG_DEVICE_OBJECT_PROPERTIES;
 
 /// BACnet TrendLog object.
 ///
@@ -89,12 +91,44 @@ impl TrendLogObject {
         self.description = desc.into();
     }
 
-    /// Set the log device object property reference.
+    /// Set Log_DeviceObjectProperty, the property the log samples, as local
+    /// configuration: the log buffer is left as it is.
+    ///
+    /// A reference may name another device; the poller then logs a failure
+    /// for each sample instead of reading it. A Device member that isn't a
+    /// Device identifier fails with PROPERTY / VALUE_OUT_OF_RANGE and changes
+    /// nothing.
     pub fn set_log_device_object_property(
         &mut self,
         reference: Option<BACnetDeviceObjectPropertyReference>,
-    ) {
+    ) -> Result<(), Error> {
+        if let Some(reference) = &reference {
+            crate::device_reference::check_device_member(reference.device_identifier)?;
+        }
         self.log_device_object_property = reference;
+        Ok(())
+    }
+
+    /// A client's write of Log_DeviceObjectProperty: one reference, or Null
+    /// for none (#1234). See [`references::check_written`] for the refusals.
+    /// A new value purges the buffer, leaving a BUFFER_PURGED status record
+    /// (Clause 12.25.8); without a valid clock the purge fails with DEVICE /
+    /// OPERATIONAL_PROBLEM and nothing changes. Writing the value already held
+    /// changes nothing.
+    fn write_log_device_object_property(&mut self, value: PropertyValue) -> Result<(), Error> {
+        let reference = match value {
+            PropertyValue::Null => None,
+            value => {
+                let reference = crate::device_reference::decode_property_reference(&value)?;
+                references::check_written(&reference, false)?;
+                Some(reference)
+            }
+        };
+        if reference != self.log_device_object_property {
+            self.lifecycle().purge()?;
+            self.log_device_object_property = reference;
+        }
+        Ok(())
     }
 
     /// Set the logging type (0=polled, 1=cov, 2=triggered).
@@ -176,10 +210,13 @@ impl BACnetObject for TrendLogObject {
             p if p == PropertyIdentifier::LOGGING_TYPE => {
                 Ok(PropertyValue::Enumerated(self.logging_type))
             }
-            p if p == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => Ok(self
-                .log_device_object_property
-                .as_ref()
-                .map_or(PropertyValue::Null, reference_value)),
+            // The Clause 21 encoding; Null while no reference is set.
+            p if p == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => {
+                Ok(self.log_device_object_property.as_ref().map_or(
+                    PropertyValue::Null,
+                    crate::device_reference::property_reference_value,
+                ))
+            }
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }
@@ -248,6 +285,9 @@ impl BACnetObject for TrendLogObject {
                 code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
             });
         }
+        if property == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY {
+            return self.write_log_device_object_property(value);
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -283,25 +323,11 @@ impl BACnetObject for TrendLogObject {
     }
 }
 
-/// One Log_DeviceObjectProperty reference as a read projects it: the object,
-/// property, array index and device, with Null for an absent member.
-fn reference_value(reference: &BACnetDeviceObjectPropertyReference) -> PropertyValue {
-    PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(reference.object_identifier),
-        PropertyValue::Unsigned(reference.property_identifier as u64),
-        reference
-            .property_array_index
-            .map_or(PropertyValue::Null, |index| {
-                PropertyValue::Unsigned(index as u64)
-            }),
-        reference
-            .device_identifier
-            .map_or(PropertyValue::Null, PropertyValue::ObjectIdentifier),
-    ])
-}
-
 #[cfg(test)]
 mod log_record_tests;
+
+#[cfg(test)]
+mod reference_tests;
 
 #[cfg(test)]
 mod tests;

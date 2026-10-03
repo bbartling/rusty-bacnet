@@ -122,12 +122,8 @@ fn averaging_window_average_has_no_drift_over_many_samples() {
 
 #[test]
 fn averaging_each_reset_route_discards_the_samples() {
-    let reference = PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(
-            ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap(),
-        ),
-        PropertyValue::Unsigned(P::PRESENT_VALUE.to_raw() as u64),
-    ]);
+    // [0] analog-input 3, [1] present-value.
+    let reference = PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x03, 0x19, 0x55]);
     // Footnote 1 of Table 12-5: a write of any of these rows resets the
     // window, even when it stores the value already there.
     for (property, value) in [

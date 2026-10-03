@@ -32,10 +32,7 @@ fn stale_state() -> EventEnrollmentEvalState {
 }
 
 fn reference_value(oid: ObjectIdentifier, property: PropertyIdentifier) -> PropertyValue {
-    PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(oid),
-        PropertyValue::Unsigned(property.to_raw() as u64),
-    ])
+    super::integration::reference_value(oid, property.to_raw(), None, None)
 }
 
 fn retarget(

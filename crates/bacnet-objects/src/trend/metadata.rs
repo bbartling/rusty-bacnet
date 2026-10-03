@@ -15,6 +15,7 @@ use crate::property_metadata::{
 // and interval rows retain their base optional classification; no new presence
 // or logging-mode write gates are introduced. Table 12-29 defines no
 // Out_Of_Service, so there is no such row (#985). Reliability stays read-only.
+// Log_DeviceObjectProperty is writable, held to this device (#1234).
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -31,7 +32,7 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::LOGGING_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::LOG_DEVICE_OBJECT_PROPERTY, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::LOG_DEVICE_OBJECT_PROPERTY, Optional, None, Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -219,7 +220,8 @@ mod tests {
                         | P::LOG_INTERVAL
                         | P::STOP_WHEN_FULL
                         | P::RECORD_COUNT
-                        | P::DESCRIPTION => Always,
+                        | P::DESCRIPTION
+                        | P::LOG_DEVICE_OBJECT_PROPERTY => Always,
                         _ => ReadOnly,
                     };
                     assert_eq!(row.write_capability, capability, "{kind:?} {p:?}");
@@ -266,6 +268,14 @@ mod tests {
                             ErrorClass::PROPERTY,
                             ErrorCode::INVALID_DATA_TYPE,
                         );
+                        continue;
+                    }
+                    if p == P::LOG_DEVICE_OBJECT_PROPERTY && kind == ObjectType::TREND_LOG {
+                        // Null is a Trend Log's empty reference (#1234).
+                        object
+                            .write_property(p, None, PropertyValue::Null, None)
+                            .unwrap();
+                        assert_eq!(object.read_property(p, None).unwrap(), PropertyValue::Null);
                         continue;
                     }
                     assert_error(

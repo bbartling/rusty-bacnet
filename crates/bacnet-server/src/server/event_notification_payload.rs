@@ -494,37 +494,13 @@ fn read_monitored_reference(
     let value = enrollment
         .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
         .ok()?;
-    let PropertyValue::List(items) = &value else {
-        return None;
-    };
-    if !(2..=4).contains(&items.len()) {
-        return None;
-    }
-    let PropertyValue::ObjectIdentifier(object_identifier) = items[0] else {
-        return None;
-    };
-    let PropertyValue::Unsigned(raw_property) = items[1] else {
-        return None;
-    };
-    let raw_property = u32::try_from(raw_property).ok()?;
-    if raw_property > 0x3f_ffff {
-        return None;
-    }
-    let array_index = match items.get(2) {
-        None | Some(PropertyValue::Null) => None,
-        Some(PropertyValue::Unsigned(index)) => Some(u32::try_from(*index).ok()?),
-        Some(_) => return None,
-    };
-    match items.get(3) {
-        None | Some(PropertyValue::Null) | Some(PropertyValue::ObjectIdentifier(_)) => {}
-        Some(_) => return None,
-    }
+    let reference = crate::event_enrollment::decode_reference_value(&value)?;
     Some((
         value,
         MonitoredReference {
-            object_identifier,
-            property_identifier: PropertyIdentifier::from_raw(raw_property),
-            array_index,
+            object_identifier: reference.object_identifier,
+            property_identifier: PropertyIdentifier::from_raw(reference.property_identifier),
+            array_index: reference.property_array_index,
         },
     ))
 }

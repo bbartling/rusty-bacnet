@@ -263,22 +263,25 @@ fn device_frame_takes_a_local_reference_and_refuses_a_device_member() {
             Some(reference.clone())
         );
     }
-    // The flat form and Null keep their meaning.
+    // Null still clears. The flat form isn't what Averaging serves, so it is
+    // a value of another datatype under this frame (#1182).
     let flat = PropertyValue::List(vec![
         PropertyValue::ObjectIdentifier(reference.object_identifier),
         PropertyValue::Unsigned(85),
         PropertyValue::Unsigned(3),
     ]);
-    assert_eq!(
-        decode_reference_write(&flat, ReferenceFrame::Device).unwrap(),
-        Some(reference.clone())
+    expect_protocol(
+        decode_reference_write(&flat, ReferenceFrame::Device),
+        ErrorCode::INVALID_DATA_TYPE,
+        "flat list under the Device frame",
     );
     assert_eq!(
         decode_reference_write(&PropertyValue::Null, ReferenceFrame::Device).unwrap(),
         None
     );
     // A Device member [3] is valid encoding, so its refusal names the
-    // missing remote support; malformed bytes stay INVALID_DATA_ENCODING.
+    // missing remote support, or the range when it names no Device;
+    // malformed bytes stay INVALID_DATA_ENCODING.
     let good = framed(&reference);
     let with_device = [good.clone(), vec![0x3C, 0x02, 0x00, 0x00, 0x4D]].concat();
     expect_protocol(
@@ -288,6 +291,16 @@ fn device_frame_takes_a_local_reference_and_refuses_a_device_member() {
         ),
         ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
         "device-qualified member [3]",
+    );
+    expect_protocol(
+        decode_reference_write(
+            &PropertyValue::ApplicationData(
+                [good.clone(), vec![0x3C, 0x00, 0x00, 0x00, 0x4D]].concat(),
+            ),
+            ReferenceFrame::Device,
+        ),
+        ErrorCode::VALUE_OUT_OF_RANGE,
+        "[3] naming an Analog Input",
     );
     let cases: Vec<(Vec<u8>, &str)> = vec![
         (Vec::new(), "empty frame"),

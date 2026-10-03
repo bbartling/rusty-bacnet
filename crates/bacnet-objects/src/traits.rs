@@ -339,7 +339,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// `array_property_default`): identifier-stable arrays are admitted
     /// without consulting the object type, the identifiers whose datatype
     /// changes with the object type (ACTION, ALARM_VALUES / FAULT_VALUES,
-    /// LIST_OF_OBJECT_PROPERTY_REFERENCES, PRESENT_VALUE) classify by
+    /// LIST_OF_OBJECT_PROPERTY_REFERENCES, PRESENT_VALUE,
+    /// LOG_DEVICE_OBJECT_PROPERTY) classify by
     /// `object_identifier().object_type()`, and everything else — scalars and
     /// BACnetLIST properties — rejects the index. Object implementations with
     /// vendor or per-instance array properties override.

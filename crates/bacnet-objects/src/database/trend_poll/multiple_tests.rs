@@ -70,7 +70,7 @@ fn multiple(
 ) -> TrendLogMultipleObject {
     let mut log = TrendLogMultipleObject::new(1, "TLM", capacity).unwrap();
     for member in members {
-        log.add_property_reference(member);
+        log.add_property_reference(member).unwrap();
     }
     log.write_property(
         P::LOG_INTERVAL,
