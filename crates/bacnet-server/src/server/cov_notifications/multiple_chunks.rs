@@ -1,6 +1,6 @@
 //! Splitting one COV-multiple report into notifications that each fit the
 //! subscriber's maximum APDU (135-2020 §13.1, §13.18.1.1; #986, #1008,
-//! #1038).
+//! #1038, #1090).
 //!
 //! The report's timestamped changes go out strictly in capture order, each
 //! reference's latest change included. The last notification carries the
@@ -9,8 +9,12 @@
 //! fit. A reference whose latest change goes out early conveys no change in
 //! the last notification, where a sibling carrying its field times it as for
 //! any reference that conveys no change (#987). A change that does not fit a
-//! notification even alone, latest or not, is dropped and counted, since
-//! every attempt to send it would fail.
+//! notification even alone, latest or not, goes out one value per
+//! notification instead, its values in the order they were captured, each
+//! with the change's Time_Of_Change and an envelope naming the change (#1090).
+//! A reference whose latest change goes out so is finished by the part with
+//! its last value. A value that does not fit even alone is dropped and
+//! counted, since every attempt to send it would fail.
 //!
 //! When the untimestamped values alone do not fit one notification, every
 //! timestamped change goes out first, and the untimestamped values follow in
@@ -33,7 +37,7 @@ use tracing::warn;
 use super::cov_clock::cov_multiple_datetime;
 use super::multiple_items::{build_items, Coordinate, History, Latest, Retained, Stamp};
 use crate::cov::multiple_reads::MultipleReads;
-use crate::cov::timed::{value_len, TimedClaim, ITEM_FRAMING};
+use crate::cov::timed::{value_len, TimedChange, TimedClaim, ValueFit, ITEM_FRAMING};
 use crate::cov::CovSubscriptionKey;
 use crate::cov::CovSubscriptionSnapshot;
 
@@ -191,8 +195,10 @@ fn fits(notification: &COVNotificationMultipleRequest, limit: usize) -> bool {
 /// service-request octets, in the order they go out: the oldest changes
 /// first, each part with the claim it retires, and last the notification
 /// with the untimestamped values and the newest changes, left out when it
-/// would carry nothing. Untimestamped values that do not fit one notification
-/// alone go out after every change, in as many notifications as they need.
+/// would carry nothing. A change too large for a notification of its own
+/// goes out one value per notification (#1090). Untimestamped values that do
+/// not fit one notification alone go out after every change, in as many
+/// notifications as they need.
 pub(super) fn split(content: &ReportContent<'_>, mut claim: TimedClaim, limit: usize) -> Vec<Part> {
     // Each earlier part as its count of the oldest remaining changes, and
     // whether that one change cannot fit a notification on its own.
@@ -222,13 +228,27 @@ pub(super) fn split(content: &ReportContent<'_>, mut claim: TimedClaim, limit: u
         plan
     };
     let mut parts = Vec::new();
+    // How a notification of one value of a change too large for a
+    // notification of its own would go out.
+    let fit = |key: &CovSubscriptionKey, value: &TimedChange| {
+        let notification = content.history(&[(key, value)]);
+        if notification.list_of_cov_notifications.is_empty() {
+            ValueFit::Empty
+        } else if fits(&notification, limit) {
+            ValueFit::Fits
+        } else {
+            ValueFit::TooLarge
+        }
+    };
     for (count, too_large) in plan {
         let part = claim.split_oldest(count);
-        if too_large {
-            part.discard();
+        if !too_large {
+            parts.push((content.history(&part.in_order()), part));
             continue;
         }
-        parts.push((content.history(&part.in_order()), part));
+        for value in part.split_values(fit) {
+            parts.push((content.history(&value.in_order()), value));
+        }
     }
     let last = content.last(&claim.in_order());
     if encoded_len(&last).is_some_and(|len| len > limit) {
@@ -281,7 +301,8 @@ fn history_parts(parts: Vec<(COVNotificationMultipleRequest, TimedClaim)>) -> Ve
 
 /// Of the report's `parts`, in send order, a timestamped reference is
 /// finished by the last that carries it, which carries its latest drained
-/// change.
+/// change, or the last value of it sent when that change went out one value
+/// per notification (#1090).
 fn finish_timed(parts: &mut [Part]) {
     let mut later = HashSet::new();
     for part in parts.iter_mut().rev() {

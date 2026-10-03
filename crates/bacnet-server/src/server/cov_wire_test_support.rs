@@ -619,7 +619,7 @@ impl Harness {
     }
 
     /// Deliver an answer from the subscriber.
-    async fn respond(&self, answer: Apdu) {
+    pub(super) async fn respond(&self, answer: Apdu) {
         let mut payload = BytesMut::new();
         encode_apdu(&mut payload, &answer).unwrap();
         let mut npdu = BytesMut::new();

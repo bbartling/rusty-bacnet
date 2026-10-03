@@ -183,7 +183,7 @@ async fn admission_independent_handlers_and_eight_owned_abort_workers_never_queu
             }),
             _ => Apdu::Abort(AbortPdu {
                 invoke_id,
-                sent_by_server: false,
+                sent_by_server: true,
                 abort_reason: AbortReason::OTHER,
             }),
         };
