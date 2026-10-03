@@ -11,7 +11,8 @@ name: CI
 # push mirror, in .github/workflows/native-tests.yml (#950). See docs/ci.md.
 #
 #   Lean  — every PR to dev/main, push to dev/main, v* tags, weekly, manual:
-#           lint (fmt, file-size cap, no-secret scan, script regressions),
+#           lint (fmt, file-size cap, no-secret scan, script regressions,
+#           changelog fragments),
 #           clippy and rustdoc with warnings denied (every feature, the PyO3
 #           crate, and each published crate alone with default features, for
 #           Linux, Windows and macOS),
@@ -136,6 +137,11 @@ jobs:
         run: python3 scripts/ci/test-check-msrv.py
       - name: Release script tests
         run: python3 -m unittest discover -s scripts/release
+      # Entries are changelog.d/ fragments; [Unreleased] in CHANGELOG.md holds none.
+      - name: Changelog fragments
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_changelog.py'
+          python3 scripts/changelog.py check
 
   clippy:
     name: Clippy

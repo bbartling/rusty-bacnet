@@ -1,6 +1,7 @@
 //! Group, Global Group and Structured View object tests.
 
 use super::*;
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 
 // -----------------------------------------------------------------------
 // GroupObject tests
@@ -180,32 +181,77 @@ fn structured_view_add_subordinates() {
     let mut sv = StructuredViewObject::new(1, "SV").unwrap();
     let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let bi1 = ObjectIdentifier::new(ObjectType::BINARY_INPUT, 1).unwrap();
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap();
     sv.add_subordinate(ai1, "Temperature");
-    sv.add_subordinate(bi1, "Occupancy");
+    sv.add_subordinate(
+        BACnetDeviceObjectReference {
+            device_identifier: Some(device),
+            object_identifier: bi1,
+        },
+        "Occupancy",
+    );
 
-    let val = sv
-        .read_property(PropertyIdentifier::SUBORDINATE_LIST, None)
-        .unwrap();
-    if let PropertyValue::List(items) = val {
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0], PropertyValue::ObjectIdentifier(ai1));
-        assert_eq!(items[1], PropertyValue::ObjectIdentifier(bi1));
-    } else {
-        panic!("Expected List");
-    }
-
-    let ann = sv
-        .read_property(PropertyIdentifier::SUBORDINATE_ANNOTATIONS, None)
-        .unwrap();
-    if let PropertyValue::List(items) = ann {
-        assert_eq!(items.len(), 2);
+    // Each Subordinate_List element is a BACnetDeviceObjectReference
+    // (Table 12-34): the object under [1], after the device under [0] when
+    // the subordinate lives in another device.
+    let subordinates = [
+        PropertyValue::ApplicationData(vec![0x1C, 0x00, 0x00, 0x00, 0x01]),
+        PropertyValue::ApplicationData(vec![
+            0x0C, 0x02, 0x00, 0x00, 0x09, 0x1C, 0x00, 0xC0, 0x00, 0x01,
+        ]),
+    ];
+    let annotations = [
+        PropertyValue::CharacterString("Temperature".into()),
+        PropertyValue::CharacterString("Occupancy".into()),
+    ];
+    for (property, elements) in [
+        (PropertyIdentifier::SUBORDINATE_LIST, &subordinates),
+        (PropertyIdentifier::SUBORDINATE_ANNOTATIONS, &annotations),
+    ] {
         assert_eq!(
-            items[0],
-            PropertyValue::CharacterString("Temperature".into())
+            sv.read_property(property, None).unwrap(),
+            PropertyValue::List(elements.to_vec()),
+            "{property:?}"
         );
-        assert_eq!(items[1], PropertyValue::CharacterString("Occupancy".into()));
-    } else {
-        panic!("Expected List");
+        // Index 0 is the size, 1..=N one element, and past N is
+        // INVALID_ARRAY_INDEX.
+        assert_eq!(
+            sv.read_property(property, Some(0)).unwrap(),
+            PropertyValue::Unsigned(2),
+            "{property:?}[0]"
+        );
+        for (index, element) in (1..).zip(elements) {
+            assert_eq!(
+                &sv.read_property(property, Some(index)).unwrap(),
+                element,
+                "{property:?}[{index}]"
+            );
+        }
+        for index in [3, u32::MAX] {
+            let error = sv.read_property(property, Some(index)).unwrap_err();
+            assert!(
+                matches!(error, Error::Protocol { class, code }
+                    if class == ErrorClass::PROPERTY.to_raw() as u32
+                        && code == ErrorCode::INVALID_ARRAY_INDEX.to_raw() as u32),
+                "{property:?}[{index}]: {error:?}"
+            );
+        }
+        // Neither array has a write route, whole or by element.
+        for index in [None, Some(0), Some(1)] {
+            let error = sv
+                .write_property(property, index, elements[0].clone(), None)
+                .unwrap_err();
+            assert!(
+                matches!(error, Error::Protocol { class, code }
+                    if class == ErrorClass::PROPERTY.to_raw() as u32
+                        && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32),
+                "{property:?}[{index:?}] write: {error:?}"
+            );
+        }
+        assert_eq!(
+            sv.read_property(property, None).unwrap(),
+            PropertyValue::List(elements.to_vec())
+        );
     }
 }
 
