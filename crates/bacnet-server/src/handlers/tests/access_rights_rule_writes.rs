@@ -7,7 +7,7 @@
 //! before. Enable reads as an application BOOLEAN and takes BOOLEAN writes.
 //! ReadPropertyMultiple ALL carries what the writes left.
 
-use super::access_control_arrays::{array_cases, assert_reads, db_with};
+use super::access_control_arrays::{array_cases, assert_reads, db_with, Expected};
 use super::access_rights_rules::{configured, ANYWHERE_OFF, BUSINESS_HOURS, REMOTE_ZONE};
 use super::*;
 use bacnet_encoding::constructed::encode_access_rule;
@@ -117,7 +117,7 @@ fn assert_error(result: Result<(), Error>, class: ErrorClass, code: ErrorCode) {
 
 /// Both arrays as `configured()` sets them, through ReadProperty and
 /// ReadPropertyMultiple.
-fn configured_cases() -> Vec<(P, Option<u32>, Result<Vec<u8>, ErrorCode>)> {
+fn configured_cases() -> Vec<(P, Option<u32>, Expected)> {
     let mut cases = array_cases(P::POSITIVE_ACCESS_RULES, &[BUSINESS_HOURS, ANYWHERE_OFF]);
     cases.extend(array_cases(P::NEGATIVE_ACCESS_RULES, &[REMOTE_ZONE]));
     cases
