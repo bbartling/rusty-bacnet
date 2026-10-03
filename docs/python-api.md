@@ -1596,7 +1596,12 @@ from rusty_bacnet import EventType
 
 server.add_calendar(instance=1, name="Holiday Calendar")
 server.add_schedule(instance=1, name="Occupancy Schedule")
-server.add_notification_class(instance=1, name="Critical Alarms", notification_class=1)
+server.add_notification_class(
+    instance=1,
+    name="Critical Alarms",
+    notification_class=1,
+    storage_path="/application/state/class-1",  # optional
+)
 server.add_notification_forwarder(
     instance=1,
     name="Forwarder",
@@ -1637,6 +1642,18 @@ server.add_event_enrollment(
     event_type=EventType.OUT_OF_RANGE,  # default: EventType.CHANGE_OF_BITSTRING
 )
 ```
+
+A Notification Class with `storage_path` keeps the Recipient_List a client
+writes in that file and serves it again after a restart; without it the list
+lives in memory only. The file is replaced whole on each list write, and the
+save runs on a thread of its own while the server goes on answering other
+requests. A write whose list cannot be saved is refused with DEVICE /
+OPERATIONAL_PROBLEM, and the class keeps its old list. `storage_path` takes a
+`str` (a `pathlib.Path` raises `TypeError`, as for the forwarder). Give each
+class its own file: the file records which class it belongs to, so two
+classes sharing a path fail to register after a restart, and a file this
+backend did not write, or a corrupt one, makes `add_notification_class` raise
+`BacnetError`.
 
 The Notification Forwarder sends each event notification the server
 receives, and each one its own objects address to its Device, on to the
@@ -2386,7 +2403,8 @@ server.add_access_point(instance=1, name="Lobby Access", access_doors=[door])
 server.add_access_credential(instance=1, name="Badge 001")
 server.add_access_user(instance=1, name="John Doe")
 server.add_access_rights(instance=1, name="Employee Access")
-server.add_access_zone(instance=1, name="Building A")
+lobby = ObjectIdentifier(ObjectType.ACCESS_POINT, 1)
+server.add_access_zone(instance=1, name="Building A", entry_points=[lobby])
 # Wiegand 26 (8) in class 0, and vendor 260's CUSTOM (2) format 7 in class 3.
 server.add_credential_data_input(
     instance=1,
@@ -2400,8 +2418,13 @@ The keyword arguments set arrays that are read-only over the network.
 this device or a `(device, object)` pair for one in another device; a pair
 whose device isn't a Device raises `ValueError`, and an `access_doors`
 element that isn't an Access Door raises `BacnetProtocolError`
-(VALUE_OUT_OF_RANGE). `supported_formats` takes `(format, format_class)`
-pairs, a format being a BACnetAuthenticationFactorType number or a
+(VALUE_OUT_OF_RANGE). `entry_points` and `exit_points` set an Access Zone's
+Entry_Points and Exit_Points lists in the same element forms, and an element
+that isn't an Access Point raises `BacnetProtocolError` (VALUE_OUT_OF_RANGE).
+A whole read of either list returns the references' octets as `bytes`, or
+`[]` while the list is empty. `supported_formats` takes
+`(format, format_class)` pairs, a format being a
+BACnetAuthenticationFactorType number or a
 `(format_type, vendor_id, vendor_format)` triple, which a CUSTOM format
 needs; an ill-formed format raises VALUE_OUT_OF_RANGE.
 

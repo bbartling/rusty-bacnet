@@ -41,6 +41,8 @@ mod mutation_tests;
 mod mutation_wpm_priority_tests;
 #[cfg(test)]
 mod mutation_wpm_tests;
+#[cfg(test)]
+mod notification_class_durable_tests;
 mod read_range;
 #[cfg(test)]
 mod recipient_mac_bound_tests;
@@ -548,7 +550,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let MutationEffects {
             written_oids,
-            coarse_cov_oids,
+            mut coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
             command_runs,
@@ -645,14 +647,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     );
                 }
 
-                for oid in &written_oids {
-                    Self::fire_event_notifications_with_bindings(
-                        &services.event_delivery(),
-                        cov_table,
-                        oid,
-                    )
-                    .await;
-                }
+                Self::fire_written_event_notifications(
+                    &services.event_delivery(),
+                    cov_table,
+                    &written_oids,
+                    &mut coarse_cov_oids,
+                )
+                .await;
                 Self::fire_post_write_cov_notifications(
                     &cov_ctx,
                     &coarse_cov_oids,
@@ -708,14 +709,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .await;
         }
 
-        for oid in &written_oids {
-            Self::fire_event_notifications_with_bindings(
-                &services.event_delivery(),
-                cov_table,
-                oid,
-            )
-            .await;
-        }
+        Self::fire_written_event_notifications(
+            &services.event_delivery(),
+            cov_table,
+            &written_oids,
+            &mut coarse_cov_oids,
+        )
+        .await;
 
         Self::fire_post_write_cov_notifications(
             &cov_ctx,

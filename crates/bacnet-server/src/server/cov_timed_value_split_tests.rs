@@ -321,6 +321,50 @@ async fn a_rejected_confirmed_value_goes_out_again_before_the_rest_of_its_change
     h.server.stop().await.unwrap();
 }
 
+/// DISABLE_INITIATION ends a confirmed report at its first retry while it is
+/// sending a change value by value (#1327). The value rejoins its change, which
+/// stays in delivery (#1163): when later changes captured meanwhile overflow
+/// the 50-octet bound, eviction passes over it. Once communication is enabled
+/// what is held goes out value by value in capture order, with no hold-off.
+#[tokio::test(start_paused = true)]
+async fn a_value_dcc_withdraws_goes_out_again_with_the_rest_of_its_change() {
+    use bacnet_types::enums::EnableDisable;
+    let config = ServerConfig {
+        dcc_policy: crate::server::DccPolicy::LegacyPermissive,
+        ..ServerConfig::default()
+    };
+    let mut h = tiny_harness(config, true, 1).await;
+    h.set_clock(1);
+    h.write_local(1.0).await;
+    let first = h.notification().await;
+    assert_eq!(
+        vec![values(&first, TINY_APDU, true)],
+        av1_apart(1.0, 1)[..1]
+    );
+    let (invoke_id, _) = h.take_confirmed();
+    h.dcc(EnableDisable::DISABLE_INITIATION, None).await;
+    h.workers_idle().await;
+    assert!(!h.frames.lock().unwrap().iter().any(
+        |apdu| matches!(apdu, Apdu::ConfirmedRequest(request) if request.invoke_id == invoke_id)
+    ));
+    for second in 2..=3 {
+        h.set_clock(second);
+        h.write_local(f32::from(second)).await;
+    }
+    h.no_notification().await;
+    // Over the bound, eviction takes the middle change, never the one in
+    // delivery nor the newest.
+    assert_eq!(h.server.cov_counters().timed_changes_dropped, 1);
+    h.dcc(EnableDisable::ENABLE, None).await;
+    assert_eq!(
+        take(&h, 4, TINY_APDU, true).await,
+        [av1_apart(1.0, 1), av1_apart(3.0, 3)].concat()
+    );
+    h.no_notification().await;
+    assert_eq!(av1_completed(&h).await, Some(PropertyValue::Real(3.0)));
+    h.server.stop().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn an_oversized_value_is_counted_each_time_and_warned_once_per_admission() {
     for confirmed in [false, true] {

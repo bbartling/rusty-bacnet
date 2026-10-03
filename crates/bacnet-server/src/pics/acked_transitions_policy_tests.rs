@@ -1,3 +1,4 @@
+use bacnet_objects::access_control::AccessZoneObject;
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::database::ObjectDatabase;
@@ -61,6 +62,11 @@ fn acked_transitions_network_policy_is_uniform_on_all_supported_types() {
             "Multi-state Value",
             ObjectType::MULTI_STATE_VALUE,
             Box::new(MultiStateValueObject::new(1, "MSV-1", 2).unwrap()),
+        ),
+        (
+            "Access Zone",
+            ObjectType::ACCESS_ZONE,
+            Box::new(AccessZoneObject::new(1, "ZONE-1").unwrap()),
         ),
         (
             "Event Enrollment",

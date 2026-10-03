@@ -31,6 +31,7 @@ use bytes::Bytes;
 
 mod recipient_abort;
 
+mod dcc_retry;
 mod learned_router_cache;
 mod suppression_counters;
 

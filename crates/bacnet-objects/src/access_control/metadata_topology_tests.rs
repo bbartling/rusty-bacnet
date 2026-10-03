@@ -1,5 +1,5 @@
 use super::*;
-use crate::property_metadata::PropertyWriteCapability;
+use crate::property_metadata::{PropertyPresenceCondition, PropertyWriteCapability};
 use crate::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::Error;
@@ -14,6 +14,20 @@ fn assert_error(error: Error, expected: ErrorCode) {
         "expected {expected:?}, got {error:?}"
     );
 }
+
+/// The zone's intrinsic-reporting rows (#1305), in metadata order.
+const ZONE_EVENT_ROWS: [P; 10] = [
+    P::TIME_DELAY,
+    P::NOTIFICATION_CLASS,
+    P::ALARM_VALUES,
+    P::EVENT_ENABLE,
+    P::ACKED_TRANSITIONS,
+    P::NOTIFY_TYPE,
+    P::EVENT_TIME_STAMPS,
+    P::EVENT_MESSAGE_TEXTS,
+    P::EVENT_DETECTION_ENABLE,
+    P::TIME_DELAY_NORMAL,
+];
 
 fn assert_exact_sets(object: &dyn BACnetObject, all: &[P], required: &[P]) {
     let metadata = object.property_metadata();
@@ -32,7 +46,14 @@ fn assert_exact_sets(object: &dyn BACnetObject, all: &[P], required: &[P]) {
     assert!(!object.is_createable());
     assert!(object.is_deleteable());
     for row in metadata.iter() {
-        assert_eq!(row.presence_condition, None);
+        assert_eq!(
+            row.presence_condition,
+            ZONE_EVENT_ROWS
+                .contains(&row.property_identifier)
+                .then_some(PropertyPresenceCondition::IntrinsicReporting),
+            "{:?}",
+            row.property_identifier
+        );
         let expected = if (row.property_identifier == P::PRESENT_VALUE
             && object.object_identifier().object_type() == ObjectType::ACCESS_DOOR)
             || row.property_identifier == P::GLOBAL_IDENTIFIER
@@ -292,7 +313,10 @@ fn property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list() {
         P::ADJUST_VALUE,
         P::OCCUPANCY_UPPER_LIMIT,
         P::OCCUPANCY_LOWER_LIMIT,
-    ];
+    ]
+    .into_iter()
+    .chain(ZONE_EVENT_ROWS)
+    .collect::<Vec<_>>();
     let required = [
         P::OBJECT_IDENTIFIER,
         P::OBJECT_NAME,
@@ -377,12 +401,20 @@ fn property_metadata_access_trio_write_capabilities_match_dispatch() {
         ),
         (
             || Box::new(AccessZoneObject::new(1, "ZONE-1").unwrap()),
-            // Adjust_Value: Table 12-37 footnote 5 (#1284).
+            // Adjust_Value: Table 12-37 footnote 5 (#1284); the event
+            // configuration (#1305).
             &[
                 P::DESCRIPTION,
                 P::OUT_OF_SERVICE,
                 P::GLOBAL_IDENTIFIER,
                 P::ADJUST_VALUE,
+                P::TIME_DELAY,
+                P::NOTIFICATION_CLASS,
+                P::ALARM_VALUES,
+                P::EVENT_ENABLE,
+                P::NOTIFY_TYPE,
+                P::EVENT_DETECTION_ENABLE,
+                P::TIME_DELAY_NORMAL,
             ],
             // Table 12-37 footnote 1 (#1247).
             &[P::OCCUPANCY_COUNT, P::RELIABILITY],
@@ -662,6 +694,9 @@ fn property_metadata_access_point_and_zone_writes_store_verbatim() {
             P::OCCUPANCY_COUNT_ENABLE,
             P::OCCUPANCY_UPPER_LIMIT,
             P::OCCUPANCY_LOWER_LIMIT,
+            P::ACKED_TRANSITIONS,
+            P::EVENT_TIME_STAMPS,
+            P::EVENT_MESSAGE_TEXTS,
         ] {
             let value = zone.read_property(p, None).unwrap();
             assert_error(

@@ -1,8 +1,9 @@
 //! Staging writes whose new state an object saves first (#1270).
 //!
 //! A Notification Forwarder saves a written Recipient_List or
-//! Subscribed_Recipients, and an Audit Log a Log_Enable change, before
-//! serving it, and refuses the write if the save fails. So that the save
+//! Subscribed_Recipients, a Notification Class a written Recipient_List
+//! (#1315), and an Audit Log a Log_Enable change, before serving it, and
+//! refuses the write if the save fails. So that the save
 //! never runs while the database guard is held, a request that makes such a
 //! write stages it first ([`DurableWrites`]): under the guard the object
 //! queues the save, the request awaits it with the guard dropped, and then
@@ -54,18 +55,21 @@ enum TargetValue {
     ListEdit { service_data: Bytes, remove: bool },
 }
 
-/// The object types whose bundled objects save a written state first.
+/// Whether a bundled object of `oid`'s type may save a write of `property`
+/// first. A Notification Class saves only its Recipient_List; a forwarder
+/// and an Audit Log decide for themselves, any property.
 ///
 /// An object type that takes up [`DurableWrites`] is listed here too, or
 /// the server never stages its writes and they save in place under the
 /// guard (see "Adding an object" in [`bacnet_objects::durable`]).
 ///
 /// [`DurableWrites`]: bacnet_objects::durable::DurableWrites
-fn may_save(oid: ObjectIdentifier) -> bool {
-    matches!(
-        oid.object_type(),
-        ObjectType::NOTIFICATION_FORWARDER | ObjectType::AUDIT_LOG
-    )
+fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
+    match oid.object_type() {
+        ObjectType::NOTIFICATION_FORWARDER | ObjectType::AUDIT_LOG => true,
+        ObjectType::NOTIFICATION_CLASS => property == PropertyIdentifier::RECIPIENT_LIST,
+        _ => false,
+    }
 }
 
 impl DurableTarget {
@@ -74,7 +78,7 @@ impl DurableTarget {
         let Ok(request) = WritePropertyRequest::decode(service_data) else {
             return Vec::new();
         };
-        if !may_save(request.object_identifier) {
+        if !may_save(request.object_identifier, request.property_identifier) {
             return Vec::new();
         }
         let Ok(value) = handlers::decode_write_property_value(
@@ -105,10 +109,10 @@ impl DurableTarget {
             };
             let reference = attempt.reference;
             let oid = reference.object_identifier;
-            if !may_save(oid) {
+            let property = PropertyIdentifier::from_raw(reference.property_identifier);
+            if !may_save(oid, property) {
                 continue;
             }
-            let property = PropertyIdentifier::from_raw(reference.property_identifier);
             if let Ok(value) = handlers::decode_write_property_value(
                 property,
                 reference.property_array_index,
@@ -137,7 +141,7 @@ impl DurableTarget {
         let Ok(request) = ListElementRequest::decode(service_data) else {
             return Vec::new();
         };
-        if !may_save(request.object_identifier) {
+        if !may_save(request.object_identifier, request.property_identifier) {
             return Vec::new();
         }
         vec![Self {
@@ -158,7 +162,7 @@ impl DurableTarget {
         array_index: Option<u32>,
         value: &PropertyValue,
     ) -> Vec<Self> {
-        if !may_save(oid) {
+        if !may_save(oid, property) {
             return Vec::new();
         }
         vec![Self {

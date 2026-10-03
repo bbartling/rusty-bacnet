@@ -1681,6 +1681,12 @@ element is new. Refusals of the request or target (authorization, object,
 property, array index, list kind, write access) name element 0, as do the
 object's refusals of what a removal leaves.
 
+On a running server a successful edit runs the object's intrinsic-reporting
+evaluation, as a WriteProperty does. An Alarm_Values edit that puts the
+watched value in or out of alarm, with Time_Delay 0, moves Event_State before
+the next periodic tick, and the transition's Status_Flags change goes to the
+object's COV subscribers.
+
 ReadRange reads only the same BACnetLIST properties. A scalar, a constructed
 single value, a whole array (Object_List, Priority_Array) or an indexed array
 element returns `SERVICES/PROPERTY_IS_NOT_A_LIST`, after the unknown object,
@@ -1866,6 +1872,11 @@ framing, through the shared `bacnet-encoding` codecs.
   declaring Present_Value's format and class puts Present_Value back to
   UNDEFINED, with Update_Time stamped from the Device clock; out of service
   that covers the simulated factor and the reader's factor put aside.
+- **Access Zone `Entry_Points` and `Exit_Points`** (Clauses 12.32.23 and
+  12.32.24) are BACnetLISTs of `BACnetDeviceObjectReference`, read-only on the
+  network. `AccessZoneObject::set_entry_points` and `set_exit_points` set
+  them and return `Result`: a reference to anything but an Access Point is
+  VALUE_OUT_OF_RANGE, and the points set before are kept.
 - **Access Rights rules**: `Positive_Access_Rules` and `Negative_Access_Rules`
   are BACnetARRAYs of `bacnet_types::constructed::BACnetAccessRule` (codec
   `bacnet_encoding::constructed::{encode_access_rule, decode_access_rule}`),
@@ -1888,6 +1899,7 @@ framing, through the shared `bacnet-encoding` codecs.
   setter that stores these references refuses one that breaks the rule with
   VALUE_OUT_OF_RANGE and keeps what it held: `set_door_members`,
   `set_access_doors`, `set_access_event`'s credential,
+  `AccessZoneObject::set_entry_points` and `set_exit_points`,
   `AccessCredentialObject::set_assigned_access_rights`,
   `StructuredViewObject::add_subordinate`, `set_energy_meter_ref` and the
   Staging configuration. A Staging `Target_References` write over the network
@@ -2035,10 +2047,48 @@ Loop's measured input has its own route,
 |------|-------------|
 | `CalendarObject` | `::new(instance, name)` |
 | `ScheduleObject` | `::new(instance, name, default_value)` |
-| `NotificationClass` | `::new(instance, name)` |
+| `NotificationClass` | `::new(instance, name)`, `::with_persistence(instance, name, persistence)` |
 | `NotificationForwarderObject` | `::new(instance, name)`, `::with_persistence(instance, name, persistence)` |
 | `AlertEnrollmentObject` | `::new(instance, name, initial_source)` |
 | `EventEnrollmentObject` | `::new(instance, name, event_type)` |
+
+A `NotificationClass` built with `with_persistence` keeps a written
+`Recipient_List` across a restart (Clause 12.21.8, #1315). The storage is an
+application-owned `NotificationClassPersistence` that loads and saves a
+`NotificationClassSnapshot`; `FileNotificationClassPersistence` keeps it in
+one file, replaced whole the same way as the forwarder's file (a format of
+its own, tagged `RBNNCL01`, with the same 64 KiB and 32-destination caps on
+load). A class built with `new` keeps the list in memory only.
+
+Saves follow the forwarder's rules (see
+[Notification forwarding](#notification-forwarding)), and the two objects
+share the code: the save runs on the class's own writer thread, and the
+bundled server stages every network or `write_local` Recipient_List write
+(WriteProperty, WritePropertyMultiple, AddListElement and RemoveListElement)
+and waits for its save with the database guard dropped. A list that cannot be
+saved is refused with DEVICE / OPERATIONAL_PROBLEM, and the class keeps the
+old one. A WritePropertyMultiple under a `mutation_authorizer`, and
+application code writing through the database, save in place. A staged write
+its request releases without making (an earlier WritePropertyMultiple attempt
+failed, say) is dropped, and the class saves the list it serves at once. A
+staged write whose request vanished without releasing it (`stop()` aborted
+the request, or an application dropped a `write_local` future) is dropped the
+same way once 10 s have passed since its save finished: by the next write
+that stages, or within a further second by the server's once-a-second
+operation task, which measures the time on its own monotonic clock. The
+forwarder's operation task applies the same bound. `wait_for_saves()` blocks until queued
+saves have run, and dropping the class waits for them too. Like the forwarder,
+a `NotificationClass` is not `UnwindSafe` or `RefUnwindSafe`.
+
+A written list wins over `add_destination`, as on the forwarder:
+`NotificationClassSnapshot::recipient_list` stays `None` until a write sets
+the list, configured destinations are never saved and apply at every start
+until then, and once a written list was saved, `recipient_list_saved()` is
+true and `add_destination` checks a destination without adding it. An
+AddListElement edits the list the class serves, configured destinations
+included, so its result is the written list from then on. Loading a saved
+list that a write would refuse (past the cap, or an address MAC past 18
+octets) fails `with_persistence`.
 
 An Event Enrollment's Object_Property_Reference, set with
 `set_object_property_reference`, reads as the context-tagged
@@ -2836,8 +2886,27 @@ Adjust_Value), and otherwise compares Occupancy_Count with the limits
 limit at or below the lower one is VALUE_OUT_OF_RANGE). Adjust_Value is the
 one writable counting row: an Integer written in service is added to the
 count (stopping at zero, and zero clears it), while out of service it is
-kept without moving the count. Event_State stays NORMAL, as the zone runs no
-intrinsic reporting.
+kept without moving the count.
+
+An Access Zone reports intrinsically on Occupancy_State with the
+CHANGE_OF_STATE algorithm (Clause 12.32). It serves the event rows the
+Multi-state Input does: Time_Delay, Notification_Class, Alarm_Values,
+Event_Enable, Acked_Transitions, Notify_Type, Event_Time_Stamps,
+Event_Message_Texts, Event_Detection_Enable and Time_Delay_Normal, the
+configuration writable over the network. Alarm_Values is a list of
+BACnetAccessZoneOccupancyState values (named, or proprietary from 64 to
+65535; anything else is VALUE_OUT_OF_RANGE), which
+`AccessZoneObject::set_alarm_values` sets too. Event_State goes OFFNORMAL
+once Occupancy_State has stayed in Alarm_Values for Time_Delay seconds,
+whether the count moves through `set_occupancy_count`, an Adjust_Value write
+or a count simulated out of service, and back to NORMAL once it has stayed
+out of them for Time_Delay_Normal; a Reliability other than
+NO_FAULT_DETECTED is FAULT. The server sends each transition to the
+recipients of the zone's Notification Class: a CHANGE_OF_STATE notification
+carries Occupancy_State as its `zone-occupancy-state` New_State, and a
+CHANGE_OF_RELIABILITY one lists Occupancy_State (Table 13-5). A count the
+application sets directly on the object is picked up by the one-second
+tick.
 
 Over the network the Access Point event values stay read-only, but writing
 its Out_Of_Service records an event on each edge (Clause 12.31.8):
@@ -3345,8 +3414,11 @@ context to one follow-up, so changes held on every object go out together. Nothi
 re-sends by itself, so a subscriber that stopped answering, or keeps refusing,
 costs at most one delivery attempt per hold-off however often its objects change,
 and cannot keep the per-peer and global in-flight slots to itself. Shutdown and
-cancellation clear the mark without a hold-off. The retry timeout starts once each
-send has completed, and the transport bounds the send itself, so a report stays
+cancellation clear the mark without a hold-off, and so does DCC ending a report at
+a retry (see [Confirmed notifications under
+DeviceCommunicationControl](#confirmed-notifications-under-devicecommunicationcontrol)).
+The retry timeout starts once each send has completed, and the transport bounds
+the send itself, so a report stays
 outstanding for the transport's send bounds plus the retry cycle. The standard
 ends delivery with the confirmed-request retries (Clause 5.4.4); reporting again
 after a hold-off is local policy.
@@ -4479,6 +4551,41 @@ naming any network is sent routed, as it is written. The server has one port,
 so the local network is that port's; a multi-port device would need the
 network attached to each port (#863).
 
+### Confirmed notifications under DeviceCommunicationControl
+
+While DeviceCommunicationControl restricts initiation the server sends no COV
+or event notification, and that holds for the retries of a confirmed one
+already outstanding (Clause 16.1, #1327). Every attempt, the first and each
+retry, reads the communication state before it sends. An attempt that DCC
+blocks is not sent: the notification ends there, its invoke ID freed at once
+instead of after the remaining timeouts. An answer that has already taken the
+lease still ends it as usual. The server refuses the deprecated DISABLE, so
+DISABLE_INITIATION is the state that does this. What happens next depends on
+the notification:
+
+- **COV.** The report ends with no hold-off, because the subscriber did not
+  fail, and its baselines stay where they were. Timestamped history goes back
+  to its queue, and the `Max_Notification_Delay` backstop sends it once
+  communication is enabled again, at once if its delay has run out by then.
+  Untimestamped values are reported by the reference's next fanout, as a
+  change DCC held back before its first send would be. A change partly sent
+  value by value stays in delivery, so the history bound keeps the rest of it.
+  A report withdrawn before its first attempt is taken back out of the COV
+  counters, since nothing went out.
+- **Events.** Nothing in `EventNotificationCounters` moves, and the
+  notification is not sent again once communication is enabled, the same as a
+  transition DCC stops before its first send. `Acked_Transitions` keeps what
+  the transition set; delivery never changes it.
+- **Audit.** Not withdrawn. Clause 16.1 exempts Confirmed- and
+  UnconfirmedAuditNotification from DISABLE_INITIATION, and an audit
+  notification makes a single attempt with no retries, so one already sent
+  waits for its answer, and the reporter's health and backlog are untouched.
+  The server still holds back audit notifications that are due to start while
+  initiation is disabled, a known gap against that exemption (#1370).
+
+A write a Command or Channel makes in another device follows the same rule
+(see [Building Control](#building-control-7)).
+
 ### Notification forwarding
 
 A `NotificationForwarderObject` (type 51, Clause 12.51) originates no events.
@@ -4628,7 +4735,8 @@ notifications alike, whose Notification Class lookup failed closed: one per
 `RecipientLookupOutcome` that suppresses delivery, alongside the warning each
 one logs. `NoConfiguredDestinations` and `NoMatchingDestinations` are
 configured behaviour and are not counted, nor are notifications held back by
-DCC or Event_Enable. The three confirmed fields count notifications to one
+DCC or Event_Enable, a confirmed one DCC ends at a retry included. The three
+confirmed fields count notifications to one
 recipient; a reservation refused because the server is stopping is not
 counted.
 

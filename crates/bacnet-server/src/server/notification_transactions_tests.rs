@@ -431,3 +431,31 @@ async fn server_lifecycle_stop_and_drop_close_notification_transactions() {
     assert!(transactions.is_closed());
     assert_eq!(transactions.active_count(), 0);
 }
+
+/// An answer that takes the lease after a retry's receiver is armed, but
+/// before that retry is withdrawn (DCC taking effect on another thread),
+/// still ends the transaction: the withdrawal does not lose it (#1327).
+#[tokio::test(start_paused = true)]
+async fn an_answer_ahead_of_a_withdrawn_retry_still_ends_the_transaction() {
+    use super::notification_transactions::{run_attempts, Attempt};
+    let transactions = NotificationTransactions::new();
+    let (operation, receiver) = transactions.reserve(direct_peer(10), COV_SERVICE).unwrap();
+    let invoke_id = operation.invoke_id();
+    let answering = Arc::clone(&transactions);
+    let result = run_attempts(operation, receiver, Duration::from_secs(3), 3, |attempt| {
+        let next = if attempt == 0 {
+            Attempt::Sent
+        } else {
+            assert!(answering.admit_terminal(
+                &[10, 0x55],
+                None,
+                &simple_ack(invoke_id, COV_SERVICE)
+            ));
+            Attempt::Withdrawn(())
+        };
+        std::future::ready(next)
+    })
+    .await;
+    assert_eq!(result, Ok(NotificationWorkerResult::Ack));
+    assert_eq!(transactions.active_count(), 0);
+}

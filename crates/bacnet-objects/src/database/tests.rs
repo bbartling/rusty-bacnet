@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use super::*;
+use crate::access_control::AccessZoneObject;
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::event::{EventStateChange, EventTransition, EventTransitionCommit};
@@ -10,7 +11,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
 #[test]
-fn all_nine_builtin_intrinsic_families_implement_atomic_commit() {
+fn all_ten_builtin_intrinsic_families_implement_atomic_commit() {
     let mut objects: Vec<Box<dyn BACnetObject>> = vec![
         Box::new(AnalogInputObject::new(1, "AI", 0).unwrap()),
         Box::new(AnalogOutputObject::new(1, "AO", 0).unwrap()),
@@ -21,6 +22,7 @@ fn all_nine_builtin_intrinsic_families_implement_atomic_commit() {
         Box::new(MultiStateInputObject::new(1, "MSI", 3).unwrap()),
         Box::new(MultiStateOutputObject::new(1, "MSO", 3).unwrap()),
         Box::new(MultiStateValueObject::new(1, "MSV", 3).unwrap()),
+        Box::new(AccessZoneObject::new(1, "ZONE").unwrap()),
     ];
 
     for object in &mut objects {

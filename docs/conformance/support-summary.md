@@ -26,6 +26,7 @@ Row counts by priority and status are not committed, so concurrent ledger PRs me
 | `BACNET-15-WP-OUTBOUND-PRIORITY` | Clause 15.9.1.1 Priority, printed page 752 / PDF page 754; inbound error and noncommandable rules printed page 753 / PDF page 755 | P1 | in-progress | 2 |
 | `BACNET-LOCAL-MUTATION-POLICY` | Local operator authorization policy; Clauses 14, 15 and 13 COV service execution boundaries; not a normative authentication claim | P1 | in-progress | 3 |
 | `BACNET-16-LOCAL-INBOUND-SOURCE-POLICIES` | Clauses 13.14, 13.15, 13.16, 16.1, 16.7, 16.8 | P1 | supported-with-clause-evidence | 4 |
+| `BACNET-16-DCC-NOTIFICATION-INITIATION` | Clause 16.1 | P1 | in-progress | 1 |
 | `BACNET-15-ENDPOINT-DEVICE-WRITE` | Clause 15.9; Clause 12.11 Protocol_Services_Supported | P1 | in-progress | 2 |
 | `BACNET-4-ARCHITECTURE` | Clause 4 | P2 | implementation-present-needs-source-review | 2 |
 | `BACNET-5-TSM-CLIENT` | Clause 5.4.4 | P1 | implementation-present-needs-state-machine-audit | 2 |
@@ -70,6 +71,8 @@ Row counts by priority and status are not committed, so concurrent ledger PRs me
 | `BACNET-12-ACCESS-ZONE-OUT-OF-SERVICE-SIMULATION` | Clause 12.32, Table 12-37 footnote 1, Clauses 12.32.7 and 12.32.9 to 12.32.11, Clause 15.9.1.3 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-ACCESS-POINT-OUT-OF-SERVICE-EVENTS` | Clause 12.31, Clauses 12.31.8 and 12.31.27 to 12.31.29, Clause 13.1, Table 13-1 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-ACCESS-ZONE-OCCUPANCY` | Clause 12.32, Table 12-37, Clauses 12.32.6, 12.32.8 and 12.32.10 to 12.32.15 | P1 | supported-with-clause-evidence | 1 |
+| `BACNET-12-ACCESS-ZONE-INTRINSIC-REPORTING` | Clause 12.32, Table 12-37, Clauses 12.32.25 to 12.32.37, Clause 13.3.2, Table 13-5 | P1 | supported-with-clause-evidence | 1 |
+| `BACNET-12-ACCESS-ZONE-ENTRY-EXIT-POINTS` | Clause 12.32, Table 12-37, Clauses 12.32.23 and 12.32.24 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-ACCESS-POINT-AUTHENTICATION-AND-CREDENTIAL` | Clause 12.31, Table 12-36, Clauses 12.31.8, 12.31.9, 12.31.27.1 and 12.31.30, Table 13-1 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-ACCESS-POINT-POLICY-AND-AUTHORIZATION` | Clause 12.31, Table 12-36, Clauses 12.31.10, 12.31.11, 12.31.14 and 12.31.33, Table K-10 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-21-DEVICE-OBJECT-REFERENCE-DEVICE-MEMBER` | Clause 21 BACnetDeviceObjectReference and BACnetDeviceObjectPropertyReference, Clause 15.9.1.3 | P1 | supported-with-clause-evidence | 2 |
@@ -88,6 +91,7 @@ Row counts by priority and status are not committed, so concurrent ledger PRs me
 | `BACNET-12-CHANNEL-OBJECT` | Clauses 12.53 and 21; Tables 12-62 and 12-63 | P1 | supported-with-clause-evidence | 5 |
 | `BACNET-15-WRITEGROUP` | Clauses 15.11, 12.53.13 to 12.53.15, 16.1.2 and 21; Annex F.3.11 | P1 | supported-with-clause-evidence | 4 |
 | `BACNET-12-RECIPIENT-LIST-FRAMING` | Clause 12.21, Clause 21 | P1 | supported-with-clause-evidence | 3 |
+| `BACNET-12-NOTIFICATION-CLASS-RECIPIENT-LIST-RESTART` | Clause 12.21.8 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-EVENT-PARAMETERS-FRAMING` | Clause 12.12, Clause 21 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-OOS-RELIABILITY-WRITABILITY` | Clause 12.17 Table 12-20 footnote 7 and 12.17.9 Out_Of_Service (Loop Present_Value and Reliability); Clause 12 Out_Of_Service property texts (12.2/12.3/12.4/12.6/12.7/12.8/12.19/12.21/12.22 families); Clause 12.24 Schedule Reliability_Evaluation_Inhibit text; Clauses 12.15 and 12.16, Tables 12-18 and 12-19 footnote 1 (Life Safety Point and Zone); Clause 12.25 Table 12-29 and Clause 12.30 Table 12-35 (Trend Log / Trend Log Multiple); Clause 21 BACnetReliability; Clause 12.32, Table 12-37 footnote 1 (Access Zone) | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-RELINQUISH-DEFAULT-WRITABILITY` | Clause 12.3 Table 12-3 (Analog Output), Clause 12.7 Table 12-8 (Binary Output), Clause 12.8 Table 12-10 (Binary Value), Clause 12.19 Table 12-22 (Multi-state Output), Clause 12.20 Table 12-23 (Multi-state Value), Clause 12.26 Table 12-30 (Access Door), Clause 12.54 Table 12-64 (Lighting Output), Clause 12.55 Table 12-69 (Binary Lighting Output), Clause 12 value object tables; Clause 19 command prioritization | P1 | supported-with-clause-evidence | 0 |

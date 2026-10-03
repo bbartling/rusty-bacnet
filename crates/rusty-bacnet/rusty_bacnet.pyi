@@ -2707,7 +2707,25 @@ class BACnetServer:
     def add_date_time_pattern_value(self, instance: int, name: str) -> None: ...
 
     # --- Notification/logging ---
-    def add_notification_class(self, instance: int, name: str, notification_class: int = 0) -> None: ...
+    def add_notification_class(
+        self,
+        instance: int,
+        name: str,
+        notification_class: int = 0,
+        storage_path: Optional[str] = None,
+    ) -> None:
+        """Add a Notification Class (Clause 12.21). With ``storage_path``, a
+        Recipient_List a client writes is kept in that file across restarts; a
+        write whose list cannot be saved is refused with DEVICE /
+        OPERATIONAL_PROBLEM and the old list stays. Without it the list lives in
+        memory only.
+
+        ``storage_path`` is a ``str``; a ``pathlib.Path`` raises TypeError, as
+        for ``add_notification_forwarder``. Give each class a file of its own:
+        the file names the class it belongs to, so one that holds another
+        object's list, or anything this backend did not write, makes this call
+        raise BacnetError (BacnetProtocolError for a saved list a client's write
+        would be refused)."""
     def add_notification_forwarder(
         self,
         instance: int,
@@ -3046,7 +3064,29 @@ class BACnetServer:
         """
         ...
     def add_access_user(self, instance: int, name: str) -> None: ...
-    def add_access_zone(self, instance: int, name: str) -> None: ...
+    def add_access_zone(
+        self,
+        instance: int,
+        name: str,
+        *,
+        entry_points: Optional[
+            list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
+        ] = None,
+        exit_points: Optional[
+            list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
+        ] = None,
+    ) -> None:
+        """Add an Access Zone object to the server (before starting).
+
+        ``entry_points`` and ``exit_points`` set Entry_Points and Exit_Points,
+        the Access Points leading into and out of the zone (read-only over
+        the network), in the element forms ``add_access_door`` takes for
+        ``door_members``. A pair whose device isn't a Device object
+        identifier raises ValueError, and a reference to anything but an
+        Access Point raises BacnetProtocolError with VALUE_OUT_OF_RANGE;
+        either way nothing is registered.
+        """
+        ...
     def add_credential_data_input(
         self,
         instance: int,

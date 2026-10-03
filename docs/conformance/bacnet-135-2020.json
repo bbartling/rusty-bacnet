@@ -597,6 +597,48 @@
    "gaps": []
   },
   {
+   "id": "BACNET-16-DCC-NOTIFICATION-INITIATION",
+   "standard_anchor": "Clause 16.1",
+   "priority": "P1",
+   "summary": "While DCC restricts initiation the server sends no COV or event notification and ends a confirmed one at its next attempt, freeing its invoke ID; audit notifications are exempt.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-server/src/server/notification_transactions.rs::run_notification_under_dcc",
+    "crates/bacnet-server/src/server/notification_transactions.rs::run_attempts",
+    "crates/bacnet-server/src/server/cov_notifications/confirmed.rs::send_confirmed_cov",
+    "crates/bacnet-server/src/server/event_send.rs::send_event_notification",
+    "crates/bacnet-server/src/server/audit_delivery.rs::deliver_observed",
+    "crates/bacnet-server/src/handlers/device_mgmt.rs::validate_dcc"
+   ],
+   "positive_tests": [
+    "crates/bacnet-server/src/server/notification_dcc_tests.rs::{an_answer_claimed_as_the_retry_timer_fires_still_ends_the_notification,disable_initiation_leaves_an_outstanding_audit_notification_to_its_answer}",
+    "crates/bacnet-server/src/server/notification_transactions_tests.rs::an_answer_ahead_of_a_withdrawn_retry_still_ends_the_transaction",
+    "crates/bacnet-server/src/server/cov_timed_deadline_tests.rs::history_of_a_report_dcc_ends_at_a_retry_goes_out_once_enabled",
+    "crates/bacnet-server/src/server/cov_timed_value_split_tests.rs::a_value_dcc_withdraws_goes_out_again_with_the_rest_of_its_change"
+   ],
+   "negative_tests": [
+    "crates/bacnet-server/src/server/notification_dcc_tests.rs::{dcc_ends_an_outstanding_notification_at_its_next_retry_and_frees_its_lease,dcc_in_force_at_the_first_attempt_sends_nothing_and_frees_the_lease_at_once}",
+    "crates/bacnet-server/src/server/cov_confirmed_baseline_tests.rs::{confirmed_report_dcc_stops_at_a_retry_ends_there_without_a_hold_off,confirmed_follow_up_under_dcc_is_dropped_not_deferred}",
+    "crates/bacnet-server/src/server/event_confirmed_routing_tests/dcc_retry.rs::dcc_ends_an_outstanding_confirmed_event_notification_at_its_next_retry",
+    "crates/bacnet-server/src/server/cov_notifications/confirmed/tests.rs::a_report_dcc_withdraws_before_its_first_attempt_is_not_counted",
+    "crates/bacnet-integration-tests/tests/server/dcc.rs::{dcc_disable_rejected_without_changing_comm_state,dcc_disable_initiation_allows_rp_blocks_cov}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#confirmed-notifications-under-devicecommunicationcontrol"
+   ],
+   "notes": [
+    "Each attempt of a confirmed COV or event notification, retries included, reads the DCC state first. One that DISABLE_INITIATION blocks ends the notification there, its invoke ID freed, unless an answer has already taken the lease.",
+    "A COV report ended this way takes no hold-off and keeps its baselines. Its timestamped history goes back to the queue for the backstop to send once initiation is enabled; untimestamped values go out at the next fanout.",
+    "An event notification ended this way moves no `EventNotificationCounters` field and is not sent again once initiation is enabled. `Acked_Transitions` keeps what the transition committed.",
+    "Audit notifications are never ended this way: Clause 16.1 exempts them from DISABLE_INITIATION, and each makes one attempt, so one already sent waits for its answer and the reporter's health is unchanged.",
+    "DISABLE is refused with `SERVICES` / `SERVICE_REQUEST_DENIED`, so DISABLE_INITIATION is the state that restricts initiation. Command and Channel writes to other devices follow the same per-attempt rule."
+   ],
+   "gaps": [
+    "#1370: Audit notifications due to start while DISABLE_INITIATION is in force are held back and count as failed deliveries, though Clause 16.1 exempts them"
+   ]
+  },
+  {
    "id": "BACNET-15-ENDPOINT-DEVICE-WRITE",
    "standard_anchor": "Clause 15.9; Clause 12.11 Protocol_Services_Supported",
    "priority": "P1",
@@ -2731,7 +2773,7 @@
     "In service both writes fail with WRITE_ACCESS_DENIED. Out of service a count is an Unsigned and a Reliability an Enumerated in the BACnetReliability production, else INVALID_DATA_TYPE or VALUE_OUT_OF_RANGE.",
     "`AccessZoneObject::set_occupancy_count` updates the count set aside while out of service, and `set_reliability_internal` is refused then, as on the other Reliability carriers.",
     "The return to service serves the count set aside, a choice Clause 12.32.11 leaves to the implementation.",
-    "A simulated count moves Occupancy_State. The zone runs no intrinsic reporting and has no Table 13-1 row, so a simulated value raises no event and sends no COV report."
+    "A simulated count moves Occupancy_State, and a simulated count or Reliability can raise an event. The zone has no Table 13-1 row, so neither sends a COV report."
    ]
   },
   {
@@ -2798,12 +2840,86 @@
     "The zone always counts, so Occupancy_Count, Occupancy_Count_Enable, Adjust_Value and both limits are always served; Occupancy_State never reads NOT_SUPPORTED.",
     "Occupancy_Count_Enable and the limits are read-only on the network; `set_occupancy_count_enable` and `set_occupancy_limits` set them, a nonzero upper limit at or below the lower one being VALUE_OUT_OF_RANGE.",
     "Turning counting off zeroes the served count, the count set aside and Adjust_Value; meanwhile the application's counts are dropped and a simulated count other than zero is VALUE_OUT_OF_RANGE. Counting restarts from zero.",
-    "Adjust_Value is an Integer: in service a nonzero value is added to the count, stopping at zero, and zero clears it; out of service it is kept and the count stays as simulated.",
-    "Event_State reads NORMAL, as the zone runs no intrinsic reporting."
+    "Adjust_Value is an Integer: in service a nonzero value is added to the count, stopping at zero, and zero clears it; out of service it is kept and the count stays as simulated."
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-ZONE-INTRINSIC-REPORTING",
+   "standard_anchor": "Clause 12.32, Table 12-37, Clauses 12.32.25 to 12.32.37, Clause 13.3.2, Table 13-5",
+   "priority": "P1",
+   "summary": "An Access Zone reports CHANGE_OF_STATE on Occupancy_State against Alarm_Values after Time_Delay and sends each transition to its Notification Class recipients.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/event/state_reporting.rs",
+    "crates/bacnet-objects/src/access_control/zone.rs::AccessZoneObject",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs",
+    "crates/bacnet-server/src/server/event_notification_payload.rs::project_intrinsic_payload"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/zone_event_tests.rs::{access_zone_serves_the_event_rows,access_zone_goes_offnormal_after_time_delay_and_back_to_normal,access_zone_time_delay_normal_governs_only_the_return_to_normal,access_zone_event_enable_gates_distribution_not_the_transition,access_zone_acknowledges_its_latest_offnormal_transition,access_zone_simulated_fault_and_count_drive_the_event_state}",
+    "crates/bacnet-server/src/server/access_zone_event_tests.rs::{access_zone_occupancy_alarm_reaches_notification_class_recipients,access_zone_event_enable_withholds_only_the_distribution,access_zone_fault_notification_reports_occupancy_state,access_zone_in_alarm_is_listed_by_the_summary_services}",
+    "crates/bacnet-server/src/server/list_element_event_tests.rs::alarm_values_list_edits_move_a_zone_at_once",
+    "crates/bacnet-server/src/handlers/tests/access_zone_oos_writes.rs::alarm_values_take_occupancy_states_over_the_wire",
+    "crates/bacnet-objects/src/database/tests.rs::all_ten_builtin_intrinsic_families_implement_atomic_commit",
+    "crates/bacnet-objects/src/enrollment_summary_capability_tests.rs::all_ten_intrinsic_families_report_implied_algorithm_and_shared_commit_coordinate",
+    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::{all_ten_builtin_normal_families_project_exact_typed_values,builtin_fault_projection_is_tag_19_with_explicit_property_order}",
+    "crates/bacnet-server/src/server/event_message_policy_tests.rs::all_ten_builtin_families_store_each_policy_message_in_only_its_coordinate",
+    "crates/bacnet-server/src/pics/acked_transitions_policy_tests.rs::acked_transitions_network_policy_is_uniform_on_all_supported_types",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list,property_metadata_access_trio_write_capabilities_match_dispatch}",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_zone_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/zone_event_tests.rs::{access_zone_alarm_values_take_occupancy_states_only,access_zone_alarm_values_past_the_cap_are_no_space,access_zone_condition_cleared_within_time_delay_reports_nothing,access_zone_event_detection_enable_suspends_and_resets_reporting}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#access-control-7"
+   ],
+   "notes": [
+    "Time_Delay, Notification_Class, Alarm_Values, Event_Enable, Notify_Type, Event_Detection_Enable and Time_Delay_Normal are writable; Acked_Transitions, Event_Time_Stamps and Event_Message_Texts are read-only.",
+    "Alarm_Values takes named BACnetAccessZoneOccupancyState values and proprietary ones from 64 to 65535, else VALUE_OUT_OF_RANGE naming the element. A WriteProperty of one element reaches the zone as that element alone.",
+    "The algorithm watches the Occupancy_State and Reliability served, so a count or fault simulated out of service raises events as a real one does.",
+    "A CHANGE_OF_STATE notification carries Occupancy_State as its `zone-occupancy-state` New_State; a CHANGE_OF_RELIABILITY one lists Occupancy_State.",
+    "Moving from one alarm value to another keeps OFFNORMAL and sends nothing, the optional re-indication of Clause 13.3.2 being left out."
    ],
    "gaps": [
-    "Intrinsic reporting on Occupancy_State (CHANGE_OF_STATE) and its event rows are not modeled (no issue)",
-    "Entry_Points and Exit_Points serve Object Identifiers, not BACnetDeviceObjectReference elements, and have no setter (no issue)"
+    "#1132: a count the application sets on the object reaches the algorithm at the next one-second tick, as no runtime route runs it at once",
+    "#1328: WriteProperty can't write an empty Alarm_Values list",
+    "#1329: Event_Message_Texts_Config, Event_Algorithm_Inhibit and Event_Algorithm_Inhibit_Ref are not served"
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-ZONE-ENTRY-EXIT-POINTS",
+   "standard_anchor": "Clause 12.32, Table 12-37, Clauses 12.32.23 and 12.32.24",
+   "priority": "P1",
+   "summary": "An Access Zone serves Entry_Points and Exit_Points as lists of BACnetDeviceObjectReference naming Access Points, which the application sets.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/zone.rs::AccessZoneObject",
+    "crates/bacnet-objects/src/device_reference.rs::object_reference_list",
+    "crates/bacnet-objects/src/device_reference.rs::check_device_member",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/zone_points_tests.rs::access_zone_entry_and_exit_points_serve_device_object_references",
+    "crates/bacnet-server/src/handlers/tests/device_reference_reads.rs::access_zone_entry_and_exit_points_are_served_framed",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_entry_and_exit_points_reach_the_zone_lists",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_entry_and_exit_points_reach_the_lists_and_name_points_only",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_keywords"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/zone_points_tests.rs::access_zone_points_refuse_other_objects_and_non_device_devices"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#constructed-property-framing",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "`set_entry_points` and `set_exit_points` refuse a reference to anything but an Access Point, or one whose device identifier is not a Device, with VALUE_OUT_OF_RANGE, keeping the list.",
+    "Both lists are read-only on the network: WriteProperty gets WRITE_ACCESS_DENIED.",
+    "Python sets them at registration with `add_access_zone(entry_points=..., exit_points=...)`."
    ]
   },
   {
@@ -2894,6 +3010,7 @@
     "crates/bacnet-objects/src/device_reference.rs::check_device_member",
     "crates/bacnet-objects/src/access_control/door.rs::set_door_members",
     "crates/bacnet-objects/src/access_control/point.rs::set_access_doors",
+    "crates/bacnet-objects/src/access_control/zone.rs::set_entry_points",
     "crates/bacnet-objects/src/staging.rs",
     "crates/bacnet-objects/src/access_control/rights.rs::check_access_rule",
     "crates/rusty-bacnet/src/types/property_reference.rs::check_device",
@@ -2907,6 +3024,7 @@
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/access_control/device_reference_tests.rs::{access_door_door_members_refuse_a_non_device_device_identifier,access_point_access_doors_refuse_a_non_device_device_identifier,access_point_event_credential_refuses_a_non_device_device_identifier,access_credential_assigned_access_rights_refuse_a_non_device_device_identifier}",
+    "crates/bacnet-objects/src/access_control/zone_points_tests.rs::access_zone_points_refuse_other_objects_and_non_device_devices",
     "crates/bacnet-objects/src/group/tests.rs::{structured_view_add_subordinate_refuses_a_non_device_device_identifier,structured_view_set_subordinates_replaces_both_arrays_or_nothing}",
     "crates/bacnet-objects/src/staging/tests.rs::target_references_refuse_a_non_device_device_identifier",
     "crates/bacnet-objects/src/access_control/rights_tests.rs::access_rights_rules_refuse_a_non_device_device_identifier",
@@ -3579,7 +3697,9 @@
     "crates/bacnet-objects/src/notification_forwarder/mod.rs::NotificationForwarderObject::with_persistence",
     "crates/bacnet-objects/src/notification_forwarder/saving.rs::Storage",
     "crates/bacnet-objects/src/durable.rs::SaveWriter",
-    "crates/bacnet-server/src/server/durable_writes.rs::stage"
+    "crates/bacnet-server/src/server/durable_writes.rs::stage",
+    "crates/bacnet-objects/src/durable/staged.rs::StagedSaves",
+    "crates/bacnet-objects/src/durable/file.rs::ObjectFile"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/event_notification_subscription.rs::event_notification_subscription_round_trips_golden_elements",
@@ -3636,6 +3756,7 @@
     "crates/bacnet-objects/src/durable/tests.rs::a_directory_sync_follows_a_rename",
     "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_release_from_another_request_leaves_the_staged_write_alone",
     "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_slow_save_keeps_its_staged_write_for_a_lifetime_after_it_finishes",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::an_operation_task_call_drops_a_forgotten_staged_write_on_the_store_clock",
     "crates/bacnet-objects/src/durable/tests.rs::a_staged_lifetime_counts_from_the_end_of_the_save",
     "crates/bacnet-objects/src/durable/tests.rs::a_ticket_recognizes_only_its_own_wait",
     "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::a_write_property_multiple_stopped_before_its_list_write_puts_the_served_list_back",
@@ -4052,6 +4173,74 @@
      "A Device binding routed to the local network's known number at the link broadcast MAC is skipped and counts in recipient_unroutable, as a local binding at that MAC does.",
      "Python reads either object's Recipient_List as a list of Destination mappings with every key, the form add_notification_forwarder takes; a value that doesn't decode as destinations stays application_data octets."
     ]
+  },
+  {
+   "id": "BACNET-12-NOTIFICATION-CLASS-RECIPIENT-LIST-RESTART",
+   "standard_anchor": "Clause 12.21.8",
+   "priority": "P1",
+   "summary": "A Notification Class built with persistence saves each written Recipient_List before serving it and serves the saved list again after a restart.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/notification_class/persistence.rs::NotificationClassPersistence",
+    "crates/bacnet-objects/src/notification_class/persistence.rs::FileNotificationClassPersistence",
+    "crates/bacnet-objects/src/notification_class/saving.rs::NotificationClass::with_persistence",
+    "crates/bacnet-objects/src/durable/staged.rs::StagedSaves::expire",
+    "crates/bacnet-objects/src/durable/staged.rs::StagedSaves",
+    "crates/bacnet-objects/src/durable/file.rs::ObjectFile",
+    "crates/bacnet-server/src/server/durable_writes.rs::may_save",
+    "crates/rusty-bacnet/src/server/server_methods/registration.rs::add_notification_class"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::a_written_recipient_list_reads_back_after_a_rebuild",
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::saved_recipient_list_wins_over_configured_destinations",
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::configured_destinations_apply_at_every_start_until_a_write",
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::a_saved_empty_recipient_list_still_wins",
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::file_persistence_keeps_a_class_list_across_a_rebuild",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_staged_write_saves_while_the_class_serves_the_old_list",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_second_write_waits_until_the_first_has_landed",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_staged_write_its_request_never_made_leaves_storage_with_the_served_list",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_dropped_staged_write_leaves_configured_destinations_unsaved",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_write_nobody_staged_supersedes_a_staged_one",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_forgotten_staged_write_is_dropped_by_the_next_write_that_stages",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::staging_skips_writes_the_class_does_not_save_or_will_refuse",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::an_operation_task_call_drops_a_forgotten_staged_write_once_its_lifetime_is_over",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_staged_write_whose_request_vanished_is_put_back_within_its_lifetime_and_a_tick",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_write_property_saves_off_the_lock_and_survives_a_rebuild",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_write_property_multiple_saves_off_the_lock_and_survives_a_rebuild",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::an_add_list_element_saves_off_the_lock_and_survives_a_rebuild",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_remove_list_element_saves_off_the_lock_and_survives_a_rebuild",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_write_local_saves_off_the_lock_and_survives_a_rebuild",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::configured_destinations_are_never_saved_and_a_written_list_wins_on_restart",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_write_property_multiple_stopped_before_its_list_write_saves_no_list",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::deleting_a_class_while_its_save_is_held_leaves_the_database_available",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_paused_clock_stands_still_while_a_class_save_runs",
+    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRestartTests::test_a_written_recipient_list_survives_a_restart",
+    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_runtime_and_stub_agree"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::a_recipient_list_write_that_cannot_be_saved_is_refused",
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::a_saved_recipient_list_a_write_would_refuse_refuses_the_class",
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::file_persistence_round_trips_and_refuses_another_objects_file",
+    "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::file_persistence_refuses_a_file_past_its_size_or_entry_caps",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_staged_write_whose_save_fails_is_refused_and_the_old_list_stays",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_list_that_cannot_be_saved_is_refused_on_every_path_and_the_old_list_stays",
+    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRestartTests::test_a_list_that_cannot_be_saved_is_refused_and_the_old_list_stays",
+    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_an_empty_storage_path_is_refused",
+    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_storage_path_is_a_str_naming_a_file_this_backend_wrote"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#schedule--notification-6",
+    "docs/python-api.md#schedule--notification"
+   ],
+   "notes": [
+    "Destinations from `add_destination` are never saved and apply at each start until a write sets the list; after that the saved list wins, even when empty, and `add_destination` only checks.",
+    "The server stages list writes from WriteProperty, WritePropertyMultiple, AddListElement, RemoveListElement and `write_local`, saving with the database guard dropped; WritePropertyMultiple under a mutation authorizer saves in place.",
+    "A list that cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM. Storage goes back to the served list at once when a staged write is released unmade, or within 10 s and a tick when its request vanished.",
+    "`FileNotificationClassPersistence` writes its own `RBNNCL01` format, a sibling of the forwarder's `RBNFWD01`, and refuses a file past 64 KiB or 32 destinations, or saved for another object.",
+    "A class built with `NotificationClass::new`, and one added from Python without `storage_path`, keeps its Recipient_List in memory only."
+   ],
+   "gaps": []
   },
   {
    "id": "BACNET-12-EVENT-PARAMETERS-FRAMING",
@@ -5880,7 +6069,8 @@
     "crates/bacnet-server/src/server/audit_reporter_list_tests.rs::audit_reporter_list_duplicates_and_absent_elements_preserve_delta_and_preimage",
     "crates/rusty-bacnet/src/errors.rs::tests::protocol_errors_carry_their_structured_detail",
     "crates/rusty-bacnet/tests/test_list_validation.py::test_change_list_error_reaches_python_with_its_element_number",
-    "crates/bacnet-server/src/server/schedule_reference_list_tests.rs::add_commands_the_new_target_and_remove_relinquishes_the_dropped_one"
+    "crates/bacnet-server/src/server/schedule_reference_list_tests.rs::add_commands_the_new_target_and_remove_relinquishes_the_dropped_one",
+    "crates/bacnet-server/src/server/list_element_event_tests.rs::{alarm_values_list_edits_move_a_zone_at_once,alarm_values_list_edit_moves_a_multi_state_input_at_once}"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::remove_list_element_refuses_an_absent_element_and_removes_nothing",
@@ -5935,6 +6125,7 @@
     "A named element the list already held, or a refusal of what a removal leaves, is no element of the request and reports 0 (Clause 15.1.1.3.2). A refusal that names no element, from a custom object, keeps the earlier estimate: the first element the list would gain, exact for a request adding one new element.",
     "Before #1048 a named refusal passed through unmapped, so a custom object's list position went out as the request's element number. WriteProperty and WritePropertyMultiple keep the plain class/code on the wire; their Rust results now carry the detail.",
     "A pure-duplicate AddListElement still writes the unchanged list, so the object's write-access check applies. Audit observation is unchanged in kind: an executable request that fails (not found, datatype, object refusal) is recorded with its error and pre-image, and malformed elements stay silent. CreateObject-Error, which has the same shape, and the other structured error bodies are BACNET-21-STRUCTURED-ERROR-BODIES (#1047), which generalized Error::ChangeList into Error::Structured.",
+    "A successful edit runs the object's per-write event evaluation, as WriteProperty does: an Alarm_Values edit with Time_Delay 0 moves Event_State at once, and a transition it starts gets the COV fanout the periodic task would give it.",
     "Subscribed_Recipients has its own codec and matcher: an element names the entry with the same recipient and process identifier, an add renews that entry in place, and a refusal on a renewed entry names the request element that renewed it. Its evidence is under BACNET-12-FORWARDER-SUBSCRIBED-RECIPIENTS."
    ]
   },
@@ -8500,8 +8691,8 @@
     "crates/bacnet-server/src/server/lifecycle.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-objects/src/database/tests.rs::all_nine_builtin_intrinsic_families_implement_atomic_commit",
-    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::all_nine_builtin_normal_families_project_exact_typed_values",
+    "crates/bacnet-objects/src/database/tests.rs::all_ten_builtin_intrinsic_families_implement_atomic_commit",
+    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::all_ten_builtin_normal_families_project_exact_typed_values",
     "crates/bacnet-server/src/server/event_notifications_custom_tests.rs::custom_immediate_proposal_commits_exact_history_before_distribution",
     "crates/bacnet-server/src/server/event_notifications_custom_tests.rs::custom_delayed_proposal_commits_exact_history_before_distribution",
     "crates/bacnet-server/src/server/event_notifications_custom_tests.rs::custom_local_commit_survives_distribution_gates",
