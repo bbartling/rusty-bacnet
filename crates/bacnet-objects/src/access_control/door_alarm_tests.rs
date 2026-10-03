@@ -200,7 +200,11 @@ fn access_door_alarm_lists_take_door_alarm_states_only() {
     // NORMAL can't be masked: it is the state every alarm returns to. The
     // other two lists may name it.
     crate::common::assert_list_element_refused(
-        write(&mut door, P::MASKED_ALARM_VALUES, states(&[S::TAMPER, S::NORMAL])),
+        write(
+            &mut door,
+            P::MASKED_ALARM_VALUES,
+            states(&[S::TAMPER, S::NORMAL]),
+        ),
         ErrorClass::PROPERTY,
         ErrorCode::VALUE_OUT_OF_RANGE,
         2,

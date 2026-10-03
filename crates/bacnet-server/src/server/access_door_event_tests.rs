@@ -115,7 +115,11 @@ fn take(sent: &SendLog) -> Vec<Bytes> {
     sent.take().into_iter().map(|frame| frame.npdu).collect()
 }
 
-async fn read(server: &BACnetServer<TestTransport>, oid: ObjectIdentifier, property: P) -> PropertyValue {
+async fn read(
+    server: &BACnetServer<TestTransport>,
+    oid: ObjectIdentifier,
+    property: P,
+) -> PropertyValue {
     server
         .database()
         .read()
@@ -193,7 +197,13 @@ async fn access_door_open_too_long_reaches_recipients_until_masked() {
 #[tokio::test(start_paused = true)]
 async fn access_door_simulated_alarm_goes_into_and_out_of_alarm() {
     let (server, oid, sent) = start(door(0)).await;
-    write(&server, oid, P::OUT_OF_SERVICE, PropertyValue::Boolean(true)).await;
+    write(
+        &server,
+        oid,
+        P::OUT_OF_SERVICE,
+        PropertyValue::Boolean(true),
+    )
+    .await;
     assert!(sent.is_empty());
 
     write(
@@ -240,7 +250,13 @@ async fn access_door_simulated_alarm_goes_into_and_out_of_alarm() {
 #[tokio::test(start_paused = true)]
 async fn access_door_fault_value_reports_door_alarm_state_and_present_value() {
     let (server, oid, sent) = start(door(0)).await;
-    write(&server, oid, P::OUT_OF_SERVICE, PropertyValue::Boolean(true)).await;
+    write(
+        &server,
+        oid,
+        P::OUT_OF_SERVICE,
+        PropertyValue::Boolean(true),
+    )
+    .await;
     write(
         &server,
         oid,

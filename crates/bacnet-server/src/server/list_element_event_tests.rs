@@ -121,7 +121,8 @@ async fn masked_alarm_values_list_edit_returns_a_door_to_normal_at_once() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
         // FORCED_OPEN (3) is an alarm value, with Time_Delay 0 (#1149).
         let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
-        door.set_alarm_values([DoorAlarmState::FORCED_OPEN]).unwrap();
+        door.set_alarm_values([DoorAlarmState::FORCED_OPEN])
+            .unwrap();
         door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN)
             .unwrap();
         db.add(Box::new(door)).unwrap();

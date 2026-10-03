@@ -66,7 +66,9 @@ impl BACnetObject for BuiltInProjectionObject {
             {
                 Ok(PropertyValue::Enumerated(0))
             }
-            p if p == PropertyIdentifier::PRESENT_VALUE && object_type != ObjectType::ACCESS_ZONE => {
+            p if p == PropertyIdentifier::PRESENT_VALUE
+                && object_type != ObjectType::ACCESS_ZONE =>
+            {
                 Ok(self.present_value.clone())
             }
             p if p == PropertyIdentifier::FEEDBACK_VALUE => {

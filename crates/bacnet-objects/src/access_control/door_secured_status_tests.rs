@@ -69,8 +69,10 @@ fn access_door_secured_status_is_secured_with_every_input_met() {
     assert_eq!(secured(&door), SECURED);
     // Door_Alarm_State isn't an input: only Event_State sets IN_ALARM, and
     // no event algorithm has run on it.
-    door.set_alarm_values([DoorAlarmState::FORCED_OPEN]).unwrap();
-    door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN).unwrap();
+    door.set_alarm_values([DoorAlarmState::FORCED_OPEN])
+        .unwrap();
+    door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN)
+        .unwrap();
     assert_eq!(secured(&door), SECURED);
 }
 
@@ -142,7 +144,8 @@ fn report(door: &mut AccessDoorObject, state: DoorAlarmState) {
 #[test]
 fn access_door_secured_status_follows_the_in_alarm_flag() {
     let mut door = door();
-    door.set_alarm_values([DoorAlarmState::FORCED_OPEN]).unwrap();
+    door.set_alarm_values([DoorAlarmState::FORCED_OPEN])
+        .unwrap();
     door.set_fault_values([DoorAlarmState::DOOR_FAULT]).unwrap();
     for (state, event_state, flags) in [
         (
@@ -183,8 +186,13 @@ fn access_door_secured_status_fails_while_any_state_is_masked() {
     door.set_masked_alarm_values([DoorAlarmState::TAMPER])
         .unwrap();
     assert_eq!(secured(&door), UNSECURED);
-    door.write_property(P::MASKED_ALARM_VALUES, None, PropertyValue::List(vec![]), None)
-        .unwrap();
+    door.write_property(
+        P::MASKED_ALARM_VALUES,
+        None,
+        PropertyValue::List(vec![]),
+        None,
+    )
+    .unwrap();
     assert_eq!(secured(&door), SECURED);
 }
 

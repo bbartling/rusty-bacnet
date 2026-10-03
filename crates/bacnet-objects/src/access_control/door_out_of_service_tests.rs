@@ -182,7 +182,8 @@ fn access_door_return_to_service_serves_the_device_state_again() {
     let mut door = door();
     door.set_door_status(DoorStatus::OPENED);
     door.set_lock_status(LockStatus::UNLOCKED);
-    door.set_door_alarm_state(DoorAlarmState::DOOR_OPEN_TOO_LONG).unwrap();
+    door.set_door_alarm_state(DoorAlarmState::DOOR_OPEN_TOO_LONG)
+        .unwrap();
     let device = served(&door);
     assert_eq!(
         device,
@@ -220,7 +221,8 @@ fn access_door_return_to_service_serves_the_device_state_again() {
     assert_eq!(served(&door), served(&self::door()));
     // In service the device's values are served directly again, and the
     // rows refuse writes once more.
-    door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN).unwrap();
+    door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN)
+        .unwrap();
     assert_eq!(
         read(&door, P::DOOR_ALARM_STATE),
         enumerated(DoorAlarmState::FORCED_OPEN.to_raw())

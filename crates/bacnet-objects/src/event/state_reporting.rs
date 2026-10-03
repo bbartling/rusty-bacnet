@@ -264,14 +264,23 @@ pub(crate) fn enumerated_list(
 
 /// [`enumerated_list`] for values an application sets: the same checks, as
 /// a network write of the same list would meet them.
-pub(crate) fn checked_raw_list(values: Vec<u32>, in_range: fn(u32) -> bool) -> Result<Vec<u32>, Error> {
+pub(crate) fn checked_raw_list(
+    values: Vec<u32>,
+    in_range: fn(u32) -> bool,
+) -> Result<Vec<u32>, Error> {
     let values = values.into_iter().map(PropertyValue::Enumerated).collect();
     enumerated_list(None, &PropertyValue::List(values), in_range)
 }
 
 /// [`enumerated_list`] read back: the raw values as a list of Enumerated.
 pub(crate) fn enumerated_list_value(values: &[u32]) -> PropertyValue {
-    PropertyValue::List(values.iter().copied().map(PropertyValue::Enumerated).collect())
+    PropertyValue::List(
+        values
+            .iter()
+            .copied()
+            .map(PropertyValue::Enumerated)
+            .collect(),
+    )
 }
 
 /// Implement the `BACnetObject` intrinsic-reporting hooks of an object that

@@ -2,7 +2,9 @@
 //! WriteProperty and WritePropertyMultiple: taken while Out_Of_Service is
 //! TRUE, refused in service (Clause 12.26.9, Table 12-30 footnote 1, #1131).
 //! Also the Secured_Status a ReadProperty derives from the served values and
-//! Present_Value (Clause 12.26.14, #1148).
+//! Present_Value (Clause 12.26.14, #1148), and the door's three alarm lists
+//! over WriteProperty, WritePropertyMultiple and the list services, with the
+//! Door_Alarm_State they admit (Clauses 12.26.20 and 12.26.21, #1149).
 
 use super::*;
 use bacnet_objects::access_control::AccessDoorObject;
@@ -447,8 +449,7 @@ fn door_alarm_lists_take_door_alarm_states_over_the_wire() {
             (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, 2),
             "{list:?}"
         );
-        handle_remove_list_element(&mut db, &list_request(oid, list, &[0x91, 4, 0x91, 6]))
-            .unwrap();
+        handle_remove_list_element(&mut db, &list_request(oid, list, &[0x91, 4, 0x91, 6])).unwrap();
         assert_eq!(read_bytes(&db, oid, list), [0x91, 7], "{list:?}");
     }
     // NORMAL can't be masked.

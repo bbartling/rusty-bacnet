@@ -2069,7 +2069,7 @@
     "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_pulse_below_a_live_command_or_of_zero_length_never_takes_effect",
     "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_rewriting_a_pulse_slot_cancels_or_rearms_its_deadline",
     "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_times_are_unsigned32_tenths",
-    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::property_metadata_access_door_writes_command_priority_and_gate_relinquish"
+    "crates/bacnet-objects/src/access_control/metadata_topology_door_tests.rs::property_metadata_access_door_writes_command_priority_and_gate_relinquish"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2096,11 +2096,12 @@
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/access_control/door_out_of_service_tests.rs::{access_door_takes_simulated_rows_out_of_service,access_door_return_to_service_serves_the_device_state_again,access_door_simulation_neither_drives_nor_follows_the_pulse_relock}",
-    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_trio_write_capabilities_match_dispatch,property_metadata_access_door_writes_command_priority_and_gate_relinquish}",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::property_metadata_access_trio_write_capabilities_match_dispatch",
+    "crates/bacnet-objects/src/access_control/metadata_topology_door_tests.rs::property_metadata_access_door_writes_command_priority_and_gate_relinquish",
     "crates/bacnet-objects/src/access_control/door_secured_status_tests.rs::{access_door_secured_status_is_secured_with_every_input_met,access_door_secured_status_follows_present_value,access_door_secured_status_follows_door_and_lock_status,access_door_secured_status_follows_the_in_alarm_flag,access_door_secured_status_is_unknown_when_an_input_cannot_be_told,access_door_secured_status_follows_a_pulse_and_its_relock,access_door_secured_status_follows_a_simulation_and_the_return_to_service}",
     "crates/bacnet-server/src/handlers/tests/access_door_oos_writes.rs::{write_property_takes_door_status_rows_only_out_of_service,write_property_multiple_takes_door_status_rows_only_out_of_service,read_property_derives_secured_status_from_the_served_door}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_door_indexed_reads_and_bytes_are_unchanged",
-    "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_door_simulated_door_alarm_state_reports_and_restores",
+    "crates/bacnet-server/src/server/table_13_1_door_cov_tests.rs::access_door_simulated_door_alarm_state_reports_and_restores",
     "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact",
     "crates/bacnet-objects/src/access_control/door_secured_status_tests.rs::access_door_secured_status_fails_while_any_state_is_masked"
    ],
@@ -6685,7 +6686,7 @@
     "crates/bacnet-server/src/server/averaging_window_tests.rs::averaging_missed_sample_local_counts_an_attempt_and_not_a_value",
     "crates/bacnet-objects/src/averaging/sample_tests.rs::averaging_missed_samples_count_as_attempted_but_not_valid",
     "crates/bacnet-server/src/server/averaging_sampling_tests.rs::averaging_server_samples_notify_property_subscribers",
-    "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_door_cov_reports_and_triggers_on_door_alarm_state",
+    "crates/bacnet-server/src/server/table_13_1_door_cov_tests.rs::access_door_cov_reports_and_triggers_on_door_alarm_state",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_point_cov_leads_with_access_event_and_triggers_on_its_time",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::credential_data_input_cov_reports_and_triggers_on_update_time",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::load_control_cov_reports_and_triggers_on_its_shed_rows",
@@ -6723,7 +6724,7 @@
     "The server picks the leading value by object type (cov/reported.rs lead): Present_Value as a trigger, or on an Access Point Access_Event, which doesn't trigger; Active_COV_Subscriptions names the same property.",
     "Credential Data Input's Present_Value stays a trigger although its row's criteria name only Update_Time and Status_Flags: Clause 12.36 has Update_Time change on every Present_Value update, so this sends no report the row wouldn't.",
     "Load Control has no COV_Increment, so its Present_Value reports on any change. Door_Alarm_State, Update_Time and the Access Point event rows have no runtime application route yet: the new setters AccessDoorObject::set_door_alarm_state, AccessPointObject::set_access_event and CredentialDataInputObject::set_update_time reach the object only before the server holds it, so the wire tests replace the stored object and run the fanout.",
-    "#1131 made Door_Alarm_State, Door_Status and Lock_Status writable while Out_Of_Service is TRUE (BACNET-12-ACCESS-DOOR-OUT-OF-SERVICE-SIMULATION), and table_13_1_cov_tests.rs::access_door_simulated_door_alarm_state_reports_and_restores shows a simulated Door_Alarm_State and its restore on the return to service each sending the report.",
+    "#1131 made Door_Alarm_State, Door_Status and Lock_Status writable while Out_Of_Service is TRUE (BACNET-12-ACCESS-DOOR-OUT-OF-SERVICE-SIMULATION), and table_13_1_door_cov_tests.rs::access_door_simulated_door_alarm_state_reports_and_restores shows a simulated Door_Alarm_State and its restore on the return to service each sending the report.",
     "Not claimed for #1061: Access_Event_Authentication_Factor and Duty_Window, which the objects don't serve and the reports leave out (#1092); and a Load Control Start_Time write route.",
     "An Access Point serves Access_Event_Credential (#1284), so its reports carry it after Access_Event_Time (BACNET-12-ACCESS-POINT-AUTHENTICATION-AND-CREDENTIAL).",
     "The reports carry Credential Data Input Present_Value, the BACnetTimeStamp rows (Update_Time, Access_Event_Time) and the BACnetShedLevel rows exactly as ReadProperty serves them, in their Clause 21 forms since #1133 (BACNET-12-ACCESS-LOAD-CONTROL-DATATYPES).",
