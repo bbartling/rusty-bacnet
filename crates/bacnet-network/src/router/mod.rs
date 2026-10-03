@@ -58,10 +58,11 @@
 mod local_delivery;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu};
+use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduDecodeError};
 use bacnet_transport::port::{DataAttribute, TransportPort};
 use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
 use bacnet_types::error::Error;
@@ -83,7 +84,7 @@ use control_messages::handle_network_message;
 pub use control_policy::{ControlAuthContext, ControlAuthorizer, ControlClass};
 pub use control_policy::{ControlDecisionCounters, ControlGate, ControlPolicy};
 pub use control_policy::{ControlServiceCounters, ControlTrust};
-use forwarding::{forward_broadcast, forward_unicast, send_reject};
+use forwarding::{forward_broadcast, forward_unicast, refuse_address_too_long, send_reject};
 
 /// A send request to be forwarded on a port.
 #[derive(Debug)]
@@ -333,6 +334,8 @@ pub struct BACnetRouter {
     sender_tasks: Vec<JoinHandle<()>>,
     /// Background task that purges stale learned routes.
     aging_task: Option<JoinHandle<()>>,
+    /// NPDUs refused for a DLEN or SLEN past `NpduAddress::MAX_MAC_LEN`.
+    address_length_drops: Arc<AtomicU64>,
 }
 
 impl BACnetRouter {
@@ -413,6 +416,19 @@ impl BACnetRouter {
     /// Count-only RB-09 decision totals (allow/deny/policy-deny per class).
     pub fn control_snapshot(&self) -> control_policy::ControlDecisionCounters {
         self.control.snapshot()
+    }
+
+    /// NPDUs refused on any port since start because their DLEN or SLEN was
+    /// past [`NpduAddress::MAX_MAC_LEN`](bacnet_encoding::npdu::NpduAddress::MAX_MAC_LEN)
+    /// (#1141). Saturates at `u64::MAX`.
+    ///
+    /// Such an NPDU is neither forwarded nor delivered locally. When it names
+    /// a specific DNET, the router also answers the sender with
+    /// Reject-Message-To-Network reason 6, `ADDRESSING_ERROR` (Clause 6.4.4),
+    /// the way it rejects a DNET it cannot reach. A global broadcast, or an
+    /// NPDU without a DNET, is only dropped.
+    pub fn address_length_drops(&self) -> u64 {
+        self.address_length_drops.load(Ordering::Relaxed)
     }
 
     async fn start_dispatch<T: TransportPort + 'static>(
@@ -548,11 +564,13 @@ impl BACnetRouter {
         }
 
         let mut dispatch_tasks = Vec::new();
+        let address_length_drops = Arc::new(AtomicU64::new(0));
 
         for (port_idx, mut rx) in port_receivers.into_iter().enumerate() {
             let table = Arc::clone(&table);
             let discovery = Arc::clone(&discovery);
             let control = Arc::clone(&control);
+            let address_length_drops = Arc::clone(&address_length_drops);
             let local_tx = local_tx.clone();
             let send_txs = Arc::clone(&send_txs);
             let port_network = port_networks[port_idx];
@@ -726,6 +744,15 @@ impl BACnetRouter {
                                 let _ = local_tx.try_send_apdu(apdu);
                             }
                         }
+                        Err(e @ NpduDecodeError::AddressTooLong { dnet, .. }) => {
+                            warn!(error = %e, port = port_idx, "Router refused an NPDU");
+                            refuse_address_too_long(
+                                &send_txs[port_idx],
+                                &received,
+                                dnet,
+                                &address_length_drops,
+                            );
+                        }
                         Err(e) => {
                             warn!(error = %e, port = port_idx, "Router decode failed");
                         }
@@ -774,6 +801,7 @@ impl BACnetRouter {
                 dispatch_tasks,
                 sender_tasks,
                 aging_task: Some(aging_task),
+                address_length_drops,
             },
             local_rx,
             counters,

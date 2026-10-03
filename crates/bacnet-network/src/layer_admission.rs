@@ -1,5 +1,5 @@
 use super::*;
-use bacnet_encoding::npdu::decode_npdu;
+use bacnet_encoding::npdu::{decode_npdu, NpduDecodeError};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::task::Poll;
@@ -530,6 +530,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         let mut npdu_rx = self.transport.start().await?;
         let mut network_control_tx = self.network_control_tx.take();
         let network_control_ingress_sequence = Arc::clone(&self.network_control_ingress_sequence);
+        let address_length_drops = Arc::clone(&self.address_length_drops);
         let (apdu_tx, apdu_rx) = AdmissionSender::channel(track_depth);
         let counters = apdu_tx.counters.clone();
 
@@ -597,6 +598,11 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                             Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
                             Err(mpsc::error::TrySendError::Closed(_)) => break,
                         }
+                    }
+                    Err(e @ NpduDecodeError::AddressTooLong { .. }) => {
+                        // A non-router has no reject to send (Clause 6.6.3.5).
+                        count_address_length_drop(&address_length_drops);
+                        warn!(error = %e, "Dropping NPDU with an over-long address");
                     }
                     Err(e) => {
                         warn!(error = %e, "Failed to decode NPDU");
