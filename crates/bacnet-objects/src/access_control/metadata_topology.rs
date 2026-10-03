@@ -51,6 +51,11 @@ use crate::property_metadata::{
 // (#1248) without opening them to writes. Authentication_Status and
 // Access_Event_Credential, appended for #1284, carry the table R code with
 // no write arm, so RequiredRead/ReadOnly too.
+// The point rows #1307 appended carry the table R code.
+// Active_Authentication_Policy and Authorization_Mode have routed write arms,
+// so RequiredRead/Always; the application sets
+// Number_Of_Authentication_Policies and Priority_For_Writing, which have no
+// write arm, so RequiredRead/ReadOnly.
 // Zone Global_Identifier carries the table W code with the routed Unsigned
 // arm, so RequiredWrite/Always. Table 12-37 has neither Present_Value nor
 // Access_Doors, so the zone serves neither (#1064 removed the
@@ -125,6 +130,15 @@ const ACCESS_POINT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::AUTHENTICATION_STATUS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::ACCESS_EVENT_CREDENTIAL, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::ACTIVE_AUTHENTICATION_POLICY, RequiredRead, None, Always),
+    PropertyMetadata::new(
+        P::NUMBER_OF_AUTHENTICATION_POLICIES,
+        RequiredRead,
+        None,
+        ReadOnly,
+    ),
+    PropertyMetadata::new(P::AUTHORIZATION_MODE, RequiredRead, None, Always),
+    PropertyMetadata::new(P::PRIORITY_FOR_WRITING, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 

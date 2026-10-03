@@ -112,6 +112,11 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             // The Table 12-36 required rows #1284 added.
             P::AUTHENTICATION_STATUS,
             P::ACCESS_EVENT_CREDENTIAL,
+            // The Table 12-36 required rows #1307 added.
+            P::ACTIVE_AUTHENTICATION_POLICY,
+            P::NUMBER_OF_AUTHENTICATION_POLICIES,
+            P::AUTHORIZATION_MODE,
+            P::PRIORITY_FOR_WRITING,
         ],
         _ => vec![
             P::OBJECT_IDENTIFIER,

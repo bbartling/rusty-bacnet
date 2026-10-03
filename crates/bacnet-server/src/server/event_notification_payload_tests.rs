@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_encoding::constructed::decode_bacnet_property_value;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use std::borrow::Cow;
 
@@ -290,7 +291,7 @@ fn builtin_fault_projection_is_tag_19_with_explicit_property_order() {
         let mut decoded = Vec::new();
         let mut offset = 0;
         while offset < property_values.len() {
-            let (entry, next) = BACnetPropertyValue::decode(&property_values, offset).unwrap();
+            let (entry, next) = decode_bacnet_property_value(&property_values, offset).unwrap();
             assert!(next > offset);
             decoded.push(entry);
             offset = next;

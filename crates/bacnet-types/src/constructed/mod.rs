@@ -17,14 +17,18 @@ mod action;
 pub use action::{BACnetActionCommand, BACnetActionList};
 mod access;
 pub use access::{
-    BACnetAssignedAccessRights, BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat,
-    BACnetCredentialAuthenticationFactor,
+    BACnetAccessRule, BACnetAssignedAccessRights, BACnetAuthenticationFactor,
+    BACnetAuthenticationFactorFormat, BACnetCredentialAuthenticationFactor,
 };
 mod audit;
 pub use audit::{
     AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
     BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification,
     BACnetObjectSelector,
+};
+mod event_notification;
+pub use event_notification::{
+    ChangeOfValueChoice, EventNotificationRequest, NotificationParameters,
 };
 mod lift;
 pub use lift::{
@@ -38,6 +42,8 @@ pub use log::{
 };
 mod property_access;
 pub use property_access::{AccessResult, BACnetPropertyAccessResult};
+mod property_value;
+pub use property_value::BACnetPropertyValue;
 mod read_access;
 pub use read_access::{PropertyReference, ReadAccessSpecification};
 mod staging;
@@ -547,29 +553,6 @@ impl From<ObjectIdentifier> for BACnetDeviceObjectReference {
             object_identifier,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// BACnetAccessRule (Clause 12 -- used by AccessRights object)
-// ---------------------------------------------------------------------------
-
-/// BACnet Access Rule for access control objects.
-///
-/// Specifies a time range and location with an enable/disable flag,
-/// used in positive and negative access rules lists.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BACnetAccessRule {
-    /// Time range specifier: 0 = specified, 1 = always.
-    pub time_range_specifier: u32,
-    /// Optional time range (start date, start time, end date, end time).
-    /// Present only when `time_range_specifier` is 0 (specified).
-    pub time_range: Option<(Date, Time, Date, Time)>,
-    /// Location specifier: 0 = specified, 1 = all.
-    pub location_specifier: u32,
-    /// Optional location reference. Present only when `location_specifier` is 0 (specified).
-    pub location: Option<BACnetDeviceObjectReference>,
-    /// Whether access is enabled or disabled by this rule.
-    pub enable: bool,
 }
 
 // ---------------------------------------------------------------------------

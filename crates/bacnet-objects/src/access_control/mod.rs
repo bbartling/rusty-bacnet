@@ -153,6 +153,7 @@ mod door_out_of_service;
 mod metadata_identity;
 mod metadata_topology;
 mod point;
+mod point_authorization;
 mod rights;
 mod user;
 mod zone;
@@ -182,6 +183,8 @@ mod device_reference_tests;
 mod door_out_of_service_tests;
 #[cfg(test)]
 mod door_pulse_tests;
+#[cfg(test)]
+mod point_authorization_tests;
 #[cfg(test)]
 mod point_out_of_service_tests;
 #[cfg(test)]

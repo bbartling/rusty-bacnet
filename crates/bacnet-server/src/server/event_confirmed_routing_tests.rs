@@ -17,6 +17,7 @@ use super::event_notifications_tests::local_broadcast_destination;
 use super::event_recipient_routing_tests::{address_recipient, destination_for};
 use super::*;
 use crate::server::test_transport::{SendLog, TestTransport, BIP_LOCAL_MAC};
+use bacnet_encoding::constructed::decode_event_notification;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event::EventStateChange;
@@ -336,7 +337,7 @@ async fn confirmed_retry_reuses_committed_message_bytes_after_history_changes() 
     assert_eq!(first.len(), 1);
     let first_frame = first[0].1.clone();
     let (_, first_request) = decode_confirmed(&first_frame);
-    let notification = EventNotificationRequest::decode(&first_request.service_request).unwrap();
+    let notification = decode_event_notification(&first_request.service_request).unwrap();
     assert_eq!(
         notification.message_text,
         Some("ANALOG_INPUT,1: NORMAL -> HIGH_LIMIT".into())

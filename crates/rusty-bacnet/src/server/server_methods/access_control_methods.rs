@@ -3,10 +3,12 @@
 //! Access_Doors and Credential Data Input Supported_Formats with
 //! Supported_Format_Classes (#1249), and Access Zone Entry_Points and
 //! Exit_Points (#1306). Each is read-only over the network, so these keyword
-//! arguments are the Python route to it.
+//! arguments are the Python route to it. The Access Point's policy count,
+//! supported authorization modes and Priority_For_Writing are read-only
+//! too, and take keyword arguments the same way (#1307).
 use super::super::*;
 use bacnet_types::constructed::BACnetAuthenticationFactorFormat;
-use bacnet_types::enums::{AuthenticationFactorType, ErrorClass, ErrorCode};
+use bacnet_types::enums::{AuthenticationFactorType, AuthorizationMode, ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 use pyo3::exceptions::PyValueError;
 
@@ -112,15 +114,40 @@ impl BACnetServer {
     /// Access Door's `door_members`; a pair whose device isn't a Device
     /// raises ValueError, and a reference to anything but an Access Door
     /// raises VALUE_OUT_OF_RANGE.
-    #[pyo3(signature = (instance, name, *, access_doors=None))]
+    ///
+    /// `number_of_authentication_policies` sets the policy count (1 when
+    /// omitted, never 0), `supported_authorization_modes` the
+    /// BACnetAuthorizationMode numbers the application carries out, which a
+    /// write of Authorization_Mode can take (AUTHORIZE alone when omitted;
+    /// AUTHORIZE must be among them, and a proprietary mode runs from 64 to
+    /// 65535), and `priority_for_writing` the door command priority (16 when
+    /// omitted, else 1 to 16). A value outside those raises
+    /// VALUE_OUT_OF_RANGE.
+    #[pyo3(signature = (
+        instance,
+        name,
+        *,
+        access_doors=None,
+        number_of_authentication_policies=None,
+        supported_authorization_modes=None,
+        priority_for_writing=None
+    ))]
     fn add_access_point(
         &self,
         instance: u32,
         name: &str,
         access_doors: Option<Vec<PyDeviceObjectReference>>,
+        number_of_authentication_policies: Option<u32>,
+        supported_authorization_modes: Option<Vec<u32>>,
+        priority_for_writing: Option<u32>,
     ) -> PyResult<()> {
-        let doors = device_references(access_doors)?;
-        let obj = access_point(instance, name, doors).map_err(to_py_err)?;
+        let settings = PointSettings {
+            access_doors: device_references(access_doors)?,
+            number_of_authentication_policies,
+            supported_authorization_modes,
+            priority_for_writing,
+        };
+        let obj = access_point(instance, name, settings).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 
@@ -179,16 +206,35 @@ fn access_door(
     Ok(obj)
 }
 
-/// Build an Access Point, applying Access_Doors through its validating
-/// setter.
+/// The optional `add_access_point` keyword arguments; `None` keeps the
+/// point's default.
+#[derive(Default)]
+struct PointSettings {
+    access_doors: Option<Vec<BACnetDeviceObjectReference>>,
+    number_of_authentication_policies: Option<u32>,
+    supported_authorization_modes: Option<Vec<u32>>,
+    priority_for_writing: Option<u32>,
+}
+
+/// Build an Access Point through its validating setters.
 fn access_point(
     instance: u32,
     name: &str,
-    doors: Option<Vec<BACnetDeviceObjectReference>>,
+    settings: PointSettings,
 ) -> Result<AccessPointObject, Error> {
     let mut obj = AccessPointObject::new(instance, name)?;
-    if let Some(doors) = doors {
+    if let Some(doors) = settings.access_doors {
         obj.set_access_doors(doors)?;
+    }
+    if let Some(count) = settings.number_of_authentication_policies {
+        obj.set_number_of_authentication_policies(count)?;
+    }
+    if let Some(modes) = settings.supported_authorization_modes {
+        obj.set_supported_authorization_modes(modes.into_iter().map(AuthorizationMode::from_raw))?;
+    }
+    if let Some(priority) = settings.priority_for_writing {
+        // A value too wide for u8 is out of 1..=16 too.
+        obj.set_priority_for_writing(u8::try_from(priority).unwrap_or(0))?;
     }
     Ok(obj)
 }

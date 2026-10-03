@@ -399,6 +399,7 @@ dependencies = [
  "bacnet-encoding",
  "bacnet-types",
  "bytes",
+ "libc",
  "tracing",
 ]
 

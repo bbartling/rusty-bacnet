@@ -55,13 +55,17 @@ fn python_door_members_and_access_doors_reach_the_arrays() {
         );
     }
 
-    let point = access_point(1, "AP-1", references(vec![remote()])).unwrap();
+    let doors = |references| PointSettings {
+        access_doors: references,
+        ..PointSettings::default()
+    };
+    let point = access_point(1, "AP-1", doors(references(vec![remote()]))).unwrap();
     assert_eq!(
         size(&point, PropertyIdentifier::ACCESS_DOORS),
         PropertyValue::Unsigned(1)
     );
     // Access_Doors names Access Doors only.
-    let refused = access_point(2, "AP-2", references(vec![local()]))
+    let refused = access_point(2, "AP-2", doors(references(vec![local()])))
         .err()
         .unwrap();
     assert!(is_value_out_of_range(&refused), "{refused:?}");
@@ -72,7 +76,7 @@ fn python_door_members_and_access_doors_reach_the_arrays() {
         size(&door, PropertyIdentifier::DOOR_MEMBERS),
         PropertyValue::Unsigned(0)
     );
-    let point = access_point(3, "AP-3", None).unwrap();
+    let point = access_point(3, "AP-3", PointSettings::default()).unwrap();
     assert_eq!(
         size(&point, PropertyIdentifier::ACCESS_DOORS),
         PropertyValue::Unsigned(0)
@@ -210,4 +214,92 @@ fn python_supported_formats_reach_both_arrays() {
         size(&bare, PropertyIdentifier::SUPPORTED_FORMATS),
         PropertyValue::Unsigned(0)
     );
+}
+
+#[test]
+fn python_point_settings_reach_the_access_point_rows() {
+    let read = |point: &AccessPointObject, property| point.read_property(property, None).unwrap();
+    let mut point = access_point(
+        1,
+        "AP-1",
+        PointSettings {
+            number_of_authentication_policies: Some(3),
+            // AUTHORIZE (0), DENY_ALL (2) and a proprietary 300.
+            supported_authorization_modes: Some(vec![0, 2, 300]),
+            priority_for_writing: Some(8),
+            ..PointSettings::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        read(
+            &point,
+            PropertyIdentifier::NUMBER_OF_AUTHENTICATION_POLICIES
+        ),
+        PropertyValue::Unsigned(3)
+    );
+    assert_eq!(
+        read(&point, PropertyIdentifier::PRIORITY_FOR_WRITING),
+        PropertyValue::Unsigned(8)
+    );
+    // The supported modes gate Authorization_Mode writes.
+    for (mode, accepted) in [(300, true), (1, false), (2, true)] {
+        let result = point.write_property(
+            PropertyIdentifier::AUTHORIZATION_MODE,
+            None,
+            PropertyValue::Enumerated(mode),
+            None,
+        );
+        assert_eq!(result.is_ok(), accepted, "{mode}: {result:?}");
+    }
+
+    // Omitted arguments keep the defaults: one policy, priority 16 and
+    // AUTHORIZE as the only supported mode, so DENY_ALL (2) is refused.
+    let mut bare = access_point(2, "AP-2", PointSettings::default()).unwrap();
+    assert_eq!(
+        read(&bare, PropertyIdentifier::NUMBER_OF_AUTHENTICATION_POLICIES),
+        PropertyValue::Unsigned(1)
+    );
+    assert_eq!(
+        read(&bare, PropertyIdentifier::PRIORITY_FOR_WRITING),
+        PropertyValue::Unsigned(16)
+    );
+    let refused = bare
+        .write_property(
+            PropertyIdentifier::AUTHORIZATION_MODE,
+            None,
+            PropertyValue::Enumerated(2),
+            None,
+        )
+        .unwrap_err();
+    assert!(is_value_out_of_range(&refused), "{refused:?}");
+
+    // Zero policies, a set without AUTHORIZE, a reserved mode, and
+    // priorities outside 1..=16, one of them too wide for u8.
+    let refusals = [
+        PointSettings {
+            number_of_authentication_policies: Some(0),
+            ..PointSettings::default()
+        },
+        PointSettings {
+            supported_authorization_modes: Some(vec![1, 2]),
+            ..PointSettings::default()
+        },
+        PointSettings {
+            supported_authorization_modes: Some(vec![0, 6]),
+            ..PointSettings::default()
+        },
+        PointSettings {
+            priority_for_writing: Some(0),
+            ..PointSettings::default()
+        },
+        PointSettings {
+            priority_for_writing: Some(256 + 8),
+            ..PointSettings::default()
+        },
+    ];
+    for settings in refusals {
+        let refused = access_point(3, "AP-3", settings).err().unwrap();
+        assert!(is_value_out_of_range(&refused), "{refused:?}");
+    }
 }

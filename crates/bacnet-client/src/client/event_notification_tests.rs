@@ -1,8 +1,9 @@
 use super::*;
 use bacnet_encoding::apdu::UnconfirmedRequest;
+use bacnet_encoding::constructed::decode_event_notification;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_encoding::tags::{encode_tag, TagClass};
-use bacnet_services::alarm_event::{EventNotificationRequest, NotificationParameters};
+use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::{EventState, EventType, NotifyType, ObjectType};
@@ -252,7 +253,7 @@ async fn valid_events_preserve_payload_metadata_and_service_specific_replies() {
         for source in [None, remote()] {
             for &(text, expected) in cases {
                 let data = payload(text);
-                assert!(EventNotificationRequest::decode(&data).is_ok());
+                assert!(decode_event_notification(&data).is_ok());
                 h.send(inbound(request(data, confirmed, false), source.clone()))
                     .await;
                 if confirmed {
@@ -291,7 +292,7 @@ async fn bad_message_text_is_dropped_only_by_client_for_both_services() {
     for confirmed in [true, false] {
         for text in invalid_text_cases() {
             let data = payload(Some(&text));
-            assert!(EventNotificationRequest::decode(&data).is_err());
+            assert!(decode_event_notification(&data).is_err());
             h.send(inbound(request(data.clone(), confirmed, false), remote()))
                 .await;
             if confirmed {
@@ -300,7 +301,7 @@ async fn bad_message_text_is_dropped_only_by_client_for_both_services() {
             h.fence().await;
             assert_notification(rx.try_recv().unwrap(), remote(), confirmed, None);
             assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
-            assert!(EventNotificationRequest::decode(&data).is_err());
+            assert!(decode_event_notification(&data).is_err());
         }
     }
     h.client.stop().await.unwrap();
@@ -344,7 +345,7 @@ async fn other_malformed_fields_are_rejected_or_silently_dropped_without_deliver
     let mut rx = h.client.event_notifications();
     for confirmed in [true, false] {
         for data in malformed_cases() {
-            assert!(EventNotificationRequest::decode(&data).is_err());
+            assert!(decode_event_notification(&data).is_err());
             h.send(inbound(request(data, confirmed, false), remote()))
                 .await;
             if confirmed {

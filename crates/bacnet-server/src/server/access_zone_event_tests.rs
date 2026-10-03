@@ -10,12 +10,12 @@ use super::event_notifications_tests::{
 };
 use super::*;
 use crate::server::test_transport::{SendLog, TestTransport};
+use bacnet_encoding::constructed::decode_bacnet_property_value;
 use bacnet_objects::access_control::AccessZoneObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::NotificationParameters;
-use bacnet_services::common::BACnetPropertyValue;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::BACnetPropertyStates;
 use bacnet_types::enums::{
@@ -234,7 +234,7 @@ async fn access_zone_fault_notification_reports_occupancy_state() {
         StatusFlags::IN_ALARM | StatusFlags::FAULT | StatusFlags::OUT_OF_SERVICE
     );
     // Occupancy_State alone, NORMAL with the count at zero.
-    let (entry, end) = BACnetPropertyValue::decode(&property_values, 0).unwrap();
+    let (entry, end) = decode_bacnet_property_value(&property_values, 0).unwrap();
     assert_eq!(end, property_values.len());
     assert_eq!(entry.property_identifier, P::OCCUPANCY_STATE);
     assert_eq!(entry.value, [0x91, 0x00]);

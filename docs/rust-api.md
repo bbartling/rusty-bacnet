@@ -1877,6 +1877,19 @@ framing, through the shared `bacnet-encoding` codecs.
   network. `AccessZoneObject::set_entry_points` and `set_exit_points` set
   them and return `Result`: a reference to anything but an Access Point is
   VALUE_OUT_OF_RANGE, and the points set before are kept.
+- **Access Rights rules**: `Positive_Access_Rules` and `Negative_Access_Rules`
+  are BACnetARRAYs of `bacnet_types::constructed::BACnetAccessRule` (codec
+  `bacnet_encoding::constructed::{encode_access_rule, decode_access_rule}`),
+  read whole, by index and at index 0 for the size like the arrays above, and
+  read-only on the network. `BACnetAccessRule::new(time_range, location,
+  enable)` sets each specifier from its reference: SPECIFIED when given,
+  ALWAYS or ALL when `None`. `AccessRightsObject::set_positive_access_rules`
+  and `set_negative_access_rules` return `Result` and keep the old rules on
+  VALUE_OUT_OF_RANGE: a device member that isn't a Device, a specifier
+  outside its two values, SPECIFIED without its reference, ALWAYS or ALL with
+  a reference that isn't unspecified (instance 4194303), or a location that is
+  neither an Access Point, an Access Zone nor unspecified. The object stores
+  and serves the rules; nothing in the stack evaluates them.
 - **Device references**: a
   `BACnetDeviceObjectReference` whose device identifier is present must name
   a Device object (Clause 21);
@@ -2211,12 +2224,22 @@ it), but refuse a Device member that isn't a Device identifier, and
 `add_property_reference` a 65th reference.
 
 An Event Log record is a `BACnetEventLogRecord`: a timestamp and an
-`EventLogDatum` holding a log status, a time change, or a notification as the
-encoded parameters of a ConfirmedEventNotification request
-(`bacnet_services::alarm_event::EventNotificationRequest::encode` writes them,
-`decode` reads them back). `EventLogObject::add_record` takes one. A Trend Log
-record stays a `BACnetLogRecord`; its optional `status_flags` is a
-`StatusFlags`.
+`EventLogDatum` holding a log status, a time change, or a notification as a
+typed `EventNotificationRequest`, the parameters of a ConfirmedEventNotification
+request. `EventLogObject::add_record` takes one. The request, its
+`NotificationParameters` event values and `BACnetPropertyValue` live in
+`bacnet_types::constructed` (bacnet-services re-exports them). Their codecs
+are functions in `bacnet_encoding::constructed`: `encode_event_notification` /
+`decode_event_notification`, `encode_notification_parameters` /
+`decode_notification_parameters`, and `encode_bacnet_property_value` /
+`decode_bacnet_property_value`. `decode_event_notification_tolerant` reads a
+request whose message text doesn't decode (a character set the stack doesn't
+support, for one) with no message text; the client uses it for received
+notifications and `decode_event_log_record` for a record's notification, which
+otherwise has to be a valid request. The request codec writes an
+ACK_NOTIFICATION without its ack-required, from-state and event values, so
+ReadRange serves such a record without them. A Trend Log record stays a `BACnetLogRecord`; its optional
+`status_flags` is a `StatusFlags`.
 
 Every record kind, the Audit Log's included, carries a log status as the
 typed `bacnet_types::bitstring::LogStatus` flags (`LOG_DISABLED`,
@@ -2228,7 +2251,8 @@ device hold these to 32 bits but doesn't require it, so a record read from a
 peer may carry wider values, and the decoders accept up to eight octets.
 
 `add_record` and the trend hooks refuse a record that would not encode (an
-any-value or notification whose tags don't balance, a bit string with
+any-value, or a notification's raw event values, whose tags don't balance; a
+complex event's property priority outside 1 to 16; a bit string with
 impossible padding) with its encoding error, before anything changes. So
 `LogBufferRecords::encode_record` cannot fail, and one bad record can't break
 every ReadRange window over the log.
@@ -2246,6 +2270,7 @@ each item as one record framed as its Clause 21 production:
 | Trend Log | BACnetLogRecord | `encode_log_record` / `decode_log_record` |
 | Event Log | BACnetEventLogRecord | `encode_event_log_record` / `decode_event_log_record` |
 | Trend Log Multiple | BACnetLogMultipleRecord | `encode_log_multiple_record` / `decode_log_multiple_record` |
+| Audit Log | BACnetAuditLogRecord | `encode_audit_log_record` / `decode_audit_log_record_at` |
 
 Each decoder returns the offset after the record, so a client walks a
 ReadRange ACK's `item_data` record by record. The poller logs a value whose
@@ -2649,7 +2674,28 @@ with `set_door_status` and `set_lock_status`.
 An Access Point's Authentication_Status is READY until the application
 reports another status with `set_authentication_status` (a value past
 IN_PROGRESS is VALUE_OUT_OF_RANGE); it reads DISABLED while Out_Of_Service is
-TRUE and the reported status again afterwards. An Access Zone counts
+TRUE and the reported status again afterwards.
+
+The point also serves Active_Authentication_Policy,
+Number_Of_Authentication_Policies, Authorization_Mode and
+Priority_For_Writing. It serves no policy list, so what each policy holds is
+up to the application. `set_number_of_authentication_policies` sets how many
+there are (1 by default; zero, or a count below the policy in effect, is
+VALUE_OUT_OF_RANGE), and a client picks the policy in effect by writing
+Active_Authentication_Policy, an Unsigned from 1 to that count.
+Authorization_Mode starts at AUTHORIZE and takes a write of any mode in the
+set `set_supported_authorization_modes` gives. The point enforces no mode
+itself, so a new point supports AUTHORIZE alone: an application that acts on
+the mode declares the other standard modes it carries out, and proprietary
+ones from 64 to 65535, in a set that keeps AUTHORIZE and the mode in effect.
+Any other value is VALUE_OUT_OF_RANGE, and another datatype
+INVALID_DATA_TYPE.
+`set_priority_for_writing` sets the priority the application commands the
+Access_Doors at (16 by default, 1 to 16 accepted). The policy count and the
+priority are read-only over the network; the point stores and checks these
+values, and carrying them out is the application's work.
+
+An Access Zone counts
 occupancy: Occupancy_State reads DISABLED while counting is off
 (`set_occupancy_count_enable(false)`, which also zeroes the count and
 Adjust_Value), and otherwise compares Occupancy_Count with the limits
@@ -3931,8 +3977,7 @@ supports only an older schema cannot read newer snapshots; rolling back to such 
 requires restoring a compatible backup and loses changes made after that backup.
 
 Unconfirmed receipt never emits a response and never writes the confirmed ledger.
-Synchronous persistence under the database writer is an intentional availability
-limitation. Query authorization, sustained rate limiting, and multi-log routing
+Query authorization, sustained rate limiting, and multi-log routing
 policy are not provided. The standalone server optionally forwards changed
 accepted batches from its selected log after local commit: configure
 `AuditLogObject::set_member_of` and a remote configured `DeviceBinding`.
@@ -3943,6 +3988,35 @@ Query input changes never rewrite stored notifications or receipt identities,
 and the requested-count, ACK-cap, and segmentation limits stay independent.
 Executed-service bit 46
 represents receipt only; no Audit Reporting BIBB, including AR-L-A, is claimed.
+
+#### Commits off the database lock
+
+`AuditLogObject` makes every `AuditLogPersistence::commit` call on a writer
+thread of its own, one at a time, so a custom backend never sees two calls at
+once; dropping the object waits for queued commits. The bundled server stages
+each inbound notification batch and each network or `write_local` Log_Enable
+change: the log builds the next snapshot and queues its commit, the server
+waits for the commit with the object database guard dropped, and only then
+does the log take the snapshot. Other requests read and write the database
+meanwhile, and the promises above hold: a batch reaches memory, and a
+confirmed one its SimpleACK, only after its records and receipt are durable,
+and a commit that fails leaves the log as it was. One commit is staged per log
+at a time; a second batch waits for the first without holding the guard.
+`AuditLogNotificationSink::stage_notification_batch` and
+`finish_notification_batch` are the sink's side of this. Their defaults store
+the batch at once, so a custom sink keeps committing where it did. The server
+waits for a staged commit on Tokio's blocking pool, so under a paused test
+clock (`tokio::time::pause`) virtual time does not jump to the next timer
+while the writer thread commits.
+
+Application code that changes the log while holding the guard
+(`add_record`, or `write_property` through the database) still commits in
+place and waits for the commit there, after letting a staged commit land
+first. The file backend synchronizes a slot's directory the first time it
+creates that slot (on Unix; on Windows `std` cannot open a directory, so that
+step is skipped). The commit has landed by then, so a filesystem that cannot
+synchronize a directory is passed over and any other failure there is logged,
+not returned.
 
 ---
 
@@ -4322,19 +4396,50 @@ in `received_not_forwarded`. One that comes later, or after newer
 notifications pushed its entry out, is forwarded again. The record is in
 memory only.
 
-`with_persistence` keeps `Subscribed_Recipients` in an application-owned
-`SubscribedRecipientsPersistence`, saving the list, each entry with the minutes
-it has left, when a write changes it, when an entry lapses, and at most once a
-minute while the entries' minutes fall, and restoring it when the forwarder is
-built again (Clause 12.51.9). A restored entry so carries at most about a
-minute more than it had left, and repeated restarts still run it out.
-`FileSubscribedRecipientsPersistence` keeps it in one file, replaced whole
-through a synchronized temporary file. A write that cannot be saved fails with
-DEVICE / OPERATIONAL_PROBLEM. A save the operation task makes that fails is
-logged and retried a minute later. `save_counters()` returns a
-`ForwarderSaveCounters` handle, shared with the object, whose `failed_saves()`
-counts every refused save; take it before adding the object to the database.
-`Recipient_List` writes stay in memory, as a Notification Class's do.
+`with_persistence` keeps `Recipient_List` and `Subscribed_Recipients` in an
+application-owned `NotificationForwarderPersistence`, saving both lists as one
+`ForwarderSnapshot` when a write changes either, when a subscription lapses,
+and at most once a minute while the subscriptions' minutes fall, and restoring
+them when the forwarder is built again (Clauses 12.51.8 and 12.51.9). A
+restored subscription so carries at most about a minute more than it had
+left, and repeated restarts still run it out.
+`FileNotificationForwarderPersistence` keeps both lists in one file, replaced
+whole through a synchronized temporary file, a rename and a synchronized
+directory (on Unix; Windows skips the directory step).
+
+Saves run on the forwarder's own writer thread, one at a time. The bundled
+server waits for them with the object database guard dropped, except where
+noted below; application code writing a list through the database waits for
+the save in place. The bundled server stages each network or
+`write_local` list write: the forwarder queues the save, the server waits for
+it with the guard dropped (on the blocking pool, as for the Audit Log), and the
+write then takes the saved list. A write
+that cannot be saved fails with DEVICE / OPERATIONAL_PROBLEM and leaves the old
+list. WritePropertyMultiple stages too, except under a `mutation_authorizer`,
+which sees each attempt only as the handler reaches it; such an attempt saves
+in place. The operation task's lapse and minute saves coalesce, so a burst
+costs one save of the latest lists; one that fails is logged and retried a
+minute later. `save_counters()` returns a `ForwarderSaveCounters` handle,
+shared with the object, whose `failed_saves()` counts every refused save; take
+it before adding the object to the database. `wait_for_saves()` blocks until
+queued saves have run, and dropping the forwarder waits for them too, so the
+server's DeleteObject drops a removed forwarder on a blocking thread after
+releasing the guard. A staged write its request never makes (an earlier
+WritePropertyMultiple attempt failed, say) is dropped, and the forwarder at
+once queues a save of the lists it serves, so storage never keeps a list the
+forwarder refused. The writer is a plain `std` thread with no Tokio runtime,
+one per forwarder that has saved and parked while idle, and a `save` that
+panics counts as a failed save. Once its rename succeeds a
+file save has landed: a filesystem that cannot synchronize a directory is
+passed over, and any other failure there is logged, not returned.
+
+A written `Recipient_List` wins over the configured one. `ForwarderSnapshot`
+holds `recipient_list: None` until a write sets the list; the destinations the
+application configures with `add_destination` are never saved and apply at
+every start until then. Once a write has set the list and it was saved, a
+rebuilt forwarder serves the saved list (`recipient_list_saved()` is true) and
+`add_destination` checks a destination but does not add it. To return to the
+configured list, clear the storage.
 
 ### Undelivered event notification counters
 
