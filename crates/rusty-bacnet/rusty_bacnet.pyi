@@ -3384,7 +3384,13 @@ class BipEndpoint:
         apdu_timeout_ms: int = 6000,
         apdu_retries: int = 0,
         registered_network_port: Optional[int] = None,
-    ) -> None: ...
+        *,
+        read_work_limit: int = 256,
+    ) -> None:
+        """``read_work_limit``: result rows one ReadProperty served by the
+        server role may expand, a Group's member rows included; a read past it
+        is aborted with OUT_OF_RESOURCES. Zero raises ValueError."""
+        ...
 
     def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...
     def add_analog_value(self, instance: int, name: str, units: int = 62, *, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None) -> None:
@@ -3393,6 +3399,22 @@ class BipEndpoint:
     def add_binary_input(self, instance: int, name: str) -> None: ...
     def add_binary_value(self, instance: int, name: str, *, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL."""
+        ...
+    def add_group(
+        self,
+        instance: int,
+        name: str,
+        members: Optional[
+            list[tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]]
+        ] = None,
+    ) -> None:
+        """Group whose Present_Value is rebuilt from ``members`` on each read.
+
+        ``members`` has the ``read_property_multiple`` spec shape. A member
+        with no properties, a property identifier above 4194303, or one
+        reporting a group's Present_Value raises ValueError naming its
+        position and the rule. Indexes outside unsigned32 raise OverflowError.
+        """
         ...
 
     def start(self) -> Awaitable[None]:
@@ -3463,7 +3485,10 @@ class ScEndpoint:
         segmentation: Optional[Segmentation] = None,
         services: Optional[list[int]] = None,
         queue_capacity: int = 16,
-    ) -> None: ...
+        read_work_limit: int = 256,
+    ) -> None:
+        """``read_work_limit`` is as for ``BipEndpoint``."""
+        ...
 
     def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...
     def add_analog_value(self, instance: int, name: str, units: int = 62, *, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None) -> None:
@@ -3472,6 +3497,22 @@ class ScEndpoint:
     def add_binary_input(self, instance: int, name: str) -> None: ...
     def add_binary_value(self, instance: int, name: str, *, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL."""
+        ...
+    def add_group(
+        self,
+        instance: int,
+        name: str,
+        members: Optional[
+            list[tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]]
+        ] = None,
+    ) -> None:
+        """Group whose Present_Value is rebuilt from ``members`` on each read.
+
+        ``members`` has the ``read_property_multiple`` spec shape. A member
+        with no properties, a property identifier above 4194303, or one
+        reporting a group's Present_Value raises ValueError naming its
+        position and the rule. Indexes outside unsigned32 raise OverflowError.
+        """
         ...
 
     def start(self) -> Awaitable[None]:
@@ -3539,7 +3580,11 @@ class MstpEndpoint:
         queue_capacity: int = 16,
         apdu_timeout_ms: int = 6000,
         apdu_retries: int = 0,
-    ) -> None: ...
+        *,
+        read_work_limit: int = 256,
+    ) -> None:
+        """``read_work_limit`` is as for ``BipEndpoint``."""
+        ...
 
     def add_analog_input(self, instance: int, name: str, units: int = 62, present_value: float = 0.0) -> None: ...
     def add_analog_value(self, instance: int, name: str, units: int = 62, *, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None) -> None:
@@ -3548,6 +3593,22 @@ class MstpEndpoint:
     def add_binary_input(self, instance: int, name: str) -> None: ...
     def add_binary_value(self, instance: int, name: str, *, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL."""
+        ...
+    def add_group(
+        self,
+        instance: int,
+        name: str,
+        members: Optional[
+            list[tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]]
+        ] = None,
+    ) -> None:
+        """Group whose Present_Value is rebuilt from ``members`` on each read.
+
+        ``members`` has the ``read_property_multiple`` spec shape. A member
+        with no properties, a property identifier above 4194303, or one
+        reporting a group's Present_Value raises ValueError naming its
+        position and the rule. Indexes outside unsigned32 raise OverflowError.
+        """
         ...
 
     def start(self) -> Awaitable[None]:

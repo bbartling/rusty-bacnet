@@ -28,6 +28,46 @@ mod metadata;
 // GroupObject (type 11)
 // ---------------------------------------------------------------------------
 
+/// Largest property identifier the 22-bit property field can carry.
+const MAX_PROPERTY_IDENTIFIER: u32 = 0x3F_FFFF;
+
+/// Why [`GroupObject::add_member`] refused a member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupMemberRefusal {
+    /// The specification lists no property references.
+    NoProperties,
+    /// A reference names this property identifier, above 4194303.
+    PropertyOutOfRange(PropertyIdentifier),
+    /// The specification names a Group or Global Group and selects its
+    /// Present_Value, by name or through ALL or REQUIRED.
+    NestsGroupPresentValue,
+}
+
+impl std::fmt::Display for GroupMemberRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoProperties => f.write_str("the member lists no properties"),
+            Self::PropertyOutOfRange(property) => write!(
+                f,
+                "property identifier {} is above {MAX_PROPERTY_IDENTIFIER}",
+                property.to_raw()
+            ),
+            Self::NestsGroupPresentValue => f.write_str(
+                "the member reports a Group or Global Group's Present_Value, \
+                 by name or through ALL or REQUIRED",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for GroupMemberRefusal {}
+
+impl From<GroupMemberRefusal> for Error {
+    fn from(_: GroupMemberRefusal) -> Self {
+        common::value_out_of_range_error()
+    }
+}
+
 /// BACnet Group object (type 11).
 ///
 /// Each member is a [`ReadAccessSpecification`]: an object in this device and
@@ -62,16 +102,33 @@ impl GroupObject {
 
     /// Append a member to List_Of_Group_Members.
     ///
-    /// Refused with PROPERTY / VALUE_OUT_OF_RANGE, leaving the members as
-    /// they were, when the specification lists no properties, or when it
-    /// names a Group or Global Group and selects that object's Present_Value,
-    /// explicitly or through ALL or REQUIRED: Clause 12.14.5 doesn't let one
-    /// group report another group's Present_Value.
-    pub fn add_member(&mut self, member: ReadAccessSpecification) -> Result<(), Error> {
+    /// Refused, leaving the members as they were, with the
+    /// [`GroupMemberRefusal`] naming the rule the specification breaks: it
+    /// lists no properties, names a property identifier past the 22-bit
+    /// range, or names a Group or Global Group and selects that object's
+    /// Present_Value, explicitly or through ALL or REQUIRED (Clause 12.14.5
+    /// doesn't let one group report another group's Present_Value). A refusal
+    /// converts to PROPERTY / VALUE_OUT_OF_RANGE as an [`Error`].
+    pub fn add_member(
+        &mut self,
+        member: ReadAccessSpecification,
+    ) -> Result<(), GroupMemberRefusal> {
+        let references = &member.list_of_property_references;
+        if references.is_empty() {
+            return Err(GroupMemberRefusal::NoProperties);
+        }
+        if let Some(reference) = references
+            .iter()
+            .find(|reference| reference.property_identifier.to_raw() > MAX_PROPERTY_IDENTIFIER)
+        {
+            return Err(GroupMemberRefusal::PropertyOutOfRange(
+                reference.property_identifier,
+            ));
+        }
         let nests_a_group = matches!(
             member.object_identifier.object_type(),
             ObjectType::GROUP | ObjectType::GLOBAL_GROUP
-        ) && member.list_of_property_references.iter().any(|reference| {
+        ) && references.iter().any(|reference| {
             matches!(
                 reference.property_identifier,
                 PropertyIdentifier::PRESENT_VALUE
@@ -79,8 +136,8 @@ impl GroupObject {
                     | PropertyIdentifier::REQUIRED
             )
         });
-        if member.list_of_property_references.is_empty() || nests_a_group {
-            return Err(common::value_out_of_range_error());
+        if nests_a_group {
+            return Err(GroupMemberRefusal::NestsGroupPresentValue);
         }
         self.list_of_group_members.push(member);
         Ok(())
