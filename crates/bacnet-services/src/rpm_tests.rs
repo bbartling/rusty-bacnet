@@ -413,3 +413,70 @@ fn request_empty_outer_rejects_and_explicit_zero_index_matches_wire_vector() {
         &[0x0c, 2, 0, 0, 10, 0x1e, 0x09, 77, 0x19, 0, 0x1f]
     );
 }
+
+#[test]
+fn read_access_specification_codec_handles_one_element_at_an_offset() {
+    // One specification alone, as a Group's List_Of_Group_Members element
+    // carries it: AV-2 Present_Value, then Priority_Array[16].
+    let spec = ReadAccessSpecification {
+        object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap(),
+        list_of_property_references: vec![
+            PropertyReference {
+                property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: None,
+            },
+            PropertyReference {
+                property_identifier: PropertyIdentifier::PRIORITY_ARRAY,
+                property_array_index: Some(16),
+            },
+        ],
+    };
+    let octets = [
+        0x0C, 0, 0x80, 0, 2, 0x1E, 0x09, 85, 0x09, 87, 0x19, 16, 0x1F,
+    ];
+    let mut buf = BytesMut::from(&b"xy"[..]);
+    spec.encode(&mut buf);
+    assert_eq!(&buf[2..], &octets);
+    buf.extend_from_slice(&[0xAA]);
+    assert_eq!(
+        ReadAccessSpecification::decode(&buf, 2).unwrap(),
+        (spec.clone(), 2 + octets.len())
+    );
+    // The request codec is the same specification codec, back to back.
+    let mut request = BytesMut::new();
+    ReadPropertyMultipleRequest {
+        list_of_read_access_specs: vec![spec.clone(), spec],
+    }
+    .encode(&mut request)
+    .unwrap();
+    assert_eq!(&request[..], &[&octets[..], &octets[..]].concat()[..]);
+    // A truncated specification is refused.
+    for end in [4, 5, 9, octets.len() - 1] {
+        assert!(ReadAccessSpecification::decode(&octets[..end], 0).is_err());
+    }
+}
+
+#[test]
+fn read_access_result_encodes_alone_as_in_the_ack() {
+    let result = ReadAccessResult {
+        object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 9).unwrap(),
+        list_of_results: vec![ReadResultElement {
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+            property_value: None,
+            error: Some((ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT)),
+        }],
+    };
+    let mut alone = BytesMut::new();
+    result.encode(&mut alone);
+    assert_eq!(
+        &alone[..],
+        &[0x0C, 0, 0, 0, 9, 0x1E, 0x29, 85, 0x5E, 0x91, 1, 0x91, 31, 0x5F, 0x1F]
+    );
+    let mut ack = BytesMut::new();
+    ReadPropertyMultipleACK {
+        list_of_read_access_results: vec![result],
+    }
+    .encode(&mut ack);
+    assert_eq!(ack, alone);
+}

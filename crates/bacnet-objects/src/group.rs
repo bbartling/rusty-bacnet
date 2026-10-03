@@ -8,6 +8,7 @@ use bacnet_encoding::constructed::{
     encode_device_object_property_reference, encode_device_object_reference,
     encode_property_access_result,
 };
+use bacnet_services::rpm::ReadAccessSpecification;
 use bacnet_types::bitstring::status_flags_from_bacnet;
 use bacnet_types::constructed::{
     AccessResult, BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
@@ -30,17 +31,22 @@ mod metadata;
 
 /// BACnet Group object (type 11).
 ///
-/// Groups a set of BACnet objects together. The LIST_OF_GROUP_MEMBERS contains
-/// the ObjectIdentifiers of the member objects. PRESENT_VALUE returns the last
-/// read results (empty by default).
+/// Each member is a [`ReadAccessSpecification`]: an object in this device and
+/// the properties of it the group reports (Clause 12.14.5). The specification
+/// has no device member, so the Group can't name an object elsewhere; a
+/// Global Group does that.
+///
+/// The object holds no Present_Value. Clause 12.14.6 has it rebuilt from the
+/// members on every read, and only the server, which holds the database, can
+/// read them: it answers Present_Value with one `ReadAccessResult` per
+/// member, read as ReadPropertyMultiple would read that specification. A
+/// direct [`read_property`](BACnetObject::read_property) call on the object
+/// alone returns an empty list.
 pub struct GroupObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
-    /// The list of group member object identifiers.
-    pub list_of_group_members: Vec<ObjectIdentifier>,
-    /// The last read results for each member (populated externally).
-    pub present_value: Vec<PropertyValue>,
+    list_of_group_members: Vec<ReadAccessSpecification>,
 }
 
 impl GroupObject {
@@ -52,19 +58,43 @@ impl GroupObject {
             name: name.into(),
             description: String::new(),
             list_of_group_members: Vec::new(),
-            present_value: Vec::new(),
         })
     }
 
-    /// Add a member object to the group.
-    pub fn add_member(&mut self, oid: ObjectIdentifier) {
-        self.list_of_group_members.push(oid);
+    /// Append a member to List_Of_Group_Members.
+    ///
+    /// Refused with PROPERTY / VALUE_OUT_OF_RANGE, leaving the members as
+    /// they were, when the specification lists no properties, or when it
+    /// names a Group or Global Group and selects that object's Present_Value,
+    /// explicitly or through ALL or REQUIRED: Clause 12.14.5 doesn't let one
+    /// group report another group's Present_Value.
+    pub fn add_member(&mut self, member: ReadAccessSpecification) -> Result<(), Error> {
+        let nests_a_group = matches!(
+            member.object_identifier.object_type(),
+            ObjectType::GROUP | ObjectType::GLOBAL_GROUP
+        ) && member.list_of_property_references.iter().any(|reference| {
+            matches!(
+                reference.property_identifier,
+                PropertyIdentifier::PRESENT_VALUE
+                    | PropertyIdentifier::ALL
+                    | PropertyIdentifier::REQUIRED
+            )
+        });
+        if member.list_of_property_references.is_empty() || nests_a_group {
+            return Err(common::value_out_of_range_error());
+        }
+        self.list_of_group_members.push(member);
+        Ok(())
+    }
+
+    /// The members, in List_Of_Group_Members order.
+    pub fn members(&self) -> &[ReadAccessSpecification] {
+        &self.list_of_group_members
     }
 
     /// Clear all members from the group.
     pub fn clear_members(&mut self) {
         self.list_of_group_members.clear();
-        self.present_value.clear();
     }
 }
 
@@ -90,15 +120,27 @@ impl BACnetObject for GroupObject {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::GROUP.to_raw()))
             }
+            // Both are BACnetLISTs (Table 12-17): an index is refused here as
+            // the service handlers refuse it.
+            p if (p == PropertyIdentifier::LIST_OF_GROUP_MEMBERS
+                || p == PropertyIdentifier::PRESENT_VALUE)
+                && array_index.is_some() =>
+            {
+                Err(common::property_is_not_an_array_error())
+            }
+            // One ReadAccessSpecification per element (Clause 21).
             p if p == PropertyIdentifier::LIST_OF_GROUP_MEMBERS => Ok(PropertyValue::List(
                 self.list_of_group_members
                     .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
+                    .map(|member| {
+                        let mut encoded = BytesMut::new();
+                        member.encode(&mut encoded);
+                        PropertyValue::ApplicationData(encoded.to_vec())
+                    })
                     .collect(),
             )),
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::List(self.present_value.clone()))
-            }
+            // Rebuilt by the server on each read; see the type's docs.
+            p if p == PropertyIdentifier::PRESENT_VALUE => Ok(PropertyValue::List(Vec::new())),
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -451,6 +493,9 @@ impl BACnetObject for StructuredViewObject {
 
 #[cfg(test)]
 mod array_tests;
+
+#[cfg(test)]
+mod group_members_tests;
 
 #[cfg(test)]
 mod member_status_flags_tests;

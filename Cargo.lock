@@ -398,6 +398,7 @@ name = "bacnet-objects"
 version = "0.11.0"
 dependencies = [
  "bacnet-encoding",
+ "bacnet-services",
  "bacnet-types",
  "bytes",
  "tracing",

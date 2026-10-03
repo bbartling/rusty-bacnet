@@ -11,9 +11,11 @@ pub(crate) enum RpmFailure {
     Bytes,
 }
 
-struct PlannedObject {
-    lookup_oid: ObjectIdentifier,
-    properties: Vec<PropertyReference>,
+/// One specification after target resolution and ALL/REQUIRED/OPTIONAL
+/// expansion; a Group's Present_Value plans its members the same way.
+pub(super) struct PlannedObject {
+    pub(super) lookup_oid: ObjectIdentifier,
+    pub(super) properties: Vec<PropertyReference>,
 }
 
 // Visit expansion rows without collecting a second, unbounded expansion vector.
@@ -75,7 +77,7 @@ fn expand(
     Ok(())
 }
 
-fn plan(
+pub(super) fn plan(
     db: &ObjectDatabase,
     request: &ReadPropertyMultipleRequest,
     limit: usize,
@@ -126,8 +128,13 @@ fn plan(
 }
 
 /// `object` is the effective read view for this row, if the object exists.
-/// Lookup and canonical array-index precedence match ReadProperty.
-fn element(object: Option<&dyn BACnetObject>, reference: &PropertyReference) -> ReadResultElement {
+/// Lookup and canonical array-index precedence match ReadProperty. `read`
+/// fetches the row's value from the object once those checks pass.
+pub(super) fn element(
+    object: Option<&dyn BACnetObject>,
+    reference: &PropertyReference,
+    read: impl FnOnce(&dyn BACnetObject) -> Result<PropertyValue, Error>,
+) -> ReadResultElement {
     let id = reference.property_identifier;
     let index = reference.property_array_index;
     let response_index = super::read_property::rpm_response_index(object, id, index);
@@ -136,7 +143,7 @@ fn element(object: Option<&dyn BACnetObject>, reference: &PropertyReference) -> 
         Some(object) if index.is_some() && !object.is_array_property(id) => {
             Err((ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY))
         }
-        Some(object) => match object.read_property(id, index) {
+        Some(object) => match read(object) {
             Ok(value) => {
                 // One property may return/encode an arbitrarily large owned
                 // value. Only accumulated service bytes are bounded here.
@@ -247,7 +254,15 @@ pub(crate) fn rpm_budgeted_request_observed(
                 .as_ref()
                 .map(|served| served as &dyn BACnetObject)
                 .or(object);
-            let result = element(object, &reference);
+            let result = element(object, &reference, |object| {
+                group_present_value::read_served_property(
+                    db,
+                    view,
+                    object,
+                    reference.property_identifier,
+                    reference.property_array_index,
+                )
+            });
             let mut encoded = BytesMut::new();
             result.encode(&mut encoded);
             scratch.append(&encoded, footer.len())?;

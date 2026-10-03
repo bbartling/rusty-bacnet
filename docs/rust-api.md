@@ -1654,6 +1654,17 @@ framing, through the shared `bacnet-encoding` codecs.
   `AccessResult` values, by member position, and a member without one reads
   PROPERTY / VALUE_NOT_INITIALIZED. Index 0 reads the array size and each
   index from 1 one element.
+- **Group `List_Of_Group_Members` and `Present_Value`** (Clause 12.14) are
+  lists, so an array index is refused. A member is a
+  `bacnet_services::rpm::ReadAccessSpecification`: an object in this device
+  and the properties the group reports. `GroupObject::add_member` refuses one
+  with no properties, and one that would report a Group's or Global Group's
+  Present_Value. The object stores no Present_Value: the server rebuilds it on
+  every ReadProperty, ReadPropertyMultiple and ReadRange as one
+  ReadAccessResult per member, reading each member as ReadPropertyMultiple
+  would, so a failed read carries its error and an object that isn't in the
+  database reads OBJECT / UNKNOWN_OBJECT. Read directly from the object alone,
+  Present_Value is an empty list.
 - **Structured View `Subordinate_List` and Command `Action`** (Clauses 12.29
   and 12.10) are arrays too, with the same per-index reads, as is
   `Subordinate_Annotations`. A Subordinate_List element is a

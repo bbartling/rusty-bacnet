@@ -12,6 +12,7 @@ mod command_source;
 mod elevator;
 mod file;
 mod group;
+mod group_present_value;
 mod life_safety;
 mod lighting;
 mod load_control;
