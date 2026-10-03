@@ -41,8 +41,7 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
 
-            // Decode application-tagged value bytes → PropertyValue
-            let (value, _) = decode_application_value(&ack.property_value, 0).map_err(to_py_err)?;
+            let value = decode_read_ack(&ack).map_err(to_py_err)?;
 
             Ok(PyPropertyValue::from_rust(value))
         })
@@ -264,8 +263,8 @@ impl BACnetClient {
                         dict.set_item("request_index", r.request_index)?;
                         dict.set_item("device_instance", r.device_instance)?;
                         match r.result {
-                            Ok(ack) => match decode_application_value(&ack.property_value, 0) {
-                                Ok((value, _)) => {
+                            Ok(ack) => match decode_read_ack(&ack) {
+                                Ok(value) => {
                                     dict.set_item("value", PyPropertyValue::from_rust(value))?;
                                     dict.set_item("error", py.None())?;
                                 }

@@ -15,7 +15,7 @@ use tokio::sync::broadcast;
 
 use bacnet_client::client::{COVNotificationDelivery, ReceivedCOVNotification};
 use bacnet_client::discovery::DiscoveredDevice;
-use bacnet_encoding::primitives::{decode_application_value, encode_property_value};
+use bacnet_encoding::primitives::encode_property_value;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::rpm::ReadPropertyMultipleACK;
 use bacnet_services::wpm::WriteAccessSpecification;
@@ -34,6 +34,7 @@ mod enums;
 mod mapping;
 mod object_identifier;
 mod property_value;
+mod read_value;
 mod rpm_wpm;
 mod timestamp;
 
@@ -48,6 +49,7 @@ pub use device::PyDiscoveredDevice;
 pub use enums::*;
 pub use object_identifier::PyObjectIdentifier;
 pub use property_value::PyPropertyValue;
+pub(crate) use read_value::{decode_read_ack, decode_read_value};
 pub(crate) use rpm_wpm::{
     py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyDeviceWrite, PyPropertyWrite,
     PyReadAccessSpec, PyWriteAccessSpec,

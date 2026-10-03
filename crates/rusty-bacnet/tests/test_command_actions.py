@@ -123,10 +123,11 @@ class CommandActionTests(unittest.IsolatedAsyncioTestCase):
         await server.start()
         try:
             for instance in (*range(10, 13), *range(20, 27), 30):
-                with self.assertRaises(RuntimeError):
+                with self.assertRaises(BacnetProtocolError) as raised:
                     await server.read_property(
                         ObjectIdentifier(ObjectType.COMMAND, instance), P.PRESENT_VALUE
                     )
+                self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
         finally:
             await server.stop()
 

@@ -14,7 +14,8 @@ use bacnet_types::constructed::{
     BACnetLogMultipleRecord, BACnetLogRecord, BACnetObjectPropertyReference,
 };
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier, Reliability,
+    ErrorClass, ErrorCode, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier,
+    Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue, Time};
@@ -64,6 +65,21 @@ impl CovReportedProperty {
     pub const fn triggers(self) -> bool {
         matches!(self, Self::Trigger(_))
     }
+}
+
+/// Whether the standard's object tables type `property` as a BACnetARRAY on
+/// `object_type`: the answer the default [`BACnetObject::is_array_property`]
+/// gives. A client can ask it about a remote object, before or without any
+/// value, to learn the property's shape.
+pub fn standard_array_property(object_type: ObjectType, property: PropertyIdentifier) -> bool {
+    array_property_default(object_type, property)
+}
+
+/// Whether the standard's object tables type `property` as a BACnetLIST on
+/// `object_type`: the answer the default [`BACnetObject::is_list_property`]
+/// gives, usable for a remote object as [`standard_array_property`] is.
+pub fn standard_list_property(object_type: ObjectType, property: PropertyIdentifier) -> bool {
+    list_property_default(object_type, property)
 }
 
 /// Result of applying a LifeSafetyOperation to an object.
@@ -516,8 +532,6 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// [`supports_subscribe_cov_property`](Self::supports_subscribe_cov_property)
     /// for every property.
     fn supports_cov_property(&self, property: PropertyIdentifier) -> bool {
-        use bacnet_types::enums::ObjectType;
-
         match self.object_identifier().object_type() {
             ObjectType::LIFE_SAFETY_POINT | ObjectType::LIFE_SAFETY_ZONE => matches!(
                 property,

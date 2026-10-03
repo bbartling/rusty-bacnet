@@ -2293,7 +2293,8 @@
     "crates/bacnet-server/src/server/group_present_value_wire_tests.rs::group_present_value_bip_wire_rebuilds_from_members",
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::{group_members_read_the_live_device_cov_lists_through_rp_readrange_and_local_reads,group_members_read_the_live_device_cov_lists_through_rpm}",
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/snapshot_plan.rs::{reads_whose_plan_names_no_device_cov_list_take_no_snapshot,a_read_whose_plan_names_a_device_cov_list_takes_one_snapshot}",
-    "crates/rusty-bacnet/tests/test_server_group_members.py::ServerGroupWireTests::test_present_value_is_served_one_result_per_member"
+    "crates/rusty-bacnet/tests/test_server_group_members.py::ServerGroupWireTests::test_present_value_is_served_one_result_per_member",
+    "crates/rusty-bacnet/tests/test_read_value_shapes.py::ClientReadShapeTests::test_group_present_value_holds_every_member"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{malformed_property_references_are_refused,malformed_read_access_specifications_are_refused}",
@@ -2337,7 +2338,8 @@
     "Python BipEndpoint, ScEndpoint and MstpEndpoint take a keyword-only read_work_limit (default 256; zero raises ValueError) and register Groups with add_group, whose members use the read_property_multiple spec shape and pass through GroupObject::add_member (#1250).",
     "GroupObject::add_member also refuses a property identifier above 4194303, and returns a GroupMemberRefusal naming the broken rule, which converts to PROPERTY / VALUE_OUT_OF_RANGE; Python add_group puts that rule and the member's position in its ValueError.",
     "PropertyReference and ReadAccessSpecification moved from bacnet-services into bacnet_types::constructed, with their codecs as free functions in bacnet_encoding::constructed, so the Group stores them the way other objects store their Clause 21 types; the ReadPropertyMultiple, COV and Audit codecs call the same functions. Not covered: writable List_Of_Group_Members; the Audit_Level, Auditable_Operations, Tags and profile rows.",
-    "Python BACnetServer.add_group takes the endpoint owners' members through the same group_members conversion and checks, and rpm_max_result_elements limits a read of the Group's Present_Value."
+    "Python BACnetServer.add_group takes the endpoint owners' members through the same group_members conversion and checks, and rpm_max_result_elements limits a read of the Group's Present_Value.",
+    "Python BACnetServer.read_property goes through BACnetServer::read_local, so a local read of a Group's Present_Value equals a network read. Python readers return the rebuilt results as application_data octets, and no members as an empty list."
    ]
   },
   {
@@ -2992,7 +2994,8 @@
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/read_range.rs::active_cov_read_range_byte_cap_keeps_whole_elements_in_read_property_order",
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/read_range.rs::active_cov_read_range_reads_empty_lists_as_no_items",
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/read_range.rs::active_cov_read_range_pages_stay_whole_while_subscriptions_change",
-    "crates/bacnet-encoding/src/constructed/tests/cov_subscription.rs::cov_subscription_decodes_golden_elements"
+    "crates/bacnet-encoding/src/constructed/tests/cov_subscription.rs::cov_subscription_decodes_golden_elements",
+    "crates/rusty-bacnet/tests/test_read_value_shapes.py::LocalReadTests::test_derived_device_properties_match_the_network_read"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/recipient_route.rs::cov_recipient_wire_refusal_mode_lifetime_and_cross_router_cancel",
@@ -3039,7 +3042,8 @@
     "Limits: raw ObjectDatabase/DeviceObject reads and low-level RP/RPM/ReadRange helpers follow raw declared presence (empty when present), while EndpointResponder exposes neither COV list, and SubscribeCOVPropertyMultiple contexts belong to Active_COV_Multiple_Subscriptions (#814) and are not listed.",
     "The shared local Device selector chooses the lowest instance independently of hash and insertion order (#832); both insertion orders are covered across wildcard RP/RPM/read_local, both live lists, discovery and ordinary/Single/Multiple notification identity.",
     "Concrete instances precede the maximum wildcard; wildcard-only and no-Device fallbacks are preserved. This is local determinism for a multi-Device database, not a relaxation of Clause 12.11. Device membership changes after startup do not rebind the discovery limiter. This is not a full COV or BTL claim.",
-    "#1156: COV admission refuses a subscriber whose reported address (its direct MAC or routed source) is longer than BACnetAddress::MAX_MAC_LEN, so every listed subscription encodes; the COV subscription codecs refuse a longer recipient MAC in both directions."
+    "#1156: COV admission refuses a subscriber whose reported address (its direct MAC or routed source) is longer than BACnetAddress::MAX_MAC_LEN, so every listed subscription encodes; the COV subscription codecs refuse a longer recipient MAC in both directions.",
+    "Python BACnetServer.read_property goes through BACnetServer::read_local, so its Active_COV_Subscriptions read lists the live subscriptions, as a network read does."
    ]
    },
    {
@@ -3322,7 +3326,8 @@
     "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_broadcast_notification_goes_confirmed_only_off_the_receiving_network",
     "crates/rusty-bacnet/tests/test_notification_forwarder.py::NotificationForwarderServerTests::test_seeded_recipient_list_and_port_filter_read_back",
     "crates/rusty-bacnet/src/types/destination_tests.rs::required_keys_alone_give_an_always_active_destination",
-    "crates/rusty-bacnet/src/types/destination_tests.rs::every_key_reaches_its_member"
+    "crates/rusty-bacnet/src/types/destination_tests.rs::every_key_reaches_its_member",
+    "crates/rusty-bacnet/tests/test_read_value_shapes.py::ClientReadShapeTests::test_recipient_lists_keep_every_destination"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::out_of_service_forwarder_takes_nothing",
@@ -5812,7 +5817,8 @@
     "crates/bacnet-server/src/server/pulse_converter_cov_tests.rs::pulse_converter_cov_notification_reports_update_time",
     "crates/bacnet-objects/src/cov_criteria_tests.rs::every_table_13_1_object_type_takes_subscribe_cov",
     "crates/bacnet-objects/src/cov_criteria_tests.rs::table_13_1_extra_values_follow_each_row",
-    "crates/bacnet-server/src/cov/active.rs::active_cov_access_point_whole_object_names_access_event"
+    "crates/bacnet-server/src/cov/active.rs::active_cov_access_point_whole_object_names_access_event",
+    "crates/rusty-bacnet/tests/test_read_value_shapes.py::ClientReadShapeTests::test_a_cov_notification_keeps_every_element"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_cov_increment_is_writable_validated_and_drives_cov",

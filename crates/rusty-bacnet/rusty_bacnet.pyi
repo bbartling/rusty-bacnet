@@ -1287,6 +1287,20 @@ class PropertyValue:
         PropertyValue.real(3.14)
         PropertyValue.character_string("hello")
         PropertyValue.object_identifier(oid)
+
+    A read result (``read_property``, ``read_property_multiple``, a
+    ``CovNotification`` value and ``BACnetServer.read_property``) keeps every
+    element of the value:
+
+    - Any context-tagged content (a Recipient_List, a Group's Present_Value,
+      a Port_Filter, a timestamp) is ``application_data`` holding the octets
+      exactly as served.
+    - A whole read (no ``array_index``) of a property the standard types as an
+      array or list on that object type is a ``list`` at every length, 0 and
+      1 included.
+    - Any other read is the bare value when it holds one element, and a
+      ``list`` in wire order when it holds none or several (a date-time is
+      a date and then a time).
     """
 
     @staticmethod
@@ -1334,12 +1348,13 @@ class PropertyValue:
     def tag(self) -> str:
         """Type tag: 'null', 'boolean', 'unsigned', 'signed', 'real', 'double',
         'octet_string', 'character_string', 'bit_string', 'enumerated',
-        'date', 'time', 'object_identifier'."""
+        'date', 'time', 'object_identifier', 'list', 'application_data'."""
         ...
 
     @property
     def value(self) -> Any:
-        """The Python-native value (int, float, str, bytes, bool, dict, or None)."""
+        """The Python-native value (int, float, str, bytes, bool, dict, tuple,
+        ObjectIdentifier, list, or None); ``application_data`` is ``bytes``."""
         ...
 
     def __repr__(self) -> str: ...
@@ -1406,7 +1421,9 @@ class CovNotification:
 
     @property
     def values(self) -> Any:
-        """List of property value change entries."""
+        """List of property value change entries: dicts with ``property_id``,
+        ``array_index`` and ``value``. ``value`` is a ``PropertyValue`` shaped
+        as a read result is, or ``bytes`` when the octets don't decode."""
         ...
 
     def __repr__(self) -> str: ...
@@ -1628,7 +1645,8 @@ class BACnetClient:
 
         ACK object/property/index must match. Device/Network Port instance 4194303
         requests accept a same-type concrete ACK. Malformed/mismatched ACKs raise
-        BacnetError; this method returns the property value, not ACK metadata.
+        BacnetError; this method returns the property value, not ACK metadata,
+        shaped as ``PropertyValue`` describes for read results.
         """
         ...
 
@@ -2966,7 +2984,15 @@ class BACnetServer:
         property_id: PropertyIdentifier,
         array_index: Optional[int] = None,
     ) -> Awaitable[PropertyValue]:
-        """Read a property from a local object."""
+        """Read a property from a local object through the server's
+        ReadProperty evaluator, the one network reads use.
+
+        The result equals what a network ``read_property`` of the same
+        property returns: a Group's Present_Value is rebuilt from its
+        members, Device instance 4194303 names this server's Device, and the
+        Device's COV subscription lists are live. An unknown object or
+        property raises ``BacnetProtocolError`` with the network error.
+        """
         ...
 
     def write_property_local(
@@ -3381,7 +3407,8 @@ class EndpointClient:
 
         ACK object/property/index must match. Device/Network Port instance 4194303
         requests accept a same-type concrete ACK. Malformed/mismatched ACKs raise
-        BacnetError; this method returns the property value, not ACK metadata.
+        BacnetError; this method returns the property value, not ACK metadata,
+        shaped as ``PropertyValue`` describes for read results.
         """
         ...
 

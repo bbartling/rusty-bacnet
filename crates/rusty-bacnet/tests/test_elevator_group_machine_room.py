@@ -55,11 +55,12 @@ class ElevatorGroupMachineRoomTests(unittest.TestCase):
                 )
                 self.assertEqual(value.value, expected)
             # The refused registration left no object behind.
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(BacnetProtocolError) as raised:
                 await server.read_property(
                     ObjectIdentifier(ObjectType.ELEVATOR_GROUP, 3),
                     PropertyIdentifier.MACHINE_ROOM_ID,
                 )
+            self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
         finally:
             await server.stop()
 

@@ -70,8 +70,13 @@ pub(crate) fn rpm_ack_to_py(py: Python<'_>, ack: ReadPropertyMultipleACK) -> PyR
             )?;
             elem_dict.set_item("array_index", elem.property_array_index)?;
             if let Some(value_bytes) = &elem.property_value {
-                match decode_application_value(value_bytes, 0) {
-                    Ok((val, _)) => {
+                match decode_read_value(
+                    result.object_identifier.object_type(),
+                    elem.property_identifier,
+                    elem.property_array_index,
+                    value_bytes,
+                ) {
+                    Ok(val) => {
                         elem_dict.set_item("value", PyPropertyValue::from_rust(val))?;
                     }
                     Err(_) => {

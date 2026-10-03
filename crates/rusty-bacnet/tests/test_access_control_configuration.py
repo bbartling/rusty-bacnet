@@ -155,10 +155,11 @@ class AccessControlConfigurationTests(unittest.TestCase):
             )
             # The refused registrations left no object behind.
             for instance in (2, 3):
-                with self.assertRaises(RuntimeError):
+                with self.assertRaises(BacnetProtocolError) as raised:
                     await server.read_property(
                         ObjectIdentifier(ObjectType.ACCESS_POINT, instance), doors, 0
                     )
+                self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
         finally:
             await server.stop()
 

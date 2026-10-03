@@ -226,6 +226,44 @@ v.value   # 72.5 (native Python float)
 | `"date"` | `tuple(year, month, day, day_of_week)` |
 | `"time"` | `tuple(hour, minute, second, hundredths)` |
 | `"list"` | `list` of native Python values |
+| `"application_data"` | `bytes`: the encoded value, octet for octet |
+
+### Read results
+
+Every read that returns a `PropertyValue` decodes the value's octets by one
+rule: `BACnetClient.read_property` and `read_property_multiple` (and their
+`_from_device` and batch forms), `EndpointClient.read_property` and
+`read_property_multiple`, `CovNotification.values`, and
+`BACnetServer.read_property`. Every element of the value is kept.
+
+- **Context-tagged content** comes back as `application_data` whose `.value`
+  holds the octets as served. Constructed values such as a Recipient_List, a
+  Group's Present_Value, a Port_Filter, Active_COV_Subscriptions or a
+  timestamp take this form, as local reads of them always have. Element
+  boundaries of a constructed list aren't marked in the octets, so the
+  binding doesn't split one: decode the octets with the datatype's layout,
+  or read single array elements with `array_index`. Writing the value back
+  with `PropertyValue.application_data` sends the same octets.
+- **A whole array or list** (no `array_index`) whose elements are
+  application-tagged is a `list` at every length, zero and one included,
+  when the standard types the property as a BACnetARRAY or BACnetLIST on
+  that object type. A whole Object_List, Priority_Array or one-state
+  State_Text is a `list`; `array_index=0` is the element count and any other
+  index is the bare element.
+- **Anything else** is the bare value when it holds one element, and a
+  `list` in wire order when it holds none or several. An empty value is
+  `PropertyValue.list([])`, whatever the property's element type. A
+  BACnetDateTime such as a Load Control's Start_Time is a two-element list,
+  the date then the time, and a list whose elements are several
+  application-tagged fields comes back flat, in wire order.
+
+```python
+objects = await client.read_property(address, device, PropertyIdentifier.OBJECT_LIST)
+objects.tag    # "list", even for a device with one object
+recipients = await client.read_property(address, nc, PropertyIdentifier.RECIPIENT_LIST)
+recipients.tag    # "application_data" (or "list" with no elements when empty)
+recipients.value  # the BACnetDestination octets, every destination
+```
 
 ---
 
@@ -263,9 +301,12 @@ Each item in `.values` is a dict:
 {
     "property_id": PropertyIdentifier,
     "array_index": int | None,
-    "value": PropertyValue | bytes | None,
+    "value": PropertyValue | bytes,
 }
 ```
+
+`value` follows the [read result](#read-results) rule, using the monitored
+object's type; octets that don't decode come back as `bytes`.
 
 ---
 
@@ -360,7 +401,8 @@ All `address` parameters accept:
 Standalone and endpoint clients validate the ACK's object, property and array
 index. Device or Network Port instance `4194303` requests accept a concrete
 same-type identifier reported by the peer; unresolved wildcard and mismatched
-ACKs raise `BacnetError`. The return value remains the decoded property value.
+ACKs raise `BacnetError`. The return value is the decoded property value,
+with every element kept as [Read results](#read-results) describes.
 The bundled server resolves the Device alias. Full-server RP/RPM and endpoint RP
 also resolve the Network Port alias when that owner explicitly registers a port;
 see [registered B/IP ports](#registered-bip-network-port).
@@ -440,7 +482,7 @@ for obj in results:
 
 Return format: `list[dict]` where each dict has:
 - `"object_id"`: `ObjectIdentifier`
-- `"results"`: `list[dict]` with `"property_id"`, `"array_index"`, `"value"` (PropertyValue or None), `"error"` (tuple of ErrorClass, ErrorCode or None)
+- `"results"`: `list[dict]` with `"property_id"`, `"array_index"`, `"value"` (PropertyValue shaped as [Read results](#read-results) describes, raw `bytes` when the octets don't decode, or None on error), `"error"` (tuple of ErrorClass, ErrorCode or None)
 
 #### `write_property_multiple(address, specs)`
 
@@ -2335,7 +2377,15 @@ await server.stop()
 
 #### `read_property(object_id, property_id, array_index=None) -> PropertyValue`
 
-Read a property from a local object in the server's database.
+Read a property from a local object through the server's ReadProperty
+evaluator, the one network reads use, so the result equals what a network
+`read_property` of the same property returns. A Group's Present_Value is
+rebuilt from its members, Device instance `4194303` names this server's
+Device, and the Device's Active_COV_Subscriptions lists the live
+subscriptions. The value takes the [read result](#read-results) shape. An
+unknown object or property raises `BacnetProtocolError` with the error a
+network read gets (`UNKNOWN_OBJECT`, for example). The server lock is held
+for the read, as for `write_property_local`.
 
 ```python
 value = await server.read_property(

@@ -10,7 +10,7 @@ use pyo3::types::{PyBytes, PyDict};
 use tokio::sync::Mutex;
 
 use bacnet_client::client;
-use bacnet_encoding::primitives::{decode_application_value, encode_property_value};
+use bacnet_encoding::primitives::encode_property_value;
 use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;
 type ClientInner =
@@ -42,10 +42,10 @@ use bacnet_types::primitives::BACnetTimeStamp;
 use crate::errors::to_py_err;
 use crate::types::{
     audit_log_query_ack_to_py, audit_log_query_request_from_py, audit_notification_request_from_py,
-    parse_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyAcknowledgmentFilter,
-    PyBACnetTimeStamp, PyCovNotificationIterator, PyDeviceWrite, PyDiscoveredDevice,
-    PyEnableDisable, PyEnrollmentSummaryEventStateFilter, PyEventState, PyEventType,
-    PyLifeSafetyOperation, PyMessagePriority, PyObjectIdentifier, PyObjectType,
+    decode_read_ack, parse_address, py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py,
+    PyAcknowledgmentFilter, PyBACnetTimeStamp, PyCovNotificationIterator, PyDeviceWrite,
+    PyDiscoveredDevice, PyEnableDisable, PyEnrollmentSummaryEventStateFilter, PyEventState,
+    PyEventType, PyLifeSafetyOperation, PyMessagePriority, PyObjectIdentifier, PyObjectType,
     PyPropertyIdentifier, PyPropertyValue, PyPropertyWrite, PyReadAccessSpec, PyReinitializedState,
     PyWriteAccessSpec,
 };

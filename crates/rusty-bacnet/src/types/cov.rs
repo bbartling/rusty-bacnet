@@ -59,6 +59,9 @@ impl PyCovNotification {
     }
 
     /// List of property values as dicts with `property_id`, `array_index`, `value`.
+    ///
+    /// Each value decodes as a `read_property` result does; octets that don't
+    /// decode come back as `bytes`.
     #[getter]
     fn values(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let list = PyList::empty(py);
@@ -71,17 +74,21 @@ impl PyCovNotification {
                 },
             )?;
             dict.set_item("array_index", pv.property_array_index)?;
-            if !pv.value.is_empty() {
-                match decode_application_value(&pv.value, 0) {
-                    Ok((val, _)) => {
-                        dict.set_item("value", PyPropertyValue::from_rust(val))?;
-                    }
-                    Err(_) => {
-                        dict.set_item("value", PyBytes::new(py, &pv.value))?;
-                    }
+            match decode_read_value(
+                self.inner
+                    .notification
+                    .monitored_object_identifier
+                    .object_type(),
+                pv.property_identifier,
+                pv.property_array_index,
+                &pv.value,
+            ) {
+                Ok(val) => {
+                    dict.set_item("value", PyPropertyValue::from_rust(val))?;
                 }
-            } else {
-                dict.set_item("value", py.None())?;
+                Err(_) => {
+                    dict.set_item("value", PyBytes::new(py, &pv.value))?;
+                }
             }
             list.append(dict)?;
         }
