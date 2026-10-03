@@ -1,4 +1,5 @@
 ---
 section: Fixed
 ---
-- Full servers and shared endpoints on the other built-in links now answer and learn local Network Number controls the same way, each through the one owner its transport already has: B/IP in BBMD and foreign-device modes, BACnet/SC, and MS/TP, plus full servers on normal and foreign-device B/IPv6 and on Linux Ethernet. None of these links has configured Network Port authority, so each starts UNKNOWN. On SC, only the Hub broadcast VMAC is a logical broadcast and replies go out through the Hub. An admitted Forwarded-NPDU counts as a local broadcast even when its UDP hop is unicast. Which senders are admitted depends on the mode: a B/IP BBMD admits only its BDT peers, and B/IPv6 admits only the configured BBMD in foreign-device mode and only multicast delivery in normal mode. B/IP NORMAL and foreign-device modes admit a Forwarded-NPDU from any UDP sender under the existing compatibility policy, so a logical broadcast there says nothing about who sent it. No startup announcement is sent. The MS/TP evidence is LoopbackSerial simulation with no RS-485 timing claim; the B/IPv6 and Ethernet wire tests need an isolated Linux link and do not run in ordinary CI (#879).
+- Full servers and shared endpoints on every other built-in link answer and
+  learn local Network Number controls, each starting UNKNOWN (#879).

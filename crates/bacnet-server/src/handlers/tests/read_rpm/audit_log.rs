@@ -79,15 +79,17 @@ fn rpm_audit_log_indexed_reads_and_list_bytes_are_unchanged() {
             P::PROPERTY_LIST,
             None,
             Ok(&[
-                0x91, 28, 0x91, 133, 0x91, 126, 0x91, 141, 0x91, 145, 0x91, 111, 0x91, 36,
+                0x91, 28, 0x91, 133, 0x91, 126, 0x91, 131, 0x91, 141, 0x91, 145, 0x91, 111, 0x91,
+                36,
             ]),
         ),
-        (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 7])),
+        (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 8])),
         (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
-        (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 36])),
+        (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 131])),
+        (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 36])),
         (
             P::PROPERTY_LIST,
-            Some(8),
+            Some(9),
             Err(ErrorCode::INVALID_ARRAY_INDEX),
         ),
         (
@@ -95,8 +97,15 @@ fn rpm_audit_log_indexed_reads_and_list_bytes_are_unchanged() {
             Some(u32::MAX),
             Err(ErrorCode::INVALID_ARRAY_INDEX),
         ),
+        // Log_Buffer is present, but Clause 12.64.10 opens it to ReadRange
+        // and AuditLogQuery only (#1092); an index fails first as on any list.
+        (P::LOG_BUFFER, None, Err(ErrorCode::READ_ACCESS_DENIED)),
+        (
+            P::LOG_BUFFER,
+            Some(1),
+            Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+        ),
         // Unserved Clause 12.64 rows stay unknown, including Reliability.
-        (P::LOG_BUFFER, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
         (P::RELIABILITY, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
         (P::MEMBER_OF, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
     ];

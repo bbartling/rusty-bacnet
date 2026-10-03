@@ -1,3 +1,4 @@
+use bacnet_encoding::constructed::{check_decoded_mac_len, check_encoded_mac_len};
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::constructed::BACnetAddress;
@@ -36,16 +37,21 @@ fn validate(request: &AuditLogQueryRequest) -> Result<(), Error> {
             ));
         }
     }
-    let filter = match &request.query_parameters {
+    let (address, filter) = match &request.query_parameters {
         BACnetAuditLogQueryParameters::ByTarget {
+            target_device_address: address,
             successful_actions_only,
             ..
         }
         | BACnetAuditLogQueryParameters::BySource {
+            source_device_address: address,
             successful_actions_only,
             ..
-        } => *successful_actions_only,
+        } => (address, *successful_actions_only),
     };
+    if let Some(address) = address {
+        check_encoded_mac_len(address, "AuditLogQuery device address")?;
+    }
     validate_filter(filter)
 }
 
@@ -374,12 +380,14 @@ fn decode_address(
     let network_number = u16::try_from(network_number)
         .map_err(|_| Error::decoding(offset, format!("{field} network-number exceeds u16")))?;
 
+    let mac_offset = inner_offset;
     let (mac_address, inner_offset) = decode_application(
         content,
         inner_offset,
         tags::app_tag::OCTET_STRING,
         &format!("{field} mac-address"),
     )?;
+    check_decoded_mac_len(mac_address.len(), content_start + mac_offset, field)?;
     if inner_offset != content.len() {
         return Err(Error::decoding(
             offset + inner_offset,

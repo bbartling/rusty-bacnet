@@ -1,6 +1,7 @@
 //! Lighting rows Tables 12-64 and 12-69 require that the objects used to lack
 //! (#1092): Default_Ramp_Rate and Default_Step_Increment on Lighting Output,
-//! and Current_Command_Priority on both objects.
+//! and Current_Command_Priority on both objects. Lighting Output's
+//! Default_Fade_Time, once a constant 0 below its range, joined them (#1111).
 
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -89,6 +90,59 @@ fn lighting_output_default_ramp_rate_and_step_increment_setters_share_the_range(
     assert_eq!(
         read(&lo, PropertyIdentifier::DEFAULT_STEP_INCREMENT),
         PropertyValue::Real(0.5)
+    );
+}
+
+#[test]
+fn lighting_output_default_fade_time_starts_at_100_ms_and_takes_writes_within_its_range() {
+    let fade = PropertyIdentifier::DEFAULT_FADE_TIME;
+    let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
+    // Clause 12.54.16 allows 100 ms to one day; a new object starts at 100.
+    assert_eq!(read(&lo, fade), PropertyValue::Unsigned(100));
+    assert!(lo.is_writable_property(fade));
+    for value in [100, 2_500, 86_400_000] {
+        lo.write_property(fade, None, PropertyValue::Unsigned(value), None)
+            .unwrap();
+        assert_eq!(read(&lo, fade), PropertyValue::Unsigned(value));
+    }
+    // Outside the range, including past u32, the value stays at one day.
+    for value in [0, 99, 86_400_001, u64::from(u32::MAX) + 1, u64::MAX] {
+        assert_error(
+            lo.write_property(fade, None, PropertyValue::Unsigned(value), None),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+        assert_eq!(
+            read(&lo, fade),
+            PropertyValue::Unsigned(86_400_000),
+            "{value}"
+        );
+    }
+    for value in [
+        PropertyValue::Real(500.0),
+        PropertyValue::Signed(500),
+        PropertyValue::Null,
+    ] {
+        assert_error(
+            lo.write_property(fade, None, value, None),
+            ErrorCode::INVALID_DATA_TYPE,
+        );
+    }
+    assert_eq!(read(&lo, fade), PropertyValue::Unsigned(86_400_000));
+}
+
+#[test]
+fn lighting_output_default_fade_time_setter_refuses_values_outside_its_range() {
+    let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
+    lo.set_default_fade_time(750).unwrap();
+    for value in [0, 99, 86_400_001, u32::MAX] {
+        assert_error(
+            lo.set_default_fade_time(value),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+    }
+    assert_eq!(
+        read(&lo, PropertyIdentifier::DEFAULT_FADE_TIME),
+        PropertyValue::Unsigned(750)
     );
 }
 

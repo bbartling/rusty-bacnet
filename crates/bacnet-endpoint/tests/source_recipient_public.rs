@@ -50,7 +50,7 @@ async fn record(rx: &mut mpsc::Receiver<ReceivedApdu>) -> BACnetAuditNotificatio
 }
 fn encoded(recipient: &BACnetRecipient) -> Vec<u8> {
     let mut bytes = bytes::BytesMut::new();
-    bacnet_encoding::constructed::encode_recipient(&mut bytes, recipient);
+    bacnet_encoding::constructed::encode_recipient(&mut bytes, recipient).unwrap();
     bytes.to_vec()
 }
 

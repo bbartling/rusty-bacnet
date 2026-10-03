@@ -98,6 +98,8 @@ mod bbmd_discovery;
 mod dcc;
 #[path = "server/error_cov.rs"]
 mod error_cov;
+#[path = "server/forwarder_subscriptions.rs"]
+mod forwarder_subscriptions;
 #[path = "server/list_elements.rs"]
 mod list_elements;
 #[path = "server/local_write_cov.rs"]

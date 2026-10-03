@@ -1,18 +1,19 @@
 //! Lighting rows #1092 added, over WriteProperty and ReadProperty:
 //! Default_Ramp_Rate and Default_Step_Increment on Lighting Output, and
-//! Current_Command_Priority on both lighting objects.
+//! Current_Command_Priority on both lighting objects. Lighting Output's
+//! Default_Fade_Time became a writable row with them in #1111.
 
 use super::*;
 use bacnet_objects::lighting::{BinaryLightingOutputObject, LightingOutputObject};
 
-fn db_with(object: Box<dyn BACnetObject>) -> (ObjectDatabase, ObjectIdentifier) {
+pub(super) fn db_with(object: Box<dyn BACnetObject>) -> (ObjectDatabase, ObjectIdentifier) {
     let oid = object.object_identifier();
     let mut db = ObjectDatabase::new();
     db.add(object).unwrap();
     (db, oid)
 }
 
-fn write_wire(
+pub(super) fn write_wire(
     db: &mut ObjectDatabase,
     oid: ObjectIdentifier,
     property: PropertyIdentifier,
@@ -34,7 +35,11 @@ fn write_wire(
     handle_write_property(db, &request).map(|_| ())
 }
 
-fn read_wire(db: &ObjectDatabase, oid: ObjectIdentifier, property: PropertyIdentifier) -> Vec<u8> {
+pub(super) fn read_wire(
+    db: &ObjectDatabase,
+    oid: ObjectIdentifier,
+    property: PropertyIdentifier,
+) -> Vec<u8> {
     let mut request = BytesMut::new();
     ReadPropertyRequest {
         object_identifier: oid,
@@ -47,7 +52,7 @@ fn read_wire(db: &ObjectDatabase, oid: ObjectIdentifier, property: PropertyIdent
     ReadPropertyACK::decode(&response).unwrap().property_value
 }
 
-fn assert_refused(result: Result<(), Error>, expected: ErrorCode) {
+pub(super) fn assert_refused(result: Result<(), Error>, expected: ErrorCode) {
     match result {
         Err(Error::Protocol { class, code }) => {
             assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
@@ -89,6 +94,32 @@ fn lighting_output_default_ramp_rate_and_step_increment_over_write_property() {
             [0x44, 0x40, 0x20, 0x00, 0x00]
         );
     }
+}
+
+#[test]
+fn lighting_output_default_fade_time_over_write_property() {
+    let fade = PropertyIdentifier::DEFAULT_FADE_TIME;
+    let (mut db, oid) = db_with(Box::new(LightingOutputObject::new(1, "LO-1").unwrap()));
+    // A new object serves 100 ms, the floor of Clause 12.54.16's range.
+    assert_eq!(read_wire(&db, oid, fade), [0x21, 100]);
+    for edge in [100, 86_400_000] {
+        write_wire(&mut db, oid, fade, PropertyValue::Unsigned(edge), None).unwrap();
+    }
+    // 86,400,000 is 0x05265C00, a four-octet Unsigned.
+    assert_eq!(read_wire(&db, oid, fade), [0x24, 0x05, 0x26, 0x5C, 0x00]);
+    write_wire(&mut db, oid, fade, PropertyValue::Unsigned(1_500), None).unwrap();
+    for outside in [0, 99, 86_400_001] {
+        assert_refused(
+            write_wire(&mut db, oid, fade, PropertyValue::Unsigned(outside), None),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+    }
+    assert_refused(
+        write_wire(&mut db, oid, fade, PropertyValue::Real(500.0), None),
+        ErrorCode::INVALID_DATA_TYPE,
+    );
+    // 1,500 is 0x05DC.
+    assert_eq!(read_wire(&db, oid, fade), [0x22, 0x05, 0xDC]);
 }
 
 #[test]

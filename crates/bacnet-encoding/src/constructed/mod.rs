@@ -39,6 +39,7 @@ mod audit_notification;
 mod audit_record;
 pub mod calendar;
 pub mod cov_subscription;
+pub mod event_notification_subscription;
 pub mod event_parameter;
 pub mod fault_parameter;
 mod floor_pairs;
@@ -77,6 +78,10 @@ pub use cov_subscription::{
     decode_cov_multiple_subscription, decode_cov_subscription, encode_cov_multiple_subscription,
     encode_cov_multiple_subscription_list, encode_cov_subscription, encode_cov_subscription_list,
 };
+pub use event_notification_subscription::{
+    decode_event_notification_subscription, encode_event_notification_subscription,
+    encode_event_notification_subscription_list,
+};
 pub use event_parameter::{decode_event_parameter, encode_event_parameter};
 pub use fault_parameter::{decode_fault_parameters, encode_fault_parameters};
 pub use landing_call_status::{
@@ -95,8 +100,8 @@ pub use read_access::{
     encode_read_access_specification,
 };
 pub use recipient::{
-    decode_configured_recipient, decode_destination, decode_destination_list, decode_recipient,
-    encode_destination, encode_destination_list, encode_recipient,
+    check_decoded_mac_len, check_encoded_mac_len, decode_destination, decode_destination_list,
+    decode_recipient, encode_destination, encode_destination_list, encode_recipient,
 };
 pub use schedule::{
     decode_daily_schedule, decode_exception_schedule, decode_special_event,

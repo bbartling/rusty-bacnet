@@ -5,7 +5,7 @@ use bytes::BytesMut;
 
 use super::{
     decode_device_object_reference, encode_device_object_reference, expect_closing,
-    recipient::{decode_app_octet_string, decode_app_unsigned},
+    recipient::{check_encoded_mac_len, decode_app_mac_address, decode_app_unsigned},
 };
 use crate::{primitives, tags};
 
@@ -17,12 +17,11 @@ const WHAT: &str = "BACnetValueSource";
 /// local network zero and empty (broadcast) MAC addresses. Source identity and
 /// authorization are mechanism-level concerns, not datatype restrictions.
 ///
-/// An unencodable MAC length returns an error
-/// before modifying the output buffer.
+/// A MAC longer than [`BACnetAddress::MAX_MAC_LEN`] octets, which the decoder
+/// refuses, returns an error before modifying the output buffer (#1156).
 pub fn encode_value_source(buf: &mut BytesMut, source: &BACnetValueSource) -> Result<(), Error> {
     if let BACnetValueSource::Address(address) = source {
-        u32::try_from(address.mac_address.len())
-            .map_err(|_| Error::OutOfRange(format!("{WHAT}: MAC length exceeds wire length")))?;
+        check_encoded_mac_len(address, WHAT)?;
     }
     match source {
         BACnetValueSource::None => tags::encode_tag(buf, 0, tags::TagClass::Context, 0),
@@ -46,7 +45,8 @@ pub fn encode_value_source(buf: &mut BytesMut, source: &BACnetValueSource) -> Re
 /// Bytes after that CHOICE are left for the caller, allowing concatenated array
 /// elements. A full-property consumer must check that the returned offset equals
 /// the payload length. Structural acceptance does not establish a valid or
-/// authorized command source.
+/// authorized command source. An address MAC longer than
+/// [`BACnetAddress::MAX_MAC_LEN`] octets is refused before it is copied (#1156).
 pub fn decode_value_source(
     data: &[u8],
     offset: usize,
@@ -65,7 +65,7 @@ pub fn decode_value_source(
         let network_number = u16::try_from(network).map_err(|_| {
             Error::decoding(pos, format!("{WHAT}: network number exceeds Unsigned16"))
         })?;
-        let (mac_address, pos) = decode_app_octet_string(data, pos, WHAT)?;
+        let (mac_address, pos) = decode_app_mac_address(data, pos, WHAT)?;
         let end = expect_closing(data, pos, 2, WHAT)?;
         return Ok((
             BACnetValueSource::Address(BACnetAddress {

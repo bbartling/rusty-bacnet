@@ -430,7 +430,7 @@ impl BACnetObject for Probe {
         // for every property.
         property == CUSTOM
     }
-    fn cov_increment(&self) -> Option<f32> {
+    fn cov_increment(&self) -> Option<f64> {
         self.called("cov_increment", ());
         Some(1.25)
     }

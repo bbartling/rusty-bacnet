@@ -663,6 +663,8 @@ mod active_cov_subscriptions_tests;
 #[cfg(test)]
 mod audit_log_query_tests;
 #[cfg(test)]
+mod averaging_reference_write_tests;
+#[cfg(test)]
 mod averaging_sample_tests;
 #[cfg(test)]
 mod binary_lighting_task_tests;
@@ -753,11 +755,17 @@ mod staging_cov_tests;
 #[cfg(test)]
 mod staging_reference_write_tests;
 #[cfg(test)]
+mod subscribed_recipients_expiry_tests;
+#[cfg(test)]
 mod table_13_1_cov_tests;
+#[cfg(test)]
+pub(crate) mod test_forwarder;
 #[cfg(test)]
 pub(crate) mod test_transport;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod value_cov_increment_tests;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Start a server builder for a caller-supplied transport type, with default configuration and

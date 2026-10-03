@@ -356,7 +356,7 @@ fn rpm_lighting_output_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::DEFAULT_FADE_TIME, None, Ok(&[0x21, 0])),
+            (P::DEFAULT_FADE_TIME, None, Ok(&[0x21, 100])),
             (
                 P::DEFAULT_FADE_TIME,
                 Some(0),
