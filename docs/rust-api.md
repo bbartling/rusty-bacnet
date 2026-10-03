@@ -2998,20 +2998,20 @@ timestamp and the list's tags, 25 to 33 octets in all (#1197). Each change count
 its encoding, one item's framing and a fixed overhead of 32 octets for the memory
 it holds besides its values, so many tiny changes cannot outgrow the estimate. The
 context also keeps room, at most one notification's worth, for the most its
-untimestamped values have taken in one report since it was last admitted or lost a reference.
-Only on overflow, the last resort, is a change dropped: the oldest of the same
-reference first, then the oldest in the context, never a reference's latest.
-Nor is a reference's change in delivery dropped: once a change sent one value per
-notification has a part delivered, or sent as a confirmed report's first part,
-the rest of it stays queued until its last value is delivered, however small the
-subscriber's maximum APDU (#1163). Beyond the bound, a context therefore holds at
-most two changes per reference. Parts
-a confirmed report defers return to the queue without that check, so the bound
-never drops what the report just planned to send. Changes returned by a failed
-notification wait while a newer change of the same reference is in flight; once a
-newer change is delivered, older ones are dropped rather than delivered as stale
-state. Every one of these drops increments `CovCounters::timed_changes_dropped`,
-as does each change that loses a value too large for any notification;
+untimestamped values have taken in one report since it was last admitted or lost
+a reference. Only on overflow, the last resort, is a change dropped: the oldest
+of the same reference first, then the oldest in the context, never a reference's
+latest. Nor is a reference's change in delivery dropped: once a change sent one
+value per notification has a part delivered, or sent as a confirmed report's
+first part, the rest of it stays queued until its last value is delivered,
+however small the subscriber's maximum APDU (#1163). Beyond the bound, a context
+therefore holds at most two changes per reference. Parts a confirmed report
+defers return to the queue without that check, so the bound never drops what the
+report just planned to send. Changes returned by a failed notification wait
+while a newer change of the same reference is in flight; once a newer change is
+delivered, older ones are dropped rather than delivered as stale state. Every
+one of these drops increments `CovCounters::timed_changes_dropped`, as does each
+change that loses a value too large for any notification;
 splitting is not counted. The log gets one warning per context for each cause
 (bound overflow, a value too large for any notification, superseded), and later
 drops for that cause are logged at debug level only, until the context is

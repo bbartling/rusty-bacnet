@@ -74,14 +74,14 @@
 //! estimate comes to 68 to 100 octets, by the envelope's size, about one
 //! Present_Value and Status_Flags change, so a value held back by a failed
 //! send or a deferral would be evicted by the next change, and the
-//! value-by-value delivery of #1090 could never finish. Counting the bound in values instead would still need
-//! an octet limit, as nothing limits a value's size when it is captured, and
-//! would change eviction for every change of such a context; exempting only
-//! the change already partly sent leaves every other eviction as it was.
-//! Each reference marks one change in delivery, the one a part last went out
-//! ahead of, so the memory ceiling stays fixed: after eviction a context
-//! holds at most its bound or, beyond it, only changes eviction may not take,
-//! two per reference at most.
+//! value-by-value delivery of #1090 could never finish. Counting the bound in
+//! values instead would still need an octet limit, as nothing limits a value's
+//! size when it is captured, and would change eviction for every change of
+//! such a context; exempting only the change already partly sent leaves every
+//! other eviction as it was. Each reference marks one change in delivery, the
+//! one a part last went out ahead of, so the memory ceiling stays fixed: after
+//! eviction a context holds at most its bound or, beyond it, only changes
+//! eviction may not take, two per reference at most.
 //!
 //! Each discarded change is counted in
 //! [`AtomicCovCounters::timed_changes_dropped`]; the log gets one warning per

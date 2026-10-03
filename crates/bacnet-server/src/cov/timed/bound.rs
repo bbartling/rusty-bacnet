@@ -44,7 +44,7 @@ pub(crate) fn request_header(confirmed: bool) -> usize {
 /// process identifier and time remaining as context-tagged unsigned values in
 /// their fewest octets, the device identifier, the timestamp, and the tags
 /// around the list. From 25 octets, unconfirmed with both numbers below 256,
-/// to 33, confirmed with both above 2^24.
+/// to 33, confirmed with both at or above 2^24.
 ///
 /// `time_remaining` is the lifetime in seconds the context had left when it
 /// was admitted. Its notifications report less as time passes, which never
