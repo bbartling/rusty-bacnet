@@ -195,11 +195,17 @@ jobs:
       - name: Clippy (PyO3 bindings)
         if: ${{ !cancelled() }}
         run: cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
-      - name: Rustdoc (every native feature)
+      # Private items too, as in Forgejo CI (#1164).
+      - name: Rustdoc (every native feature, private items)
         if: ${{ !cancelled() }}
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$NATIVE_FEATURES"
+        run: cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --document-private-items --features "$NATIVE_FEATURES"
+      - name: Rustdoc (PyO3 bindings, private items)
+        if: ${{ !cancelled() }}
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
 
       # A debug extension builds faster, and the suite doesn't need release speed.
       - name: Build the extension (maturin develop)
