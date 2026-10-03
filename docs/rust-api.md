@@ -2131,9 +2131,56 @@ transition can replace it.
 A Trend Log Multiple record is a `BACnetLogMultipleRecord`: a timestamp and a
 `LogData` holding one `LogValue` per Log_DeviceObjectProperty member, a log
 status, or a time change. `TrendLogMultipleObject::add_record` takes one and
-`records()` returns them; Log_Buffer serves each one framed as Clause 21's
-BACnetLogMultipleRecord (`bacnet_encoding::constructed::encode_log_multiple_record`
-and `decode_log_multiple_record`).
+`records()` returns them.
+
+An Event Log record is a `BACnetEventLogRecord`: a timestamp and an
+`EventLogDatum` holding a log status, a time change, or a notification as the
+encoded parameters of a ConfirmedEventNotification request
+(`bacnet_services::alarm_event::EventNotificationRequest::encode` writes them,
+`decode` reads them back). `EventLogObject::add_record` takes one. A Trend Log
+record stays a `BACnetLogRecord`; its optional `status_flags` is a
+`StatusFlags`.
+
+Every record kind, the Audit Log's included, carries a log status as the
+typed `bacnet_types::bitstring::LogStatus` flags (`LOG_DISABLED`,
+`BUFFER_PURGED`, `LOG_INTERRUPTED`). The codecs send bit 0 first, as for
+every BACnet bit string: log-disabled is `05 80`, buffer-purged `05 40`,
+log-interrupted `05 20`. `LogDatum` and `LogValue` keep INTEGER values as
+`i64` and ENUMERATED and Unsigned values as `u64`. Clause 21 lets a logging
+device hold these to 32 bits but doesn't require it, so a record read from a
+peer may carry wider values, and the decoders accept up to eight octets.
+
+`add_record` and the trend hooks refuse a record that would not encode (an
+any-value or notification whose tags don't balance, a bit string with
+impossible padding) with its encoding error, before anything changes. So
+`LogBufferRecords::encode_record` cannot fail, and one bad record can't break
+every ReadRange window over the log.
+
+Trend Log Multiple, Trend Log and Event Log objects list `Log_Buffer` in their
+Property_List, but ReadProperty and ReadPropertyMultiple answer it with
+`PROPERTY / READ_ACCESS_DENIED` (also inside RPM `ALL` and `REQUIRED`):
+Clauses 12.25.14, 12.27.13 and 12.30.19 make the buffer reachable only
+through ReadRange. ReadRange reads each object's records through
+`BACnetObject::log_buffer_internal`, a `LogBufferRecords` view, and returns
+each item as one record framed as its Clause 21 production:
+
+| Object | Record | Codec in `bacnet_encoding::constructed` |
+|--------|--------|------------------------------------------|
+| Trend Log | BACnetLogRecord | `encode_log_record` / `decode_log_record` |
+| Event Log | BACnetEventLogRecord | `encode_event_log_record` / `decode_event_log_record` |
+| Trend Log Multiple | BACnetLogMultipleRecord | `encode_log_multiple_record` / `decode_log_multiple_record` |
+
+Each decoder returns the offset after the record, so a client walks a
+ReadRange ACK's `item_data` record by record. The poller logs a value whose
+datatype has no alternative of its own (a CharacterString, Double, Date,
+ObjectIdentifier, whole array and so on) as `AnyValue` holding the value's
+own encoding, the bytes a ReadProperty of it carries; NULL is logged only
+for a NULL value. An any-value holds at most
+`bacnet_objects::log_buffer::ANY_VALUE_MAX_OCTETS` (256) octets of encoding.
+A longer value is logged as a `PROPERTY / VALUE_TOO_LONG` failure, so a Trend
+Log record stays small enough for a ReadRange page on a 480-octet APDU. A
+value no record could carry is logged as `SERVICES / OTHER`. Records an
+application adds itself are not capped.
 
 The pre-1.0 `BACnetObject` contract has two fallible trend hooks:
 `add_trend_record` for Trend Log records and `add_trend_multiple_record` for
@@ -3679,8 +3726,9 @@ both services. `RangeSpec::ByPosition::reference_index`,
 `ReadRangeAck::first_sequence_number` are `u64` for these logs (Clause 15.8).
 
 `AuditLogSnapshot::completed_receipts` is part of the public custom-persistence
-snapshot contract. `FileAuditLogPersistence` writes schema v2, reads schema v1
-as an empty receipt ledger, rejects unknown future versions, and retains the
+snapshot contract. `FileAuditLogPersistence` writes schema v3, reads schema v2
+and schema v1 (as an empty receipt ledger), rejects unknown future versions,
+and retains the
 existing two-slot generation/checksum recovery policy. When migrating a custom
 `AuditLogPersistence` implementation to 0.11.0, add `completed_receipts: Vec::new()`
 to newly constructed snapshots and when decoding an older format without
@@ -3688,10 +3736,18 @@ receipts. Thereafter, `commit` must durably store the supplied receipt ledger
 and records in the same atomic snapshot, and `load` must restore both. Dropping
 or separately committing the ledger loses confirmed-request duplicate
 protection after a reopen. The built-in file backend needs no separate v1
-conversion: it writes v2 on the next successful commit.
+conversion: it writes the current schema on the next successful commit.
 
-Back up both `.slot0` and `.slot1` files before the first v2 commit. A reader that
-supports only v1 cannot read v2 snapshots; rolling back to such an implementation
+Schema v1 and v2 files, which 0.11.0 and earlier wrote, store log-status
+records with their three bits reversed. The file backend restores each one
+when it loads such a file, so an old log-disabled record reads back as
+`LogStatus::LOG_DISABLED`, and the next commit saves the log as v3. A custom
+`AuditLogPersistence` that stored encoded records from those releases has to
+make the same correction: reverse the three bits of every log-status record
+it decodes.
+
+Back up both `.slot0` and `.slot1` files before the first commit under a newer schema. A reader that
+supports only an older schema cannot read newer snapshots; rolling back to such an implementation
 requires restoring a compatible backup and loses changes made after that backup.
 
 Unconfirmed receipt never emits a response and never writes the confirmed ledger.

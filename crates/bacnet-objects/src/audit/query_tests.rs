@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use bacnet_types::bitstring::AuditOperationFlags;
+use bacnet_types::bitstring::{AuditOperationFlags, LogStatus};
 use bacnet_types::constructed::{
     AuditPropertyReference, BACnetAddress, BACnetAuditLogDatum, BACnetAuditLogQueryParameters,
     BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification, BACnetRecipient,
@@ -154,7 +154,7 @@ fn target_filter_matches_every_field_and_device_identifier_or_address() {
         BACnetRecipient::Address(address(7, &[0x22])),
     );
     let log = log_with_records(vec![
-        record(1, BACnetAuditLogDatum::LogStatus(0)),
+        record(1, BACnetAuditLogDatum::LogStatus(LogStatus::empty())),
         record(2, BACnetAuditLogDatum::TimeChange(1.5)),
         record(3, BACnetAuditLogDatum::AuditNotification(by_identifier)),
         record(4, BACnetAuditLogDatum::AuditNotification(by_address)),

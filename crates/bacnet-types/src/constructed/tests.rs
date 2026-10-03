@@ -239,12 +239,15 @@ fn log_record_with_status_flags() {
             second: 0,
             hundredths: 0,
         },
-        log_datum: LogDatum::LogStatus(0b010), // buffer-purged
-        status_flags: Some(0b0100),            // FAULT set
+        log_datum: LogDatum::LogStatus(crate::bitstring::LogStatus::BUFFER_PURGED),
+        status_flags: Some(crate::primitives::StatusFlags::FAULT),
     };
-    assert_eq!(record.status_flags, Some(0b0100));
+    assert_eq!(
+        record.status_flags,
+        Some(crate::primitives::StatusFlags::FAULT)
+    );
     match record.log_datum {
-        LogDatum::LogStatus(s) => assert_eq!(s, 0b010),
+        LogDatum::LogStatus(s) => assert_eq!(s, crate::bitstring::LogStatus::BUFFER_PURGED),
         _ => panic!("wrong datum variant"),
     }
 }

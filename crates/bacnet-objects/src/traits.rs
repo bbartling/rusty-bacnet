@@ -29,7 +29,7 @@ use crate::event_enrollment::{
     EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentReliabilityCommit,
 };
 use crate::file::{FileConfiguration, FileStorage};
-use crate::log_buffer::LogRecordIdentity;
+use crate::log_buffer::{LogBufferRecords, LogRecordIdentity};
 use crate::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 
 /// Process-local monotonic time source used by internal object lifecycles.
@@ -1163,10 +1163,24 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Return stable identities aligned with this object's resident log records.
     ///
     /// Implementing log objects return identities oldest-to-newest, in the
-    /// same order as their public resident-record view and `LOG_BUFFER`
-    /// projection. Sequence numbers are object-owned metadata and never part
-    /// of a projected BACnet record payload. Non-log objects return `None`.
+    /// same order as their public resident-record view and their
+    /// [`log_buffer_internal`](Self::log_buffer_internal) records. Sequence
+    /// numbers are object-owned metadata and never part of an encoded BACnet
+    /// record. Non-log objects return `None`.
     fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
+        None
+    }
+
+    /// Borrow this object's Log_Buffer records as ReadRange pages them.
+    ///
+    /// The built-in Trend Log, Trend Log Multiple and Event Log objects
+    /// answer a ReadProperty of Log_Buffer with PROPERTY / READ_ACCESS_DENIED,
+    /// since their clauses (12.25.14, 12.30.19, 12.27.13) open the buffer to
+    /// ReadRange only; the server's ReadRange handler reads it through this
+    /// channel instead, one encoded record per item. The **default** returns
+    /// `None`, which leaves ReadRange reading the property through
+    /// [`read_property`](Self::read_property).
+    fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
         None
     }
 

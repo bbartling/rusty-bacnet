@@ -1221,6 +1221,7 @@ class AuditNotification(TypedDict):
 
 class AuditLogStatusDatum(TypedDict):
     kind: Literal["log_status"]
+    # BACnetLogStatus flags: 1 log-disabled, 2 buffer-purged, 4 log-interrupted.
     log_status: int
 
 

@@ -73,11 +73,17 @@ fn rpm_property_ids(
     let ack = ReadPropertyMultipleACK::decode(&response_bytes).unwrap();
     let results = &ack.list_of_read_access_results[0].list_of_results;
     for result in results {
-        // An Audit Log's Log_Buffer is present, but only ReadRange and
-        // AuditLogQuery read it (Clause 12.64.10), so a selector naming it
-        // carries an inline READ_ACCESS_DENIED (Clause 15.7.3.1.2).
-        if object_identifier.object_type() == ObjectType::AUDIT_LOG
-            && result.property_identifier == PropertyIdentifier::LOG_BUFFER
+        // A log's Log_Buffer is present, but only ReadRange (and, for an
+        // Audit Log, AuditLogQuery) reads it (Clauses 12.25.14, 12.27.13,
+        // 12.30.19 and 12.64.10), so a selector naming it carries an inline
+        // READ_ACCESS_DENIED (Clause 15.7.3.1.2).
+        if matches!(
+            object_identifier.object_type(),
+            ObjectType::AUDIT_LOG
+                | ObjectType::EVENT_LOG
+                | ObjectType::TREND_LOG
+                | ObjectType::TREND_LOG_MULTIPLE
+        ) && result.property_identifier == PropertyIdentifier::LOG_BUFFER
         {
             assert_eq!(
                 result.error,

@@ -26,7 +26,7 @@ fn write_v1_fixture(storage: &FileAuditLogPersistence, record: BACnetAuditLogRec
         .unwrap();
     let path = &storage.slot_paths()[1];
     let mut bytes = std::fs::read(path).unwrap();
-    assert_eq!(&bytes[8..10], &2u16.to_be_bytes());
+    assert_eq!(&bytes[8..10], &3u16.to_be_bytes());
     assert_eq!(&bytes[bytes.len() - 8..bytes.len() - 4], &[0; 4]);
     bytes.truncate(bytes.len() - 8); // empty receipt count + checksum
     bytes[8..10].copy_from_slice(&1u16.to_be_bytes());
@@ -320,7 +320,7 @@ async fn audit_forwarding_file_v1_reopen_has_no_replay_or_historical_receipt() {
     assert_eq!(accepted.completed_receipts.len(), 1);
     assert_eq!(
         &std::fs::read(&storage.slot_paths()[0]).unwrap()[8..10],
-        &2u16.to_be_bytes()
+        &3u16.to_be_bytes()
     );
     assert!(f.confirmed(201, &[3], data.clone()).await.is_none());
     settle().await;
