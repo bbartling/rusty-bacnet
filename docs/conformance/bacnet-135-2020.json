@@ -976,7 +976,8 @@
     "crates/bacnet-encoding/src/npdu/address_bound_tests.rs::{over_long_address_length_is_refused_for_either_field,over_long_length_is_refused_before_the_address_is_read,source_refusal_reports_the_npdu_dnet,destination_refusal_carries_the_source_behind_it,address_too_long_reads_as_out_of_range,encoder_refuses_an_address_past_the_bound_for_either_field}",
     "crates/bacnet-network/src/address_bound_tests.rs::non_router_drops_and_counts_an_over_long_address_in_either_field",
     "crates/bacnet-network/src/link_source_bound_tests.rs::non_router_drops_and_counts_a_frame_from_an_over_long_source_mac",
-    "crates/bacnet-network/src/layer_delivery_tests.rs::sends_naming_network_zero_are_refused_before_any_frame"
+    "crates/bacnet-network/src/layer_delivery_tests.rs::sends_naming_network_zero_are_refused_before_any_frame",
+    "crates/bacnet-network/src/layer_delivery_tests.rs::sends_pairing_the_global_network_with_a_device_are_refused_before_any_frame"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -991,7 +992,8 @@
     "For an over-long DADR it also reports the SNET/SADR behind it, read past the DLEN octets the frame announces, when a complete and valid one is there (#1158), so the router can address its reject; encode_npdu refuses a longer address with Error::Encoding (the limit was 255).",
     "The non-router NetworkLayer drops such an NPDU before APDU or control admission and counts it in address_length_drops(); a non-router sends no reject. The router side is under BACNET-6-ROUTER-MESSAGES. Tests feed hand-built wire bytes for each address field: 19 and 255 are refused, 1, 6 and 18 decode and re-encode unchanged.",
     "#1198: NetworkLayer drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN before decoding it and counts it in address_length_drops(). No built-in transport reports one (B/IP, BACnet/SC and Ethernet use 6 octets, MS/TP 1, B/IPv6 18), so only a custom TransportPort can, and every address learned off the network fits a BACnetAddress.",
-    "NetworkLayer refuses destination network 0 in broadcast_to_network, send_apdu_routed, send_apdu_routed_via_local_broadcast and send_apdu_on_issuance with a named Error::Encoding before encoding or sending (Clause 6.2.2.1)."
+    "NetworkLayer refuses destination network 0 in broadcast_to_network, send_apdu_routed, send_apdu_routed_via_local_broadcast and send_apdu_on_issuance with a named Error::Encoding before encoding or sending (Clause 6.2.2.1).",
+    "The routed sends and send_apdu_on_issuance refuse DNET 0xFFFF with a non-empty DADR the same way; a global broadcast goes out through broadcast_global_apdu with DLEN 0 (Clauses 6.1, 6.3.2)."
    ]
   },
   {
@@ -2569,6 +2571,7 @@
     "crates/bacnet-endpoint/src/source_reporter.rs",
     "crates/bacnet-server/src/command_lists.rs",
     "crates/bacnet-server/src/command_lists/unattached.rs",
+    "crates/bacnet-server/src/command_lists/taken.rs::TakenRuns",
     "crates/bacnet-server/src/server/remote_writes.rs",
     "crates/bacnet-server/src/server/confirmed_answer.rs",
     "crates/bacnet-server/src/server/request_tasks.rs",
@@ -2608,7 +2611,9 @@
     "crates/bacnet-server/src/command_lists/unattached_tests.rs::refused_command_run_marks_every_command_unsuccessful",
     "crates/bacnet-server/src/server/command_remote_write_tests.rs::{command_write_another_device_refuses_busy_fails_at_once_and_quits,command_write_another_device_never_answers_is_retried_then_fails,command_write_another_device_fails_unsent_while_dcc_restricts_initiation,command_write_another_device_ends_at_the_first_retry_dcc_blocks,stop_during_an_outstanding_remote_write_ends_the_run_and_frees_its_invoke_id}",
     "crates/bacnet-server/src/server/command_run_stop_tests.rs::{stop_during_a_post_delay_ends_the_run_with_what_it_made,stop_while_the_database_is_busy_ends_the_run_where_it_stood,run_no_task_starts_ends_at_once_as_unsuccessful,stop_during_a_channel_member_delay_ends_the_distribution_failed,stop_while_the_database_is_busy_ends_a_channel_distribution_failed,channel_run_no_task_starts_ends_at_once_failed,stop_ends_a_run_nothing_took,run_whose_write_panics_ends_with_its_unmade_commands_unsuccessful,stop_during_the_last_post_delay_ends_the_run_successful,run_whose_write_panics_while_the_database_is_busy_ends_where_it_stood}",
-    "crates/bacnet-server/src/server/remote_write_answer_tests.rs::{remote_write_ignores_answers_from_another_peer_or_for_another_service,remote_write_error_reject_or_abort_ends_it_at_once_saying_why,remote_write_blocked_by_dcc_at_a_retry_ends_there_as_disabled}"
+    "crates/bacnet-server/src/server/remote_write_answer_tests.rs::{remote_write_ignores_answers_from_another_peer_or_for_another_service,remote_write_error_reject_or_abort_ends_it_at_once_saying_why,remote_write_blocked_by_dcc_at_a_retry_ends_there_as_disabled}",
+    "crates/bacnet-server/src/server/command_run_cancel_tests.rs::{write_local_dropped_after_its_commit_ends_the_command_run_unsuccessful,write_local_dropped_while_the_database_is_busy_ends_the_run_once_it_is_free}",
+    "crates/bacnet-server/src/command_lists/taken_tests.rs::{taken_runs_dropped_unstarted_end_at_once_as_if_nothing_was_written,taken_runs_dropped_while_the_database_is_busy_end_once_it_is_free,taken_runs_handed_over_belong_to_their_new_owner,an_owner_that_panics_part_way_leaves_the_runs_not_yet_handed_to_the_drop,a_dropped_run_ends_once_and_never_ends_its_objects_next_run}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2619,7 +2624,8 @@
     "docs/python-api.md#building-control Python add_command action and action_text",
     "CHANGELOG.md Unreleased Added entry for #1180 (Command actions in other devices), from changelog.d/1180-command-remote-writes.md",
     "CHANGELOG.md Unreleased Fixed entry for #1252 (stop ends Command runs), from changelog.d/1252-stop-ends-command-runs.md",
-    "CHANGELOG.md Unreleased Changed entry for #1323 (remote write refusals keep their payload), from changelog.d/1323-refusal-payload.md"
+    "CHANGELOG.md Unreleased Changed entry for #1323 (remote write refusals keep their payload), from changelog.d/1323-refusal-payload.md",
+    "CHANGELOG.md Unreleased Fixed entry for #1324 (a dropped write_local ends its runs), from changelog.d/1324-dropped-write-local-runs.md"
    ],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1150, found in #1135). Breaking pre-1.0 wire change: Present_Value used to store any Unsigned and run nothing. Clause 12.10 and Table 12-12 were read as page images.",
@@ -2639,14 +2645,13 @@
     "A command naming another Device goes out as a confirmed WriteProperty, addressed from the device bindings only (a configured DeviceBinding or an I-Am under ten minutes old). No Who-Is is sent; an unbound device fails unsent.",
     "Remote write bounds: each attempt waits cov_retry_timeout_ms, silence earns up to three retries under one invoke ID, and an Error (BUSY included), Reject or Abort is final. Nothing is sent while DCC restricts initiation, a retry included.",
     "A remote write leases its invoke ID from the pool confirmed notifications use, and the lease names the peer and WriteProperty. No database guard is held while it is outstanding. tick_schedules, which has no network, fails remote commands.",
-    "stop() ends a cancelled run where it stood: In_Process FALSE, unmade commands FALSE, All_Writes_Successful TRUE only if every write was made and succeeded. Runs let go of while the database was busy, then ownerless ones, end once it is free.",
+    "stop() ends a cancelled run where it stood: In_Process FALSE, unmade commands FALSE, All_Writes_Successful TRUE only if every write was made and succeeded. Runs let go of while the database was busy, then ownerless ones, end once it is free. A write_local dropped after its commit ends the run it took but hadn't started as if no command was made, without stop().",
     "A run whose write panics ends the same way, its unmade commands FALSE, and its property subscribers hear of the end.",
     "A remote write's refusal reaches the run host with what the device said: the Error class and code, or the Reject or Abort reason. A Command keeps only pass or fail; a Channel member in another device goes through the same remote write path.",
     "Python reads Action as lists of ActionCommand mappings with every key, Write_Successful included; add_command takes those mappings back and ignores write_successful, so a command starts FALSE."
    ],
    "gaps": [
-    "#1322: a remote target with no fresh binding fails unsent; no targeted Who-Is is sent on a binding-cache miss",
-    "#1324: runs a cancelled write_local took but never started stay in progress until stop()"
+    "#1322: a remote target with no fresh binding fails unsent; no targeted Who-Is is sent on a binding-cache miss"
    ]
   },
   {
@@ -3954,6 +3959,7 @@
     "crates/bacnet-server/src/command_lists/target.rs",
     "crates/bacnet-server/src/command_lists/chain.rs",
     "crates/bacnet-server/src/command_lists/unattached.rs",
+    "crates/bacnet-server/src/command_lists/taken.rs::TakenRuns",
     "crates/bacnet-server/src/server/command_runs.rs",
     "crates/bacnet-server/src/server/remote_writes.rs",
     "crates/bacnet-server/src/server/confirmed_answer.rs",
@@ -4011,7 +4017,8 @@
     "crates/bacnet-server/src/server/command_run_stop_tests.rs::{stop_during_a_channel_member_delay_ends_the_distribution_failed,stop_while_the_database_is_busy_ends_a_channel_distribution_failed,channel_run_no_task_starts_ends_at_once_failed,stop_ends_a_run_nothing_took}",
     "crates/bacnet-server/src/server/channel_remote_write_tests.rs::{channel_member_in_another_device_that_refuses_fails_the_distribution,channel_member_in_another_device_that_never_answers_is_a_communication_failure,channel_member_in_another_device_sends_nothing_without_initiation_or_a_binding,stop_during_an_outstanding_member_write_ends_the_distribution_failed}",
     "crates/bacnet-server/src/server/channel_reliability_tests.rs::{channel_member_naming_a_missing_object_is_a_configuration_error,channel_value_a_member_cannot_take_is_a_configuration_error,stop_after_a_member_failed_keeps_that_failure}",
-    "crates/bacnet-server/src/command_lists/unattached_tests.rs::unattached_channel_member_in_another_device_fails_unsent"
+    "crates/bacnet-server/src/command_lists/unattached_tests.rs::unattached_channel_member_in_another_device_fails_unsent",
+    "crates/bacnet-server/src/server/command_run_cancel_tests.rs::{write_local_dropped_inside_its_database_guard_ends_the_distribution_failed,write_local_dropped_after_its_commit_ends_the_distribution_failed}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -4019,6 +4026,7 @@
     "docs/python-api.md#channels",
     "CHANGELOG.md Unreleased Added entry for #1151 (Channel object), from changelog.d/1151-channel-object.md",
     "CHANGELOG.md Unreleased Added entry for #1264 (Channel remote members and Reliability), from changelog.d/1264-channel-remote-members-reliability.md",
+    "CHANGELOG.md Unreleased Fixed entry for #1324 (a dropped write_local ends its runs), from changelog.d/1324-dropped-write-local-runs.md",
     "docs/rust-api.md#lighting--color-5 Channel object"
    ],
    "notes": [
@@ -4065,7 +4073,7 @@
     "crates/rusty-bacnet/src/client/client_methods/enrollment_alarm_covmulti_who_writegroup.rs::write_group_address_and_network_pick_the_destination"
    ],
    "negative_tests": [
-    "crates/bacnet-server/src/server/write_group_tests.rs::{write_group_is_dropped_under_dcc_disable_and_runs_under_disable_initiation,write_group_is_dropped_when_local_policy_restricts_network_writes,write_group_malformed_requests_are_dropped_without_an_answer,write_group_skips_a_channel_that_left_the_group_after_the_plan,write_group_reads_allow_group_delay_inhibit_at_the_write}",
+    "crates/bacnet-server/src/server/write_group_tests.rs::{write_group_is_dropped_under_dcc_disable_and_runs_under_disable_initiation,write_group_is_dropped_when_local_policy_restricts_network_writes,write_group_malformed_requests_are_dropped_without_an_answer,write_group_skips_a_channel_that_left_the_group_after_the_plan,write_group_reads_allow_group_delay_inhibit_at_the_write,write_group_dropped_after_a_channel_took_its_value_ends_that_distribution_failed}",
     "crates/bacnet-server/src/server/requests/endpoint_responder_tests.rs::responder_ignores_write_group_and_leaves_its_channels_alone",
     "crates/bacnet-endpoint/src/device_execution_tests.rs::endpoint_execution_profile_refusals_precede_ingress_and_allow_repair",
     "crates/bacnet-client/src/client/write_group_tests.rs::write_group_refuses_a_bad_request_or_network_before_sending",

@@ -27,7 +27,7 @@ use std::sync::{Mutex as StdMutex, OnceLock, Weak};
 use std::task::{Context, Waker};
 use tokio::sync::OwnedRwLockReadGuard;
 
-fn objects(db: &mut ObjectDatabase) {
+pub(super) fn objects(db: &mut ObjectDatabase) {
     outputs(db);
     let delayed = BACnetActionCommand {
         post_delay: Some(5),
@@ -164,14 +164,14 @@ async fn run_no_task_starts_ends_at_once_as_unsuccessful() {
 
 /// The objects plus CH-5, which writes AO-2 200 ms after its Present_Value
 /// is written.
-fn with_channel(db: &mut ObjectDatabase) {
+pub(super) fn with_channel(db: &mut ObjectDatabase) {
     objects(db);
     db.add(Box::new(channel(5, 5, vec![(member(ao(2), PV), 200)])))
         .unwrap();
 }
 
 /// CH-5's Write_Status, from the database.
-async fn channel_status(h: &Harness) -> WriteStatus {
+pub(super) async fn channel_status(h: &Harness) -> WriteStatus {
     match read_db(h, ch(5), PropertyIdentifier::WRITE_STATUS, None).await {
         PropertyValue::Enumerated(raw) => WriteStatus::from_raw(raw),
         other => panic!("not an ENUMERATED: {other:?}"),
