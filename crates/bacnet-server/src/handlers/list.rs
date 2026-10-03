@@ -238,18 +238,9 @@ impl Elements {
                 })
             }
             (Self::Destinations(stored), Self::Destinations(edits)) => {
-                let (list, added) = edit(
-                    stored,
-                    edits,
-                    remove,
-                    |buf, destination| {
-                        encode_destination(buf, destination);
-                        Ok(())
-                    },
-                    |_| true,
-                )?;
+                let (list, added) = edit(stored, edits, remove, encode_destination, |_| true)?;
                 let mut bytes = BytesMut::new();
-                encode_destination_list(&mut bytes, &list);
+                encode_destination_list(&mut bytes, &list)?;
                 Ok(Edited {
                     value: PropertyValue::ApplicationData(bytes.to_vec()),
                     added,

@@ -108,7 +108,8 @@ fn recipient_list_indexed_write_rejected_list_unchanged() {
 
     // Framed single destination at an index.
     let mut framed = bytes::BytesMut::new();
-    bacnet_encoding::constructed::encode_destination_list(&mut framed, &[make_dest_device(99)]);
+    bacnet_encoding::constructed::encode_destination_list(&mut framed, &[make_dest_device(99)])
+        .unwrap();
     let result = nc.write_property(
         PropertyIdentifier::RECIPIENT_LIST,
         Some(2),
@@ -150,7 +151,7 @@ fn recipient_list_malformed_tail_fails_whole_decode_no_prefix_delivery() {
     // fails and the filter yields NOTHING.
     let good = make_dest_device(10);
     let mut bytes = bytes::BytesMut::new();
-    bacnet_encoding::constructed::encode_destination_list(&mut bytes, &[good]);
+    bacnet_encoding::constructed::encode_destination_list(&mut bytes, &[good]).unwrap();
     // Trailing garbage: an opening tag [5] with no closing.
     let mut framed = bytes.to_vec();
     framed.push(0x5E);
@@ -199,7 +200,8 @@ fn routing_skips_delivery_when_stored_recipient_list_is_malformed() {
                 bacnet_encoding::constructed::encode_destination_list(
                     &mut framed,
                     &[make_dest_device(10)],
-                );
+                )
+                .unwrap();
                 let mut bytes = framed.to_vec();
                 bytes.push(0x5E); // opening [5], never closed
                 Ok(PropertyValue::ApplicationData(bytes))
@@ -271,7 +273,7 @@ fn recipient_list_framed_eight_entry_write_round_trip() {
         })
         .collect();
     let mut framed = bytes::BytesMut::new();
-    bacnet_encoding::constructed::encode_destination_list(&mut framed, &entries);
+    bacnet_encoding::constructed::encode_destination_list(&mut framed, &entries).unwrap();
     nc.write_property(
         PropertyIdentifier::RECIPIENT_LIST,
         None,

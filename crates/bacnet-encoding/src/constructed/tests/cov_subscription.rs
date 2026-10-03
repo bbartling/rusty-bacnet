@@ -57,21 +57,22 @@ fn address_subscription() -> BACnetCOVSubscription {
 #[test]
 fn cov_subscription_device_recipient_golden() {
     let mut buf = BytesMut::new();
-    encode_cov_subscription(&mut buf, &device_subscription());
+    encode_cov_subscription(&mut buf, &device_subscription()).unwrap();
     assert_eq!(buf.as_ref(), DEVICE_SUBSCRIPTION);
 }
 
 #[test]
 fn cov_subscription_address_recipient_golden() {
     let mut buf = BytesMut::new();
-    encode_cov_subscription(&mut buf, &address_subscription());
+    encode_cov_subscription(&mut buf, &address_subscription()).unwrap();
     assert_eq!(buf.as_ref(), ADDRESS_SUBSCRIPTION);
 }
 
 #[test]
 fn cov_subscription_list_is_bare_concatenation() {
     let mut buf = BytesMut::new();
-    encode_cov_subscription_list(&mut buf, &[device_subscription(), address_subscription()]);
+    encode_cov_subscription_list(&mut buf, &[device_subscription(), address_subscription()])
+        .unwrap();
 
     let expected = [DEVICE_SUBSCRIPTION, ADDRESS_SUBSCRIPTION].concat();
     assert_eq!(buf.as_ref(), expected);
@@ -80,7 +81,7 @@ fn cov_subscription_list_is_bare_concatenation() {
 #[test]
 fn cov_subscription_list_empty_encodes_to_nothing() {
     let mut buf = BytesMut::new();
-    encode_cov_subscription_list(&mut buf, &[]);
+    encode_cov_subscription_list(&mut buf, &[]).unwrap();
     assert!(buf.is_empty());
 }
 
@@ -168,25 +169,26 @@ fn address_multiple() -> BACnetCOVMultipleSubscription {
 #[test]
 fn cov_multiple_subscription_nested_specifications_golden() {
     let mut buf = BytesMut::new();
-    encode_cov_multiple_subscription(&mut buf, &device_multiple());
+    encode_cov_multiple_subscription(&mut buf, &device_multiple()).unwrap();
     assert_eq!(buf.as_ref(), DEVICE_MULTIPLE);
 }
 
 #[test]
 fn cov_multiple_subscription_address_recipient_empty_specifications_golden() {
     let mut buf = BytesMut::new();
-    encode_cov_multiple_subscription(&mut buf, &address_multiple());
+    encode_cov_multiple_subscription(&mut buf, &address_multiple()).unwrap();
     assert_eq!(buf.as_ref(), ADDRESS_MULTIPLE);
 }
 
 #[test]
 fn cov_multiple_subscription_list_is_bare_concatenation() {
     let mut buf = BytesMut::new();
-    encode_cov_multiple_subscription_list(&mut buf, &[address_multiple(), device_multiple()]);
+    encode_cov_multiple_subscription_list(&mut buf, &[address_multiple(), device_multiple()])
+        .unwrap();
     assert_eq!(buf.as_ref(), [ADDRESS_MULTIPLE, DEVICE_MULTIPLE].concat());
 
     let mut empty = BytesMut::new();
-    encode_cov_multiple_subscription_list(&mut empty, &[]);
+    encode_cov_multiple_subscription_list(&mut empty, &[]).unwrap();
     assert!(empty.is_empty());
 }
 
@@ -316,5 +318,75 @@ fn cov_multiple_subscription_rejects_truncation_and_malformed_members() {
     for bytes in [&form, &stray, &untimestamped] {
         let result = decode_cov_multiple_subscription(bytes, 0);
         assert!(result.is_err(), "{bytes:02X?}: {result:?}");
+    }
+}
+
+/// `golden`, an address-recipient element whose two-octet MAC sits at
+/// octets 6..9, with a `len`-octet MAC of 0xA5 instead.
+fn with_mac(golden: &[u8], len: usize) -> Vec<u8> {
+    let mut wire = golden[..6].to_vec();
+    wire.extend([0x65, len as u8]);
+    wire.extend(std::iter::repeat_n(0xA5, len));
+    wire.extend_from_slice(&golden[9..]);
+    wire
+}
+
+#[test]
+fn cov_subscription_recipient_mac_holds_to_the_bacnet_address_bound() {
+    // #1156: a subscription's recipient is a BACnetRecipient, so its address
+    // MAC is at most BACnetAddress::MAX_MAC_LEN (18) octets in both forms.
+    let recipient = |len: usize| BACnetRecipientProcess {
+        recipient: BACnetRecipient::Address(BACnetAddress {
+            network_number: 0x1234,
+            mac_address: bacnet_types::MacAddr::from_slice(&vec![0xA5; len]),
+        }),
+        process_identifier: 9,
+    };
+    let single = |len| BACnetCOVSubscription {
+        recipient: recipient(len),
+        ..address_subscription()
+    };
+    let multiple = |len| BACnetCOVMultipleSubscription {
+        recipient: recipient(len),
+        ..address_multiple()
+    };
+    let longest = BACnetAddress::MAX_MAC_LEN;
+    let (single_wire, multiple_wire) = (
+        with_mac(ADDRESS_SUBSCRIPTION, longest),
+        with_mac(ADDRESS_MULTIPLE, longest),
+    );
+    let mut buf = BytesMut::new();
+    encode_cov_subscription_list(&mut buf, &[single(longest)]).unwrap();
+    assert_eq!(buf.as_ref(), single_wire);
+    let mut buf = BytesMut::new();
+    encode_cov_multiple_subscription_list(&mut buf, &[multiple(longest)]).unwrap();
+    assert_eq!(buf.as_ref(), multiple_wire);
+    assert_eq!(
+        decode_cov_subscription(&single_wire, 0).unwrap(),
+        (single(longest), single_wire.len())
+    );
+    assert_eq!(
+        decode_cov_multiple_subscription(&multiple_wire, 0).unwrap(),
+        (multiple(longest), multiple_wire.len())
+    );
+
+    for len in [longest + 1, 255] {
+        let result = decode_cov_subscription(&with_mac(ADDRESS_SUBSCRIPTION, len), 0);
+        assert!(result.is_err(), "{len}-octet MAC: {result:?}");
+        let result = decode_cov_multiple_subscription(&with_mac(ADDRESS_MULTIPLE, len), 0);
+        assert!(result.is_err(), "{len}-octet MAC: {result:?}");
+        // Each encoder refuses before writing, a list included.
+        let mut buf = BytesMut::new();
+        assert!(encode_cov_subscription(&mut buf, &single(len)).is_err());
+        assert!(encode_cov_multiple_subscription(&mut buf, &multiple(len)).is_err());
+        assert!(
+            encode_cov_subscription_list(&mut buf, &[device_subscription(), single(len)]).is_err()
+        );
+        assert!(encode_cov_multiple_subscription_list(
+            &mut buf,
+            &[device_multiple(), multiple(len)]
+        )
+        .is_err());
+        assert!(buf.is_empty(), "{len}-octet MAC left output behind");
     }
 }

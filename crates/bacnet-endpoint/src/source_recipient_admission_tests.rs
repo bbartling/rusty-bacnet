@@ -10,7 +10,7 @@ fn recipient(fixture: &Fixture) -> BACnetRecipient {
 }
 async fn change(fixture: &Fixture, recipient: &BACnetRecipient) -> Result<(), Error> {
     let mut bytes = bytes::BytesMut::new();
-    bacnet_encoding::constructed::encode_recipient(&mut bytes, recipient);
+    bacnet_encoding::constructed::encode_recipient(&mut bytes, recipient).unwrap();
     fixture
         .source
         .db

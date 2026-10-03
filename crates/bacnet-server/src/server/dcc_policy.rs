@@ -1,6 +1,15 @@
 use super::{BipServerBuilder, ServerBuilder, TransportPort};
 use bacnet_encoding::npdu::NpduAddress;
+use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::error::Error;
+
+/// A source address length a restriction entry can hold and match: 1 to
+/// [`BACnetAddress::MAX_MAC_LEN`] octets. Every routed source and every
+/// built-in transport's MAC fits that bound (#1141), so a longer entry could
+/// never match anything (#1157).
+fn address_length_fits(length: usize) -> bool {
+    (1..=BACnetAddress::MAX_MAC_LEN).contains(&length)
+}
 
 /// Exact claimed DCC source, not an authenticated principal (including SC VMAC).
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -11,7 +20,8 @@ pub enum DccSource {
     Routed {
         /// Claimed source network (1..=65534).
         network: u16,
-        /// Complete claimed source address (1..=255 octets).
+        /// Complete claimed source address (1 to
+        /// [`BACnetAddress::MAX_MAC_LEN`] octets).
         address: Vec<u8>,
     },
 }
@@ -21,8 +31,10 @@ pub enum DccSource {
 pub struct DccSourceRestriction(Vec<DccSource>);
 
 impl DccSourceRestriction {
-    /// Accept at most 256 entries, each with 1..=255 address octets.
-    /// Routed networks must be 1..=65534. These are local configuration limits.
+    /// Accept at most 256 entries, each with 1 to
+    /// [`BACnetAddress::MAX_MAC_LEN`] (18) address octets, the longest source
+    /// address the network layer delivers (#1157). Routed networks must be
+    /// 1..=65534. These are local configuration limits.
     pub fn new(sources: Vec<DccSource>) -> Result<Self, Error> {
         if sources.len() > 256 {
             return Err(Error::Encoding(
@@ -41,10 +53,11 @@ impl DccSourceRestriction {
                     address
                 }
             };
-            if !(1..=255).contains(&address.len()) {
-                return Err(Error::Encoding(
-                    "DCC source address must contain 1..=255 octets".into(),
-                ));
+            if !address_length_fits(address.len()) {
+                return Err(Error::Encoding(format!(
+                    "DCC source address must contain 1..={} octets",
+                    BACnetAddress::MAX_MAC_LEN
+                )));
             }
         }
         Ok(Self(sources))
@@ -66,12 +79,12 @@ impl DccSourceRestriction {
         match routed {
             Some(source) => {
                 (1..=65534).contains(&source.network)
-                    && (1..=255).contains(&source.mac_address.len())
+                    && address_length_fits(source.mac_address.len())
                     && self.0.iter().any(|entry| matches!(entry,
                         DccSource::Routed { network, address }
                         if *network == source.network && address.as_slice() == source.mac_address.as_slice()))
             }
-            None => (1..=255).contains(&mac.len()) && self.0.iter().any(|entry|
+            None => address_length_fits(mac.len()) && self.0.iter().any(|entry|
                 matches!(entry, DccSource::Direct(address) if address.as_slice() == mac)),
         }
     }

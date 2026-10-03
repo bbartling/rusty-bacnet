@@ -69,7 +69,7 @@ fn elements(property: PropertyIdentifier, value: &[u8]) -> Vec<Vec<u8>> {
             .iter()
             .map(|subscription| {
                 let mut encoded = BytesMut::new();
-                encode_cov_subscription(&mut encoded, subscription);
+                encode_cov_subscription(&mut encoded, subscription).unwrap();
                 encoded.to_vec()
             })
             .collect()
@@ -78,7 +78,7 @@ fn elements(property: PropertyIdentifier, value: &[u8]) -> Vec<Vec<u8>> {
             .iter()
             .map(|context| {
                 let mut encoded = BytesMut::new();
-                encode_cov_multiple_subscription(&mut encoded, context);
+                encode_cov_multiple_subscription(&mut encoded, context).unwrap();
                 encoded.to_vec()
             })
             .collect()

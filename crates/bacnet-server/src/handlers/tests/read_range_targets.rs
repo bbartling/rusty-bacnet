@@ -111,7 +111,8 @@ fn encoded_destination(process_identifier: u32) -> PropertyValue {
     bacnet_encoding::constructed::encode_destination(
         &mut encoded,
         &destination(process_identifier),
-    );
+    )
+    .unwrap();
     PropertyValue::ApplicationData(encoded.to_vec())
 }
 
@@ -362,7 +363,7 @@ fn read_range_splits_framed_recipient_list_into_destinations() {
     assert_ack(&all, &items, (true, true, false), None);
     let mut framed = BytesMut::new();
     let destinations: Vec<_> = (1..=3).map(destination).collect();
-    bacnet_encoding::constructed::encode_destination_list(&mut framed, &destinations);
+    bacnet_encoding::constructed::encode_destination_list(&mut framed, &destinations).unwrap();
     assert_eq!(all.item_data, framed.to_vec());
 
     let second = call(

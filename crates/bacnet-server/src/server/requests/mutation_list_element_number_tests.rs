@@ -231,7 +231,7 @@ fn destination(process_identifier: u32) -> BACnetDestination {
 fn elements(process_identifiers: &[u32]) -> Vec<u8> {
     let mut buf = BytesMut::new();
     for &process_identifier in process_identifiers {
-        encode_destination(&mut buf, &destination(process_identifier));
+        encode_destination(&mut buf, &destination(process_identifier)).unwrap();
     }
     buf.to_vec()
 }
@@ -274,7 +274,7 @@ impl BACnetObject for Recipients {
             ));
         }
         let mut buf = BytesMut::new();
-        encode_destination_list(&mut buf, &self.list);
+        encode_destination_list(&mut buf, &self.list).unwrap();
         Ok(PropertyValue::ApplicationData(buf.to_vec()))
     }
     fn write_property(

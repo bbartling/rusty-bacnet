@@ -281,15 +281,15 @@ impl BACnetDeviceObjectPropertyReference {
 pub struct BACnetAddress {
     /// Network number (0 = local network, 1-65534 = remote, 65535 = broadcast).
     pub network_number: u16,
-    /// MAC-layer address (variable length, at most [`Self::MAX_MAC_LEN`] in a
-    /// configured recipient; empty = broadcast).
+    /// MAC-layer address (variable length, at most [`Self::MAX_MAC_LEN`] on the
+    /// wire; empty = broadcast).
     pub mac_address: MacAddr,
 }
 
 impl BACnetAddress {
-    /// The longest `mac_address`, in octets, of a recipient this stack is
-    /// configured to notify (#1124), and of any DADR or SADR the network layer
-    /// encodes or decodes (#1141).
+    /// The longest `mac_address`, in octets, that this stack encodes or decodes
+    /// in any `BACnetAddress` (#1124, #1156), and of any DADR or SADR the
+    /// network layer encodes or decodes (#1141).
     ///
     /// Clause 21 puts no length on the OCTET STRING, but a MAC is only useful
     /// if it names a node on some data link. Table 6-2 gives the network-layer
@@ -300,14 +300,15 @@ impl BACnetAddress {
     /// 16-octet IPv6 address and 2-octet UDP port. A longer MAC names no node
     /// on any of them, nor on a standard data link behind a router.
     ///
-    /// A recipient the device is configured to notify (a Recipient_List
-    /// destination or the Audit_Notification_Recipient) is held to this bound:
-    /// its decoder refuses a longer MAC, and so do the local setters that store
-    /// one, so a stored recipient always decodes again. The NPDU codec refuses
-    /// a longer DLEN or SLEN (`NpduAddress::MAX_MAC_LEN` in bacnet-encoding),
-    /// so the source addresses the stack learns off the network, which COV
-    /// subscription lists and audit records report, fit the bound as well. The
-    /// generic recipient decoder still reads any length.
+    /// Every codec for this type in bacnet-encoding holds to the bound: the
+    /// recipient, ValueSource and AuditLogQuery decoders refuse a longer MAC
+    /// and their encoders refuse to write one. The local setters that store a
+    /// configured recipient (a Recipient_List destination or the
+    /// Audit_Notification_Recipient) refuse one too, so a stored recipient
+    /// always decodes again. The NPDU codec refuses a longer DLEN or SLEN
+    /// (`NpduAddress::MAX_MAC_LEN` in bacnet-encoding), so the source addresses
+    /// the stack learns off the network, which COV subscription lists and audit
+    /// records report, fit the bound as well.
     pub const MAX_MAC_LEN: usize = 18;
 
     /// Create a local-broadcast address.
