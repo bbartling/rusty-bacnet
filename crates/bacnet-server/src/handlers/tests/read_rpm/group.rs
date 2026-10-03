@@ -570,15 +570,19 @@ fn rpm_structured_view_arrays_serve_one_element_per_index() {
             let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
             let bi1 = ObjectIdentifier::new(ObjectType::BINARY_INPUT, 1).unwrap();
             let av2 = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap();
-            object.add_subordinate(ai1, "a");
-            object.add_subordinate(
-                bacnet_types::constructed::BACnetDeviceObjectReference {
-                    device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap()),
-                    object_identifier: bi1,
-                },
-                "b",
-            );
-            object.add_subordinate(av2, "c");
+            object.add_subordinate(ai1, "a").unwrap();
+            object
+                .add_subordinate(
+                    bacnet_types::constructed::BACnetDeviceObjectReference {
+                        device_identifier: Some(
+                            ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap(),
+                        ),
+                        object_identifier: bi1,
+                    },
+                    "b",
+                )
+                .unwrap();
+            object.add_subordinate(av2, "c").unwrap();
         }
         write_common(&mut object, configured);
         let oid = object.object_identifier();

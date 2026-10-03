@@ -420,6 +420,33 @@ async fn channel_member_list_takes_local_members_over_the_wire_and_refuses_other
 }
 
 #[tokio::test(start_paused = true)]
+async fn channel_member_list_refuses_a_non_device_device_identifier_over_the_wire() {
+    let mut h = start().await;
+    let before = read_wire(&mut h, ch(3), LIST, None).await;
+    // Analog Value 856 shares the local Device's instance but is no Device,
+    // so the server leaves it for the Channel to refuse as out of range
+    // (#1285), whole and by index.
+    for other in [ObjectType::ANALOG_VALUE, ObjectType::CHANNEL] {
+        let mut bytes = BytesMut::new();
+        encode_device_object_property_reference(
+            &mut bytes,
+            &BACnetDeviceObjectPropertyReference {
+                device_identifier: Some(ObjectIdentifier::new(other, 856).unwrap()),
+                ..member(ao(2), PV)
+            },
+        );
+        for index in [None, Some(1)] {
+            assert_error(
+                write_wire(&mut h, ch(3), LIST, index, bytes.to_vec(), None).await,
+                ErrorClass::PROPERTY,
+                ErrorCode::VALUE_OUT_OF_RANGE,
+            );
+        }
+    }
+    assert_eq!(read_wire(&mut h, ch(3), LIST, None).await, before);
+}
+
+#[tokio::test(start_paused = true)]
 async fn channel_writing_its_own_present_value_is_refused_busy() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
         db.add(Box::new(channel(4, 1, vec![(member(ch(4), PV), 0)])))

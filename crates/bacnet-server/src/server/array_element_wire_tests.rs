@@ -26,15 +26,18 @@ fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
 /// A Structured View with three subordinates, one in another device.
 fn structured_view() -> StructuredViewObject {
     let mut view = StructuredViewObject::new(7, "SV-7").unwrap();
-    view.add_subordinate(oid(ObjectType::ANALOG_INPUT, 1), "a");
+    view.add_subordinate(oid(ObjectType::ANALOG_INPUT, 1), "a")
+        .unwrap();
     view.add_subordinate(
         BACnetDeviceObjectReference {
             device_identifier: Some(oid(ObjectType::DEVICE, 9)),
             object_identifier: oid(ObjectType::BINARY_INPUT, 1),
         },
         "b",
-    );
-    view.add_subordinate(oid(ObjectType::ANALOG_VALUE, 2), "c");
+    )
+    .unwrap();
+    view.add_subordinate(oid(ObjectType::ANALOG_VALUE, 2), "c")
+        .unwrap();
     view
 }
 

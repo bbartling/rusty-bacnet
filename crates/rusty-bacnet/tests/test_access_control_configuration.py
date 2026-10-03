@@ -163,6 +163,38 @@ class AccessControlConfigurationTests(unittest.TestCase):
         finally:
             await server.stop()
 
+    def test_device_reference_pairs_name_a_device(self) -> None:
+        asyncio.run(self._device_reference_pairs())
+
+    async def _device_reference_pairs(self) -> None:
+        server = make_server()
+        # A pair's device must be a Device (#1285); the refusal registers
+        # nothing.
+        not_a_device = ObjectIdentifier(ObjectType.ANALOG_VALUE, 99)
+        with self.assertRaises(ValueError):
+            server.add_access_door(2, "Wrong", door_members=[LOCK, (not_a_device, LOCK)])
+        with self.assertRaises(ValueError):
+            server.add_access_point(
+                2, "Wrong", access_doors=[(not_a_device, REMOTE_DOOR)]
+            )
+        server.add_access_door(1, "Main Entry", door_members=[(REMOTE_DEVICE, LOCK)])
+        await server.start()
+        try:
+            members = PropertyIdentifier.DOOR_MEMBERS
+            door = ObjectIdentifier(ObjectType.ACCESS_DOOR, 1)
+            self.assertEqual((await server.read_property(door, members, 0)).value, 1)
+            for refused in (
+                ObjectIdentifier(ObjectType.ACCESS_DOOR, 2),
+                ObjectIdentifier(ObjectType.ACCESS_POINT, 2),
+            ):
+                with self.assertRaises(BacnetProtocolError) as raised:
+                    await server.read_property(
+                        refused, PropertyIdentifier.OBJECT_NAME
+                    )
+                self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
+        finally:
+            await server.stop()
+
     def test_supported_formats_reach_both_arrays_and_gate_simulated_reads(self) -> None:
         asyncio.run(self._supported_formats())
 

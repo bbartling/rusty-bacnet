@@ -1,5 +1,5 @@
 //! The access events an Access Point records on its Out_Of_Service edges
-//! (Clauses 12.31.8 and 12.31.27 to 12.31.29, #1248).
+//! (Clauses 12.31.8 and 12.31.27 to 12.31.30, #1248, #1284).
 
 use std::sync::Arc;
 
@@ -10,43 +10,66 @@ use super::credential_data_input_out_of_service_tests::{
 };
 use super::*;
 
-/// A point whose last event was GRANTED in transaction 7 at 09:30, on a
-/// Device clock reading 11:30.
+/// Access Credential 3, the credential behind the GRANTED event.
+pub(super) fn credential() -> BACnetDeviceObjectReference {
+    ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, 3)
+        .unwrap()
+        .into()
+}
+
+/// Access_Event_Credential naming Access Credential 3: the object under [1].
+pub(super) const CREDENTIAL_3: [u8; 5] = [0x1C, 0x08, 0x00, 0x00, 0x03];
+
+/// The no-credential reference: Access Credential 4194303 under [1].
+pub(super) const NO_CREDENTIAL: [u8; 5] = [0x1C, 0x08, 0x3F, 0xFF, 0xFF];
+
+/// A point whose last event was GRANTED to Access Credential 3 in
+/// transaction 7 at 09:30, on a Device clock reading 11:30.
 fn point() -> AccessPointObject {
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
-    point.set_access_event(AccessEvent::GRANTED, 7, stamp(9));
+    granted_at(&mut point, 7);
     point.bind_clock_internal(Some(Arc::new(FixedClock(11))));
     point
+}
+
+/// Record GRANTED to Access Credential 3 in transaction `tag` at 09:30.
+fn granted_at(point: &mut AccessPointObject, tag: u64) {
+    point
+        .set_access_event(AccessEvent::GRANTED, tag, stamp(9), Some(credential()))
+        .unwrap();
 }
 
 fn write_out_of_service(point: &mut AccessPointObject, value: PropertyValue) -> Result<(), Error> {
     point.write_property(P::OUT_OF_SERVICE, None, value, None)
 }
 
-/// Access_Event, Access_Event_Tag, Access_Event_Time and Status_Flags as
-/// served.
-fn served(point: &AccessPointObject) -> [PropertyValue; 4] {
+/// Access_Event, Access_Event_Tag, Access_Event_Time, Access_Event_Credential
+/// and Status_Flags as served.
+fn served(point: &AccessPointObject) -> [PropertyValue; 5] {
     [
         P::ACCESS_EVENT,
         P::ACCESS_EVENT_TAG,
         P::ACCESS_EVENT_TIME,
+        P::ACCESS_EVENT_CREDENTIAL,
         P::STATUS_FLAGS,
     ]
     .map(|property| point.read_property(property, None).unwrap())
 }
 
+/// An event an Out_Of_Service edge records: no credential belongs to it.
 fn event(
     event: AccessEvent,
     tag: u64,
     time: PropertyValue,
     out_of_service: bool,
-) -> [PropertyValue; 4] {
+) -> [PropertyValue; 5] {
     let mut flags = StatusFlags::empty();
     flags.set(StatusFlags::OUT_OF_SERVICE, out_of_service);
     [
         PropertyValue::Enumerated(event.to_raw()),
         PropertyValue::Unsigned(tag),
         time,
+        PropertyValue::ApplicationData(NO_CREDENTIAL.to_vec()),
         PropertyValue::BitString {
             unused_bits: 4,
             data: vec![flags.bits() << 4],
@@ -54,9 +77,11 @@ fn event(
     ]
 }
 
-/// The GRANTED event the point starts from.
-fn granted(out_of_service: bool) -> [PropertyValue; 4] {
-    event(AccessEvent::GRANTED, 7, stamped(9), out_of_service)
+/// The GRANTED event the point starts from, with its credential.
+fn granted(out_of_service: bool) -> [PropertyValue; 5] {
+    let mut granted = event(AccessEvent::GRANTED, 7, stamped(9), out_of_service);
+    granted[3] = PropertyValue::ApplicationData(CREDENTIAL_3.to_vec());
+    granted
 }
 
 #[test]
@@ -143,7 +168,7 @@ fn access_point_sequence_number_folds_a_tag_past_its_range() {
     let mut point = point();
     point.bind_clock_internal(None);
     // A tag up to 65535 is its own sequence number; 65536 folds back to 1.
-    point.set_access_event(AccessEvent::GRANTED, 65_534, stamp(9));
+    granted_at(&mut point, 65_534);
     write_out_of_service(&mut point, PropertyValue::Boolean(true)).unwrap();
     assert_eq!(
         served(&point),
@@ -160,7 +185,7 @@ fn access_point_sequence_number_folds_a_tag_past_its_range() {
         )
     );
     // The tag's own wrap to 0 gives 1 too, never the 0 of no update yet.
-    point.set_access_event(AccessEvent::GRANTED, u64::MAX, stamp(9));
+    granted_at(&mut point, u64::MAX);
     write_out_of_service(&mut point, PropertyValue::Boolean(true)).unwrap();
     assert_eq!(
         served(&point),
@@ -171,7 +196,7 @@ fn access_point_sequence_number_folds_a_tag_past_its_range() {
 #[test]
 fn access_point_out_of_service_event_tag_wraps_at_the_top_of_its_range() {
     let mut point = point();
-    point.set_access_event(AccessEvent::GRANTED, u64::MAX, stamp(9));
+    granted_at(&mut point, u64::MAX);
     write_out_of_service(&mut point, PropertyValue::Boolean(true)).unwrap();
     assert_eq!(
         served(&point),

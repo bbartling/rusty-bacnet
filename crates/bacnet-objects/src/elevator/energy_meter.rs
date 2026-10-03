@@ -141,10 +141,8 @@ impl EnergyMeter {
         &mut self,
         reference: BACnetDeviceObjectReference,
     ) -> Result<(), Error> {
-        let device_ok = reference
-            .device_identifier
-            .is_none_or(|device| device.object_type() == ObjectType::DEVICE);
-        if !device_ok || !is_meter_type(reference.object_identifier.object_type()) {
+        crate::device_reference::check_device_member(reference.device_identifier)?;
+        if !is_meter_type(reference.object_identifier.object_type()) {
             return Err(common::value_out_of_range_error());
         }
         self.reference = reference;

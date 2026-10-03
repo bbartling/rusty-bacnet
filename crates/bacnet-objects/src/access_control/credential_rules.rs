@@ -210,13 +210,11 @@ pub(super) fn check_assigned_access_rights(
     element: &BACnetAssignedAccessRights,
 ) -> Result<(), Error> {
     let reference = &element.assigned_access_rights;
+    crate::device_reference::check_device_member(reference.device_identifier)?;
     let object = reference.object_identifier;
-    let object_ok = object.object_type() == ObjectType::ACCESS_RIGHTS
-        || object.instance_number() == ObjectIdentifier::MAX_INSTANCE;
-    let device_ok = reference
-        .device_identifier
-        .is_none_or(|device| device.object_type() == ObjectType::DEVICE);
-    if object_ok && device_ok {
+    if object.object_type() == ObjectType::ACCESS_RIGHTS
+        || object.instance_number() == ObjectIdentifier::MAX_INSTANCE
+    {
         Ok(())
     } else {
         Err(common::value_out_of_range_error())

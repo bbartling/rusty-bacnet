@@ -94,6 +94,9 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::STATUS_FLAGS,
             P::OUT_OF_SERVICE,
             P::RELIABILITY,
+            // The Table 12-36 required rows #1284 added.
+            P::AUTHENTICATION_STATUS,
+            P::ACCESS_EVENT_CREDENTIAL,
         ],
         _ => vec![
             P::OBJECT_IDENTIFIER,
@@ -107,6 +110,13 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::STATUS_FLAGS,
             P::OUT_OF_SERVICE,
             P::RELIABILITY,
+            // The Table 12-37 rows #1284 added.
+            P::OCCUPANCY_STATE,
+            P::EVENT_STATE,
+            P::OCCUPANCY_COUNT_ENABLE,
+            P::ADJUST_VALUE,
+            P::OCCUPANCY_UPPER_LIMIT,
+            P::OCCUPANCY_LOWER_LIMIT,
         ],
     };
     let optional = match kind {
@@ -121,7 +131,14 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
         // Tables 12-36 and 12-37 have no Present_Value, and Table 12-37 no
         // Access_Doors (#1064).
         ObjectType::ACCESS_POINT => vec![P::DESCRIPTION],
-        _ => vec![P::DESCRIPTION, P::OCCUPANCY_COUNT],
+        _ => vec![
+            P::DESCRIPTION,
+            P::OCCUPANCY_COUNT,
+            P::OCCUPANCY_COUNT_ENABLE,
+            P::ADJUST_VALUE,
+            P::OCCUPANCY_UPPER_LIMIT,
+            P::OCCUPANCY_LOWER_LIMIT,
+        ],
     };
     let required: Vec<_> = all
         .iter()

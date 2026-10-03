@@ -626,6 +626,8 @@ fn validate_config(config: &StagingConfig) -> Result<(), Error> {
 
 fn validate_target_references(references: &[BACnetDeviceObjectReference]) -> Result<(), Error> {
     for reference in references {
+        // A device member that isn't a Device makes no reference (#1285).
+        crate::device_reference::check_device_member(reference.device_identifier)?;
         // The object can't tell which Device holds it, so any Device member
         // is refused here; the server localizes one naming itself (#1136).
         if reference.device_identifier.is_some() {

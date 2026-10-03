@@ -127,11 +127,20 @@ impl AccessDoorObject {
     /// (Clause 12.26.15 leaves the choice to the device). A reference with no
     /// Device identifier names an object in this device. The array is
     /// read-only over the network.
+    ///
+    /// A reference whose device identifier isn't a Device object is refused
+    /// with VALUE_OUT_OF_RANGE and the members set before are kept (#1285).
     pub fn set_door_members(
         &mut self,
         members: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
-    ) {
-        self.door_members = members.into_iter().map(Into::into).collect();
+    ) -> Result<(), Error> {
+        let members: Vec<BACnetDeviceObjectReference> =
+            members.into_iter().map(Into::into).collect();
+        members.iter().try_for_each(|member| {
+            crate::device_reference::check_device_member(member.device_identifier)
+        })?;
+        self.door_members = members;
+        Ok(())
     }
 
     /// Set Door_Pulse_Time, in tenths of a second.

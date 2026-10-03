@@ -2812,7 +2812,8 @@ class BACnetServer:
         ``door_members`` sets Door_Members, the objects that make up the door
         (read-only over the network). Each element is an ``ObjectIdentifier``
         in this device or a ``(device, object)`` pair of identifiers for one
-        in another device.
+        in another device. A pair whose device isn't a Device object
+        identifier raises ValueError, and nothing is registered.
         """
         ...
     def add_access_credential(self, instance: int, name: str) -> None: ...
@@ -2828,9 +2829,10 @@ class BACnetServer:
         """Add an Access Point object to the server (before starting).
 
         ``access_doors`` sets Access_Doors (read-only over the network), in the
-        element forms ``add_access_door`` takes for ``door_members``. A
+        element forms ``add_access_door`` takes for ``door_members``. A pair
+        whose device isn't a Device object identifier raises ValueError, and a
         reference to anything but an Access Door raises BacnetProtocolError
-        with VALUE_OUT_OF_RANGE.
+        with VALUE_OUT_OF_RANGE; either way nothing is registered.
         """
         ...
     def add_access_rights(self, instance: int, name: str) -> None: ...

@@ -1,7 +1,8 @@
 //! Writes of a Channel's three arrays (Clauses 12.53.11, 12.53.12 and
 //! 12.53.15).
 use super::tests::{
-    assert_error, assert_property_error, configured, device, encoded, member, read, unsigned_list,
+    assert_error, assert_property_error, configured, device, encoded, member, oid, read,
+    unsigned_list,
 };
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -289,4 +290,42 @@ fn channel_number_and_control_groups_writes() {
         ErrorCode::VALUE_OUT_OF_RANGE,
     );
     assert_eq!(read(&channel, groups), unsigned_list(&[5]));
+}
+
+#[test]
+fn channel_members_refuse_a_non_device_device_identifier() {
+    let mut channel = configured();
+    let list = P::LIST_OF_OBJECT_PROPERTY_REFERENCES;
+    let before = read(&channel, list);
+    // Another object type in the device member is no Device (#1285), so it is
+    // out of range before the remote-device rule, even at the empty instance.
+    for not_a_device in [
+        oid(ObjectType::ANALOG_VALUE, 9),
+        oid(ObjectType::CHANNEL, ObjectIdentifier::WILDCARD_INSTANCE),
+    ] {
+        let bad = BACnetDeviceObjectPropertyReference {
+            device_identifier: Some(not_a_device),
+            ..member(1)
+        };
+        for (index, value) in [
+            (None, encoded(&[member(1), bad.clone()])),
+            (Some(1), encoded(std::slice::from_ref(&bad))),
+        ] {
+            assert_property_error(
+                channel.write_property(list, index, PropertyValue::ApplicationData(value), None),
+                ErrorCode::VALUE_OUT_OF_RANGE,
+            );
+        }
+        assert_property_error(
+            channel.set_members(vec![member(2), bad]),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+        assert_eq!(read(&channel, list), before);
+    }
+    // A Device identifier at the empty instance is still an empty member.
+    let empty = BACnetDeviceObjectPropertyReference {
+        device_identifier: Some(device(ObjectIdentifier::WILDCARD_INSTANCE)),
+        ..member(1)
+    };
+    channel.set_members(vec![member(1), empty]).unwrap();
 }

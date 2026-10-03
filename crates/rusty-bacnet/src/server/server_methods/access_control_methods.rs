@@ -7,6 +7,7 @@ use super::super::*;
 use bacnet_types::constructed::BACnetAuthenticationFactorFormat;
 use bacnet_types::enums::{AuthenticationFactorType, ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
+use pyo3::exceptions::PyValueError;
 
 /// One element of Door_Members or Access_Doors as Python gives it: an object
 /// in this device, or a `(device, object)` pair naming an object in another
@@ -17,16 +18,36 @@ enum PyDeviceObjectReference {
     Remote(PyObjectIdentifier, PyObjectIdentifier),
 }
 
-impl From<PyDeviceObjectReference> for BACnetDeviceObjectReference {
-    fn from(reference: PyDeviceObjectReference) -> Self {
-        match reference {
+impl TryFrom<PyDeviceObjectReference> for BACnetDeviceObjectReference {
+    type Error = PyErr;
+
+    /// A pair whose device isn't a Device object identifier is no reference
+    /// (#1285), so it raises ValueError before any setter sees it.
+    fn try_from(reference: PyDeviceObjectReference) -> PyResult<Self> {
+        let reference = match reference {
             PyDeviceObjectReference::Local(object) => object.to_rust().into(),
             PyDeviceObjectReference::Remote(device, object) => Self {
                 device_identifier: Some(device.to_rust()),
                 object_identifier: object.to_rust(),
             },
+        };
+        if reference.device_identifier_is_device() {
+            Ok(reference)
+        } else {
+            Err(PyValueError::new_err(
+                "the device of a (device, object) pair must be a Device object identifier",
+            ))
         }
     }
+}
+
+/// The references Python gave, each checked as it converts.
+fn device_references(
+    references: Option<Vec<PyDeviceObjectReference>>,
+) -> PyResult<Option<Vec<BACnetDeviceObjectReference>>> {
+    references
+        .map(|references| references.into_iter().map(TryFrom::try_from).collect())
+        .transpose()
 }
 
 /// One Supported_Formats element as Python gives it: a format type number,
@@ -70,7 +91,8 @@ impl BACnetServer {
     ///
     /// `door_members` sets Door_Members, the objects that make up the door.
     /// Each element is an `ObjectIdentifier` in this device or a
-    /// `(device, object)` pair of identifiers for one in another device.
+    /// `(device, object)` pair of identifiers for one in another device; a
+    /// pair whose device isn't a Device raises ValueError.
     #[pyo3(signature = (instance, name, *, door_members=None))]
     fn add_access_door(
         &self,
@@ -78,15 +100,17 @@ impl BACnetServer {
         name: &str,
         door_members: Option<Vec<PyDeviceObjectReference>>,
     ) -> PyResult<()> {
-        let obj = access_door(instance, name, door_members).map_err(to_py_err)?;
+        let members = device_references(door_members)?;
+        let obj = access_door(instance, name, members).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 
     /// Add an Access Point object to the server (before starting).
     ///
     /// `access_doors` sets Access_Doors, in the same element forms as an
-    /// Access Door's `door_members`; a reference to anything but an Access
-    /// Door raises VALUE_OUT_OF_RANGE.
+    /// Access Door's `door_members`; a pair whose device isn't a Device
+    /// raises ValueError, and a reference to anything but an Access Door
+    /// raises VALUE_OUT_OF_RANGE.
     #[pyo3(signature = (instance, name, *, access_doors=None))]
     fn add_access_point(
         &self,
@@ -94,7 +118,8 @@ impl BACnetServer {
         name: &str,
         access_doors: Option<Vec<PyDeviceObjectReference>>,
     ) -> PyResult<()> {
-        let obj = access_point(instance, name, access_doors).map_err(to_py_err)?;
+        let doors = device_references(access_doors)?;
+        let obj = access_point(instance, name, doors).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 
@@ -118,15 +143,16 @@ impl BACnetServer {
     }
 }
 
-/// Build an Access Door, applying Door_Members through its own setter.
+/// Build an Access Door, applying Door_Members through its validating
+/// setter.
 fn access_door(
     instance: u32,
     name: &str,
-    members: Option<Vec<PyDeviceObjectReference>>,
+    members: Option<Vec<BACnetDeviceObjectReference>>,
 ) -> Result<AccessDoorObject, Error> {
     let mut obj = AccessDoorObject::new(instance, name)?;
     if let Some(members) = members {
-        obj.set_door_members(members.into_iter().map(BACnetDeviceObjectReference::from));
+        obj.set_door_members(members)?;
     }
     Ok(obj)
 }
@@ -136,11 +162,11 @@ fn access_door(
 fn access_point(
     instance: u32,
     name: &str,
-    doors: Option<Vec<PyDeviceObjectReference>>,
+    doors: Option<Vec<BACnetDeviceObjectReference>>,
 ) -> Result<AccessPointObject, Error> {
     let mut obj = AccessPointObject::new(instance, name)?;
     if let Some(doors) = doors {
-        obj.set_access_doors(doors.into_iter().map(BACnetDeviceObjectReference::from))?;
+        obj.set_access_doors(doors)?;
     }
     Ok(obj)
 }

@@ -1818,7 +1818,10 @@ framing, through the shared `bacnet-encoding` codecs.
   and 12.10) are arrays too, with the same per-index reads, as is
   `Subordinate_Annotations`. A Subordinate_List element is a
   BACnetDeviceObjectReference; `add_subordinate` takes one, or an
-  `ObjectIdentifier` for an object in this device. An Action element is a
+  `ObjectIdentifier` for an object in this device, and returns `Result` (see
+  device references below). `set_subordinates` replaces every subordinate
+  with (reference, annotation) pairs, so both arrays keep one size, and
+  `subordinates()` reads them back. An Action element is a
   BACnetActionList, the BACnetActionCommand writes that Present_Value N
   selects, framed in `[0]`. `CommandObject::set_action` takes
   `BACnetActionList` values and refuses a command whose priority is outside 1
@@ -1858,10 +1861,28 @@ framing, through the shared `bacnet-encoding` codecs.
   CUSTOM format without both vendor members or another format with a nonzero
   one is VALUE_OUT_OF_RANGE), `AccessDoorObject::set_door_members` and
   `AccessPointObject::set_access_doors` (Access Door references only, else
-  VALUE_OUT_OF_RANGE). A format list that stops declaring Present_Value's
-  format and class puts Present_Value back to UNDEFINED, with Update_Time
-  stamped from the Device clock; out of service that covers the simulated
-  factor and the reader's factor put aside.
+  VALUE_OUT_OF_RANGE), both returning `Result`. A format list that stops
+  declaring Present_Value's format and class puts Present_Value back to
+  UNDEFINED, with Update_Time stamped from the Device clock; out of service
+  that covers the simulated factor and the reader's factor put aside.
+- **Device references**: a
+  `BACnetDeviceObjectReference` whose device identifier is present must name
+  a Device object (Clause 21);
+  `BACnetDeviceObjectReference::device_identifier_is_device` tells, as does
+  `bacnet_types::constructed::device_identifier_is_device` for a bare
+  optional identifier. Every
+  setter that stores these references refuses one that breaks the rule with
+  VALUE_OUT_OF_RANGE and keeps what it held: `set_door_members`,
+  `set_access_doors`, `set_access_event`'s credential,
+  `AccessCredentialObject::set_assigned_access_rights`,
+  `StructuredViewObject::add_subordinate`, `set_energy_meter_ref` and the
+  Staging configuration. A Staging `Target_References` write over the network
+  gets the same answer, ahead of the refusal of a remote device. A Channel
+  member is a `BACnetDeviceObjectPropertyReference`, which has the same
+  method and rule: `ChannelObject::set_members` and network writes of
+  `List_Of_Object_Property_References` refuse a member whose device
+  identifier isn't a Device with VALUE_OUT_OF_RANGE, before the remote-device
+  refusal.
 
 ### ObjectDatabase
 
@@ -2553,21 +2574,41 @@ Access Door, Access Point and Credential Data Input support COV (Table 13-1).
 A door's SubscribeCOV report carries Present_Value, Status_Flags and
 Door_Alarm_State; a Door_Alarm_State change sends one. An Access Point has no
 Present_Value, so its report starts with Access_Event, then Status_Flags,
-Access_Event_Tag and Access_Event_Time, and only an Access_Event_Time or
-Status_Flags change sends one. A Credential Data Input report carries
-Update_Time, whose change sends one. The application sets these values before
-adding the object with `AccessDoorObject::set_door_alarm_state`,
-`AccessPointObject::set_access_event` (its time a `BACnetTimeStamp`) and
-`CredentialDataInputObject::set_present_value` (the factor read and its
-Update_Time), and a door's Door_Status and Lock_Status with `set_door_status`
-and `set_lock_status`.
+Access_Event_Tag, Access_Event_Time and Access_Event_Credential, and only an
+Access_Event_Time or Status_Flags change sends one. A Credential Data Input
+report carries Update_Time, whose change sends one. The application sets
+these values before adding the object with
+`AccessDoorObject::set_door_alarm_state`,
+`AccessPointObject::set_access_event(event, tag, time, credential)` (its time
+a `BACnetTimeStamp`, its credential an Access Credential reference or `None`
+for the no-credential reference, instance 4194303; another object type, or
+4194303 in only one of the object and device instances, is
+VALUE_OUT_OF_RANGE) and `CredentialDataInputObject::set_present_value` (the
+factor read and its Update_Time), and a door's Door_Status and Lock_Status
+with `set_door_status` and `set_lock_status`.
+
+An Access Point's Authentication_Status is READY until the application
+reports another status with `set_authentication_status` (a value past
+IN_PROGRESS is VALUE_OUT_OF_RANGE); it reads DISABLED while Out_Of_Service is
+TRUE and the reported status again afterwards. An Access Zone counts
+occupancy: Occupancy_State reads DISABLED while counting is off
+(`set_occupancy_count_enable(false)`, which also zeroes the count and
+Adjust_Value), and otherwise compares Occupancy_Count with the limits
+`set_occupancy_limits(lower, upper)` sets (zero is no limit; a nonzero upper
+limit at or below the lower one is VALUE_OUT_OF_RANGE). Adjust_Value is the
+one writable counting row: an Integer written in service is added to the
+count (stopping at zero, and zero clears it), while out of service it is
+kept without moving the count. Event_State stays NORMAL, as the zone runs no
+intrinsic reporting.
 
 Over the network the Access Point event values stay read-only, but writing
 its Out_Of_Service records an event on each edge (Clause 12.31.8):
 OUT_OF_SERVICE on entry and OUT_OF_SERVICE_RELINQUISHED on the return, each
 a new transaction (Access_Event_Tag moves on by one, wrapping) whose
-Access_Event_Time comes from the Device clock, so each edge sends the COV
-report. A write that leaves Out_Of_Service as it was records nothing. An
+Access_Event_Time comes from the Device clock and whose
+Access_Event_Credential is the no-credential reference, so each edge sends
+the COV report. A write that leaves Out_Of_Service as it was records
+nothing. An
 Access Zone's Occupancy_Count and Reliability, the rows footnote 1 of Table
 12-37 marks, take WriteProperty and WritePropertyMultiple while
 Out_Of_Service is TRUE and refuse them in service with WRITE_ACCESS_DENIED: a

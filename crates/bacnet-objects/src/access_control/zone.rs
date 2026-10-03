@@ -1,3 +1,6 @@
+use bacnet_types::enums::AccessZoneOccupancyState;
+
+use super::zone_occupancy::{adjusted, Occupancy};
 use super::zone_out_of_service::ZoneState;
 use super::*;
 
@@ -9,6 +12,12 @@ use super::*;
 /// Represents a physical zone or area controlled by access points. Table
 /// 12-37 has neither Present_Value nor Access_Doors, so the object serves
 /// neither (#1064).
+///
+/// The zone counts occupancy (#1284): Occupancy_State follows
+/// Occupancy_Count, the occupancy limits and Occupancy_Count_Enable, and a
+/// client adjusts the count through Adjust_Value. The module
+/// `zone_occupancy` has the rules. The zone runs no intrinsic reporting, so
+/// Event_State stays NORMAL (Clause 12.32.8).
 ///
 /// While Out_Of_Service is TRUE a client can simulate Occupancy_Count and
 /// Reliability by writing them, and the zone's own values come back on the
@@ -24,6 +33,8 @@ pub struct AccessZoneObject {
     state: ZoneState,
     /// The zone's own values, put aside while Out_Of_Service is TRUE.
     device_state: Option<ZoneState>,
+    /// Occupancy_Count_Enable, Adjust_Value and the occupancy limits.
+    occupancy: Occupancy,
     entry_points: Vec<ObjectIdentifier>,
     exit_points: Vec<ObjectIdentifier>,
     out_of_service: bool,
@@ -43,6 +54,7 @@ impl AccessZoneObject {
                 reliability: Reliability::NO_FAULT_DETECTED,
             },
             device_state: None,
+            occupancy: Occupancy::NEW,
             entry_points: Vec::new(),
             exit_points: Vec::new(),
             out_of_service: false,
@@ -53,9 +65,59 @@ impl AccessZoneObject {
     /// works it out (Clause 12.32.11). Over the network Occupancy_Count takes
     /// writes only while Out_Of_Service is TRUE; meanwhile the client's
     /// simulated count keeps being served, and this one takes over on the
-    /// return to service.
+    /// return to service. While counting is off the count stays zero and the
+    /// call changes nothing.
     pub fn set_occupancy_count(&mut self, count: u64) {
-        self.device_state_mut().occupancy_count = count;
+        if self.occupancy.enabled {
+            self.device_state_mut().occupancy_count = count;
+        }
+    }
+
+    /// Set Occupancy_Count_Enable (Clause 12.32.12), read-only over the
+    /// network. Turning counting off zeroes Occupancy_Count, the count set
+    /// aside while out of service and Adjust_Value, and Occupancy_State reads
+    /// DISABLED until counting is turned on again, starting from zero.
+    pub fn set_occupancy_count_enable(&mut self, enabled: bool) {
+        self.occupancy.enabled = enabled;
+        if !enabled {
+            self.occupancy.adjust_value = 0;
+            self.state.occupancy_count = 0;
+            if let Some(own) = &mut self.device_state {
+                own.occupancy_count = 0;
+            }
+        }
+    }
+
+    /// Set Occupancy_Lower_Limit and Occupancy_Upper_Limit together, zero
+    /// meaning no limit (Clauses 12.32.14 and 12.32.15). Both are read-only
+    /// over the network. A nonzero upper limit at or below the lower one is
+    /// refused with VALUE_OUT_OF_RANGE and both limits are kept.
+    pub fn set_occupancy_limits(&mut self, lower: u64, upper: u64) -> Result<(), Error> {
+        self.occupancy.set_limits(lower, upper)
+    }
+
+    /// Occupancy_State as served: DISABLED while counting is off, else the
+    /// served count against the limits (Clause 12.32.6).
+    pub fn occupancy_state(&self) -> AccessZoneOccupancyState {
+        self.occupancy.state(self.state.occupancy_count)
+    }
+
+    /// A client's Adjust_Value write (Clause 12.32.13): an Integer, else
+    /// INVALID_DATA_TYPE. With counting on, the value is kept and moves the
+    /// count served, unless Out_Of_Service is TRUE (12.32.10); with counting
+    /// off, Adjust_Value stays zero.
+    fn write_adjust_value(&mut self, value: &PropertyValue) -> Result<(), Error> {
+        let PropertyValue::Signed(adjust) = *value else {
+            return Err(common::invalid_data_type_error());
+        };
+        if !self.occupancy.enabled {
+            return Ok(());
+        }
+        self.occupancy.adjust_value = adjust;
+        if !self.out_of_service {
+            self.state.occupancy_count = adjusted(self.state.occupancy_count, adjust);
+        }
+        Ok(())
     }
 
     /// The zone's own values: the ones put aside while out of service, else
@@ -107,6 +169,24 @@ impl BACnetObject for AccessZoneObject {
             p if p == PropertyIdentifier::OCCUPANCY_COUNT => {
                 Ok(PropertyValue::Unsigned(self.state.occupancy_count))
             }
+            p if p == PropertyIdentifier::OCCUPANCY_STATE => {
+                Ok(PropertyValue::Enumerated(self.occupancy_state().to_raw()))
+            }
+            p if p == PropertyIdentifier::EVENT_STATE => {
+                Ok(PropertyValue::Enumerated(EventState::NORMAL.to_raw()))
+            }
+            p if p == PropertyIdentifier::OCCUPANCY_COUNT_ENABLE => {
+                Ok(PropertyValue::Boolean(self.occupancy.enabled))
+            }
+            p if p == PropertyIdentifier::ADJUST_VALUE => {
+                Ok(PropertyValue::Signed(self.occupancy.adjust_value))
+            }
+            p if p == PropertyIdentifier::OCCUPANCY_UPPER_LIMIT => {
+                Ok(PropertyValue::Unsigned(self.occupancy.upper_limit))
+            }
+            p if p == PropertyIdentifier::OCCUPANCY_LOWER_LIMIT => {
+                Ok(PropertyValue::Unsigned(self.occupancy.lower_limit))
+            }
             p if p == PropertyIdentifier::ENTRY_POINTS => Ok(PropertyValue::List(
                 self.entry_points
                     .iter()
@@ -145,8 +225,16 @@ impl BACnetObject for AccessZoneObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        if let Some(result) = self.state.write(self.out_of_service, property, &value) {
+        if let Some(result) = self.state.write(
+            self.out_of_service,
+            self.occupancy.enabled,
+            property,
+            &value,
+        ) {
             return result;
+        }
+        if property == PropertyIdentifier::ADJUST_VALUE {
+            return self.write_adjust_value(&value);
         }
         match property {
             p if p == PropertyIdentifier::GLOBAL_IDENTIFIER => {

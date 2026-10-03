@@ -278,6 +278,22 @@ impl BACnetDeviceObjectPropertyReference {
         self.property_array_index = Some(array_index);
         self
     }
+
+    /// Whether the device identifier is absent or names a Device object,
+    /// the rule [`BACnetDeviceObjectReference::device_identifier_is_device`]
+    /// applies to that type's device member.
+    pub fn device_identifier_is_device(&self) -> bool {
+        device_identifier_is_device(self.device_identifier)
+    }
+}
+
+/// Whether an optional device member is absent or a Device object
+/// identifier, the only object type the member of a device-qualified
+/// reference can hold (Clause 21). The `device_identifier_is_device` methods
+/// of both reference types apply it, and so does every check the objects
+/// and the Python bindings run on a device member.
+pub fn device_identifier_is_device(device: Option<ObjectIdentifier>) -> bool {
+    device.is_none_or(|device| device.object_type() == crate::enums::ObjectType::DEVICE)
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +525,18 @@ pub struct BACnetDeviceObjectReference {
     pub device_identifier: Option<ObjectIdentifier>,
     /// The object being referenced.
     pub object_identifier: ObjectIdentifier,
+}
+
+impl BACnetDeviceObjectReference {
+    /// Whether the device identifier is absent or names a Device object.
+    ///
+    /// The Clause 21 production gives the first member to the Device that
+    /// holds the object, so an identifier of any other object type can't make
+    /// a valid reference. Setters and write paths that take these references
+    /// refuse one that fails this check.
+    pub fn device_identifier_is_device(&self) -> bool {
+        device_identifier_is_device(self.device_identifier)
+    }
 }
 
 impl From<ObjectIdentifier> for BACnetDeviceObjectReference {

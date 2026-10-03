@@ -337,10 +337,26 @@ async fn access_door_simulated_door_alarm_state_reports_and_restores() {
     h.server.stop().await.unwrap();
 }
 
+/// AP-1, whose last event, transaction `tag`, came from Access Credential
+/// `tag` at `second` past 15:00.
 fn point(event: AccessEvent, tag: u64, second: u8) -> Box<dyn BACnetObject> {
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
-    point.set_access_event(event, tag, stamp(second));
+    let card = ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, tag as u32).unwrap();
+    point
+        .set_access_event(event, tag, stamp(second), Some(card.into()))
+        .unwrap();
     Box::new(point)
+}
+
+/// Access_Event_Credential naming Access Credential `instance` (below 256),
+/// the object under [1].
+fn credential_bytes(instance: u8) -> Vec<u8> {
+    vec![0x1C, 0x08, 0x00, 0x00, instance]
+}
+
+/// The no-credential Access_Event_Credential: Access Credential 4194303.
+fn no_credential_bytes() -> Vec<u8> {
+    vec![0x1C, 0x08, 0x3F, 0xFF, 0xFF]
 }
 
 #[tokio::test(start_paused = true)]
@@ -350,14 +366,18 @@ async fn access_point_cov_leads_with_access_event_and_triggers_on_its_time() {
         db.add(point(AccessEvent::GRANTED, 1, 7)).unwrap();
     })
     .await;
-    // Access_Event_Credential and Access_Event_Authentication_Factor aren't
-    // served yet, so the report leaves them out.
+    // Access_Event_Authentication_Factor isn't served, so the report leaves
+    // it out; Access_Event_Credential follows the time (#1284).
     let report = |event: AccessEvent, tag: u64, second: u8| {
         vec![
             (PropertyIdentifier::ACCESS_EVENT, enumerated(event.to_raw())),
             (SF, normal()),
             (PropertyIdentifier::ACCESS_EVENT_TAG, unsigned(tag)),
             (PropertyIdentifier::ACCESS_EVENT_TIME, stamp_bytes(second)),
+            (
+                PropertyIdentifier::ACCESS_EVENT_CREDENTIAL,
+                credential_bytes(tag as u8),
+            ),
         ]
     };
     assert_eq!(
@@ -365,7 +385,8 @@ async fn access_point_cov_leads_with_access_event_and_triggers_on_its_time() {
         report(AccessEvent::GRANTED, 1, 7)
     );
 
-    // Access_Event and Access_Event_Tag only ride along.
+    // Access_Event, Access_Event_Tag and Access_Event_Credential only ride
+    // along.
     h.replace_and_fan_out(point(AccessEvent::DENIED_DENY_ALL, 2, 7))
         .await;
     h.no_notification().await;
@@ -389,12 +410,20 @@ async fn access_point_out_of_service_edges_record_events_and_report() {
         db.add(point(AccessEvent::GRANTED, 1, 7)).unwrap();
     })
     .await;
+    // An edge stores the no-credential reference (#1284); the GRANTED event
+    // before them came from Access Credential 1.
     let report = |event: AccessEvent, flags: u8, tag: u64, second: u8| {
+        let credential = if event == AccessEvent::GRANTED {
+            credential_bytes(1)
+        } else {
+            no_credential_bytes()
+        };
         vec![
             (PropertyIdentifier::ACCESS_EVENT, enumerated(event.to_raw())),
             (SF, vec![0x82, 0x04, flags]),
             (PropertyIdentifier::ACCESS_EVENT_TAG, unsigned(tag)),
             (PropertyIdentifier::ACCESS_EVENT_TIME, stamp_bytes(second)),
+            (PropertyIdentifier::ACCESS_EVENT_CREDENTIAL, credential),
         ]
     };
     assert_eq!(
@@ -461,12 +490,17 @@ async fn access_point_out_of_service_round_trip_reports_without_a_clock() {
     let unspecified = vec![
         0x2E, 0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF, 0x2F,
     ];
+    // No event here carries a credential.
     let report = |event: AccessEvent, tag: u64, time: Vec<u8>| {
         vec![
             (PropertyIdentifier::ACCESS_EVENT, enumerated(event.to_raw())),
             (SF, normal()),
             (PropertyIdentifier::ACCESS_EVENT_TAG, unsigned(tag)),
             (PropertyIdentifier::ACCESS_EVENT_TIME, time),
+            (
+                PropertyIdentifier::ACCESS_EVENT_CREDENTIAL,
+                no_credential_bytes(),
+            ),
         ]
     };
     assert_eq!(

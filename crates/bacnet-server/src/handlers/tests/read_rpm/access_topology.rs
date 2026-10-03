@@ -453,10 +453,10 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
                 None,
                 Ok(&[
                     0x91, 28, 0x91, 247, 0x92, 0x01, 0x42, 0x91, 250, 0x91, 246, 0x91, 36, 0x91,
-                    111, 0x91, 81, 0x91, 103,
+                    111, 0x91, 81, 0x91, 103, 0x92, 0x01, 0x04, 0x91, 249,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 9])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 11])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 247])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x42])),
@@ -466,9 +466,11 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 111])),
             (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 81])),
             (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(10), Ok(&[0x92, 0x01, 0x04])),
+            (P::PROPERTY_LIST, Some(11), Ok(&[0x91, 249])),
             (
                 P::PROPERTY_LIST,
-                Some(10),
+                Some(12),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -476,15 +478,26 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            // Authentication_Status is the Table 12-36 R row with no arm.
+            // The Table 12-36 required rows #1284 added: DISABLED while out
+            // of service, READY otherwise, and the no-credential reference.
             (
                 P::AUTHENTICATION_STATUS,
                 None,
-                Err(ErrorCode::UNKNOWN_PROPERTY),
+                Ok(if configured { &[0x91, 2] } else { &[0x91, 1] }),
             ),
             (
                 P::AUTHENTICATION_STATUS,
                 Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (
+                P::ACCESS_EVENT_CREDENTIAL,
+                None,
+                Ok(&[0x1C, 0x08, 0x3F, 0xFF, 0xFF]),
+            ),
+            (
+                P::ACCESS_EVENT_CREDENTIAL,
+                Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
         ];
@@ -597,10 +610,11 @@ fn rpm_access_zone_indexed_reads_and_bytes_are_unchanged() {
                 None,
                 Ok(&[
                     0x91, 28, 0x92, 0x01, 0x43, 0x92, 0x01, 0x22, 0x92, 0x01, 0x0c, 0x92, 0x01,
-                    0x0d, 0x91, 111, 0x91, 81, 0x91, 103,
+                    0x0d, 0x91, 111, 0x91, 81, 0x91, 103, 0x92, 0x01, 0x28, 0x91, 36, 0x92, 0x01,
+                    0x24, 0x91, 176, 0x92, 0x01, 0x29, 0x92, 0x01, 0x26,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 8])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 14])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x92, 0x01, 0x43])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x22])),
@@ -609,9 +623,11 @@ fn rpm_access_zone_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 111])),
             (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 81])),
             (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(9), Ok(&[0x92, 0x01, 0x28])),
+            (P::PROPERTY_LIST, Some(14), Ok(&[0x92, 0x01, 0x26])),
             (
                 P::PROPERTY_LIST,
-                Some(9),
+                Some(15),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -619,13 +635,24 @@ fn rpm_access_zone_indexed_reads_and_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            // Occupancy_State is the Table 12-37 row with no arm.
-            (P::OCCUPANCY_STATE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            // The Table 12-37 rows #1284 added: a new zone counts from zero
+            // with no limits, so Occupancy_State is NORMAL.
+            (P::OCCUPANCY_STATE, None, Ok(&[0x91, 0])),
             (
                 P::OCCUPANCY_STATE,
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
+            (P::EVENT_STATE, None, Ok(&[0x91, 0])),
+            (P::OCCUPANCY_COUNT_ENABLE, None, Ok(&[0x11])),
+            (P::ADJUST_VALUE, None, Ok(&[0x31, 0])),
+            (
+                P::ADJUST_VALUE,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (P::OCCUPANCY_UPPER_LIMIT, None, Ok(&[0x21, 0])),
+            (P::OCCUPANCY_LOWER_LIMIT, None, Ok(&[0x21, 0])),
         ];
         assert_cases(&db, oid, cases);
     }

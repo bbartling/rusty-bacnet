@@ -21,21 +21,30 @@ fn is_value_out_of_range(error: &Error) -> bool {
             && *code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32)
 }
 
+/// The references Python gives, converted as the registration methods do.
+fn references(
+    references: Vec<PyDeviceObjectReference>,
+) -> Option<Vec<BACnetDeviceObjectReference>> {
+    device_references(Some(references)).unwrap()
+}
+
 #[test]
 fn python_door_members_and_access_doors_reach_the_arrays() {
     let local = || PyDeviceObjectReference::Local(py(ObjectType::BINARY_INPUT, 3));
     let remote = || {
         PyDeviceObjectReference::Remote(py(ObjectType::DEVICE, 99), py(ObjectType::ACCESS_DOOR, 4))
     };
-    let door = access_door(1, "DOOR-1", Some(vec![local(), remote()])).unwrap();
+    let door = access_door(1, "DOOR-1", references(vec![local(), remote()])).unwrap();
     let mut expected = AccessDoorObject::new(1, "DOOR-1").unwrap();
-    expected.set_door_members([
-        BACnetDeviceObjectReference::from(oid(ObjectType::BINARY_INPUT, 3)),
-        BACnetDeviceObjectReference {
-            device_identifier: Some(oid(ObjectType::DEVICE, 99)),
-            object_identifier: oid(ObjectType::ACCESS_DOOR, 4),
-        },
-    ]);
+    expected
+        .set_door_members([
+            BACnetDeviceObjectReference::from(oid(ObjectType::BINARY_INPUT, 3)),
+            BACnetDeviceObjectReference {
+                device_identifier: Some(oid(ObjectType::DEVICE, 99)),
+                object_identifier: oid(ObjectType::ACCESS_DOOR, 4),
+            },
+        ])
+        .unwrap();
     for index in [Some(0), None] {
         assert_eq!(
             door.read_property(PropertyIdentifier::DOOR_MEMBERS, index)
@@ -46,13 +55,15 @@ fn python_door_members_and_access_doors_reach_the_arrays() {
         );
     }
 
-    let point = access_point(1, "AP-1", Some(vec![remote()])).unwrap();
+    let point = access_point(1, "AP-1", references(vec![remote()])).unwrap();
     assert_eq!(
         size(&point, PropertyIdentifier::ACCESS_DOORS),
         PropertyValue::Unsigned(1)
     );
     // Access_Doors names Access Doors only.
-    let refused = access_point(2, "AP-2", Some(vec![local()])).err().unwrap();
+    let refused = access_point(2, "AP-2", references(vec![local()]))
+        .err()
+        .unwrap();
     assert!(is_value_out_of_range(&refused), "{refused:?}");
 
     // Omitted arguments keep the empty arrays.
@@ -66,6 +77,35 @@ fn python_door_members_and_access_doors_reach_the_arrays() {
         size(&point, PropertyIdentifier::ACCESS_DOORS),
         PropertyValue::Unsigned(0)
     );
+}
+
+#[test]
+fn python_device_reference_pairs_name_a_device() {
+    Python::initialize();
+    let door = py(ObjectType::ACCESS_DOOR, 4);
+    // A pair's device must be a Device (#1285): anything else raises
+    // ValueError, wherever it sits in the list.
+    for not_a_device in [
+        py(ObjectType::ANALOG_VALUE, 99),
+        py(ObjectType::ACCESS_DOOR, 99),
+    ] {
+        let error = device_references(Some(vec![
+            PyDeviceObjectReference::Local(door.clone()),
+            PyDeviceObjectReference::Remote(not_a_device, door.clone()),
+        ]))
+        .err()
+        .unwrap();
+        Python::attach(|py| assert!(error.is_instance_of::<PyValueError>(py), "{error}"));
+    }
+    // A Device pair and a bare identifier still convert, and no list at all
+    // stays none.
+    let converted = references(vec![
+        PyDeviceObjectReference::Remote(py(ObjectType::DEVICE, 99), door.clone()),
+        PyDeviceObjectReference::Local(door),
+    ])
+    .unwrap();
+    assert_eq!(converted.len(), 2);
+    assert!(device_references(None).unwrap().is_none());
 }
 
 #[test]

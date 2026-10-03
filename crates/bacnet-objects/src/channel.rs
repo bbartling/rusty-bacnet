@@ -120,6 +120,8 @@ impl ChannelObject {
     ///
     /// Execution_Delay follows the new size, keeping its leading delays and
     /// adding zeros. Refused, leaving the list as it was, with PROPERTY /
+    /// VALUE_OUT_OF_RANGE for a member whose device identifier isn't a
+    /// Device object (#1285), with PROPERTY /
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED for a member naming a Device
     /// (other than the empty instance 4194303), since the object writes only
     /// inside its own device, and with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY
