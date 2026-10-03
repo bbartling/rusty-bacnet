@@ -10,20 +10,27 @@
 //! Each [`CommandRun`] carries the objects whose runs led to it. When a run's
 //! write queues further runs, each one inherits that chain plus the writing
 //! run's own object. A queued run whose object is already in its chain closes
-//! a loop, and one more than [`MAX_RUN_DEPTH`] runs deep is too long a chain
-//! to follow: neither is started. Its object took the write, so the run is
-//! ended at once as failed (In_Process back to FALSE, or Write_Status FAILED),
-//! and the write that queued it counts as failed too, with OBJECT / BUSY, the
-//! answer an object gives a Present_Value write while it is still busy.
+//! a loop, and one with more than [`MAX_RUN_DEPTH`] runs above it is too long
+//! a chain to follow: neither is started. Its object took the write, so the
+//! run is ended at once as failed (In_Process back to FALSE, or Write_Status
+//! FAILED), and the write that queued it counts as failed too, with OBJECT /
+//! BUSY, the answer an object gives a Present_Value write while it is still
+//! busy.
 
-use super::command_runs::CommandRunner;
-use super::*;
+use std::sync::Arc;
+
 use bacnet_objects::command::CommandRun;
+use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::error::Error;
+use bacnet_types::primitives::ObjectIdentifier;
+use tracing::debug;
+
+use super::{complete, RunHost};
 
 /// The most runs one chain may hold above a run: a run started by a write
 /// eight runs down from a request or application write still starts, the
 /// next one down doesn't.
-pub(super) const MAX_RUN_DEPTH: usize = 8;
+pub(crate) const MAX_RUN_DEPTH: usize = 8;
 
 /// The chain a run queued by `parent`'s write inherits.
 fn inherited_chain(parent: &CommandRun) -> Arc<[ObjectIdentifier]> {
@@ -40,52 +47,55 @@ fn may_start(chain: &[ObjectIdentifier], source: ObjectIdentifier) -> bool {
     chain.len() <= MAX_RUN_DEPTH && !chain.contains(&source)
 }
 
-impl<T: TransportPort + 'static> CommandRunner<T> {
-    /// Start the runs one of `parent`'s writes queued, each carrying
-    /// `parent`'s chain plus `parent`'s object. Runs that would close a loop
-    /// or nest too deep are ended as failed instead, and then the write fails.
-    pub(super) async fn start_nested(
-        &self,
-        parent: &CommandRun,
-        runs: Vec<CommandRun>,
-    ) -> Result<(), Error> {
-        if runs.is_empty() {
-            return Ok(());
-        }
-        let chain = inherited_chain(parent);
-        let mut refused = false;
-        let mut started = Vec::with_capacity(runs.len());
-        for mut run in runs {
-            if may_start(&chain, run.source) {
-                run.chain = Arc::clone(&chain);
-                started.push(run);
-            } else {
-                debug!(
-                    source = %parent.source,
-                    target = %run.source,
-                    depth = chain.len(),
-                    "a run would start its own object again or nest too deep; ending it as failed"
-                );
-                self.complete(run.source, run.generation, false).await;
-                refused = true;
-            }
-        }
-        self.start(started);
-        if refused {
-            Err(Error::Protocol {
-                class: ErrorClass::OBJECT.to_raw() as u32,
-                code: ErrorCode::BUSY.to_raw() as u32,
-            })
+/// The runs one of `parent`'s writes queued that may start, each carrying
+/// `parent`'s chain plus `parent`'s object, for the host to start. Runs that
+/// would close a loop or nest too deep are ended as failed instead, and then
+/// the write fails with OBJECT / BUSY after the others have been handed back
+/// through `start`.
+pub(crate) async fn admit<H: RunHost>(
+    host: &H,
+    parent: &CommandRun,
+    runs: Vec<CommandRun>,
+    start: impl FnOnce(Vec<CommandRun>),
+) -> Result<(), Error> {
+    if runs.is_empty() {
+        return Ok(());
+    }
+    let chain = inherited_chain(parent);
+    let mut refused = Vec::new();
+    let mut admitted = Vec::with_capacity(runs.len());
+    for mut run in runs {
+        if may_start(&chain, run.source) {
+            run.chain = Arc::clone(&chain);
+            admitted.push(run);
         } else {
-            Ok(())
+            refused.push(run);
         }
     }
+    start(admitted);
+    if refused.is_empty() {
+        return Ok(());
+    }
+    for run in refused {
+        debug!(
+            source = %parent.source,
+            target = %run.source,
+            depth = chain.len(),
+            "a run would start its own object again or nest too deep; ending it as failed"
+        );
+        complete(host, run.source, run.generation, false).await;
+    }
+    Err(Error::Protocol {
+        class: ErrorClass::OBJECT.to_raw() as u32,
+        code: ErrorCode::BUSY.to_raw() as u32,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use bacnet_objects::command::RunPlan;
+    use bacnet_types::enums::ObjectType;
 
     fn ch(instance: u32) -> ObjectIdentifier {
         ObjectIdentifier::new(ObjectType::CHANNEL, instance).unwrap()

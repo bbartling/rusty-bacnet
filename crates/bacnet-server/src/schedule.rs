@@ -44,11 +44,22 @@ pub(crate) fn schedule_instant(frame: ClockFrame) -> Option<(SpecificDate, Time)
 /// Evaluate all Schedule objects and write to their controlled properties.
 ///
 /// A running server evaluates schedules itself every 60 seconds and fans COV
-/// out for the objects they write; this entry point only evaluates.
+/// out for the objects they write; this entry point evaluates without COV.
+///
+/// A write to a Command object's Present_Value starts its list, and this call
+/// runs it before returning, post delays included: each command is made as
+/// the bare WriteProperty handler would make it, with the Command as the
+/// initiating object, and a list that writes another Command starts that one
+/// too (#1178). Dropping the future first ends each unfinished list as
+/// unsuccessful, so no Command is left in process.
 pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>) {
-    let mut db_w = db.write().await;
-    let schedules = db_w.find_by_type(ObjectType::SCHEDULE);
-    evaluate(&mut db_w, schedules);
+    let runs = {
+        let mut db_w = db.write().await;
+        let schedules = db_w.find_by_type(ObjectType::SCHEDULE);
+        let commit = evaluate(&mut db_w, schedules);
+        commit.take_command_runs(&mut db_w)
+    };
+    crate::command_lists::run_unattached(db, runs).await;
 }
 
 /// Evaluate schedules for the live server, returning the COV fanout owed for
@@ -205,3 +216,11 @@ fn deliver(
 #[cfg(test)]
 #[path = "schedule_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "schedule_command_tests.rs"]
+mod command_tests;
+
+#[cfg(test)]
+#[path = "schedule_channel_tests.rs"]
+mod channel_tests;

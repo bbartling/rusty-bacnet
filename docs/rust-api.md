@@ -481,6 +481,10 @@ use bacnet_services::who_am_i::{WhoAmIRequest, YouAreRequest};
 `device_identifier` (which must name a Device object) and `device_mac_address`; at
 least one of those two must be present. Both `encode` methods are fallible and both
 `decode` methods reject missing fields, context-tagged layouts and trailing data.
+`device_mac_address` is the MAC the matching device takes on the port the request
+arrived on (Clauses 16.11.3.1.5 and 16.11.4), so it is held to
+`BACnetAddress::MAX_MAC_LEN` (18 octets) in both directions (#1200): `decode`
+refuses a longer one and `encode` returns `Error::Encoding` without writing.
 
 ### Virtual Terminal
 
@@ -1514,6 +1518,14 @@ with Reject-Message-To-Network reason 6 (`ADDRESSING_ERROR`, Clause 6.4.4) for
 that DNET, as it does a DNET it cannot reach. A global broadcast or an NPDU
 without a DNET is dropped without a reject.
 
+Both also drop a frame whose link-layer source MAC, as the transport reports
+it, is longer than `NpduAddress::MAX_MAC_LEN`, before decoding it, and count it
+in the same `address_length_drops()` (#1198). Nothing answers such a frame, and
+a router learns no route from it. No built-in transport reports a MAC that long
+(B/IP, BACnet/SC and Ethernet use 6 octets, MS/TP 1, B/IPv6 18), so only a
+custom `TransportPort` can, and every address the stack learns off the network
+fits a `BACnetAddress`.
+
 `BACnetRouter` sends each Reject-Message-To-Network it originates to whoever
 first sent the refused NPDU (Clause 6.4.4, #1158). An NPDU that arrived
 with SNET/SADR came through another router: the reject carries that SNET/SADR
@@ -2145,9 +2157,20 @@ returns to FALSE, with All_Writes_Successful TRUE only if every write
 succeeded. The server writes to its own objects only, so a command naming
 another Device fails. A Schedule writing a Command's Present_Value starts the
 run as well. Command takes SubscribeCOVProperty but not SubscribeCOV, so a
-client can follow In_Process. A run that `stop()` cuts short isn't resumed,
-and a Command used without the server keeps its queued run, and In_Process
-TRUE, until something takes it.
+client can follow In_Process. A run that `stop()` cuts short isn't resumed.
+
+Whatever commits a Present_Value write owns the run it starts and finishes it,
+so no path leaves a Command in process (#1178). Without a server,
+`tick_schedules` runs the lists its Schedule writes start before it returns,
+post delays included, making each command as the bare WriteProperty handler
+would with the Command as the initiating object; dropping its future first
+ends each unfinished run as unsuccessful. The bare `handle_write_property` and
+`handle_write_property_multiple` handlers are synchronous and make no writes
+for a Command: the run a Present_Value write starts ends at once, with
+In_Process FALSE, All_Writes_Successful FALSE and every command's
+`write_successful` FALSE. The endpoint responder refuses a Command's
+Present_Value write with WRITE_ACCESS_DENIED, as it does every write other
+than the Device's Description and Audit recipient.
 
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
 Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and
@@ -2306,8 +2329,10 @@ A Channel passes each value written to its Present_Value on to its members
 each a `BACnetDeviceObjectPropertyReference` to an object in this device, then
 optionally one delay in milliseconds per member with `set_execution_delay`
 and the control groups with `set_control_groups`. All three are writable
-arrays on the network too: a write of index 0 resizes one, and the member
-list and Execution_Delay always keep the same size. A member naming another
+arrays on the network too. The member list and Execution_Delay always keep the
+same size: a write of index 0 to either resizes both, as does a whole write of
+the member list, while a whole write of Execution_Delay must give exactly one
+delay per member (VALUE_OUT_OF_RANGE otherwise). A member naming another
 Device is refused with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED; one naming the
 server's own Device is stored as the local reference it stands for.
 
@@ -2329,6 +2354,19 @@ skipped, and while Out_Of_Service is TRUE the value is kept but not passed on.
 Reliability and Allow_Group_Delay_Inhibit aren't served, and inbound WriteGroup,
 which addresses Channels by Channel_Number and Control_Groups, isn't executed
 yet.
+
+Channel runs are owned as Command runs are (#1178). Without a server,
+`tick_schedules` runs a distribution its Schedule writes start before it
+returns, delays included, and ends it FAILED if its future is dropped first.
+The bare `handle_write_property` and `handle_write_property_multiple` handlers
+end it at once as FAILED, without writing the members. The endpoint responder
+refuses a Channel's Present_Value write with WRITE_ACCESS_DENIED.
+
+A run that one Command's or Channel's write starts in another carries the
+objects above it. If it would start an object already in that chain, as two
+Channels naming each other would after their delays, or would have more than
+eight runs above it, it isn't started: it ends as failed at once and the write
+that started it fails with OBJECT / BUSY, so such a loop stops after one round.
 
 #### Life Safety (2)
 

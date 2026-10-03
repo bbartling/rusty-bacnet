@@ -44,8 +44,10 @@ impl CovRecipient {
     /// Table admission requires the same nonempty routed source MAC as NPDU
     /// decoding. The address either form reports in the Device's COV lists
     /// must also fit [`BACnetAddress::MAX_MAC_LEN`] octets, so every admitted
-    /// subscription encodes there (#1156). A routed source always does since
-    /// #1141; this keeps out a direct MAC that a custom transport makes longer.
+    /// subscription encodes there (#1156). Off the wire both forms already
+    /// fit: the NPDU codec bounds a routed source (#1141) and the network
+    /// layer drops a frame from a longer link-layer MAC (#1198). The check
+    /// stays for subscriptions that reach the public table API another way.
     pub(crate) fn validate(&self) -> Result<(), Error> {
         if matches!(self, Self::Routed(source) if source.mac_address.is_empty()) {
             return Err(Error::Encoding(

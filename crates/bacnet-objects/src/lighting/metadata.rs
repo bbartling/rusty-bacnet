@@ -84,6 +84,7 @@ const LIGHTING_OUTPUT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::DEFAULT_RAMP_RATE, RequiredRead, None, Always),
     PropertyMetadata::new(P::DEFAULT_STEP_INCREMENT, RequiredRead, None, Always),
     PropertyMetadata::new(P::CURRENT_COMMAND_PRIORITY, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::COV_INCREMENT, Optional, None, Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -230,6 +231,7 @@ mod tests {
             P::DEFAULT_RAMP_RATE,
             P::DEFAULT_STEP_INCREMENT,
             P::CURRENT_COMMAND_PRIORITY,
+            P::COV_INCREMENT,
         ];
         let required = [
             P::OBJECT_IDENTIFIER,
@@ -384,6 +386,7 @@ mod tests {
                     P::DEFAULT_FADE_TIME,
                     P::DEFAULT_RAMP_RATE,
                     P::DEFAULT_STEP_INCREMENT,
+                    P::COV_INCREMENT,
                 ],
             ),
             (
@@ -547,6 +550,7 @@ mod tests {
                 (P::DEFAULT_FADE_TIME, PropertyValue::Real(100.0)),
                 (P::DEFAULT_RAMP_RATE, PropertyValue::Unsigned(10)),
                 (P::DEFAULT_STEP_INCREMENT, PropertyValue::Double(1.0)),
+                (P::COV_INCREMENT, PropertyValue::Double(1.0)),
             ] {
                 assert_error(
                     object.write_property(p, None, value, None).unwrap_err(),

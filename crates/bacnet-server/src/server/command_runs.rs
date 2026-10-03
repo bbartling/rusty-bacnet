@@ -1,13 +1,12 @@
-//! Running the writes a Present_Value write queues: the action list a Command
-//! object's value selects (Clause 12.10, #1150), or a Channel object's value
-//! for each of its members (Clause 12.53, #1151, in `channel_runs`).
+//! Running the writes a Command or Channel object's Present_Value write
+//! queues (Clauses 12.10 and 12.53, #1150, #1151).
 //!
-//! The write only queues the run: under the guard that commits it, the
-//! object checks the value, marks itself busy and leaves a [`CommandRun`]
-//! for the server to take (`take_command_runs`). Each run then goes into the
-//! server's request task set as its own task, so neither the request that
-//! wrote Present_Value nor `write_local` waits for it, delays included, and
-//! `stop` cancels it with the other request work.
+//! The write only queues the run: under the guard that commits it, the object
+//! checks the value, marks itself busy and leaves a [`CommandRun`], which the
+//! server takes there and owns from then on (`crate::command_lists`). Each run then goes into the server's request
+//! task set as its own task, so neither the request that wrote Present_Value
+//! nor `write_local` waits for it, post delays included, and `stop` cancels
+//! it with the other request work.
 //!
 //! The writes are made one at a time, each through the same [`LocalWriter`]
 //! path as `write_local`: priorities, command-source tracking, audit, COV and
@@ -19,21 +18,13 @@
 use super::local_writes::{LocalWrite, LocalWriter};
 use super::request_tasks::RequestTaskSpawner;
 use super::*;
-use bacnet_objects::command::{CommandRun, RunPlan};
+use crate::command_lists::{RunHost, Unfinished};
+use bacnet_objects::command::CommandRun;
 use bacnet_types::constructed::BACnetActionCommand;
-
-/// A property one write of a run commands.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct RunTarget {
-    pub(super) object: ObjectIdentifier,
-    pub(super) property: PropertyIdentifier,
-    pub(super) array_index: Option<u32>,
-    pub(super) priority: Option<u8>,
-}
 
 /// The server handles a run owns while it waits out post delays.
 pub(super) struct CommandRunner<T: TransportPort + 'static> {
-    pub(super) db: Arc<RwLock<ObjectDatabase>>,
+    db: Arc<RwLock<ObjectDatabase>>,
     network: Arc<NetworkLayer<T>>,
     cov_table: Arc<RwLock<CovSubscriptionTable>>,
     cov_in_flight: Arc<Semaphore>,
@@ -101,17 +92,18 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
     }
 
     /// Start each run as its own task. A panic in a target's write path
-    /// ends that run as failed rather than leaving its Command or Channel busy.
+    /// ends that run as failed rather than leaving its object busy.
     pub(super) fn start(&self, runs: Vec<CommandRun>) {
         use futures_util::FutureExt;
         for run in runs {
             let runner = self.clone();
             self.tasks.spawn(async move {
                 let (source, generation) = (run.source, run.generation);
-                let execution = std::panic::AssertUnwindSafe(runner.execute(run));
+                let execution =
+                    std::panic::AssertUnwindSafe(crate::command_lists::execute(&runner, run));
                 if execution.catch_unwind().await.is_err() {
-                    warn!(source = %source, "Command or Channel run panicked; ending it as failed");
-                    runner.complete(source, generation, false).await;
+                    warn!(source = %source, "run panicked; ending it as failed");
+                    crate::command_lists::complete(&runner, source, generation, false).await;
                 }
             });
         }
@@ -131,170 +123,57 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
             config: &self.config,
         }
     }
+}
 
-    /// Make the run's writes, then end it.
-    async fn execute(&self, run: CommandRun) {
-        match &run.plan {
-            RunPlan::Actions(commands) => self.run_actions(&run, commands).await,
-            RunPlan::Channel(distribution) => self.distribute(&run, distribution).await,
-        }
+impl<T: TransportPort + 'static> RunHost for CommandRunner<T> {
+    fn database(&self) -> &Arc<RwLock<ObjectDatabase>> {
+        &self.db
     }
 
-    /// Make a Command's commands in order, then end the run.
-    async fn run_actions(&self, run: &CommandRun, commands: &[BACnetActionCommand]) {
-        let mut all_succeeded = true;
-        for (index, command) in commands.iter().enumerate() {
-            let Some(success) = self.make(run, index, command).await else {
-                // The Command changed under the run; whatever replaced it
-                // owns In_Process now.
-                return;
-            };
-            all_succeeded &= success;
-            // Clause 12.10.8: the delay follows every attempt, failed or not,
-            // and comes before the next write or the end of the run.
-            if let Some(delay) = command.post_delay {
-                tokio::time::sleep(Duration::from_secs(u64::from(delay))).await;
-            }
-            if !success && command.quit_on_failure {
-                break;
-            }
-        }
-        self.complete(run.source, run.generation, all_succeeded)
-            .await;
-    }
-
-    /// Make command `index` and record its outcome. `None` once the run is
-    /// stale.
-    async fn make(
-        &self,
-        run: &CommandRun,
-        index: usize,
-        command: &BACnetActionCommand,
-    ) -> Option<bool> {
-        let local = {
-            let db = self.db.read().await;
-            if db
-                .get(&run.source)
-                .and_then(|object| object.command_generation_internal())
-                != Some(run.generation)
-            {
-                return None;
-            }
-            // Clause 12.10.8 leaves writes to other devices optional. This
-            // server makes local ones only, so a command naming another
-            // Device fails like any refused write. Naming this Device is the
-            // same as naming none.
-            command
-                .device_identifier
-                .is_none_or(|device| crate::local_device::selected_device(&db) == Some(device))
-        };
-        let success = if local {
-            self.write(run, command).await
-        } else {
-            debug!(
-                command = %run.source,
-                device = ?command.device_identifier,
-                "Command list names another device; this server writes locally only"
-            );
-            false
-        };
-        let recorded = {
-            let mut db = self.db.write().await;
-            let recorded = db.get_mut(&run.source).is_some_and(|object| {
-                object.record_command_write_internal(run.generation, index, success)
-            });
-            if recorded {
-                let capture = self.cov_table.read().await.timed_capture(run.source);
-                capture.run(&db);
-            }
-            recorded
-        };
-        if !recorded {
-            return None;
-        }
-        BACnetServer::<T>::fire_cov_notifications(&self.writer().cov_context(), &run.source).await;
-        Some(success)
-    }
-
-    /// Write one command's value through the local write path; whether it
-    /// was accepted.
-    async fn write(&self, run: &CommandRun, command: &BACnetActionCommand) -> bool {
-        let target = RunTarget {
-            object: command.object_identifier,
-            property: command.property_identifier,
-            array_index: command.property_array_index,
-            priority: command.priority,
-        };
-        match self.write_value(run, target, &command.property_value).await {
-            Ok(()) => true,
-            Err(error) => {
-                debug!(
-                    command = %run.source,
-                    target = %command.object_identifier,
-                    property = ?command.property_identifier,
-                    %error,
-                    "Command write failed"
-                );
-                false
-            }
-        }
-    }
-
-    /// Write `value` to a local target through the local write path, with
-    /// `run`'s object as the initiating object.
-    pub(super) async fn write_value(
-        &self,
-        run: &CommandRun,
-        target: RunTarget,
-        value: &PropertyValue,
-    ) -> Result<(), Error> {
+    /// Write one value through the local write path, with `run`'s object as
+    /// the initiating object.
+    async fn write(&self, run: &CommandRun, command: &BACnetActionCommand) -> Result<(), Error> {
         // The value reaches the target as a WriteProperty carrying the same
         // octets would, so constructed values take the shape the object
         // expects.
         let mut encoded = BytesMut::new();
-        encode_property_value(&mut encoded, value)?;
-        let value =
-            handlers::decode_write_property_value(target.property, target.array_index, &encoded)?;
+        encode_property_value(&mut encoded, &command.property_value)?;
+        let value = handlers::decode_write_property_value(
+            command.property_identifier,
+            command.property_array_index,
+            &encoded,
+        )?;
         let runs = self
             .writer()
             .write(
-                &target.object,
+                &command.object_identifier,
                 LocalWrite::Property {
-                    property: target.property,
-                    array_index: target.array_index,
-                    priority: target.priority,
+                    property: command.property_identifier,
+                    array_index: command.property_array_index,
+                    priority: command.priority,
                 },
                 value,
                 Some(crate::LocalCommandSource::Object(run.source)),
             )
             .await?;
         // A write that starts another Command's or Channel's run starts that
-        // run too, unless it would close a loop (`run_chain`).
-        self.start_nested(run, runs).await
+        // run too, unless it would close a loop.
+        crate::command_lists::admit(self, run, runs, |runs| self.start(runs)).await
     }
 
-    /// End a run: a Command's In_Process back to FALSE and
-    /// All_Writes_Successful set, or a Channel's Write_Status set, reported to
-    /// property subscribers.
-    pub(super) async fn complete(
-        &self,
-        source: ObjectIdentifier,
-        generation: u64,
-        all_succeeded: bool,
-    ) {
-        let completed = {
-            let mut db = self.db.write().await;
-            let completed = db.get_mut(&source).is_some_and(|object| {
-                object.complete_command_run_internal(generation, all_succeeded)
-            });
-            if completed {
-                let capture = self.cov_table.read().await.timed_capture(source);
-                capture.run(&db);
-            }
-            completed
-        };
-        if completed {
-            BACnetServer::<T>::fire_cov_notifications(&self.writer().cov_context(), &source).await;
-        }
+    /// Timestamped references capture the change under its guard (#856).
+    async fn committed(&self, db: &ObjectDatabase, source: ObjectIdentifier) {
+        let capture = self.cov_table.read().await.timed_capture(source);
+        capture.run(db);
     }
+
+    /// Property subscribers hear of In_Process, All_Writes_Successful and
+    /// Write_Status.
+    async fn report(&self, source: ObjectIdentifier) {
+        BACnetServer::<T>::fire_cov_notifications(&self.writer().cov_context(), &source).await;
+    }
+
+    /// The server cancels its runs only from `stop()`, which leaves them where
+    /// they stood; a panic is ended in [`Self::start`].
+    fn abandoned(&self, _left: Unfinished) {}
 }
