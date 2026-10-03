@@ -9,9 +9,7 @@
 //! ([`crate::durable`] lists those paths). Each saved Subscribed_Recipients
 //! entry carries the whole minutes it had left at the save.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{ErrorKind, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use bacnet_encoding::constructed::{
     decode_destination, decode_event_notification_subscription, encode_destination_list,
@@ -23,7 +21,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 use super::MAX_RECIPIENT_LIST_DESTINATIONS;
-use crate::durable::sync_parent_dir;
+use crate::durable::file::ObjectFile;
 use crate::subscribed_recipients::MAX_SUBSCRIBED_RECIPIENTS;
 
 /// What a forwarder keeps across a restart: both of its lists.
@@ -54,13 +52,10 @@ pub trait NotificationForwarderPersistence: Send + Sync {
 }
 
 const MAGIC: &[u8; 8] = b"RBNFWD01";
-const OID_AT: usize = MAGIC.len();
-/// One octet: 1 when the file holds a Recipient_List, 0 when not.
-const WRITTEN_AT: usize = OID_AT + 4;
-const LENGTH_AT: usize = WRITTEN_AT + 1;
-/// The magic tag, the object identifier, the Recipient_List's presence and
-/// its length.
-const HEADER_LEN: usize = LENGTH_AT + 4;
+/// After the shared header (the magic tag and the object identifier): one
+/// octet, 1 when the file holds a Recipient_List and 0 when not, then the
+/// Recipient_List's length.
+const BODY_HEADER_LEN: usize = 1 + 4;
 /// A full Recipient_List of the longest destinations is 1,504 octets and a
 /// full Subscribed_Recipients 1,184; anything much larger is not a file this
 /// backend wrote.
@@ -79,97 +74,56 @@ pub(super) const MAX_FILE_BYTES: u64 = 64 * 1024;
 /// Subscribed_Recipients. It does not coordinate between processes.
 #[derive(Clone, Debug)]
 pub struct FileNotificationForwarderPersistence {
-    path: PathBuf,
+    file: ObjectFile,
 }
 
 impl FileNotificationForwarderPersistence {
     /// Keep the lists in the file at `path`.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let path = path.as_ref();
-        if path.as_os_str().is_empty() {
-            return Err(Error::OutOfRange(
-                "Notification Forwarder persistence path must not be empty".into(),
-            ));
-        }
         Ok(Self {
-            path: path.to_path_buf(),
+            file: ObjectFile::new(
+                path.as_ref(),
+                MAGIC,
+                MAX_FILE_BYTES,
+                "Notification Forwarder",
+            )?,
         })
     }
 
     /// The file the lists are kept in.
     pub fn path(&self) -> &Path {
-        &self.path
+        self.file.path()
     }
-
-    fn temporary_path(&self) -> PathBuf {
-        let mut temporary = self.path.as_os_str().to_os_string();
-        temporary.push(".tmp");
-        PathBuf::from(temporary)
-    }
-}
-
-fn corrupt(reason: &str) -> Error {
-    Error::Encoding(format!("Notification Forwarder file {reason}"))
-}
-
-/// Decode `bytes` as one element after another, refusing more than `cap`.
-fn decode_capped<T>(
-    bytes: &[u8],
-    cap: usize,
-    decode: impl Fn(&[u8], usize) -> Result<(T, usize), Error>,
-) -> Result<Vec<T>, Error> {
-    let mut list = Vec::new();
-    let mut offset = 0;
-    while offset < bytes.len() {
-        if list.len() == cap {
-            return Err(corrupt("holds more entries than the cap"));
-        }
-        let (element, next) =
-            decode(bytes, offset).map_err(|_| corrupt("holds an entry that does not decode"))?;
-        list.push(element);
-        offset = next;
-    }
-    Ok(list)
 }
 
 impl NotificationForwarderPersistence for FileNotificationForwarderPersistence {
     fn load(&self, forwarder: ObjectIdentifier) -> Result<Option<ForwarderSnapshot>, Error> {
-        let file = match File::open(&self.path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
+        let Some(body) = self.file.load(forwarder)? else {
+            return Ok(None);
         };
-        let mut bytes = Vec::new();
-        file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > MAX_FILE_BYTES {
-            return Err(corrupt("is too large"));
+        if body.len() < BODY_HEADER_LEN {
+            return Err(self.file.corrupt("has no valid header"));
         }
-        if bytes.len() < HEADER_LEN || &bytes[..MAGIC.len()] != MAGIC {
-            return Err(corrupt("has no valid header"));
-        }
-        if bytes[OID_AT..WRITTEN_AT] != forwarder.encode() {
-            return Err(corrupt("belongs to another object"));
-        }
-        let length = u32::from_be_bytes(bytes[LENGTH_AT..HEADER_LEN].try_into().unwrap());
+        let length = u32::from_be_bytes(body[1..BODY_HEADER_LEN].try_into().unwrap());
         let split = usize::try_from(length)
             .ok()
-            .and_then(|length| HEADER_LEN.checked_add(length))
-            .filter(|split| *split <= bytes.len())
-            .ok_or_else(|| corrupt("has a Recipient_List past its end"))?;
-        let recipient_list = &bytes[HEADER_LEN..split];
-        let recipient_list = match bytes[WRITTEN_AT] {
+            .and_then(|length| BODY_HEADER_LEN.checked_add(length))
+            .filter(|split| *split <= body.len())
+            .ok_or_else(|| self.file.corrupt("has a Recipient_List past its end"))?;
+        let recipient_list = &body[BODY_HEADER_LEN..split];
+        let recipient_list = match body[0] {
             0 if recipient_list.is_empty() => None,
-            1 => Some(decode_capped(
+            1 => Some(self.file.decode_capped(
                 recipient_list,
                 MAX_RECIPIENT_LIST_DESTINATIONS,
                 decode_destination,
             )?),
-            _ => return Err(corrupt("has no valid header")),
+            _ => return Err(self.file.corrupt("has no valid header")),
         };
         Ok(Some(ForwarderSnapshot {
             recipient_list,
-            subscribed_recipients: decode_capped(
-                &bytes[split..],
+            subscribed_recipients: self.file.decode_capped(
+                &body[split..],
                 MAX_SUBSCRIBED_RECIPIENTS,
                 decode_event_notification_subscription,
             )?,
@@ -181,35 +135,13 @@ impl NotificationForwarderPersistence for FileNotificationForwarderPersistence {
         if let Some(list) = &snapshot.recipient_list {
             encode_destination_list(&mut recipient_list, list)?;
         }
-        let mut bytes = BytesMut::with_capacity(HEADER_LEN + recipient_list.len() + 1024);
-        bytes.extend_from_slice(MAGIC);
-        bytes.extend_from_slice(&forwarder.encode());
-        bytes.extend_from_slice(&[u8::from(snapshot.recipient_list.is_some())]);
+        let mut body = BytesMut::with_capacity(BODY_HEADER_LEN + recipient_list.len() + 1024);
+        body.extend_from_slice(&[u8::from(snapshot.recipient_list.is_some())]);
         let length = u32::try_from(recipient_list.len())
             .map_err(|_| Error::OutOfRange("Recipient_List too long to save".into()))?;
-        bytes.extend_from_slice(&length.to_be_bytes());
-        bytes.extend_from_slice(&recipient_list);
-        encode_event_notification_subscription_list(&mut bytes, &snapshot.subscribed_recipients)?;
-        if let Some(parent) = self
-            .path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent)?;
-        }
-        let temporary = self.temporary_path();
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&temporary)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temporary, &self.path)?;
-        // The new lists are in place, so the save has landed whatever the
-        // directory sync finds.
-        sync_parent_dir(&self.path);
-        Ok(())
+        body.extend_from_slice(&length.to_be_bytes());
+        body.extend_from_slice(&recipient_list);
+        encode_event_notification_subscription_list(&mut body, &snapshot.subscribed_recipients)?;
+        self.file.save(forwarder, &body)
     }
 }

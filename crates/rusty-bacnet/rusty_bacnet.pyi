@@ -2707,7 +2707,25 @@ class BACnetServer:
     def add_date_time_pattern_value(self, instance: int, name: str) -> None: ...
 
     # --- Notification/logging ---
-    def add_notification_class(self, instance: int, name: str, notification_class: int = 0) -> None: ...
+    def add_notification_class(
+        self,
+        instance: int,
+        name: str,
+        notification_class: int = 0,
+        storage_path: Optional[str] = None,
+    ) -> None:
+        """Add a Notification Class (Clause 12.21). With ``storage_path``, a
+        Recipient_List a client writes is kept in that file across restarts; a
+        write whose list cannot be saved is refused with DEVICE /
+        OPERATIONAL_PROBLEM and the old list stays. Without it the list lives in
+        memory only.
+
+        ``storage_path`` is a ``str``; a ``pathlib.Path`` raises TypeError, as
+        for ``add_notification_forwarder``. Give each class a file of its own:
+        the file names the class it belongs to, so one that holds another
+        object's list, or anything this backend did not write, makes this call
+        raise BacnetError (BacnetProtocolError for a saved list a client's write
+        would be refused)."""
     def add_notification_forwarder(
         self,
         instance: int,

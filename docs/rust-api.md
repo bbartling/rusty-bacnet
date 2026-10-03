@@ -2049,10 +2049,48 @@ Loop's measured input has its own route,
 |------|-------------|
 | `CalendarObject` | `::new(instance, name)` |
 | `ScheduleObject` | `::new(instance, name, default_value)` |
-| `NotificationClass` | `::new(instance, name)` |
+| `NotificationClass` | `::new(instance, name)`, `::with_persistence(instance, name, persistence)` |
 | `NotificationForwarderObject` | `::new(instance, name)`, `::with_persistence(instance, name, persistence)` |
 | `AlertEnrollmentObject` | `::new(instance, name, initial_source)` |
 | `EventEnrollmentObject` | `::new(instance, name, event_type)` |
+
+A `NotificationClass` built with `with_persistence` keeps a written
+`Recipient_List` across a restart (Clause 12.21.8, #1315). The storage is an
+application-owned `NotificationClassPersistence` that loads and saves a
+`NotificationClassSnapshot`; `FileNotificationClassPersistence` keeps it in
+one file, replaced whole the same way as the forwarder's file (a format of
+its own, tagged `RBNNCL01`, with the same 64 KiB and 32-destination caps on
+load). A class built with `new` keeps the list in memory only.
+
+Saves follow the forwarder's rules (see
+[Notification forwarding](#notification-forwarding)), and the two objects
+share the code: the save runs on the class's own writer thread, and the
+bundled server stages every network or `write_local` Recipient_List write
+(WriteProperty, WritePropertyMultiple, AddListElement and RemoveListElement)
+and waits for its save with the database guard dropped. A list that cannot be
+saved is refused with DEVICE / OPERATIONAL_PROBLEM, and the class keeps the
+old one. A WritePropertyMultiple under a `mutation_authorizer`, and
+application code writing through the database, save in place. A staged write
+its request releases without making (an earlier WritePropertyMultiple attempt
+failed, say) is dropped, and the class saves the list it serves at once. A
+staged write whose request vanished without releasing it (`stop()` aborted
+the request, or an application dropped a `write_local` future) is dropped the
+same way once 10 s have passed since its save finished: by the next write
+that stages, or within a further second by the server's once-a-second
+operation task, which measures the time on its own monotonic clock. The
+forwarder's operation task applies the same bound. `wait_for_saves()` blocks until queued
+saves have run, and dropping the class waits for them too. Like the forwarder,
+a `NotificationClass` is not `UnwindSafe` or `RefUnwindSafe`.
+
+A written list wins over `add_destination`, as on the forwarder:
+`NotificationClassSnapshot::recipient_list` stays `None` until a write sets
+the list, configured destinations are never saved and apply at every start
+until then, and once a written list was saved, `recipient_list_saved()` is
+true and `add_destination` checks a destination without adding it. An
+AddListElement edits the list the class serves, configured destinations
+included, so its result is the written list from then on. Loading a saved
+list that a write would refuse (past the cap, or an address MAC past 18
+octets) fails `with_persistence`.
 
 An Event Enrollment's Object_Property_Reference, set with
 `set_object_property_reference`, reads as the context-tagged

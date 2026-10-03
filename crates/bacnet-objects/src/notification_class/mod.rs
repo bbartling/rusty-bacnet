@@ -14,6 +14,18 @@
 //! `UTC_Offset` property (signed minutes) at the sender. A window with
 //! `to_time < from_time` (e.g. 22:00–02:00) crosses midnight and is active
 //! outside the `[from, to]` interval; see `time_in_window`.
+//!
+//! # Restarts
+//!
+//! Clause 12.21.8 asks for the Recipient_List to survive a restart. A class
+//! built with [`NotificationClass::with_persistence`] saves a written list in
+//! a [`NotificationClassPersistence`] before serving it, and restores it when
+//! built again; one built with [`NotificationClass::new`] keeps the list in
+//! memory only. A written, saved list wins over the destinations the
+//! application configures with [`add_destination`], which are never saved.
+//! See the `saving` module for when saves run.
+//!
+//! [`add_destination`]: NotificationClass::add_destination
 
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
@@ -24,16 +36,22 @@ use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
 use crate::database::ObjectDatabase;
+use crate::durable::DurableWrites;
 use crate::event::EventTransition;
 use crate::traits::BACnetObject;
 
 mod enrollment_summary;
 mod metadata;
+mod persistence;
 pub(crate) mod recipient_list;
+mod saving;
 #[doc(hidden)]
 pub use enrollment_summary::{
     resolve_enrollment_summary_class_internal, EnrollmentSummaryClassProjection,
     EnrollmentSummaryClassProjectionError,
+};
+pub use persistence::{
+    FileNotificationClassPersistence, NotificationClassPersistence, NotificationClassSnapshot,
 };
 pub use recipient_list::MAX_RECIPIENT_LIST_DESTINATIONS;
 
@@ -56,10 +74,19 @@ pub struct NotificationClass {
     pub ack_required: EventTransitionBits,
     /// Recipient list, at most [`MAX_RECIPIENT_LIST_DESTINATIONS`] long.
     recipient_list: Vec<BACnetDestination>,
+    /// Where a written Recipient_List is saved, with persistence.
+    storage: Option<saving::Storage>,
+    /// Recipient_List writes taken, so a staged write can tell whether
+    /// another came between.
+    list_writes: u64,
+    /// A write set Recipient_List, now or before a restart, so storage keeps
+    /// it and configured destinations no longer apply.
+    recipient_list_written: bool,
 }
 
 impl NotificationClass {
-    /// Create a new NotificationClass object.
+    /// Create a new NotificationClass object. Its Recipient_List is kept in
+    /// memory only; see [`with_persistence`](Self::with_persistence).
     ///
     /// The `notification_class` number defaults to the instance number.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
@@ -74,6 +101,9 @@ impl NotificationClass {
             priority: [255, 255, 255],
             ack_required: EventTransitionBits::empty(),
             recipient_list: Vec::new(),
+            storage: None,
+            list_writes: 0,
+            recipient_list_written: false,
         })
     }
 
@@ -90,9 +120,22 @@ impl NotificationClass {
     /// [`MAX_RECIPIENT_LIST_DESTINATIONS`] cap (RESOURCES /
     /// NO_SPACE_TO_WRITE_PROPERTY).
     ///
+    /// This configures the list the application starts with; it is not
+    /// saved. On a class [`with_persistence`](Self::with_persistence) whose
+    /// storage holds a written Recipient_List
+    /// ([`recipient_list_saved`](Self::recipient_list_saved)), the saved list
+    /// wins: the destination is checked but not added.
+    ///
     /// [`BACnetAddress::MAX_MAC_LEN`]: bacnet_types::constructed::BACnetAddress::MAX_MAC_LEN
     pub fn add_destination(&mut self, dest: BACnetDestination) -> Result<(), Error> {
         recipient_list::check_added(&dest)?;
+        if self.recipient_list_saved() {
+            tracing::debug!(
+                class = %self.oid,
+                "Saved Recipient_List kept over a configured destination"
+            );
+            return Ok(());
+        }
         if self.recipient_list.len() >= MAX_RECIPIENT_LIST_DESTINATIONS {
             return Err(recipient_list::no_space_error());
         }
@@ -193,8 +236,7 @@ impl BACnetObject for NotificationClass {
             if array_index.is_some() {
                 return Err(common::property_is_not_an_array_error());
             }
-            self.recipient_list = recipient_list::decode_write(value)?;
-            return Ok(());
+            return self.write_recipient_list(value);
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
@@ -212,6 +254,15 @@ impl BACnetObject for NotificationClass {
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
+    }
+
+    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+        self.expire_staged_write(now);
+        false
+    }
+
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn DurableWrites> {
+        Some(self)
     }
 }
 
