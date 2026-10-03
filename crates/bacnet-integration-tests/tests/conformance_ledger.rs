@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::{fs, process::Command};
 
+use notes::notes_text;
 use published_doc::read_published_doc;
 use serde_json::{json, Value};
 
@@ -15,6 +16,8 @@ const STANDARD_LEDGER: &str = include_str!("../../../docs/conformance/standard-1
 
 #[path = "conformance_ledger/endpoint_device_write.rs"]
 mod endpoint_device_write;
+#[path = "conformance_ledger/notes.rs"]
+mod notes;
 #[path = "conformance_ledger/published_doc.rs"]
 mod published_doc;
 #[path = "conformance_ledger/sc_hub_response_silence.rs"]
@@ -365,8 +368,9 @@ fn sc_identity_evidence_keeps_caller_storage_and_raw_transport_limits_explicit()
         assert!(row["positive_tests"].as_array().unwrap().iter().any(|test| test == anchor));
     }
     // The machine-readable tranche notes retain their slice-time issue status.
-    assert!(row["notes"].as_str().unwrap().contains("#517 remains open"));
-    for body in [row["notes"].as_str().unwrap(), STANDARD_LEDGER] {
+    let notes = notes_text(row);
+    assert!(notes.contains("#517 remains open"));
+    for body in [notes.as_str(), STANDARD_LEDGER] {
         assert!(body.contains("changed UUIDs cannot be detected without application history"));
         assert!(body.contains("before transport-owned I/O or startup state changes"));
         assert!(body.contains("same owned WebSocket"));
