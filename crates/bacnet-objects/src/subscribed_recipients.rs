@@ -180,8 +180,9 @@ impl SubscribedRecipients {
     /// written with a minute more, which is how it read if a minute boundary
     /// fell between the read and this write. A list read and written back, or
     /// edited by the list services, so leaves the entries it doesn't change
-    /// alone, rather than stretching each to its rounded-up minute. Two entries naming the same recipient and process
-    /// are one entry, which takes the later one's members.
+    /// alone, rather than stretching each to its rounded-up minute. Two
+    /// entries naming the same recipient and process are one entry, which
+    /// takes the later one's members.
     pub fn write(&mut self, value: PropertyValue) -> Result<(), Error> {
         let PropertyValue::ApplicationData(bytes) = value else {
             return Err(common::invalid_data_type_error());
