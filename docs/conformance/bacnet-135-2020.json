@@ -2993,9 +2993,9 @@
   },
   {
    "id": "BACNET-12-CHANNEL-OBJECT",
-   "standard_anchor": "Clause 12.53 and Table 12-62 (Clauses 12.53.5 to 12.53.7, 12.53.10 to 12.53.12, 12.53.14 and 12.53.15), Table 12-63 and Coercion Rules 1 to 6 (Clauses 12.53.5.1 to 12.53.5.8); Clause 21 BACnetChannelValue, BACnetWriteStatus and BACnetDeviceObjectPropertyReference; Clauses 12.1.5.1, 15.5, 15.7, 15.9 and 15.10",
+   "standard_anchor": "Clauses 12.53 and 21; Tables 12-62 and 12-63",
    "priority": "P1",
-   "requirement_summary": "The Channel object (type 53) serves its required Table 12-62 rows plus Description and Execution_Delay, and the Device lists type 53 in Protocol_Object_Types_Supported. Present_Value takes a BACnetChannelValue at priority 1 to 16 and sets Last_Priority (16 without one). On a running server the value goes to every non-empty member of List_Of_Object_Property_References, converted to the datatype of the member's current value by Table 12-63, at the written priority, each after its Execution_Delay counted from one start. Write_Status is IDLE until a write, IN_PROGRESS while members are written (a Present_Value write meanwhile is OBJECT / BUSY), then SUCCESSFUL, or FAILED after a coercion failure or a refused write; a NULL refused as an invalid datatype isn't a failure, and every member is tried. The three arrays read one element per index and take whole, element and index-0 writes; the member list and Execution_Delay stay the same size.",
+   "summary": "The Channel object serves its required rows and arrays and passes each Present_Value write to its local members, coerced per Table 12-63, at the written priority after each member's delay.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/channel.rs::ChannelObject",
@@ -3047,18 +3047,17 @@
     "docs/rust-api.md#lighting--color-5 Channel object"
    ],
    "notes": [
-    "Split child of BACNET-12-OBJECT-MODEL (#1151, part 1 of 2). Clause 12.53, Tables 12-62 and 12-63 and BACnetChannelValue were read as page images.",
-    "The object owns Present_Value, Last_Priority, Write_Status and the busy interlock, and queues its distribution as a CommandRun (RunPlan::Channel) under the guard that commits the write. The server runs it through the same runner and LocalWriter path as a Command's list, with the Channel as the initiating object.",
-    "A member's datatype is that of the value its property holds now; NULL or a constructed value counts as unknown and passes on unchanged. Lighting_Command counts as a BACnetLightingCommand.",
-    "Members are local only: a written reference naming another Device is PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (Clause 12.53.11), and one naming this Device is stored without it.",
-    "Caps: 1024 members (and delays) and 64 control groups, past which a resize is RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. Control_Groups can't be resized to zero (VALUE_OUT_OF_RANGE).",
-    "Out_Of_Service TRUE keeps a written value from the members and leaves Write_Status alone.",
-    "Not covered: inbound WriteGroup and Allow_Group_Delay_Inhibit (#1151 part 2; Clause 12.53 expects a device with Channels to execute WriteGroup), Reliability and intrinsic reporting, members in other devices, Python configuration. A Lighting Output keeps Lighting_Command as opaque octets, so a lighting-command channel value reaches it as a WriteProperty with those octets would and is refused.",
-    "A run carries the objects whose runs led to it. A run that would start its own object again, or that has more than eight runs above it, isn't started: it ends as failed and the write that queued it fails with OBJECT / BUSY. Channel and Command runs share this.",
-    "Run generations come from one counter for the whole process, so a run left over from a removed Channel never acts on the object that replaced it.",
-    "Rule 3 bounds an Unsigned or ENUMERATED value at 2147483647 for INTEGER, REAL and Double members alike. Rounding to a REAL's precision (Rules 3 and 4) is never a failure.",
-    "A whole write of Execution_Delay gives one delay per member and is VALUE_OUT_OF_RANGE at any other length, as set_execution_delay is. Index-0 writes and whole member-list writes resize both arrays.",
-    "Without the bundled server: tick_schedules runs a Channel's distribution before it returns, delays included, and ends it FAILED if dropped first; handle_write_property and handle_write_property_multiple end it at once as FAILED; the endpoint responder refuses a Channel Present_Value write."
+    "A member's datatype is that of the value its property holds; NULL or a constructed value counts as unknown and passes unchanged, and `Lighting_Command` counts as a BACnetLightingCommand.",
+    "Members are local: a reference naming another Device is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, one naming this Device is stored without it. Caps are 1024 members and 64 control groups.",
+    "Rule 3 bounds an Unsigned or ENUMERATED value at 2147483647 for INTEGER, REAL and Double members; rounding to a REAL's precision under Rules 3 and 4 never fails a write.",
+    "A whole `Execution_Delay` write takes exactly one delay per member (VALUE_OUT_OF_RANGE otherwise); index-0 writes and whole member-list writes resize both arrays.",
+    "A run that would start its own object again, or with more than eight runs above it, ends failed and its writer gets OBJECT / BUSY. `tick_schedules` runs a distribution; the bare handlers end it FAILED."
+   ],
+   "gaps": [
+    "#1151: inbound WriteGroup and `Allow_Group_Delay_Inhibit`; Clause 12.53 expects a device with Channels to execute WriteGroup",
+    "Reliability, intrinsic reporting and members in other devices aren't served (no issue)",
+    "Python configuration of a Channel's members, delays and groups (no issue)",
+    "A Lighting Output keeps `Lighting_Command` as opaque octets, so a lighting-command value sent to it is refused (no issue)"
    ]
   },
   {
@@ -4005,12 +4004,12 @@
    "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-client/src/read_property.rs::decode_ack",
-    "crates/bacnet-endpoint/src/source_read.rs",
-    "crates/bacnet-endpoint/src/source_read_delivery.rs",
+    "crates/bacnet-endpoint/src/source_audit.rs",
+    "crates/bacnet-endpoint/src/source_audit_delivery.rs",
     "crates/bacnet-endpoint/src/session_dispatch.rs",
-    "crates/bacnet-client/src/endpoint_read_operation.rs",
+    "crates/bacnet-client/src/endpoint_operation.rs",
     "crates/bacnet-endpoint-core/src/endpoint_ingress.rs",
-    "crates/bacnet-endpoint/src/source_read_failures.rs",
+    "crates/bacnet-endpoint/src/source_audit_failures.rs",
     "crates/bacnet-server/src/server/audit_failure_queue.rs",
     "crates/bacnet-objects/src/audit/reporter_status.rs",
     "crates/bacnet-endpoint/src/source_recipient.rs",
@@ -4550,7 +4549,7 @@
    "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-server/src/handlers/read_property.rs::handle_read_property_multiple",
-    "crates/bacnet-server/src/handlers/read_property.rs::resolve_device_wildcard",
+    "crates/bacnet-server/src/handlers/read_property.rs::resolve_read_target",
     "crates/bacnet-server/src/handlers/rpm_budget.rs::RpmPlan::read_observed"
    ],
    "positive_tests": [
@@ -5223,7 +5222,7 @@
    "requirement_summary": "Formal APDU structures, service choices, errors, rejects, aborts, and confirmed/unconfirmed service encodings are validated.",
    "status": "implementation-present-needs-conformance-tests",
    "code_anchors": [
-    "crates/bacnet-encoding/src/apdu.rs",
+    "crates/bacnet-encoding/src/apdu/mod.rs",
     "crates/bacnet-services/src"
    ],
    "positive_tests": [
