@@ -1,5 +1,6 @@
 //! COV (Change of Value) services per ASHRAE 135-2020 Clauses 13.6, 13.7, 13.14 and 13.15.
 
+use bacnet_encoding::constructed::decode_property_reference;
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_types::enums::PropertyIdentifier;
@@ -7,9 +8,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::{
-    decode_context, decode_context_bool, decode_context_u32, BACnetPropertyValue, PropertyReference,
-};
+use crate::common::{decode_context, decode_context_bool, decode_context_u32, BACnetPropertyValue};
 
 pub use crate::cov_decode::COVNotificationDecodeError;
 
@@ -242,7 +241,7 @@ impl SubscribeCOVPropertyRequest {
                 "SubscribeCOVProperty expected opening tag 4",
             ));
         }
-        let (monitored_property, end) = PropertyReference::decode(data, pos)?;
+        let (monitored_property, end) = decode_property_reference(data, pos)?;
         offset = end;
         let (tag, end) = tags::decode_tag(data, offset)?;
         if !tag.is_closing_tag(4) {

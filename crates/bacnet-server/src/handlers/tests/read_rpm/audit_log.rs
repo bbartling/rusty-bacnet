@@ -3,8 +3,7 @@ use bacnet_objects::{
     audit::{AuditLogObject, AuditLogPersistence, AuditLogSnapshot},
     traits::BACnetObject,
 };
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use std::sync::{Arc, Mutex};
 use PropertyIdentifier as P;
 

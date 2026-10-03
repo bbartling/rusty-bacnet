@@ -5,7 +5,6 @@ use bacnet_encoding::{apdu::decode_apdu, npdu::decode_npdu};
 use bacnet_objects::{
     binary::BinaryValueObject, file::FileObject, multistate::MultiStateInputObject,
 };
-use bacnet_services::common::PropertyReference;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
@@ -17,7 +16,7 @@ use bacnet_services::wpm::{
     WriteAccessSpecification, WritePropertyAttempt, WritePropertyMultipleRequest,
 };
 use bacnet_services::write_property::WritePropertyRequest;
-use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::constructed::{BACnetObjectPropertyReference, PropertyReference};
 use std::sync::{atomic::AtomicUsize, Mutex as StdMutex};
 
 pub(super) fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {

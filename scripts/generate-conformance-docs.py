@@ -2,7 +2,9 @@
 """Generate draft BACnet conformance support documents from the ledger.
 
 With --check this also verifies that every test anchor in the ledger resolves
-(see check_ledger_anchors.py)."""
+(see check_ledger_anchors.py). A row's notes may be one string or an array of
+entries, which the docs print joined with single spaces (see
+ledger_notes_split.py)."""
 
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import check_ledger_anchors
+from ledger_notes_split import notes_text
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,10 +44,21 @@ def md_list(items: list[str]) -> str:
     return ", ".join(f"`{item}`" for item in items) if items else "-"
 
 
+def counts_table(data: dict) -> str:
+    """Row counts by priority and status. Printed on demand by --counts and
+    never committed: two PRs that each add a row would both bump the same
+    line, and the merged text would be stale (#1193)."""
+    rows = data["rows"]
+    lines = ["| Dimension | Value | Count |", "|---|---|---|"]
+    for key, count in sorted(Counter(row["priority"] for row in rows).items()):
+        lines.append(f"| Priority | {key} | {count} |")
+    for key, count in sorted(Counter(row["status"] for row in rows).items()):
+        lines.append(f"| Status | {key} | {count} |")
+    return "\n".join(lines) + "\n"
+
+
 def support_summary(data: dict) -> str:
     rows = data["rows"]
-    by_status = Counter(row["status"] for row in rows)
-    by_priority = Counter(row["priority"] for row in rows)
     lines = header("BACnet Standard 135-2020 Support Summary")
     lines += [
         f"- Standard: {data['standard']}",
@@ -53,18 +67,9 @@ def support_summary(data: dict) -> str:
         f"- Scope: {data['review_scope']}",
         f"- Addenda/errata: {data['addenda_errata_status']}",
         "",
-        "## Counts",
-        "",
-        "| Dimension | Value | Count |",
-        "|---|---|---|",
-    ]
-    for key, count in sorted(by_priority.items()):
-        lines.append(f"| Priority | {key} | {count} |")
-    for key, count in sorted(by_status.items()):
-        lines.append(f"| Status | {key} | {count} |")
-    lines += [
-        "",
         "## Ledger Rows",
+        "",
+        "Row counts by priority and status are not committed, so concurrent ledger PRs merge cleanly. Print them with `python3 scripts/generate-conformance-docs.py --counts`.",
         "",
         "| ID | Anchor | Priority | Status | Public Claims |",
         "|---|---|---|---|---|",
@@ -112,7 +117,7 @@ def pics_draft(data: dict) -> str:
             "BACNET-12-PROPERTY-METADATA-CORE",
             "BACNET-13-LIFE-SAFETY-OPERATION",
         }:
-            lines.append(f"| `{row['id']}` | {row['standard_anchor']} | {row['status']} | {row['notes']} |")
+            lines.append(f"| `{row['id']}` | {row['standard_anchor']} | {row['status']} | {notes_text(row['notes'])} |")
     lines.append("")
     return "\n".join(lines)
 
@@ -147,9 +152,13 @@ def generated(data: dict) -> dict[Path, str]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="fail if generated docs are stale")
+    parser.add_argument("--counts", action="store_true", help="print row counts by priority and status; writes nothing")
     args = parser.parse_args()
 
     data = load_ledger()
+    if args.counts:
+        print(counts_table(data), end="")
+        return 0
     stale: list[Path] = []
     for path, content in generated(data).items():
         content = content.rstrip() + "\n"

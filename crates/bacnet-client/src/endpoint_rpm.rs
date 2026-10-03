@@ -82,10 +82,8 @@ pub(crate) fn decode_ack(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bacnet_services::{
-        common::PropertyReference,
-        rpm::{ReadAccessResult, ReadAccessSpecification, ReadResultElement},
-    };
+    use bacnet_services::rpm::{ReadAccessResult, ReadResultElement};
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
     use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
     use bytes::BytesMut;
     fn request() -> ReadPropertyMultipleRequest {

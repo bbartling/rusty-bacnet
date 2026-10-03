@@ -271,10 +271,12 @@ DADR and SADR are capped at `NpduAddress::MAX_MAC_LEN` (18) octets, the same
 limit as `BACnetAddress::MAX_MAC_LEN` and the longest MAC any built-in data
 link uses (B/IPv6) (#1141). `encode_npdu` refuses a longer address with
 `Error::Encoding`. `decode_npdu` returns `NpduDecodeError`: a DLEN or SLEN past
-the cap is `AddressTooLong { field, length, dnet }`, checked before the address
-octets are read, and every other malformation is `Malformed(Error)`. The error
-converts into `Error` (an over-long address becomes `Error::OutOfRange`), so `?`
-still works in functions that return `Result<_, Error>`.
+the cap is `AddressTooLong { field, length, dnet, source }`, checked before the
+address octets are read, and every other malformation is `Malformed(Error)`.
+For an over-long DADR, `source` is the SNET/SADR behind it when the frame holds
+a complete, valid one, which a router needs to address its reject (#1158). The
+error converts into `Error` (an over-long address becomes `Error::OutOfRange`),
+so `?` still works in functions that return `Result<_, Error>`.
 
 ---
 
@@ -323,9 +325,10 @@ requested index independently. See the
 [scoped conformance evidence](conformance/support-summary.md).
 
 ```rust
-use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleACK, ReadAccessResult};
+use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadAccessResult};
 use bacnet_services::wpm::WriteAccessSpecification;
-use bacnet_services::common::{PropertyReference, BACnetPropertyValue};
+use bacnet_services::common::BACnetPropertyValue;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
 let spec = ReadAccessSpecification {
     object_identifier: oid,
@@ -1488,10 +1491,20 @@ An inbound NPDU whose DLEN or SLEN is past `NpduAddress::MAX_MAC_LEN` is
 refused before anything else happens to it (#1141). `NetworkLayer` discards it
 and counts it in `address_length_drops()`; a non-router has no reject message
 to send. `BACnetRouter` neither forwards nor delivers it, counts it in its own
-`address_length_drops()`, and, when the NPDU names a specific DNET, answers the
-sender with Reject-Message-To-Network reason 6 (`ADDRESSING_ERROR`, Clause
-6.4.4) for that DNET, as it does for a DNET it cannot reach. A global broadcast
-or an NPDU without a DNET is dropped without a reject.
+`address_length_drops()`, and, when the NPDU names a specific DNET, rejects it
+with Reject-Message-To-Network reason 6 (`ADDRESSING_ERROR`, Clause 6.4.4) for
+that DNET, as it does a DNET it cannot reach. A global broadcast or an NPDU
+without a DNET is dropped without a reject.
+
+`BACnetRouter` sends each Reject-Message-To-Network it originates to whoever
+first sent the refused NPDU (Clause 6.4.4, #1158). An NPDU that arrived
+with SNET/SADR came through another router: the reject carries that SNET/SADR
+as its DNET/DADR, with a hop count of 255, and goes back out the arrival port
+to the router that relayed the NPDU. An NPDU without SNET/SADR draws a local
+unicast to its sender. A reason 6 reject for an over-long SADR has no
+originator to name, so it falls back to that local unicast. A received reject
+is relayed by its DNET/DADR like any routed NPDU (Clause 6.6.3.5); one without
+a DNET is addressed to the router itself and goes no further.
 
 ---
 
@@ -1672,6 +1685,19 @@ framing, through the shared `bacnet-encoding` codecs.
   `AccessResult` values, by member position, and a member without one reads
   PROPERTY / VALUE_NOT_INITIALIZED. Index 0 reads the array size and each
   index from 1 one element.
+- **Group `List_Of_Group_Members` and `Present_Value`** (Clause 12.14) are
+  lists, so an array index is refused. A member is a
+  `bacnet_types::constructed::ReadAccessSpecification`: an object in this device
+  and the properties the group reports, encoded by
+  `bacnet_encoding::constructed::encode_read_access_specification`.
+  `GroupObject::add_member` refuses one
+  with no properties, and one that would report a Group's or Global Group's
+  Present_Value. The object stores no Present_Value: the server rebuilds it on
+  every ReadProperty, ReadPropertyMultiple and ReadRange as one
+  ReadAccessResult per member, reading each member as ReadPropertyMultiple
+  would, so a failed read carries its error and an object that isn't in the
+  database reads OBJECT / UNKNOWN_OBJECT. Read directly from the object alone,
+  Present_Value is an empty list.
 - **Structured View `Subordinate_List` and Command `Action`** (Clauses 12.29
   and 12.10) are arrays too, with the same per-index reads, as is
   `Subordinate_Annotations`. A Subordinate_List element is a
@@ -1683,6 +1709,25 @@ framing, through the shared `bacnet-encoding` codecs.
   to 16 or whose value can't be encoded. All three arrays are read-only on the
   network. Writing the Command's Present_Value runs the list it selects; see
   [Building Control](#building-control-7).
+- **Load Control shed levels** (Clause 12.28): Requested_Shed_Level,
+  Expected_Shed_Level and Actual_Shed_Level are `BACnetShedLevel` values, one
+  context tag each: percent `[0]` or level `[1]` (Unsigned, `u64` in Rust) or
+  amount `[2]` (REAL). They start at level 0, the LEVEL choice's no-shed value.
+  A WriteProperty of Requested_Shed_Level must carry one of those choices;
+  anything else fails with INVALID_DATA_TYPE, and a percent above 100 or an
+  amount that is negative or not finite with VALUE_OUT_OF_RANGE.
+  `LoadControlObject::set_requested_shed_level` applies the same checks and
+  returns `Result`. Present_Value stays SHED_INACTIVE (the shed state machine
+  isn't modeled), so a new requested level also resets Expected_Shed_Level and
+  Actual_Shed_Level to its choice's Table 12-33 default: 100, 0 or 0.0.
+  `set_actual_shed_level` refuses a level of another choice than the requested
+  one.
+- **Access Point `Access_Event_Time` and Credential Data Input `Update_Time`**
+  are `BACnetTimeStamp` values, the unspecified date and time in the datetime
+  form until the first update. Credential Data Input `Present_Value` is a
+  `BACnetAuthenticationFactor`, the UNDEFINED factor until the first read.
+  `CredentialDataInputObject::set_present_value(factor, update_time)` records
+  a read and its time together.
 
 ### ObjectDatabase
 
@@ -2156,9 +2201,10 @@ Access_Event_Tag and Access_Event_Time, and only an Access_Event_Time or
 Status_Flags change sends one. A Credential Data Input report carries
 Update_Time, whose change sends one. The application sets these values before
 adding the object with `AccessDoorObject::set_door_alarm_state`,
-`AccessPointObject::set_access_event` and
-`CredentialDataInputObject::set_update_time`, and a door's Door_Status and
-Lock_Status with `set_door_status` and `set_lock_status`.
+`AccessPointObject::set_access_event` (its time a `BACnetTimeStamp`) and
+`CredentialDataInputObject::set_present_value` (the factor read and its
+Update_Time), and a door's Door_Status and Lock_Status with `set_door_status`
+and `set_lock_status`.
 
 Over the network the Access Point and Credential Data Input values stay
 read-only. A door's Door_Status, Lock_Status and Door_Alarm_State, the rows
@@ -2172,6 +2218,14 @@ door's own three values aside, a value the application sets meanwhile replaces
 the one put aside, and the return to service serves them again, dropping the
 simulation. A simulated Door_Alarm_State sends the COV report as a real change
 does. The pulse relock runs on its timer whatever the simulated values say.
+
+A door's Secured_Status isn't stored: each read works it out from what the
+door serves (Clause 12.26.14). It reads SECURED while the door is commanded
+LOCK, isn't IN_ALARM, and its Door_Status and Lock_Status show it shut and
+locked (or UNUSED). Any other input makes it UNSECURED, so an UNLOCK or a pulse
+reads UNSECURED until it ends. A Door_Status or Lock_Status of UNKNOWN or a
+fault makes it UNKNOWN, unless another input has already made it UNSECURED.
+Simulated values count the same as the device's.
 
 #### Transportation (3)
 

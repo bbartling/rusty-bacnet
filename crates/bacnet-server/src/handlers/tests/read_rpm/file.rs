@@ -1,7 +1,7 @@
 use super::*;
 use bacnet_objects::{file::FileObject, traits::BACnetObject};
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleACK};
+use bacnet_services::rpm::ReadPropertyMultipleACK;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 

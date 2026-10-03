@@ -345,7 +345,7 @@ pub struct DeviceRpmRequest {
     /// Device instance number (must be in the device table).
     pub device_instance: u32,
     /// ReadAccessSpecifications to send in a single RPM.
-    pub specs: Vec<bacnet_services::rpm::ReadAccessSpecification>,
+    pub specs: Vec<bacnet_types::constructed::ReadAccessSpecification>,
 }
 
 /// Result of an RPM to a single device within a batch.

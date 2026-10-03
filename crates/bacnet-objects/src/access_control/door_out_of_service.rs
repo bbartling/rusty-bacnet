@@ -52,8 +52,10 @@
 //!   Door_Alarm_State raises no event of its own. An Event Enrollment that
 //!   monitors the property reads the served value, so it sees the simulation
 //!   as it would see the device.
-//! - Secured_Status is stored, not derived from these values, so a simulation
-//!   doesn't move it.
+//! - Secured_Status: each read derives it from the served Door_Status and
+//!   Lock_Status, among other inputs (`AccessDoorObject::secured_status`,
+//!   #1148). A simulated value moves it as a device report would, and the
+//!   return to service moves it back with the device's values.
 
 use bacnet_types::enums::{DoorAlarmState, DoorStatus, LockStatus, PropertyIdentifier};
 use bacnet_types::error::Error;

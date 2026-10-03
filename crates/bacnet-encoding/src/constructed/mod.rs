@@ -48,8 +48,10 @@ pub mod lift_car_call_list;
 mod members;
 pub mod object_property_reference;
 mod property_access_result;
+mod read_access;
 pub mod recipient;
 pub mod schedule;
+mod shed_level;
 pub mod staging;
 mod value_source;
 
@@ -88,6 +90,10 @@ pub use object_property_reference::{
     encode_setpoint_reference,
 };
 pub use property_access_result::{decode_property_access_result, encode_property_access_result};
+pub use read_access::{
+    decode_property_reference, decode_read_access_specification, encode_property_reference,
+    encode_read_access_specification,
+};
 pub use recipient::{
     decode_configured_recipient, decode_destination, decode_destination_list, decode_recipient,
     encode_destination, encode_destination_list, encode_recipient,
@@ -98,6 +104,7 @@ pub use schedule::{
     encode_exception_schedule, encode_special_event, encode_special_event_period,
     encode_time_value, encode_weekly_schedule,
 };
+pub use shed_level::{decode_shed_level, encode_shed_level};
 pub use staging::{
     decode_device_object_reference, decode_stage_limit_value, encode_device_object_reference,
     encode_stage_limit_value,

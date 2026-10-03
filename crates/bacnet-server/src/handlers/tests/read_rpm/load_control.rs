@@ -1,7 +1,6 @@
 use super::*;
 use bacnet_objects::{load_control::LoadControlObject, traits::BACnetObject};
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use PropertyIdentifier as P;
 
 #[test]
@@ -19,13 +18,12 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
                     None,
                 )
                 .unwrap();
+            // percent [0] 50.
             object
                 .write_property(
                     P::REQUESTED_SHED_LEVEL,
                     None,
-                    bacnet_types::primitives::PropertyValue::List(vec![
-                        bacnet_types::primitives::PropertyValue::Unsigned(50),
-                    ]),
+                    bacnet_types::primitives::PropertyValue::ApplicationData(vec![0x09, 50]),
                     None,
                 )
                 .unwrap();
@@ -45,6 +43,14 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
         type ExpectedRead = Result<&'static [u8], ErrorCode>;
         let unspec_start_time: &[u8] =
             &[0xa4, 0xff, 0xff, 0xff, 0xff, 0xb4, 0xff, 0xff, 0xff, 0xff];
+        // The shed levels are BACnetShedLevel choices (#1133). They start at
+        // level [1] 0; after the percent [0] write, Expected and Actual hold
+        // the PERCENT default, 100, as the object stays SHED_INACTIVE.
+        let (requested, expected_actual): (&[u8], &[u8]) = if configured {
+            (&[0x09, 50], &[0x09, 100])
+        } else {
+            (&[0x19, 0], &[0x19, 0])
+        };
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             (P::PRESENT_VALUE, None, Ok(&[0x91, 0])),
             (
@@ -57,11 +63,7 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (
-                P::REQUESTED_SHED_LEVEL,
-                None,
-                Ok(if configured { &[0x21, 50] } else { &[0x21, 0] }),
-            ),
+            (P::REQUESTED_SHED_LEVEL, None, Ok(requested)),
             (
                 P::REQUESTED_SHED_LEVEL,
                 Some(0),
@@ -72,13 +74,13 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::EXPECTED_SHED_LEVEL, None, Ok(&[0x21, 0])),
+            (P::EXPECTED_SHED_LEVEL, None, Ok(expected_actual)),
             (
                 P::EXPECTED_SHED_LEVEL,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::ACTUAL_SHED_LEVEL, None, Ok(&[0x21, 0])),
+            (P::ACTUAL_SHED_LEVEL, None, Ok(expected_actual)),
             (
                 P::ACTUAL_SHED_LEVEL,
                 Some(0),

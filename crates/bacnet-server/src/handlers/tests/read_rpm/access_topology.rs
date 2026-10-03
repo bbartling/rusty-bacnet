@@ -3,8 +3,7 @@ use bacnet_objects::{
     access_control::{AccessDoorObject, AccessPointObject, AccessZoneObject},
     traits::BACnetObject,
 };
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
@@ -201,7 +200,12 @@ fn rpm_access_door_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::SECURED_STATUS, None, Ok(&[0x91, 0])),
+            // Derived: the UNLOCK command leaves the door UNSECURED (#1148).
+            (
+                P::SECURED_STATUS,
+                None,
+                Ok(if configured { &[0x91, 1] } else { &[0x91, 0] }),
+            ),
             (
                 P::SECURED_STATUS,
                 Some(0),
@@ -362,10 +366,11 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
-        // Access_Event_Time reads back the unspecified Date/Time pair, the
-        // same bytes as the LoadControl Start_Time default.
-        let unspec_event_time: &[u8] =
-            &[0xa4, 0xff, 0xff, 0xff, 0xff, 0xb4, 0xff, 0xff, 0xff, 0xff];
+        // Access_Event_Time is a BACnetTimeStamp: the unspecified date and
+        // time framed as the datetime [2] choice (#1133).
+        let unspec_event_time: &[u8] = &[
+            0x2e, 0xa4, 0xff, 0xff, 0xff, 0xff, 0xb4, 0xff, 0xff, 0xff, 0xff, 0x2f,
+        ];
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             // Table 12-36 has no Present_Value row (#1064).
             (P::PRESENT_VALUE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),

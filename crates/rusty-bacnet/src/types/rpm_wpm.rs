@@ -50,7 +50,7 @@ pub(crate) fn py_to_rpm_specs(specs: Vec<PyReadAccessSpec>) -> Vec<ReadAccessSpe
         .collect()
 }
 
-/// Convert a ReadPropertyMultipleACK to Python list[dict].
+/// Convert a ReadPropertyMultipleACK to Python `list[dict]`.
 pub(crate) fn rpm_ack_to_py(py: Python<'_>, ack: ReadPropertyMultipleACK) -> PyResult<Py<PyAny>> {
     let outer = PyList::empty(py);
     for result in ack.list_of_read_access_results {

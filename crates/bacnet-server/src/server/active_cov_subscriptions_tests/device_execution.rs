@@ -373,10 +373,8 @@ async fn device_execution_view_owns_selected_live_and_other_empty_cov_values() {
 #[test]
 fn device_execution_view_rpm_budgets_count_canonical_rows_and_preserve_output() {
     use crate::device_view::{DeviceExecution, DeviceReadContext};
-    use bacnet_services::{
-        common::PropertyReference,
-        rpm::{ReadAccessSpecification, ReadPropertyMultipleRequest},
-    };
+    use bacnet_services::rpm::ReadPropertyMultipleRequest;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
     let mut db = ObjectDatabase::new();
     db.add(Box::new(CustomDevice {
         oid: device(),
@@ -476,9 +474,9 @@ fn device_execution_view_keeps_context_free_helpers_on_raw_declared_profile() {
     );
     let mut request = BytesMut::new();
     bacnet_services::rpm::ReadPropertyMultipleRequest {
-        list_of_read_access_specs: vec![bacnet_services::rpm::ReadAccessSpecification {
+        list_of_read_access_specs: vec![bacnet_types::constructed::ReadAccessSpecification {
             object_identifier: device(),
-            list_of_property_references: vec![bacnet_services::common::PropertyReference {
+            list_of_property_references: vec![bacnet_types::constructed::PropertyReference {
                 property_identifier: PropertyIdentifier::ALL,
                 property_array_index: None,
             }],

@@ -176,7 +176,7 @@ impl BACnetClient {
                 list_of_cov_references: refs
                     .into_iter()
                     .map(|(pid, idx, inc, ts)| COVReference {
-                        monitored_property: bacnet_services::common::PropertyReference {
+                        monitored_property: bacnet_types::constructed::PropertyReference {
                             property_identifier: pid.to_rust(),
                             property_array_index: idx,
                         },

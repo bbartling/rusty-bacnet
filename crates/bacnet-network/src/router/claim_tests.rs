@@ -1,5 +1,5 @@
 use super::*;
-use crate::router_table::RoutingClaimSnapshot;
+use crate::router_table::{ReachabilityStatus, RoutingClaimSnapshot};
 
 // Invoke the real handler with in-memory port queues; no sleeps, sockets or
 // background aging. Exact hold-down boundaries are covered by injected table time.
@@ -433,7 +433,8 @@ async fn dampened_table_transition_still_relays_every_reject() {
     let (tx0, mut rx0) = mpsc::channel(16);
     let (tx1, mut rx1) = mpsc::channel(16);
     let send_txs = [tx0, tx1];
-    let source = NpduAddress {
+    // The reject names the originator, 4000/[7], as its DNET/DADR (#1158).
+    let origin = NpduAddress {
         network: 4000,
         mac_address: MacAddr::from_slice(&[7]),
     };
@@ -441,7 +442,7 @@ async fn dampened_table_transition_still_relays_every_reject() {
         let npdu = Npdu {
             is_network_message: true,
             message_type: Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()),
-            source: Some(source.clone()),
+            destination: Some(origin.clone()),
             payload: Bytes::from(vec![reason, 0x0b, 0xb8]),
             ..Default::default()
         };
@@ -458,13 +459,20 @@ async fn dampened_table_transition_still_relays_every_reject() {
         else {
             panic!("expected original reject relay");
         };
-        assert_eq!(mac, source.mac_address);
+        // 4000 is directly connected: the DADR gets the reject, and the
+        // ingress network and link sender become its SNET/SADR.
+        assert_eq!(mac, origin.mac_address);
         let relayed = decode_npdu(data).unwrap();
-        assert_eq!(relayed.destination, Some(source.clone()));
+        assert!(relayed.destination.is_none());
         assert_eq!(relayed.payload, npdu.payload);
         assert_eq!(relayed.message_type, npdu.message_type);
-        assert!(relayed.source.is_none());
-        assert_eq!(relayed.hop_count, 255);
+        assert_eq!(
+            relayed.source,
+            Some(NpduAddress {
+                network: 1000,
+                mac_address: MacAddr::from_slice(&[1]),
+            })
+        );
         assert!(rx0.try_recv().is_err());
         assert!(rx1.try_recv().is_err());
     }

@@ -54,15 +54,16 @@ pub(super) fn cov_reported_properties_default(
 ///   AUTHENTICATION_FACTORS / ASSIGNED_ACCESS_RIGHTS (Table 12-40, the only
 ///   table carrying either).
 /// - **Type-dependent** identifiers classify by `object_type`: ACTION is
-///   BACnetARRAY[N] on Command (Table 12-12) but a single BACnetAction on Loop
+///   BACnetARRAY\[N\] on Command (Table 12-12) but a single BACnetAction on Loop
 ///   (Table 12-20), and ACTION_TEXT, its parallel array of descriptions, is
-///   classified on Command, the only type that has it; ALARM_VALUES / FAULT_VALUES are BACnetARRAY[N] on
+///   classified on Command, the only type that has it; ALARM_VALUES /
+///   FAULT_VALUES are BACnetARRAY\[N\] on
 ///   CharacterString Value (Table 12-44) and BitString Value (Table 12-47) but
 ///   BACnetLIST on the multi-state, life-safety, and access families;
 ///   LIST_OF_OBJECT_PROPERTY_REFERENCES is
-///   BACnetARRAY[N] on Channel (Table 12-62) but BACnetLIST on Schedule
+///   BACnetARRAY\[N\] on Channel (Table 12-62) but BACnetLIST on Schedule
 ///   (Table 12-28) and Timer (Table 12-75); PRESENT_VALUE is
-///   BACnetARRAY[N] of BACnetPropertyAccessResult on Global Group
+///   BACnetARRAY\[N\] of BACnetPropertyAccessResult on Global Group
 ///   (Table 12-57) but scalar elsewhere.
 /// - **Everything else** — scalars and the identifier-stable BACnetLIST
 ///   properties DATE_LIST (Table 12-11), LIST_OF_GROUP_MEMBERS

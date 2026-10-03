@@ -229,45 +229,6 @@ fn forward_unicast_decrements_hop_count() {
     }
 }
 
-#[test]
-fn send_reject_generates_reject_message() {
-    let (tx, mut rx) = mpsc::channel::<SendRequest>(256);
-
-    let source_mac = vec![0x0A, 0x00, 0x01, 0x01];
-    let unknown_network: u16 = 9999;
-
-    send_reject(
-        &tx,
-        &source_mac,
-        unknown_network,
-        RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-        &[],
-    );
-
-    let sent = rx.try_recv().unwrap();
-    match sent {
-        SendRequest::Unicast {
-            npdu: data, mac, ..
-        } => {
-            assert_eq!(mac.as_slice(), &source_mac[..]);
-            let decoded = decode_npdu(data.clone()).unwrap();
-            assert!(decoded.is_network_message);
-            assert_eq!(
-                decoded.message_type,
-                Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw())
-            );
-            assert_eq!(decoded.payload.len(), 3);
-            assert_eq!(
-                decoded.payload[0],
-                RejectMessageReason::NOT_DIRECTLY_CONNECTED.to_raw()
-            );
-            let rejected_net = u16::from_be_bytes([decoded.payload[1], decoded.payload[2]]);
-            assert_eq!(rejected_net, 9999);
-        }
-        _ => panic!("Expected Unicast send for reject message"),
-    }
-}
-
 #[tokio::test]
 async fn single_port_router_no_i_am_router_announcement() {
     let (send_tx, mut send_rx) = mpsc::channel::<SendRequest>(256);
