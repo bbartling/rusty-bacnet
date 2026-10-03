@@ -1,18 +1,59 @@
-use super::property_states::{
-    decode_device_obj_prop_ref, decode_property_states, encode_property_states, extract_raw_context,
-};
-use super::*;
-use bacnet_types::enums::{
-    AccessEvent, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState, Reliability, TimerState,
-    TimerTransition,
-};
-use bacnet_types::primitives::StatusFlags;
+//! The parameters of an event notification (Clauses 13.8 and 13.9) and its
+//! event values: what a notification service request carries and what an
+//! Event Log record holds (Clause 12.27.13). The encoding crate frames them on
+//! the wire.
 
-mod decode;
-mod decode_helpers;
-mod decode_timer;
-mod encode;
-mod structured;
+#[cfg(not(feature = "std"))]
+use alloc::{string::String, vec::Vec};
+
+use super::{
+    BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference, BACnetPropertyStates,
+    BACnetPropertyValue,
+};
+use crate::enums::{
+    AccessEvent, EventState, EventType, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState,
+    NotifyType, Reliability, TimerState, TimerTransition,
+};
+use crate::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, StatusFlags, Time};
+
+// ---------------------------------------------------------------------------
+// EventNotificationRequest
+// ---------------------------------------------------------------------------
+
+/// ConfirmedEventNotification / UnconfirmedEventNotification request parameters.
+///
+/// The same members, from the process identifier through the event values,
+/// make up the notification an Event Log record holds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventNotificationRequest {
+    /// Process identifier of the notification recipient.
+    pub process_identifier: u32,
+    /// Device that generated the event.
+    pub initiating_device_identifier: ObjectIdentifier,
+    /// Object that triggered the event.
+    pub event_object_identifier: ObjectIdentifier,
+    /// Timestamp of the event transition.
+    pub timestamp: BACnetTimeStamp,
+    /// Notification class for routing.
+    pub notification_class: u32,
+    /// Priority (0-255).
+    pub priority: u8,
+    /// Event algorithm that produced the notification.
+    pub event_type: EventType,
+    /// Optional message text (\[7\]).
+    pub message_text: Option<String>,
+    /// Whether this is an alarm, an event, or an acknowledgment notification.
+    pub notify_type: NotifyType,
+    /// Whether the recipient must acknowledge.
+    pub ack_required: bool,
+    /// Event state before this transition. Not encoded for ACK_NOTIFICATION; decode sets
+    /// NORMAL when the field is absent.
+    pub from_state: EventState,
+    /// Event state after this transition.
+    pub to_state: EventState,
+    /// Optional event values (tag \[12\]).
+    pub event_values: Option<NotificationParameters>,
+}
 
 // ---------------------------------------------------------------------------
 // NotificationParameters

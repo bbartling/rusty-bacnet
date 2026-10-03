@@ -64,7 +64,7 @@ fn event_notification_u32_fields_reject_overflow_aliases() {
         for value in [[1, 0, 0, 0, 0].as_slice(), [0xff; 8].as_slice()] {
             let mut values = canonical_values();
             values[field] = value;
-            assert!(EventNotificationRequest::decode(&raw_event_notification(
+            assert!(decode_event_notification(&raw_event_notification(
                 values,
                 canonical_tags(),
                 Some(&[1]),
@@ -80,7 +80,7 @@ fn event_notification_priority_rejects_values_above_u8() {
     for value in [[1, 0].as_slice(), [1, 1].as_slice(), [0xff; 8].as_slice()] {
         let mut values = canonical_values();
         values[2] = value;
-        assert!(EventNotificationRequest::decode(&raw_event_notification(
+        assert!(decode_event_notification(&raw_event_notification(
             values,
             canonical_tags(),
             Some(&[1]),
@@ -103,7 +103,7 @@ fn event_notification_numeric_fields_accept_fitting_leading_zero() {
         max_u32.as_slice(),
         max_u32.as_slice(),
     ];
-    let decoded = EventNotificationRequest::decode(&raw_event_notification(
+    let decoded = decode_event_notification(&raw_event_notification(
         values,
         canonical_tags(),
         Some(&[1]),
@@ -125,7 +125,7 @@ fn event_notification_fields_require_owned_context_tags() {
     for field in 0..canonical_tags().len() {
         let mut field_tags = canonical_tags();
         field_tags[field].0 = 13;
-        assert!(EventNotificationRequest::decode(&raw_event_notification(
+        assert!(decode_event_notification(&raw_event_notification(
             canonical_values(),
             field_tags,
             Some(&[1]),
@@ -135,7 +135,7 @@ fn event_notification_fields_require_owned_context_tags() {
 
         let mut field_tags = canonical_tags();
         field_tags[field].1 = tags::TagClass::Application;
-        assert!(EventNotificationRequest::decode(&raw_event_notification(
+        assert!(decode_event_notification(&raw_event_notification(
             canonical_values(),
             field_tags,
             Some(&[1]),
@@ -147,7 +147,7 @@ fn event_notification_fields_require_owned_context_tags() {
 
 #[test]
 fn event_notification_rejects_unknown_fields_before_notify_type() {
-    assert!(EventNotificationRequest::decode(&raw_event_notification(
+    assert!(decode_event_notification(&raw_event_notification(
         canonical_values(),
         canonical_tags(),
         Some(&[1]),
@@ -159,7 +159,7 @@ fn event_notification_rejects_unknown_fields_before_notify_type() {
 #[test]
 fn event_notification_ack_required_must_be_boolean() {
     for value in [&[][..], &[2], &[0, 1]] {
-        assert!(EventNotificationRequest::decode(&raw_event_notification(
+        assert!(decode_event_notification(&raw_event_notification(
             canonical_values(),
             canonical_tags(),
             Some(value),
@@ -187,14 +187,14 @@ fn event_notification_preserves_optional_envelope_fields() {
         event_values: None,
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded).unwrap();
-    let decoded = EventNotificationRequest::decode(&encoded).unwrap();
+    encode_event_notification(&request, &mut encoded).unwrap();
+    let decoded = decode_event_notification(&encoded).unwrap();
     assert_eq!(decoded.message_text.as_deref(), Some("high limit"));
     assert!(decoded.ack_required);
 
     let mut ack_values = canonical_values();
     ack_values[4] = &[2];
-    let decoded = EventNotificationRequest::decode(&raw_event_notification(
+    let decoded = decode_event_notification(&raw_event_notification(
         ack_values,
         canonical_tags(),
         None,
@@ -228,7 +228,7 @@ fn ack_notification_omits_ack_from_state_and_event_values_exactly() {
     };
 
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded).unwrap();
+    encode_event_notification(&request, &mut encoded).unwrap();
     assert_eq!(
         encoded.as_ref(),
         &[
@@ -238,7 +238,7 @@ fn ack_notification_omits_ack_from_state_and_event_values_exactly() {
         "ACK_NOTIFICATION must end with To State [11] and omit [9], [10], and [12]"
     );
 
-    let decoded = EventNotificationRequest::decode(&encoded).unwrap();
+    let decoded = decode_event_notification(&encoded).unwrap();
     assert_eq!(decoded.notify_type, NotifyType::ACK_NOTIFICATION);
     assert!(!decoded.ack_required);
     assert_eq!(
@@ -268,9 +268,9 @@ fn event_notification_rejects_every_truncated_prefix() {
         event_values: None,
     };
     let mut encoded = BytesMut::new();
-    request.encode(&mut encoded).unwrap();
+    encode_event_notification(&request, &mut encoded).unwrap();
 
     for end in 0..encoded.len() {
-        assert!(EventNotificationRequest::decode(&encoded[..end]).is_err());
+        assert!(decode_event_notification(&encoded[..end]).is_err());
     }
 }

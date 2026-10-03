@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_encoding::constructed::encode_bacnet_property_value;
 
 use bacnet_objects::analog::{AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
@@ -483,7 +484,7 @@ fn malformed_after_prefix_uses_exact_or_sentinel_reference_and_keeps_prefix() {
 
     let mut exact_wire = encode_request(oid, vec![first.clone(), second.clone()]);
     let mut second_wire = BytesMut::new();
-    second.encode(&mut second_wire);
+    encode_bacnet_property_value(&second, &mut second_wire);
     let second_start = exact_wire
         .windows(second_wire.len())
         .position(|window| window == second_wire.as_ref())

@@ -55,13 +55,15 @@ fn cov_notification(process_id: &[u8], time_remaining: &[u8]) -> BytesMut {
     primitives::encode_ctx_object_id(&mut buf, 2, &object_identifier());
     encode_context_value(&mut buf, 3, time_remaining);
     tags::encode_opening_tag(&mut buf, 4);
-    BACnetPropertyValue {
-        property_identifier: PropertyIdentifier::PRESENT_VALUE,
-        property_array_index: None,
-        value: vec![0],
-        priority: None,
-    }
-    .encode(&mut buf);
+    encode_bacnet_property_value(
+        &BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+            value: vec![0],
+            priority: None,
+        },
+        &mut buf,
+    );
     tags::encode_closing_tag(&mut buf, 4);
     buf
 }

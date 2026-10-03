@@ -1,14 +1,15 @@
 //! Incremental WritePropertyMultiple request grammar.
 
+use bacnet_encoding::constructed::{
+    decode_bacnet_property_value_in_list_detailed, PropertyValueDecodeError,
+    PropertyValueDecodeFailure, PropertyValueDecodeStage,
+};
 use bacnet_encoding::tags::{self, TagClass};
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::RejectReason;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use crate::common::{
-    BACnetPropertyValue, PropertyValueDecodeError, PropertyValueDecodeFailure,
-    PropertyValueDecodeStage, MAX_DECODED_ITEMS,
-};
+use crate::common::MAX_DECODED_ITEMS;
 
 /// Stable request-decoding stage reported by the incremental WPM cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,11 +182,14 @@ impl<'a> WritePropertyMultipleCursor<'a> {
                 {
                     return self.fail(self.limit_error("WPM property count exceeds limit"));
                 }
-                let (property, end) =
-                    match BACnetPropertyValue::decode_in_list_detailed(self.data, self.offset, 1) {
-                        Ok(decoded) => decoded,
-                        Err(error) => return self.fail(self.property_error(oid, error)),
-                    };
+                let (property, end) = match decode_bacnet_property_value_in_list_detailed(
+                    self.data,
+                    self.offset,
+                    1,
+                ) {
+                    Ok(decoded) => decoded,
+                    Err(error) => return self.fail(self.property_error(oid, error)),
+                };
                 self.offset = end;
                 self.property_count += 1;
                 self.total_attempts += 1;
@@ -382,6 +386,7 @@ mod tests {
     use super::*;
     use crate::common::BACnetPropertyValue;
     use crate::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
+    use bacnet_encoding::constructed::encode_bacnet_property_value;
     use bacnet_encoding::{primitives, tags};
     use bacnet_types::enums::{ObjectType, PropertyIdentifier};
     use bytes::BytesMut;
@@ -409,7 +414,7 @@ mod tests {
             primitives::encode_ctx_object_id(&mut data, 0, &spec.object_identifier);
             tags::encode_opening_tag(&mut data, 1);
             for property in spec.list_of_properties {
-                property.encode(&mut data);
+                encode_bacnet_property_value(&property, &mut data);
             }
             tags::encode_closing_tag(&mut data, 1);
         }

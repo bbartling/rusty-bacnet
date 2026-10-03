@@ -2,9 +2,11 @@ use super::*;
 use crate::clock::{ClockFrame, ClockReader};
 use bacnet_encoding::constructed::encode_event_log_record;
 use bacnet_types::bitstring::LogStatus;
-use bacnet_types::constructed::EventLogDatum;
-use bacnet_types::enums::{ErrorClass, ErrorCode};
-use bacnet_types::primitives::{Date, Time};
+use bacnet_types::constructed::{
+    BACnetPropertyValue, EventLogDatum, EventNotificationRequest, NotificationParameters,
+};
+use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, EventType, NotifyType};
+use bacnet_types::primitives::{BACnetTimeStamp, Date, StatusFlags, Time};
 use bytes::BytesMut;
 use std::sync::Arc;
 
@@ -49,6 +51,29 @@ fn make_record(hour: u8, value: f32) -> BACnetEventLogRecord {
         date: make_date(),
         time: make_time(hour),
         log_datum: EventLogDatum::TimeChange(value),
+    }
+}
+
+/// A short change-of-state alarm from Device 1 about Analog Input 1, with
+/// `event_values` as given.
+fn notification(
+    event_type: EventType,
+    event_values: Option<NotificationParameters>,
+) -> EventNotificationRequest {
+    EventNotificationRequest {
+        process_identifier: 1,
+        initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap(),
+        event_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+        timestamp: BACnetTimeStamp::SequenceNumber(5),
+        notification_class: 0,
+        priority: 100,
+        event_type,
+        message_text: None,
+        notify_type: NotifyType::ALARM,
+        ack_required: false,
+        from_state: EventState::NORMAL,
+        to_state: EventState::OFFNORMAL,
+        event_values,
     }
 }
 
@@ -149,15 +174,42 @@ fn log_buffer_records_are_framed_event_log_records() {
 fn unencodable_record_is_refused_at_add_and_the_rest_still_serve() {
     let mut el = EventLogObject::new(1, "EL-1", 100).unwrap();
     el.add_record(make_record(10, 72.5)).unwrap();
-    for log_datum in [
-        // An opening tag left open, and a value cut short.
-        EventLogDatum::Notification(vec![0x3E, 0x19, 0x05]),
-        EventLogDatum::Notification(vec![0x09]),
+    for (event_type, event_values) in [
+        // Raw event values with an opening tag left open.
+        (
+            EventType::COMMAND_FAILURE,
+            NotificationParameters::CommandFailure {
+                command_value: vec![0x3E, 0x19, 0x05],
+                status_flags: StatusFlags::empty(),
+                feedback_value: vec![0x91, 0x00],
+            },
+        ),
+        // A property priority outside 1 to 16.
+        (
+            EventType::EXTENDED,
+            NotificationParameters::ComplexEventType {
+                property_values: vec![BACnetPropertyValue {
+                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                    property_array_index: None,
+                    value: vec![0x10],
+                    priority: Some(17),
+                }],
+            },
+        ),
+        // A bit string with more than seven unused bits, which the record
+        // decoder would refuse.
+        (
+            EventType::CHANGE_OF_BITSTRING,
+            NotificationParameters::ChangeOfBitstring {
+                referenced_bitstring: (8, vec![0xA0]),
+                status_flags: StatusFlags::empty(),
+            },
+        ),
     ] {
         let bad = BACnetEventLogRecord {
             date: make_date(),
             time: make_time(11),
-            log_datum,
+            log_datum: EventLogDatum::Notification(notification(event_type, Some(event_values))),
         };
         assert!(el.add_record(bad).is_err());
     }
@@ -336,11 +388,8 @@ fn write_absent_property_is_unknown() {
 #[test]
 fn log_buffer_serves_every_event_log_datum() {
     let mut el = EventLogObject::new(1, "EL-1", 100).unwrap();
-    // A notification's request parameters as `bacnet_services` encodes them;
-    // the log stores and serves them unchanged.
-    let notification = vec![0x09, 0x01, 0x1C, 0x02, 0x00, 0x00, 0x01];
     let records = [
-        EventLogDatum::Notification(notification),
+        EventLogDatum::Notification(notification(EventType::CHANGE_OF_STATE, None)),
         EventLogDatum::TimeChange(-0.5),
         EventLogDatum::LogStatus(LogStatus::LOG_INTERRUPTED),
     ]
