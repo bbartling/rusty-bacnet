@@ -37,7 +37,8 @@ use bacnet_objects::traits::{
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
-    BACnetDeviceObjectReference, BACnetLogRecord, BACnetObjectSelector,
+    BACnetDeviceObjectReference, BACnetLogRecord, BACnetObjectPropertyReference,
+    BACnetObjectSelector,
 };
 use bacnet_types::enums::{
     AuditLevel, ErrorClass, ErrorCode, EventState, EventType, LifeSafetyOperation, ObjectType,
@@ -587,6 +588,17 @@ impl BACnetObject for Probe {
     ) -> Result<(), Error> {
         self.called("add_averaging_sample_internal", (sample,));
         Ok(())
+    }
+    fn take_due_averaging_sample_internal(
+        &mut self,
+        now: Duration,
+    ) -> Option<BACnetObjectPropertyReference> {
+        self.called("take_due_averaging_sample_internal", (now,));
+        Some(BACnetObjectPropertyReference {
+            object_identifier: oid(ObjectType::ANALOG_VALUE, 41),
+            property_identifier: P::PRESENT_VALUE.to_raw(),
+            property_array_index: Some(2),
+        })
     }
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
         self.called("audit_log_storage_internal", ());
