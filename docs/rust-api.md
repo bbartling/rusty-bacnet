@@ -2351,8 +2351,9 @@ Access Door, Access Point and Credential Data Input support COV (Table 13-1).
 A door's SubscribeCOV report carries Present_Value, Status_Flags and
 Door_Alarm_State; a Door_Alarm_State change sends one. An Access Point has no
 Present_Value, so its report starts with Access_Event, then Status_Flags,
-Access_Event_Tag and Access_Event_Time, and only an Access_Event_Time or
-Status_Flags change sends one. A Credential Data Input report carries
+Access_Event_Tag and Access_Event_Time, and only an Access_Event_Tag,
+Access_Event_Time or Status_Flags change sends one (the tag stands in for a
+time that can't move, as with no usable Device clock). A Credential Data Input report carries
 Update_Time, whose change sends one. The application sets these values before
 adding the object with `AccessDoorObject::set_door_alarm_state`,
 `AccessPointObject::set_access_event` (its time a `BACnetTimeStamp`) and

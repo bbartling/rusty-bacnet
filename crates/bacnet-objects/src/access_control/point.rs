@@ -15,19 +15,24 @@ use crate::clock::{stamp_datetime, ClockReader};
 /// Each change of Out_Of_Service is an access event of the point's own
 /// (Clause 12.31.8; #1248): entering out of service records OUT_OF_SERVICE
 /// and the return to service OUT_OF_SERVICE_RELINQUISHED. Recording one
-/// follows Clause 12.31.27.1: the change is an operator action and so starts
-/// a new access transaction, moving Access_Event_Tag on by one (wrapping at
-/// the top of the Unsigned range), and Access_Event_Time takes the time from
-/// the Device clock, every field unspecified when there is none. A write
-/// that leaves Out_Of_Service as it was, NULL included, records nothing. The
-/// point serves neither Access_Event_Credential nor
+/// follows Clause 12.31.27.1, which moves Access_Event_Tag on when an event
+/// starts a new access transaction and stamps Access_Event_Time with the
+/// current date and time. The introduction to Clause 12.31 counts an
+/// operator action as an access transaction, so each change of
+/// Out_Of_Service starts a new one: the tag moves on by one (wrapping at the
+/// top of the Unsigned range), and the time comes from the Device clock,
+/// every field unspecified when there is none. A write that leaves
+/// Out_Of_Service as it was, NULL included, records nothing. The point
+/// serves neither Access_Event_Credential nor
 /// Access_Event_Authentication_Factor, so neither is touched.
 ///
-/// The new Access_Event_Time is the Table 13-1 trigger, so each edge sends
-/// the Access Point SubscribeCOV report, which also carries the changed
-/// OUT_OF_SERVICE flag. The point runs no intrinsic reporting (no
-/// ACCESS_EVENT algorithm; Event_State stays NORMAL), so an edge raises no
-/// event notification.
+/// The new tag and time are both Access Point COV triggers, so each edge
+/// sends the SubscribeCOV report, which also carries the changed
+/// OUT_OF_SERVICE flag. That holds for a round trip in one
+/// WritePropertyMultiple with no usable clock too: Status_Flags ends where
+/// it started and the time can't move, but the tag has. The point runs no
+/// intrinsic reporting (no ACCESS_EVENT algorithm; Event_State stays
+/// NORMAL), so an edge raises no event notification.
 pub struct AccessPointObject {
     oid: ObjectIdentifier,
     name: String,
@@ -67,9 +72,9 @@ impl AccessPointObject {
     /// and Access_Event_Time, which the application's access logic produces.
     ///
     /// Access_Event_Time is a `BACnetTimeStamp` (Clause 12.31.29) and goes
-    /// out in its Clause 21 CHOICE form. A change of it triggers a SubscribeCOV
-    /// notification; the event and its tag only ride along (Table 13-1). Over
-    /// the network all three stay read-only.
+    /// out in its Clause 21 CHOICE form. A change of it or of the tag
+    /// triggers a SubscribeCOV notification; the event only rides along
+    /// (Table 13-1). Over the network all three stay read-only.
     ///
     /// While Out_Of_Service is TRUE the point performs no authentication or
     /// authorization (Clause 12.31.8), so its access logic has nothing to

@@ -555,8 +555,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// type. The default follows the object type's Table 13-1 row:
     ///
     /// - Access Door: Door_Alarm_State, a trigger.
-    /// - Access Point: Access_Event_Tag, Access_Event_Time (a trigger),
-    ///   Access_Event_Credential and Access_Event_Authentication_Factor.
+    /// - Access Point: Access_Event_Tag and Access_Event_Time (both
+    ///   triggers), Access_Event_Credential and
+    ///   Access_Event_Authentication_Factor.
     /// - Credential Data Input: Update_Time, a trigger.
     /// - Load Control: Requested_Shed_Level, Start_Time, Shed_Duration and
     ///   Duty_Window, all triggers.

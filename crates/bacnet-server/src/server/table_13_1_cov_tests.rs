@@ -344,7 +344,7 @@ fn point(event: AccessEvent, tag: u64, second: u8) -> Box<dyn BACnetObject> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn access_point_cov_leads_with_access_event_and_triggers_on_its_time() {
+async fn access_point_cov_leads_with_access_event_and_triggers_on_its_tag_and_time() {
     let oid = ObjectIdentifier::new(ObjectType::ACCESS_POINT, 1).unwrap();
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
         db.add(point(AccessEvent::GRANTED, 1, 7)).unwrap();
@@ -365,9 +365,19 @@ async fn access_point_cov_leads_with_access_event_and_triggers_on_its_time() {
         report(AccessEvent::GRANTED, 1, 7)
     );
 
-    // Access_Event and Access_Event_Tag only ride along.
+    // Access_Event only rides along: a second event of the same transaction
+    // whose time didn't move sends nothing.
+    h.replace_and_fan_out(point(AccessEvent::DENIED_DENY_ALL, 1, 7))
+        .await;
+    h.no_notification().await;
+
+    // A new Access_Event_Tag sends a report even when the time stays.
     h.replace_and_fan_out(point(AccessEvent::DENIED_DENY_ALL, 2, 7))
         .await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(AccessEvent::DENIED_DENY_ALL, 2, 7)
+    );
     h.no_notification().await;
 
     // A new Access_Event_Time sends a report with the current values.
@@ -441,6 +451,52 @@ async fn access_point_out_of_service_edges_record_events_and_report() {
     assert_eq!(
         values(&h.cov_notification().await, oid),
         report(AccessEvent::OUT_OF_SERVICE_RELINQUISHED, 0x00, 3, 30)
+    );
+    h.no_notification().await;
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn access_point_out_of_service_round_trip_reports_without_a_clock() {
+    const OUT_OF_SERVICE: PropertyIdentifier = PropertyIdentifier::OUT_OF_SERVICE;
+    let oid = ObjectIdentifier::new(ObjectType::ACCESS_POINT, 1).unwrap();
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        db.add(Box::new(AccessPointObject::new(1, "AP-1").unwrap()))
+            .unwrap();
+    })
+    .await;
+    // Without a usable Device clock every edge stamps the unspecified date
+    // and time, the value Access_Event_Time holds before any event.
+    h.server.database().write().await.set_clock_reader(None);
+    let unspecified = vec![
+        0x2E, 0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF, 0x2F,
+    ];
+    let report = |event: AccessEvent, tag: u64| {
+        vec![
+            (PropertyIdentifier::ACCESS_EVENT, enumerated(event.to_raw())),
+            (SF, normal()),
+            (PropertyIdentifier::ACCESS_EVENT_TAG, unsigned(tag)),
+            (PropertyIdentifier::ACCESS_EVENT_TIME, unspecified.clone()),
+        ]
+    };
+    assert_eq!(subscribed(&mut h, oid).await, report(AccessEvent::NONE, 0));
+
+    // One WritePropertyMultiple takes the point out of service and back. Both
+    // edges are recorded, so the tag moves on by two and Access_Event ends at
+    // OUT_OF_SERVICE_RELINQUISHED. Status_Flags ends where it started and the
+    // time can't move, so the new tag is what sends the report.
+    write_multiple(
+        &mut h,
+        oid,
+        vec![
+            (OUT_OF_SERVICE, encode(PropertyValue::Boolean(true))),
+            (OUT_OF_SERVICE, encode(PropertyValue::Boolean(false))),
+        ],
+    )
+    .await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(AccessEvent::OUT_OF_SERVICE_RELINQUISHED, 2)
     );
     h.no_notification().await;
     h.server.stop().await.unwrap();

@@ -10,6 +10,14 @@ use super::CovReportedProperty;
 /// Every row Table 13-1 gives more than Present_Value and Status_Flags is
 /// here. Access Point's row leads with Access_Event instead of Present_Value;
 /// the server supplies that leading value, so only the rest is listed.
+///
+/// Access_Event_Tag triggers alongside Access_Event_Time, the row's own
+/// trigger. Clause 12.31.27.1 moves the tag only when a new transaction
+/// starts, and the same recording stamps the time, so with a working clock
+/// a tag change always comes with a time change. The tag matters when the
+/// time can't move: with no usable Device clock every event stamps the
+/// unspecified date and time, and an out-of-service round trip in one
+/// WritePropertyMultiple would otherwise report nothing.
 pub(super) fn cov_reported_properties_default(
     object_type: ObjectType,
 ) -> &'static [CovReportedProperty] {
@@ -18,7 +26,7 @@ pub(super) fn cov_reported_properties_default(
     match object_type {
         ObjectType::ACCESS_DOOR => &[Trigger(P::DOOR_ALARM_STATE)],
         ObjectType::ACCESS_POINT => &[
-            Value(P::ACCESS_EVENT_TAG),
+            Trigger(P::ACCESS_EVENT_TAG),
             Trigger(P::ACCESS_EVENT_TIME),
             Value(P::ACCESS_EVENT_CREDENTIAL),
             Value(P::ACCESS_EVENT_AUTHENTICATION_FACTOR),

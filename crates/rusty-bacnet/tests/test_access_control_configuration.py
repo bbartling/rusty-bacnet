@@ -7,9 +7,13 @@ read-only over the network (#1249).
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import inspect
 import unittest
+from pathlib import Path
 
+import rusty_bacnet
 from rusty_bacnet import (
     BACnetServer,
     BacnetProtocolError,
@@ -36,6 +40,29 @@ WIEGAND26_FORMAT = bytes([0x09, 0x08])
 VENDOR_260_FORMAT = bytes([0x09, 0x02, 0x1A, 0x01, 0x04, 0x29, 0x07])
 
 
+# Each registration method and the keyword-only argument that sets its array.
+ARRAY_KEYWORDS = (
+    ("add_access_door", "door_members"),
+    ("add_access_point", "access_doors"),
+    ("add_credential_data_input", "supported_formats"),
+)
+
+
+def installed_stub_method(name: str) -> ast.FunctionDef:
+    stub_path = Path(rusty_bacnet.__file__).with_suffix(".pyi")
+    tree = ast.parse(stub_path.read_text(encoding="utf-8"), filename=str(stub_path))
+    server = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "BACnetServer"
+    )
+    return next(
+        node
+        for node in server.body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+
+
 def make_server() -> BACnetServer:
     return BACnetServer(
         device_instance=503_249,
@@ -51,6 +78,29 @@ def factor(format_type: int, format_class: int, value: bytes) -> PropertyValue:
     return PropertyValue.application_data(
         bytes([0x09, format_type, 0x19, format_class, 0x28 | len(value)]) + value
     )
+
+
+class AccessControlStubContractTests(unittest.TestCase):
+    def test_runtime_and_stub_expose_the_array_keywords(self) -> None:
+        for method_name, keyword in ARRAY_KEYWORDS:
+            with self.subTest(method=method_name):
+                parameters = inspect.signature(
+                    getattr(BACnetServer, method_name)
+                ).parameters
+                self.assertEqual(list(parameters), ["self", "instance", "name", keyword])
+                self.assertIs(parameters[keyword].kind, inspect.Parameter.KEYWORD_ONLY)
+                self.assertIsNone(parameters[keyword].default)
+                method = installed_stub_method(method_name)
+                self.assertEqual(
+                    [argument.arg for argument in method.args.args],
+                    ["self", "instance", "name"],
+                )
+                self.assertEqual(
+                    [argument.arg for argument in method.args.kwonlyargs], [keyword]
+                )
+                [default] = method.args.kw_defaults
+                self.assertIsInstance(default, ast.Constant)
+                self.assertIsNone(default.value)
 
 
 class AccessControlConfigurationTests(unittest.TestCase):
