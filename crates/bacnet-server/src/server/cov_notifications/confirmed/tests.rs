@@ -425,15 +425,7 @@ async fn a_panicking_follow_up_batch_leaves_the_task_running() {
             PropertyIdentifier::PRESENT_VALUE,
         ))
         .await;
-    let fanout = crate::server::cov_fanout::CovFanout::new(
-        &f.db,
-        &f.network,
-        &f.table,
-        &f.permits,
-        &f.transactions,
-        &f.comm,
-        &f.config,
-    );
+    let fanout = crate::server::cov_fanout::CovFanout::new(&f.ctx(), &Default::default());
     let task = tokio::spawn(fanout.run_revisits());
     let revisits = Arc::clone(f.table.read().await.revisits());
     revisits.request([broken.key().clone()]);
