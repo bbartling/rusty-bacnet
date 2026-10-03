@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::calendar::SpecificDate;
-use bacnet_types::constructed::{BACnetLogRecord, BACnetObjectPropertyReference};
+use bacnet_types::constructed::{
+    BACnetLogMultipleRecord, BACnetLogRecord, BACnetObjectPropertyReference,
+};
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier, Reliability,
 };
@@ -1173,6 +1175,19 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// ordinary record. Timestamp failures return an error without mutation.
     /// Objects without trend insertion return OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
     fn add_trend_record(&mut self, _record: BACnetLogRecord) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Submit a Trend Log Multiple record, one value per monitored member, to
+    /// an object's log lifecycle.
+    ///
+    /// The outcomes match [`add_trend_record`](Self::add_trend_record).
+    /// Objects without Trend Log Multiple insertion return
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+    fn add_trend_multiple_record(&mut self, _record: BACnetLogMultipleRecord) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,

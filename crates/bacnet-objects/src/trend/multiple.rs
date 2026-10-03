@@ -1,33 +1,30 @@
-//! TrendLog (type 20) and TrendLogMultiple (type 27) objects per ASHRAE 135-2020.
+//! TrendLogMultiple (type 27, Clause 12.30).
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetLogRecord};
+use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetLogMultipleRecord};
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
+use super::{multiple_metadata, reference_value};
 use crate::clock::ClockReader;
 use crate::common::{self, read_property_list_property};
-use crate::log_buffer::{LogRecordBuffer, LogRecordIdentity, LogRecordProfile};
+use crate::log_buffer::{LogRecordBuffer, LogRecordIdentity};
 use crate::log_lifecycle::LogLifecycle;
 use crate::traits::BACnetObject;
 
-mod metadata;
-mod multiple;
-mod multiple_metadata;
-
-pub use multiple::TrendLogMultipleObject;
-
-/// BACnet TrendLog object.
+/// BACnet TrendLogMultiple object (type 27).
 ///
-/// Ring buffer of timestamped property values. The application calls
-/// `add_record()` to log values at `log_interval` intervals.
-pub struct TrendLogObject {
+/// Multi-channel trending. Unlike TrendLog, which monitors a single property,
+/// TrendLogMultiple monitors a list of device-object-property references and
+/// logs one value per reference in each record. The database's trend poller
+/// samples every reference at `log_interval` while Logging_Type is POLLED.
+pub struct TrendLogMultipleObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
@@ -35,17 +32,18 @@ pub struct TrendLogObject {
     log_interval: u32,
     stop_when_full: bool,
     buffer_size: u32,
-    log_buffer: LogRecordBuffer,
-    reliability: Reliability,
-    log_device_object_property: Option<BACnetDeviceObjectPropertyReference>,
+    log_buffer: LogRecordBuffer<BACnetLogMultipleRecord>,
+    log_device_object_property: Vec<BACnetDeviceObjectPropertyReference>,
     logging_type: u32, // 0=polled, 1=cov, 2=triggered
+    reliability: Reliability,
     clock: Option<Arc<dyn ClockReader>>,
 }
 
-impl TrendLogObject {
-    /// Create a new Trend Log object with logging enabled; `buffer_size` is the record capacity.
+impl TrendLogMultipleObject {
+    /// Build a log with logging enabled that holds at most `buffer_size`
+    /// records.
     pub fn new(instance: u32, name: impl Into<String>, buffer_size: u32) -> Result<Self, Error> {
-        let oid = ObjectIdentifier::new(ObjectType::TREND_LOG, instance)?;
+        let oid = ObjectIdentifier::new(ObjectType::TREND_LOG_MULTIPLE, instance)?;
         Ok(Self {
             oid,
             name: name.into(),
@@ -55,25 +53,30 @@ impl TrendLogObject {
             stop_when_full: false,
             buffer_size,
             log_buffer: LogRecordBuffer::new(buffer_size),
-            reliability: Reliability::NO_FAULT_DETECTED,
-            log_device_object_property: None,
+            log_device_object_property: Vec::new(),
             logging_type: 0,
+            reliability: Reliability::NO_FAULT_DETECTED,
             clock: None,
         })
     }
 
-    /// Add a BACnetLogRecord to the trend log buffer.
+    /// Add a record to the log buffer.
     ///
     /// Success does not guarantee a resident ordinary record: disabled logging
     /// is ignored, zero-capacity logging may only count, and a stop-before-full
     /// transition records status instead. Missing/invalid status clocks fail
     /// atomically with DEVICE / OPERATIONAL_PROBLEM.
-    pub fn add_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+    pub fn add_record(&mut self, record: BACnetLogMultipleRecord) -> Result<(), Error> {
         self.lifecycle().try_add_ordinary(record).map(|_| ())
     }
 
+    /// Add a property reference to the monitored list.
+    pub fn add_property_reference(&mut self, reference: BACnetDeviceObjectPropertyReference) {
+        self.log_device_object_property.push(reference);
+    }
+
     /// Get the current buffer contents.
-    pub fn records(&self) -> &VecDeque<BACnetLogRecord> {
+    pub fn records(&self) -> &VecDeque<BACnetLogMultipleRecord> {
         self.log_buffer.records()
     }
 
@@ -87,20 +90,12 @@ impl TrendLogObject {
         self.description = desc.into();
     }
 
-    /// Set the log device object property reference.
-    pub fn set_log_device_object_property(
-        &mut self,
-        reference: Option<BACnetDeviceObjectPropertyReference>,
-    ) {
-        self.log_device_object_property = reference;
-    }
-
     /// Set the logging type (0=polled, 1=cov, 2=triggered).
     pub fn set_logging_type(&mut self, logging_type: u32) {
         self.logging_type = logging_type;
     }
 
-    fn lifecycle(&mut self) -> LogLifecycle<'_, BACnetLogRecord> {
+    fn lifecycle(&mut self) -> LogLifecycle<'_, BACnetLogMultipleRecord> {
         LogLifecycle::new(
             &mut self.log_buffer,
             &mut self.log_enable,
@@ -110,7 +105,7 @@ impl TrendLogObject {
     }
 }
 
-impl BACnetObject for TrendLogObject {
+impl BACnetObject for TrendLogMultipleObject {
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
     }
@@ -134,9 +129,9 @@ impl BACnetObject for TrendLogObject {
             p if p == PropertyIdentifier::DESCRIPTION => {
                 Ok(PropertyValue::CharacterString(self.description.clone()))
             }
-            p if p == PropertyIdentifier::OBJECT_TYPE => {
-                Ok(PropertyValue::Enumerated(ObjectType::TREND_LOG.to_raw()))
-            }
+            p if p == PropertyIdentifier::OBJECT_TYPE => Ok(PropertyValue::Enumerated(
+                ObjectType::TREND_LOG_MULTIPLE.to_raw(),
+            )),
             p if p == PropertyIdentifier::LOG_ENABLE => Ok(PropertyValue::Boolean(self.log_enable)),
             p if p == PropertyIdentifier::LOG_INTERVAL => {
                 Ok(PropertyValue::Unsigned(self.log_interval as u64))
@@ -153,9 +148,9 @@ impl BACnetObject for TrendLogObject {
             p if p == PropertyIdentifier::TOTAL_RECORD_COUNT => Ok(PropertyValue::Unsigned(
                 self.log_buffer.total_record_count() as u64,
             )),
-            // Clause 12.25.30 lets only IN_ALARM (from Event_State) and FAULT
-            // (from Reliability) move on a Trend Log; OVERRIDDEN and
-            // OUT_OF_SERVICE are always FALSE. Table 12-29 has no
+            // Clause 12.30.5 lets only IN_ALARM (from Event_State) and FAULT
+            // (from Reliability) move on a Trend Log Multiple; OVERRIDDEN and
+            // OUT_OF_SERVICE are always FALSE. Table 12-35 has no
             // Out_Of_Service property (#985).
             p if p == PropertyIdentifier::STATUS_FLAGS => Ok(common::compute_status_flags(
                 StatusFlags::empty(),
@@ -169,16 +164,17 @@ impl BACnetObject for TrendLogObject {
             p if p == PropertyIdentifier::RELIABILITY => {
                 Ok(PropertyValue::Enumerated(self.reliability.to_raw()))
             }
-            p if p == PropertyIdentifier::LOG_BUFFER => {
-                Ok(self.log_buffer.project(LogRecordProfile::Trend))
-            }
+            // Each record framed as Clause 21 gives it (#1203).
+            p if p == PropertyIdentifier::LOG_BUFFER => self.log_buffer.project_framed(),
             p if p == PropertyIdentifier::LOGGING_TYPE => {
                 Ok(PropertyValue::Enumerated(self.logging_type))
             }
-            p if p == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => Ok(self
-                .log_device_object_property
-                .as_ref()
-                .map_or(PropertyValue::Null, reference_value)),
+            p if p == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => Ok(PropertyValue::List(
+                self.log_device_object_property
+                    .iter()
+                    .map(reference_value)
+                    .collect(),
+            )),
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }
@@ -233,20 +229,6 @@ impl BACnetObject for TrendLogObject {
                 code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
             });
         }
-        // Clause 12.25 Table 12-29 lists Reliability as plain O with no
-        // writability footnote, and unlike the intrinsic-reporting objects the
-        // Trend Log Reliability_Evaluation_Inhibit paragraph requires
-        // NO_FAULT_DETECTED while evaluation is inhibited, without an exception
-        // for a client-supplied Reliability value while Out_Of_Service is TRUE.
-        // Nothing in Clause 12.25 grants a
-        // network client this property: the log owns it (logging status and
-        // fault indication), so every write is refused.
-        if property == PropertyIdentifier::RELIABILITY {
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
-            });
-        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
@@ -258,7 +240,7 @@ impl BACnetObject for TrendLogObject {
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
-        metadata::for_object(self)
+        multiple_metadata::for_object(self)
     }
 
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
@@ -273,30 +255,7 @@ impl BACnetObject for TrendLogObject {
         Some(self.log_buffer.identities())
     }
 
-    fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+    fn add_trend_multiple_record(&mut self, record: BACnetLogMultipleRecord) -> Result<(), Error> {
         self.add_record(record)
     }
 }
-
-/// One Log_DeviceObjectProperty reference as a read projects it: the object,
-/// property, array index and device, with Null for an absent member.
-fn reference_value(reference: &BACnetDeviceObjectPropertyReference) -> PropertyValue {
-    PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(reference.object_identifier),
-        PropertyValue::Unsigned(reference.property_identifier as u64),
-        reference
-            .property_array_index
-            .map_or(PropertyValue::Null, |index| {
-                PropertyValue::Unsigned(index as u64)
-            }),
-        reference
-            .device_identifier
-            .map_or(PropertyValue::Null, PropertyValue::ObjectIdentifier),
-    ])
-}
-
-#[cfg(test)]
-mod log_record_tests;
-
-#[cfg(test)]
-mod tests;
