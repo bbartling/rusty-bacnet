@@ -2340,9 +2340,12 @@ at once. Nothing is sent while DeviceCommunicationControl restricts
 initiation, and the run holds no database guard while the write is
 outstanding. Naming this server's own Device is the same as naming none.
 
-A run that `stop()` cuts short isn't resumed. It ends with In_Process FALSE,
-All_Writes_Successful FALSE and each command it hadn't made marked
-unsuccessful (#1252), and a Channel's distribution ends FAILED. Once the
+A run that `stop()` cuts short isn't resumed. It ends where it stood
+(#1252): In_Process returns to FALSE, each command it hadn't made reads
+unsuccessful, and All_Writes_Successful is TRUE only if every write had
+already been made and succeeded, as when the stop falls in the last command's
+post delay. A Channel's distribution with members left unwritten ends FAILED.
+Once the
 server's own work has stopped, `stop()` also ends any run still in progress on
 the database, such as one a write made straight into the database queued.
 `stop()` doesn't wait for a database the application holds: those runs end as

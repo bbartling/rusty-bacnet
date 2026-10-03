@@ -4,24 +4,27 @@
 //! Each write goes out as one unsegmented confirmed WriteProperty. The address
 //! comes from the server's device bindings only, a configured binding or an
 //! I-Am heard in the last ten minutes; nothing sends a Who-Is, so an unknown
-//! or stale device fails at once with nothing sent. The invoke ID is leased
-//! from the same device-wide pool as confirmed notifications (and, in an
-//! endpoint, client requests), so no two outstanding transactions share one,
-//! and the answer
-//! comes back through the notifications' dispatch fast path. The lease
-//! carries the peer and the WriteProperty service: only that peer's answer
-//! ends it, and a SimpleACK or Error only when it names WriteProperty, so a
-//! late answer to a notification that once held the same invoke ID can't
-//! complete the write. Each attempt waits `cov_retry_timeout_ms` for an
-//! answer, and only silence earns another attempt, up to the server's three
-//! retries; an Error (BUSY included), Reject or Abort is final. Nothing is
-//! sent while DeviceCommunicationControl restricts initiation, a retry
-//! included, and the caller holds no database guard while a write is
+//! or stale device fails at once with nothing sent.
+//!
+//! The invoke ID is leased from the same device-wide pool as confirmed
+//! notifications (and, in an endpoint, client requests), so no two
+//! outstanding transactions share one, and the answer comes back through the
+//! notifications' dispatch fast path. The lease carries the peer and the
+//! WriteProperty service: only that peer's answer ends it, and a SimpleACK or
+//! Error only when it names WriteProperty, so a late answer to a notification
+//! that once held the same invoke ID can't complete the write.
+//!
+//! Each attempt waits `cov_retry_timeout_ms` for an answer, and only silence
+//! earns another attempt, up to the server's three retries; an Error (BUSY
+//! included), Reject or Abort is final. Nothing is sent while
+//! DeviceCommunicationControl restricts initiation: a retry it would block,
+//! or one whose observed binding has lapsed, ends the write there and frees
+//! its invoke ID. The caller holds no database guard while a write is
 //! outstanding.
 
 use super::device_bindings::DeviceBindingTable;
 use super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
-use super::notification_transactions::NotificationReserveError;
+use super::notification_transactions::{run_attempts, Attempt, NotificationReserveError};
 use super::*;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::BACnetActionCommand;
@@ -36,11 +39,11 @@ const WRITE_PROPERTY: ConfirmedServiceChoice = ConfirmedServiceChoice::WRITE_PRO
 /// Why a write in another device was not made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RemoteWriteError {
-    /// DeviceCommunicationControl restricts initiation, so nothing was sent,
-    /// or no more was once it took effect.
+    /// DeviceCommunicationControl restricts initiation: nothing was sent, or
+    /// the write ended at the first retry after it took effect.
     Disabled,
     /// No usable binding for the device: none configured, no I-Am heard in
-    /// the last ten minutes, or one that lapsed between attempts.
+    /// the last ten minutes, or an observed one that lapsed before a retry.
     Unbound,
     /// The value has no encoding.
     Unencodable,
@@ -172,30 +175,33 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
         )
         .expect("valid APDU encoding");
         let (apdu, route, network) = (&apdu, &route, self.network);
-        let (mut restricted, mut lapsed) = (false, false);
-        let outcome =
-            run_notification_worker(operation, answer, self.timeout, self.retries, |attempt| {
-                // A retry is a send too: DCC and the binding's lifetime are
-                // checked again before each one.
-                let blocked = self.initiation_restricted();
-                let expired = route.freshness.is_some_and(|freshness| {
-                    !freshness.permits_attempt_at(tokio::time::Instant::now())
-                });
-                restricted |= blocked;
-                lapsed |= expired;
-                async move {
-                    if blocked || expired {
-                        return Err(());
-                    }
-                    send(network, apdu, route, invoke_id, attempt).await
+        let outcome = run_attempts(operation, answer, self.timeout, self.retries, |attempt| {
+            // A retry is a send too: DCC and the binding's lifetime are
+            // checked again before each one, and either ends the write.
+            let withdrawn = if self.initiation_restricted() {
+                Some(RemoteWriteError::Disabled)
+            } else if route
+                .freshness
+                .is_some_and(|freshness| !freshness.permits_attempt_at(tokio::time::Instant::now()))
+            {
+                Some(RemoteWriteError::Unbound)
+            } else {
+                None
+            };
+            async move {
+                if let Some(reason) = withdrawn {
+                    return Attempt::Withdrawn(reason);
                 }
-            })
-            .await;
+                match send(network, apdu, route, invoke_id, attempt).await {
+                    Ok(()) => Attempt::Sent,
+                    Err(()) => Attempt::NotSent,
+                }
+            }
+        })
+        .await?;
         match outcome {
             NotificationWorkerResult::Ack => Ok(()),
             NotificationWorkerResult::Error => Err(RemoteWriteError::Refused),
-            NotificationWorkerResult::Exhausted if restricted => Err(RemoteWriteError::Disabled),
-            NotificationWorkerResult::Exhausted if lapsed => Err(RemoteWriteError::Unbound),
             NotificationWorkerResult::Exhausted => Err(RemoteWriteError::Unanswered),
             NotificationWorkerResult::Closed => Err(RemoteWriteError::Stopping),
         }

@@ -122,6 +122,11 @@ impl Unfinished {
         self.source
     }
 
+    /// Whether this is `source`'s run of `generation`.
+    pub(crate) fn is(&self, source: ObjectIdentifier, generation: u64) -> bool {
+        self.source == source && self.generation == generation
+    }
+
     /// End the run where it stood, as successful only if every write was
     /// made and succeeded. A Command's commands never made read unsuccessful
     /// and In_Process returns to FALSE; a Channel's Write_Status becomes
@@ -163,6 +168,11 @@ pub(crate) fn end_unowned(db: &Arc<RwLock<ObjectDatabase>>, stranded: Vec<Unfini
 
 /// Run `end` under the database's write guard: at once if no guard is held,
 /// otherwise from a task once the database is free.
+///
+/// The task is detached on purpose: its caller is a `Drop` or a `stop()` that
+/// mustn't wait on a database an application holds, and nothing else would
+/// end these runs. A runtime that shuts down before the task runs drops it;
+/// that is logged, and the objects stay busy.
 fn when_free(
     db: &Arc<RwLock<ObjectDatabase>>,
     end: impl FnOnce(&mut ObjectDatabase) + Send + 'static,
@@ -174,18 +184,37 @@ fn when_free(
     match tokio::runtime::Handle::try_current() {
         Ok(runtime) => {
             let db = Arc::clone(db);
-            runtime.spawn(async move { end(&mut *db.write().await) });
+            runtime.spawn(async move {
+                let mut waiting = Waiting(true);
+                end(&mut *db.write().await);
+                waiting.0 = false;
+            });
         }
         Err(_) => warn!("runs let go of outside a runtime; their objects stay busy"),
     }
 }
 
+/// Logs a [`when_free`] task dropped before it could end its runs.
+struct Waiting(bool);
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        if self.0 {
+            warn!("runtime dropped the task ending runs let go of; their objects stay busy");
+        }
+    }
+}
+
 /// End every run on `db` that nothing owns any more, once nothing can own
-/// one (#1252). A run in progress, or one queued on its object
-/// and never taken, ends unsuccessful: a Command with each command marked
+/// one (#1252). A run in progress, or one queued on its object and never
+/// taken, ends unsuccessful: a Command with each command marked
 /// unsuccessful, a Channel with Write_Status FAILED. Runs whose progress is
 /// known are ended first through [`Unfinished::end`], so this only meets
 /// runs that made no write.
+///
+/// The sweep can't tell a server's runs from others on the same database: a
+/// run an application's own `tick_schedules` is driving ends here too, and
+/// that run then finds its generation stale and stops.
 fn end_ownerless(db: &mut ObjectDatabase) {
     db.for_each_object_mut(|oid, object| {
         if end_ownerless_object(object) {

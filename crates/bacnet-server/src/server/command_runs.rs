@@ -18,9 +18,11 @@
 //! replaced or reconfigured stops.
 //!
 //! A run let go of before it ends (cancelled by `stop()`, refused by a closed
-//! task set, or unwound by a panic) ends as unsuccessful at once when the
-//! database is free. Otherwise it waits in the request task set, and `stop()`
-//! ends it once those tasks are joined and the database is free (#1252).
+//! task set, or unwound by a panic) ends where it stood at once when the
+//! database is free: the commands it hadn't made read unsuccessful, and it
+//! counts as successful only if every write was made and succeeded. Otherwise
+//! it waits in the request task set, and `stop()` ends it once those tasks are
+//! joined and the database is free (#1252); a panic ends it straight away.
 
 use super::local_writes::{LocalWrite, LocalWriter};
 use super::remote_writes::{RemoteWrite, RemoteWriter};
@@ -135,16 +137,27 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
                 queued.left = None;
                 if execution.catch_unwind().await.is_err() {
                     warn!(source = %source, "run panicked; ending it as failed");
-                    // Unwinding handed the run to `abandoned`, which ended it
-                    // if the database was free. Either way its subscribers
-                    // hear of the end.
-                    let runner = &queued.runner;
-                    if !crate::command_lists::complete(runner, source, generation, false).await {
-                        runner.report(source).await;
-                    }
+                    queued.runner.end_panicked(source, generation).await;
                 }
             });
         }
+    }
+
+    /// End a run whose write panicked. Unwinding handed it to `abandoned`,
+    /// which ended it if the database was free and stranded it otherwise; a
+    /// stranded one is taken back and ended where it stood. Either way its
+    /// subscribers hear of the end.
+    async fn end_panicked(&self, source: ObjectIdentifier, generation: u64) {
+        if let Some(left) = self.tasks.unstrand(source, generation) {
+            let mut db = self.db.write().await;
+            if left.end(&mut db) {
+                self.committed(&db, source).await;
+            }
+        } else if crate::command_lists::complete(self, source, generation, false).await {
+            // Nothing had ended it, so `complete` did and reported it.
+            return;
+        }
+        self.report(source).await;
     }
 
     fn remote_writer(&self) -> RemoteWriter<'_, T> {

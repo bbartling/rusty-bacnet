@@ -1,6 +1,7 @@
 use super::request_admission::{Admission, Class, Rejection};
 use super::{RequestAdmissionCounters, RequestAdmissionPolicy};
 use crate::command_lists::Unfinished;
+use bacnet_types::primitives::ObjectIdentifier;
 use std::future::{poll_fn, Future};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::task::{JoinError, JoinSet};
@@ -63,6 +64,16 @@ impl RequestTaskSpawner {
             }
             None => Err(left),
         }
+    }
+
+    /// Take back `source`'s run of `generation` if it was stranded.
+    pub(super) fn unstrand(&self, source: ObjectIdentifier, generation: u64) -> Option<Unfinished> {
+        let owner = self.0.upgrade()?;
+        let mut stranded = owner.3.lock().unwrap();
+        let at = stranded
+            .iter()
+            .position(|left| left.is(source, generation))?;
+        Some(stranded.swap_remove(at))
     }
 }
 

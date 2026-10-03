@@ -8,7 +8,9 @@
 //! In_Process and All_Writes_Successful go over the wire; the peer's answers
 //! are delivered by hand. The clock is paused, and the server's APDU timeout
 //! is the default 3 seconds.
-use super::command_action_wire_tests::{ao, idle, outputs, slot8, state, write, write_pv};
+use super::command_action_wire_tests::{
+    ao, cmd, idle, outputs, read_db, slot8, state, write, write_pv,
+};
 use super::command_run_stop_tests::{db_flags, db_state};
 use super::cov_wire_test_support::*;
 use super::*;
@@ -18,7 +20,7 @@ use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
 
-fn device(instance: u32) -> ObjectIdentifier {
+pub(super) fn device(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap()
 }
 
@@ -59,12 +61,12 @@ async fn start(binding: DeviceBinding) -> Harness {
     h
 }
 
-async fn start_local() -> Harness {
+pub(super) async fn start_local() -> Harness {
     start(DeviceBinding::local(device(9), PEER).unwrap()).await
 }
 
 /// Take every WriteProperty request the server has sent.
-fn sent_writes(h: &Harness) -> Vec<(u8, WritePropertyRequest)> {
+pub(super) fn sent_writes(h: &Harness) -> Vec<(u8, WritePropertyRequest)> {
     let mut frames = h.frames.lock().unwrap();
     let mut taken = Vec::new();
     frames.retain(|apdu| match apdu {
@@ -82,7 +84,7 @@ fn sent_writes(h: &Harness) -> Vec<(u8, WritePropertyRequest)> {
 
 /// Wait for the one WriteProperty request the run sends, and check it carries
 /// the command.
-async fn remote_write(h: &Harness) -> u8 {
+pub(super) async fn remote_write(h: &Harness) -> u8 {
     let sent = tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             let sent = sent_writes(h);
@@ -109,7 +111,48 @@ async fn remote_write(h: &Harness) -> u8 {
     invoke_id
 }
 
-fn ack(invoke_id: u8) -> Apdu {
+/// Deliver `answer` as `source_mac` sent it, from `source` when routed.
+pub(super) async fn deliver(
+    h: &Harness,
+    answer: &Apdu,
+    source_mac: &[u8],
+    source: Option<NpduAddress>,
+) {
+    let mut payload = BytesMut::new();
+    encode_apdu(&mut payload, answer).unwrap();
+    let mut npdu = BytesMut::new();
+    encode_npdu(
+        &mut npdu,
+        &Npdu {
+            source,
+            payload: payload.freeze(),
+            ..Npdu::default()
+        },
+    )
+    .unwrap();
+    h.tx.send(ReceivedNpdu {
+        direct_response: None,
+        npdu: npdu.freeze(),
+        source_mac: MacAddr::from_slice(source_mac),
+        link_layer_group: false,
+        data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
+        reply_tx: None,
+    })
+    .await
+    .unwrap();
+}
+
+/// DeviceCommunicationControl's DISABLE_INITIATION: requests are still
+/// answered, nothing is initiated.
+pub(super) fn disable_initiation(h: &Harness) {
+    h.server.comm_state.store(
+        bacnet_types::enums::EnableDisable::DISABLE_INITIATION.to_raw() as u8,
+        Ordering::Release,
+    );
+}
+
+pub(super) fn ack(invoke_id: u8) -> Apdu {
     Apdu::SimpleAck(SimpleAck {
         invoke_id,
         service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
@@ -192,11 +235,7 @@ async fn command_write_another_device_never_answers_is_retried_then_fails() {
 #[tokio::test(start_paused = true)]
 async fn command_write_another_device_fails_unsent_while_dcc_restricts_initiation() {
     let mut h = start_local().await;
-    // DISABLE_INITIATION: requests are still answered, nothing is initiated.
-    h.server.comm_state.store(
-        bacnet_types::enums::EnableDisable::DISABLE_INITIATION.to_raw() as u8,
-        Ordering::Release,
-    );
+    disable_initiation(&h);
     write_pv(&mut h, 1, 1).await.unwrap();
     idle(&h, 1).await;
     assert!(sent_writes(&h).is_empty());
@@ -213,18 +252,27 @@ async fn command_write_another_device_fails_unsent_while_dcc_restricts_initiatio
 }
 
 #[tokio::test(start_paused = true)]
-async fn command_write_another_device_sends_no_retry_once_dcc_restricts_initiation() {
+async fn command_write_another_device_ends_at_the_first_retry_dcc_blocks() {
     let mut h = start_local().await;
     write_pv(&mut h, 1, 1).await.unwrap();
     remote_write(&h).await;
-    h.server.comm_state.store(
-        bacnet_types::enums::EnableDisable::DISABLE_INITIATION.to_raw() as u8,
-        Ordering::Release,
+    let sent = tokio::time::Instant::now();
+    disable_initiation(&h);
+    // The first retry, 3 seconds on, is where DCC is checked: the write ends
+    // there, freeing its invoke ID, rather than sitting out the other two.
+    while read_db(&h, cmd(1), PropertyIdentifier::IN_PROCESS, None).await
+        == PropertyValue::Boolean(true)
+    {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let ended = sent.elapsed();
+    assert!(
+        (Duration::from_millis(2_900)..Duration::from_millis(3_050)).contains(&ended),
+        "{ended:?}"
     );
-    idle(&h, 1).await;
+    assert_eq!(h.server.notification_transactions.active_count(), 0);
     assert!(sent_writes(&h).is_empty());
     assert_eq!(db_flags(&h, 1).await, [false, true]);
-    assert_eq!(h.server.notification_transactions.active_count(), 0);
 }
 
 #[tokio::test(start_paused = true)]
@@ -233,32 +281,11 @@ async fn command_write_through_a_routed_binding_completes_on_the_routed_ack() {
     let mut h = start(DeviceBinding::routed(device(9), 5, [0x09], PEER).unwrap()).await;
     write_pv(&mut h, 1, 1).await.unwrap();
     let invoke_id = remote_write(&h).await;
-    let mut payload = BytesMut::new();
-    encode_apdu(&mut payload, &ack(invoke_id)).unwrap();
-    let mut npdu = BytesMut::new();
-    encode_npdu(
-        &mut npdu,
-        &Npdu {
-            source: Some(NpduAddress {
-                network: 5,
-                mac_address: MacAddr::from_slice(&[0x09]),
-            }),
-            payload: payload.freeze(),
-            ..Npdu::default()
-        },
-    )
-    .unwrap();
-    h.tx.send(ReceivedNpdu {
-        direct_response: None,
-        npdu: npdu.freeze(),
-        source_mac: MacAddr::from_slice(&PEER),
-        link_layer_group: false,
-        data_attributes: Vec::new(),
-        provenance: TransportProvenance::unverified(),
-        reply_tx: None,
-    })
-    .await
-    .unwrap();
+    let source = NpduAddress {
+        network: 5,
+        mac_address: MacAddr::from_slice(&[0x09]),
+    };
+    deliver(&h, &ack(invoke_id), &PEER, Some(source)).await;
     idle(&h, 1).await;
     assert_eq!(db_flags(&h, 1).await, [true, true]);
     assert_eq!(state(&mut h, 1).await, (false, true));
