@@ -19,6 +19,7 @@ const OPTIONAL: &[&str] = &[
     "post_delay",
     "quit_on_failure",
     "device_identifier",
+    "write_successful",
 ];
 
 /// Read `action`, a list of lists of `ActionCommand` mappings, one inner list
@@ -72,15 +73,13 @@ fn action_command(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetAction
             .map(|item| ranged_integer(&item, &field(key), 0, maximum))
             .transpose()
     };
-    let quit_on_failure = match optional_item(value, "quit_on_failure")? {
-        None => false,
-        Some(item) if item.is_instance_of::<PyBool>() => item.extract()?,
-        Some(_) => {
-            return Err(PyTypeError::new_err(format!(
-                "{} must be a bool",
-                field("quit_on_failure")
-            )))
-        }
+    let flag = |key: &str| match optional_item(value, key)? {
+        None => Ok(false),
+        Some(item) if item.is_instance_of::<PyBool>() => item.extract(),
+        Some(_) => Err(PyTypeError::new_err(format!(
+            "{} must be a bool",
+            field(key)
+        ))),
     };
     Ok(BACnetActionCommand {
         device_identifier: optional_item(value, "device_identifier")?
@@ -96,9 +95,10 @@ fn action_command(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetAction
         property_value,
         priority: optional_integer("priority", u8::MAX.into())?.map(|priority| priority as u8),
         post_delay: optional_integer("post_delay", u32::MAX.into())?.map(|delay| delay as u32),
-        quit_on_failure,
-        // No write has been made yet.
-        write_successful: false,
+        quit_on_failure: flag("quit_on_failure")?,
+        // FALSE until the command's write succeeds; a read of Action carries
+        // the flag, so the read's mapping can be given back.
+        write_successful: flag("write_successful")?,
     })
 }
 

@@ -28,17 +28,6 @@ LOCK = ObjectIdentifier(ObjectType.BINARY_OUTPUT, 1)
 REMOTE_DEVICE = ObjectIdentifier(ObjectType.DEVICE, 99)
 REMOTE_DOOR = ObjectIdentifier(ObjectType.ACCESS_DOOR, 4)
 
-# A BACnetDeviceObjectReference: device identifier [0] when present, object
-# identifier [1].
-LOCK_REFERENCE = bytes([0x1C, 0x01, 0x00, 0x00, 0x01])
-REMOTE_DOOR_REFERENCE = bytes(
-    [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x07, 0x80, 0x00, 0x04]
-)
-# Supported_Formats elements: format type [0], then vendor id [1] and vendor
-# format [2] for the CUSTOM format.
-WIEGAND26_FORMAT = bytes([0x09, 0x08])
-VENDOR_260_FORMAT = bytes([0x09, 0x02, 0x1A, 0x01, 0x04, 0x29, 0x07])
-
 
 # Each registration method and the keyword-only argument that sets its array.
 ARRAY_KEYWORDS = (
@@ -121,12 +110,11 @@ class AccessControlConfigurationTests(unittest.TestCase):
             door = ObjectIdentifier(ObjectType.ACCESS_DOOR, 1)
             members = PropertyIdentifier.DOOR_MEMBERS
             self.assertEqual((await server.read_property(door, members, 0)).value, 2)
-            self.assertEqual(
-                (await server.read_property(door, members, 1)).value, LOCK_REFERENCE
-            )
+            # Each element reads in the form it was given (#1310).
+            self.assertEqual((await server.read_property(door, members, 1)).value, LOCK)
             self.assertEqual(
                 (await server.read_property(door, members, 2)).value,
-                REMOTE_DOOR_REFERENCE,
+                (REMOTE_DEVICE, REMOTE_DOOR),
             )
             side = ObjectIdentifier(ObjectType.ACCESS_DOOR, 2)
             self.assertEqual((await server.read_property(side, members, 0)).value, 0)
@@ -151,7 +139,7 @@ class AccessControlConfigurationTests(unittest.TestCase):
             self.assertEqual((await server.read_property(point, doors, 0)).value, 1)
             self.assertEqual(
                 (await server.read_property(point, doors, 1)).value,
-                REMOTE_DOOR_REFERENCE,
+                (REMOTE_DEVICE, REMOTE_DOOR),
             )
             # The refused registrations left no object behind.
             for instance in (2, 3):
@@ -220,12 +208,11 @@ class AccessControlConfigurationTests(unittest.TestCase):
             formats = PropertyIdentifier.SUPPORTED_FORMATS
             classes = PropertyIdentifier.SUPPORTED_FORMAT_CLASSES
             self.assertEqual((await server.read_property(reader, formats, 0)).value, 2)
+            self.assertEqual((await server.read_property(reader, formats)).value,
+                             [8, (2, 260, 7)])
+            self.assertEqual((await server.read_property(reader, formats, 1)).value, 8)
             self.assertEqual(
-                (await server.read_property(reader, formats, 1)).value, WIEGAND26_FORMAT
-            )
-            self.assertEqual(
-                (await server.read_property(reader, formats, 2)).value,
-                VENDOR_260_FORMAT,
+                (await server.read_property(reader, formats, 2)).value, (2, 260, 7)
             )
             self.assertEqual((await server.read_property(reader, classes)).value, [0, 3])
 

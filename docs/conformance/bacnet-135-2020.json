@@ -313,7 +313,9 @@
    "positive_tests": [
     "crates/bacnet-server/src/server/staging_reference_write_tests.rs::write_property_takes_a_target_naming_this_device_as_a_local_reference",
     "crates/bacnet-server/src/server/staging_reference_write_tests.rs::write_property_multiple_and_write_local_take_a_target_naming_this_device",
-    "crates/bacnet-server/src/local_references.rs::tests::staging_targets_naming_the_local_device_lose_their_device"
+    "crates/bacnet-server/src/local_references.rs::tests::staging_targets_naming_the_local_device_lose_their_device",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_stages_read_as_the_triples_written",
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::stages_read_as_the_triples_written"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/staging_reference_write_tests.rs::a_target_in_another_device_is_refused_alone_or_in_a_mixed_array",
@@ -328,7 +330,8 @@
    "notes": [
     "Refs #1136. Before, every element carrying a Device identifier was refused, even one naming this device, which 12.62.14 does not permit: like 12.24.10 for the Schedule, it lets a property limited to its own device refuse only references outside it.",
     "The rewrite is the Schedule's (BACNET-12-SCHEDULE-WRITES), generalized in local_references.rs over both reference types: the server, which selects the local Device under the write's database guard, drops a Device member naming that Device from each element before the object decodes the value.",
-    "A Device at the wildcard instance names no device and is never local. StagingObject written directly, or configured through StagingConfig, still refuses every Device member, since it cannot tell which Device holds it. Target_References is an array, so the list services do not apply. Not covered: targets in other devices (refused; the object issues no remote writes)."
+    "A Device at the wildcard instance names no device and is never local. StagingObject written directly, or configured through StagingConfig, still refuses every Device member, since it cannot tell which Device holds it. Target_References is an array, so the list services do not apply. Not covered: targets in other devices (refused; the object issues no remote writes).",
+    "Python reads Target_References as ObjectIdentifiers, a (device, object) pair for a reference that keeps its Device member, and Stages as (limit, values, deadband) triples, the forms add_staging takes."
    ]
   },
   {
@@ -2304,7 +2307,10 @@
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::{group_members_read_the_live_device_cov_lists_through_rp_readrange_and_local_reads,group_members_read_the_live_device_cov_lists_through_rpm}",
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/snapshot_plan.rs::{reads_whose_plan_names_no_device_cov_list_take_no_snapshot,a_read_whose_plan_names_a_device_cov_list_takes_one_snapshot}",
     "crates/rusty-bacnet/tests/test_server_group_members.py::ServerGroupWireTests::test_present_value_is_served_one_result_per_member",
-    "crates/rusty-bacnet/tests/test_read_value_shapes.py::ClientReadShapeTests::test_group_present_value_holds_every_member"
+    "crates/rusty-bacnet/tests/test_read_value_shapes.py::ClientReadShapeTests::test_group_present_value_holds_every_member",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_group_members_read_as_the_specs_written",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_group_present_value_reads_as_its_members_results",
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{group_members_read_as_the_specs_written,group_present_value_reads_as_read_property_multiple_results}"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{malformed_property_references_are_refused,malformed_read_access_specifications_are_refused}",
@@ -2332,7 +2338,9 @@
     "CHANGELOG.md Unreleased Changed entry for #1250 (GroupObject::add_member refusal reasons), from changelog.d/1250-group-member-refusal.md",
     "docs/python-api.md#endpoint-groups-and-the-read-work-limit Python endpoint add_group and read_work_limit",
     "docs/rust-api.md#constructed-property-framing Group List_Of_Group_Members and Present_Value",
-    "docs/python-api.md#groups--views Python BACnetServer add_group members"
+    "docs/python-api.md#groups--views Python BACnetServer add_group members",
+    "CHANGELOG.md Unreleased Changed entry for #1310 (Python typed reads of constructed lists), from changelog.d/1310-python-typed-list-reads.md",
+    "docs/python-api.md#typed-collections Python typed reads of constructed lists"
    ],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1134, found in #1107). Breaking pre-1.0 wire and Rust API changes. Table 12-17, Clause 12.14 and the Clause 21 productions were read as page images. Before, List_Of_Group_Members went out as bare application-tagged object identifiers with no properties, and Present_Value as whatever values the application had stored, which named no member and could not report a failed read.",
@@ -2349,7 +2357,7 @@
     "GroupObject::add_member also refuses a property identifier above 4194303, and returns a GroupMemberRefusal naming the broken rule, which converts to PROPERTY / VALUE_OUT_OF_RANGE; Python add_group puts that rule and the member's position in its ValueError.",
     "PropertyReference and ReadAccessSpecification moved from bacnet-services into bacnet_types::constructed, with their codecs as free functions in bacnet_encoding::constructed, so the Group stores them the way other objects store their Clause 21 types; the ReadPropertyMultiple, COV and Audit codecs call the same functions. Not covered: writable List_Of_Group_Members; the Audit_Level, Auditable_Operations, Tags and profile rows.",
     "Python BACnetServer.add_group takes the endpoint owners' members through the same group_members conversion and checks, and rpm_max_result_elements limits a read of the Group's Present_Value.",
-    "Python BACnetServer.read_property goes through BACnetServer::read_local, so a local read of a Group's Present_Value equals a network read. Python readers return the rebuilt results as application_data octets, and no members as an empty list."
+    "Python BACnetServer.read_property goes through BACnetServer::read_local, so a local read of a Group's Present_Value equals a network read. Python readers return the rebuilt results as read_property_multiple result mappings, List_Of_Group_Members in the add_group spec shape, and no members as an empty list."
    ]
   },
   {
@@ -2431,7 +2439,9 @@
     "crates/rusty-bacnet/src/server/server_methods/registration_tests.rs::command_builder_applies_action_then_action_text_through_the_object_setters",
     "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_present_value_write_runs_the_configured_list",
     "crates/bacnet-server/src/server/command_remote_write_tests.rs::{command_writes_another_device_and_its_ack_marks_the_command_successful,command_write_through_a_routed_binding_completes_on_the_routed_ack}",
-    "crates/bacnet-integration-tests/tests/server/command_remote.rs::command_writes_a_target_in_another_device_over_bip"
+    "crates/bacnet-integration-tests/tests/server/command_remote.rs::command_writes_a_target_in_another_device_over_bip",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_command_action_reads_as_the_action_commands_written",
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::command_actions_read_as_the_action_commands_written"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/command_action_wire_tests.rs::{command_quit_on_failure_stops_the_list_and_action_reads_back_the_flags,command_present_value_above_the_action_size_is_value_out_of_range,command_naming_another_device_fails_and_naming_this_device_is_local,command_writing_its_own_present_value_is_refused_busy}",
@@ -2477,7 +2487,8 @@
     "Remote write bounds: each attempt waits cov_retry_timeout_ms, silence earns up to three retries under one invoke ID, and an Error (BUSY included), Reject or Abort is final. Nothing is sent while DCC restricts initiation, a retry included.",
     "A remote write leases its invoke ID from the pool confirmed notifications use, and the lease names the peer and WriteProperty. No database guard is held while it is outstanding. tick_schedules, which has no network, fails remote commands.",
     "stop() ends a cancelled run where it stood: In_Process FALSE, unmade commands FALSE, All_Writes_Successful TRUE only if every write was made and succeeded. Runs let go of while the database was busy, then ownerless ones, end once it is free.",
-    "A run whose write panics ends the same way, its unmade commands FALSE, and its property subscribers hear of the end."
+    "A run whose write panics ends the same way, its unmade commands FALSE, and its property subscribers hear of the end.",
+    "Python reads Action as lists of ActionCommand mappings with every key, Write_Successful included, and add_command takes those mappings back, the flag as write_successful."
    ],
    "gaps": [
     "#1322: a remote target with no fresh binding fails unsent; no targeted Who-Is is sent on a binding-cache miss",
@@ -2795,7 +2806,11 @@
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_door_members_reach_the_array",
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_access_doors_reach_the_array_and_name_doors_only",
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_array_keywords",
-    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_supported_formats_reach_both_arrays_and_gate_simulated_reads"
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_supported_formats_reach_both_arrays_and_gate_simulated_reads",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_object_references_read_as_written",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_supported_formats_read_as_the_formats_written",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_each_read_is_accepted_by_its_typed_write",
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{object_references_read_as_identifiers_or_device_pairs,supported_formats_read_as_numbers_or_vendor_triples}"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/authentication_factor_format.rs::authentication_factor_format_rejects_malformed_elements",
@@ -2814,7 +2829,8 @@
     "Access Zone has no Access_Doors row, so an indexed read of it fails with UNKNOWN_PROPERTY rather than PROPERTY_IS_NOT_AN_ARRAY, as for the other array identifiers on objects that lack them.",
     "Not covered: network writes and resizing of Supported_Formats and Supported_Format_Classes, which Table 12-43 does not require.",
     "Python sets the arrays at registration through add_access_door(door_members=...), add_access_point(access_doors=...) and add_credential_data_input(supported_formats=...). A reference is an ObjectIdentifier in this device or a (device, object) pair; a format is a type number or a (type, vendor id, vendor format) triple.",
-    "Both setters, and the Python keyword arguments, refuse a reference whose device identifier is not a Device object (BACNET-21-DEVICE-OBJECT-REFERENCE-DEVICE-MEMBER)."
+    "Both setters, and the Python keyword arguments, refuse a reference whose device identifier is not a Device object (BACNET-21-DEVICE-OBJECT-REFERENCE-DEVICE-MEMBER).",
+    "Python reads Door_Members, Access_Doors and Supported_Formats back in the keyword arguments' forms: an ObjectIdentifier or (device, object) pair per reference, and a type number or (type, vendor id, vendor format) triple per format."
    ]
   },
   {
@@ -3478,7 +3494,10 @@
     "crates/rusty-bacnet/tests/test_read_value_shapes.py::ClientReadShapeTests::test_recipient_lists_keep_every_destination",
     "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_recipient_naming_this_network_by_number_is_local_to_the_loop_rules",
     "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_network_number_is_remote_while_this_network_has_none",
-    "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::a_repeat_is_matched_by_source_invoke_id_and_octets"
+    "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::a_repeat_is_matched_by_source_invoke_id_and_octets",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_port_filter_reads_as_the_pairs_written",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_a_cov_notification_value_reads_typed",
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::port_filters_read_as_the_pairs_written_whole_and_by_index"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::out_of_service_forwarder_takes_nothing",
@@ -3675,7 +3694,9 @@
     "crates/bacnet-server/src/server/event_recipient_routing_tests.rs::custom_class_at_the_cap_reaches_every_destination",
     "crates/bacnet-server/src/server/event_confirmed_routing_tests/learned_router_cache.rs::admitted_routes_stop_at_64_but_existing_network_updates_at_capacity",
     "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::every_deliverable_route_moves_no_counter",
-    "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_recipient_list_takes_framed_writes_up_to_the_cap"
+    "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_recipient_list_takes_framed_writes_up_to_the_cap",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_recipient_lists_read_as_the_destinations_written",
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{recipient_lists_read_as_the_destinations_written,equality_and_repr_follow_the_element_production}"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/recipient.rs",
@@ -3697,11 +3718,15 @@
     "crates/bacnet-server/src/server/event_recipient_routing_tests/post_route_counters.rs::failed_broadcast_forms_count_once_each",
     "crates/rusty-bacnet/tests/test_event_notification_counters.py::EventNotificationCountersTests::test_a_failed_unconfirmed_send_is_counted_once_per_destination",
     "crates/bacnet-encoding/src/constructed/tests/recipient.rs::recipient_mac_bound_holds_in_both_directions",
-    "crates/bacnet-services/src/enrollment_summary_width_tests.rs::enrollment_filter_recipient_mac_holds_to_the_bacnet_address_bound"
+    "crates/bacnet-services/src/enrollment_summary_width_tests.rs::enrollment_filter_recipient_mac_holds_to_the_bacnet_address_bound",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::FallbackTests::test_a_value_that_is_not_the_expected_production_keeps_its_octets",
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{a_value_that_is_not_the_expected_production_falls_back,empty_values_and_other_properties_keep_the_generic_shape}"
    ],
    "benchmarks": [],
    "public_claims": [
-    "docs/rust-api.md#constructed-property-framing"
+    "docs/rust-api.md#constructed-property-framing",
+    "CHANGELOG.md Unreleased Changed entry for #1310 (Python typed reads of constructed lists), from changelog.d/1310-python-typed-list-reads.md",
+    "docs/python-api.md#typed-collections Python typed reads of constructed lists"
    ],
     "notes": [
      "Split child of BACNET-12-OBJECT-MODEL; scope is the modeled NotificationClass path. The generic recipient codec remains interoperability vocabulary. Golden vectors cover the device, address (nonzero network), and broadcast (zero-length MAC) forms; the 8-entry list round-trip covers the Annex K.2.25 AE-CRL-B minimum-entries posture.",
@@ -3717,7 +3742,8 @@
      "A destination is then at most 47 octets and a full list at most 1,504. Routing applies MAX_RECIPIENT_LIST_DESTINATIONS to every class: a custom NOTIFICATION_CLASS object serving a longer list yields RecipientListTooLong, the server logs a warning, counts the transition in EventNotificationCounters::recipient_list_too_long (#1142) and sends nothing for that transition (never a prefix), and decoding stops at the first destination past the cap. GetEnrollmentSummary membership still reads the list as configured.",
      "#1156: decode_recipient itself holds to the bound, so the separate decode_configured_recipient is gone. COV subscription lists, audit notifications and records, and the GetEnrollmentSummary enrollment filter decode through it, and every recipient encoder (encode_recipient, encode_destination and its list form, the COV subscription encoders, the audit notification encoder) refuses a longer MAC before writing anything.",
      "The ValueSource and AuditLogQuery address codecs share the same check (check_decoded_mac_len, check_encoded_mac_len). Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, and COV admission and remote command origins refuse a longer direct MAC, so nothing the stack stores fails to encode.",
-     "A Notification Forwarder's Recipient_List takes the same framed writes and cap."
+     "A Notification Forwarder's Recipient_List takes the same framed writes and cap.",
+     "Python reads either object's Recipient_List as a list of Destination mappings with every key, the form add_notification_forwarder takes; a value that doesn't decode as destinations stays application_data octets."
     ]
   },
   {

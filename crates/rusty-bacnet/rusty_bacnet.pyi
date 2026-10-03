@@ -1073,9 +1073,11 @@ class BACnetTimeStamp:
 class ActionCommand(TypedDict):
     """One write in a Command object's action list (``BACnetActionCommand``).
 
-    Unknown keys raise ValueError and wrong types raise TypeError. The server
-    makes local writes only, so a ``device_identifier`` naming another Device
-    makes that command fail when the list runs.
+    Unknown keys raise ValueError and wrong types raise TypeError. A
+    ``device_identifier`` naming another Device sends that write there as a
+    confirmed WriteProperty when the server has a binding for the Device;
+    with none, the command fails when the list runs. A read of Action gives
+    each command in this form, with every key present.
     """
 
     object_identifier: ObjectIdentifier
@@ -1089,6 +1091,9 @@ class ActionCommand(TypedDict):
     # A failed write with this set stops the rest of the list. Default False.
     quit_on_failure: NotRequired[bool]
     device_identifier: NotRequired[ObjectIdentifier | None]
+    # Set when the command's write succeeds; a read of Action carries it, so
+    # a read mapping can be given back. Default False.
+    write_successful: NotRequired[bool]
 
 
 class AuditReporterConfiguration(TypedDict):
@@ -1127,7 +1132,8 @@ class Destination(TypedDict):
     Unknown keys, out-of-range values and malformed time tuples raise
     ValueError; other wrong types raise TypeError. A key left out gives a
     destination active every day, all day, for every transition, with
-    unconfirmed notifications.
+    unconfirmed notifications. A read of Recipient_List gives each
+    destination in this form, with every key present.
     """
 
     recipient: AuditRecipientInput
@@ -1292,10 +1298,27 @@ class PropertyValue:
     ``CovNotification`` value and ``BACnetServer.read_property``) keeps every
     element of the value; only broken framing raises:
 
-    - Any context-tagged content (a Recipient_List, a Group's Present_Value,
-      a Port_Filter, a timestamp), or content this type has no form for (a
-      UCS-4, DBCS or JIS string, bad UTF-8, an ENUMERATED past 32 bits), is
-      ``application_data`` holding the octets exactly as served.
+    - A constructed collection the binding also writes as typed values reads
+      typed: a whole read is a ``list`` of its elements in the typed write's
+      form, and an indexed read one element, tagged with its production.
+      These are Recipient_List (``"destination"``: a ``Destination`` with
+      every key), Port_Filter (``"port_permission"``: ``(port_id,
+      enabled)``), a Group's List_Of_Group_Members
+      (``"read_access_specification"``: ``(object_id, [(property_id,
+      array_index), ...])``) and Present_Value (``"read_access_result"``: a
+      ``ReadAccessResult``), a Command's Action (``"action_list"``: a list of
+      ``ActionCommand`` with every key), Door_Members, Access_Doors and a
+      Staging's Target_References (``"device_object_reference"``: an
+      ``ObjectIdentifier``, or ``(device, object)``), Supported_Formats
+      (``"authentication_factor_format"``: the format type, or
+      ``(format_type, vendor_id, vendor_format)``) and Stages
+      (``"stage_limit_value"``: ``(limit, values, deadband)``). Each element
+      keeps its octets, so the value writes back unchanged. A value that
+      isn't those elements, to the last octet, follows the rules below.
+    - Other context-tagged content (a timestamp, Active_COV_Subscriptions),
+      or content this type has no form for (a UCS-4, DBCS or JIS string,
+      bad UTF-8, an ENUMERATED past 32 bits), is ``application_data``
+      holding the octets exactly as served.
     - A whole read (no ``array_index``) of a property the stack's
       classification table marks as an array or list on that object type
       (every BACnetARRAY and BACnetLIST of the 2020 object tables) is a
@@ -1303,7 +1326,11 @@ class PropertyValue:
     - Any other read is the bare value when it holds one element, and a
       ``list`` in wire order when it holds none or several (a date-time is
       a date and then a time). An indexed read is one element under these
-      rules: ``Stages[1]`` is a list, ``Port_Filter[2]`` application_data.
+      rules: ``Port_Filter[2]`` is a port_permission, ``Event_Time_Stamps[1]``
+      application_data.
+
+    Two values are equal when they carry the same octets and, for a typed
+    read, the same element production.
     """
 
     @staticmethod
@@ -1351,13 +1378,18 @@ class PropertyValue:
     def tag(self) -> str:
         """Type tag: 'null', 'boolean', 'unsigned', 'signed', 'real', 'double',
         'octet_string', 'character_string', 'bit_string', 'enumerated',
-        'date', 'time', 'object_identifier', 'list', 'application_data'."""
+        'date', 'time', 'object_identifier', 'list', 'application_data', or
+        one typed constructed element: 'destination', 'port_permission',
+        'read_access_specification', 'read_access_result', 'action_list',
+        'device_object_reference', 'authentication_factor_format',
+        'stage_limit_value'."""
         ...
 
     @property
     def value(self) -> Any:
         """The Python-native value (int, float, str, bytes, bool, dict, tuple,
-        ObjectIdentifier, list, or None); ``application_data`` is ``bytes``."""
+        ObjectIdentifier, list, or None); ``application_data`` is ``bytes``,
+        and a typed constructed element the form its typed write takes."""
         ...
 
     def __repr__(self) -> str: ...

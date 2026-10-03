@@ -227,6 +227,7 @@ v.value   # 72.5 (native Python float)
 | `"time"` | `tuple(hour, minute, second, hundredths)` |
 | `"list"` | `list` of native Python values |
 | `"application_data"` | `bytes`: the encoded value, octet for octet |
+| `"destination"`, `"port_permission"` and the other element tags of [typed collections](#typed-collections) | the element in the form its typed write takes |
 
 ### Read results
 
@@ -238,9 +239,14 @@ rule: `BACnetClient.read_property` and `read_property_multiple` (and their
 broken framing (a length past the end, an unmatched opening or closing tag)
 is an error.
 
-- **Context-tagged content** comes back as `application_data` whose `.value`
-  holds the octets as served. Constructed values such as a Recipient_List, a
-  Group's Present_Value, a Port_Filter, Active_COV_Subscriptions or a
+- **A typed collection**, one of the constructed lists and arrays in
+  [the table below](#typed-collections), reads in the form its typed write
+  takes: a whole read is a `list` of the elements, and an indexed read one
+  element tagged with its production. A value that doesn't decode as those
+  elements, to the last octet, falls through to the rules below.
+- **Other context-tagged content** comes back as `application_data` whose
+  `.value` holds the octets as served. Constructed values such as
+  Active_COV_Subscriptions, a Load Control's Requested_Shed_Level or a
   timestamp take this form, as local reads of them always have. Element
   boundaries of a constructed list aren't marked in the octets, so the
   binding doesn't split one: decode the octets with the datatype's layout,
@@ -266,17 +272,47 @@ is an error.
 
 `array_index=0` reads an array's size. Any other index reads one element,
 shaped by the same rules: a single application value is bare
-(`Object_List[2]`), an element of several application fields is a `list`
-(a Staging's `Stages[1]`: limit, values, deadband), and a context-tagged
-element is `application_data` (`Port_Filter[2]`, `Event_Time_Stamps[1]`).
+(`Object_List[2]`), an element of a typed collection is that element
+(`Port_Filter[2]` is a `port_permission`), an element of several application
+fields is a `list`, and any other context-tagged element is
+`application_data` (`Event_Time_Stamps[1]`).
 
 ```python
 objects = await client.read_property(address, device, PropertyIdentifier.OBJECT_LIST)
 objects.tag    # "list", even for a device with one object
 recipients = await client.read_property(address, nc, PropertyIdentifier.RECIPIENT_LIST)
-recipients.tag    # "application_data" (or "list" with no elements when empty)
-recipients.value  # the BACnetDestination octets, every destination
+recipients.tag    # "list"
+recipients.value  # [{"recipient": {"kind": "device", ...}, "process_identifier": 1, ...}, ...]
+port = await client.read_property(address, nf, PropertyIdentifier.PORT_FILTER, 2)
+port.tag, port.value  # ("port_permission", (1, False))
 ```
+
+#### Typed collections
+
+These properties hold lists or arrays of constructed elements that the
+binding also takes as typed values, so their reads come back in the same
+form (#1310). A whole read's `.value` is a list of the elements, and a script
+can hand it back to the typed write; an empty collection is
+`PropertyValue.list([])`. Each element keeps the octets it was read from, so
+writing the value back (`write_property`, `write_property_local`) sends them
+unchanged. Two values are equal when they carry the same octets and the same
+element production, so a typed read doesn't equal
+`PropertyValue.application_data` of its octets.
+
+| Object type | Property | Element tag | Element `.value` | Typed write |
+|-------------|----------|-------------|------------------|-------------|
+| Notification Class, Notification Forwarder | Recipient_List | `"destination"` | a `Destination` mapping with every key | `add_notification_forwarder(recipients=...)` |
+| Notification Forwarder | Port_Filter | `"port_permission"` | `(port_id, enabled)` | `add_notification_forwarder(port_filter=...)` |
+| Group | List_Of_Group_Members | `"read_access_specification"` | `(object_id, [(property_id, array_index), ...])` | `add_group(members=...)` |
+| Group | Present_Value | `"read_access_result"` | a `read_property_multiple` result: `{"object_id": ..., "results": [...]}` | none: the members' results |
+| Command | Action | `"action_list"` | a list of `ActionCommand` mappings with every key | `add_command(action=...)` |
+| Access Door, Access Point, Staging | Door_Members, Access_Doors, Target_References | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` when the reference names a device | `door_members=`, `access_doors=`, `target_references=` |
+| Credential Data Input | Supported_Formats | `"authentication_factor_format"` | the format type, or `(format_type, vendor_id, vendor_format)` when it has vendor members (a missing one is `None`) | `add_credential_data_input(supported_formats=...)`, paired with Supported_Format_Classes |
+| Staging | Stages | `"stage_limit_value"` | `(limit, values, deadband)`, `values` a `list[bool]` | `add_staging(stages=...)` |
+
+A Group's Present_Value results, and an `ActionCommand`'s `property_value`,
+are themselves read results: each value is shaped as a read of the property it
+names would be.
 
 ---
 
@@ -1622,8 +1658,9 @@ raises `BacnetProtocolError`. `port_filter` serves Port_Filter as
 `(port_id, enabled)` pairs, one per network port; the server receives through
 Port_ID 0, and without `port_filter` the property is absent. Clients can still
 change both lists over the network, within the limits Port_Filter's writes
-allow. Subscribed_Recipients save failures are counted by
-[`forwarder_save_counters()`](#forwarder_save_counters---dictint-forwardersavecounters).
+allow. Both read back in these forms, each destination with every key (see
+[typed collections](#typed-collections)). Subscribed_Recipients save failures
+are counted by [`forwarder_save_counters()`](#forwarder_save_counters---dictint-forwardersavecounters).
 
 `initial_source` is required and becomes the Alert Enrollment object's
 read-only `Present_Value`. This is an intentional breaking correction; there
@@ -2068,8 +2105,10 @@ server.add_staging(
 per element, each a list of `ActionCommand` mappings with
 `object_identifier`, `property_identifier` and `property_value`, and optionally
 `property_array_index`, `priority`, `post_delay` (seconds), `quit_on_failure`
-(False when omitted) and `device_identifier`. `action_text` serves Action_Text,
-one text per list. Both are read-only over the network. A wrong shape or Python
+and `write_successful` (both False when omitted) and `device_identifier`.
+`action_text` serves Action_Text, one text per list. Both are read-only over
+the network. Action reads back as these mappings with every key, the
+Write_Successful flags included (see [typed collections](#typed-collections)). A wrong shape or Python
 type raises TypeError, and an unknown or missing key raises ValueError. The
 object's own setters refuse a priority outside 1 to 16, a value with no
 encoding, or a text count that differs from the list count, raising
@@ -2233,7 +2272,8 @@ each edge, OUT_OF_SERVICE on entry and OUT_OF_SERVICE_RELINQUISHED on the
 return, each with the next Access_Event_Tag and the Device clock's time, and
 each sends the point's COV report. Supported_Formats,
 Supported_Format_Classes, Door_Members and Access_Doors read as arrays (index
-0 is the size).
+0 is the size), each reference and format in the form its keyword argument
+takes (see [typed collections](#typed-collections)).
 
 #### Transportation
 
@@ -2273,6 +2313,9 @@ member by member when it is added, with the same `ValueError` and
 rebuilds the Group's Present_Value from the members on every read, one result
 per member, and each member row counts against `rpm_max_result_elements`; a
 read past it is aborted with OUT_OF_RESOURCES (see [RPM budgets](rpm-budget.md)).
+List_Of_Group_Members reads back in the spec shape, and Present_Value as the
+`read_property_multiple` results of the members (see
+[typed collections](#typed-collections)).
 
 #### Extended Value Types
 

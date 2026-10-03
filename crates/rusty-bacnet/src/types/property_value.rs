@@ -1,3 +1,4 @@
+use super::constructed_read::Element;
 use super::*;
 
 // ---------------------------------------------------------------------------
@@ -17,9 +18,16 @@ use super::*;
 ///
 /// Read results with `.value` (native Python type) and `.tag` (type name).
 #[pyclass(name = "PropertyValue", frozen, from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PyPropertyValue {
+    /// The value as it travels: what a write of this value encodes.
     pub(crate) inner: primitives::PropertyValue,
+    /// Set on a typed read of a constructed collection (#1310), naming its
+    /// elements' production. With `inner` one `ApplicationData`, the value
+    /// is one element; with `inner` a `List` of them, the whole collection.
+    /// `tag` and `value` follow it, while `inner` keeps each element's
+    /// octets as read.
+    pub(crate) element: Option<Element>,
 }
 
 impl PyPropertyValue {
@@ -28,7 +36,18 @@ impl PyPropertyValue {
     }
 
     pub fn from_rust(value: primitives::PropertyValue) -> Self {
-        Self { inner: value }
+        Self {
+            inner: value,
+            element: None,
+        }
+    }
+
+    /// A typed read of constructed elements; see [`Self::element`].
+    pub(crate) fn constructed(value: primitives::PropertyValue, element: Element) -> Self {
+        Self {
+            inner: value,
+            element: Some(element),
+        }
     }
 }
 
@@ -87,72 +106,52 @@ impl PyPropertyValue {
 
     #[staticmethod]
     fn null() -> Self {
-        Self {
-            inner: primitives::PropertyValue::Null,
-        }
+        Self::from_rust(primitives::PropertyValue::Null)
     }
 
     #[staticmethod]
     fn boolean(value: bool) -> Self {
-        Self {
-            inner: primitives::PropertyValue::Boolean(value),
-        }
+        Self::from_rust(primitives::PropertyValue::Boolean(value))
     }
 
     #[staticmethod]
     fn unsigned(value: u64) -> Self {
-        Self {
-            inner: primitives::PropertyValue::Unsigned(value),
-        }
+        Self::from_rust(primitives::PropertyValue::Unsigned(value))
     }
 
     #[staticmethod]
     fn signed(value: i32) -> Self {
-        Self {
-            inner: primitives::PropertyValue::Signed(value),
-        }
+        Self::from_rust(primitives::PropertyValue::Signed(value))
     }
 
     #[staticmethod]
     fn real(value: f32) -> Self {
-        Self {
-            inner: primitives::PropertyValue::Real(value),
-        }
+        Self::from_rust(primitives::PropertyValue::Real(value))
     }
 
     #[staticmethod]
     fn double(value: f64) -> Self {
-        Self {
-            inner: primitives::PropertyValue::Double(value),
-        }
+        Self::from_rust(primitives::PropertyValue::Double(value))
     }
 
     #[staticmethod]
     fn character_string(value: String) -> Self {
-        Self {
-            inner: primitives::PropertyValue::CharacterString(value),
-        }
+        Self::from_rust(primitives::PropertyValue::CharacterString(value))
     }
 
     #[staticmethod]
     fn octet_string(value: Vec<u8>) -> Self {
-        Self {
-            inner: primitives::PropertyValue::OctetString(value),
-        }
+        Self::from_rust(primitives::PropertyValue::OctetString(value))
     }
 
     #[staticmethod]
     fn enumerated(value: u32) -> Self {
-        Self {
-            inner: primitives::PropertyValue::Enumerated(value),
-        }
+        Self::from_rust(primitives::PropertyValue::Enumerated(value))
     }
 
     #[staticmethod]
     fn object_identifier(oid: &PyObjectIdentifier) -> Self {
-        Self {
-            inner: primitives::PropertyValue::ObjectIdentifier(oid.to_rust()),
-        }
+        Self::from_rust(primitives::PropertyValue::ObjectIdentifier(oid.to_rust()))
     }
 
     /// Create a Date property value.
@@ -163,14 +162,12 @@ impl PyPropertyValue {
     /// `day_of_week` is 1=Monday..7=Sunday (or 255 for unspecified).
     #[staticmethod]
     fn date(year: u16, month: u8, day: u8, day_of_week: u8) -> Self {
-        Self {
-            inner: primitives::PropertyValue::Date(primitives::Date {
-                year: year.saturating_sub(1900) as u8,
-                month,
-                day,
-                day_of_week,
-            }),
-        }
+        Self::from_rust(primitives::PropertyValue::Date(primitives::Date {
+            year: year.saturating_sub(1900) as u8,
+            month,
+            day,
+            day_of_week,
+        }))
     }
 
     /// Create a Time property value.
@@ -181,14 +178,12 @@ impl PyPropertyValue {
     /// `hundredths` is 0-99 (or 255 for unspecified).
     #[staticmethod]
     fn time(hour: u8, minute: u8, second: u8, hundredths: u8) -> Self {
-        Self {
-            inner: primitives::PropertyValue::Time(primitives::Time {
-                hour,
-                minute,
-                second,
-                hundredths,
-            }),
-        }
+        Self::from_rust(primitives::PropertyValue::Time(primitives::Time {
+            hour,
+            minute,
+            second,
+            hundredths,
+        }))
     }
 
     /// Create a BitString property value.
@@ -197,17 +192,15 @@ impl PyPropertyValue {
     /// `data` is the raw bit data bytes.
     #[staticmethod]
     fn bit_string(unused_bits: u8, data: Vec<u8>) -> Self {
-        Self {
-            inner: primitives::PropertyValue::BitString { unused_bits, data },
-        }
+        Self::from_rust(primitives::PropertyValue::BitString { unused_bits, data })
     }
 
     /// Create a List (array) property value from a list of PropertyValue items.
     #[staticmethod]
     fn list(items: Vec<PyPropertyValue>) -> Self {
-        Self {
-            inner: primitives::PropertyValue::List(items.into_iter().map(|pv| pv.inner).collect()),
-        }
+        Self::from_rust(primitives::PropertyValue::List(
+            items.into_iter().map(|pv| pv.inner).collect(),
+        ))
     }
 
     /// Create an ApplicationData value from pre-encoded application-layer
@@ -215,83 +208,65 @@ impl PyPropertyValue {
     /// BACnetEventParameter). The bytes are emitted verbatim on the wire.
     #[staticmethod]
     fn application_data(bytes: Vec<u8>) -> Self {
-        Self {
-            inner: primitives::PropertyValue::ApplicationData(bytes),
-        }
+        Self::from_rust(primitives::PropertyValue::ApplicationData(bytes))
     }
 
     // -- Accessors -----------------------------------------------------------
 
-    /// The BACnet type tag (e.g. "real", "unsigned", "boolean").
+    /// The BACnet type tag (e.g. "real", "unsigned", "boolean"). One element
+    /// of a typed constructed read is named by its production
+    /// ("destination", "port_permission", ...); a whole one is a "list".
     #[getter]
     fn tag(&self) -> &str {
-        match &self.inner {
-            primitives::PropertyValue::Null => "null",
-            primitives::PropertyValue::Boolean(_) => "boolean",
-            primitives::PropertyValue::Unsigned(_) => "unsigned",
-            primitives::PropertyValue::Signed(_) => "signed",
-            primitives::PropertyValue::Real(_) => "real",
-            primitives::PropertyValue::Double(_) => "double",
-            primitives::PropertyValue::OctetString(_) => "octet_string",
-            primitives::PropertyValue::CharacterString(_) => "character_string",
-            primitives::PropertyValue::BitString { .. } => "bit_string",
-            primitives::PropertyValue::Enumerated(_) => "enumerated",
-            primitives::PropertyValue::Date(_) => "date",
-            primitives::PropertyValue::Time(_) => "time",
-            primitives::PropertyValue::ObjectIdentifier(_) => "object_identifier",
-            primitives::PropertyValue::List(_) => "list",
-            primitives::PropertyValue::ApplicationData(_) => "application_data",
+        match (&self.inner, self.element) {
+            (primitives::PropertyValue::ApplicationData(_), Some(element)) => element.tag(),
+            (inner, _) => tag(inner),
         }
     }
 
     /// The value as a native Python type (float, int, str, bool, bytes, etc.).
+    /// A typed constructed element is the mapping or tuple its typed write
+    /// takes, and a whole typed collection a list of them.
     #[getter]
     fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        property_value_to_py(py, &self.inner)
-    }
-
-    fn __repr__(&self) -> String {
-        match &self.inner {
-            primitives::PropertyValue::Null => "PropertyValue.null()".to_string(),
-            primitives::PropertyValue::Boolean(b) => format!("PropertyValue.boolean({b})"),
-            primitives::PropertyValue::Unsigned(u) => format!("PropertyValue.unsigned({u})"),
-            primitives::PropertyValue::Signed(i) => format!("PropertyValue.signed({i})"),
-            primitives::PropertyValue::Real(f) => format!("PropertyValue.real({f})"),
-            primitives::PropertyValue::Double(f) => format!("PropertyValue.double({f})"),
-            primitives::PropertyValue::CharacterString(s) => {
-                format!("PropertyValue.character_string({s:?})")
+        match (&self.inner, self.element) {
+            (primitives::PropertyValue::ApplicationData(octets), Some(element)) => {
+                element.to_py(py, octets)
             }
-            primitives::PropertyValue::OctetString(b) => {
-                format!("PropertyValue.octet_string(<{} bytes>)", b.len())
+            (primitives::PropertyValue::List(items), Some(element)) => {
+                let list = pyo3::types::PyList::empty(py);
+                for item in items {
+                    list.append(match item {
+                        primitives::PropertyValue::ApplicationData(octets) => {
+                            element.to_py(py, octets)?
+                        }
+                        item => property_value_to_py(py, item)?,
+                    })?;
+                }
+                Ok(list.into_any().unbind())
             }
-            primitives::PropertyValue::BitString { data, .. } => {
-                format!("PropertyValue.bit_string(<{} bytes>)", data.len())
-            }
-            primitives::PropertyValue::Enumerated(e) => format!("PropertyValue.enumerated({e})"),
-            primitives::PropertyValue::Date(d) => {
-                format!("PropertyValue.date({}/{}/{})", d.year, d.month, d.day)
-            }
-            primitives::PropertyValue::Time(t) => {
-                format!("PropertyValue.time({}:{}:{})", t.hour, t.minute, t.second)
-            }
-            primitives::PropertyValue::ObjectIdentifier(oid) => {
-                format!(
-                    "PropertyValue.object_identifier({}, {})",
-                    oid.object_type(),
-                    oid.instance_number()
-                )
-            }
-            primitives::PropertyValue::List(elements) => {
-                format!("PropertyValue.list(<{} elements>)", elements.len())
-            }
-            primitives::PropertyValue::ApplicationData(bytes) => {
-                format!("PropertyValue.application_data(<{} bytes>)", bytes.len())
-            }
+            (inner, _) => property_value_to_py(py, inner),
         }
     }
 
+    fn __repr__(&self) -> String {
+        match (&self.inner, self.element) {
+            (primitives::PropertyValue::ApplicationData(octets), Some(element)) => {
+                format!("PropertyValue.{}(<{} bytes>)", element.tag(), octets.len())
+            }
+            (primitives::PropertyValue::List(items), Some(element)) => format!(
+                "PropertyValue.list(<{} {} elements>)",
+                items.len(),
+                element.tag()
+            ),
+            (inner, _) => repr(inner),
+        }
+    }
+
+    /// Equal when both carry the same value and, for a typed constructed
+    /// read, the same element production.
     fn __eq__(&self, other: &Self) -> bool {
-        self.inner == other.inner
+        self == other
     }
 
     fn __hash__(&self) -> u64 {
@@ -299,6 +274,69 @@ impl PyPropertyValue {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         std::mem::discriminant(&self.inner).hash(&mut h);
         format!("{:?}", self.inner).hash(&mut h);
+        self.element.hash(&mut h);
         h.finish()
+    }
+}
+
+/// The tag of a value with no typed constructed form.
+fn tag(value: &primitives::PropertyValue) -> &'static str {
+    match value {
+        primitives::PropertyValue::Null => "null",
+        primitives::PropertyValue::Boolean(_) => "boolean",
+        primitives::PropertyValue::Unsigned(_) => "unsigned",
+        primitives::PropertyValue::Signed(_) => "signed",
+        primitives::PropertyValue::Real(_) => "real",
+        primitives::PropertyValue::Double(_) => "double",
+        primitives::PropertyValue::OctetString(_) => "octet_string",
+        primitives::PropertyValue::CharacterString(_) => "character_string",
+        primitives::PropertyValue::BitString { .. } => "bit_string",
+        primitives::PropertyValue::Enumerated(_) => "enumerated",
+        primitives::PropertyValue::Date(_) => "date",
+        primitives::PropertyValue::Time(_) => "time",
+        primitives::PropertyValue::ObjectIdentifier(_) => "object_identifier",
+        primitives::PropertyValue::List(_) => "list",
+        primitives::PropertyValue::ApplicationData(_) => "application_data",
+    }
+}
+
+/// The repr of a value with no typed constructed form.
+fn repr(value: &primitives::PropertyValue) -> String {
+    match value {
+        primitives::PropertyValue::Null => "PropertyValue.null()".to_string(),
+        primitives::PropertyValue::Boolean(b) => format!("PropertyValue.boolean({b})"),
+        primitives::PropertyValue::Unsigned(u) => format!("PropertyValue.unsigned({u})"),
+        primitives::PropertyValue::Signed(i) => format!("PropertyValue.signed({i})"),
+        primitives::PropertyValue::Real(f) => format!("PropertyValue.real({f})"),
+        primitives::PropertyValue::Double(f) => format!("PropertyValue.double({f})"),
+        primitives::PropertyValue::CharacterString(s) => {
+            format!("PropertyValue.character_string({s:?})")
+        }
+        primitives::PropertyValue::OctetString(b) => {
+            format!("PropertyValue.octet_string(<{} bytes>)", b.len())
+        }
+        primitives::PropertyValue::BitString { data, .. } => {
+            format!("PropertyValue.bit_string(<{} bytes>)", data.len())
+        }
+        primitives::PropertyValue::Enumerated(e) => format!("PropertyValue.enumerated({e})"),
+        primitives::PropertyValue::Date(d) => {
+            format!("PropertyValue.date({}/{}/{})", d.year, d.month, d.day)
+        }
+        primitives::PropertyValue::Time(t) => {
+            format!("PropertyValue.time({}:{}:{})", t.hour, t.minute, t.second)
+        }
+        primitives::PropertyValue::ObjectIdentifier(oid) => {
+            format!(
+                "PropertyValue.object_identifier({}, {})",
+                oid.object_type(),
+                oid.instance_number()
+            )
+        }
+        primitives::PropertyValue::List(elements) => {
+            format!("PropertyValue.list(<{} elements>)", elements.len())
+        }
+        primitives::PropertyValue::ApplicationData(bytes) => {
+            format!("PropertyValue.application_data(<{} bytes>)", bytes.len())
+        }
     }
 }

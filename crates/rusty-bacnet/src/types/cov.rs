@@ -84,7 +84,7 @@ impl PyCovNotification {
                 &pv.value,
             ) {
                 Ok(val) => {
-                    dict.set_item("value", PyPropertyValue::from_rust(val))?;
+                    dict.set_item("value", val)?;
                 }
                 Err(_) => {
                     dict.set_item("value", PyBytes::new(py, &pv.value))?;
