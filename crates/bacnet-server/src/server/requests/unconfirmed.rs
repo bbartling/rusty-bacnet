@@ -1,6 +1,6 @@
 //! Unconfirmed-service dispatch (Who-Is, Who-Has, time sync, text, event
-//! notifications for the forwarders, and Audit notification receipt) — see
-//! `EXECUTED_UNCONFIRMED`.
+//! notifications for the forwarders, Audit notification receipt and
+//! WriteGroup) — see `EXECUTED_UNCONFIRMED`.
 //!
 //! Split out of `requests.rs` to keep every file under the 700-LOC cap.
 
@@ -25,6 +25,7 @@ pub(crate) const EXECUTED_UNCONFIRMED: &[UnconfirmedServiceChoice] = &[
     UnconfirmedServiceChoice::UNCONFIRMED_TEXT_MESSAGE,
     UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION,
     UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION,
+    UnconfirmedServiceChoice::WRITE_GROUP,
 ];
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -342,6 +343,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 Ok(None) => {}
                 Err(error) => debug!(%error, "Ignoring UnconfirmedAuditNotification request"),
             }
+        } else if req.service_choice == UnconfirmedServiceChoice::WRITE_GROUP {
+            Self::execute_write_group(services, &req.service_request).await;
         } else {
             debug!(
                 service = req.service_choice.to_raw(),

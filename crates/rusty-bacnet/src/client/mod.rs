@@ -10,6 +10,7 @@ use pyo3::types::{PyBytes, PyDict};
 use tokio::sync::Mutex;
 
 use bacnet_client::client;
+use bacnet_client::client::WriteGroupDestination;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;

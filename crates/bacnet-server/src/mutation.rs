@@ -61,6 +61,11 @@ impl MutationTrust {
 /// include claimed link/routed addresses separately from the sealed direct-SC
 /// leaf/incarnation snapshot available to an installed authorizer.
 /// DCC, admission, decoding and WPM element validation retain their existing precedence.
+///
+/// Inbound WriteGroup is not one of the ten, and no authorizer can decide it yet
+/// (#1319). The server runs it only under `Permissive` with no authorizer installed
+/// and drops every WriteGroup under `DenyAll` or with any authorizer, even an
+/// allow-all one. Those drops aren't counted in [`MutationDecisionCounters`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum MutationPolicy {
     /// Preserve default-allow behavior: an absent authorizer allows; an installed
@@ -196,6 +201,9 @@ impl std::fmt::Debug for MutationAuthorizationContext {
 /// invoke policy once, including multi-element list/subscription requests.
 /// Callbacks can run concurrently and WPM holds the database write lock: do not
 /// block, reenter the server, or perform side effects from a callback.
+///
+/// Inbound WriteGroup never reaches the callback: while one is installed, whatever
+/// it would return, the server drops every WriteGroup without counting it (#1319).
 pub type MutationAuthorizer = Arc<dyn Fn(&MutationAuthorizationContext) -> bool + Send + Sync>;
 
 /// Saturating lifetime decision totals for one covered service.
@@ -216,6 +224,8 @@ pub struct MutationServiceCounters {
 /// WPM counts each element reaching its gate, not requests or an unvisited suffix.
 /// Pre-gate failures, duplicates and DCC drops do not count. In permissive mode an
 /// absent authorizer allows without decoding, so a later handler failure still counts.
+/// An inbound WriteGroup dropped under `DenyAll` or an installed authorizer isn't a
+/// decision and doesn't count (#1319).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MutationDecisionCounters {
     /// WriteProperty decisions.
