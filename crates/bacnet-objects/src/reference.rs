@@ -131,7 +131,11 @@ pub(crate) fn decode_reference_write(
 
 /// Join a list of `ApplicationData` chunks into one run of octets. A list
 /// that mixes chunks with decoded values can't be one encoding:
-/// INVALID_DATA_ENCODING.
+/// INVALID_DATA_ENCODING. Over the wire such a list is what Averaging gets
+/// for octets that open with a context tag and then carry an
+/// application-tagged member. When that first tag is 0, a Trend Log, which
+/// decodes the same octets whole in `device_reference.rs`, answers them as
+/// an encoding error too.
 fn join_chunks(items: &[PropertyValue]) -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::new();
     for item in items {

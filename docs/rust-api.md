@@ -2476,8 +2476,9 @@ Object_Property_Reference reads as the context-tagged
 `BACnetDeviceObjectPropertyReference`, a `PropertyValue::ApplicationData` with
 no Device member (Null while unset), and a write takes that encoding back
 (#1182). The flat application-tagged list reads used to serve is now
-INVALID_DATA_TYPE, and a Device member that isn't a Device identifier
-VALUE_OUT_OF_RANGE.
+INVALID_DATA_TYPE, as are octets that don't open with the object
+identifier's context tag 0 (#1312), and a Device member that isn't a Device
+identifier VALUE_OUT_OF_RANGE.
 
 Staging uses an explicit atomic configuration; the former stage-count-only
 constructor is intentionally removed because it could not create a valid

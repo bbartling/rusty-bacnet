@@ -364,6 +364,29 @@ fn averaging_object_property_reference_over_the_wire() {
         ErrorCode::INVALID_DATA_TYPE,
         "flat reference",
     );
+    // Octets that don't open with the object identifier's primitive tag 0
+    // aren't this datatype either: the members out of order, or wrapped in a
+    // [0] frame (#1312, as device_reference.rs answers for #1311). Octets
+    // that open with it and then break stay an encoding error.
+    for (bytes, code, context) in [
+        (
+            [&AI_7_PV[5..], &AI_7_PV[..5]].concat(),
+            ErrorCode::INVALID_DATA_TYPE,
+            "[1] before [0]",
+        ),
+        (
+            [&[0x0E][..], &AI_7_PV, &[0x0F]].concat(),
+            ErrorCode::INVALID_DATA_TYPE,
+            "reference wrapped in a [0] frame",
+        ),
+        (
+            vec![0x0C, 0x00, 0x00, 0x00, 0x07, 0x91, 0x55],
+            ErrorCode::INVALID_DATA_ENCODING,
+            "[0] then an application-tagged property",
+        ),
+    ] {
+        assert_refused(&mut db, oid, opr, bytes, code, context);
+    }
     assert_refused(
         &mut db,
         oid,
