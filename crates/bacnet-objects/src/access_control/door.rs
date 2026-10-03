@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::door_out_of_service::DoorState;
 use super::*;
 use crate::traits::MonotonicClock;
 
@@ -31,16 +32,23 @@ pub const DEFAULT_DOOR_OPEN_TOO_LONG_TIME: u32 = 300;
 /// pulse written below a priority already commanded is relinquished at once,
 /// and a pulse time of zero relinquishes at once too. Changing a pulse time
 /// leaves an armed deadline as it was.
+///
+/// While Out_Of_Service is TRUE a client can simulate Door_Status,
+/// Lock_Status and Door_Alarm_State by writing them, and the door's own values
+/// come back on the return to service (Clause 12.26.9, Table 12-30 footnote 1;
+/// #1131). The module `door_out_of_service` has the details.
 #[derive(Clone)]
 pub struct AccessDoorObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
     present_value: DoorValue,
-    door_status: DoorStatus,
-    lock_status: LockStatus,
+    /// Door_Status, Lock_Status and Door_Alarm_State as served: the device's,
+    /// or a client's simulation while Out_Of_Service is TRUE.
+    state: DoorState,
+    /// The device's own door state, put aside while Out_Of_Service is TRUE.
+    device_state: Option<DoorState>,
     secured_status: DoorSecuredStatus,
-    door_alarm_state: DoorAlarmState,
     door_members: Vec<ObjectIdentifier>,
     status_flags: StatusFlags,
     /// Event_State.
@@ -75,10 +83,9 @@ impl AccessDoorObject {
             name: name.into(),
             description: String::new(),
             present_value: DoorValue::LOCK,
-            door_status: DoorStatus::CLOSED,
-            lock_status: LockStatus::LOCKED,
+            state: DoorState::SECURE,
+            device_state: None,
             secured_status: DoorSecuredStatus::SECURED,
-            door_alarm_state: DoorAlarmState::NORMAL,
             door_members: Vec::new(),
             status_flags: StatusFlags::empty(),
             event_state: EventState::NORMAL,
@@ -127,13 +134,36 @@ impl AccessDoorObject {
         self.door_open_too_long_time = tenths;
     }
 
+    /// Set Door_Status, the open or closed state the door's contact reports.
+    ///
+    /// While Out_Of_Service is TRUE a client's simulated value keeps being
+    /// served, and this one takes over on the return to service.
+    pub fn set_door_status(&mut self, status: DoorStatus) {
+        self.device_state_mut().door_status = status;
+    }
+
+    /// Set Lock_Status, the state the door lock's monitor reports.
+    ///
+    /// While Out_Of_Service is TRUE a client's simulated value keeps being
+    /// served, and this one takes over on the return to service.
+    pub fn set_lock_status(&mut self, status: LockStatus) {
+        self.device_state_mut().lock_status = status;
+    }
+
     /// Set Door_Alarm_State, the alarm condition the application's door
     /// logic has worked out (Clause 12.26 leaves that to the device).
     ///
-    /// A change of it triggers a SubscribeCOV notification (Table 13-1).
-    /// Over the network the property stays read-only.
+    /// A change of the value served triggers a SubscribeCOV notification
+    /// (Table 13-1). While Out_Of_Service is TRUE a client's simulated value
+    /// keeps being served, and this one takes over on the return to service.
     pub fn set_door_alarm_state(&mut self, state: DoorAlarmState) {
-        self.door_alarm_state = state;
+        self.device_state_mut().door_alarm_state = state;
+    }
+
+    /// The device's own door state: the one put aside while out of service,
+    /// else the one served.
+    fn device_state_mut(&mut self) -> &mut DoorState {
+        self.device_state.as_mut().unwrap_or(&mut self.state)
     }
 
     fn recalculate_present_value(&mut self) {
@@ -248,17 +278,17 @@ impl BACnetObject for AccessDoorObject {
                 Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
             }
             p if p == PropertyIdentifier::DOOR_STATUS => {
-                Ok(PropertyValue::Enumerated(self.door_status.to_raw()))
+                Ok(PropertyValue::Enumerated(self.state.door_status.to_raw()))
             }
             p if p == PropertyIdentifier::LOCK_STATUS => {
-                Ok(PropertyValue::Enumerated(self.lock_status.to_raw()))
+                Ok(PropertyValue::Enumerated(self.state.lock_status.to_raw()))
             }
             p if p == PropertyIdentifier::SECURED_STATUS => {
                 Ok(PropertyValue::Enumerated(self.secured_status.to_raw()))
             }
-            p if p == PropertyIdentifier::DOOR_ALARM_STATE => {
-                Ok(PropertyValue::Enumerated(self.door_alarm_state.to_raw()))
-            }
+            p if p == PropertyIdentifier::DOOR_ALARM_STATE => Ok(PropertyValue::Enumerated(
+                self.state.door_alarm_state.to_raw(),
+            )),
             p if p == PropertyIdentifier::DOOR_MEMBERS => Ok(PropertyValue::List(
                 self.door_members
                     .iter()
@@ -301,12 +331,22 @@ impl BACnetObject for AccessDoorObject {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
+        // The door's entry edge is always seen (it starts in service and only
+        // this write moves Out_Of_Service), so there is no fallback state.
+        if let Some(result) = common::write_out_of_service_with_restore(
+            &mut self.out_of_service,
+            &mut self.state,
+            &mut self.device_state,
+            None,
+            property,
+            &value,
+        ) {
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
+            return result;
+        }
+        if let Some(result) = self.state.write(self.out_of_service, property, &value) {
             return result;
         }
         match property {

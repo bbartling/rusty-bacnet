@@ -123,7 +123,9 @@ fn hub_response_silence_has_scoped_policy_and_executable_anchors() {
     ] {
         assert!(normalized.contains(phrase), "{phrase}");
     }
-    assert!(read_repo_file("CHANGELOG.md").contains("#accepting-hub-unsolicited-response-silence"));
+    assert!(
+        read_published_doc("CHANGELOG.md").contains("#accepting-hub-unsolicited-response-silence")
+    );
     assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
 }
 
@@ -179,7 +181,7 @@ fn hub_unknown_transit_evidence_keeps_family_scope_and_existing_lifecycle() {
     }
     assert_eq!(count, 11);
     assert!(STANDARD_LEDGER.contains("## Hub Unknown transit and Result return\n"));
-    assert!(read_repo_file("CHANGELOG.md").contains("#hub-unknown-transit-and-result-return"));
+    assert!(read_published_doc("CHANGELOG.md").contains("#hub-unknown-transit-and-result-return"));
     assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
 }
 
@@ -278,6 +280,6 @@ fn hub_resolution_transit_is_unicast_hub_only_with_executable_evidence() {
     ] {
         assert!(section.contains(phrase), "{phrase}");
     }
-    assert!(read_repo_file("CHANGELOG.md").contains("#hub-address-resolution-transit"));
+    assert!(read_published_doc("CHANGELOG.md").contains("#hub-address-resolution-transit"));
     assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
 }

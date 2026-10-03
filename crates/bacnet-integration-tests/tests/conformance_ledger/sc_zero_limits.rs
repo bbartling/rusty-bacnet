@@ -100,7 +100,7 @@ fn zero_limit_docs_keep_capacity_policy_separate_from_immutable_identity_closeou
     assert!(closeout.contains("bde599405c38e2ceb62e23ee628a0f15d1ac9fe2"));
     assert_eq!(closeout.matches("\n| A").count(), 6);
     for path in ["CHANGELOG.md", "docs/rust-api.md", "docs/python-api.md"] {
-        let body = read_repo_file(path);
+        let body = read_published_doc(path);
         assert!(body.contains("received-zero-capacity-admission"), "{path}");
         let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
         for phrase in [

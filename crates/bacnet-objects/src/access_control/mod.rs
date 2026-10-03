@@ -26,6 +26,7 @@ mod credential;
 mod credential_data_input;
 mod credential_rules;
 mod door;
+mod door_out_of_service;
 mod metadata_identity;
 mod metadata_topology;
 mod point;
@@ -42,6 +43,8 @@ pub use zone::*;
 
 #[cfg(test)]
 mod credential_tests;
+#[cfg(test)]
+mod door_out_of_service_tests;
 #[cfg(test)]
 mod door_pulse_tests;
 #[cfg(test)]

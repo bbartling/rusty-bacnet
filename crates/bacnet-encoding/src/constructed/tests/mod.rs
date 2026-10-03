@@ -8,6 +8,7 @@ use bacnet_types::constructed::{
 use bacnet_types::enums::ObjectType;
 
 mod access_credential;
+mod action_list;
 mod assigned_landing_calls;
 mod calendar;
 mod cov_subscription;

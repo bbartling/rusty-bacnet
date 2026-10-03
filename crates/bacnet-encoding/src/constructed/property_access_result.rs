@@ -12,11 +12,10 @@
 use bacnet_types::constructed::{AccessResult, BACnetPropertyAccessResult};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
 
 use super::{
-    decode_app_enumerated, decode_dopr_body, encode_dopr_body, expect_closing, MAX_FRAMED_ITEMS,
+    decode_app_enumerated, decode_dopr_body, decode_framed_value, encode_dopr_body, expect_closing,
 };
 use crate::{primitives, tags};
 
@@ -61,6 +60,9 @@ pub fn encode_property_access_result(
 /// whole, empty included). A context-tagged element in it decodes to
 /// [`PropertyValue::ApplicationData`], so the value re-encodes to the same
 /// octets.
+///
+/// [`PropertyValue::List`]: bacnet_types::primitives::PropertyValue::List
+/// [`PropertyValue::ApplicationData`]: bacnet_types::primitives::PropertyValue::ApplicationData
 pub fn decode_property_access_result(
     data: &[u8],
     offset: usize,
@@ -68,8 +70,7 @@ pub fn decode_property_access_result(
     let (reference, offset) = decode_dopr_body(data, offset, WHAT)?;
     let (tag, content) = tags::decode_tag(data, offset)?;
     let (access_result, end) = if tag.is_opening_tag(4) {
-        let (inner, end) = tags::extract_context_value(data, content, 4)?;
-        let value = decode_value(&data[..content + inner.len()], content)?;
+        let (value, end) = decode_framed_value(data, content, 4, WHAT)?;
         (AccessResult::Value(value), end)
     } else if tag.is_opening_tag(5) {
         let (class, next) = decode_app_enumerated(data, content, WHAT)?;
@@ -97,26 +98,4 @@ pub fn decode_property_access_result(
         },
         end,
     ))
-}
-
-/// The value between `start` and the end of `data`: one element as itself,
-/// any other count as a list.
-fn decode_value(data: &[u8], start: usize) -> Result<PropertyValue, Error> {
-    let mut values = Vec::new();
-    let mut offset = start;
-    while offset < data.len() {
-        if values.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
-                offset,
-                format!("{WHAT}: property-value exceeds item limit"),
-            ));
-        }
-        let (value, next) = primitives::decode_application_value(data, offset)?;
-        values.push(value);
-        offset = next;
-    }
-    Ok(match <[PropertyValue; 1]>::try_from(values) {
-        Ok([value]) => value,
-        Err(values) => PropertyValue::List(values),
-    })
 }

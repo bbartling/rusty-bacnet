@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::{fs, process::Command};
 
+use published_doc::read_published_doc;
 use serde_json::{json, Value};
 
 const LEDGER_JSON: &str = include_str!("../../../docs/conformance/bacnet-135-2020.json");
@@ -14,6 +15,8 @@ const STANDARD_LEDGER: &str = include_str!("../../../docs/conformance/standard-1
 
 #[path = "conformance_ledger/endpoint_device_write.rs"]
 mod endpoint_device_write;
+#[path = "conformance_ledger/published_doc.rs"]
+mod published_doc;
 #[path = "conformance_ledger/sc_hub_response_silence.rs"]
 mod sc_hub_response_silence;
 #[path = "conformance_ledger/sc_mu_liveness.rs"]
@@ -579,7 +582,7 @@ fn sc_identity_closeout_links_and_symbol_anchors_resolve_offline() {
         ("docs/python-api.md", ""),
     ] {
         let link = format!("]({prefix}{target})");
-        assert!(read_repo_file(doc).contains(&link), "{doc}");
+        assert!(read_published_doc(doc).contains(&link), "{doc}");
     }
     let links = sc_identity_closeout()
         .split('[')

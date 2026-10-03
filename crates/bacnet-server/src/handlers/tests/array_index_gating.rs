@@ -107,7 +107,21 @@ fn gating_db() -> ObjectDatabase {
     db.add(Box::new(StructuredViewObject::new(1, "SV-1").unwrap()))
         .unwrap();
     let mut command = CommandObject::new(1, "CMD-1").unwrap();
-    command.set_action(vec![vec![1, 2, 3]]);
+    command
+        .set_action(vec![bacnet_types::constructed::BACnetActionList {
+            commands: vec![bacnet_types::constructed::BACnetActionCommand {
+                device_identifier: None,
+                object_identifier: oid(ObjectType::ANALOG_OUTPUT, 1),
+                property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                property_array_index: None,
+                property_value: PropertyValue::Real(1.0),
+                priority: None,
+                post_delay: None,
+                quit_on_failure: false,
+                write_successful: true,
+            }],
+        }])
+        .unwrap();
     db.add(Box::new(command)).unwrap();
     db.add(Box::new(staging(1, "STG-1"))).unwrap();
     db
@@ -411,10 +425,9 @@ fn true_arrays_pass_the_gate_on_read_property() {
 #[test]
 fn modeled_arrays_on_command_and_staging_pass_the_gate() {
     // Review FIX 1: ACTION (Table 12-12) and STAGES / STAGE_NAMES /
-    // TARGET_REFERENCES (Table 12-80) are BACnetARRAY[N]. The objects still
-    // return the whole value for any index (same documented residue as
-    // Global Group / Structured View) — the pin is that the gate ADMITS the
-    // index instead of rejecting PROPERTY_IS_NOT_AN_ARRAY.
+    // TARGET_REFERENCES (Table 12-80) are BACnetARRAY[N]. The pin is that the
+    // gate ADMITS the index instead of rejecting PROPERTY_IS_NOT_AN_ARRAY;
+    // read_rpm::command and the Staging tests pin the element octets.
     let db = gating_db();
     for &(property, object_type) in &[
         (PropertyIdentifier::ACTION, ObjectType::COMMAND),
