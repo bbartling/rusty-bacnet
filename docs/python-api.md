@@ -2247,9 +2247,9 @@ server.add_access_rights(
 missing or `None` member makes the rule apply at any time (ALWAYS) or at every
 access point (ALL). A wrong type raises `TypeError`; an unknown or missing key,
 or a device that isn't a Device, raises `ValueError`; a location naming
-another object type raises VALUE_OUT_OF_RANGE. Each rule reads back as
-`application_data` holding its BACnetAccessRule octets. The server stores and
-serves the rules; it doesn't evaluate them.
+another object type raises `BacnetProtocolError` (VALUE_OUT_OF_RANGE). Each
+rule reads back as `application_data` holding its BACnetAccessRule octets. The
+server stores and serves the rules; it doesn't evaluate them.
 
 Access Door, Access Point, Credential Data Input and Load Control take
 SubscribeCOV, and each report carries the values their Table 13-1 rows name:

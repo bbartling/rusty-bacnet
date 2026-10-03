@@ -1877,8 +1877,8 @@ framing, through the shared `bacnet-encoding` codecs.
   VALUE_OUT_OF_RANGE: a device member that isn't a Device, a specifier
   outside its two values, SPECIFIED without its reference, ALWAYS or ALL with
   a reference that isn't unspecified (instance 4194303), or a location that is
-  neither an Access Point nor an Access Zone. The object stores and serves the
-  rules; nothing in the stack evaluates them.
+  neither an Access Point, an Access Zone nor unspecified. The object stores
+  and serves the rules; nothing in the stack evaluates them.
 - **Device references**: a
   `BACnetDeviceObjectReference` whose device identifier is present must name
   a Device object (Clause 21);

@@ -2830,6 +2830,7 @@
    "code_anchors": [
     "crates/bacnet-types/src/constructed/access.rs::BACnetAccessRule",
     "crates/bacnet-types/src/enums/access.rs::AccessRuleTimeRangeSpecifier",
+    "crates/bacnet-types/src/enums/access.rs::AccessRuleLocationSpecifier",
     "crates/bacnet-encoding/src/constructed/access_rule.rs",
     "crates/bacnet-objects/src/access_control/rights.rs::AccessRightsObject",
     "crates/bacnet-objects/src/access_control/rights.rs::check_access_rule",
@@ -2839,9 +2840,9 @@
    "positive_tests": [
     "crates/bacnet-types/src/enums/tests/access_production.rs::access_rule_specifier_values_match_clause_21",
     "crates/bacnet-types/src/constructed/tests.rs::access_rule_new_sets_each_specifier_from_its_reference",
-    "crates/bacnet-encoding/src/constructed/tests/access_rule.rs::{access_rule_golden_bytes_and_round_trip,access_rule_decoder_keeps_what_the_object_judges,access_rules_decode_one_element_at_a_time}",
+    "crates/bacnet-encoding/src/constructed/tests/access_rule.rs::{access_rule_golden_bytes_and_round_trip,access_rule_decoder_keeps_what_the_object_judges,access_rules_decode_one_element_at_a_time,access_rule_all_keeps_an_unspecified_location}",
     "crates/bacnet-objects/src/access_control/rights_tests.rs::access_rights_rule_arrays_read_whole_and_by_index",
-    "crates/bacnet-server/src/handlers/tests/access_rights_rules.rs::access_rights_rule_arrays_read_per_index",
+    "crates/bacnet-server/src/handlers/tests/access_rights_rules.rs::{access_rights_rule_arrays_read_per_index,rpm_all_carries_both_configured_rule_arrays}",
     "crates/rusty-bacnet/src/types/access_rule_tests.rs::access_rule_mappings_fill_the_rule_and_default_to_always_and_all",
     "crates/rusty-bacnet/src/server/server_methods/access_rights_methods_tests.rs::python_access_rules_reach_both_arrays",
     "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsRulesTests::test_rules_reach_both_arrays_and_read_back",
@@ -2867,8 +2868,9 @@
     "Python sets both arrays through `add_access_rights(positive_access_rules=..., negative_access_rules=...)`: lists of `AccessRule` mappings, where a missing time range or location means ALWAYS or ALL."
    ],
    "gaps": [
-    "Network writes of both arrays, indexed writes and the index 0 resize with Clause 12.34.9.3 defaults (no issue)",
-    "Nothing evaluates the stored rules: the Clause 12.34.9.2 authorization check isn't modeled (no issue)"
+    "#1330: network writes of both arrays, indexed writes and the index 0 resize with Clause 12.34.9.3 defaults",
+    "#1331: nothing evaluates the stored rules; the Clause 12.34.9.2 authorization check isn't modeled",
+    "#1332: Access Rights doesn't serve its required Enable row (Table 12-39)"
    ]
   },
   {

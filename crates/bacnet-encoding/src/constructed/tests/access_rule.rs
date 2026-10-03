@@ -177,4 +177,52 @@ fn access_rule_rejects_malformed_elements() {
             "{bytes:02X?} must not decode"
         );
     }
+
+    // Contents cut short are BufferTooShort; a wrong tag is Decoding.
+    let truncated: &[u8] = &[0x09, 0x01, 0x29, 0x00, 0x3E, 0x1C, 0x08, 0x40];
+    assert!(
+        matches!(
+            decode_access_rule(truncated, 0),
+            Err(Error::BufferTooShort { .. })
+        ),
+        "{:?}",
+        decode_access_rule(truncated, 0)
+    );
+    let wrong_tag: &[u8] = &[0x09, 0x01, 0x29, 0x01, 0x39, 0x01];
+    assert!(
+        matches!(
+            decode_access_rule(wrong_tag, 0),
+            Err(Error::Decoding { .. })
+        ),
+        "{:?}",
+        decode_access_rule(wrong_tag, 0)
+    );
+}
+
+#[test]
+fn access_rule_all_keeps_an_unspecified_location() {
+    // ALL with the location present but unspecified: Access Point 4194303
+    // ((33 << 22) | 0x3FFFFF) in Device 4194303 ((8 << 22) | 0x3FFFFF).
+    let rule = BACnetAccessRule {
+        time_range_specifier: AccessRuleTimeRangeSpecifier::ALWAYS,
+        time_range: None,
+        location_specifier: AccessRuleLocationSpecifier::ALL,
+        location: Some(BACnetDeviceObjectReference {
+            device_identifier: Some(oid(ObjectType::DEVICE, ObjectIdentifier::MAX_INSTANCE)),
+            object_identifier: oid(ObjectType::ACCESS_POINT, ObjectIdentifier::MAX_INSTANCE),
+        }),
+        enable: true,
+    };
+    round_trip(
+        &rule,
+        &[
+            0x09, 0x01, // time-range-specifier [0] ALWAYS
+            0x29, 0x01, // location-specifier [2] ALL
+            0x3E, // location [3]
+            0x0C, 0x02, 0x3F, 0xFF, 0xFF, // device [0] Device 4194303
+            0x1C, 0x08, 0x7F, 0xFF, 0xFF, // object [1] Access Point 4194303
+            0x3F, //
+            0x49, 0x01, // enable [4] TRUE
+        ],
+    );
 }

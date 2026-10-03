@@ -1,14 +1,16 @@
 //! Access Rights Positive_Access_Rules and Negative_Access_Rules over the
 //! wire (#1316): ReadProperty and ReadPropertyMultiple agree on each
 //! BACnetAccessRule array whole, its size at index 0, each element and
-//! INVALID_ARRAY_INDEX past the end, and WriteProperty refuses both arrays
-//! (Table 12-39 makes them R rows).
+//! INVALID_ARRAY_INDEX past the end, ReadPropertyMultiple ALL carries both
+//! whole, and WriteProperty refuses both arrays (Table 12-39 makes them R
+//! rows).
 
 use super::access_control_arrays::{array_cases, assert_reads, db_with};
 use super::*;
 use bacnet_objects::access_control::AccessRightsObject;
 use bacnet_types::constructed::{
     BACnetAccessRule, BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
+    PropertyReference, ReadAccessSpecification,
 };
 use PropertyIdentifier as P;
 
@@ -105,4 +107,45 @@ fn access_rights_rule_arrays_refuse_network_writes() {
     let mut cases = array_cases(P::POSITIVE_ACCESS_RULES, &[BUSINESS_HOURS, ANYWHERE_OFF]);
     cases.extend(array_cases(P::NEGATIVE_ACCESS_RULES, &[REMOTE_ZONE]));
     assert_reads(&db, rights, &cases);
+}
+
+#[test]
+fn rpm_all_carries_both_configured_rule_arrays() {
+    let (db, rights) = db_with(Box::new(configured()));
+    let mut request = BytesMut::new();
+    ReadPropertyMultipleRequest {
+        list_of_read_access_specs: vec![ReadAccessSpecification {
+            object_identifier: rights,
+            list_of_property_references: vec![PropertyReference {
+                property_identifier: P::ALL,
+                property_array_index: None,
+            }],
+        }],
+    }
+    .encode(&mut request)
+    .unwrap();
+    let mut response = BytesMut::new();
+    handle_read_property_multiple(&db, &request, &mut response).unwrap();
+    let ack = ReadPropertyMultipleACK::decode(&response).unwrap();
+    let results = &ack.list_of_read_access_results[0].list_of_results;
+    for (property, octets) in [
+        (
+            P::POSITIVE_ACCESS_RULES,
+            [BUSINESS_HOURS, ANYWHERE_OFF].concat(),
+        ),
+        (P::NEGATIVE_ACCESS_RULES, REMOTE_ZONE.to_vec()),
+    ] {
+        let found: Vec<_> = results
+            .iter()
+            .filter(|result| result.property_identifier == property)
+            .collect();
+        assert_eq!(found.len(), 1, "{property:?}");
+        assert_eq!(found[0].property_array_index, None, "{property:?}");
+        assert_eq!(found[0].error, None, "{property:?}");
+        assert_eq!(
+            found[0].property_value.as_deref(),
+            Some(octets.as_slice()),
+            "{property:?}"
+        );
+    }
 }
