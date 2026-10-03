@@ -189,7 +189,7 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
                 .is_none_or(|device| crate::local_device::selected_device(&db) == Some(device))
         };
         let success = if local {
-            self.write(run.source, command).await
+            self.write(run, command).await
         } else {
             debug!(
                 command = %run.source,
@@ -218,21 +218,18 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
 
     /// Write one command's value through the local write path; whether it
     /// was accepted.
-    async fn write(&self, source: ObjectIdentifier, command: &BACnetActionCommand) -> bool {
+    async fn write(&self, run: &CommandRun, command: &BACnetActionCommand) -> bool {
         let target = RunTarget {
             object: command.object_identifier,
             property: command.property_identifier,
             array_index: command.property_array_index,
             priority: command.priority,
         };
-        match self
-            .write_value(source, target, &command.property_value)
-            .await
-        {
+        match self.write_value(run, target, &command.property_value).await {
             Ok(()) => true,
             Err(error) => {
                 debug!(
-                    command = %source,
+                    command = %run.source,
                     target = %command.object_identifier,
                     property = ?command.property_identifier,
                     %error,
@@ -244,10 +241,10 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
     }
 
     /// Write `value` to a local target through the local write path, with
-    /// `source` as the initiating object.
+    /// `run`'s object as the initiating object.
     pub(super) async fn write_value(
         &self,
-        source: ObjectIdentifier,
+        run: &CommandRun,
         target: RunTarget,
         value: &PropertyValue,
     ) -> Result<(), Error> {
@@ -268,13 +265,12 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
                     priority: target.priority,
                 },
                 value,
-                Some(crate::LocalCommandSource::Object(source)),
+                Some(crate::LocalCommandSource::Object(run.source)),
             )
             .await?;
         // A write that starts another Command's or Channel's run starts that
-        // run too.
-        self.start(runs);
-        Ok(())
+        // run too, unless it would close a loop (`run_chain`).
+        self.start_nested(run, runs).await
     }
 
     /// End a run: a Command's In_Process back to FALSE and

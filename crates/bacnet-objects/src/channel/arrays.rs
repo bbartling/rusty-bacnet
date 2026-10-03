@@ -7,10 +7,16 @@
 //! unchanged when it fails.
 //!
 //! The member list and the delays always have the same size (Table 12-62,
-//! footnote 1). Whatever changes the size of one, whole write or index 0,
-//! changes the other's to match: the list grows with empty references and
-//! the delays with zeros (Clauses 12.53.11.2 and 12.53.12.1), and both
-//! shrink from the end.
+//! footnote 1). The clause names the writes that change a size: index 0 of
+//! either array grows the other with it, the list with empty references and
+//! the delays with zeros (Clauses 12.53.11.2 and 12.53.12.1). Here an
+//! index-0 write that shrinks one shrinks the other from the end too, and a
+//! whole write of the member list, which says how many members there are,
+//! carries the delays to its size the same way. A whole write of
+//! Execution_Delay only supplies one delay per member: one of any other
+//! length is refused with VALUE_OUT_OF_RANGE, as
+//! `ChannelObject::set_execution_delay` refuses it, so writing delays never
+//! adds or drops a member.
 //!
 //! A member naming another device is refused with PROPERTY /
 //! OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, which Clause 12.53.11 allows a
@@ -176,12 +182,10 @@ impl ChannelObject {
         match array_index {
             None => {
                 let delays = unsigned_elements(value)?;
-                if delays.len() > MAX_CHANNEL_MEMBERS {
-                    return Err(no_space_error());
+                if delays.len() != self.members.len() {
+                    return Err(common::value_out_of_range_error());
                 }
-                let size = delays.len();
                 self.execution_delay = delays;
-                self.resize_members(size);
             }
             Some(0) => {
                 let size = new_size(value, MAX_CHANNEL_MEMBERS)?;

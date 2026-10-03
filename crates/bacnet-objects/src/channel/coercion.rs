@@ -17,14 +17,17 @@
 //!   (Unsigned and ENUMERATED, Unsigned and BACnetObjectIdentifier), the
 //!   number is kept and only the datatype changes. A number the target can't
 //!   hold is a failure.
-//! - Rule 3 bounds an Unsigned or ENUMERATED value at 2147483647 when it goes
-//!   to an INTEGER, the one target where that bound bites; REAL and Double
-//!   targets take any Unsigned.
+//! - Rule 3 bounds the Unsigned or ENUMERATED value itself at 2147483647,
+//!   whichever numeric target it goes to (INTEGER, REAL or Double); a larger
+//!   one fails. Unsigned to ENUMERATED and back is the pass-through above,
+//!   not Rule 3.
 //! - A REAL or Double going to an integer type keeps its integer part
 //!   (truncation toward zero) once the rule's range check passes. NaN is
 //!   outside every range.
-//! - The REAL precision limit in Rules 3 and 4 is the rounding a REAL does
-//!   anyway, not a failure.
+//! - The seven-significant-digit REAL limit in Rules 3 and 4 is read the
+//!   same way in both: the value is rounded to the nearest REAL, which is
+//!   what that precision means, and the rounding never fails the write. Only
+//!   the range bounds fail it.
 
 use bacnet_encoding::constructed::is_lighting_command_channel_value;
 use bacnet_types::enums::PropertyIdentifier;
@@ -160,8 +163,7 @@ impl Number {
     fn to_integer(self) -> Option<i32> {
         match self {
             Self::Boolean(value) => Some(value.into()),
-            // Rule 3's bound, 2147483647, is the top of the INTEGER range.
-            Self::Unsigned(value) => i32::try_from(value).ok(),
+            Self::Unsigned(value) => rule_3_bound(value).map(|value| value as i32),
             Self::Integer(value) => i32::try_from(value).ok(),
             Self::Real(value) => float_to_integer(value.into()),
             Self::Double(value) => float_to_integer(value),
@@ -172,7 +174,9 @@ impl Number {
     fn to_real(self) -> Option<f32> {
         match self {
             Self::Boolean(value) => Some(u8::from(value).into()),
-            Self::Unsigned(value) => Some(value as f32),
+            // Rules 3 and 4: rounding to a REAL's precision isn't a failure,
+            // but an Unsigned past 2147483647 is (Rule 3).
+            Self::Unsigned(value) => rule_3_bound(value).map(|value| value as f32),
             Self::Integer(value) => Some(value as f32),
             Self::Real(value) => Some(value),
             // Rule 6: a magnitude past the REAL range fails.
@@ -182,16 +186,22 @@ impl Number {
         }
     }
 
-    /// The value as a Double.
-    fn to_double(self) -> f64 {
+    /// The value as a Double, if the rule allows it.
+    fn to_double(self) -> Option<f64> {
         match self {
-            Self::Boolean(value) => u8::from(value).into(),
-            Self::Unsigned(value) => value as f64,
-            Self::Integer(value) => value as f64,
-            Self::Real(value) => value.into(),
-            Self::Double(value) => value,
+            Self::Boolean(value) => Some(u8::from(value).into()),
+            Self::Unsigned(value) => rule_3_bound(value).map(f64::from),
+            Self::Integer(value) => Some(value as f64),
+            Self::Real(value) => Some(value.into()),
+            Self::Double(value) => Some(value),
         }
     }
+}
+
+/// Rule 3 bounds an Unsigned or ENUMERATED going to INTEGER, REAL or Double
+/// at 2147483647, the top of the INTEGER range.
+fn rule_3_bound(value: u64) -> Option<u32> {
+    i32::try_from(value).ok().map(|value| value as u32)
 }
 
 fn float_to_unsigned(value: f64) -> Option<u64> {
@@ -242,7 +252,7 @@ pub fn coerce_channel_value(
             D::Unsigned => number.to_unsigned().map(PropertyValue::Unsigned),
             D::Integer => number.to_integer().map(PropertyValue::Signed),
             D::Real => number.to_real().map(PropertyValue::Real),
-            D::Double => Some(PropertyValue::Double(number.to_double())),
+            D::Double => number.to_double().map(PropertyValue::Double),
             D::Enumerated => number
                 .to_unsigned()
                 .and_then(|raw| u32::try_from(raw).ok())

@@ -429,3 +429,21 @@ fn command_takes_property_subscriptions_but_not_subscribe_cov() {
     assert!(cmd.supports_subscribe_cov_property());
     assert!(cmd.supports_cov_property(PropertyIdentifier::IN_PROCESS));
 }
+
+#[test]
+fn command_replacement_never_shares_a_run_generation() {
+    // Two objects with one identifier, each written once: a run left over
+    // from the first can't pass for the second's.
+    let mut old = configured();
+    write_pv(&mut old, 1).unwrap();
+    let stale = old.take_command_run_internal().unwrap();
+    let mut fresh = configured();
+    write_pv(&mut fresh, 1).unwrap();
+    let current = fresh.take_command_run_internal().unwrap();
+    assert_eq!(stale.source, current.source);
+    assert_ne!(stale.generation, current.generation);
+    assert!(!fresh.record_command_write_internal(stale.generation, 0, false));
+    assert!(!fresh.complete_command_run_internal(stale.generation, false));
+    assert_eq!(state(&fresh), (true, false));
+    assert!(fresh.complete_command_run_internal(current.generation, true));
+}

@@ -21,6 +21,7 @@
 //! executed yet, so Allow_Group_Delay_Inhibit isn't served.
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use bacnet_encoding::constructed::{
     encode_device_object_property_reference, is_lighting_command_channel_value,
@@ -33,7 +34,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 
-use crate::command::{CommandRun, RunPlan};
+use crate::command::{next_generation, CommandRun, RunPlan};
 use crate::common::{self, read_identity_properties};
 use crate::property_metadata::{property_list_from_metadata, PropertyMetadata};
 use crate::traits::BACnetObject;
@@ -87,7 +88,8 @@ pub struct ChannelObject {
     execution_delay: Vec<u32>,
     channel_number: u16,
     control_groups: Vec<u32>,
-    /// Bumped by every Present_Value write that starts a distribution.
+    /// A fresh `next_generation` value at every Present_Value write that
+    /// starts a distribution, unique across the process.
     generation: u64,
     pending_run: Option<CommandRun>,
 }
@@ -109,7 +111,7 @@ impl ChannelObject {
             execution_delay: Vec::new(),
             channel_number,
             control_groups: vec![0],
-            generation: 0,
+            generation: next_generation(),
             pending_run: None,
         })
     }
@@ -187,7 +189,7 @@ impl ChannelObject {
             self.write_status = WriteStatus::IDLE;
             return Ok(());
         }
-        self.generation = self.generation.wrapping_add(1);
+        self.generation = next_generation();
         let members: Vec<ChannelMember> = self
             .members
             .iter()
@@ -213,6 +215,7 @@ impl ChannelObject {
                 priority,
                 members,
             }),
+            chain: Arc::from([]),
         });
         Ok(())
     }
@@ -380,6 +383,9 @@ impl BACnetObject for ChannelObject {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod array_tests;
 
 #[cfg(test)]
 mod coercion_tests;

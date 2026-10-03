@@ -2,7 +2,11 @@ use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use PropertyIdentifier as P;
 
-fn assert_error<T: std::fmt::Debug>(result: Result<T, Error>, class: ErrorClass, code: ErrorCode) {
+pub(super) fn assert_error<T: std::fmt::Debug>(
+    result: Result<T, Error>,
+    class: ErrorClass,
+    code: ErrorCode,
+) {
     assert!(
         matches!(result, Err(Error::Protocol { class: c, code: e })
             if c == class.to_raw() as u32 && e == code.to_raw() as u32),
@@ -10,27 +14,27 @@ fn assert_error<T: std::fmt::Debug>(result: Result<T, Error>, class: ErrorClass,
     );
 }
 
-fn assert_property_error<T: std::fmt::Debug>(result: Result<T, Error>, code: ErrorCode) {
+pub(super) fn assert_property_error<T: std::fmt::Debug>(result: Result<T, Error>, code: ErrorCode) {
     assert_error(result, ErrorClass::PROPERTY, code);
 }
 
-fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
+pub(super) fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
 }
 
-fn device(instance: u32) -> ObjectIdentifier {
+pub(super) fn device(instance: u32) -> ObjectIdentifier {
     oid(ObjectType::DEVICE, instance)
 }
 
 /// AV-`instance`'s Present_Value, in this device.
-fn member(instance: u32) -> BACnetDeviceObjectPropertyReference {
+pub(super) fn member(instance: u32) -> BACnetDeviceObjectPropertyReference {
     BACnetDeviceObjectPropertyReference::new_local(
         oid(ObjectType::ANALOG_VALUE, instance),
         P::PRESENT_VALUE.to_raw(),
     )
 }
 
-fn encoded(members: &[BACnetDeviceObjectPropertyReference]) -> Vec<u8> {
+pub(super) fn encoded(members: &[BACnetDeviceObjectPropertyReference]) -> Vec<u8> {
     let mut bytes = BytesMut::new();
     for member in members {
         encode_device_object_property_reference(&mut bytes, member);
@@ -39,7 +43,7 @@ fn encoded(members: &[BACnetDeviceObjectPropertyReference]) -> Vec<u8> {
 }
 
 /// CH-1 on channel 7 with members AV-1, AV-2 (100 ms) and AV-3 (200 ms).
-fn configured() -> ChannelObject {
+pub(super) fn configured() -> ChannelObject {
     let mut channel = ChannelObject::new(1, "CH-1", 7).unwrap();
     channel
         .set_members(vec![member(1), member(2), member(3)])
@@ -48,7 +52,7 @@ fn configured() -> ChannelObject {
     channel
 }
 
-fn read(channel: &ChannelObject, property: PropertyIdentifier) -> PropertyValue {
+pub(super) fn read(channel: &ChannelObject, property: PropertyIdentifier) -> PropertyValue {
     channel.read_property(property, None).unwrap()
 }
 
@@ -74,7 +78,7 @@ fn distribution(run: &CommandRun) -> &ChannelDistribution {
     }
 }
 
-fn unsigned_list(values: &[u64]) -> PropertyValue {
+pub(super) fn unsigned_list(values: &[u64]) -> PropertyValue {
     PropertyValue::List(
         values
             .iter()
@@ -249,6 +253,24 @@ fn channel_stale_completion_is_ignored() {
 }
 
 #[test]
+fn channel_replacement_never_shares_a_run_generation() {
+    // Two objects with one identifier, each written once: a run left over
+    // from the first can't pass for the second's.
+    let mut old = configured();
+    write_pv(&mut old, PropertyValue::Real(1.0), None).unwrap();
+    let stale = old.take_command_run_internal().unwrap();
+    let mut fresh = configured();
+    write_pv(&mut fresh, PropertyValue::Real(1.0), None).unwrap();
+    let current = fresh.take_command_run_internal().unwrap();
+    assert_eq!(stale.source, current.source);
+    assert_ne!(stale.generation, current.generation);
+    assert_ne!(Some(stale.generation), fresh.command_generation_internal());
+    assert!(!fresh.complete_command_run_internal(stale.generation, false));
+    assert_eq!(write_status(&fresh), WriteStatus::IN_PROGRESS);
+    assert!(fresh.complete_command_run_internal(current.generation, true));
+}
+
+#[test]
 fn channel_without_members_stays_idle_and_empty_references_are_skipped() {
     let mut channel = ChannelObject::new(1, "CH-1", 7).unwrap();
     write_pv(&mut channel, PropertyValue::Boolean(true), Some(4)).unwrap();
@@ -364,279 +386,6 @@ fn channel_present_value_takes_a_channel_value_and_a_priority_from_1_to_16() {
         read(&channel, P::LAST_PRIORITY),
         PropertyValue::Unsigned(16)
     );
-}
-
-#[test]
-fn channel_member_writes_keep_execution_delay_the_same_size() {
-    let mut channel = configured();
-    let list = P::LIST_OF_OBJECT_PROPERTY_REFERENCES;
-    // A whole write, as the server hands it over: the members' octets back
-    // to back. Two members: the delays keep their first two.
-    channel
-        .write_property(
-            list,
-            None,
-            PropertyValue::ApplicationData(encoded(&[member(8), member(9)])),
-            None,
-        )
-        .unwrap();
-    assert_eq!(read(&channel, P::EXECUTION_DELAY), unsigned_list(&[0, 100]));
-    // One element.
-    channel
-        .write_property(
-            list,
-            Some(2),
-            PropertyValue::ApplicationData(encoded(&[member(4)])),
-            None,
-        )
-        .unwrap();
-    assert_eq!(
-        read(&channel, list),
-        PropertyValue::List(vec![
-            PropertyValue::ApplicationData(encoded(&[member(8)])),
-            PropertyValue::ApplicationData(encoded(&[member(4)])),
-        ])
-    );
-    // Index 0 grows both arrays: empty references and zero delays.
-    channel
-        .write_property(list, Some(0), PropertyValue::Unsigned(4), None)
-        .unwrap();
-    assert_eq!(
-        channel.read_property(list, Some(4)).unwrap(),
-        PropertyValue::ApplicationData(encoded(&[arrays::empty_reference()]))
-    );
-    assert_eq!(
-        read(&channel, P::EXECUTION_DELAY),
-        unsigned_list(&[0, 100, 0, 0])
-    );
-    // Growing Execution_Delay grows the members too; shrinking either
-    // shrinks both from the end.
-    channel
-        .write_property(
-            P::EXECUTION_DELAY,
-            Some(0),
-            PropertyValue::Unsigned(5),
-            None,
-        )
-        .unwrap();
-    assert_eq!(
-        channel.read_property(list, Some(0)).unwrap(),
-        PropertyValue::Unsigned(5)
-    );
-    channel
-        .write_property(P::EXECUTION_DELAY, None, unsigned_list(&[5, 6]), None)
-        .unwrap();
-    assert_eq!(
-        channel.read_property(list, Some(0)).unwrap(),
-        PropertyValue::Unsigned(2)
-    );
-    channel
-        .write_property(
-            P::EXECUTION_DELAY,
-            Some(2),
-            PropertyValue::Unsigned(250),
-            None,
-        )
-        .unwrap();
-    assert_eq!(read(&channel, P::EXECUTION_DELAY), unsigned_list(&[5, 250]));
-    // A one-element array decodes to its single value.
-    channel
-        .write_property(P::EXECUTION_DELAY, None, PropertyValue::Unsigned(9), None)
-        .unwrap();
-    assert_eq!(
-        read(&channel, list),
-        PropertyValue::List(vec![PropertyValue::ApplicationData(encoded(&[member(8)])),])
-    );
-    channel
-        .write_property(list, Some(0), PropertyValue::Unsigned(0), None)
-        .unwrap();
-    assert_eq!(
-        read(&channel, P::EXECUTION_DELAY),
-        PropertyValue::List(vec![])
-    );
-    // An empty whole write empties both.
-    channel.set_members(vec![member(1)]).unwrap();
-    channel
-        .write_property(list, None, PropertyValue::ApplicationData(vec![]), None)
-        .unwrap();
-    assert_eq!(
-        read(&channel, P::EXECUTION_DELAY),
-        PropertyValue::List(vec![])
-    );
-}
-
-#[test]
-fn channel_member_writes_refuse_other_devices_bad_indexes_and_oversize() {
-    let mut channel = configured();
-    let list = P::LIST_OF_OBJECT_PROPERTY_REFERENCES;
-    let before = read(&channel, list);
-    let remote = BACnetDeviceObjectPropertyReference {
-        device_identifier: Some(device(9)),
-        ..member(1)
-    };
-    for (index, value) in [
-        (None, encoded(&[member(1), remote.clone()])),
-        (Some(1), encoded(std::slice::from_ref(&remote))),
-    ] {
-        assert_property_error(
-            channel.write_property(list, index, PropertyValue::ApplicationData(value), None),
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        );
-    }
-    assert_property_error(
-        channel.set_members(vec![remote]),
-        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-    );
-    assert_property_error(
-        channel.write_property(
-            list,
-            Some(4),
-            PropertyValue::ApplicationData(encoded(&[member(4)])),
-            None,
-        ),
-        ErrorCode::INVALID_ARRAY_INDEX,
-    );
-    assert_property_error(
-        channel.write_property(
-            list,
-            Some(1),
-            PropertyValue::ApplicationData(encoded(&[member(4), member(5)])),
-            None,
-        ),
-        ErrorCode::INVALID_DATA_ENCODING,
-    );
-    // An application tag where a member's [0] object identifier belongs.
-    assert_property_error(
-        channel.write_property(
-            list,
-            None,
-            PropertyValue::ApplicationData(vec![0x21, 0x01]),
-            None,
-        ),
-        ErrorCode::INVALID_DATA_TYPE,
-    );
-    assert_property_error(
-        channel.write_property(list, None, PropertyValue::Real(1.0), None),
-        ErrorCode::INVALID_DATA_TYPE,
-    );
-    let too_many = MAX_CHANNEL_MEMBERS as u64 + 1;
-    for property in [list, P::EXECUTION_DELAY] {
-        assert_error(
-            channel.write_property(property, Some(0), PropertyValue::Unsigned(too_many), None),
-            ErrorClass::RESOURCES,
-            ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
-        );
-    }
-    assert_error(
-        channel.set_members(vec![member(1); MAX_CHANNEL_MEMBERS + 1]),
-        ErrorClass::RESOURCES,
-        ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
-    );
-    assert_property_error(
-        channel.write_property(
-            P::EXECUTION_DELAY,
-            Some(1),
-            PropertyValue::Unsigned(u64::from(u32::MAX) + 1),
-            None,
-        ),
-        ErrorCode::VALUE_OUT_OF_RANGE,
-    );
-    assert_property_error(
-        channel.set_execution_delay(vec![1, 2]),
-        ErrorCode::VALUE_OUT_OF_RANGE,
-    );
-    assert_eq!(read(&channel, list), before);
-    assert_eq!(
-        read(&channel, P::EXECUTION_DELAY),
-        unsigned_list(&[0, 100, 200])
-    );
-}
-
-#[test]
-fn channel_number_and_control_groups_writes() {
-    let mut channel = configured();
-    channel
-        .write_property(
-            P::CHANNEL_NUMBER,
-            None,
-            PropertyValue::Unsigned(65_535),
-            None,
-        )
-        .unwrap();
-    assert_eq!(
-        read(&channel, P::CHANNEL_NUMBER),
-        PropertyValue::Unsigned(65_535)
-    );
-    assert_property_error(
-        channel.write_property(
-            P::CHANNEL_NUMBER,
-            None,
-            PropertyValue::Unsigned(65_536),
-            None,
-        ),
-        ErrorCode::VALUE_OUT_OF_RANGE,
-    );
-    assert_property_error(
-        channel.write_property(P::CHANNEL_NUMBER, None, PropertyValue::Signed(3), None),
-        ErrorCode::INVALID_DATA_TYPE,
-    );
-
-    let groups = P::CONTROL_GROUPS;
-    channel
-        .write_property(groups, None, unsigned_list(&[27, 27, 0]), None)
-        .unwrap();
-    channel
-        .write_property(
-            groups,
-            Some(3),
-            PropertyValue::Unsigned(u32::MAX.into()),
-            None,
-        )
-        .unwrap();
-    channel
-        .write_property(groups, Some(0), PropertyValue::Unsigned(4), None)
-        .unwrap();
-    assert_eq!(
-        read(&channel, groups),
-        unsigned_list(&[27, 27, u32::MAX.into(), 0])
-    );
-    channel
-        .write_property(groups, None, PropertyValue::Unsigned(5), None)
-        .unwrap();
-    assert_eq!(read(&channel, groups), unsigned_list(&[5]));
-    // At least one entry, at most MAX_CONTROL_GROUPS.
-    assert_property_error(
-        channel.write_property(groups, Some(0), PropertyValue::Unsigned(0), None),
-        ErrorCode::VALUE_OUT_OF_RANGE,
-    );
-    assert_property_error(
-        channel.set_control_groups(vec![]),
-        ErrorCode::VALUE_OUT_OF_RANGE,
-    );
-    assert_error(
-        channel.write_property(
-            groups,
-            Some(0),
-            PropertyValue::Unsigned(MAX_CONTROL_GROUPS as u64 + 1),
-            None,
-        ),
-        ErrorClass::RESOURCES,
-        ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
-    );
-    assert_property_error(
-        channel.write_property(groups, Some(2), PropertyValue::Unsigned(1), None),
-        ErrorCode::INVALID_ARRAY_INDEX,
-    );
-    assert_property_error(
-        channel.write_property(
-            groups,
-            Some(1),
-            PropertyValue::Unsigned(u64::from(u32::MAX) + 1),
-            None,
-        ),
-        ErrorCode::VALUE_OUT_OF_RANGE,
-    );
-    assert_eq!(read(&channel, groups), unsigned_list(&[5]));
 }
 
 #[test]

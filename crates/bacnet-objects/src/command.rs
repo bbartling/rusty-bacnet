@@ -15,6 +15,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
@@ -33,6 +35,18 @@ pub struct CommandRun {
     pub generation: u64,
     /// What the run writes.
     pub plan: RunPlan,
+    /// The objects whose runs led to this one, outermost first. The object
+    /// leaves it empty; the server fills it in when one run's write starts
+    /// another, so a run that would start its own object again is caught.
+    pub chain: Arc<[ObjectIdentifier]>,
+}
+
+/// The next run generation. One counter serves every Command and Channel in
+/// the process, so a run left over from an object that was removed never
+/// matches the object that took its place.
+pub(crate) fn next_generation() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// What a [`CommandRun`] writes.
@@ -58,7 +72,8 @@ pub struct CommandObject {
     action_text: Option<Vec<String>>,
     status_flags: StatusFlags,
     reliability: Reliability,
-    /// Bumped by every Present_Value write and Action change.
+    /// A fresh [`next_generation`] at every Present_Value write and Action
+    /// change.
     generation: u64,
     /// The Action element (zero-based) whose commands are being made.
     running: Option<usize>,
@@ -80,7 +95,7 @@ impl CommandObject {
             action_text: None,
             status_flags: StatusFlags::empty(),
             reliability: Reliability::NO_FAULT_DETECTED,
-            generation: 0,
+            generation: next_generation(),
             running: None,
             pending_run: None,
         })
@@ -106,7 +121,7 @@ impl CommandObject {
             texts.resize(action.len(), String::new());
         }
         self.action = action;
-        self.generation = self.generation.wrapping_add(1);
+        self.generation = next_generation();
         self.in_process = false;
         self.running = None;
         self.pending_run = None;
@@ -140,7 +155,7 @@ impl CommandObject {
             _ => return Err(common::value_out_of_range_error()),
         };
         self.present_value = selected;
-        self.generation = self.generation.wrapping_add(1);
+        self.generation = next_generation();
         let commands = index.map_or_else(Vec::new, |i| self.action[i].commands.clone());
         if commands.is_empty() {
             self.all_writes_successful = true;
@@ -153,6 +168,7 @@ impl CommandObject {
             source: self.oid,
             generation: self.generation,
             plan: RunPlan::Actions(commands),
+            chain: Arc::from([]),
         });
         Ok(())
     }

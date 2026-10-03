@@ -27,7 +27,7 @@ use bacnet_types::enums::{ObjectType, WriteStatus};
 
 const LIST: PropertyIdentifier = PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES;
 
-fn ch(instance: u32) -> ObjectIdentifier {
+pub(super) fn ch(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::CHANNEL, instance).unwrap()
 }
 
@@ -39,14 +39,14 @@ fn mso1() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::MULTI_STATE_OUTPUT, 1).unwrap()
 }
 
-fn member(
+pub(super) fn member(
     object: ObjectIdentifier,
     property: PropertyIdentifier,
 ) -> BACnetDeviceObjectPropertyReference {
     BACnetDeviceObjectPropertyReference::new_local(object, property.to_raw())
 }
 
-fn channel(
+pub(super) fn channel(
     instance: u32,
     number: u16,
     members: Vec<(BACnetDeviceObjectPropertyReference, u32)>,
@@ -90,11 +90,11 @@ fn objects(db: &mut ObjectDatabase) {
     .unwrap();
 }
 
-async fn start() -> Harness {
+pub(super) async fn start() -> Harness {
     Harness::start_with(ServerConfig::default(), objects).await
 }
 
-fn encoded(value: &PropertyValue) -> Vec<u8> {
+pub(super) fn encoded(value: &PropertyValue) -> Vec<u8> {
     let mut bytes = BytesMut::new();
     encode_property_value(&mut bytes, value).unwrap();
     bytes.to_vec()
@@ -125,7 +125,7 @@ async fn write_wire(
 }
 
 /// WriteProperty of `value` to CH-`instance`'s Present_Value.
-async fn write_channel(
+pub(super) async fn write_channel(
     h: &mut Harness,
     instance: u32,
     value: &PropertyValue,
@@ -135,7 +135,7 @@ async fn write_channel(
 }
 
 /// CH-`instance`'s Write_Status, read over the wire.
-async fn write_status(h: &mut Harness, instance: u32) -> WriteStatus {
+pub(super) async fn write_status(h: &mut Harness, instance: u32) -> WriteStatus {
     match read_wire(h, ch(instance), PropertyIdentifier::WRITE_STATUS, None)
         .await
         .unwrap()[..]
@@ -147,7 +147,7 @@ async fn write_status(h: &mut Harness, instance: u32) -> WriteStatus {
 
 /// Wait, in paused time, until CH-`instance` has written its members, and
 /// return its Write_Status.
-async fn settled(h: &mut Harness, instance: u32) -> WriteStatus {
+pub(super) async fn settled(h: &mut Harness, instance: u32) -> WriteStatus {
     tokio::time::timeout(Duration::from_secs(60), async {
         while read_db(h, ch(instance), PropertyIdentifier::WRITE_STATUS, None).await
             == PropertyValue::Enumerated(WriteStatus::IN_PROGRESS.to_raw())
@@ -162,7 +162,7 @@ async fn settled(h: &mut Harness, instance: u32) -> WriteStatus {
 }
 
 /// Slot `priority` of `target`'s Priority_Array.
-async fn slot(h: &Harness, target: ObjectIdentifier, priority: u32) -> PropertyValue {
+pub(super) async fn slot(h: &Harness, target: ObjectIdentifier, priority: u32) -> PropertyValue {
     read_db(
         h,
         target,

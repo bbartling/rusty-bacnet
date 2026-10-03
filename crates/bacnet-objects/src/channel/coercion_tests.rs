@@ -144,11 +144,33 @@ fn unsigned_row_rules_1_and_3() {
         Some(V::Signed(i32::MAX))
     );
     assert_eq!(coerce(&V::Unsigned(2_147_483_648), D::Integer), None);
+    // Rule 3 bounds the value at 2147483647 for REAL and Double as well.
+    for target in [D::Integer, D::Real, D::Double] {
+        assert_eq!(
+            coerce(&V::Unsigned(2_147_483_648), target),
+            None,
+            "{target:?}"
+        );
+    }
+    assert_eq!(
+        coerce(&V::Unsigned(2_147_483_647), D::Double),
+        Some(V::Double(2_147_483_647.0))
+    );
+    // Rounded to a REAL's precision, not refused.
+    assert_eq!(
+        coerce(&V::Unsigned(16_777_217), D::Real),
+        Some(V::Real(16_777_216.0))
+    );
     // Past 32 bits, neither an ENUMERATED nor an object identifier holds it.
     let wide = V::Unsigned(u64::from(u32::MAX) + 1);
     assert_eq!(coerce(&wide, D::Enumerated), None);
     assert_eq!(coerce(&wide, D::ObjectIdentifier), None);
-    assert_eq!(coerce(&wide, D::Double), Some(V::Double(4_294_967_296.0)));
+    assert_eq!(coerce(&wide, D::Double), None);
+    // Unsigned to ENUMERATED passes the number on; Rule 3 doesn't apply.
+    assert_eq!(
+        coerce(&V::Unsigned(3_000_000_000), D::Enumerated),
+        Some(V::Enumerated(3_000_000_000))
+    );
 }
 
 #[test]
@@ -173,6 +195,11 @@ fn integer_row_rules_1_and_4() {
         Some(V::Unsigned(2_147_483_647))
     );
     assert_eq!(coerce(&V::Signed(0), D::Boolean), Some(V::Boolean(false)));
+    // Rounded to a REAL's precision, as under Rule 3.
+    assert_eq!(
+        coerce(&V::Signed(-16_777_217), D::Real),
+        Some(V::Real(-16_777_216.0))
+    );
 }
 
 #[test]
@@ -248,7 +275,19 @@ fn enumerated_row_rules_1_and_3() {
             (D::Double, V::Double(3.0)),
         ],
     );
-    assert_eq!(coerce(&V::Enumerated(u32::MAX), D::Integer), None);
+    // Rule 3 bounds an ENUMERATED at 2147483647 for each numeric target.
+    for target in [D::Integer, D::Real, D::Double] {
+        assert_eq!(
+            coerce(&V::Enumerated(2_147_483_648), target),
+            None,
+            "{target:?}"
+        );
+        assert_eq!(coerce(&V::Enumerated(u32::MAX), target), None, "{target:?}");
+    }
+    assert_eq!(
+        coerce(&V::Enumerated(u32::MAX), D::Unsigned),
+        Some(V::Unsigned(u32::MAX.into()))
+    );
 }
 
 #[test]

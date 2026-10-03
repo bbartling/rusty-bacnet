@@ -95,7 +95,7 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
             array_index: reference.property_array_index,
             priority: distribution.priority,
         };
-        match self.write_value(run.source, target, &value).await {
+        match self.write_value(run, target, &value).await {
             Ok(()) => Some(true),
             Err(error) if value == PropertyValue::Null && is_invalid_datatype(&error) => Some(true),
             Err(error) => {

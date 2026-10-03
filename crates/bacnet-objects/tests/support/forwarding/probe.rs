@@ -395,6 +395,7 @@ impl BACnetObject for Probe {
             source: self.oid,
             generation: 11,
             plan: RunPlan::Actions(Vec::new()),
+            chain: std::sync::Arc::from([]),
         })
     }
     fn command_generation_internal(&self) -> Option<u64> {
