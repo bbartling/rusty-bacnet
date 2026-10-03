@@ -150,7 +150,7 @@ fn rpm_notification_class_indexed_reads_and_constructed_bytes_are_unchanged() {
         max_result_elements: cases.len(),
         max_service_ack_bytes: legacy.len(),
     };
-    use crate::handlers::rpm_budget::{handle_rpm_budgeted, RpmFailure};
+    use crate::handlers::{rpm_budget::handle_rpm_budgeted, ReadFailure};
     let mut bounded = BytesMut::new();
     handle_rpm_budgeted(&db, &request_bytes, &mut bounded, budget).unwrap();
     assert_eq!(bounded, legacy);
@@ -165,7 +165,7 @@ fn rpm_notification_class_indexed_reads_and_constructed_bytes_are_unchanged() {
                 ..budget
             }
         ),
-        Err(RpmFailure::Work)
+        Err(ReadFailure::Work)
     ));
     assert_eq!(&prefix[..], b"prefix");
     assert!(matches!(
@@ -178,7 +178,7 @@ fn rpm_notification_class_indexed_reads_and_constructed_bytes_are_unchanged() {
                 ..budget
             }
         ),
-        Err(RpmFailure::Bytes)
+        Err(ReadFailure::Bytes)
     ));
     assert_eq!(&prefix[..], b"prefix");
 }

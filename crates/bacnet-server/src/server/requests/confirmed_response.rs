@@ -58,10 +58,10 @@ pub(super) async fn read_property_multiple_observed(
         Option<u32>,
         Option<(ErrorClass, ErrorCode)>,
     ),
-) -> Result<(), handlers::RpmFailure> {
+) -> Result<(), handlers::ReadFailure> {
     let db = db.read().await;
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest::decode(service_request)
-        .map_err(handlers::RpmFailure::Service)?;
+        .map_err(handlers::ReadFailure::Service)?;
     let live = match handlers::active_cov_device_for_rpm(&db, &request) {
         Some(selection) => Some(active_cov_snapshot(&db, cov_table, selection).await),
         None => None,
@@ -121,7 +121,7 @@ pub(super) async fn read_property_response_observed(
                 |oid, request, result| completed(&db, oid, request, result),
             )
         }
-        Err(error) => Err(handlers::RpmFailure::Service(error)),
+        Err(error) => Err(handlers::ReadFailure::Service(error)),
     };
     match result {
         Ok(()) => Apdu::ComplexAck(ComplexAck {
@@ -133,12 +133,12 @@ pub(super) async fn read_property_response_observed(
             service_choice: request.service_choice,
             service_ack: service_ack.freeze(),
         }),
-        Err(handlers::RpmFailure::Service(error)) => {
+        Err(handlers::ReadFailure::Service(error)) => {
             error_apdu_from_error(request.invoke_id, request.service_choice, &error)
         }
         // A Group's Present_Value past the work limit draws the abort an RPM
         // over its work budget does; ReadProperty has no byte budget.
-        Err(handlers::RpmFailure::Work | handlers::RpmFailure::Bytes) => Apdu::Abort(AbortPdu {
+        Err(handlers::ReadFailure::Work | handlers::ReadFailure::Bytes) => Apdu::Abort(AbortPdu {
             sent_by_server: true,
             invoke_id: request.invoke_id,
             abort_reason: AbortReason::OUT_OF_RESOURCES,

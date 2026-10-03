@@ -16,14 +16,14 @@ pub fn handle_read_property(
 ) -> Result<(), Error> {
     let request = ReadPropertyRequest::decode(service_data)?;
     read_property_request_observed(db, None, &request, buf, |_, _, _| {})
-        .map_err(RpmFailure::unlimited)
+        .map_err(ReadFailure::unlimited)
 }
 
 /// ReadProperty evaluator over one decoded request. `view` carries executor-owned
 /// Device definitions, request-local COV lists and the work limit a Group's
 /// Present_Value is charged to; observations carry only execution outcomes,
 /// never the read value. A read past the work limit fails with
-/// [`RpmFailure::Work`] and is not observed, as a ReadPropertyMultiple over
+/// [`ReadFailure::Work`] and is not observed, as a ReadPropertyMultiple over
 /// its work budget is not.
 pub(crate) fn read_property_request_observed(
     db: &ObjectDatabase,
@@ -31,7 +31,7 @@ pub(crate) fn read_property_request_observed(
     request: &ReadPropertyRequest,
     buf: &mut BytesMut,
     mut completed: impl FnMut(ObjectIdentifier, &ReadPropertyRequest, &Result<(), Error>),
-) -> Result<(), RpmFailure> {
+) -> Result<(), ReadFailure> {
     let lookup_oid = resolve_read_target(
         db,
         &request.object_identifier,
@@ -39,11 +39,11 @@ pub(crate) fn read_property_request_observed(
     );
     let result = match read_property_decoded(db, view, request, lookup_oid, buf) {
         Ok(()) => Ok(()),
-        Err(RpmFailure::Service(error)) => Err(error),
+        Err(ReadFailure::Service(error)) => Err(error),
         Err(failure) => return Err(failure),
     };
     completed(lookup_oid, request, &result);
-    result.map_err(RpmFailure::Service)
+    result.map_err(ReadFailure::Service)
 }
 
 /// Evaluate one property read with ReadProperty error precedence: unknown
@@ -56,9 +56,9 @@ pub(crate) fn read_property_value(
     lookup_oid: ObjectIdentifier,
     property: PropertyIdentifier,
     array_index: Option<u32>,
-) -> Result<PropertyValue, RpmFailure> {
+) -> Result<PropertyValue, ReadFailure> {
     let object =
-        read_target_object(db, &lookup_oid).ok_or(RpmFailure::Service(Error::Protocol {
+        read_target_object(db, &lookup_oid).ok_or(ReadFailure::Service(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
         }))?;
@@ -73,7 +73,7 @@ pub(crate) fn read_property_value(
     // type-dependent identifiers, e.g. ALARM_VALUES), so the handler defers
     // to the trait query.
     if array_index.is_some() && !object.is_array_property(property) {
-        return Err(RpmFailure::Service(Error::Protocol {
+        return Err(ReadFailure::Service(Error::Protocol {
             class: ErrorClass::PROPERTY.to_raw() as u32,
             code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
         }));
@@ -88,7 +88,7 @@ fn read_property_decoded(
     request: &ReadPropertyRequest,
     lookup_oid: ObjectIdentifier,
     buf: &mut BytesMut,
-) -> Result<(), RpmFailure> {
+) -> Result<(), ReadFailure> {
     let value = read_property_value(
         db,
         view,
@@ -98,7 +98,7 @@ fn read_property_decoded(
     )?;
 
     let mut value_buf = BytesMut::new();
-    encode_property_value(&mut value_buf, &value).map_err(RpmFailure::Service)?;
+    encode_property_value(&mut value_buf, &value).map_err(ReadFailure::Service)?;
 
     let ack = ReadPropertyACK {
         object_identifier: lookup_oid,
@@ -411,7 +411,7 @@ pub fn handle_read_property_multiple(
                             prop_id,
                             array_index,
                         )
-                        .map_err(RpmFailure::unlimited)
+                        .map_err(ReadFailure::unlimited)
                         {
                             Ok(value) => {
                                 let mut value_buf = BytesMut::new();

@@ -21,7 +21,8 @@
 //! pre-scan (`active_cov_device`, `active_cov_device_for_rpm`) looks through
 //! the members of every Group whose Present_Value a request may read, so those
 //! rows serve the request's one live snapshot (#1171).
-use super::rpm_budget::{self, PlannedObject, RpmFailure, Work};
+use super::read_budget::{ReadFailure, Work};
+use super::rpm_budget::{self, PlannedObject};
 use super::*;
 use bacnet_encoding::constructed::decode_read_access_specification;
 use bacnet_objects::traits::BACnetObject;
@@ -42,7 +43,7 @@ pub(super) fn read_served_property(
     object: &dyn BACnetObject,
     property: PropertyIdentifier,
     array_index: Option<u32>,
-) -> Result<PropertyValue, RpmFailure> {
+) -> Result<PropertyValue, ReadFailure> {
     let reference = PropertyReference {
         property_identifier: property,
         property_array_index: array_index,
@@ -54,7 +55,7 @@ pub(super) fn read_served_property(
         Some(members) => value(db, view, members),
         None => object.read_property(property, array_index),
     }
-    .map_err(RpmFailure::Service)
+    .map_err(ReadFailure::Service)
 }
 
 /// The members, when `reference` reads the whole Present_Value of `object`
@@ -67,7 +68,7 @@ pub(super) fn plan_members(
     object: &dyn BACnetObject,
     reference: &PropertyReference,
     work: &mut Work,
-) -> Result<Option<GroupMembers>, RpmFailure> {
+) -> Result<Option<GroupMembers>, ReadFailure> {
     if reference.property_identifier != PropertyIdentifier::PRESENT_VALUE
         || reference.property_array_index.is_some()
         || object.object_identifier().object_type() != ObjectType::GROUP

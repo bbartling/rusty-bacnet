@@ -1,51 +1,10 @@
 //! Bounded server-owned RPM planning and service-ACK accumulation.
 use super::group_present_value::GroupMembers;
+use super::read_budget::{ReadFailure, Work};
 use super::*;
 use crate::server::ReadPropertyMultipleBudget;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
-
-#[derive(Debug)]
-pub(crate) enum RpmFailure {
-    Service(Error),
-    Work,
-    Bytes,
-}
-
-impl RpmFailure {
-    /// The error of a read made with no work or byte limit, which only a
-    /// service error can fail.
-    pub(super) fn unlimited(self) -> Error {
-        match self {
-            Self::Service(error) => error,
-            Self::Work | Self::Bytes => unreachable!("a read with no limit ran past one"),
-        }
-    }
-}
-
-/// The result rows one read request has expanded, counted against its work
-/// limit. A Group's Present_Value charges each member row to the request that
-/// reads it (#1172), so several Groups in one request share the one limit.
-pub(super) struct Work {
-    used: usize,
-    limit: usize,
-}
-
-impl Work {
-    pub(super) fn new(limit: usize) -> Self {
-        Self { used: 0, limit }
-    }
-
-    /// Count one more row, failing once the request would pass its limit.
-    pub(super) fn charge(&mut self) -> Result<(), RpmFailure> {
-        self.used = self
-            .used
-            .checked_add(1)
-            .filter(|&n| n <= self.limit)
-            .ok_or(RpmFailure::Work)?;
-        Ok(())
-    }
-}
 
 /// One specification after target resolution and ALL/REQUIRED/OPTIONAL
 /// expansion; a Group's Present_Value plans its members the same way.
@@ -66,8 +25,8 @@ pub(super) struct PlannedRow {
 fn expand(
     object: &dyn BACnetObject,
     reference: &PropertyReference,
-    mut visit: impl FnMut(PropertyIdentifier) -> Result<(), RpmFailure>,
-) -> Result<(), RpmFailure> {
+    mut visit: impl FnMut(PropertyIdentifier) -> Result<(), ReadFailure>,
+) -> Result<(), ReadFailure> {
     let id = reference.property_identifier;
     if !matches!(
         id,
@@ -125,7 +84,7 @@ pub(super) fn plan(
     request: &ReadPropertyMultipleRequest,
     limit: usize,
     view: Option<&DeviceReadContext<'_>>,
-) -> Result<Vec<PlannedObject>, RpmFailure> {
+) -> Result<Vec<PlannedObject>, ReadFailure> {
     plan_specs(
         db,
         &request.list_of_read_access_specs,
@@ -145,7 +104,7 @@ pub(super) fn plan_specs(
     work: &mut Work,
     view: Option<&DeviceReadContext<'_>>,
     groups: bool,
-) -> Result<Vec<PlannedObject>, RpmFailure> {
+) -> Result<Vec<PlannedObject>, ReadFailure> {
     let mut plan = Vec::new();
     for spec in specs {
         let lookup_oid = read_property::resolve_read_target(
@@ -267,13 +226,13 @@ struct Scratch {
 }
 
 impl Scratch {
-    fn append(&mut self, bytes: &[u8], reserved: usize) -> Result<(), RpmFailure> {
+    fn append(&mut self, bytes: &[u8], reserved: usize) -> Result<(), ReadFailure> {
         self.bytes
             .len()
             .checked_add(bytes.len())
             .and_then(|n| n.checked_add(reserved))
             .filter(|&n| n <= self.limit)
-            .ok_or(RpmFailure::Bytes)?;
+            .ok_or(ReadFailure::Bytes)?;
         self.bytes.extend_from_slice(bytes);
         Ok(())
     }
@@ -286,7 +245,7 @@ pub(crate) fn handle_rpm_budgeted(
     data: &[u8],
     buf: &mut BytesMut,
     budget: ReadPropertyMultipleBudget,
-) -> Result<(), RpmFailure> {
+) -> Result<(), ReadFailure> {
     handle_rpm_budgeted_observed(db, data, buf, budget, |_, _, _, _| {})
 }
 
@@ -303,8 +262,8 @@ pub(crate) fn handle_rpm_budgeted_observed(
         Option<u32>,
         Option<(ErrorClass, ErrorCode)>,
     ),
-) -> Result<(), RpmFailure> {
-    let request = ReadPropertyMultipleRequest::decode(data).map_err(RpmFailure::Service)?;
+) -> Result<(), ReadFailure> {
+    let request = ReadPropertyMultipleRequest::decode(data).map_err(ReadFailure::Service)?;
     rpm_budgeted_request_observed(db, None, &request, buf, budget, completed)
 }
 
@@ -325,7 +284,7 @@ pub(crate) fn rpm_budgeted_request_observed(
         Option<u32>,
         Option<(ErrorClass, ErrorCode)>,
     ),
-) -> Result<(), RpmFailure> {
+) -> Result<(), ReadFailure> {
     let plan = plan(db, request, budget.max_result_elements, view)?;
     let mut scratch = Scratch {
         bytes: BytesMut::new(),

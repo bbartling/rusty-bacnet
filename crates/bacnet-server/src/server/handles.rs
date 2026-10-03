@@ -79,8 +79,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         );
         handlers::read_property_value(&db, Some(&view), lookup_oid, property, array_index).map_err(
             |failure| match failure {
-                handlers::RpmFailure::Service(error) => error,
-                handlers::RpmFailure::Work | handlers::RpmFailure::Bytes => Error::Abort {
+                handlers::ReadFailure::Service(error) => error,
+                handlers::ReadFailure::Work | handlers::ReadFailure::Bytes => Error::Abort {
                     reason: AbortReason::OUT_OF_RESOURCES.to_raw(),
                 },
             },

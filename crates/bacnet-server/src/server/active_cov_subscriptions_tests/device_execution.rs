@@ -421,8 +421,8 @@ fn device_execution_view_rpm_budgets_count_canonical_rows_and_preserve_output() 
         );
         assert!(matches!(
             (&result, work_failure),
-            (Err(crate::handlers::RpmFailure::Work), true)
-                | (Err(crate::handlers::RpmFailure::Bytes), false)
+            (Err(crate::handlers::ReadFailure::Work), true)
+                | (Err(crate::handlers::ReadFailure::Bytes), false)
         ));
         assert_eq!(out.as_ref(), b"unchanged");
         assert_eq!(observations, 0);
