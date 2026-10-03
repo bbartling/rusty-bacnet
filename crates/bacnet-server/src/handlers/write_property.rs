@@ -180,6 +180,7 @@ pub(crate) fn handle_write_property_multiple_observed(
         let value = match decode_write_property_value(
             property,
             reference.property_array_index,
+            object.is_list_property(property),
             &attempt.value,
         ) {
             Ok(value) => crate::local_references::localize(db, oid, property, value),
@@ -335,9 +336,18 @@ fn invalid_data_encoding_error() -> Error {
 }
 
 /// Decode the complete propertyValue payload handed to an object write arm.
+///
+/// `list` says whether the target object holds `property` as a BACnetLIST
+/// ([`BACnetObject::is_list_property`]). Such a property written whole reaches
+/// the object as a `PropertyValue::List` whatever its length, so an empty
+/// value clears it and one element arrives as a list of one rather than as
+/// that element alone. Any other property needs at least one element.
+///
+/// [`BACnetObject::is_list_property`]: bacnet_objects::traits::BACnetObject::is_list_property
 pub(crate) fn decode_write_property_value(
     property: PropertyIdentifier,
     array_index: Option<u32>,
+    list: bool,
     bytes: &[u8],
 ) -> Result<PropertyValue, Error> {
     if property == PropertyIdentifier::EVENT_PARAMETERS && bytes.starts_with(&[0xfe, 0xff]) {
@@ -466,15 +476,14 @@ pub(crate) fn decode_write_property_value(
         values.push(value);
         offset = new_offset;
     }
+    // A list's encoding is its elements back to back, nothing at all for an
+    // empty one (Clause 20.2.17). The other datatypes reaching this loop have
+    // no empty encoding, so no octets is INVALID_DATA_ENCODING for them
+    // (Clause 15.9.1.3).
+    if list && array_index.is_none() {
+        return Ok(PropertyValue::List(values));
+    }
     match values.len() {
-        // BACnetLIST properties that may be written empty.
-        0 if matches!(
-            property,
-            PropertyIdentifier::FAULT_SIGNALS | PropertyIdentifier::DATE_LIST
-        ) =>
-        {
-            Ok(PropertyValue::List(values))
-        }
         0 => Err(invalid_data_encoding_error()),
         1 => Ok(values.pop().expect("one element present")),
         _ => Ok(PropertyValue::List(values)),
@@ -554,6 +563,7 @@ pub(crate) fn handle_write_property_observed(
     let value = decode_write_property_value(
         request.property_identifier,
         request.property_array_index,
+        object.is_list_property(request.property_identifier),
         &request.property_value,
     )?;
     let value = crate::local_references::localize(db, oid, request.property_identifier, value);

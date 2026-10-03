@@ -72,6 +72,14 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
     }
 }
 
+/// Whether a bundled object of `oid`'s type holds `property` as a
+/// BACnetLIST. No type [`may_save`] admits departs from the standard
+/// classification, so a value decodes here as the handler decodes it after
+/// asking the object.
+fn held_as_list(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
+    bacnet_objects::traits::standard_list_property(oid.object_type(), property)
+}
+
 impl DurableTarget {
     /// The write a WriteProperty request makes, if its object may save it.
     pub(super) fn write_property(service_data: &[u8]) -> Vec<Self> {
@@ -84,6 +92,7 @@ impl DurableTarget {
         let Ok(value) = handlers::decode_write_property_value(
             request.property_identifier,
             request.property_array_index,
+            held_as_list(request.object_identifier, request.property_identifier),
             &request.property_value,
         ) else {
             return Vec::new();
@@ -116,6 +125,7 @@ impl DurableTarget {
             if let Ok(value) = handlers::decode_write_property_value(
                 property,
                 reference.property_array_index,
+                held_as_list(oid, property),
                 &attempt.value,
             ) {
                 targets.push(Self {

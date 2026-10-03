@@ -209,9 +209,16 @@ impl<T: TransportPort + 'static> RunHost for CommandRunner<T> {
         // expects.
         let mut encoded = BytesMut::new();
         encode_property_value(&mut encoded, &command.property_value)?;
+        let list = self
+            .db
+            .read()
+            .await
+            .get(&command.object_identifier)
+            .is_some_and(|object| object.is_list_property(command.property_identifier));
         let value = handlers::decode_write_property_value(
             command.property_identifier,
             command.property_array_index,
+            list,
             &encoded,
         )?;
         let runs = self

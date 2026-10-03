@@ -1637,6 +1637,14 @@ Audit record; present read-only arrays and unindexed absence retain their existi
 Audit handling. The outer WP authorization check and direct object writes are
 unchanged.
 
+WriteProperty and WritePropertyMultiple give a property that
+`BACnetObject::is_list_property` reports as a BACnetLIST, written whole, to the
+object as a `PropertyValue::List` of any length: a value with no octets is the
+empty list (Clause 20.2.17), so Alarm_Values can be cleared, and one element is
+a list of one. `write_local_encoded` and a Command's writes decode the same way.
+Any other property still needs a value: no octets is
+`PROPERTY/INVALID_DATA_ENCODING`, and one element arrives alone (#1328).
+
 AddListElement and RemoveListElement edit only properties that
 `BACnetObject::is_list_property` reports as a BACnetLIST. The default follows the
 Clause 12 datatypes, including identifiers whose type depends on the object type

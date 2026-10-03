@@ -146,10 +146,11 @@ impl ChangeOfStateReporting {
     }
 
     /// The values a written Alarm_Values holds: a list of Enumerated, where a
-    /// value that isn't a list is its one element, which is how WriteProperty
-    /// hands over a one-element list. An index is PROPERTY_IS_NOT_AN_ARRAY;
-    /// an element of another datatype is INVALID_DATA_TYPE and one outside
-    /// the enumeration VALUE_OUT_OF_RANGE, each naming the element.
+    /// value that isn't a list is its one element (WriteProperty hands over a
+    /// list, but a local write may pass one value alone). An index is
+    /// PROPERTY_IS_NOT_AN_ARRAY; an element of another datatype is
+    /// INVALID_DATA_TYPE and one outside the enumeration VALUE_OUT_OF_RANGE,
+    /// each naming the element.
     fn alarm_values(
         &self,
         array_index: Option<u32>,
