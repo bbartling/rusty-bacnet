@@ -113,6 +113,67 @@ fn vector_channel_bounds_and_group_bounds() {
 }
 
 #[test]
+fn vector_annex_f_examples() {
+    // The three WriteGroup encodings of Annex F.3.11, service data only.
+    let entry = |channel, override_priority, value: &[u8]| GroupChannelValue {
+        channel,
+        override_priority,
+        value: value.to_vec(),
+    };
+    let cases = [
+        (
+            WriteGroupRequest {
+                group_number: group(23),
+                write_priority: 8,
+                change_list: vec![
+                    entry(268, None, &[0x22, 0x04, 0x57]),
+                    entry(269, None, &[0x22, 0x08, 0xAE]),
+                ],
+                inhibit_delay: None,
+            },
+            vec![
+                0x09, 0x17, 0x19, 0x08, 0x2E, 0x0A, 0x01, 0x0C, 0x22, 0x04, 0x57, 0x0A, 0x01, 0x0D,
+                0x22, 0x08, 0xAE, 0x2F,
+            ],
+        ),
+        (
+            WriteGroupRequest {
+                group_number: group(23),
+                write_priority: 8,
+                change_list: vec![
+                    entry(12, None, &[0x44, 0x42, 0x86, 0x00, 0x00]),
+                    entry(13, None, &[0x44, 0x42, 0x90, 0x00, 0x00]),
+                ],
+                inhibit_delay: Some(true),
+            },
+            vec![
+                0x09, 0x17, 0x19, 0x08, 0x2E, 0x09, 0x0C, 0x44, 0x42, 0x86, 0x00, 0x00, 0x09, 0x0D,
+                0x44, 0x42, 0x90, 0x00, 0x00, 0x2F, 0x39, 0x01,
+            ],
+        ),
+        (
+            WriteGroupRequest {
+                group_number: group(23),
+                write_priority: 8,
+                change_list: vec![
+                    entry(12, None, &[0x22, 0x04, 0x57]),
+                    entry(13, Some(10), &[0x74, 0x00, b'A', b'B', b'C']),
+                ],
+                inhibit_delay: None,
+            },
+            vec![
+                0x09, 0x17, 0x19, 0x08, 0x2E, 0x09, 0x0C, 0x22, 0x04, 0x57, 0x09, 0x0D, 0x19, 0x0A,
+                0x74, 0x00, 0x41, 0x42, 0x43, 0x2F,
+            ],
+        ),
+    ];
+    for (req, expected) in cases {
+        assert_eq!(encode(&req), expected);
+        assert_eq!(WriteGroupRequest::decode(&expected).unwrap(), req);
+    }
+}
+
+#[test]
 fn decode_accepts_leading_zero_unsigned_widths() {
     let data = [
         0x0C, 0x00, 0x00, 0x00, 0x01, 0x1A, 0x00, 0x10, 0x2E, 0x0B, 0x00, 0x00, 0x05, 0x1A, 0x00,

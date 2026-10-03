@@ -18,6 +18,7 @@ fn rpm_channel_metadata_selectors_preserve_bytes_and_budgets() {
         P::OUT_OF_SERVICE,
         P::LIST_OF_OBJECT_PROPERTY_REFERENCES,
         P::EXECUTION_DELAY,
+        P::ALLOW_GROUP_DELAY_INHIBIT,
         P::CHANNEL_NUMBER,
         P::CONTROL_GROUPS,
     ];
@@ -34,7 +35,11 @@ fn rpm_channel_metadata_selectors_preserve_bytes_and_budgets() {
         P::CHANNEL_NUMBER,
         P::CONTROL_GROUPS,
     ];
-    let optional = [P::DESCRIPTION, P::EXECUTION_DELAY];
+    let optional = [
+        P::DESCRIPTION,
+        P::EXECUTION_DELAY,
+        P::ALLOW_GROUP_DELAY_INHIBIT,
+    ];
     for configured in [false, true] {
         let mut object = ChannelObject::new(7, "CH-7", 11).unwrap();
         if configured {

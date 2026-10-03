@@ -1176,10 +1176,15 @@ await client.subscribe_cov_property_multiple(
 
 ### Write Group
 
-#### `write_group(address, group_number, write_priority, change_list, inhibit_delay=None)`
+#### `write_group(address, group_number, write_priority, change_list, inhibit_delay=None, *, network=None)`
 
-Write values to the Channel objects of a control group (unconfirmed).
+Write values to the Channel objects of a control group (unconfirmed). Nothing
+answers, so the call returns once the request is sent.
 
+- `address`: one device's address, or `None` to broadcast.
+- `network`: with `address=None`, broadcast on that remote network (1 to 65534),
+  or on every network with 65535. Leave it `None` for the local network. An
+  address and a network together raise `ValueError`.
 - `group_number`: 1 to 4294967295; group 0 is reserved.
 - `write_priority`: 1 to 16, used for entries that do not override it.
 - `change_list`: a non-empty list of `(channel, override_priority, value_bytes)` tuples.
@@ -1188,10 +1193,14 @@ Write values to the Channel objects of a control group (unconfirmed).
   - `override_priority` is 1 to 16, or `None` to use `write_priority`.
   - `value_bytes` is one encoded BACnetChannelValue with no wrapper tag: a single
     application-tagged primitive, or a context-0 lighting command.
-- `inhibit_delay`: optional Boolean.
+- `inhibit_delay`: optional Boolean. TRUE skips the execution delays of Channels whose
+  `Allow_Group_Delay_Inhibit` is TRUE.
 
 A value outside those rules raises `ValueError`, or `OverflowError` for integers that
 don't fit, before anything is sent.
+
+The Rust server executes WriteGroup on its Channel objects. The Python
+`BACnetServer` can't hold a Channel yet, so it has nothing for a WriteGroup to change.
 
 ```python
 await client.write_group(
@@ -1205,6 +1214,11 @@ await client.write_group(
         (6, 10, bytes([0x00])),
     ],
     inhibit_delay=False,
+)
+
+# The same change list for every device on network 5.
+await client.write_group(
+    None, 1, 8, [(5, None, bytes([0x44, 0x42, 0x90, 0x00, 0x00]))], network=5
 )
 ```
 

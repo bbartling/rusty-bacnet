@@ -2292,13 +2292,20 @@ class BACnetClient:
 
     def write_group(
         self,
-        address: str,
+        address: Optional[str],
         group_number: int,
         write_priority: int,
         change_list: list[tuple[int, Optional[int], bytes]],
         inhibit_delay: Optional[bool] = None,
+        *,
+        network: Optional[int] = None,
     ) -> Awaitable[None]:
         """Send a WriteGroup request (unconfirmed).
+
+        With an ``address`` the request goes to that one device. With
+        ``address=None`` it is broadcast: on the local network, or with
+        ``network`` on that remote network (1-65534), or on every network when
+        ``network`` is 65535. Give ``network`` only with ``address=None``.
 
         ``group_number`` is 1-4294967295 (group 0 is reserved) and
         ``write_priority`` is 1-16. ``change_list`` is a non-empty list of
