@@ -24,8 +24,12 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
-    /// Record one sample of an Averaging object's referenced property, taken
-    /// by the application; the server doesn't read the reference itself.
+    /// Record one sample for an Averaging object, taken by the application.
+    ///
+    /// The server samples an object holding an Object_Property_Reference
+    /// itself, every Window_Interval / Window_Samples seconds; this route
+    /// feeds an object without one, and on one the server samples it adds
+    /// one more attempt without moving the server's schedule.
     ///
     /// The value is a BOOLEAN (0 or 1), Signed, Unsigned, Enumerated or finite
     /// REAL, or `None` for an attempt that produced no value, which counts

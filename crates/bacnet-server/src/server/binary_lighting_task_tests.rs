@@ -522,4 +522,57 @@ async fn a_snapshot_report_times_a_timestamped_field_only_with_its_own_value() {
     server.stop().await.unwrap();
 }
 
+/// An object whose deadline stays due however often it is advanced, as an
+/// Averaging object's would if nothing claimed its due sample (#1144).
+struct StuckDeadline;
+
+impl BACnetObject for StuckDeadline {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 77).unwrap()
+    }
+    fn object_name(&self) -> &str {
+        "STUCK-1"
+    }
+    fn read_property(&self, _: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::PROPERTY.to_raw() as u32,
+            code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
+        })
+    }
+    fn write_property(
+        &mut self,
+        _: PropertyIdentifier,
+        _: Option<u32>,
+        _: PropertyValue,
+        _: Option<u8>,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::PROPERTY.to_raw() as u32,
+            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+        })
+    }
+    fn property_list(&self) -> std::borrow::Cow<'static, [PropertyIdentifier]> {
+        std::borrow::Cow::Borrowed(&[])
+    }
+    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+        Some(Duration::ZERO)
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_deadline_left_due_does_not_spin_the_monotonic_task() {
+    let (transport, _) = recording_transport();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(StuckDeadline)).unwrap();
+    let mut server = BACnetServer::start(ServerConfig::default(), db, transport)
+        .await
+        .unwrap();
+    // Paused time only moves while every task is idle: a task waking at once
+    // for the same deadline would hold this sleep forever.
+    let before = tokio::time::Instant::now();
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert_eq!(before.elapsed(), Duration::from_secs(5));
+    server.stop().await.unwrap();
+}
+
 mod observation_order;
