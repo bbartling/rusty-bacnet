@@ -103,9 +103,6 @@ impl<T: TransportPort + 'static> AuditReporterChangeSink
                     if !self.owner.is_active() {
                         return Err(denied());
                     }
-                    if self.comm_state.load(Ordering::Acquire) != 0 {
-                        return Err(denied());
-                    }
                     super::audit_context_preparation::validate_summary(
                         status,
                         &next,
@@ -201,7 +198,6 @@ impl<T: TransportPort + 'static> AuditReporterChangeSink
                             ));
                         }
                         let network = Arc::clone(&self.network);
-                        let comm_state = Arc::clone(&self.comm_state);
                         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
                         let attempts: Vec<_> = attempts
                             .into_iter()
@@ -223,12 +219,10 @@ impl<T: TransportPort + 'static> AuditReporterChangeSink
                             futures_util::future::join_all(attempts.into_iter().map(
                                 |(route, permit, reservation, bytes, completion)| {
                                     let network = Arc::clone(&network);
-                                    let comm_state = Arc::clone(&comm_state);
                                     async move {
                                         let _permit = permit;
                                         let delivered = deliver(
                                             &network,
-                                            &comm_state,
                                             &route,
                                             &bytes,
                                             reservation,

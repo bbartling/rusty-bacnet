@@ -42,7 +42,7 @@ impl<T: TransportPort + 'static> super::audit_recipient::TargetAudit<T> {
         };
         let apply = |sequence| {
             self.transactions.commit_audit(|| {
-                if !self.owner.is_active() || self.comm_state.load(Ordering::Acquire) != 0 {
+                if !self.owner.is_active() {
                     return Err(super::audit_recipient::denied());
                 }
                 self.batches.command(status, value, true, || {
@@ -117,13 +117,10 @@ impl<T: TransportPort + 'static> super::audit_recipient::TargetAudit<T> {
                         finished: false,
                     };
                     let network = Arc::clone(&self.network);
-                    let comm_state = Arc::clone(&self.comm_state);
                     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
                     Ok(async move {
                         let _permit = permit;
-                        let delivered =
-                            deliver(&network, &comm_state, &route, &bytes, reserved, deadline)
-                                .await;
+                        let delivered = deliver(&network, &route, &bytes, reserved, deadline).await;
                         completion.finish(delivered);
                     })
                 })

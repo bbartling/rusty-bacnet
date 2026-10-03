@@ -133,17 +133,72 @@ async fn audit_forwarding_denial_disabled_and_malformed_batches_are_silent() {
     f.server.stop().await.unwrap();
 }
 
+/// Put the server under DISABLE_INITIATION for one minute through a wire
+/// request from `[3]`, so the DCC timer is live.
+async fn disable_initiation(f: &mut Fixture) {
+    use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
+    f.server.config.dcc_policy = DccPolicy::LegacyPermissive;
+    let mut data = BytesMut::new();
+    DeviceCommunicationControlRequest {
+        time_duration: Some(1),
+        enable_disable: bacnet_types::enums::EnableDisable::DISABLE_INITIATION,
+        password: None,
+    }
+    .encode(&mut data)
+    .unwrap();
+    let mut request = confirmed_request(90, data.freeze());
+    request.service_choice = ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL;
+    let s = &f.server;
+    let (tx, rx) = oneshot::channel();
+    BACnetServer::handle_confirmed_request(
+        &s.test_services(),
+        &s.confirmed_request_tracker,
+        &s.request_tasks.spawner(),
+        &[3],
+        None,
+        request,
+        Some(tx),
+    )
+    .await;
+    let response = decode_apdu(decode_npdu(rx.await.unwrap()).unwrap().payload).unwrap();
+    assert!(matches!(response, Apdu::SimpleAck(_)), "{response:?}");
+    assert_eq!(f.server.comm_state(), 2);
+}
+
+/// A forward is an audit notification, which Clause 16.1 leaves running under
+/// DISABLE_INITIATION: both receipt paths forward, the ACK keeps the sink
+/// healthy, and the DCC timer re-enabling initiation forwards nothing again.
 #[tokio::test(start_paused = true)]
-async fn audit_forwarding_dcc_oversize_and_send_errors_leave_local_success() {
+async fn audit_forwarding_goes_out_under_disable_initiation() {
     let mut f = ready().await;
-    f.server.comm_state.store(2, Ordering::Release); // DISABLE_INITIATION
+    disable_initiation(&mut f).await;
     assert!(matches!(
         f.confirmed(1, &[3], payload(false)).await,
         Some(Apdu::SimpleAck(_))
     ));
+    f.unconfirmed(payload(false)).await;
     settle().await;
-    assert!(f.requests().is_empty());
-    f.server.comm_state.store(0, Ordering::Release);
+    let requests = f.requests();
+    assert_eq!(requests.len(), 2, "both receipts forward under DCC");
+    for request in &requests {
+        assert!(f.ack(request.invoke_id, &[2], request.service_choice));
+    }
+    settle().await;
+    assert_eq!(
+        f.reliability().await,
+        PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
+    );
+    assert_eq!(f.server.notification_transactions.active_count(), 0);
+    tokio::time::advance(Duration::from_secs(60)).await;
+    settle().await;
+    assert_eq!(f.server.comm_state(), 0, "the DCC timer re-enables");
+    assert_eq!(f.requests().len(), 2, "nothing is forwarded again");
+    f.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn audit_forwarding_oversize_and_send_errors_leave_local_success() {
+    let mut f = ready().await;
     f.server.config.max_apdu_length = 50;
     assert!(matches!(
         f.confirmed(2, &[3], payload(false)).await,
@@ -177,7 +232,7 @@ async fn audit_forwarding_dcc_oversize_and_send_errors_leave_local_success() {
             .unwrap()
             .completed_receipts
             .len(),
-        3
+        2
     );
     assert_eq!(f.server.notification_transactions.active_count(), 0);
     f.server.stop().await.unwrap();

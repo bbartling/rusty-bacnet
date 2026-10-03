@@ -445,9 +445,6 @@ async fn audit_reporter_auditing_failure_excludes_nonresource_failures_under_loa
     fixture.server.config.max_apdu_length = 1;
     writes(&fixture, 2).await;
     fixture.server.config.max_apdu_length = 1476;
-    fixture.server.comm_state.store(2, Ordering::Release);
-    writes(&fixture, 2).await;
-    fixture.server.comm_state.store(0, Ordering::Release);
     fixture.server.config.mutation_policy = crate::mutation::MutationPolicy::DenyAll;
     assert!(matches!(
         write_value(&fixture.server, None).await,

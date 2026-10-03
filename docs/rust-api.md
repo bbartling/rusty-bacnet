@@ -4614,6 +4614,7 @@ The server automatically dispatches:
 **Outgoing (server-initiated):**
 - COV notifications (confirmed and unconfirmed, with `NotificationTransactions` retries for confirmed)
 - Event notifications (confirmed and unconfirmed, routed via NotificationClass recipients, and the copies Notification Forwarder objects send on)
+- Audit notifications (confirmed and unconfirmed, from Audit Reporters and Audit Log forwarding; one attempt each, and they keep going out under DISABLE_INITIATION, see [Confirmed notifications under DeviceCommunicationControl](#confirmed-notifications-under-devicecommunicationcontrol))
 
 Confirmed notification invoke IDs, terminal admission and retries belong to
 `NotificationTransactions`. A separate private learned-router cache stores up to
@@ -4677,12 +4678,18 @@ the notification:
   notification is not sent again once communication is enabled, the same as a
   transition DCC stops before its first send. `Acked_Transitions` keeps what
   the transition set; delivery never changes it.
-- **Audit.** Not withdrawn. Clause 16.1 exempts Confirmed- and
-  UnconfirmedAuditNotification from DISABLE_INITIATION, and an audit
-  notification makes a single attempt with no retries, so one already sent
-  waits for its answer, and the reporter's health and backlog are untouched.
-  The server still holds back audit notifications that are due to start while
-  initiation is disabled, a known gap against that exemption (#1370).
+- **Audit.** Not withdrawn, and not held back. Clause 16.1 exempts Confirmed-
+  and UnconfirmedAuditNotification from DISABLE_INITIATION, so no audit sender
+  reads the communication state (#1370). An audit notification makes a single
+  attempt with no retries: one already sent waits for its answer, and one due
+  while initiation is disabled goes out as usual. That covers Audit Reporter
+  records, immediate or batched by `Maximum_Send_Delay`, their
+  AUDITING_FAILURE summaries and Audit Log forwarding. Only real delivery
+  moves a Reporter's health, and a record dropped for want of a send slot is
+  summarized as usual. Writes whose commit owes a notification, such as a
+  Device's `Audit_Notification_Recipient`, a Reporter's own properties or
+  `Send_Now`, and an object's mandatory audit policy, are accepted under
+  DISABLE_INITIATION and report like any other.
 
 A write a Command or Channel makes in another device follows the same rule
 (see [Building Control](#building-control-7)).

@@ -211,7 +211,6 @@ pub(super) struct WriteAudit<'a, T: TransportPort> {
     config: &'a ServerConfig,
     network: &'a Arc<NetworkLayer<T>>,
     transactions: &'a Arc<NotificationTransactions>,
-    comm_state: &'a Arc<AtomicU8>,
     source: BACnetRecipient,
     invoke_id: Option<u8>,
     pending: Option<PendingWrite>,
@@ -240,14 +239,12 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
         config: &'a ServerConfig,
         network: &'a Arc<NetworkLayer<T>>,
         transactions: &'a Arc<NotificationTransactions>,
-        comm_state: &'a Arc<AtomicU8>,
         db: &ObjectDatabase,
     ) -> Option<Self> {
         Some(Self {
             config,
             network,
             transactions,
-            comm_state,
             source: BACnetRecipient::Device(db.local_device().identifier()?),
             invoke_id: None,
             pending: None,
@@ -259,7 +256,6 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
         network: &'a Arc<NetworkLayer<T>>,
         transactions: &'a Arc<NotificationTransactions>,
         bindings: &Arc<RwLock<DeviceBindingTable>>,
-        comm_state: &'a Arc<AtomicU8>,
         request: RequestSource<'_>,
     ) -> Self {
         let RequestSource {
@@ -297,7 +293,6 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
             config,
             network,
             transactions,
-            comm_state,
             source,
             invoke_id: Some(invoke_id),
             pending: None,
@@ -593,9 +588,6 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                 epoch: pending.completion,
                 finished: false,
             };
-            if self.comm_state.load(Ordering::Acquire) != 0 {
-                return;
-            }
             if let Some(queue) = self
                 .transactions
                 .audit_batch
@@ -636,9 +628,6 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             epoch: pending.completion,
             finished: false,
         };
-        if self.comm_state.load(Ordering::Acquire) != 0 {
-            return;
-        }
         // Validate encoding and APDU fit before resource admission: those
         // failures must not become resource-drop counts even under overload.
         let Some(mut bytes) = encode_notification(
@@ -687,15 +676,13 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             bytes = encoded;
         }
         let network = Arc::clone(self.network);
-        let comm_state = Arc::clone(self.comm_state);
         // The absolute deadline includes scheduling and transport send, not only ACK wait.
         let deadline = tokio::time::Instant::now() + DELIVERY_TIMEOUT;
         let context_pin = pending.failure;
         self.transactions.spawn(async move {
             let _permit = permit;
             let _context_pin = context_pin;
-            let delivered =
-                deliver(&network, &comm_state, &route, &bytes, reserved, deadline).await;
+            let delivered = deliver(&network, &route, &bytes, reserved, deadline).await;
             completion.finish(delivered);
         });
     }
