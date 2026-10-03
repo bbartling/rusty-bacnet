@@ -94,6 +94,9 @@ mod atomic_write_file_budget;
 mod basic;
 #[path = "server/bbmd_discovery.rs"]
 mod bbmd_discovery;
+#[cfg(feature = "ipv6")]
+#[path = "server/bip6_group_confirmed.rs"]
+mod bip6_group_confirmed;
 #[path = "server/dcc.rs"]
 mod dcc;
 #[path = "server/error_cov.rs"]

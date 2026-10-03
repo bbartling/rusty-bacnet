@@ -2484,6 +2484,7 @@ class EventNotificationCounters(TypedDict):
     unconfirmed_send_failed: int
     apdu_too_large: int
     received_not_forwarded: int
+    forwarding_cap_dropped: int
 
 class DccOutcomeCounters(TypedDict):
     """Independent u64 lifetime totals, saturating at 2**64-1; not an audit log."""
@@ -3143,8 +3144,10 @@ class BACnetServer:
         after the last retry. unconfirmed_send_failed counts unconfirmed
         notifications the transport refused to send, once per destination.
         apdu_too_large counts notifications not sent to one destination
-        because they exceed the local APDU size, and received_not_forwarded
-        counts received event notifications no Notification Forwarder took.
+        because they exceed the local APDU size, received_not_forwarded
+        counts received event notifications no Notification Forwarder took,
+        and forwarding_cap_dropped counts destinations dropped because one
+        notification already had 64 across the forwarders.
         Fields are sampled independently. Raises
         RuntimeError before start and after stop.
         """
