@@ -2,19 +2,22 @@
 //! WriteProperty, and how that write ends decides Write_Status and
 //! Reliability (#1264, Clauses 12.53.7, 12.53.9 and 12.53.11).
 //!
-//! Devices 9 and 11 are bound to the harness peer; Device 10 has no binding.
-//! CH-5 (channel 21, group 27) writes AO-1 in Device 9 at once and the local
-//! AO-2 100 ms after the distribution starts. CH-6 writes AO-1 in Device 10.
-//! CH-7 writes, in this order and all at once, AO-1 and AO-3 in Device 9,
-//! AO-4 in Device 11 and the local AO-2. Requests are taken from the frames
-//! the server sends and answered by hand. The clock is paused, and the
-//! server's APDU timeout is the default 3 seconds.
+//! Devices 9 and 11 are bound to the harness peer; Device 10 has no binding,
+//! so a write there looks for it with a Who-Is first (#1322). CH-5 (channel
+//! 21, group 27) writes AO-1 in Device 9 at once and the local AO-2 100 ms
+//! after the distribution starts. CH-6 writes AO-1 in Device 10. CH-7 writes,
+//! in this order and all at once, AO-1 and AO-3 in Device 9, AO-4 in Device
+//! 11 and the local AO-2. CH-8 writes, all at once, AO-1 and AO-3 in Device
+//! 10 and the local AO-2. Requests are taken from the frames the server
+//! sends and answered by hand, as are Who-Is requests with an I-Am. The clock
+//! is paused, and the server's APDU timeout is the default 3 seconds.
 use super::channel_wire_tests::{ch, channel, member, settled, write_channel, write_status};
 use super::command_action_wire_tests::{ao, outputs, read_db, read_wire, slot8};
 use super::command_remote_write_tests::{
-    ack, device, disable_initiation, remote_write, sent_writes,
+    ack, deliver, device, disable_initiation, remote_write, sent_writes,
 };
 use super::cov_wire_test_support::*;
+use super::remote_write_discovery_tests::{i_am, next_who_is, targeted, who_is_sent};
 use super::*;
 use bacnet_encoding::npdu::{encode_npdu, Npdu};
 use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
@@ -51,6 +54,12 @@ async fn start() -> Harness {
             (member(ao(2), PV), 0),
         ];
         db.add(Box::new(channel(7, 23, seven))).unwrap();
+        let eight = vec![
+            (remote_output(10, 1), 0),
+            (remote_output(10, 3), 0),
+            (member(ao(2), PV), 0),
+        ];
+        db.add(Box::new(channel(8, 24, eight))).unwrap();
     })
     .await;
     for instance in [9, 11] {
@@ -350,30 +359,66 @@ async fn channel_skips_the_rest_of_a_silent_device_for_the_distribution() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn channel_member_in_another_device_sends_nothing_without_initiation_or_a_binding() {
+async fn channel_member_in_another_device_sends_nothing_while_dcc_restricts_initiation() {
     let mut h = start().await;
-    // Device 10 has no binding: nothing is sent.
+    // Bound Device 9 gets no WriteProperty, and unbound Device 10 no Who-Is.
+    disable_initiation(&h);
+    for instance in [5, 6] {
+        write_channel(&mut h, instance, &PropertyValue::Real(80.0), Some(8))
+            .await
+            .unwrap();
+        assert_eq!(settled(&mut h, instance).await, WriteStatus::FAILED);
+        assert_eq!(
+            reliability(&mut h, instance).await,
+            Reliability::COMMUNICATION_FAILURE
+        );
+    }
+    assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
+    assert!(sent_writes(&h).is_empty());
+    assert!(who_is_sent(&h).is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn channel_member_in_an_unbound_device_is_written_once_its_who_is_is_answered() {
+    let mut h = start().await;
     write_channel(&mut h, 6, &PropertyValue::Real(80.0), Some(8))
         .await
         .unwrap();
-    assert_eq!(settled(&mut h, 6).await, WriteStatus::FAILED);
-    assert_eq!(
-        reliability(&mut h, 6).await,
-        Reliability::COMMUNICATION_FAILURE
-    );
+    assert_eq!(next_who_is(&h).await, (None, targeted(10)));
+    assert_eq!(write_status(&mut h, 6).await, WriteStatus::IN_PROGRESS);
+    assert!(sent_writes(&h).is_empty());
+    deliver(&h, &i_am(10), &PEER, None).await;
+    let (invoke_id, _) = next_request(&h, ao(1)).await;
+    h.respond(ack(invoke_id)).await;
+    assert_eq!(settled(&mut h, 6).await, WriteStatus::SUCCESSFUL);
+    assert_eq!(reliability(&mut h, 6).await, Reliability::NO_FAULT_DETECTED);
+}
 
-    // DCC restricts initiation: Device 9 gets no frame either.
-    disable_initiation(&h);
-    write_channel(&mut h, 5, &PropertyValue::Real(80.0), Some(8))
+#[tokio::test(start_paused = true)]
+async fn channel_skips_the_rest_of_an_unbound_device_its_who_is_finds_silent() {
+    let mut h = start().await;
+    let started = tokio::time::Instant::now();
+    write_channel(&mut h, 8, &PropertyValue::Real(80.0), Some(8))
         .await
         .unwrap();
-    assert_eq!(settled(&mut h, 5).await, WriteStatus::FAILED);
-    assert_eq!(
-        reliability(&mut h, 5).await,
-        Reliability::COMMUNICATION_FAILURE
+    assert_eq!(next_who_is(&h).await, (None, targeted(10)));
+    // No I-Am comes. AO-3 shares the silent device, so it fails unsent with
+    // no second Who-Is, and the local AO-2 is still written: the
+    // distribution waits out one Who-Is in all.
+    assert_eq!(settled(&mut h, 8).await, WriteStatus::FAILED);
+    let took = started.elapsed();
+    let wait = Duration::from_secs(3);
+    assert!(
+        (wait..wait + Duration::from_millis(100)).contains(&took),
+        "{took:?}"
     );
     assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
+    assert_eq!(
+        reliability(&mut h, 8).await,
+        Reliability::COMMUNICATION_FAILURE
+    );
     assert!(sent_writes(&h).is_empty());
+    assert!(who_is_sent(&h).is_empty());
 }
 
 #[tokio::test(start_paused = true)]

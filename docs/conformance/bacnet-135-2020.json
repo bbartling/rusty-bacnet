@@ -2471,6 +2471,8 @@
     "crates/bacnet-server/src/command_lists.rs",
     "crates/bacnet-server/src/command_lists/unattached.rs",
     "crates/bacnet-server/src/server/remote_writes.rs",
+    "crates/bacnet-server/src/server/binding_probes.rs",
+    "crates/bacnet-server/src/server/device_bindings.rs",
     "crates/bacnet-server/src/server/confirmed_answer.rs",
     "crates/bacnet-server/src/server/request_tasks.rs",
     "crates/bacnet-server/src/server/shutdown.rs",
@@ -2492,7 +2494,9 @@
     "crates/rusty-bacnet/src/server/server_methods/registration_tests.rs::command_builder_applies_action_then_action_text_through_the_object_setters",
     "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_present_value_write_runs_the_configured_list",
     "crates/bacnet-server/src/server/command_remote_write_tests.rs::{command_writes_another_device_and_its_ack_marks_the_command_successful,command_write_through_a_routed_binding_completes_on_the_routed_ack}",
-    "crates/bacnet-integration-tests/tests/server/command_remote.rs::command_writes_a_target_in_another_device_over_bip",
+    "crates/bacnet-integration-tests/tests/server/command_remote.rs::{command_writes_a_target_in_another_device_over_bip,command_finds_an_unbound_target_with_a_who_is_over_bip}",
+    "crates/bacnet-server/src/server/remote_write_discovery_tests.rs::{unbound_command_target_answers_a_targeted_who_is_and_the_write_is_made,concurrent_writes_to_an_unbound_device_share_one_who_is,who_is_for_a_stale_routed_binding_goes_to_its_network}",
+    "crates/bacnet-server/src/server/binding_probes.rs::tests::an_answer_wakes_every_wait_and_frees_the_device",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_command_action_reads_as_the_action_commands_written",
     "crates/rusty-bacnet/src/types/constructed_read_tests.rs::command_actions_read_as_the_action_commands_written"
    ],
@@ -2509,7 +2513,9 @@
     "crates/bacnet-server/src/command_lists/unattached_tests.rs::refused_command_run_marks_every_command_unsuccessful",
     "crates/bacnet-server/src/server/command_remote_write_tests.rs::{command_write_another_device_refuses_busy_fails_at_once_and_quits,command_write_another_device_never_answers_is_retried_then_fails,command_write_another_device_fails_unsent_while_dcc_restricts_initiation,command_write_another_device_ends_at_the_first_retry_dcc_blocks,stop_during_an_outstanding_remote_write_ends_the_run_and_frees_its_invoke_id}",
     "crates/bacnet-server/src/server/command_run_stop_tests.rs::{stop_during_a_post_delay_ends_the_run_with_what_it_made,stop_while_the_database_is_busy_ends_the_run_where_it_stood,run_no_task_starts_ends_at_once_as_unsuccessful,stop_during_a_channel_member_delay_ends_the_distribution_failed,stop_while_the_database_is_busy_ends_a_channel_distribution_failed,channel_run_no_task_starts_ends_at_once_failed,stop_ends_a_run_nothing_took,run_whose_write_panics_ends_with_its_unmade_commands_unsuccessful,stop_during_the_last_post_delay_ends_the_run_successful,run_whose_write_panics_while_the_database_is_busy_ends_where_it_stood}",
-    "crates/bacnet-server/src/server/remote_write_answer_tests.rs::{remote_write_ignores_answers_from_another_peer_or_for_another_service,remote_write_error_reject_or_abort_ends_it_at_once_saying_why,remote_write_blocked_by_dcc_at_a_retry_ends_there_as_disabled}"
+    "crates/bacnet-server/src/server/remote_write_answer_tests.rs::{remote_write_ignores_answers_from_another_peer_or_for_another_service,remote_write_error_reject_or_abort_ends_it_at_once_saying_why,remote_write_blocked_by_dcc_at_a_retry_ends_there_as_disabled}",
+    "crates/bacnet-server/src/server/remote_write_discovery_tests.rs::{silent_unbound_target_fails_after_the_apdu_timeout_with_one_who_is,silent_unbound_command_target_fails_and_the_rest_of_the_list_runs,no_who_is_while_dcc_restricts_initiation_or_for_the_wildcard_device,absent_device_gets_one_who_is_per_hold_off}",
+    "crates/bacnet-server/src/server/binding_probes.rs::tests::{a_probe_is_joined_while_out_then_holds_off_its_device_for_a_minute,probes_are_capped_until_their_hold_off_ends,a_wait_too_long_to_add_still_starts_a_probe}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2520,7 +2526,8 @@
     "docs/python-api.md#building-control Python add_command action and action_text",
     "CHANGELOG.md Unreleased Added entry for #1180 (Command actions in other devices), from changelog.d/1180-command-remote-writes.md",
     "CHANGELOG.md Unreleased Fixed entry for #1252 (stop ends Command runs), from changelog.d/1252-stop-ends-command-runs.md",
-    "CHANGELOG.md Unreleased Changed entry for #1323 (remote write refusals keep their payload), from changelog.d/1323-refusal-payload.md"
+    "CHANGELOG.md Unreleased Changed entry for #1323 (remote write refusals keep their payload), from changelog.d/1323-refusal-payload.md",
+    "CHANGELOG.md Unreleased Added entry for #1322 (targeted Who-Is for unbound remote targets), from changelog.d/1322-targeted-who-is.md"
    ],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1150, found in #1135). Breaking pre-1.0 wire change: Present_Value used to store any Unsigned and run nothing. Clause 12.10 and Table 12-12 were read as page images.",
@@ -2537,16 +2544,17 @@
     "Python (#1179): BACnetServer.add_command takes keyword-only action (lists of ActionCommand mappings) and action_text. The binding checks shapes and Python types (TypeError, ValueError); CommandObject::set_action and set_action_text refuse a priority outside 1 to 16, an unencodable value or a text count mismatch (VALUE_OUT_OF_RANGE). Write_Successful starts FALSE.",
     "A run started by another run's write carries the chain of objects above it; one that would start its own Command again, or with more than eight runs above it, ends as failed and that write fails with OBJECT / BUSY (#1151), so two Commands writing each other between post delays stop after one round.",
     "Run generations come from one process-wide counter (#1151), so a run left over from a replaced Command can't act on its replacement.",
-    "A command naming another Device goes out as a confirmed WriteProperty, addressed from the device bindings only (a configured DeviceBinding or an I-Am under ten minutes old). No Who-Is is sent; an unbound device fails unsent.",
+    "A command naming another Device goes out as a confirmed WriteProperty, addressed from the device bindings (a configured DeviceBinding or an I-Am under ten minutes old).",
     "Remote write bounds: each attempt waits cov_retry_timeout_ms, silence earns up to three retries under one invoke ID, and an Error (BUSY included), Reject or Abort is final. Nothing is sent while DCC restricts initiation, a retry included.",
     "A remote write leases its invoke ID from the pool confirmed notifications use, and the lease names the peer and WriteProperty. No database guard is held while it is outstanding. tick_schedules, which has no network, fails remote commands.",
     "stop() ends a cancelled run where it stood: In_Process FALSE, unmade commands FALSE, All_Writes_Successful TRUE only if every write was made and succeeded. Runs let go of while the database was busy, then ownerless ones, end once it is free.",
     "A run whose write panics ends the same way, its unmade commands FALSE, and its property subscribers hear of the end.",
     "A remote write's refusal reaches the run host with what the device said: the Error class and code, or the Reject or Abort reason. A Command keeps only pass or fail; a Channel member in another device goes through the same remote write path.",
-    "Python reads Action as lists of ActionCommand mappings with every key, Write_Successful included; add_command takes those mappings back and ignores write_successful, so a command starts FALSE."
+    "Python reads Action as lists of ActionCommand mappings with every key, Write_Successful included; add_command takes those mappings back and ignores write_successful, so a command starts FALSE.",
+    "A remote target with no fresh binding gets one Who-Is with both limits set to its instance, broadcast locally or to the network of its stale routed binding; the write waits cov_retry_timeout_ms for the I-Am and fails unsent without one.",
+    "Who-Is bounds: one per device per 60 s from its send, shared by writes that miss while it is out; a miss inside that minute fails at once; at most 256 devices tracked; none for instance 4194303 or while DCC restricts initiation."
    ],
    "gaps": [
-    "#1322: a remote target with no fresh binding fails unsent; no targeted Who-Is is sent on a binding-cache miss",
     "#1324: runs a cancelled write_local took but never started stay in progress until stop()"
    ]
   },
@@ -3768,6 +3776,7 @@
     "crates/bacnet-server/src/command_lists/unattached.rs",
     "crates/bacnet-server/src/server/command_runs.rs",
     "crates/bacnet-server/src/server/remote_writes.rs",
+    "crates/bacnet-server/src/server/binding_probes.rs",
     "crates/bacnet-server/src/server/confirmed_answer.rs",
     "crates/bacnet-objects/src/command.rs::WriteFailure",
     "crates/bacnet-server/src/local_references.rs",
@@ -3788,10 +3797,10 @@
     "crates/bacnet-objects/src/channel/tests.rs::{channel_replacement_never_shares_a_run_generation,channel_allow_group_delay_inhibit_starts_false_and_takes_boolean_writes}",
     "crates/bacnet-server/src/server/channel_run_tests.rs::{channel_lighting_command_reaches_its_member_without_the_context_0_framing,channel_members_with_equal_delays_go_in_list_order}",
     "crates/bacnet-server/src/schedule_channel_tests.rs::tick_schedules_runs_the_channel_distributions_its_writes_start",
-    "crates/bacnet-server/src/server/channel_remote_write_tests.rs::{channel_writes_a_member_in_another_device_and_waits_for_its_answer,channel_null_a_member_in_another_device_refuses_as_the_wrong_datatype_succeeds,write_group_distribution_writes_a_member_in_another_device,channel_skips_the_rest_of_a_silent_device_for_the_distribution}",
+    "crates/bacnet-server/src/server/channel_remote_write_tests.rs::{channel_writes_a_member_in_another_device_and_waits_for_its_answer,channel_null_a_member_in_another_device_refuses_as_the_wrong_datatype_succeeds,write_group_distribution_writes_a_member_in_another_device,channel_skips_the_rest_of_a_silent_device_for_the_distribution,channel_member_in_an_unbound_device_is_written_once_its_who_is_is_answered}",
     "crates/bacnet-server/src/server/channel_reliability_tests.rs::{channel_member_that_refuses_is_a_process_error_until_a_good_run_clears_it,channel_reliability_takes_a_client_value_only_out_of_service,channel_reliability_names_the_first_failure_in_write_order}",
     "crates/bacnet-objects/src/channel/reliability_tests.rs::{channel_reliability_names_the_failure_and_clears_on_the_next_success,channel_write_with_nothing_to_distribute_clears_reliability,channel_reliability_is_simulated_out_of_service_and_restored_in_service,channel_takes_members_in_other_devices}",
-    "crates/bacnet-server/src/command_lists/target.rs::tests::{failures_sort_into_configuration_process_and_communication,only_an_invalid_datatype_error_or_reject_refuses_the_datatype}",
+    "crates/bacnet-server/src/command_lists/target.rs::tests::{failures_sort_into_configuration_process_and_communication,only_an_invalid_datatype_error_or_reject_refuses_the_datatype,only_silence_to_the_write_or_its_who_is_marks_the_device_silent}",
     "crates/bacnet-integration-tests/tests/server/channel_remote.rs::channel_writes_members_in_another_device_over_bip"
    ],
    "negative_tests": [
@@ -3810,7 +3819,7 @@
     "crates/bacnet-server/src/schedule_channel_tests.rs::tick_schedules_dropped_with_a_run_queued_but_not_started_ends_it",
     "crates/bacnet-objects/src/channel/coercion_tests.rs::nan_and_infinities_fail_every_conversion_with_a_range",
     "crates/bacnet-server/src/server/command_run_stop_tests.rs::{stop_during_a_channel_member_delay_ends_the_distribution_failed,stop_while_the_database_is_busy_ends_a_channel_distribution_failed,channel_run_no_task_starts_ends_at_once_failed,stop_ends_a_run_nothing_took}",
-    "crates/bacnet-server/src/server/channel_remote_write_tests.rs::{channel_member_in_another_device_that_refuses_fails_the_distribution,channel_member_in_another_device_that_never_answers_is_a_communication_failure,channel_member_in_another_device_sends_nothing_without_initiation_or_a_binding,stop_during_an_outstanding_member_write_ends_the_distribution_failed}",
+    "crates/bacnet-server/src/server/channel_remote_write_tests.rs::{channel_member_in_another_device_that_refuses_fails_the_distribution,channel_member_in_another_device_that_never_answers_is_a_communication_failure,channel_member_in_another_device_sends_nothing_while_dcc_restricts_initiation,channel_skips_the_rest_of_an_unbound_device_its_who_is_finds_silent,stop_during_an_outstanding_member_write_ends_the_distribution_failed}",
     "crates/bacnet-server/src/server/channel_reliability_tests.rs::{channel_member_naming_a_missing_object_is_a_configuration_error,channel_value_a_member_cannot_take_is_a_configuration_error,stop_after_a_member_failed_keeps_that_failure}",
     "crates/bacnet-server/src/command_lists/unattached_tests.rs::unattached_channel_member_in_another_device_fails_unsent"
    ],
@@ -3818,18 +3827,18 @@
    "public_claims": [
     "CHANGELOG.md Unreleased Added entry for #1151 (Channel object), from changelog.d/1151-channel-object.md",
     "CHANGELOG.md Unreleased Added entry for #1264 (Channel remote members and Reliability), from changelog.d/1264-channel-remote-members-reliability.md",
+    "CHANGELOG.md Unreleased Added entry for #1322 (targeted Who-Is for unbound remote targets), from changelog.d/1322-targeted-who-is.md",
     "docs/rust-api.md#lighting--color-5 Channel object"
    ],
    "notes": [
     "A local member's datatype is that of its property's value; NULL, constructed values and remote members count as unknown and pass unchanged, `Lighting_Command` as a BACnetLightingCommand. Rule 3 bounds Unsigned and ENUMERATED at 2147483647.",
-    "Members in other Devices get confirmed WriteProperty from the device bindings, one at a time; a device silent to one write fails its later members unsent (one retry wait per silent device). This Device's identifier is dropped.",
+    "Members in other Devices get confirmed WriteProperty, one at a time, after a targeted Who-Is when unbound; a device silent to one write or its Who-Is fails its later members unsent. This Device's identifier is dropped.",
     "A whole `Execution_Delay` write takes exactly one delay per member (VALUE_OUT_OF_RANGE otherwise); index-0 and whole member-list writes resize both arrays. Caps are 1024 members and 64 control groups.",
     "A run that would start its own object again, or with more than eight runs above it, ends failed and its writer gets OBJECT / BUSY. `tick_schedules` runs a distribution; the bare handlers and `stop()` end it FAILED.",
     "Reliability names the first failed member: CONFIGURATION_ERROR for a value the Channel can't coerce (type or rule range) or an unknown-target or datatype refusal, COMMUNICATION_FAILURE for no binding, DCC or silence, else PROCESS_ERROR."
    ],
    "gaps": [
     "Intrinsic reporting and Reliability_Evaluation_Inhibit aren't served (no issue)",
-    "#1322: a remote member with no fresh binding fails unsent; no targeted Who-Is is sent",
     "#1342: a remote member's datatype isn't read first, so its value goes uncoerced",
     "#1343: members are written one at a time, so an outstanding remote write delays members due after it",
     "Python configuration of a Channel's members, delays and groups (no issue)",

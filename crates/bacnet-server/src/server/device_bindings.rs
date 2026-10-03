@@ -1,3 +1,4 @@
+use super::binding_probes::BindingProbes;
 use super::*;
 
 /// Maximum number of configured and observed device bindings held by a server.
@@ -150,9 +151,12 @@ enum BindingEntry {
     },
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub(super) struct DeviceBindingTable {
     entries: HashMap<ObjectIdentifier, BindingEntry>,
+    /// Targeted Who-Is requests out or held off, kept under the same guard
+    /// so an I-Am can wake the writes waiting on them (#1322).
+    pub(super) probes: BindingProbes,
 }
 
 impl DeviceBindingTable {
@@ -303,6 +307,22 @@ impl DeviceBindingTable {
             return ObservationOutcome::RejectedInvalid;
         }
 
+        let outcome = self.record_observation(device, target, now);
+        if matches!(
+            outcome,
+            ObservationOutcome::Inserted | ObservationOutcome::Refreshed
+        ) {
+            self.probes.answer(&device);
+        }
+        outcome
+    }
+
+    fn record_observation(
+        &mut self,
+        device: ObjectIdentifier,
+        target: DeviceBindingTarget,
+        now: Instant,
+    ) -> ObservationOutcome {
         match self.entries.get_mut(&device) {
             Some(BindingEntry::Configured(_)) => ObservationOutcome::ConfiguredPreserved,
             Some(BindingEntry::Observed {
@@ -334,6 +354,18 @@ impl DeviceBindingTable {
                 );
                 ObservationOutcome::Inserted
             }
+        }
+    }
+
+    /// The network a targeted Who-Is for `device` is broadcast on: the
+    /// remote one its last I-Am came from, or `None` for this one.
+    pub(super) fn who_is_network(&self, device: &ObjectIdentifier) -> Option<u16> {
+        match self.entries.get(device) {
+            Some(BindingEntry::Observed {
+                target: DeviceBindingTarget::Routed { network, .. },
+                ..
+            }) => Some(*network),
+            _ => None,
         }
     }
 

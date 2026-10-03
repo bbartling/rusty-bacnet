@@ -2143,8 +2143,14 @@ until the list ends, and All_Writes_Successful then reads True only if every
 write succeeded. Zero, or an empty list, writes nothing. A command whose
 `device_identifier` names another device is sent there as a confirmed
 WriteProperty when the server has a binding for it, from `add_device_binding`
-or an I-Am heard in the last ten minutes; with none it fails and nothing is
-sent. `stop()` ends a run it cuts short with In_Process False.
+or an I-Am heard in the last ten minutes. With neither, the server first
+broadcasts one Who-Is for that device's instance alone and waits the APDU
+timeout (3 seconds) for its I-Am, which binds it; with no I-Am the command
+fails and no WriteProperty is sent. A device gets at most one Who-Is a
+minute, so a command naming it within a minute of one that drew nothing
+fails at once, and nothing at all is sent while DeviceCommunicationControl
+restricts initiation. `stop()` ends a run it cuts short with In_Process
+False.
 
 `add_staging` validates the complete ladder and target mapping atomically; it
 does not invent stage limits, deadbands, names, priorities, or targets. Each
