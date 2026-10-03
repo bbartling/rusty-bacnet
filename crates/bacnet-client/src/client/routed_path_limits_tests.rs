@@ -22,6 +22,24 @@ fn forwarded_npci_rejects_unrepresentable_addresses() {
     assert!(forwarded_npci_len(6, 256).is_err());
 }
 
+/// A routed confirmed destination names one station on one remote network
+/// (#1278): DNET 1 and 65534 pass, DNET 0 and 65535 fail, and so does a DADR
+/// that is empty or too long, in the shared check and the forwarded NPCI.
+#[test]
+fn routed_unicast_needs_one_remote_network_and_one_station() {
+    for dnet in [1, u16::MAX - 1] {
+        assert!(check_routed_unicast(dnet, 1).is_ok());
+    }
+    for (dnet, dadr_len) in [(0, 6), (u16::MAX, 6), (100, 0), (100, 19)] {
+        assert!(matches!(
+            check_routed_unicast(dnet, dadr_len),
+            Err(Error::Encoding(_))
+        ));
+    }
+    assert!(matches!(forwarded_npci_len(0, 6),
+        Err(Error::Encoding(m)) if m == "routed destination MAC address must contain 1..=18 octets"));
+}
+
 /// Every MAC a routed path carries holds to [`NpduAddress::MAX_MAC_LEN`]
 /// (#1267). An 18-octet router MAC, forwarded source and DADR build a path; one
 /// octet more is refused, and a refused router MAC reserves no path entry.
@@ -32,7 +50,7 @@ async fn routed_path_macs_hold_to_the_npdu_address_bound() {
     assert!(matches!(forwarded_npci_len(6, longest + 1),
         Err(Error::Encoding(m)) if m == "local source MAC address for routed forwarding must contain 1..=18 octets"));
     assert!(matches!(forwarded_npci_len(longest + 1, 6),
-        Err(Error::Encoding(m)) if m == "routed destination MAC address must contain 0..=18 octets"));
+        Err(Error::Encoding(m)) if m == "routed destination MAC address must contain 1..=18 octets"));
 
     let limits = Arc::new(RoutedPathLimits::with_capacity(
         4,

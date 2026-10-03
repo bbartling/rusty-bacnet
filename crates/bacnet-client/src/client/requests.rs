@@ -95,6 +95,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// The NPDU is sent as a unicast to `router_mac` with DNET/DADR set so
     /// the router forwards it to `dest_network`/`dest_mac`.
+    ///
+    /// A confirmed request goes to one device, so `dest_network` must be in
+    /// 1..=65534 and `dest_mac` must hold 1 to
+    /// [`NpduAddress::MAX_MAC_LEN`] octets. DNET 0 names no network, DNET
+    /// 65535 and an empty DADR address a broadcast, and any of them fails
+    /// with [`Error::Encoding`] before path or transaction state is taken.
+    /// Every routed confirmed entry point, such as the `_to_device` and
+    /// `_from_device` methods, applies the same rule.
     pub async fn confirmed_request_routed(
         &self,
         router_mac: &[u8],
@@ -121,11 +129,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<Bytes, Error> {
-        // A DADR or local source MAC that no router could carry fails here,
-        // before the path gate is reserved or awaited (#1267).
+        // A destination that is not one device (#1278), or a DADR or local
+        // source MAC that no router could carry (#1267), fails here, before
+        // the path gate is reserved or awaited and before TSM registration.
         let routed_forwarded_npci_len = match target {
             ConfirmedTarget::Local { .. } => None,
-            ConfirmedTarget::Routed { dest_mac, .. } => {
+            ConfirmedTarget::Routed {
+                dest_network,
+                dest_mac,
+                ..
+            } => {
+                check_remote_dnet(dest_network)?;
                 Some(forwarded_npci_len(dest_mac.len(), self.local_mac.len())?)
             }
         };

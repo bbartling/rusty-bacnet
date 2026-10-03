@@ -135,7 +135,7 @@
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Schedule reference correction",
-    "docs/rust-api.md#schedule--notification-5 Schedule & Notification",
+    "docs/rust-api.md#schedule--notification-6 Schedule & Notification",
     "CHANGELOG.md Unreleased Fixed entry for #1029 and #1028"
    ],
    "notes": [
@@ -185,7 +185,7 @@
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Fixed entry for #1029 and #1028",
-    "docs/rust-api.md#schedule--notification-5 Schedule & Notification"
+    "docs/rust-api.md#schedule--notification-6 Schedule & Notification"
    ],
    "notes": [
     "Refs #1028. Before, evaluate applied every exception whatever its period, ignored Calendar references and Effective_Period, treated a NULL time-value as a value, and returned an Octet String of the raw time-value bytes, which commandable targets refused.",
@@ -275,7 +275,7 @@
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Added entry for #1057 and #1056",
-    "docs/rust-api.md#schedule--notification-5 Schedule & Notification",
+    "docs/rust-api.md#schedule--notification-6 Schedule & Notification",
     "docs/architecture.md#server-engine Schedule tick row",
     "CHANGELOG.md Unreleased Added entry for #1055",
     "CHANGELOG.md Unreleased Fixed entry for #1087",
@@ -401,7 +401,7 @@
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Added entry for #1057 and #1056",
-    "docs/rust-api.md#schedule--notification-5 Schedule & Notification",
+    "docs/rust-api.md#schedule--notification-6 Schedule & Notification",
     "CHANGELOG.md Unreleased Added entry for #1088 and #1086"
    ],
    "notes": [
@@ -519,6 +519,66 @@
     "Refs #768. Keyword-only mutation_policy accepts permissive (native default) or deny_all and stores the native enum. Invalid strings/type fail synchronously before transport preparation or startup drain.",
     "The generic builder owns one gate across transports; installed B/IP tests cover exact denial and unchanged property/object/list/file state, denied COV, default/explicit permissive writes, remote reads and trusted local writes.",
     "Native tests retain exhaustive ten-service policy/authorizer/counter coverage. No Python callbacks, duplicate gate, certificate principal or broader clause qualification. DCC, ReinitializeDevice, LifeSafety, Audit and endpoint Device-write authorization remain separate; #524 remains open. Global evidence pins and existing row statuses are unchanged."
+   ]
+  },
+  {
+   "id": "BACNET-16-LOCAL-INBOUND-SOURCE-POLICIES",
+   "standard_anchor": "Clauses 13.14, 13.15, 13.16, 16.1, 16.7, 16.8",
+   "priority": "P1",
+   "summary": "Opt-in local policies limit which claimed sources may set the clock, run DeviceCommunicationControl or use reserved COV slots; they are local hardening options, not requirements of the standard.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-server/src/server/time_sync_policy.rs::TimeSyncPolicy",
+    "crates/bacnet-server/src/server/time_sync_policy.rs::TimeSyncSourceRestriction",
+    "crates/bacnet-server/src/server/time_sync_policy.rs::TimeSyncLimiter",
+    "crates/bacnet-server/src/server/requests/unconfirmed.rs::apply_time_sync_request",
+    "crates/bacnet-server/src/server/dcc_policy.rs::DccSourceRestriction",
+    "crates/bacnet-server/src/server/dcc_timer.rs::replace",
+    "crates/bacnet-server/src/cov/policy.rs::CovPolicy::validate",
+    "crates/bacnet-server/src/cov/policy.rs::CovPolicy::is_peer_reserved",
+    "crates/bacnet-server/src/cov/identity.rs::CovRecipient::from_endpoint"
+   ],
+   "positive_tests": [
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_defaults_and_all_builders_validate_before_start_or_dial",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_source_entries_hold_to_the_bacnet_address_bound",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::step_cap_exact_boundary_both_directions_and_utc_local_parity",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_rates_bound_bursts_and_restore_cadence_without_denial_debits",
+    "crates/bacnet-server/src/server/requests/unconfirmed_time_sync_tests.rs::time_sync_allowlist_accepts_exact_direct_routed_and_sc_vmac_with_callback_provenance",
+    "crates/bacnet-server/src/server/dcc_policy_tests.rs::dcc_source_restriction_builds_with_the_longest_entries",
+    "crates/bacnet-server/src/server/requests/dcc_tests.rs::dcc_source_exact_full_bytes_and_fail_closed_wire",
+    "crates/bacnet-server/src/cov/policy_tests.rs::cov_policy_validate_accepts_defaults_zero_reservations_and_clamped_relations",
+    "crates/bacnet-server/src/cov/policy_tests.rs::cov_policy_reserved_macs_hold_to_the_bacnet_address_bound",
+    "crates/bacnet-server/src/cov/tests.rs::is_peer_reserved_checks_canonical_peer_identity"
+   ],
+   "negative_tests": [
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::exact_sources_and_configured_empty_do_not_fall_back_to_router",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::rejects_invalid_allowlists_at_construction",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_source_entries_hold_to_the_bacnet_address_bound",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::failed_step_does_not_spend_rate_or_coalescing_budget",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::coalescing_and_source_capacity_preserve_active_routed_identity",
+    "crates/bacnet-server/src/server/requests/unconfirmed_time_sync_tests.rs::time_sync_disabled_empty_allowlist_and_step_denials_leave_clock_and_observer_untouched",
+    "crates/bacnet-server/src/server/dcc_policy_tests.rs::dcc_source_restriction_configuration_bounds",
+    "crates/bacnet-server/src/server/dcc_policy_tests.rs::dcc_source_restriction_rejected_before_start",
+    "crates/bacnet-server/src/server/dcc_policy_tests.rs::dcc_source_denied_enable_still_occupies_recovery",
+    "crates/bacnet-server/src/cov/policy_tests.rs::cov_policy_validate_rejects_zero_limits_and_unmatchable_reservations",
+    "crates/bacnet-server/src/cov/policy_tests.rs::cov_policy_reserved_macs_hold_to_the_bacnet_address_bound",
+    "crates/bacnet-server/src/cov/policy_tests.rs::invalid_cov_policy_fails_start_before_transport"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/dcc-policy.md#optional-exact-source-restriction",
+    "docs/python-api.md#cov-policy"
+   ],
+   "notes": [
+    "Inbound TimeSynchronization and UTCTimeSynchronization are decoded, then checked against `TimeSyncPolicy`. The default sets the clock on every valid request; a refused one leaves the clock and the `on_time_sync` observer untouched.",
+    "`max_step` compares the requested time with the clock in the request's own basis, UTC through `UTC_Offset` and daylight saving, inclusive at the bound in both directions. With a cap set, an unreadable clock refuses the request.",
+    "Per-source and global token buckets and coalescing windows count both services together; a request the step cap refuses spends no budget. The source table holds `max_sources` entries (default 256) and never evicts an active one.",
+    "Entries in `TimeSyncSourceRestriction`, `DccSourceRestriction` and the `CovPolicy` reserved lists hold 1 to `BACnetAddress::MAX_MAC_LEN` (18) octets and routed networks 1 to 65534; others fail with `Error::Encoding` before startup.",
+    "A routed source matches only a routed entry, by network and full address, never by the router's MAC; a direct entry matches only unrouted traffic. An empty time-sync or DCC list denies all; the DCC list needs `DccPolicy::RequirePassword`."
+   ],
+   "gaps": [
+    "#1292: Python servers cannot set `TimeSyncPolicy` and run the default",
+    "#1292: No user guide section documents `TimeSyncPolicy`; only its rustdoc does"
    ]
   },
   {
@@ -771,7 +831,7 @@
   },
   {
    "id": "BACNET-5-ROUTED-PATH-LIMIT",
-   "standard_anchor": "Clauses 5.2.1.2, 6.4.4, and 19.4",
+   "standard_anchor": "Clauses 5.2.1.2, 6.2.2.1, 6.3, 6.4.4, and 19.4",
    "priority": "P1",
    "requirement_summary": "Confirmed routed APDU sizing combines peer, local transport, and path NPDU evidence, while an exactly correlated too-long network rejection terminates the active owner and narrows later sends.",
    "status": "implementation-present-needs-conformance-tests",
@@ -782,7 +842,9 @@
     "crates/bacnet-client/src/client/requests.rs",
     "crates/bacnet-client/src/client/segmented_request.rs",
     "crates/bacnet-client/src/client/segmentation.rs",
-    "crates/bacnet-client/src/tsm.rs"
+    "crates/bacnet-client/src/tsm.rs",
+    "crates/bacnet-client/src/client/discovery.rs",
+    "crates/bacnet-client/src/endpoint_requester.rs"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/npdu.rs::tests::reject_message_to_network_payload_decodes_typed_reason_and_dnet",
@@ -791,7 +853,10 @@
      "crates/bacnet-client/src/client/routed_path_limit_tests.rs::reason_4_completes_exact_caller_learns_bound_and_does_not_retry",
      "crates/bacnet-client/src/client/routed_path_limit_tests.rs::same_path_serializes_while_a_second_router_remains_concurrent",
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::capacity_cleanup_never_splits_a_held_or_waiting_same_path_gate",
-     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_path_macs_hold_to_the_npdu_address_bound"
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_path_macs_hold_to_the_npdu_address_bound",
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_unicast_needs_one_remote_network_and_one_station",
+     "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::path_apis_and_routed_requests_share_the_remote_dnet_bound",
+     "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::add_routed_device_refuses_a_destination_no_request_could_reach"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/npdu.rs::tests::reject_message_to_network_payload_requires_exact_length",
@@ -805,7 +870,12 @@
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::control_queued_before_activation_cannot_claim_the_new_generation",
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::claimed_control_cannot_complete_reused_invoke_id_for_new_owner",
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_path_macs_hold_to_the_npdu_address_bound",
-     "crates/bacnet-client/src/client/routed_path_mac_bound_tests.rs::over_long_routed_path_macs_fail_before_registration_or_emission"
+     "crates/bacnet-client/src/client/routed_path_mac_bound_tests.rs::over_long_routed_path_macs_fail_before_registration_or_emission",
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_unicast_needs_one_remote_network_and_one_station",
+     "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::routed_confirmed_request_to_no_single_device_fails_before_any_state",
+     "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::path_apis_and_routed_requests_share_the_remote_dnet_bound",
+     "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::add_routed_device_refuses_a_destination_no_request_could_reach",
+     "crates/bacnet-client/src/endpoint_requester_tests.rs::routed_destination_to_no_single_device_fails_before_registration"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -817,7 +887,8 @@
      "Path state is capped at 256 entries; deterministic idle reclamation never removes configured/learned evidence or a gate with an owner/waiter, and exhaustion fails before TSM registration. Ambiguous termination holds the same-path gate through a configuration-derived stale-control quarantine, while monotonic network-ingress sequencing prevents controls queued before activation from claiming a later generation.",
      "Malformed, unmatched, stale, wrong-router, wrong-DNET, other-reason, and direct traffic do not mutate policy. Full active probing, persistent cache, router enforcement, and unconfirmed-traffic changes remain deferred. Third-party conformance evidence is still required.",
     "A client attached to a BACnetRouter through a LoopbackTransport port gets reason 4 rejects on its own NetworkLayer from the router's port MAC, so it needs no router-side receiver (#1175).",
-    "Every MAC on a routed path holds to NpduAddress::MAX_MAC_LEN (18 octets). A routed request refuses a longer DADR or local source MAC, and an empty or longer router MAC, with Error::Encoding before it reserves or waits on the path; the path configuration methods refuse such a router MAC too (#1267)."
+    "Every MAC on a routed path holds to NpduAddress::MAX_MAC_LEN (18 octets). A routed request refuses a longer DADR or local source MAC, and an empty or longer router MAC, with Error::Encoding before it reserves or waits on the path; the path configuration methods refuse such a router MAC too (#1267).",
+    "A routed confirmed request goes to one device: DNET 0, DNET 65535 or an empty DADR fails with Error::Encoding before the path or a TSM entry is taken. The path methods share that DNET check; add_routed_device and the endpoint requester apply the same rule. Unconfirmed sends keep remote and global broadcasts."
     ]
   },
   {
@@ -868,9 +939,9 @@
    ],
    "positive_tests": [
     "crates/bacnet-network/src/address_bound_tests.rs::router_rejects_an_over_long_address_toward_a_dnet_with_reason_6",
-    "crates/bacnet-network/src/reject_route_tests.rs::{router_rejects_a_relayed_npdu_toward_its_snet_sadr,router_rejects_a_local_npdu_with_a_local_unicast,router_rejects_an_npdu_from_its_own_snet_with_a_local_unicast,router_rejects_an_npdu_from_its_other_snet_out_that_port,router_relays_a_received_reject_to_the_node_its_dnet_names,router_hands_a_reject_addressed_to_itself_to_its_control_receiver,chained_routers_carry_a_reject_back_to_the_originating_device}",
-    "crates/bacnet-network/src/router/reject_tests.rs::{send_reject_addresses_the_originator_or_the_local_sender,send_reject_unicasts_an_originator_on_the_arrival_network_to_its_sadr,send_reject_sends_an_originator_on_another_direct_network_out_its_port,relay_routes_a_received_reject_by_its_dnet,a_reject_addressed_to_the_router_reaches_its_consumer_and_the_table}",
-    "crates/bacnet-network/src/router/options_tests.rs::{one_start_combines_admission_tracking_a_control_policy_and_the_control_receiver,plain_options_start_a_permissive_router_without_a_control_receiver}"
+    "crates/bacnet-network/src/reject_route_tests.rs::{router_rejects_a_relayed_npdu_toward_its_snet_sadr,router_rejects_a_local_npdu_with_a_local_unicast,router_rejects_an_npdu_from_its_own_snet_with_a_local_unicast,router_rejects_a_node_with_its_other_ports_mac_at_that_mac,router_rejects_an_npdu_from_its_other_snet_out_that_port,router_relays_a_received_reject_to_the_node_its_dnet_names,router_hands_a_reject_addressed_to_itself_to_its_control_receiver,chained_routers_carry_a_reject_back_to_the_originating_device}",
+    "crates/bacnet-network/src/router/reject_tests.rs::{send_reject_addresses_the_originator_or_the_local_sender,relay_routes_a_received_reject_by_its_dnet,a_reject_addressed_to_the_router_reaches_its_consumer_and_the_table}",
+    "crates/bacnet-network/src/router/options_tests.rs::{one_start_combines_admission_tracking_a_control_policy_and_the_control_receiver,plain_options_start_a_permissive_router_without_a_control_receiver,tracked_network_control_receiver_counts_its_high_water_mark_and_drops}"
    ],
    "negative_tests": [
     "crates/bacnet-network/src/address_bound_tests.rs::{router_rejects_an_over_long_address_toward_a_dnet_with_reason_6,router_drops_an_over_long_broadcast_or_local_npdu_without_a_reject}",
@@ -904,7 +975,9 @@
     "#1219: a refused NPDU whose SNET is another of the router's directly connected networks gets its reject out the port attached to that network, as a local unicast to the SADR with no DNET (Clause 6.5.4).",
     "#1219: a refused NPDU whose SNET/SADR is the router's own address on one of its networks draws no reject.",
     "#1220: BACnetRouter::start takes RouterOptions, which turns on the tracked local APDU receiver, the RB-09 control policy and authorizer, and the network-control receiver in any combination. A loopback test starts a router with all three.",
-    "#1198: the router drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN on any port before decoding it, counts it in address_length_drops() and sends nothing back. Such a frame is not delivered or forwarded and teaches no route; a test shows a route announced from a 19-octet MAC is not learned."
+    "#1198: the router drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN on any port before decoding it, counts it in address_length_drops() and sends nothing back. Such a frame is not delivered or forwarded and teaches no route; a test shows a route announced from a 19-octet MAC is not learned.",
+    "`RouterOptions::network_control_receiver_with_admission` hands back the router's control receiver as an `AdmissionReceiver`. Its counters give queue depth, high-water mark and full and closed drops; a loopback test fills the 256-control queue.",
+    "Loopback reject tests check the MAC each unicast reject goes to as well as its bytes, through `LoopbackTransport::record_unicast_destinations`. That tells a local reject to the SADR from one to the link sender."
    ]
   },
   {
@@ -1019,12 +1092,10 @@
    "positive_tests": [
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/priority_array_writes.rs::priority_array_all_twenty_profiles_trait_metadata_and_pics_are_read_only",
     "crates/bacnet-server/src/pics/tests.rs",
-    "crates/bacnet-objects/src",
-    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_source_entries_hold_to_the_bacnet_address_bound"
+    "crates/bacnet-objects/src"
    ],
    "negative_tests": [
-    "crates/bacnet-server/src/handlers/tests",
-    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_source_entries_hold_to_the_bacnet_address_bound"
+    "crates/bacnet-server/src/handlers/tests"
    ],
    "benchmarks": [
     "benchmarks/src/stress/objects.rs"
@@ -1035,8 +1106,7 @@
     "docs/rust-api.md#bacnet-objects object model"
    ],
    "notes": [
-    "Initial family row only; later work should split high-claim services and object families into detailed rows.",
-    "Inbound TimeSynchronization and UTCTimeSynchronization can pass through an optional local source allowlist, TimeSyncSourceRestriction. Each entry holds 1 to BACnetAddress::MAX_MAC_LEN (18) octets, the longest source the network layer delivers; a longer one is refused with Error::Encoding (#1266)."
+    "Initial family row only; later work should split high-claim services and object families into detailed rows."
    ]
   },
   {
@@ -2201,7 +2271,9 @@
     "crates/bacnet-server/src/handlers/rpm_budget.rs::RpmPlan",
     "crates/bacnet-server/src/handlers/rpm_budget.rs::live_cov_selection",
     "crates/bacnet-server/src/handlers/read_property.rs::PropertyPlan",
-    "crates/bacnet-endpoint/src/session.rs::SessionConfig"
+    "crates/bacnet-endpoint/src/session.rs::SessionConfig",
+    "crates/rusty-bacnet/src/endpoint/common.rs::parse_read_work_limit",
+    "crates/rusty-bacnet/src/endpoint/common.rs::pending_group"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{property_references_encode_and_decode_with_and_without_an_index,read_access_specifications_decode_one_element_at_an_offset}",
@@ -2215,12 +2287,17 @@
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{malformed_property_references_are_refused,malformed_read_access_specifications_are_refused}",
-    "crates/bacnet-objects/src/group/group_members_tests.rs::{add_member_refuses_a_member_that_reports_a_group_present_value,add_member_refuses_a_member_without_properties,group_lists_refuse_an_array_index}",
+    "crates/bacnet-objects/src/group/group_members_tests.rs::{add_member_refuses_a_member_that_reports_a_group_present_value,add_member_refuses_a_member_without_properties,group_lists_refuse_an_array_index,add_member_refuses_a_property_identifier_past_22_bits}",
     "crates/bacnet-objects/src/group/metadata.rs::tests::property_metadata_group_trio_write_capabilities_match_dispatch",
     "crates/bacnet-server/src/handlers/tests/read_rpm/group_present_value.rs::member_rows_are_charged_to_the_rpm_work_budget_and_shared_between_groups",
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::group_present_value_past_the_work_limit_aborts_as_any_rpm_does",
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/snapshot_plan.rs::a_read_past_its_work_limit_aborts_before_sampling_the_cov_table",
-    "crates/bacnet-endpoint/src/read_work_limit_tests.rs::{endpoint_group_read_past_the_read_work_limit_aborts_out_of_resources,endpoint_read_work_limit_defaults_to_256_and_refuses_zero}"
+    "crates/bacnet-endpoint/src/read_work_limit_tests.rs::{endpoint_group_read_past_the_read_work_limit_aborts_out_of_resources,endpoint_read_work_limit_defaults_to_256_and_refuses_zero}",
+    "crates/rusty-bacnet/src/endpoint/mstp_lifecycle_tests.rs::mstp_python_wrapper_applies_its_read_work_limit",
+    "crates/rusty-bacnet/tests/test_endpoint_read_work_limit.py::ReadWorkLimitWireTests::test_group_read_over_the_limit_aborts_out_of_resources",
+    "crates/rusty-bacnet/tests/test_endpoint_read_work_limit.py::ReadWorkLimitConstructorTests::test_default_keyword_only_stub_and_range",
+    "crates/rusty-bacnet/tests/test_endpoint_read_work_limit.py::EndpointGroupRegistrationTests::test_members_are_validated_when_added",
+    "crates/rusty-bacnet/tests/test_endpoint.py::ScEndpointHubTests::test_sc_endpoint_applies_its_read_work_limit"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2228,6 +2305,9 @@
     "CHANGELOG.md Unreleased Fixed entry for #1171 (Group members read the live Device COV lists), from changelog.d/1171-group-member-cov-lists.md",
     "CHANGELOG.md Unreleased Changed entry for #1172 (Group Present_Value charged to the request's work limit), from changelog.d/1172-group-present-value-work-limit.md",
     "CHANGELOG.md Unreleased Added entry for #1215 (endpoint read work limit), from changelog.d/1215-endpoint-read-work-limit.md",
+    "CHANGELOG.md Unreleased Added entry for #1250 (Python endpoint read work limit and Groups), from changelog.d/1250-python-read-work-limit.md",
+    "CHANGELOG.md Unreleased Changed entry for #1250 (GroupObject::add_member refusal reasons), from changelog.d/1250-group-member-refusal.md",
+    "docs/python-api.md#endpoint-groups-and-the-read-work-limit Python endpoint add_group and read_work_limit",
     "docs/rust-api.md#constructed-property-framing Group List_Of_Group_Members and Present_Value"
    ],
    "notes": [
@@ -2241,6 +2321,8 @@
     "The low-level handlers with no executor view have no limit. The rebuilt octets still count toward the RPM byte budget.",
     "Every read plans its rows, a Group's member rows included and ALL, REQUIRED and OPTIONAL expanded, before it reads a value. A request samples the COV table once, under the database guard and before the COV table guard, only when a planned row names the Device's Active_COV_Subscriptions or Active_COV_Multiple_Subscriptions, directly or through the Device wildcard; a request past its work limit samples nothing (#1171, #1213).",
     "The shared endpoint has no ReadPropertyMultiple budget: its ReadProperty charges a Group's Present_Value to SessionConfig::read_work_limit (default 256, zero refused), also set with the endpoint builders' read_work_limit, and aborts with OUT_OF_RESOURCES past it (#1215).",
+    "Python BipEndpoint, ScEndpoint and MstpEndpoint take a keyword-only read_work_limit (default 256; zero raises ValueError) and register Groups with add_group, whose members use the read_property_multiple spec shape and pass through GroupObject::add_member (#1250).",
+    "GroupObject::add_member also refuses a property identifier above 4194303, and returns a GroupMemberRefusal naming the broken rule, which converts to PROPERTY / VALUE_OUT_OF_RANGE; Python add_group puts that rule and the member's position in its ValueError.",
     "PropertyReference and ReadAccessSpecification moved from bacnet-services into bacnet_types::constructed, with their codecs as free functions in bacnet_encoding::constructed, so the Group stores them the way other objects store their Clause 21 types; the ReadPropertyMultiple, COV and Audit codecs call the same functions. Not covered: writable List_Of_Group_Members; the Audit_Level, Auditable_Operations, Tags and profile rows."
    ]
   },
@@ -2958,24 +3040,33 @@
     "id": "BACNET-12-NOTIFICATION-FORWARDER-WITHDRAWAL",
    "standard_anchor": "Clause 12.51 (pp. 497-503), Table 12-58 (p. 500); Clause 13.2.5.1 (p. 643); Clause 21 BACnetEventNotificationSubscription and BACnetProcessIdSelection productions (pp. 904, 924)",
    "priority": "P1",
-   "requirement_summary": "Bundled devices do not advertise or expose Notification Forwarder object support until the object implements notification redistribution, subscriptions, filtering, and the required loop, port, and network restrictions.",
-   "status": "unsupported-by-design",
+   "requirement_summary": "Bundled devices declare object type 51 in Protocol_Object_Types_Supported only while the bundled Notification Forwarder redistributes notifications, keeps expiring subscriptions, filters them and applies the loop, port and network rules of Clause 12.51. The withdrawn placeholder, which forwarded nothing, does not come back.",
+   "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/device/mod.rs::DeviceObject::new",
-    "crates/bacnet-objects/src/lib.rs",
-    "crates/rusty-bacnet/src/server/mod.rs",
+    "crates/bacnet-objects/src/device/mod.rs::EXECUTED_SERVICES",
+    "crates/bacnet-objects/src/notification_forwarder/mod.rs::NotificationForwarderObject",
     "crates/rusty-bacnet/src/server/server_methods/registration.rs",
     "crates/rusty-bacnet/rusty_bacnet.pyi"
    ],
-   "positive_tests": [],
+   "positive_tests": [
+    "crates/bacnet-objects/src/device/tests.rs::read_protocol_object_types_supported",
+    "crates/bacnet-objects/src/device/tests.rs::read_protocol_services_supported",
+    "crates/bacnet-server/src/handlers/tests/read_rpm.rs::read_property_serves_derived_services_supported",
+    "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_serves_every_required_row",
+    "crates/bacnet-integration-tests/tests/server/notification_forwarder.rs::forwarder_relays_a_notification_between_clients_over_the_wire",
+    "crates/rusty-bacnet/tests/test_notification_forwarder.py::NotificationForwarderRegistrationTests::test_runtime_and_stub_agree",
+    "crates/rusty-bacnet/tests/test_notification_forwarder.py::NotificationForwarderServerTests::test_configured_rows_read_back"
+   ],
    "negative_tests": [
-    "crates/bacnet-objects/src/device/tests.rs::read_protocol_object_types_supported"
+    "crates/bacnet-server/src/server/event_forwarding_origin_tests.rs::confirmed_notification_is_acknowledged_whatever_forwarding_finds"
    ],
    "benchmarks": [],
    "public_claims": [],
    "notes": [
-    "Type 51 is absent from bundled Device Protocol_Object_Types_Supported values, and the public Rust placeholder plus Python registration method are removed because they provided no forwarding behavior. ObjectType::NOTIFICATION_FORWARDER, the Python enum constant, CLI remote-identifier parsing, and generic recipient codecs remain as wire-level interoperability vocabulary rather than public support claims. Reintroduction requires full Clause 12.51 forwarding, subscription, filtering, and anti-loop/port/network behavior.",
-    "Subscribed_Recipients storage, its list services and ReadRange exist for an application-defined forwarder (BACNET-12-FORWARDER-SUBSCRIBED-RECIPIENTS). They forward nothing, so this row's status stands."
+    "Type 51 is set in bundled Device Protocol_Object_Types_Supported values, and Protocol_Services_Supported sets ConfirmedEventNotification and UnconfirmedEventNotification, which the server executes for the forwarders.",
+    "bacnet_objects::notification_forwarder::NotificationForwarderObject is the bundled object; Python registers it with BACnetServer.add_notification_forwarder.",
+    "Forwarding is BACNET-12-NOTIFICATION-FORWARDER-FORWARDING; Subscribed_Recipients and its restart persistence are BACNET-12-FORWARDER-SUBSCRIBED-RECIPIENTS."
    ]
   },
   {
@@ -2983,7 +3074,7 @@
    "standard_anchor": "Clause 12.51.9 and Table 12-58 (Subscribed_Recipients, printed 500-502, PDF 502-504); Clause 21 BACnetEventNotificationSubscription (printed 904, PDF 906); Clauses 15.1.1.3, 15.1.2, 15.2.1.3 and 15.2.2; local licensed source inspected",
    "priority": "P1",
    "requirement_summary": "A Notification Forwarder's Subscribed_Recipients lists event-notification subscriptions that run out. AddListElement and RemoveListElement pick an entry by its recipient and process identifier alone: an add naming a held entry replaces its confirmation flag and Time Remaining, and a removal ignores those two members. Time Remaining counts minutes, a live entry never reads as zero, an entry leaves the list when its time is up, and every time from 1 to 1,440 minutes is taken.",
-   "status": "in-progress",
+   "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-types/src/constructed/mod.rs::BACnetEventNotificationSubscription",
     "crates/bacnet-encoding/src/constructed/event_notification_subscription.rs",
@@ -2991,7 +3082,10 @@
     "crates/bacnet-server/src/handlers/list.rs::edit_subscriptions",
     "crates/bacnet-server/src/handlers/list.rs::ElementCodec::for_datatype",
     "crates/bacnet-server/src/handlers/list.rs::Added::request_position",
-    "crates/bacnet-server/src/handlers/read_range_items.rs::FramedElement"
+    "crates/bacnet-server/src/handlers/read_range_items.rs::FramedElement",
+    "crates/bacnet-objects/src/notification_forwarder/persistence.rs::SubscribedRecipientsPersistence",
+    "crates/bacnet-objects/src/notification_forwarder/persistence.rs::FileSubscribedRecipientsPersistence",
+    "crates/bacnet-objects/src/notification_forwarder/mod.rs::NotificationForwarderObject::with_persistence"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/event_notification_subscription.rs::event_notification_subscription_round_trips_golden_elements",
@@ -3016,7 +3110,16 @@
     "crates/bacnet-server/src/server/requests/subscribed_recipients_wire_tests.rs::subscribed_recipients_add_renew_remove_and_read_on_the_wire",
     "crates/bacnet-server/src/server/requests/subscribed_recipients_wire_tests.rs::read_property_multiple_all_serves_subscribed_recipients",
     "crates/bacnet-server/src/server/subscribed_recipients_expiry_tests.rs::the_operation_task_drops_each_subscription_at_its_deadline",
-    "crates/bacnet-integration-tests/tests/server/forwarder_subscriptions.rs::forwarder_subscribed_recipients_list_services_and_reads_reach_the_client"
+    "crates/bacnet-integration-tests/tests/server/forwarder_subscriptions.rs::forwarder_subscribed_recipients_list_services_and_reads_reach_the_client",
+    "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_subscribed_recipients_take_writes_and_lapse",
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::subscribed_recipients_restart_lands_between_the_time_left_and_the_last_subscription",
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::file_persistence_keeps_a_forwarder_list_across_a_rebuild",
+    "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::a_lapsed_subscription_is_not_a_destination",
+    "crates/bacnet-server/src/server/event_forwarding_tests.rs::a_lapsed_subscription_is_not_forwarded_to",
+    "crates/bacnet-integration-tests/tests/server/notification_forwarder.rs::forwarder_relays_a_notification_between_clients_over_the_wire",
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::subscribed_recipients_keep_running_out_across_repeated_restarts",
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::subscribed_recipients_minute_saves_come_at_most_once_a_minute",
+    "crates/bacnet-objects/src/subscribed_recipients_tests.rs::unbinding_the_clock_keeps_the_time_each_entry_has_left"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/event_notification_subscription.rs::event_notification_subscription_refuses_truncated_and_malformed_elements",
@@ -3028,7 +3131,11 @@
     "crates/bacnet-server/src/handlers/tests/list_element_subscriptions.rs::a_full_list_takes_renewals_but_refuses_another_entry",
     "crates/bacnet-server/src/handlers/tests/list_element_subscriptions.rs::malformed_elements_are_refused_by_position",
     "crates/bacnet-server/src/handlers/tests/list_element_subscriptions.rs::a_lapsed_entry_is_not_found_and_can_be_added_afresh",
-    "crates/bacnet-server/src/server/requests/subscribed_recipients_wire_tests.rs::a_full_subscribed_recipients_refuses_the_entry_past_the_cap_on_the_wire"
+    "crates/bacnet-server/src/server/requests/subscribed_recipients_wire_tests.rs::a_full_subscribed_recipients_refuses_the_entry_past_the_cap_on_the_wire",
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::subscribed_recipients_write_that_cannot_be_saved_is_refused",
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::subscribed_recipients_saved_out_of_range_refuses_the_forwarder",
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::file_persistence_round_trips_and_refuses_another_objects_file",
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::a_failed_save_is_counted_and_retried_a_minute_later"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3037,15 +3144,97 @@
     "CHANGELOG.md #1049"
    ],
    "notes": [
-    "The stack bundles no Notification Forwarder (BACNET-12-NOTIFICATION-FORWARDER-WITHDRAWAL). bacnet_objects::subscribed_recipients::SubscribedRecipients holds the list for an application's own type-51 object, and the server's list services and ReadRange edit and page the list of any such object that serves it as framed ApplicationData.",
-    "Nothing forwards notifications to the entries, and the list is not kept across a restart, which Clause 12.51.9 asks for. Both wait on the forwarder object.",
+    "The bundled NotificationForwarderObject keeps the list in bacnet_objects::subscribed_recipients::SubscribedRecipients. An application's own type-51 object can hold one too, and the server's list services and ReadRange edit and page the list of any such object that serves it as framed ApplicationData.",
+    "The server forwards each notification a forwarder takes to every live entry (BACNET-12-NOTIFICATION-FORWARDER-FORWARDING).",
     "The store holds at most 32 entries (MAX_SUBSCRIBED_RECIPIENTS); a full list of address entries with 18-octet MACs is at most 1,184 octets and reads unsegmented over B/IP. A renewal never counts against the cap.",
     "The store takes 1 to 1,440 minutes (MAX_SUBSCRIPTION_MINUTES). A write refuses 0 or a longer time with PROPERTY / VALUE_OUT_OF_RANGE and the entry past the cap with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY, naming the entry. AddListElement reports both at the request element, the second as NO_SPACE_TO_ADD_LIST_ELEMENT.",
     "Deadlines sit on the database's monotonic clock. Reads serve the whole minutes left, rounded up, and skip a lapsed entry. The server's monotonic operation task drops each entry at its deadline through advance_monotonic_time_internal.",
     "A whole-list write restarts each entry's lifetime from its Time Remaining, except an entry written exactly as it reads, which keeps its deadline. The list services write the whole list back, so an edit leaves the other entries' deadlines alone.",
     "The handler keys entries by the encoding of recipient and process identifier. A later element naming the same entry wins, and a refusal the store names on a renewed entry maps back to the request element that renewed it.",
-    "Recipients decode with decode_configured_recipient, so an address MAC over 18 octets is a malformed element (PROPERTY / INVALID_DATA_TYPE).",
-    "An entry written with the same recipient, process and confirmation flag, and with the minutes it reads now or one more, keeps its deadline; the one more covers a minute boundary between the handler's read and its write. Any other Time Remaining restarts the lifetime."
+    "Recipients decode with decode_recipient, so an address MAC over 18 octets is a malformed element (PROPERTY / INVALID_DATA_TYPE).",
+    "WriteProperty and WritePropertyMultiple of the whole list reach the object as framed ApplicationData.",
+    "A forwarder built with with_persistence saves the list, each entry with the whole minutes it has left, when a write changes it and when an entry lapses, and restores it when built again. A restored entry counts down from its saved minutes, which lie between the time it had left at the restart and its last subscribed time.",
+    "A write that cannot be saved fails with DEVICE / OPERATIONAL_PROBLEM and leaves the list as it was. A failed save after a lapse keeps the older copy.",
+    "FileSubscribedRecipientsPersistence keeps one forwarder's list in one file, replaced through a synchronized temporary file and rename; a file for another object, or one that does not decode, refuses the forwarder.",
+    "Binding a monotonic clock keeps the time each entry has left, so a list restored before the object joins a database lapses on time.",
+    "An entry written with the same recipient, process and confirmation flag, and with the minutes it reads now or one more, keeps its deadline; the one more covers a minute boundary between the handler's read and its write. Any other Time Remaining restarts the lifetime.",
+    "Between writes the operation task, which calls the object each second, saves the list when an entry lapses and at most once a minute while the served minutes differ from the saved copy. A saved entry so carries at most about a minute more than it had left, and repeated restarts still run it out.",
+    "A failed save logs a warning, counts in ForwarderSaveCounters::failed_saves (a handle shared with the object, from save_counters) and is retried a minute later."
+   ]
+  },
+  {
+   "id": "BACNET-12-NOTIFICATION-FORWARDER-FORWARDING",
+   "standard_anchor": "Clause 12.51, Table 12-58; Clauses 13.2.5.1, 13.8 and 13.9; Clause 21",
+   "priority": "P1",
+   "summary": "Notification Forwarder objects send each received or local event notification they take on to their Recipient_List and Subscribed_Recipients, applying the Clause 12.51 filters and loop rules.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/notification_forwarder/selection.rs::forwarding_targets",
+    "crates/bacnet-objects/src/notification_forwarder/port_filter.rs",
+    "crates/bacnet-server/src/server/event_forwarding.rs",
+    "crates/bacnet-server/src/server/event_send.rs",
+    "crates/bacnet-server/src/server/requests/mod.rs",
+    "crates/bacnet-server/src/server/requests/unconfirmed.rs",
+    "crates/bacnet-services/src/alarm_event/event_forwarding.rs::ForwardedEventNotification",
+    "crates/bacnet-encoding/src/constructed/port_permission.rs",
+    "crates/bacnet-network/src/layer.rs::ReceivedApdu"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::forwarder_sends_to_its_recipient_list_and_its_subscriptions",
+    "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::process_identifier_filter_selects_the_notifications_taken",
+    "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::local_forwarding_only_takes_just_this_devices_notifications",
+    "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::recipient_list_filters_by_day_time_and_transition",
+    "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::shared_destinations_go_once_and_skipped_forwarders_take_nothing",
+    "crates/bacnet-server/src/server/event_forwarding_tests.rs::received_notification_goes_to_recipient_list_and_subscriptions",
+    "crates/bacnet-server/src/server/event_forwarding_tests.rs::forwarders_chain_within_the_device_and_each_takes_a_notification_once",
+    "crates/bacnet-server/src/server/event_forwarding_origin_tests.rs::confirmed_notification_is_acknowledged_while_its_copy_is_still_sending",
+    "crates/bacnet-server/src/server/event_forwarding_origin_tests.rs::local_notification_reaches_the_forwarders_its_class_names",
+    "crates/bacnet-services/src/alarm_event/tests/event_forwarding.rs::forwarded_notification_reads_its_routing_members_and_swaps_only_the_process",
+    "crates/bacnet-services/src/alarm_event/tests/event_forwarding.rs::forwarded_notification_keeps_a_message_text_in_any_character_set",
+    "crates/bacnet-services/src/alarm_event/tests/event_forwarding.rs::forwarded_acknowledgment_needs_no_from_state",
+    "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_filter_and_service_rows_take_writes",
+    "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_port_filter_writes_change_only_enabled_members",
+    "crates/bacnet-encoding/src/constructed/tests/port_permission.rs::port_permission_round_trips_golden_elements",
+    "crates/bacnet-integration-tests/tests/server/notification_forwarder.rs::forwarder_relays_a_notification_between_clients_over_the_wire",
+    "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_destination_two_chained_forwarders_name_gets_one_copy",
+    "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_bound_device_on_the_receiving_network_gets_no_copy_of_a_broadcast",
+    "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_broadcast_notification_goes_confirmed_only_off_the_receiving_network"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::out_of_service_forwarder_takes_nothing",
+    "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::port_filter_drops_notifications_from_a_disabled_port",
+    "crates/bacnet-server/src/server/event_forwarding_tests.rs::process_identifier_filter_and_out_of_service_gate_forwarding",
+    "crates/bacnet-server/src/server/event_forwarding_tests.rs::local_forwarding_only_ignores_received_notifications",
+    "crates/bacnet-server/src/server/event_forwarding_tests.rs::loop_rules_keep_copies_off_the_receiving_network_and_global_broadcast",
+    "crates/bacnet-server/src/server/event_forwarding_tests.rs::port_filter_disabling_port_zero_stops_received_notifications",
+    "crates/bacnet-server/src/server/event_forwarding_tests.rs::malformed_unconfirmed_notification_is_ignored",
+    "crates/bacnet-server/src/server/event_forwarding_origin_tests.rs::confirmed_notification_is_acknowledged_whatever_forwarding_finds",
+    "crates/bacnet-services/src/alarm_event/tests/event_forwarding.rs::forwarded_notification_refuses_malformed_requests",
+    "crates/bacnet-encoding/src/constructed/tests/port_permission.rs::port_permission_refuses_malformed_elements",
+    "crates/bacnet-server/src/server/event_forwarding_tests.rs::a_forwarded_copy_whose_send_fails_is_counted_once",
+    "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_received_notification_no_forwarder_takes_is_counted",
+    "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_copy_longer_than_the_local_apdu_capacity_is_dropped_and_counted"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#notification-forwarding",
+    "docs/python-api.md#schedule--notification",
+    "CHANGELOG.md #1225"
+   ],
+   "notes": [
+    "Every received event notification, and each local one whose Notification Class names this device's Device object, goes to every NOTIFICATION_FORWARDER object, bundled or custom, read through its properties.",
+    "A copy keeps the received request octet for octet after the process identifier, so text in any character set and event values the stack does not model pass through.",
+    "The server is a single-port node: a received notification arrives through Port_ID 0, and Port_Filter is absent unless the application sets one.",
+    "Every well-formed ConfirmedEventNotification is acknowledged before any copy is sent, whether or not a forwarder takes it; one that does not decode draws Reject INVALID_PARAMETER_DATA_TYPE.",
+    "Within one device a forwarder takes a notification once and a destination gets one copy, however many chained forwarders name it."
+   ],
+   "gaps": [
+    "#1256: Recipient_List writes are kept in memory only, so a restart loses them.",
+    "#1257: a ConfirmedEventNotification is treated as unicast, since confirmed requests carry no broadcast addressing.",
+    "#1258: a recipient address that names the local network by its number is treated as remote by the loop rules.",
+    "#1259: fan-out across several forwarders, and repeats of a confirmed notification, are bounded only by each list's cap.",
+    "#1260: Python cannot set Recipient_List or Port_Filter locally.",
+    "#1270: Subscribed_Recipients saves run while the ObjectDatabase write lock is held."
    ]
   },
   {
@@ -3119,7 +3308,8 @@
     "crates/bacnet-objects/src/notification_class/tests/routed_list.rs::custom_class_at_the_cap_routes_every_destination",
     "crates/bacnet-server/src/server/event_recipient_routing_tests.rs::custom_class_at_the_cap_reaches_every_destination",
     "crates/bacnet-server/src/server/event_confirmed_routing_tests/learned_router_cache.rs::admitted_routes_stop_at_64_but_existing_network_updates_at_capacity",
-    "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::every_deliverable_route_moves_no_counter"
+    "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::every_deliverable_route_moves_no_counter",
+    "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_recipient_list_takes_framed_writes_up_to_the_cap"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/recipient.rs",
@@ -3148,10 +3338,10 @@
     "docs/rust-api.md#constructed-property-framing"
    ],
     "notes": [
-     "Split child of BACNET-12-OBJECT-MODEL; scope is the modeled NotificationClass path. The generic recipient codec remains interoperability vocabulary and is not Notification Forwarder object support. Golden vectors cover the device, address (nonzero network), and broadcast (zero-length MAC) forms; the 8-entry list round-trip covers the Annex K.2.25 AE-CRL-B minimum-entries posture.",
+     "Split child of BACNET-12-OBJECT-MODEL; scope is the modeled NotificationClass path. The generic recipient codec remains interoperability vocabulary. Golden vectors cover the device, address (nonzero network), and broadcast (zero-length MAC) forms; the 8-entry list round-trip covers the Annex K.2.25 AE-CRL-B minimum-entries posture.",
      "Decode is strict end to end: element sequence, fixed-width bit-string members (exactly one content octet with unused_bits 1 for valid-days / 5 for transitions), and whole-list routing (a malformed stored list fails closed with no prefix delivery).",
      "#1125: the pre-#152 flat application-tagged form (PropertyValue::List of seven-value entries) is gone. A local write of it, an empty flat list included, fails with PROPERTY / INVALID_DATA_TYPE, and routing treats a custom class serving it as an invalid list.",
-     "Network writes were always framed, and neither the Python bindings nor the CLI built the flat form. The write path and routing share one capped framed decoder. Indexed writes are rejected (Tranche K / #260 family). Remaining work: interop evidence against a second implementation; Notification Forwarder remains unsupported under BACNET-12-NOTIFICATION-FORWARDER-WITHDRAWAL.",
+     "Network writes were always framed, and neither the Python bindings nor the CLI built the flat form. The write path and routing share one capped framed decoder. Indexed writes are rejected (Tranche K / #260 family). Remaining work: interop evidence against a second implementation.",
      "#1098: Recipient_List is capped at 32 destinations (MAX_RECIPIENT_LIST_DESTINATIONS), four times the AE-CRL-B minimum of 8 (Annex K.2.25). A device destination encodes in at most 27 octets and an address destination with a MAC of up to 6 octets in at most 35, so a full list is at most 1,120 octets and a ReadProperty of it fits one 1476-octet B/IP APDU; each event transition fans out to at most 32 notifications per class.",
      "A write checks destinations in order and refuses the first past the cap before decoding it, as Date_List does. The recipient_list field is private: recipient_list() reads it and add_destination returns Result, so nothing local grows the list past the cap. Before, the list was unbounded up to the 10,000-item framed decoder limit, past which a write failed with INVALID_DATA_TYPE.",
      "#1124: an address MAC is at most 18 octets (BACnetAddress::MAX_MAC_LEN). Clause 21 leaves the OCTET STRING unbounded; the longest network-layer address in Table 6-2 is 7 octets (LonTalk Neuron_ID), and the longest link address this stack uses is the 18-octet B/IPv6 form (IPv6 address and UDP port).",
@@ -3160,7 +3350,8 @@
      "A destination's recipient decodes through decode_recipient, which refuses a longer MAC, so a WriteProperty or WritePropertyMultiple fails with PROPERTY / INVALID_DATA_TYPE and an AddListElement with a ChangeList-Error naming the element; add_destination refuses with the same code so a stored list stays decodable.",
      "A destination is then at most 47 octets and a full list at most 1,504. Routing applies MAX_RECIPIENT_LIST_DESTINATIONS to every class: a custom NOTIFICATION_CLASS object serving a longer list yields RecipientListTooLong, the server logs a warning, counts the transition in EventNotificationCounters::recipient_list_too_long (#1142) and sends nothing for that transition (never a prefix), and decoding stops at the first destination past the cap. GetEnrollmentSummary membership still reads the list as configured.",
      "#1156: decode_recipient itself holds to the bound, so the separate decode_configured_recipient is gone. COV subscription lists, audit notifications and records, and the GetEnrollmentSummary enrollment filter decode through it, and every recipient encoder (encode_recipient, encode_destination and its list form, the COV subscription encoders, the audit notification encoder) refuses a longer MAC before writing anything.",
-     "The ValueSource and AuditLogQuery address codecs share the same check (check_decoded_mac_len, check_encoded_mac_len). Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, and COV admission and remote command origins refuse a longer direct MAC, so nothing the stack stores fails to encode."
+     "The ValueSource and AuditLogQuery address codecs share the same check (check_decoded_mac_len, check_encoded_mac_len). Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, and COV admission and remote command origins refuse a longer direct MAC, so nothing the stack stores fails to encode.",
+     "A Notification Forwarder's Recipient_List takes the same framed writes and cap."
     ]
   },
   {
@@ -3456,7 +3647,7 @@
    ],
    "benchmarks": [],
    "public_claims": [
-    "docs/rust-api.md#schedule--notification-5 AlertEnrollmentObject constructor migration",
+    "docs/rust-api.md#schedule--notification-6 AlertEnrollmentObject constructor migration",
     "docs/python-api.md#schedule--notification add_alert_enrollment constructor migration",
     "crates/rusty-bacnet/rusty_bacnet.pyi add_alert_enrollment",
     "CHANGELOG.md Unreleased Alert Enrollment migration note"
@@ -3805,7 +3996,8 @@
     "crates/bacnet-server/src/server/cov_multiple_admission_tests.rs::a_cancellation_removes_every_listed_reference_whatever_precedes_it",
     "crates/bacnet-server/src/server/cov_multiple_admission_tests.rs::a_partly_admitted_request_warns_afresh_about_dropped_changes",
     "crates/bacnet-server/src/cov/multiple_admission_tests.rs::cov_multiple_admission_stops_at_the_first_proposal_past_the_quota",
-    "crates/bacnet-server/src/server/cov_quota_tests.rs::subscribe_cov_property_multiple_quota_names_the_overflowing_reference"
+    "crates/bacnet-server/src/server/cov_quota_tests.rs::subscribe_cov_property_multiple_quota_names_the_overflowing_reference",
+    "crates/bacnet-server/src/cov/timed/bound.rs::tests::{the_envelope_is_what_the_encoder_lays_around_the_items,at_a_50_octet_subscriber_a_change_that_fits_the_wire_fits_the_bound,admission_sizes_the_envelope_from_the_lifetime_left}"
    ],
    "negative_tests": [
         "crates/bacnet-server/src/server/cov_identity_completion_tests/completion_order.rs::cov_order_newer_failure_or_cancellation_does_not_block_older_success",
@@ -3923,7 +4115,8 @@
    "benchmarks": [],
    "public_claims": [
     "docs/rust-api.md#cov-subscriptions",
-    "docs/python-api.md#cov-subscriptions"
+    "docs/python-api.md#cov-subscriptions",
+    "CHANGELOG.md Unreleased Changed entry for #1197 (COV-multiple history bound sized from the real envelope), from changelog.d/1197-cov-multiple-envelope.md"
    ],
    "notes": [
     "Issue #826 adds local latest-successful preparation ordering for whole unconfirmed observations, not a Standard-mandated concurrency tie-break. A checked table-owner counter is reserved after coherent eligible capture and before later awaits; each live reference atomically commits a newer successful marker and complete baseline.",
@@ -4003,7 +4196,8 @@
     "Neither error table has a row for it: Clause 18.5 defines that code for service parameters that would need functionality the device lacks, and Clause 16.1.1.3 pairs it with a device without a clock. The general row for a context that cannot be created never fires and stays documented only (#1102 item 2): a context exists only while it holds references and has no storage or limit of its own, so a new context whose first reference finds no room gets the per-reference RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT error.",
     "It ties to the empty-spec context materialization gap below; revisit it if contexts get their own storage or limit. A cancellation validates nothing and removes every listed reference. CovSubscriptionTable::subscribe_multiple returns Err(MultipleRefusal) with the error, the refused position and the kept snapshots.",
     "Issue #1163 keeps a change in delivery out of the local bound's eviction. A change sent one value per notification (#1090) is in delivery from when a part of it is delivered, or sent as a confirmed report's first part with the rest deferred, until its last value is delivered; each reference marks only the change a part last went out ahead of.",
-    "Eviction takes neither that change nor a reference's newest, so at a 50-octet subscriber, where the bound holds about one Present_Value and Status_Flags change, a value held back by a failed send or a deferral still goes out after a newer change, and timed_changes_dropped moves only on a real overflow, for a change not yet begun. Beyond the bound a context holds at most two changes per reference. The bound and this exemption are local policy."
+    "Eviction takes neither that change nor a reference's newest, so at a 50-octet subscriber, where the bound holds about one Present_Value and Status_Flags change, a value held back by a failed send or a deferral still goes out after a newer change, and timed_changes_dropped moves only on a real overflow, for a change not yet begun. Beyond the bound a context holds at most two changes per reference. The bound and this exemption are local policy.",
+    "The bound sizes each notification as the smaller maximum APDU less the octets the encoder puts around its items for that context: the confirmed or unconfirmed header, the process identifier, the lifetime left at the last admission, the device identifier, the timestamp and the list tags, 25 to 33 octets (#1197)."
    ]
   },
   {

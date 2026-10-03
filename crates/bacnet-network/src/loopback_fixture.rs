@@ -3,7 +3,8 @@
 //!
 //! Raw NPDU bytes go in through [`LoopbackTransport`] peers, and the frames
 //! the router sends come back out of them, so a test sees exactly what a
-//! neighbouring node would.
+//! neighbouring node would. [`FromRouter`] also says which MAC each unicast
+//! was sent to (#1243).
 
 use bacnet_encoding::npdu::{
     decode_npdu, decode_reject_message_to_network, Npdu, NpduAddress, RejectMessageToNetwork,
@@ -11,6 +12,7 @@ use bacnet_encoding::npdu::{
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_types::enums::NetworkMessageType;
+use bacnet_types::MacAddr;
 use bytes::Bytes;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
@@ -71,16 +73,57 @@ pub(crate) async fn recv<T>(rx: &mut mpsc::Receiver<T>) -> T {
         .expect("channel closed")
 }
 
+/// What a router sends one peer: the frames, and the MAC each unicast among
+/// them was sent to.
+pub(crate) struct FromRouter {
+    frames: mpsc::Receiver<ReceivedNpdu>,
+    /// The destination of each unicast in `frames`, in the same order.
+    unicast_macs: mpsc::UnboundedReceiver<MacAddr>,
+}
+
+impl FromRouter {
+    /// Frames from a custom port, which reports each unicast's MAC to
+    /// `unicast_macs` in the order it queues the frames.
+    pub(crate) fn new(
+        frames: mpsc::Receiver<ReceivedNpdu>,
+        unicast_macs: mpsc::UnboundedReceiver<MacAddr>,
+    ) -> Self {
+        Self {
+            frames,
+            unicast_macs,
+        }
+    }
+
+    /// Start `peer`, and record where `port`, the router's side of the
+    /// pair, sends each unicast.
+    pub(crate) async fn start(port: &mut LoopbackTransport, peer: &mut LoopbackTransport) -> Self {
+        let unicast_macs = port.record_unicast_destinations();
+        Self::new(peer.start().await.unwrap(), unicast_macs)
+    }
+
+    /// The next frame, with the MAC it was unicast to, or `None` for a
+    /// data-link broadcast.
+    pub(crate) async fn recv(&mut self) -> (ReceivedNpdu, Option<MacAddr>) {
+        let frame = recv(&mut self.frames).await;
+        let to = (!frame.link_layer_group).then(|| {
+            self.unicast_macs
+                .try_recv()
+                .expect("each unicast has its MAC recorded")
+        });
+        (frame, to)
+    }
+}
+
 /// A two-port router with a loopback peer on each port.
 pub(crate) struct RouterFixture {
     pub(crate) router: BACnetRouter,
     pub(crate) local: mpsc::Receiver<ReceivedApdu>,
     /// Peer on port 0 (network 1000), MAC 0x0A.
     pub(crate) peer_a: LoopbackTransport,
-    pub(crate) from_router_a: mpsc::Receiver<ReceivedNpdu>,
+    pub(crate) from_router_a: FromRouter,
     /// Peer on port 1 (network 2000), MAC 0x0B, the next hop to network 3000.
     pub(crate) peer_b: LoopbackTransport,
-    pub(crate) from_router_b: mpsc::Receiver<ReceivedNpdu>,
+    pub(crate) from_router_b: FromRouter,
 }
 
 impl RouterFixture {
@@ -98,10 +141,10 @@ impl RouterFixture {
     async fn launch(
         network_control: bool,
     ) -> (Self, Option<mpsc::Receiver<ReceivedNetworkControl>>) {
-        let (port_a, mut peer_a) = LoopbackTransport::pair(vec![0x01], vec![0x0A]);
-        let (port_b, mut peer_b) = LoopbackTransport::pair(vec![0x02], vec![0x0B]);
-        let from_router_a = peer_a.start().await.unwrap();
-        let from_router_b = peer_b.start().await.unwrap();
+        let (mut port_a, mut peer_a) = LoopbackTransport::pair(vec![0x01], vec![0x0A]);
+        let (mut port_b, mut peer_b) = LoopbackTransport::pair(vec![0x02], vec![0x0B]);
+        let from_router_a = FromRouter::start(&mut port_a, &mut peer_a).await;
+        let from_router_b = FromRouter::start(&mut port_b, &mut peer_b).await;
         let ports = vec![
             RouterPort {
                 transport: port_a,
@@ -138,7 +181,7 @@ impl RouterFixture {
             .await
             .unwrap();
         loop {
-            let frame = recv(&mut fixture.from_router_a).await;
+            let (frame, _) = fixture.from_router_a.recv().await;
             let npdu = decode_npdu(frame.npdu).unwrap();
             if npdu.message_type == i_am && npdu.payload[..] == REMOTE.to_be_bytes() {
                 break;
@@ -163,22 +206,22 @@ impl RouterFixture {
 }
 
 /// The next frame a router sends to a peer, past its I-Am-Router-To-Network
-/// announcements, as raw bytes with whether it went out as a data-link
-/// broadcast.
-pub(crate) async fn next_frame_from_router(rx: &mut mpsc::Receiver<ReceivedNpdu>) -> (Bytes, bool) {
+/// announcements, as raw bytes with the MAC it was unicast to, or `None` when
+/// it went out as a data-link broadcast.
+pub(crate) async fn next_frame_from_router(rx: &mut FromRouter) -> (Bytes, Option<MacAddr>) {
     let i_am = Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw());
     loop {
-        let frame = recv(rx).await;
+        let (frame, to) = rx.recv().await;
         if decode_npdu(frame.npdu.clone()).unwrap().message_type != i_am {
-            return (frame.npdu, frame.link_layer_group);
+            return (frame.npdu, to);
         }
     }
 }
 
 /// [`next_frame_from_router`], decoded.
-pub(crate) async fn next_from_router(rx: &mut mpsc::Receiver<ReceivedNpdu>) -> (Npdu, bool) {
-    let (frame, broadcast) = next_frame_from_router(rx).await;
-    (decode_npdu(frame).unwrap(), broadcast)
+pub(crate) async fn next_from_router(rx: &mut FromRouter) -> (Npdu, Option<MacAddr>) {
+    let (frame, to) = next_frame_from_router(rx).await;
+    (decode_npdu(frame).unwrap(), to)
 }
 
 pub(crate) fn reject_of(npdu: &Npdu) -> RejectMessageToNetwork {

@@ -20,6 +20,8 @@ fn every_event_notification_counter_reaches_python_under_its_rust_name() {
         confirmed_rejected: 9,
         confirmed_unanswered: 10,
         unconfirmed_send_failed: 11,
+        apdu_too_large: 12,
+        received_not_forwarded: 13,
     };
     assert_eq!(
         event_notification_counter_entries(counters),
@@ -35,6 +37,8 @@ fn every_event_notification_counter_reaches_python_under_its_rust_name() {
             ("confirmed_rejected", 9),
             ("confirmed_unanswered", 10),
             ("unconfirmed_send_failed", 11),
+            ("apdu_too_large", 12),
+            ("received_not_forwarded", 13),
         ])
     );
 }

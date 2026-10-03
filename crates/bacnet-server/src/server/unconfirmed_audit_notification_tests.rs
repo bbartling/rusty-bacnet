@@ -23,6 +23,7 @@ fn received(
         source_network,
         link_layer_group: false,
         is_group: false,
+        global_broadcast: false,
         data_attributes: Vec::new(),
         provenance: TransportProvenance::unverified(),
         reply_tx: None,

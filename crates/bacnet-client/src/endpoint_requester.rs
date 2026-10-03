@@ -22,7 +22,9 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
-use crate::client::{confirmed_response_result, new_coordinated_tsm, ClientConfig};
+use crate::client::{
+    check_routed_unicast, confirmed_response_result, new_coordinated_tsm, ClientConfig,
+};
 #[path = "endpoint_operation.rs"]
 mod operation;
 #[path = "endpoint_operation_request.rs"]
@@ -310,6 +312,21 @@ impl EndpointRequester {
                 "endpoint requester cannot send confirmed requests to a broadcast destination"
                     .into(),
             ));
+        }
+        // A routed destination names one device, as a client's routed
+        // confirmed request does (#1278): DNET 0 names no network, and DNET
+        // 65535 or an empty DADR would turn the request into a broadcast.
+        if let EndpointApduDestination::Routed {
+            destination_network,
+            destination_mac,
+            ..
+        }
+        | EndpointApduDestination::RoutedViaLocalBroadcast {
+            destination_network,
+            destination_mac,
+        } = &destination
+        {
+            check_routed_unicast(*destination_network, destination_mac.len())?;
         }
 
         let service_data = self.encode_operation(&request)?;

@@ -260,7 +260,10 @@ impl ClientRoleHandle {
     ///
     /// Covers routed, local-broadcast and addressed destinations the direct
     /// shorthand cannot spell. Same fail-closed shutdown semantics as
-    /// [`read_property`](Self::read_property).
+    /// [`read_property`](Self::read_property). A routed destination names one
+    /// device: a network outside 1..=65534, or a MAC that is empty or longer
+    /// than 18 octets, fails with [`Error::Encoding`] before a transaction
+    /// is reserved, as does a broadcast destination.
     pub async fn read_property_with_destination(
         &self,
         destination: EndpointApduDestination,
@@ -380,7 +383,9 @@ impl ClientRoleHandle {
 
     /// Explicit destination and pass-through attributes for ReadRange.
     /// Routed destinations are available when source reporting is not selected
-    /// for the operation. Responses remain unsegmented.
+    /// for the operation, under the same one-device rule as
+    /// [`read_property_with_destination`](Self::read_property_with_destination).
+    /// Responses remain unsegmented.
     pub async fn read_range_with_destination(
         &self,
         destination: EndpointApduDestination,

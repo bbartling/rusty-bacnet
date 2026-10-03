@@ -1361,6 +1361,8 @@ let (side_a, side_b) = LoopbackTransport::pair(
 
 In-process channel-based transport for composing a client and server without real network sockets (e.g. inside an HTTP gateway). `LoopbackTransport::pair()` creates two connected transports backed by `tokio::sync::mpsc` channels — sending on one delivers to the other. Available as `AnyTransport::Loopback` for use with the enum dispatch wrapper.
 
+The peer receives every frame, whatever MAC a unicast was sent to. For tests that need to know, `record_unicast_destinations()` returns a receiver of those MACs, in the order the peer receives the unicast frames (#1243). Call it before handing the transport to a router or network layer; dropping the receiver stops the record.
+
 ### AnyTransport (enum dispatch)
 
 ```rust
@@ -1499,7 +1501,8 @@ The builder methods turn options on, in any combination: `track_admission()`
 makes the local receiver an `AdmissionReceiver` with queue snapshots and a
 per-source quota, `control_policy()` and `control_authorizer()` set the RB-09
 gate for routing controls, and `network_control_receiver()` adds the receiver
-described below. The start returns a `StartedRouter` holding the router, the
+described below (`network_control_receiver_with_admission()` for a tracked
+one). The start returns a `StartedRouter` holding the router, the
 local APDU receiver and, when asked for, the network-control receiver.
 
 ```rust
@@ -1547,10 +1550,27 @@ port attached to its DNET, is addressed to the router itself (#1175). It
 updates the routing table and goes no further. Start the router with
 `RouterOptions::network_control_receiver()` to also get these rejects as
 `ReceivedNetworkControl` records, the same type a non-router
-`NetworkLayer` control receiver yields. A client or server attached to a
-router through a `LoopbackTransport` port does not need this: it is an
-ordinary node on that port's network, and rejects for its requests reach its
-own `NetworkLayer`.
+`NetworkLayer` control receiver yields. That receiver is a raw
+`mpsc::Receiver`. `RouterOptions::network_control_receiver_with_admission()`
+returns the same stream as an `AdmissionReceiver` instead, as
+`NetworkLayer::enable_network_control_receiver_with_admission()` does
+(#1242): its `counters()` give the queue's depth, high-water mark and full and
+closed drop totals. The two options are alternatives, and the later call
+decides the receiver type.
+
+```rust
+let StartedRouter { network_control, .. } = BACnetRouter::start(
+    ports,
+    RouterOptions::new().network_control_receiver_with_admission(),
+)
+.await?;
+let controls = network_control.expect("asked for");
+let snapshot = controls.counters().snapshot();
+```
+
+A client or server attached to a router through a `LoopbackTransport` port
+does not need either receiver: it is an ordinary node on that port's network,
+and rejects for its requests reach its own `NetworkLayer`.
 
 ---
 
@@ -1727,17 +1747,19 @@ framing, through the shared `bacnet-encoding` codecs.
   is refused (#1125). Routing holds every Notification Class, a custom object
   included, to the same cap: a class serving a longer list gets
   `RecipientLookupOutcome::RecipientListTooLong`, and the transition reaches
-  none of its destinations. The codec is not a Notification Forwarder object,
-  which is unsupported.
+  none of its destinations. A Notification Forwarder's Recipient_List takes the
+  same writes, with the same cap.
 - **Notification Forwarder `Subscribed_Recipients`** is a BACnetLIST of
   BACnetEventNotificationSubscription (Clause 12.51.9): a recipient, a process
   identifier, a confirmation flag and the minutes the entry has left, under
   context tags 0 to 3 (`encode_event_notification_subscription`,
-  `decode_event_notification_subscription`). The stack bundles no forwarder
-  object (#188), but an application's own one can hold the list in
-  `bacnet_objects::subscribed_recipients::SubscribedRecipients` and route the
-  property's read and write and the `*_monotonic_*_internal` clock hooks to
-  it. Nothing forwards notifications to the entries. The store keeps at most
+  `decode_event_notification_subscription`). The bundled
+  `NotificationForwarderObject` holds the list in
+  `bacnet_objects::subscribed_recipients::SubscribedRecipients`, and an
+  application's own forwarder type can do the same, routing the property's
+  read and write and the `*_monotonic_*_internal` clock hooks to it. The
+  server forwards notifications to every live entry (see
+  [Notification forwarding](#notification-forwarding)). The store keeps at most
   `MAX_SUBSCRIBED_RECIPIENTS` (32) entries and takes 1 to
   `MAX_SUBSCRIPTION_MINUTES` (1,440) minutes, refusing anything else by
   position, as a Recipient_List write does. It serves whole minutes left,
@@ -1768,8 +1790,10 @@ framing, through the shared `bacnet-encoding` codecs.
   and the properties the group reports, encoded by
   `bacnet_encoding::constructed::encode_read_access_specification`.
   `GroupObject::add_member` refuses one
-  with no properties, and one that would report a Group's or Global Group's
-  Present_Value. The object stores no Present_Value: the server rebuilds it on
+  with no properties, one naming a property identifier above 4194303, and one
+  that would report a Group's or Global Group's Present_Value, returning a
+  `GroupMemberRefusal` that names the rule and converts to PROPERTY /
+  VALUE_OUT_OF_RANGE. The object stores no Present_Value: the server rebuilds it on
   every ReadProperty, ReadPropertyMultiple and ReadRange as one
   ReadAccessResult per member, reading each member as ReadPropertyMultiple
   would, so a failed read carries its error and an object that isn't in the
@@ -1900,7 +1924,7 @@ When the only Device has the wildcard instance there is a selected Device but
 no concrete identity, so Audit, endpoint Device writes, local command sources
 and Audit Log forwarding refuse to start or stay unconfigured.
 
-### Object Types (62)
+### Object Types (63)
 
 #### Core I/O (9)
 
@@ -1958,13 +1982,14 @@ Loop's measured input has its own route,
 `BACnetServer::set_controlled_variable_value_local` (see
 [Building Control](#building-control-7)).
 
-#### Schedule & Notification (5)
+#### Schedule & Notification (6)
 
 | Type | Constructor |
 |------|-------------|
 | `CalendarObject` | `::new(instance, name)` |
 | `ScheduleObject` | `::new(instance, name, default_value)` |
 | `NotificationClass` | `::new(instance, name)` |
+| `NotificationForwarderObject` | `::new(instance, name)`, `::with_persistence(instance, name, persistence)` |
 | `AlertEnrollmentObject` | `::new(instance, name, initial_source)` |
 | `EventEnrollmentObject` | `::new(instance, name, event_type)` |
 
@@ -2649,6 +2674,18 @@ A routed request refuses a longer DADR or local source MAC, and a router MAC
 that is empty or longer, with `Error::Encoding` before it reserves or waits on
 the path, and both configuration methods refuse such a router MAC too.
 
+A routed confirmed request goes to one device on one remote network (#1278).
+DNET must be in 1..=65534, since 0 names no network and 65535 is the global
+broadcast, and the DADR must hold at least one octet, since an empty DADR has
+the remote router broadcast the request. `confirmed_request_routed` and every
+routed confirmed method built on it (`read_property_routed`, the
+`_from_device` and `_to_device` methods, the routed COV subscriptions) refuse
+any of them with `Error::Encoding` before the path is reserved or a
+transaction registered. Both configuration methods use the same DNET check,
+`add_routed_device` refuses such a peer, and the endpoint requester refuses
+such a routed destination. Unconfirmed sends keep remote and global broadcasts,
+for example `broadcast_network_unconfirmed`.
+
 State is keyed by the immediate router MAC together with DNET. One confirmed
 request at a time owns that path; requests through a different router or to a
 different DNET remain independent, and direct requests bypass this state. A
@@ -3037,24 +3074,28 @@ new, as before. An unconfirmed context without timestamped references holds its
 one-report turn only while a report of several parts goes out.
 
 As a local bound, one context's pending changes are limited to an estimate of what
-four notifications of that size can carry. Each change counts its encoding, one
-item's framing and a fixed overhead of 32 octets for the memory it holds besides
-its values, so many tiny changes cannot outgrow the estimate. The context also
-keeps room, at most one notification's worth, for the most its untimestamped
-values have taken in one report since it was last admitted or lost a reference.
-Only on overflow, the last resort, is a change dropped: the oldest of the same
-reference first, then the oldest in the context, never a reference's latest.
-Nor is a reference's change in delivery dropped: once a change sent one value per
-notification has a part delivered, or sent as a confirmed report's first part,
-the rest of it stays queued until its last value is delivered, however small the
-subscriber's maximum APDU (#1163). Beyond the bound, a context therefore holds at
-most two changes per reference. Parts
-a confirmed report defers return to the queue without that check, so the bound
-never drops what the report just planned to send. Changes returned by a failed
-notification wait while a newer change of the same reference is in flight; once a
-newer change is delivered, older ones are dropped rather than delivered as stale
-state. Every one of these drops increments `CovCounters::timed_changes_dropped`,
-as does each change that loses a value too large for any notification;
+four notifications of that size can carry. A notification's room for items is that
+size less the octets the encoder puts around them for the context: the request
+header, confirmed or not, the process identifier and the lifetime left at the
+context's last admission in their fewest octets, the device identifier, the
+timestamp and the list's tags, 25 to 33 octets in all (#1197). Each change counts
+its encoding, one item's framing and a fixed overhead of 32 octets for the memory
+it holds besides its values, so many tiny changes cannot outgrow the estimate. The
+context also keeps room, at most one notification's worth, for the most its
+untimestamped values have taken in one report since it was last admitted or lost
+a reference. Only on overflow, the last resort, is a change dropped: the oldest
+of the same reference first, then the oldest in the context, never a reference's
+latest. Nor is a reference's change in delivery dropped: once a change sent one
+value per notification has a part delivered, or sent as a confirmed report's
+first part, the rest of it stays queued until its last value is delivered,
+however small the subscriber's maximum APDU (#1163). Beyond the bound, a context
+therefore holds at most two changes per reference. Parts a confirmed report
+defers return to the queue without that check, so the bound never drops what the
+report just planned to send. Changes returned by a failed notification wait
+while a newer change of the same reference is in flight; once a newer change is
+delivered, older ones are dropped rather than delivered as stale state. Every
+one of these drops increments `CovCounters::timed_changes_dropped`, as does each
+change that loses a value too large for any notification;
 splitting is not counted. The log gets one warning per context for each cause
 (bound overflow, a value too large for any notification, superseded), and later
 drops for that cause are logged at debug level only, until the context is
@@ -3899,6 +3940,7 @@ The server automatically dispatches:
 - ConfirmedTextMessage
 - LifeSafetyOperation (authorized silence/unsilence; reset via configured application executor)
 - ConfirmedAuditNotification (explicit sink and fail-closed authorizer; process-local duplicate detection)
+- ConfirmedEventNotification (acknowledged once it decodes, then offered to the Notification Forwarder objects)
 - AuditLogQuery (retained records; three-state success filter; no query authorization)
 - ReadRange
 - AtomicReadFile, AtomicWriteFile (writes are mutation-gated)
@@ -3909,11 +3951,12 @@ The server automatically dispatches:
 - WhoHas / IHave
 - TimeSynchronization, UTCTimeSynchronization
 - UnconfirmedTextMessage
+- UnconfirmedEventNotification (offered to the Notification Forwarder objects)
 - UnconfirmedAuditNotification (explicit sink and distinct fail-closed authorizer; no response or duplicate tracking)
 
 **Outgoing (server-initiated):**
 - COV notifications (confirmed and unconfirmed, with `NotificationTransactions` retries for confirmed)
-- Event notifications (confirmed and unconfirmed, routed via NotificationClass recipients)
+- Event notifications (confirmed and unconfirmed, routed via NotificationClass recipients, and the copies Notification Forwarder objects send on)
 
 Confirmed notification invoke IDs, terminal admission and retries belong to
 `NotificationTransactions`. A separate private learned-router cache stores up to
@@ -3923,6 +3966,65 @@ later retries; a configured Device binding keeps its fixed next hop. The former
 public `ServerTsm` type and its unused transaction methods have been removed
 without a compatibility alias. `CovAckResult` remains available at its existing
 `bacnet_server::server` path.
+
+### Notification forwarding
+
+A `NotificationForwarderObject` (type 51, Clause 12.51) originates no events.
+The server offers it every ConfirmedEventNotification and
+UnconfirmedEventNotification it receives, and every notification one of its
+own objects sends to a Notification Class recipient naming the server's own
+Device object, with that recipient's process identifier. A forwarder takes a
+notification when it is in service, its `Process_Identifier_Filter` is NULL
+or equals the notification's process identifier, its `Local_Forwarding_Only`
+is FALSE or the notification is the device's own, and, for a received
+notification, its `Port_Filter` (absent unless configured with
+`set_port_filter`) enables Port_ID 0, the server's one port. It sends a copy to
+each `Recipient_List` destination whose days, times and transitions admit the
+notification and to each live `Subscribed_Recipients` entry, confirmed or not
+as the destination asks. A forwarder that cannot serve
+`Process_Identifier_Filter` or `Local_Forwarding_Only` as Clause 12.51 types
+them takes nothing, and a `Recipient_List` or `Subscribed_Recipients` that does
+not decode, or runs past its cap, gives no destinations. A copy differs from
+the received notification only in its process identifier: the rest goes on
+octet for octet, whatever the character set of its message text.
+`ForwardedEventNotification::decode` checks the request's structure without
+decoding the text or event values, and refuses anything after the event values. Copies go through the same send path, route
+skips and counters as the server's own notifications. Notifications are never
+sent segmented, so a copy longer than the local APDU capacity, such as one of a
+notification that arrived segmented, is not sent to that destination and counts
+in `apdu_too_large`; the other destinations are still served.
+
+No copy goes by global broadcast, a notification received by global broadcast
+(`ReceivedApdu::global_broadcast`) is not forwarded, a received notification is
+not broadcast back onto the local network, and one received by broadcast goes
+to no node on the local network. A ConfirmedEventNotification is treated as
+addressed to this device alone, and a recipient address that names the local
+network by its number is treated as remote. These skips are configured
+behaviour and move no counter. DeviceCommunicationControl's
+DISABLE_INITIATION stops every copy.
+A destination naming the server's own Device object hands the copy to the
+forwarders that have not yet taken it, and across such a chain each
+destination (recipient, process identifier and confirmation) gets one copy.
+
+The server executes ConfirmedEventNotification, so it acknowledges every
+well-formed one once it decodes, before any copy is sent and whatever
+forwarding then finds, including one no forwarder takes. A received
+notification that no forwarder takes counts in `received_not_forwarded`. One
+that does not decode is rejected with INVALID_PARAMETER_DATA_TYPE.
+
+`with_persistence` keeps `Subscribed_Recipients` in an application-owned
+`SubscribedRecipientsPersistence`, saving the list, each entry with the minutes
+it has left, when a write changes it, when an entry lapses, and at most once a
+minute while the entries' minutes fall, and restoring it when the forwarder is
+built again (Clause 12.51.9). A restored entry so carries at most about a
+minute more than it had left, and repeated restarts still run it out.
+`FileSubscribedRecipientsPersistence` keeps it in one file, replaced whole
+through a synchronized temporary file. A write that cannot be saved fails with
+DEVICE / OPERATIONAL_PROBLEM. A save the operation task makes that fails is
+logged and retried a minute later. `save_counters()` returns a
+`ForwarderSaveCounters` handle, shared with the object, whose `failed_saves()`
+counts every refused save; take it before adding the object to the database.
+`Recipient_List` writes stay in memory, as a Notification Class's do.
 
 ### Undelivered event notification counters
 
@@ -3944,6 +4046,8 @@ counters.confirmed_no_invoke_id;        // no invoke ID free for a confirmed not
 counters.confirmed_rejected;            // the recipient answered Error, Reject or Abort
 counters.confirmed_unanswered;          // no acknowledgment after the last retry
 counters.unconfirmed_send_failed;       // an unconfirmed send the transport refused
+counters.apdu_too_large;                // a notification longer than the local APDU size
+counters.received_not_forwarded;        // a received notification no forwarder took
 ```
 
 The four recipient-list fields count transitions, event and acknowledgment
@@ -3961,6 +4065,14 @@ destinations are still served. A confirmed send that fails locally counts in
 `confirmed_unanswered`. No field counts an encode failure: the committed
 payload and message text are validated before the destinations are walked, so
 a well-formed transition always encodes.
+
+`apdu_too_large` (#1225) counts notifications not sent to one destination
+because their APDU is longer than the local APDU capacity; notifications are
+never sent segmented, and the other destinations are still served. It is
+mostly a forwarded copy of a notification that arrived segmented.
+`received_not_forwarded` counts received event notifications that decoded but
+that no Notification Forwarder took (see
+[Notification forwarding](#notification-forwarding)).
 
 The three route fields (#1160) count destinations that matched the transition
 but were skipped while their route was resolved, once per destination; the

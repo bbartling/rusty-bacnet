@@ -9,11 +9,19 @@ use bacnet_types::enums::NetworkMessageType;
 use tokio::time::{timeout, Duration};
 
 use super::*;
+use crate::layer::QueueAdmissionSnapshot;
 use crate::loopback_fixture::recv;
 use crate::router::RouterPort;
 
 /// I-Am-Router-To-Network for 3000, as peer B announces it.
 const I_AM_3000: [u8; 5] = [0x01, 0x80, 0x01, 0x0B, 0xB8];
+/// Reject-Message-To-Network with no DNET, reason 1 for 3000: addressed to
+/// the router itself.
+const REJECT_3000: [u8; 6] = [0x01, 0x80, 0x03, 0x01, 0x0B, 0xB8];
+/// A local APDU for network 6000, which the router has no route to, and the
+/// reason 1 reject it draws.
+const TO_6000: [u8; 8] = [0x01, 0x20, 0x17, 0x70, 0x00, 0xFF, 0x10, 0x08];
+const REJECT_6000: [u8; 6] = [0x01, 0x80, 0x03, 0x01, 0x17, 0x70];
 
 /// Loopback peers A (0A, network 1000) and B (0B, network 2000), started,
 /// and the router ports they face: the router is 01 and 02.
@@ -117,6 +125,80 @@ async fn plain_options_start_a_permissive_router_without_a_control_receiver() {
     assert_eq!(
         router.table().lock().await.lookup(3000).unwrap().port_index,
         1
+    );
+
+    router.stop().await;
+    peer_a.stop().await.unwrap();
+    peer_b.stop().await.unwrap();
+}
+
+/// Send `count` rejects addressed to the router from peer B, then [`TO_6000`],
+/// and wait for its reject. Port B's dispatch takes them in order, so by then
+/// each reject before it has been queued for the control receiver or dropped.
+async fn rejects_to_the_router(
+    peer_b: &LoopbackTransport,
+    from_router_b: &mut mpsc::Receiver<ReceivedNpdu>,
+    count: usize,
+) {
+    for _ in 0..count {
+        peer_b.send_unicast(&REJECT_3000, &[0x02]).await.unwrap();
+    }
+    peer_b.send_unicast(&TO_6000, &[0x02]).await.unwrap();
+    while recv(from_router_b).await.npdu[..] != REJECT_6000 {}
+}
+
+#[tokio::test]
+async fn tracked_network_control_receiver_counts_its_high_water_mark_and_drops() {
+    let (ports, [(mut peer_a, _from_router_a), (mut peer_b, mut from_router_b)]) = ports().await;
+    let options = RouterOptions::new().network_control_receiver_with_admission();
+    let StartedRouter {
+        mut router,
+        apdus: _apdus,
+        network_control,
+    } = BACnetRouter::start(ports, options).await.unwrap();
+    let mut controls = network_control.expect("asked for");
+    let counters = controls.counters();
+
+    // Four more than the 256-control queue holds: the last four are dropped.
+    rejects_to_the_router(&peer_b, &mut from_router_b, 260).await;
+    assert_eq!(
+        counters.snapshot(),
+        QueueAdmissionSnapshot {
+            current_depth: 256,
+            high_water: 256,
+            full_drops: 4,
+            fairness_drops: 0,
+            closed_drops: 0,
+        }
+    );
+    assert_eq!(router.network_control_ingress_sequence(), 260);
+
+    // Draining empties the queue and keeps the high-water mark and drops.
+    for sequence in 1..=256 {
+        let control = controls.try_recv().unwrap();
+        assert_eq!(control.ingress_sequence, sequence);
+        assert_eq!(control.npdu.payload[..], REJECT_3000[3..]);
+    }
+    assert_eq!(
+        counters.snapshot(),
+        QueueAdmissionSnapshot {
+            high_water: 256,
+            full_drops: 4,
+            ..Default::default()
+        }
+    );
+
+    // Once closed, each reject for the router is a closed drop.
+    controls.close();
+    rejects_to_the_router(&peer_b, &mut from_router_b, 2).await;
+    assert_eq!(
+        counters.snapshot(),
+        QueueAdmissionSnapshot {
+            high_water: 256,
+            full_drops: 4,
+            closed_drops: 2,
+            ..Default::default()
+        }
     );
 
     router.stop().await;

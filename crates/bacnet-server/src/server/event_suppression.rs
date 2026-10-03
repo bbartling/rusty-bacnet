@@ -27,12 +27,16 @@ use std::sync::atomic::AtomicU64;
 /// The next three count confirmed notifications to one recipient that were
 /// never acknowledged.
 ///
-/// The last one counts unconfirmed notifications whose send failed at the
+/// The next one counts unconfirmed notifications whose send failed at the
 /// transport, once per destination. The transition's other destinations are
 /// still served. There is no counter for a notification that fails to
 /// encode: the committed payload and message text are validated before the
 /// destinations are walked, so a well-formed transition always encodes, and
 /// the send loop only logs and skips if that invariant is ever broken.
+///
+/// The last two concern the Notification Forwarder objects (#1225): copies
+/// too large to send unsegmented, and received notifications no forwarder
+/// took.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EventNotificationCounters {
     /// No Notification Class object has the class number the event object
@@ -79,6 +83,16 @@ pub struct EventNotificationCounters {
     /// error. Nothing is retried. Confirmed sends that fail locally count in
     /// `confirmed_unanswered` instead.
     pub unconfirmed_send_failed: u64,
+    /// Notifications not sent to one destination because their APDU is
+    /// longer than the local APDU capacity; notifications are never sent
+    /// segmented. A forwarded copy of a notification that arrived segmented
+    /// is the usual case. The other destinations are still served.
+    pub apdu_too_large: u64,
+    /// Received ConfirmedEventNotification and UnconfirmedEventNotification
+    /// requests that decoded but that no Notification Forwarder object took.
+    /// A confirmed one is still acknowledged. One sent by global broadcast,
+    /// which forwarders ignore, is not counted.
+    pub received_not_forwarded: u64,
 }
 
 /// One undelivered event notification, as counted in
@@ -96,6 +110,8 @@ pub(crate) enum EventSuppression {
     ConfirmedRejected,
     ConfirmedUnanswered,
     UnconfirmedSendFailed,
+    ApduTooLarge,
+    ReceivedNotForwarded,
 }
 
 impl EventSuppression {
@@ -120,7 +136,7 @@ impl EventSuppression {
 
 /// The server's shared storage behind [`EventNotificationCounters`].
 #[derive(Debug, Default)]
-pub(crate) struct EventSuppressions([AtomicU64; 11]);
+pub(crate) struct EventSuppressions([AtomicU64; 13]);
 
 impl EventSuppressions {
     pub(crate) fn record(&self, suppression: EventSuppression) {
@@ -134,7 +150,7 @@ impl EventSuppressions {
     }
 
     pub(crate) fn snapshot(&self) -> EventNotificationCounters {
-        let [notification_class_missing, recipient_list_unavailable, recipient_list_invalid, recipient_list_too_long, device_recipient_unbound, recipient_unroutable, confirmed_broadcast_recipient, confirmed_no_invoke_id, confirmed_rejected, confirmed_unanswered, unconfirmed_send_failed] =
+        let [notification_class_missing, recipient_list_unavailable, recipient_list_invalid, recipient_list_too_long, device_recipient_unbound, recipient_unroutable, confirmed_broadcast_recipient, confirmed_no_invoke_id, confirmed_rejected, confirmed_unanswered, unconfirmed_send_failed, apdu_too_large, received_not_forwarded] =
             self.0.each_ref().map(|n| n.load(Ordering::Relaxed));
         EventNotificationCounters {
             notification_class_missing,
@@ -148,6 +164,8 @@ impl EventSuppressions {
             confirmed_rejected,
             confirmed_unanswered,
             unconfirmed_send_failed,
+            apdu_too_large,
+            received_not_forwarded,
         }
     }
 }
@@ -165,7 +183,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 mod tests {
     use super::*;
 
-    const ALL: [EventSuppression; 11] = [
+    const ALL: [EventSuppression; 13] = [
         EventSuppression::NotificationClassMissing,
         EventSuppression::RecipientListUnavailable,
         EventSuppression::RecipientListInvalid,
@@ -177,6 +195,8 @@ mod tests {
         EventSuppression::ConfirmedRejected,
         EventSuppression::ConfirmedUnanswered,
         EventSuppression::UnconfirmedSendFailed,
+        EventSuppression::ApduTooLarge,
+        EventSuppression::ReceivedNotForwarded,
     ];
 
     #[test]
@@ -201,6 +221,8 @@ mod tests {
                 confirmed_rejected: 9,
                 confirmed_unanswered: 10,
                 unconfirmed_send_failed: 11,
+                apdu_too_large: 12,
+                received_not_forwarded: 13,
             }
         );
     }
