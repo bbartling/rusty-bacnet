@@ -94,6 +94,18 @@ fn tuple4<'py>(
     Ok(tuple)
 }
 
+/// Read a `(hour, minute, second, hundredths)` tuple into a `Time`, with the
+/// ranges `BACnetTimeStamp.time` takes.
+pub(super) fn time_tuple(value: &Bound<'_, PyAny>, name: &str) -> PyResult<primitives::Time> {
+    let time = tuple4(value, name, "(hour, minute, second, hundredths)")?;
+    time_parts(
+        &time.get_item(0)?,
+        &time.get_item(1)?,
+        &time.get_item(2)?,
+        &time.get_item(3)?,
+    )
+}
+
 fn actual_year(date: &primitives::Date) -> u16 {
     date.actual_year()
         .unwrap_or(u16::from(primitives::Date::UNSPECIFIED))

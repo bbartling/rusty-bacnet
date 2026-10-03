@@ -109,8 +109,17 @@ impl BACnetServer {
         let read_range_budget = self.read_range_budget;
         let get_event_information_budget = self.get_event_information_budget;
         let cov_policy = self.cov_policy.clone();
+        let time_sync_policy = self.time_sync_policy.clone();
 
         let objects: Vec<Box<dyn BACnetObject + Send>> = pending.drain(..).collect();
+        // Taken under the pending lock, with the forwarders they belong to.
+        let forwarder_save_counters = std::mem::take(
+            &mut *self
+                .pending_forwarder_save_counters
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?,
+        );
+        let live_forwarder_save_counters = Arc::clone(&self.forwarder_save_counters);
         self.forwarding_configuration_started
             .store(true, Ordering::Release);
         drop(pending);
@@ -243,6 +252,7 @@ impl BACnetServer {
                 .read_range_budget(read_range_budget)
                 .get_event_information_budget(get_event_information_budget)
                 .cov_policy(cov_policy)
+                .time_sync_policy(time_sync_policy)
                 .transport(transport);
             if let Some(sink) = audit_notification_sink {
                 builder = builder.audit_notification_sink(sink.object_id);
@@ -265,7 +275,13 @@ impl BACnetServer {
             }
             let srv = builder.build().await.map_err(to_py_err)?;
 
-            *inner.lock().await = Some(srv);
+            // No fallible step once the server runs: it must reach `inner`.
+            let mut published = inner.lock().await;
+            *live_forwarder_save_counters
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = forwarder_save_counters;
+            *published = Some(srv);
+            drop(published);
             started.store(true, Ordering::Release);
             Ok(())
         };

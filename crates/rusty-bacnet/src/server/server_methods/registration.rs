@@ -55,7 +55,8 @@ impl BACnetServer {
         event_information_max_service_ack_bytes=16384,
         sc_device_uuid=None,
         registered_network_port=None,
-        cov_policy=None
+        cov_policy=None,
+        time_sync_policy=None
     ))]
     fn new(
         device_instance: u32,
@@ -109,6 +110,7 @@ impl BACnetServer {
         sc_device_uuid: Option<Vec<u8>>,
         registered_network_port: Option<u32>,
         cov_policy: Option<&Bound<'_, pyo3::types::PyDict>>,
+        time_sync_policy: Option<&Bound<'_, pyo3::types::PyDict>>,
     ) -> PyResult<Self> {
         super::constructor_budgets::registered_network_port(registered_network_port, transport)?;
         let mutation_policy = super::constructor_budgets::mutation_policy(mutation_policy)?;
@@ -157,6 +159,7 @@ impl BACnetServer {
             event_information_max_service_ack_bytes,
         })?;
         let cov_policy = super::cov_policy::cov_policy(cov_policy)?;
+        let time_sync_policy = super::time_sync_policy::time_sync_policy(time_sync_policy)?;
         if transport == "sc" {
             crate::tls::required_sc_credentials(
                 sc_ca_cert.as_deref(),
@@ -204,6 +207,7 @@ impl BACnetServer {
             read_range_budget,
             get_event_information_budget,
             cov_policy,
+            time_sync_policy,
             audit_notification_sink: None,
             audit_reporters: None,
             audit_recipient: std::sync::Mutex::new(None),
@@ -211,6 +215,8 @@ impl BACnetServer {
             forwarding_configuration_started: AtomicBool::new(false),
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
+            pending_forwarder_save_counters: std::sync::Mutex::new(Vec::new()),
+            forwarder_save_counters: Arc::new(std::sync::Mutex::new(Vec::new())),
         })
     }
 
@@ -321,39 +327,6 @@ impl BACnetServer {
         self.push_pending(Box::new(nc))
     }
 
-    /// Add a Notification Forwarder object to the server (before starting).
-    ///
-    /// With `storage_path`, Subscribed_Recipients is kept in that file and
-    /// restored when the server is built again.
-    #[pyo3(signature = (
-        instance,
-        name,
-        process_identifier_filter=None,
-        local_forwarding_only=false,
-        storage_path=None
-    ))]
-    fn add_notification_forwarder(
-        &self,
-        instance: u32,
-        name: &str,
-        process_identifier_filter: Option<u32>,
-        local_forwarding_only: bool,
-        storage_path: Option<&str>,
-    ) -> PyResult<()> {
-        let mut nf = match storage_path {
-            Some(path) => {
-                let storage =
-                    Arc::new(FileSubscribedRecipientsPersistence::new(path).map_err(to_py_err)?);
-                NotificationForwarderObject::with_persistence(instance, name, storage)
-                    .map_err(to_py_err)?
-            }
-            None => NotificationForwarderObject::new(instance, name).map_err(to_py_err)?,
-        };
-        nf.set_process_identifier_filter(process_identifier_filter);
-        nf.set_local_forwarding_only(local_forwarding_only);
-        self.push_pending(Box::new(nf))
-    }
-
     /// Add a Trend Log object to the server (before starting).
     #[pyo3(signature = (instance, name, buffer_size=100))]
     fn add_trend_log(&self, instance: u32, name: &str, buffer_size: u32) -> PyResult<()> {
@@ -459,10 +432,23 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
-    /// Add a Group object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_group(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = GroupObject::new(instance, name).map_err(to_py_err)?;
+    /// Add a Group object to the server (before starting); its Present_Value
+    /// is rebuilt from `members` on each read, one result per member, in
+    /// order.
+    ///
+    /// `members` takes the `read_property_multiple` spec shape, checked as
+    /// the endpoint owners' `add_group` checks it: a member listing no
+    /// properties, a property identifier past 22 bits, or a group's
+    /// Present_Value is a ValueError naming its position and the rule.
+    #[pyo3(signature = (instance, name, members=None))]
+    fn add_group(
+        &self,
+        instance: u32,
+        name: &str,
+        members: Option<Vec<crate::types::PyReadAccessSpec>>,
+    ) -> PyResult<()> {
+        let members = crate::group_members::members(members);
+        let obj = crate::group_members::group(instance, name, &members)?;
         self.push_pending(Box::new(obj))
     }
 

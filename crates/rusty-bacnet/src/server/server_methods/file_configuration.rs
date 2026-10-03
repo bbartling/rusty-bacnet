@@ -217,6 +217,7 @@ mod tests {
             read_range_budget: server::ReadRangeBudget::default(),
             get_event_information_budget: server::GetEventInformationBudget::default(),
             cov_policy: server::CovPolicy::default(),
+            time_sync_policy: server::TimeSyncPolicy::default(),
             audit_notification_sink: None,
             audit_reporters: None,
             audit_recipient: std::sync::Mutex::new(None),
@@ -224,6 +225,8 @@ mod tests {
             forwarding_configuration_started: AtomicBool::new(false),
             started: Arc::new(AtomicBool::new(false)),
             pending_objects: std::sync::Mutex::new(Vec::new()),
+            pending_forwarder_save_counters: std::sync::Mutex::new(Vec::new()),
+            forwarder_save_counters: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
