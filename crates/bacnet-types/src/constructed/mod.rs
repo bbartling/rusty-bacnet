@@ -17,7 +17,8 @@ mod action;
 pub use action::{BACnetActionCommand, BACnetActionList};
 mod access;
 pub use access::{
-    BACnetAssignedAccessRights, BACnetAuthenticationFactor, BACnetCredentialAuthenticationFactor,
+    BACnetAssignedAccessRights, BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat,
+    BACnetCredentialAuthenticationFactor,
 };
 mod audit;
 pub use audit::{

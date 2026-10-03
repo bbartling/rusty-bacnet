@@ -1800,6 +1800,19 @@ framing, through the shared `bacnet-encoding` codecs.
   `BACnetAuthenticationFactor`, the UNDEFINED factor until the first read.
   `CredentialDataInputObject::set_present_value(factor, update_time)` records
   a read and its time together.
+- **Access-control arrays**: Credential Data Input `Supported_Formats` (each
+  element a `BACnetAuthenticationFactorFormat`: format type `[0]`, optional
+  vendor id `[1]` and vendor format `[2]`) and `Supported_Format_Classes`
+  (Unsigned), Access Door `Door_Members` and Access Point `Access_Doors` (each
+  element a `BACnetDeviceObjectReference`) are BACnetARRAYs: index 0 reads the
+  size, 1 to N one element, and past N fails with INVALID_ARRAY_INDEX. All four
+  are read-only on the network. The application sets them with
+  `CredentialDataInputObject::set_supported_formats` (format and class pairs,
+  so both arrays keep one size; a format outside the closed production, a
+  CUSTOM format without both vendor members or another format with a nonzero
+  one is VALUE_OUT_OF_RANGE), `AccessDoorObject::set_door_members` and
+  `AccessPointObject::set_access_doors` (Access Door references only, else
+  VALUE_OUT_OF_RANGE).
 
 ### ObjectDatabase
 
@@ -2319,8 +2332,19 @@ adding the object with `AccessDoorObject::set_door_alarm_state`,
 Update_Time), and a door's Door_Status and Lock_Status with `set_door_status`
 and `set_lock_status`.
 
-Over the network the Access Point and Credential Data Input values stay
-read-only. A door's Door_Status, Lock_Status and Door_Alarm_State, the rows
+Over the network the Access Point values stay read-only. A Credential Data
+Input's Present_Value and Reliability, the rows footnote 1 of Table 12-43
+marks, take WriteProperty and WritePropertyMultiple while Out_Of_Service is
+TRUE and refuse them in service with WRITE_ACCESS_DENIED. A Present_Value
+write must be one `BACnetAuthenticationFactor` (else INVALID_DATA_TYPE) whose
+format type and class match a declared Supported_Formats element and its
+class, or the UNDEFINED or ERROR factor with class 0 (else
+VALUE_OUT_OF_RANGE); it stamps Update_Time from the Device clock. A
+Reliability write must be a BACnetReliability value. Entering out of service
+puts the reader's Present_Value, Update_Time and Reliability aside,
+`set_present_value` updates the values put aside, `set_reliability_internal`
+is refused until the return to service, and the return to service serves the
+reader's values again. A door's Door_Status, Lock_Status and Door_Alarm_State, the rows
 footnote 1 of Table 12-30 marks, take WriteProperty and WritePropertyMultiple
 while Out_Of_Service is TRUE, so a client can simulate the door; in service
 they refuse writes with WRITE_ACCESS_DENIED. A write must be an Enumerated in
