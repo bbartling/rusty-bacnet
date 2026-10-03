@@ -179,7 +179,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Malformed routing metadata is rejected deliberately: an empty
     /// `router_mac` or `remote_mac` cannot identify a next hop or a peer, so
     /// such a registration returns [`Error::Encoding`] and the table is left
-    /// unchanged (an empty SADR could never satisfy a routed lookup).
+    /// unchanged (an empty SADR could never satisfy a routed lookup). A
+    /// `remote_network` outside 1..=65534 or a `remote_mac` longer than
+    /// [`NpduAddress::MAX_MAC_LEN`] is refused the same way, since
+    /// [`BACnetClient::confirmed_request_routed`] refuses that destination.
     pub async fn add_routed_device(&self, config: RoutedDeviceConfig) -> Result<(), Error> {
         if config.router_mac.is_empty() {
             return Err(Error::Encoding(
@@ -191,6 +194,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 "remote_mac must not be empty: it is half of the routed peer's identity".into(),
             ));
         }
+        check_routed_unicast(config.remote_network, config.remote_mac.len())?;
         let oid = bacnet_types::primitives::ObjectIdentifier::new(
             bacnet_types::enums::ObjectType::DEVICE,
             config.instance,

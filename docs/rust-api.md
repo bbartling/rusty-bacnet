@@ -2574,6 +2574,18 @@ A routed request refuses a longer DADR or local source MAC, and a router MAC
 that is empty or longer, with `Error::Encoding` before it reserves or waits on
 the path, and both configuration methods refuse such a router MAC too.
 
+A routed confirmed request goes to one device on one remote network (#1278).
+DNET must be in 1..=65534, since 0 names no network and 65535 is the global
+broadcast, and the DADR must hold at least one octet, since an empty DADR has
+the remote router broadcast the request. `confirmed_request_routed` and every
+routed confirmed method built on it (`read_property_routed`, the
+`_from_device` and `_to_device` methods, the routed COV subscriptions) refuse
+any of them with `Error::Encoding` before the path is reserved or a
+transaction registered. Both configuration methods use the same DNET check,
+`add_routed_device` refuses such a peer, and the endpoint requester refuses
+such a routed destination. Unconfirmed sends keep remote and global broadcasts,
+for example `broadcast_network_unconfirmed`.
+
 State is keyed by the immediate router MAC together with DNET. One confirmed
 request at a time owns that path; requests through a different router or to a
 different DNET remain independent, and direct requests bypass this state. A

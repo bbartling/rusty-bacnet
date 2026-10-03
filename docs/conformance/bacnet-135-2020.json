@@ -769,7 +769,7 @@
   },
   {
    "id": "BACNET-5-ROUTED-PATH-LIMIT",
-   "standard_anchor": "Clauses 5.2.1.2, 6.4.4, and 19.4",
+   "standard_anchor": "Clauses 5.2.1.2, 6.2.2.1, 6.3, 6.4.4, and 19.4",
    "priority": "P1",
    "requirement_summary": "Confirmed routed APDU sizing combines peer, local transport, and path NPDU evidence, while an exactly correlated too-long network rejection terminates the active owner and narrows later sends.",
    "status": "implementation-present-needs-conformance-tests",
@@ -780,7 +780,9 @@
     "crates/bacnet-client/src/client/requests.rs",
     "crates/bacnet-client/src/client/segmented_request.rs",
     "crates/bacnet-client/src/client/segmentation.rs",
-    "crates/bacnet-client/src/tsm.rs"
+    "crates/bacnet-client/src/tsm.rs",
+    "crates/bacnet-client/src/client/discovery.rs",
+    "crates/bacnet-client/src/endpoint_requester.rs"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/npdu.rs::tests::reject_message_to_network_payload_decodes_typed_reason_and_dnet",
@@ -789,7 +791,10 @@
      "crates/bacnet-client/src/client/routed_path_limit_tests.rs::reason_4_completes_exact_caller_learns_bound_and_does_not_retry",
      "crates/bacnet-client/src/client/routed_path_limit_tests.rs::same_path_serializes_while_a_second_router_remains_concurrent",
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::capacity_cleanup_never_splits_a_held_or_waiting_same_path_gate",
-     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_path_macs_hold_to_the_npdu_address_bound"
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_path_macs_hold_to_the_npdu_address_bound",
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_unicast_needs_one_remote_network_and_one_station",
+     "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::path_apis_and_routed_requests_share_the_remote_dnet_bound",
+     "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::add_routed_device_refuses_a_destination_no_request_could_reach"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/npdu.rs::tests::reject_message_to_network_payload_requires_exact_length",
@@ -803,7 +808,12 @@
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::control_queued_before_activation_cannot_claim_the_new_generation",
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::claimed_control_cannot_complete_reused_invoke_id_for_new_owner",
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_path_macs_hold_to_the_npdu_address_bound",
-     "crates/bacnet-client/src/client/routed_path_mac_bound_tests.rs::over_long_routed_path_macs_fail_before_registration_or_emission"
+     "crates/bacnet-client/src/client/routed_path_mac_bound_tests.rs::over_long_routed_path_macs_fail_before_registration_or_emission",
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_unicast_needs_one_remote_network_and_one_station",
+     "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::routed_confirmed_request_to_no_single_device_fails_before_any_state",
+     "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::path_apis_and_routed_requests_share_the_remote_dnet_bound",
+     "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::add_routed_device_refuses_a_destination_no_request_could_reach",
+     "crates/bacnet-client/src/endpoint_requester_tests.rs::routed_destination_to_no_single_device_fails_before_registration"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -815,7 +825,8 @@
      "Path state is capped at 256 entries; deterministic idle reclamation never removes configured/learned evidence or a gate with an owner/waiter, and exhaustion fails before TSM registration. Ambiguous termination holds the same-path gate through a configuration-derived stale-control quarantine, while monotonic network-ingress sequencing prevents controls queued before activation from claiming a later generation.",
      "Malformed, unmatched, stale, wrong-router, wrong-DNET, other-reason, and direct traffic do not mutate policy. Full active probing, persistent cache, router enforcement, and unconfirmed-traffic changes remain deferred. Third-party conformance evidence is still required.",
     "A client attached to a BACnetRouter through a LoopbackTransport port gets reason 4 rejects on its own NetworkLayer from the router's port MAC, so it needs no router-side receiver (#1175).",
-    "Every MAC on a routed path holds to NpduAddress::MAX_MAC_LEN (18 octets). A routed request refuses a longer DADR or local source MAC, and an empty or longer router MAC, with Error::Encoding before it reserves or waits on the path; the path configuration methods refuse such a router MAC too (#1267)."
+    "Every MAC on a routed path holds to NpduAddress::MAX_MAC_LEN (18 octets). A routed request refuses a longer DADR or local source MAC, and an empty or longer router MAC, with Error::Encoding before it reserves or waits on the path; the path configuration methods refuse such a router MAC too (#1267).",
+    "A routed confirmed request goes to one device: DNET 0, DNET 65535 or an empty DADR fails with Error::Encoding before the path or a TSM entry is taken. The path methods share that DNET check; add_routed_device and the endpoint requester apply the same rule. Unconfirmed sends keep remote and global broadcasts."
     ]
   },
   {
