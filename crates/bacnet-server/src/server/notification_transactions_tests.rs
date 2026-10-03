@@ -134,7 +134,8 @@ async fn notification_terminals_complete_exactly_once() {
         (simple_ack(0, COV_SERVICE), CovAckResult::Ack),
         (error(0, COV_SERVICE), CovAckResult::Error),
         (reject(0), CovAckResult::Error),
-        (abort(0, false), CovAckResult::Error),
+        // The recipient serves the notification: its Abort has the server flag.
+        (abort(0, true), CovAckResult::Error),
     ] {
         let transactions = NotificationTransactions::new();
         let (operation, receiver) = transactions.reserve(direct_peer(1), COV_SERVICE).unwrap();
@@ -200,7 +201,8 @@ async fn mismatches_and_nonterminals_leave_notification_pending() {
 
     for pdu in [
         simple_ack(invoke_id, EVENT_SERVICE),
-        abort(invoke_id, true),
+        // A client-direction Abort belongs to a transaction this device serves.
+        abort(invoke_id, false),
         complex_ack(invoke_id, false),
         complex_ack(invoke_id, true),
         segment_ack(invoke_id, false),

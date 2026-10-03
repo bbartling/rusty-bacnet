@@ -507,7 +507,8 @@
     "crates/bacnet-client/src/client/lifecycle.rs",
     "crates/bacnet-client/src/client/requests.rs",
     "crates/bacnet-client/src/client/segmentation.rs",
-    "crates/bacnet-client/src/client/transaction_cleanup.rs"
+    "crates/bacnet-client/src/client/transaction_cleanup.rs",
+    "crates/bacnet-endpoint-core/src/coordinator.rs"
    ],
    "positive_tests": [
     "crates/bacnet-integration-tests/tests/server/segmentation_tx.rs",
@@ -521,19 +522,25 @@
     "crates/bacnet-client/src/client/segmented_receive_lifecycle_tests.rs::segment_activity_restarts_the_receive_timer",
     "crates/bacnet-client/src/client/segmented_receive_lifecycle_tests.rs::segmented_request_response_stops_its_request_timer",
     "crates/bacnet-client/src/client/segmented_receive_lifecycle_tests.rs::segmented_request_timeout_cleanup_preserves_replacement_sender",
-    "crates/bacnet-client/src/client/segmented_timeout_tests.rs::delayed_timeout_cleanup_preserves_newer_segmented_response"
+    "crates/bacnet-client/src/client/segmented_timeout_tests.rs::delayed_timeout_cleanup_preserves_newer_segmented_response",
+    "crates/bacnet-endpoint-core/src/coordinator_tests.rs::notification_abort_releases_for_reuse_and_stale_cleanup_cannot_release_replacement",
+    "crates/bacnet-server/src/server/notification_transactions_tests.rs::notification_terminals_complete_exactly_once",
+    "crates/bacnet-server/src/server/event_confirmed_routing_tests/recipient_abort.rs::recipient_abort_ends_a_confirmed_event_notification_without_retries",
+    "crates/bacnet-server/src/server/cov_confirmed_baseline_tests.rs::confirmed_report_aborted_by_the_subscriber_is_not_retried"
    ],
    "negative_tests": [
     "crates/bacnet-client/src/client/segmented_timeout_tests.rs::segment_timer_timeout_ends_the_reassembly_session",
     "crates/bacnet-client/src/client/segmented_timeout_tests.rs::caller_cancellation_reclaims_reassembly_after_tsm_lock_contention",
-    "crates/bacnet-client/src/client/segmented_timeout_tests.rs::caller_cancellation_reclaims_segmented_request_sender"
+    "crates/bacnet-client/src/client/segmented_timeout_tests.rs::caller_cancellation_reclaims_segmented_request_sender",
+    "crates/bacnet-endpoint-core/src/coordinator_tests.rs::abort_direction_is_the_same_for_every_lease_owner",
+    "crates/bacnet-server/src/server/notification_transactions_tests.rs::mismatches_and_nonterminals_leave_notification_pending"
    ],
    "benchmarks": [],
    "public_claims": [
     "README.md#features async client and server transaction handling",
     "docs/python-api.md#transport-configuration-examples transport examples"
    ],
-   "notes": "Clause 5.4.4.3 segmented ComplexACK admission stops RequestTimer after segment zero is saved. TSM-owned phase and activity-generation transitions serialize request retry authorization against admission without holding the TSM lock across transport I/O, and reject stale SegmentTimer expiry after new, duplicate, or out-of-order activity. Each registration also carries an immutable owner identity that qualifies request timer expiry, cancellation, receive-state activity/reset/completion, and dispatch-owned cleanup across immediate Invoke ID reuse. Clause 5.4.4.4 receive timeout uses four APDU segment timeouts, returns the local TSM_TIMEOUT ABORT.indication, promptly reclaims reassembly state without inbound traffic, and sends no peer PDU. The broader Clause 5.4.4 transition matrix still needs audit."
+   "notes": "Clause 5.4.4.3 segmented ComplexACK admission stops RequestTimer after segment zero is saved. TSM-owned phase and activity-generation transitions serialize request retry authorization against admission without holding the TSM lock across transport I/O, and reject stale SegmentTimer expiry after new, duplicate, or out-of-order activity. Each registration also carries an immutable owner identity that qualifies request timer expiry, cancellation, receive-state activity/reset/completion, and dispatch-owned cleanup across immediate Invoke ID reuse. Clause 5.4.4.4 receive timeout uses four APDU segment timeouts, returns the local TSM_TIMEOUT ABORT.indication, promptly reclaims reassembly state without inbound traffic, and sends no peer PDU. #1155: a confirmed COV, COV-multiple, Event or audit notification is a requesting-side transaction too, so the recipient answers it as the server and its Abort has the server flag set (Clause 5.4.4 AbortPDU_Received). The shared outbound coordinator now ends every lease, notification or client request, only on a server-flagged Abort and refuses one with the flag clear; before, notification leases expected the flag clear, refused the recipient's Abort and retried until the retries ran out. The broader Clause 5.4.4 transition matrix still needs audit."
   },
   {
    "id": "BACNET-5-TSM-SERVER",
