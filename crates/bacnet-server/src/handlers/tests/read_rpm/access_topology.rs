@@ -362,10 +362,11 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
-        // Access_Event_Time reads back the unspecified Date/Time pair, the
-        // same bytes as the LoadControl Start_Time default.
-        let unspec_event_time: &[u8] =
-            &[0xa4, 0xff, 0xff, 0xff, 0xff, 0xb4, 0xff, 0xff, 0xff, 0xff];
+        // Access_Event_Time is a BACnetTimeStamp: the unspecified date and
+        // time framed as the datetime [2] choice (#1133).
+        let unspec_event_time: &[u8] = &[
+            0x2e, 0xa4, 0xff, 0xff, 0xff, 0xff, 0xb4, 0xff, 0xff, 0xff, 0xff, 0x2f,
+        ];
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             // Table 12-36 has no Present_Value row (#1064).
             (P::PRESENT_VALUE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),

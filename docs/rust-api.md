@@ -1682,6 +1682,25 @@ framing, through the shared `bacnet-encoding` codecs.
   `BACnetActionList` values and refuses a command whose priority is outside 1
   to 16 or whose value can't be encoded. All three arrays are read-only on the
   network, and the Command stores Present_Value without running the actions.
+- **Load Control shed levels** (Clause 12.28): Requested_Shed_Level,
+  Expected_Shed_Level and Actual_Shed_Level are `BACnetShedLevel` values, one
+  context tag each: percent `[0]` or level `[1]` (Unsigned, `u64` in Rust) or
+  amount `[2]` (REAL). They start at level 0, the LEVEL choice's no-shed value.
+  A WriteProperty of Requested_Shed_Level must carry one of those choices;
+  anything else fails with INVALID_DATA_TYPE, and a percent above 100 or an
+  amount that is negative or not finite with VALUE_OUT_OF_RANGE.
+  `LoadControlObject::set_requested_shed_level` applies the same checks and
+  returns `Result`. Present_Value stays SHED_INACTIVE (the shed state machine
+  isn't modeled), so a new requested level also resets Expected_Shed_Level and
+  Actual_Shed_Level to its choice's Table 12-33 default: 100, 0 or 0.0.
+  `set_actual_shed_level` refuses a level of another choice than the requested
+  one.
+- **Access Point `Access_Event_Time` and Credential Data Input `Update_Time`**
+  are `BACnetTimeStamp` values, the unspecified date and time in the datetime
+  form until the first update. Credential Data Input `Present_Value` is a
+  `BACnetAuthenticationFactor`, the UNDEFINED factor until the first read.
+  `CredentialDataInputObject::set_present_value(factor, update_time)` records
+  a read and its time together.
 
 ### ObjectDatabase
 
@@ -2121,9 +2140,10 @@ Access_Event_Tag and Access_Event_Time, and only an Access_Event_Time or
 Status_Flags change sends one. A Credential Data Input report carries
 Update_Time, whose change sends one. The application sets these values before
 adding the object with `AccessDoorObject::set_door_alarm_state`,
-`AccessPointObject::set_access_event` and
-`CredentialDataInputObject::set_update_time`, and a door's Door_Status and
-Lock_Status with `set_door_status` and `set_lock_status`.
+`AccessPointObject::set_access_event` (its time a `BACnetTimeStamp`) and
+`CredentialDataInputObject::set_present_value` (the factor read and its
+Update_Time), and a door's Door_Status and Lock_Status with `set_door_status`
+and `set_lock_status`.
 
 Over the network the Access Point and Credential Data Input values stay
 read-only. A door's Door_Status, Lock_Status and Door_Alarm_State, the rows

@@ -24,10 +24,10 @@ use crate::property_metadata::{
 // Optional with a routed CharacterString write arm, so Optional/Always.
 // Present_Value, Expected_Shed_Level, and Actual_Shed_Level carry the table R
 // code and have no network write route, so RequiredRead/ReadOnly.
-// Requested_Shed_Level carries the table W code and dispatch accepts List
-// with one Unsigned (percent) or finite Real (amount), so
-// RequiredWrite/Always. Shed_Duration carries the table W code and dispatch
-// accepts Unsigned, so RequiredWrite/Always. Start_Time carries the table W
+// Requested_Shed_Level carries the table W code and dispatch accepts one
+// BACnetShedLevel CHOICE (#1133), so RequiredWrite/Always. Shed_Duration
+// carries the table W code and dispatch accepts Unsigned, so
+// RequiredWrite/Always. Start_Time carries the table W
 // code but dispatch has no write arm, so the row mirrors dispatch as
 // RequiredRead/ReadOnly rather than advertising a route write_property
 // rejects (Averaging Attempted_Samples precedent). Status_Flags and
@@ -158,18 +158,17 @@ mod tests {
             object.read_property(P::PRESENT_VALUE, None).unwrap(),
             PropertyValue::Enumerated(0)
         );
-        assert_eq!(
-            object.read_property(P::REQUESTED_SHED_LEVEL, None).unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(0)])
-        );
-        assert_eq!(
-            object.read_property(P::EXPECTED_SHED_LEVEL, None).unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(0)])
-        );
-        assert_eq!(
-            object.read_property(P::ACTUAL_SHED_LEVEL, None).unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(0)])
-        );
+        // The shed levels start at the LEVEL choice's default, level [1] 0.
+        for p in [
+            P::REQUESTED_SHED_LEVEL,
+            P::EXPECTED_SHED_LEVEL,
+            P::ACTUAL_SHED_LEVEL,
+        ] {
+            assert_eq!(
+                object.read_property(p, None).unwrap(),
+                PropertyValue::ApplicationData(vec![0x19, 0x00])
+            );
+        }
         assert_eq!(
             object.read_property(P::SHED_DURATION, None).unwrap(),
             PropertyValue::Unsigned(0)
@@ -277,44 +276,31 @@ mod tests {
                 .unwrap_err(),
             ErrorCode::WRITE_ACCESS_DENIED,
         );
-        // Requested_Shed_Level accepts a single-element Unsigned
-        // (percent) or finite Real (amount) list and stores Percent or
-        // Amount; a bare Unsigned is the wrong datatype.
-        object
-            .write_property(
-                P::REQUESTED_SHED_LEVEL,
-                None,
-                PropertyValue::List(vec![PropertyValue::Unsigned(50)]),
-                None,
-            )
-            .unwrap();
-        assert_eq!(
-            object.read_property(P::REQUESTED_SHED_LEVEL, None).unwrap(),
-            PropertyValue::List(vec![PropertyValue::Unsigned(50)])
-        );
-        object
-            .write_property(
-                P::REQUESTED_SHED_LEVEL,
-                None,
-                PropertyValue::List(vec![PropertyValue::Real(25.5)]),
-                None,
-            )
-            .unwrap();
-        assert_eq!(
-            object.read_property(P::REQUESTED_SHED_LEVEL, None).unwrap(),
-            PropertyValue::List(vec![PropertyValue::Real(25.5)])
-        );
-        assert_error(
+        // Requested_Shed_Level takes a BACnetShedLevel CHOICE (percent [0]
+        // 50, then amount [2] 25.5) and serves it back as written; the bare
+        // Unsigned and one-element list it took before #1133 are the wrong
+        // datatype.
+        for written in [vec![0x09, 0x32], vec![0x2C, 0x41, 0xCC, 0x00, 0x00]] {
+            let written = PropertyValue::ApplicationData(written);
             object
-                .write_property(
-                    P::REQUESTED_SHED_LEVEL,
-                    None,
-                    PropertyValue::Unsigned(50),
-                    None,
-                )
-                .unwrap_err(),
-            ErrorCode::INVALID_DATA_TYPE,
-        );
+                .write_property(P::REQUESTED_SHED_LEVEL, None, written.clone(), None)
+                .unwrap();
+            assert_eq!(
+                object.read_property(P::REQUESTED_SHED_LEVEL, None).unwrap(),
+                written
+            );
+        }
+        for legacy in [
+            PropertyValue::Unsigned(50),
+            PropertyValue::List(vec![PropertyValue::Unsigned(50)]),
+        ] {
+            assert_error(
+                object
+                    .write_property(P::REQUESTED_SHED_LEVEL, None, legacy, None)
+                    .unwrap_err(),
+                ErrorCode::INVALID_DATA_TYPE,
+            );
+        }
         // Shed_Duration stores Unsigned verbatim and rejects other types
         // without changing state.
         object
