@@ -3,6 +3,8 @@ use super::event_forwarding::{ForwardOrigin, Reception};
 use super::*;
 use bacnet_services::alarm_event::ForwardedEventNotification;
 
+#[cfg(test)]
+mod access_rights_mutation_tests;
 mod acknowledge_alarm;
 mod alarm_summary;
 mod atomic_read_file;

@@ -1880,16 +1880,27 @@ framing, through the shared `bacnet-encoding` codecs.
 - **Access Rights rules**: `Positive_Access_Rules` and `Negative_Access_Rules`
   are BACnetARRAYs of `bacnet_types::constructed::BACnetAccessRule` (codec
   `bacnet_encoding::constructed::{encode_access_rule, decode_access_rule}`),
-  read whole, by index and at index 0 for the size like the arrays above, and
-  read-only on the network. `BACnetAccessRule::new(time_range, location,
-  enable)` sets each specifier from its reference: SPECIFIED when given,
-  ALWAYS or ALL when `None`. `AccessRightsObject::set_positive_access_rules`
-  and `set_negative_access_rules` return `Result` and keep the old rules on
+  read whole, by index and at index 0 for the size like the arrays above.
+  `BACnetAccessRule::new(time_range, location, enable)` sets each specifier
+  from its reference: SPECIFIED when given, ALWAYS or ALL when `None`.
+  `AccessRightsObject::set_positive_access_rules` and
+  `set_negative_access_rules` return `Result` and keep the old rules on
   VALUE_OUT_OF_RANGE: a device member that isn't a Device, a specifier
   outside its two values, SPECIFIED without its reference, ALWAYS or ALL with
   a reference that isn't unspecified (instance 4194303), or a location that is
-  neither an Access Point, an Access Zone nor unspecified. The object stores
-  and serves the rules; nothing in the stack evaluates them.
+  neither an Access Point, an Access Zone nor unspecified. A list longer than
+  `MAX_ACCESS_RULES` (1024) is NO_SPACE_TO_WRITE_PROPERTY. Peers write both
+  arrays with WriteProperty and WritePropertyMultiple: the whole array (the
+  rules' octets back to back), one rule at an index, or the size at index 0.
+  Each write gets the setters' checks, and a refused one leaves the array
+  as it was. Growing at index 0 appends SPECIFIED rules with unspecified
+  references (Schedule 4194303's Present_Value, Access Point 4194303) and
+  the enable flag FALSE (Clause 12.34.9.3); shrinking drops rules from the
+  end. Enable (property 133, `PropertyIdentifier::LOG_ENABLE`) is a BOOLEAN,
+  TRUE by default, set with `set_enable` or written by peers; FALSE disables
+  every rule in both arrays (Clause 12.34.8) without touching each rule's own
+  flag. The object stores and serves the rules and the flag; nothing in the
+  stack evaluates them.
 - **Device references**: a
   `BACnetDeviceObjectReference` whose device identifier is present must name
   a Device object (Clause 21);

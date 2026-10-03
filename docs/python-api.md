@@ -2441,7 +2441,7 @@ with VALUE_OUT_OF_RANGE, and another datatype with INVALID_DATA_TYPE.
 
 `add_access_rights` takes `positive_access_rules` and `negative_access_rules`,
 lists of `AccessRule` mappings for Positive_Access_Rules and
-Negative_Access_Rules, both read-only over the network:
+Negative_Access_Rules, and `enable` for the object's Enable flag:
 
 ```python
 # Access Zone 3 in Device 99.
@@ -2474,10 +2474,20 @@ server.add_access_rights(
 missing or `None` member makes the rule apply at any time (ALWAYS) or at every
 access point (ALL). A wrong type raises `TypeError`; an unknown or missing key,
 or a device that isn't a Device, raises `ValueError`; a location naming
-another object type raises `BacnetProtocolError` (VALUE_OUT_OF_RANGE). Each
+another object type raises `BacnetProtocolError` (VALUE_OUT_OF_RANGE), and so
+does a list of more than 1024 rules (NO_SPACE_TO_WRITE_PROPERTY). Each
 rule reads back as `application_data` holding its BACnetAccessRule octets
-(#1344 tracks reading it as an `AccessRule` mapping). The server stores and
-serves the rules; it doesn't evaluate them.
+(#1344 tracks reading it as an `AccessRule` mapping).
+
+`enable` (a bool, `True` when omitted) sets Enable, which a peer reads and
+writes as `PropertyIdentifier.LOG_ENABLE` (property 133); `False` disables
+every rule in both arrays. Peers can also write the arrays: the whole array
+as `PropertyValue.application_data` holding the rules' octets back to back,
+one rule at an `array_index`, or the size at index 0. A grown array gets
+disabled SPECIFIED rules with unspecified references, and a shrunk one loses
+its last rules. Writes get the same checks as the keywords, and a refused
+write leaves the array unchanged. The server stores and serves the rules and
+the flag; it doesn't evaluate them.
 
 Access Door, Access Point, Credential Data Input and Load Control take
 SubscribeCOV, and each report carries the values their Table 13-1 rows name:

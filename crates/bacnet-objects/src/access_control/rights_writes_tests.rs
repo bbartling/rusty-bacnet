@@ -97,9 +97,17 @@ fn access_rights_rule_arrays_take_whole_and_indexed_writes() {
 
         // A whole write in the server's form, the rules' octets back to back.
         rights
-            .write_property(property, None, wire(&[business_hours(), anywhere_off()]), None)
+            .write_property(
+                property,
+                None,
+                wire(&[business_hours(), anywhere_off()]),
+                None,
+            )
             .unwrap();
-        assert_eq!(rules_of(&rights, property), [business_hours(), anywhere_off()]);
+        assert_eq!(
+            rules_of(&rights, property),
+            [business_hours(), anywhere_off()]
+        );
 
         // An indexed write replaces one rule, an unspecified reference
         // included.
@@ -118,7 +126,9 @@ fn access_rights_rule_arrays_take_whole_and_indexed_writes() {
         // A whole read writes back unchanged, in the List form a read returns.
         let read = rights.read_property(property, None).unwrap();
         assert!(matches!(&read, PropertyValue::List(elements) if elements.len() == 2));
-        rights.write_property(property, None, read.clone(), None).unwrap();
+        rights
+            .write_property(property, None, read.clone(), None)
+            .unwrap();
         assert_eq!(rights.read_property(property, None).unwrap(), read);
         assert!(rules_of(&rights, other).is_empty(), "{other:?}");
 
@@ -220,7 +230,12 @@ fn access_rights_refused_rule_writes_leave_both_arrays_unchanged() {
             PropertyIdentifier::PRESENT_VALUE.to_raw(),
         ))
     };
-    let point = || Some(BACnetDeviceObjectReference::from(oid(ObjectType::ACCESS_POINT, 2)));
+    let point = || {
+        Some(BACnetDeviceObjectReference::from(oid(
+            ObjectType::ACCESS_POINT,
+            2,
+        )))
+    };
     let not_a_device = oid(ObjectType::ANALOG_VALUE, 99);
 
     // Each is VALUE_OUT_OF_RANGE, as from the setters.

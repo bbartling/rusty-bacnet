@@ -33,6 +33,7 @@ fn python_access_rules_reach_both_arrays() {
         "AR-1",
         Some(vec![business_hours()]),
         Some(vec![lockdown.clone()]),
+        true,
     )
     .unwrap();
     assert_eq!(rights.positive_access_rules(), [business_hours()]);
@@ -47,7 +48,9 @@ fn python_access_rules_reach_both_arrays() {
     // A location naming an Access Door is the setter's refusal.
     let door = BACnetAccessRule::new(None, Some(oid(ObjectType::ACCESS_DOOR, 2).into()), true);
     for (positive, negative) in [(Some(vec![door.clone()]), None), (None, Some(vec![door]))] {
-        let refused = access_rights(2, "AR-2", positive, negative).err().unwrap();
+        let refused = access_rights(2, "AR-2", positive, negative, true)
+            .err()
+            .unwrap();
         assert!(
             matches!(refused, Error::Protocol { class, code }
                 if class == ErrorClass::PROPERTY.to_raw() as u32
@@ -57,7 +60,28 @@ fn python_access_rules_reach_both_arrays() {
     }
 
     // Omitted arguments keep both arrays empty.
-    let bare = access_rights(3, "AR-3", None, None).unwrap();
+    let bare = access_rights(3, "AR-3", None, None, true).unwrap();
     assert!(bare.positive_access_rules().is_empty());
     assert!(bare.negative_access_rules().is_empty());
+}
+
+#[test]
+fn python_enable_reaches_the_enable_row() {
+    assert!(rights_enable(true));
+    assert!(!rights_enable(false));
+    let disabled = access_rights(4, "AR-4", Some(vec![business_hours()]), None, false).unwrap();
+    assert_eq!(
+        disabled
+            .read_property(PropertyIdentifier::LOG_ENABLE, None)
+            .unwrap(),
+        PropertyValue::Boolean(false)
+    );
+    // The rules keep their own enable flags.
+    assert_eq!(disabled.positive_access_rules(), [business_hours()]);
+}
+
+fn rights_enable(enable: bool) -> bool {
+    access_rights(5, "AR-5", None, None, enable)
+        .unwrap()
+        .enable()
 }

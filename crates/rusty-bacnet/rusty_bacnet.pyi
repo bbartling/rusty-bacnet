@@ -3051,16 +3051,20 @@ class BACnetServer:
         *,
         positive_access_rules: Optional[list[AccessRule]] = None,
         negative_access_rules: Optional[list[AccessRule]] = None,
+        enable: bool = True,
     ) -> None:
         """Add an Access Rights object to the server (before starting).
 
         ``positive_access_rules`` and ``negative_access_rules`` set the two
-        rule arrays (read-only over the network) as ``AccessRule`` mappings.
-        A wrong shape or type raises TypeError, an unknown or missing key or a
+        rule arrays as ``AccessRule`` mappings, and ``enable`` sets Enable
+        (``PropertyIdentifier.LOG_ENABLE``, property 133), whose FALSE
+        disables every rule. Peers can write all three over the network. A
+        wrong shape or type raises TypeError, an unknown or missing key or a
         device that isn't a Device raises ValueError, and a location naming
         anything but an Access Point or Access Zone raises BacnetProtocolError
-        with VALUE_OUT_OF_RANGE; nothing is registered after any of them. The
-        server stores and serves the rules but doesn't evaluate them.
+        with VALUE_OUT_OF_RANGE (more than 1024 rules, with
+        NO_SPACE_TO_WRITE_PROPERTY); nothing is registered after any of them.
+        The server stores and serves the rules but doesn't evaluate them.
         """
         ...
     def add_access_user(self, instance: int, name: str) -> None: ...

@@ -50,11 +50,14 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::DESCRIPTION, true, true),
             (P::OBJECT_TYPE, false, false),
             (P::GLOBAL_IDENTIFIER, false, true),
-            (P::POSITIVE_ACCESS_RULES, false, false),
-            (P::NEGATIVE_ACCESS_RULES, false, false),
+            // R rows the network may write (#1330).
+            (P::POSITIVE_ACCESS_RULES, false, true),
+            (P::NEGATIVE_ACCESS_RULES, false, true),
             // Table 12-39 has no Out_Of_Service row (#1064).
             (P::STATUS_FLAGS, false, false),
             (P::RELIABILITY, false, false),
+            // Enable, property 133: required, and writable (#1332).
+            (P::LOG_ENABLE, false, true),
             (P::PROPERTY_LIST, false, false),
         ],
         _ => vec![
