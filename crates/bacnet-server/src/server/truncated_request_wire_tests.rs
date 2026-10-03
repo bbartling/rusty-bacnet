@@ -8,6 +8,7 @@
 //! general error choice. AV-1 is the Harness's Analog Value.
 use super::*;
 use crate::server::cov_wire_test_support::Harness;
+use crate::server::test_transport::TestTransport;
 use bacnet_encoding::apdu::ErrorPdu;
 use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleError;
 
@@ -122,6 +123,22 @@ async fn confirmed_audit_notification_cut_short_draws_services_other() {
         assert!(error.error_data.is_empty());
     }
     h.server.stop().await.unwrap();
+}
+
+/// The mapping every refused confirmed request goes through answers a
+/// decoder's two refusal kinds alike, whatever the service.
+#[test]
+fn malformed_and_cut_short_requests_draw_the_same_reply() {
+    for raw in 0..=u8::MAX {
+        let service = ConfirmedServiceChoice::from_raw(raw);
+        let reply =
+            |error: Error| BACnetServer::<TestTransport>::error_apdu_from_error(7, service, &error);
+        assert_eq!(
+            reply(Error::decoding(3, "malformed")),
+            reply(Error::buffer_too_short(9, 4)),
+            "{service:?}"
+        );
+    }
 }
 
 /// A `[0]` Unsigned announcing two contents octets and holding one.

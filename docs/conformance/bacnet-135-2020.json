@@ -6138,7 +6138,7 @@
     "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::read_property_multiple_cut_short_draws_services_other",
     "crates/bacnet-encoding/src/constructed/tests/tagged.rs::{application_primitives_read_any_type_and_name_the_expected_one,application_unsigned_values_narrow_to_their_width}",
     "crates/bacnet-services/src/truncated_member_tests.rs::{members_cut_short_are_a_short_buffer,fixed_size_members_of_the_wrong_length_stay_malformed_when_cut_short,confirmed_cov_notification_rejects_keep_their_reasons}",
-    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{service_parameters_cut_short_draw_services_other,subscribe_cov_property_multiple_process_cut_short_draws_the_general_error}"
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{service_parameters_cut_short_draw_services_other,subscribe_cov_property_multiple_process_cut_short_draws_the_general_error,malformed_and_cut_short_requests_draw_the_same_reply}"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
