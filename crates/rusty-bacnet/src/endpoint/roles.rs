@@ -68,7 +68,7 @@ impl PyEndpointClient {
                 .await
                 .map_err(to_py_err)?;
             let value = crate::types::decode_read_ack(&ack).map_err(to_py_err)?;
-            Ok(PyPropertyValue::from_rust(value))
+            Ok(value)
         })
     }
 

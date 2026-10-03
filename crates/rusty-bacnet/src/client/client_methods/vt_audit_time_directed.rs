@@ -450,7 +450,7 @@ impl BACnetClient {
                 .await
                 .map_err(to_py_err)?;
             let value = decode_read_ack(&ack).map_err(to_py_err)?;
-            Ok(PyPropertyValue::from_rust(value))
+            Ok(value)
         })
     }
 

@@ -21,9 +21,13 @@ mod metadata;
 
 /// BACnet EventLog object.
 ///
-/// Ring buffer of timestamped event log records. The application calls
-/// `add_record()` to log a notification or a clock change; the log adds its
-/// own status records.
+/// Ring buffer of timestamped event log records. A server running the
+/// database logs the event notifications the device builds into its Event
+/// Logs ([`ObjectDatabase::log_event_notification`]); the application calls
+/// `add_record()` for anything else, such as a clock change or a notification
+/// it received. The log adds its own status records.
+///
+/// [`ObjectDatabase::log_event_notification`]: crate::database::ObjectDatabase::log_event_notification
 pub struct EventLogObject {
     oid: ObjectIdentifier,
     name: String,
@@ -196,6 +200,10 @@ impl BACnetObject for EventLogObject {
 
     fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
         Some(&self.log_buffer)
+    }
+
+    fn add_event_log_record(&mut self, record: BACnetEventLogRecord) -> Result<(), Error> {
+        self.add_record(record)
     }
 }
 
