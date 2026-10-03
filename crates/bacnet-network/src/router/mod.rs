@@ -73,18 +73,20 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 use crate::layer::{is_group_delivery, AdmissionReceiver, QueueAdmissionCounters, ReceivedApdu};
-use crate::router_table::{ReachabilityStatus, RouterTable};
+use crate::router_table::RouterTable;
 use bacnet_transport::port::TransportProvenance;
 
 mod control_messages;
 pub mod control_policy;
 mod forwarding;
+mod reject;
 
 use control_messages::handle_network_message;
 pub use control_policy::{ControlAuthContext, ControlAuthorizer, ControlClass};
 pub use control_policy::{ControlDecisionCounters, ControlGate, ControlPolicy};
 pub use control_policy::{ControlServiceCounters, ControlTrust};
-use forwarding::{forward_broadcast, forward_unicast, refuse_address_too_long, send_reject};
+use forwarding::{forward_broadcast, forward_unicast};
+use reject::{refuse_address_too_long, route_refusal, send_reject, Refused};
 
 /// A send request to be forwarded on a port.
 #[derive(Debug)]
@@ -638,28 +640,11 @@ impl BACnetRouter {
 
                                 if let Some(route) = route {
                                     // Check reachability before forwarding (spec 6.6.3.6)
-                                    match reachability.unwrap_or(ReachabilityStatus::Reachable) {
-                                        ReachabilityStatus::Busy => {
-                                            send_reject(
-                                                &send_txs[port_idx],
-                                                &received.source_mac,
-                                                dest_net,
-                                                RejectMessageReason::ROUTER_BUSY,
-                                                &received.data_attributes,
-                                            );
-                                            continue;
-                                        }
-                                        ReachabilityStatus::Unreachable => {
-                                            send_reject(
-                                                &send_txs[port_idx],
-                                                &received.source_mac,
-                                                dest_net,
-                                                RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-                                                &received.data_attributes,
-                                            );
-                                            continue;
-                                        }
-                                        ReachabilityStatus::Reachable => {}
+                                    if let Some(reason) = route_refusal(reachability) {
+                                        let refused =
+                                            Refused::frame(&send_txs[port_idx], &received, &npdu);
+                                        send_reject(&refused, dest_net, reason);
+                                        continue;
                                     }
                                     if route.port_index == port_idx && route.directly_connected {
                                         let dest_mac = npdu
@@ -726,11 +711,9 @@ impl BACnetRouter {
                                         );
                                     }
                                     send_reject(
-                                        &send_txs[port_idx],
-                                        &received.source_mac,
+                                        &Refused::frame(&send_txs[port_idx], &received, &npdu),
                                         dest_net,
                                         RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-                                        &received.data_attributes,
                                     );
                                 }
                             } else {
@@ -744,12 +727,12 @@ impl BACnetRouter {
                                 let _ = local_tx.try_send_apdu(apdu);
                             }
                         }
-                        Err(e @ NpduDecodeError::AddressTooLong { dnet, .. }) => {
-                            warn!(error = %e, port = port_idx, "Router refused an NPDU");
+                        Err(e @ NpduDecodeError::AddressTooLong { .. }) => {
                             refuse_address_too_long(
                                 &send_txs[port_idx],
+                                port_idx,
                                 &received,
-                                dnet,
+                                &e,
                                 &address_length_drops,
                             );
                         }
@@ -907,28 +890,9 @@ async fn dispatch_network_message(
     };
 
     if let Some(route) = route {
-        match reachability.unwrap_or(ReachabilityStatus::Reachable) {
-            ReachabilityStatus::Busy => {
-                send_reject(
-                    &send_txs[ctx.port_idx],
-                    ctx.source_mac.as_slice(),
-                    dest_net,
-                    RejectMessageReason::ROUTER_BUSY,
-                    &ctx.data_attributes,
-                );
-                return;
-            }
-            ReachabilityStatus::Unreachable => {
-                send_reject(
-                    &send_txs[ctx.port_idx],
-                    ctx.source_mac.as_slice(),
-                    dest_net,
-                    RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-                    &ctx.data_attributes,
-                );
-                return;
-            }
-            ReachabilityStatus::Reachable => {}
+        if let Some(reason) = route_refusal(reachability) {
+            send_reject(&Refused::control(send_txs, ctx), dest_net, reason);
+            return;
         }
         forward_unicast(
             send_txs,
@@ -950,11 +914,9 @@ async fn dispatch_network_message(
             solicit_who_is(send_txs, ctx.port_idx, dest_net, &ctx.data_attributes);
         }
         send_reject(
-            &send_txs[ctx.port_idx],
-            ctx.source_mac.as_slice(),
+            &Refused::control(send_txs, ctx),
             dest_net,
             RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-            &ctx.data_attributes,
         );
     }
 }

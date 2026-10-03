@@ -6,6 +6,7 @@
 use super::control_policy::{ControlAuthorizer, ControlGate, ControlPolicy};
 use super::envelope_harness::*;
 use super::*;
+use crate::router_table::ReachabilityStatus;
 use bacnet_encoding::npdu::NpduAddress;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -120,13 +121,14 @@ async fn hardened_denies_protected_silently() {
         h.table.lock().await.effective_reachability(3000),
         Some(ReachabilityStatus::Reachable)
     );
-    // Reject transition denied: no table change, no relay.
+    // Reject transition denied: no table change, and no relay toward the
+    // originator on 1000 its DNET/DADR names.
     let mut npdu = control_npdu(
         NetworkMessageType::REJECT_MESSAGE_TO_NETWORK,
         &[1, 0x0b, 0xb8],
     );
-    npdu.source = Some(NpduAddress {
-        network: 2000,
+    npdu.destination = Some(NpduAddress {
+        network: 1000,
         mac_address: MacAddr::from_slice(&[7]),
     });
     h.handle(h.ctx(1, &[2], npdu)).await;
@@ -508,7 +510,7 @@ async fn reject_deny_sends_no_success_and_no_loop() {
         NetworkMessageType::REJECT_MESSAGE_TO_NETWORK,
         &[1, 0x0b, 0xb8],
     );
-    npdu.source = Some(NpduAddress {
+    npdu.destination = Some(NpduAddress {
         network: 4000,
         mac_address: MacAddr::from_slice(&[7]),
     });
@@ -533,7 +535,7 @@ async fn reject_deny_sends_no_success_and_no_loop() {
         NetworkMessageType::REJECT_MESSAGE_TO_NETWORK,
         &[1, 0x0b, 0xb8],
     );
-    npdu.source = Some(NpduAddress {
+    npdu.destination = Some(NpduAddress {
         network: 4000,
         mac_address: MacAddr::from_slice(&[7]),
     });
