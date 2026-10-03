@@ -195,6 +195,11 @@ fn property_metadata_access_point_exact_sets_readable_rows_and_indexed_list() {
         // The Table 12-36 required rows #1284 added.
         P::AUTHENTICATION_STATUS,
         P::ACCESS_EVENT_CREDENTIAL,
+        // The Table 12-36 required rows #1307 added.
+        P::ACTIVE_AUTHENTICATION_POLICY,
+        P::NUMBER_OF_AUTHENTICATION_POLICIES,
+        P::AUTHORIZATION_MODE,
+        P::PRIORITY_FOR_WRITING,
     ];
     let required = [
         P::OBJECT_IDENTIFIER,
@@ -210,6 +215,10 @@ fn property_metadata_access_point_exact_sets_readable_rows_and_indexed_list() {
         P::RELIABILITY,
         P::AUTHENTICATION_STATUS,
         P::ACCESS_EVENT_CREDENTIAL,
+        P::ACTIVE_AUTHENTICATION_POLICY,
+        P::NUMBER_OF_AUTHENTICATION_POLICIES,
+        P::AUTHORIZATION_MODE,
+        P::PRIORITY_FOR_WRITING,
         P::PROPERTY_LIST,
     ];
     assert_exact_sets(&object, &all, &required);
@@ -357,7 +366,13 @@ fn property_metadata_access_trio_write_capabilities_match_dispatch() {
         ),
         (
             || Box::new(AccessPointObject::new(1, "AP-1").unwrap()),
-            &[P::DESCRIPTION, P::OUT_OF_SERVICE],
+            // The policy in effect and the mode (#1307).
+            &[
+                P::DESCRIPTION,
+                P::OUT_OF_SERVICE,
+                P::ACTIVE_AUTHENTICATION_POLICY,
+                P::AUTHORIZATION_MODE,
+            ],
             &[],
         ),
         (
@@ -583,6 +598,8 @@ fn property_metadata_access_point_and_zone_writes_store_verbatim() {
             P::RELIABILITY,
             P::AUTHENTICATION_STATUS,
             P::ACCESS_EVENT_CREDENTIAL,
+            P::NUMBER_OF_AUTHENTICATION_POLICIES,
+            P::PRIORITY_FOR_WRITING,
         ] {
             let value = point.read_property(p, None).unwrap();
             assert_error(

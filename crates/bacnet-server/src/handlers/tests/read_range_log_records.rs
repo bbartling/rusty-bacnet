@@ -3,7 +3,9 @@
 //! BACnetEventLogRecord, whatever the range selects.
 
 use super::*;
-use bacnet_encoding::constructed::{decode_event_log_record, decode_log_record};
+use bacnet_encoding::constructed::{
+    decode_event_log_record, decode_log_record, encode_event_notification,
+};
 use bacnet_services::alarm_event::EventNotificationRequest;
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::enums::{EventState, EventType, NotifyType};
@@ -154,7 +156,7 @@ fn event_log_read_range_serves_every_record_kind_with_exact_bytes() {
         0x3F, 0x49, 0x00, 0x59, 0x64, 0x69, 0x01, 0x89, 0x00, 0x99, 0x00, 0xA9, 0x00, 0xB9, 0x02,
     ];
     let mut encoded = BytesMut::new();
-    notification().encode(&mut encoded).unwrap();
+    encode_event_notification(&notification(), &mut encoded).unwrap();
     assert_eq!(encoded.as_ref(), &parameters[..]);
 
     let kinds = [
@@ -165,7 +167,7 @@ fn event_log_read_range_serves_every_record_kind_with_exact_bytes() {
         ),
         // notification [1] around the request's fields.
         (
-            EventLogDatum::Notification(parameters.clone()),
+            EventLogDatum::Notification(notification()),
             [&[0x1E, 0x1E][..], &parameters, &[0x1F, 0x1F]].concat(),
         ),
         // time-change [2], amount unknown.
@@ -195,15 +197,10 @@ fn event_log_read_range_serves_every_record_kind_with_exact_bytes() {
     let whole = call(&db, oid, PropertyIdentifier::LOG_BUFFER, None).unwrap();
     let served = decoded(&whole, decode_event_log_record);
     assert_eq!(served, records);
-    let EventLogDatum::Notification(body) = &served[1].log_datum else {
-        panic!("a notification record");
-    };
-    let request = EventNotificationRequest::decode(body).unwrap();
     assert_eq!(
-        request.event_object_identifier,
-        notification().event_object_identifier
+        served[1].log_datum,
+        EventLogDatum::Notification(notification())
     );
-    assert_eq!(request.to_state, EventState::OFFNORMAL);
 }
 
 /// One ReadRange of a Trend Log's buffer under `bytes` of service ACK.

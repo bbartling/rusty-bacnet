@@ -1,5 +1,6 @@
 //! WritePropertyMultiple service per ASHRAE 135-2020 Clause 15.10.
 
+use bacnet_encoding::constructed::encode_bacnet_property_value;
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_types::error::Error;
@@ -86,7 +87,7 @@ impl WritePropertyMultipleRequest {
             primitives::encode_ctx_object_id(buf, 0, &spec.object_identifier);
             tags::encode_opening_tag(buf, 1);
             for prop_val in &spec.list_of_properties {
-                prop_val.encode(buf);
+                encode_bacnet_property_value(prop_val, buf);
             }
             tags::encode_closing_tag(buf, 1);
         }

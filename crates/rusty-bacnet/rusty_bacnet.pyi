@@ -1091,6 +1091,36 @@ class ActionCommand(TypedDict):
     device_identifier: NotRequired[ObjectIdentifier | None]
 
 
+class AccessRuleTimeRange(TypedDict):
+    """The property whose value decides when an access rule applies, such as
+    a Schedule's Present_Value (``BACnetDeviceObjectPropertyReference``).
+
+    Unknown keys and a ``device_identifier`` that isn't a Device raise
+    ValueError; wrong types raise TypeError.
+    """
+
+    object_identifier: ObjectIdentifier
+    property_identifier: PropertyIdentifier
+    property_array_index: NotRequired[int | None]
+    device_identifier: NotRequired[ObjectIdentifier | None]
+
+
+class AccessRule(TypedDict):
+    """One element of an Access Rights rule array (``BACnetAccessRule``).
+
+    A missing or ``None`` ``time_range`` means the rule applies at any time
+    (ALWAYS), and a missing or ``None`` ``location`` that it covers every
+    access point (ALL). A ``location`` is an Access Point or Access Zone, as
+    an ``ObjectIdentifier`` in this device or a ``(device, object)`` pair.
+    """
+
+    enable: bool
+    time_range: NotRequired[AccessRuleTimeRange | None]
+    location: NotRequired[
+        ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier] | None
+    ]
+
+
 class AuditReporterConfiguration(TypedDict):
     """Owned pre-start target Reporter settings; no Python callbacks."""
     instance: int
@@ -2650,12 +2680,13 @@ class BACnetServer:
         """Add a Notification Forwarder (Clause 12.51) that sends the event
         notifications this server receives on to its Recipient_List and
         Subscribed_Recipients. ``process_identifier_filter=None`` forwards every
-        process identifier. With ``storage_path``, Subscribed_Recipients is kept
-        in that file across restarts.
+        process identifier. With ``storage_path``, Recipient_List and
+        Subscribed_Recipients are kept in that file across restarts.
 
         ``recipients`` seeds Recipient_List in order; more than 32 destinations,
         or an address MAC past 18 octets, raises BacnetProtocolError, as a
-        client's write would be refused. ``port_filter`` serves Port_Filter as
+        client's write would be refused. With ``storage_path``, a
+        Recipient_List a client wrote, once saved, wins over the seed. ``port_filter`` serves Port_Filter as
         ``(port_id, enabled)`` pairs; the server receives through Port_ID 0.
         Without it Port_Filter is absent."""
     def add_trend_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
@@ -2832,6 +2863,9 @@ class BACnetServer:
         access_doors: Optional[
             list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
         ] = None,
+        number_of_authentication_policies: Optional[int] = None,
+        supported_authorization_modes: Optional[list[int]] = None,
+        priority_for_writing: Optional[int] = None,
     ) -> None:
         """Add an Access Point object to the server (before starting).
 
@@ -2840,9 +2874,39 @@ class BACnetServer:
         whose device isn't a Device object identifier raises ValueError, and a
         reference to anything but an Access Door raises BacnetProtocolError
         with VALUE_OUT_OF_RANGE; either way nothing is registered.
+
+        ``number_of_authentication_policies`` (1 when omitted, never 0) and
+        ``priority_for_writing`` (16 when omitted, else 1 to 16) set
+        Number_Of_Authentication_Policies and Priority_For_Writing, which are
+        read-only over the network. ``supported_authorization_modes`` lists
+        the BACnetAuthorizationMode numbers the application carries out, the
+        values a write of Authorization_Mode can take: AUTHORIZE (0) alone
+        when omitted, and AUTHORIZE must be in any list given; proprietary
+        modes run from 64 to 65535. A value outside those raises
+        BacnetProtocolError with VALUE_OUT_OF_RANGE. Peers write
+        Active_Authentication_Policy (1 to the policy count) and
+        Authorization_Mode (one of the supported modes).
         """
         ...
-    def add_access_rights(self, instance: int, name: str) -> None: ...
+    def add_access_rights(
+        self,
+        instance: int,
+        name: str,
+        *,
+        positive_access_rules: Optional[list[AccessRule]] = None,
+        negative_access_rules: Optional[list[AccessRule]] = None,
+    ) -> None:
+        """Add an Access Rights object to the server (before starting).
+
+        ``positive_access_rules`` and ``negative_access_rules`` set the two
+        rule arrays (read-only over the network) as ``AccessRule`` mappings.
+        A wrong shape or type raises TypeError, an unknown or missing key or a
+        device that isn't a Device raises ValueError, and a location naming
+        anything but an Access Point or Access Zone raises BacnetProtocolError
+        with VALUE_OUT_OF_RANGE; nothing is registered after any of them. The
+        server stores and serves the rules but doesn't evaluate them.
+        """
+        ...
     def add_access_user(self, instance: int, name: str) -> None: ...
     def add_access_zone(self, instance: int, name: str) -> None: ...
     def add_credential_data_input(

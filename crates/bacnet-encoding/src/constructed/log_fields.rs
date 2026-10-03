@@ -113,11 +113,11 @@ pub(super) fn decode_failure(body: &[u8], offset: usize, what: &str) -> Result<(
 }
 
 /// Refuse a bit string whose unused-bit count is above 7, or nonzero with no
-/// data.
-pub(super) fn check_bit_string(unused_bits: u8, data: &[u8]) -> Result<(), Error> {
+/// data: the decoder would refuse it. `what` names the value in the error.
+pub(super) fn check_bit_string(unused_bits: u8, data: &[u8], what: &str) -> Result<(), Error> {
     if unused_bits > 7 || (data.is_empty() && unused_bits != 0) {
         return Err(Error::OutOfRange(format!(
-            "bitstring-value has {unused_bits} unused bits over {} octets",
+            "{what} has {unused_bits} unused bits over {} octets",
             data.len()
         )));
     }

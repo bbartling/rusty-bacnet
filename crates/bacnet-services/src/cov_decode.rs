@@ -1,11 +1,12 @@
 //! Detailed confirmed-COV decoding and Reject classification.
 
+use bacnet_encoding::constructed::decode_bacnet_property_value_in_list;
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::enums::RejectReason;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use crate::common::{BACnetPropertyValue, MAX_DECODED_ITEMS};
+use crate::common::MAX_DECODED_ITEMS;
 use crate::cov::COVNotificationRequest;
 
 /// Structured failure returned when decoding a confirmed COV notification.
@@ -188,7 +189,7 @@ impl COVNotificationRequest {
                 ));
             }
             let (pv, new_offset) =
-                BACnetPropertyValue::decode_in_list(data, offset, 4).map_err(|error| {
+                decode_bacnet_property_value_in_list(data, offset, 4).map_err(|error| {
                     let reject_reason = property_value_reject_reason(&error);
                     failure(error, reject_reason)
                 })?;

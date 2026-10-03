@@ -1,7 +1,8 @@
 //! ReadPropertyMultiple service per ASHRAE 135-2020 Clause 15.7.
 
 use bacnet_encoding::constructed::{
-    decode_read_access_specification, encode_read_access_specification,
+    decode_read_access_specification, encode_read_access_specification, extract_property_value,
+    PropertyValueBoundary,
 };
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
@@ -11,7 +12,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::{extract_property_value, PropertyValueBoundary, MAX_DECODED_ITEMS};
+use crate::common::MAX_DECODED_ITEMS;
 
 // ---------------------------------------------------------------------------
 // ReadPropertyMultipleRequest
