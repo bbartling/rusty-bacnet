@@ -2,13 +2,14 @@
 //! under `[0]`, or under `[1]` the first failed subscription's `[0]` monitored
 //! object identifier, `[1]` property reference and `[2]` error.
 
+use crate::common::decode_context;
 use crate::common::error_type::{
     decode_constructed, decode_error_in, decode_error_pdu, encode_error_in, error_pdu, finish,
 };
-use crate::common::{decode_context, PropertyReference};
 use bacnet_encoding::apdu::ErrorPdu;
+use bacnet_encoding::constructed::{decode_property_reference, encode_property_reference};
 use bacnet_encoding::{primitives, tags};
-use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::constructed::{BACnetObjectPropertyReference, PropertyReference};
 use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::{Error, ErrorDetail};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -40,11 +41,13 @@ impl SubscribeCOVPropertyMultipleError {
         tags::encode_opening_tag(buf, 1);
         primitives::encode_ctx_object_id(buf, 0, &subscription.object_identifier);
         tags::encode_opening_tag(buf, 1);
-        PropertyReference {
-            property_identifier: PropertyIdentifier::from_raw(subscription.property_identifier),
-            property_array_index: subscription.property_array_index,
-        }
-        .encode(buf);
+        encode_property_reference(
+            buf,
+            &PropertyReference {
+                property_identifier: PropertyIdentifier::from_raw(subscription.property_identifier),
+                property_array_index: subscription.property_array_index,
+            },
+        );
         tags::encode_closing_tag(buf, 1);
         encode_error_in(buf, 2, self.error_class, self.error_code);
         tags::encode_closing_tag(buf, 1);
@@ -72,7 +75,7 @@ impl SubscribeCOVPropertyMultipleError {
         )?;
         let object_identifier = ObjectIdentifier::decode(object)?;
         let (reference_body, offset) = decode_constructed(subscription, offset, 1, WHAT)?;
-        let (reference, reference_end) = PropertyReference::decode(reference_body, 0)?;
+        let (reference, reference_end) = decode_property_reference(reference_body, 0)?;
         finish(
             reference_body,
             reference_end,

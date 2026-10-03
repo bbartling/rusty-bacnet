@@ -47,6 +47,7 @@ mod audit_notification;
 mod cov;
 pub(crate) mod device_mgmt;
 mod file;
+mod group_present_value;
 mod list;
 mod object_mgmt;
 mod read_property;

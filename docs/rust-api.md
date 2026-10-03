@@ -324,9 +324,10 @@ requested index independently. See the
 [scoped conformance evidence](conformance/support-summary.md).
 
 ```rust
-use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleACK, ReadAccessResult};
+use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadAccessResult};
 use bacnet_services::wpm::WriteAccessSpecification;
-use bacnet_services::common::{PropertyReference, BACnetPropertyValue};
+use bacnet_services::common::BACnetPropertyValue;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
 let spec = ReadAccessSpecification {
     object_identifier: oid,
@@ -1681,6 +1682,19 @@ framing, through the shared `bacnet-encoding` codecs.
   `AccessResult` values, by member position, and a member without one reads
   PROPERTY / VALUE_NOT_INITIALIZED. Index 0 reads the array size and each
   index from 1 one element.
+- **Group `List_Of_Group_Members` and `Present_Value`** (Clause 12.14) are
+  lists, so an array index is refused. A member is a
+  `bacnet_types::constructed::ReadAccessSpecification`: an object in this device
+  and the properties the group reports, encoded by
+  `bacnet_encoding::constructed::encode_read_access_specification`.
+  `GroupObject::add_member` refuses one
+  with no properties, and one that would report a Group's or Global Group's
+  Present_Value. The object stores no Present_Value: the server rebuilds it on
+  every ReadProperty, ReadPropertyMultiple and ReadRange as one
+  ReadAccessResult per member, reading each member as ReadPropertyMultiple
+  would, so a failed read carries its error and an object that isn't in the
+  database reads OBJECT / UNKNOWN_OBJECT. Read directly from the object alone,
+  Present_Value is an empty list.
 - **Structured View `Subordinate_List` and Command `Action`** (Clauses 12.29
   and 12.10) are arrays too, with the same per-index reads, as is
   `Subordinate_Annotations`. A Subordinate_List element is a
@@ -1986,33 +2000,45 @@ Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and
 Shed_Duration, and a change of any of them sends one. Duty_Window, which the
 row also names, isn't served yet.
 
-The application also feeds an Averaging object its samples. The server doesn't
-read Object_Property_Reference: the application samples the referenced property,
-spacing its reads Window_Interval / Window_Samples seconds apart, and, in a
-running server, passes each result to
-`BACnetServer::add_averaging_sample_local(&averaging_id, Some(value))`, or
-`None` for an attempt that produced no value (a failed read, say). Before the
-object is added, `AveragingObject::add_sample(v)` does the same for an `f32` and
-`add_missed_sample()` for a miss. The value may be a BOOLEAN (FALSE and TRUE
-count as 0 and 1), Signed, Unsigned, Enumerated or finite REAL, since the
-object computes in REAL. Another datatype, Double included, fails with
-INVALID_DATA_TYPE and NaN or an infinity with VALUE_OUT_OF_RANGE, and a refused
-sample counts as neither attempted nor valid. Any object other than an
-Averaging object refuses the call with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+A running server samples an Averaging object's Object_Property_Reference
+itself, every Window_Interval / Window_Samples seconds (#1144). The first sample
+comes one spacing after the server starts, and each write that empties the
+window (below) starts the spacing over. The spacing never drops below
+`averaging::MIN_SAMPLE_PERIOD` (100 ms); a shorter configured one is stretched,
+so that window spans more than Window_Interval. A referenced object or property
+that doesn't exist, an array index on a property that isn't an array, a failed
+read, or a value of a datatype the object can't average counts as a missed
+attempt. References are always local: a device-qualified write is refused. The
+server's monotonic operation task does this through
+`ObjectDatabase::sample_due_averaging_objects`, which an application driving
+its own database can call as well.
 
-The object keeps the most recent Window_Samples attempts (15 by default, at
-most `MAX_WINDOW_SAMPLES` = 1440) and treats each call as the next one: it has
-no clock, so Window_Interval (900 s by default) tells the application how often
-to sample rather than timing anything itself. Minimum_Value, Maximum_Value and
-Average_Value cover the valid samples in the window, Attempted_Samples counts
-the attempts in it and Valid_Samples the valid ones, so a miss shows up as the
-difference. With no valid sample in the window, the statistics read positive
-infinity, negative infinity and NaN. Window_Interval and Window_Samples are
-writable over the network and through `set_window_interval` and
-`set_window_samples`; a write of either, of Object_Property_Reference, or of
-zero to Attempted_Samples empties the window. A zero interval, a sample count of
-zero or above the bound, and a nonzero Attempted_Samples fail with
-VALUE_OUT_OF_RANGE and change nothing.
+The application feeds an object that has no reference. In a running server it
+passes each result to
+`BACnetServer::add_averaging_sample_local(&averaging_id, Some(value))`, or
+`None` for an attempt that produced no value (a failed read, say). On an object
+the server samples, such a call is one more attempt and leaves the server's
+spacing alone. Before the object is added, `AveragingObject::add_sample(v)` does
+the same for an `f32` and `add_missed_sample()` for a miss. The value may be a
+BOOLEAN (FALSE and TRUE count as 0 and 1), Signed, Unsigned, Enumerated or
+finite REAL, since the object computes in REAL. Another datatype, Double
+included, fails with INVALID_DATA_TYPE and NaN or an infinity with
+VALUE_OUT_OF_RANGE, and a refused sample counts as neither attempted nor valid.
+Any object other than an Averaging object refuses the call with
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+
+The object keeps the most recent Window_Samples attempts (15 by default, at most
+`MAX_WINDOW_SAMPLES` = 1440), and each sample, the server's or the
+application's, fills the next slot. Window_Interval is 900 s by default.
+Minimum_Value, Maximum_Value and Average_Value cover the valid samples in the
+window, Attempted_Samples counts the attempts in it and Valid_Samples the valid
+ones, so a miss shows up as the difference. With no valid sample in the window,
+the statistics read positive infinity, negative infinity and NaN.
+Window_Interval and Window_Samples are writable over the network and through
+`set_window_interval` and `set_window_samples`; a write of either, of
+Object_Property_Reference, or of zero to Attempted_Samples empties the window. A
+zero interval, a sample count of zero or above the bound, and a nonzero
+Attempted_Samples fail with VALUE_OUT_OF_RANGE and change nothing.
 
 Each sample changes the statistics and counts together, then the server's COV
 path runs, as it does after a write. Averaging has no Table 13-1 row, so
@@ -2146,6 +2172,14 @@ door's own three values aside, a value the application sets meanwhile replaces
 the one put aside, and the return to service serves them again, dropping the
 simulation. A simulated Door_Alarm_State sends the COV report as a real change
 does. The pulse relock runs on its timer whatever the simulated values say.
+
+A door's Secured_Status isn't stored: each read works it out from what the
+door serves (Clause 12.26.14). It reads SECURED while the door is commanded
+LOCK, isn't IN_ALARM, and its Door_Status and Lock_Status show it shut and
+locked (or UNUSED). Any other input makes it UNSECURED, so an UNLOCK or a pulse
+reads UNSECURED until it ends. A Door_Status or Lock_Status of UNKNOWN or a
+fault makes it UNKNOWN, unless another input has already made it UNSECURED.
+Simulated values count the same as the device's.
 
 #### Transportation (3)
 
@@ -2676,7 +2710,13 @@ so splitting a confirmed report is local policy: it sends only its oldest part a
 returns the rest to the queue once it holds the context, the Ack's follow-up sends
 the next part, and a part that fails goes out again first after the hold-off. A
 change that does not fit a notification even alone, a reference's latest
-included, is dropped and counted, since every attempt to send it would fail.
+included, goes out one value per notification instead, in the order its values
+were captured, each with the change's `Time_Of_Change` and an envelope naming
+the change (#1090). Only the notification with its last value completes the
+reference; values whose notification fails or is deferred return as one
+change, and once what is left of it fits, it goes out like any other change.
+A value that does not fit even alone is dropped, and its change counted, since
+every attempt to send it would fail; the change's other values still go out.
 
 Untimestamped values that alone exceed one notification, as in the initial report
 of a SubscribeCOVPropertyMultiple request over many objects, go out after every
@@ -2710,12 +2750,14 @@ a confirmed report defers return to the queue without that check, so the bound
 never drops what the report just planned to send. Changes returned by a failed
 notification wait while a newer change of the same reference is in flight; once a
 newer change is delivered, older ones are dropped rather than delivered as stale
-state. Every one of these drops increments `CovCounters::timed_changes_dropped`;
+state. Every one of these drops increments `CovCounters::timed_changes_dropped`,
+as does each change that loses a value too large for any notification;
 splitting is not counted. The log gets one warning per context for each cause
-(bound overflow, too large for any notification, superseded), and later drops for
-that cause are logged at debug level only, until the context is admitted afresh: a
-timestamped reference of it is subscribed again, or an admission changes the
-maximum APDU its notifications must fit (#1039). The counter is therefore the
+(bound overflow, a value too large for any notification, superseded), and later
+drops for that cause are logged at debug level only, until the context is
+admitted afresh: a timestamped reference of it is subscribed again, or an
+admission changes the maximum APDU its notifications must fit (#1039). The
+counter is therefore the
 running signal. Untimestamped references left out as too large
 are counted apart, in `CovCounters::untimed_references_oversized`: nothing of
 theirs is lost, since the next fanout reads their values again, and the count is
@@ -2723,16 +2765,20 @@ per report rather than per change. `CovSubscriptionTable::with_max_apdu_length`
 sets the local maximum (the full server uses its configured capacity).
 
 A subscriber whose maximum APDU cannot hold one timestamped change of its
-references receives no timestamped changes at all: the subscription is accepted,
-and each change is dropped and counted as above (#1039). The standard defines no
-error for refusing a subscription because the subscriber's APDU is too small, so
-the server does not refuse it. Measured with this encoder, one timestamped change
-of a REAL Present_Value with its Status_Flags takes 58 to 64 octets in an
-unconfirmed notification and 60 to 66 in a confirmed one (more for larger
-subscriber process identifiers and lifetimes), and a Binary Present_Value with its
-Status_Flags 55 to 63. Both are over the 50 octets of the smallest maximum APDU a
-request can advertise, and well within the next size, 128. The same values
-without timestamps take 36 to 44 octets, so a 50-octet subscriber should subscribe
+references gets each such change one value per notification, as above (#1090).
+Measured with this encoder, one timestamped change of a REAL Present_Value with
+its Status_Flags takes 58 to 64 octets in an unconfirmed notification and 60 to
+66 in a confirmed one (more for larger subscriber process identifiers and
+lifetimes), and a Binary Present_Value with its Status_Flags 55 to 63: both over
+the 50 octets of the smallest maximum APDU a request can advertise, and well
+within the next size, 128. Each of those values alone takes 44 to 52 octets
+unconfirmed and 46 to 54 confirmed, so a 50-octet subscriber typically gets
+Present_Value and Status_Flags in two notifications, but not with the largest
+process identifiers and lifetimes. A value that fits no notification even alone
+is dropped and counted (#1039): the subscription is still accepted, since the
+standard defines no error for refusing one because the subscriber's APDU is too
+small. Without timestamps the same change takes 36 to 44 octets in one
+notification, so a 50-octet subscriber that needs no change times is better off
 with Timestamped=FALSE. At 128 or 206 octets, only large values such as long
 character strings or lists can exceed one notification.
 

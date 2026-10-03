@@ -14,9 +14,19 @@ fn group_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
     if configured {
         let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
         let ai2 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap();
-        group.add_member(ai1);
-        group.add_member(ai2);
-        group.present_value.push(PropertyValue::Enumerated(3));
+        for object_identifier in [ai1, ai2] {
+            group
+                .add_member(bacnet_types::constructed::ReadAccessSpecification {
+                    object_identifier,
+                    list_of_property_references: vec![
+                        bacnet_types::constructed::PropertyReference {
+                            property_identifier: P::PRESENT_VALUE,
+                            property_array_index: None,
+                        },
+                    ],
+                })
+                .unwrap();
+        }
         global
             .group_members
             .push(BACnetDeviceObjectPropertyReference {

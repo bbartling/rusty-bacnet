@@ -5,9 +5,11 @@
 //! the subscriber advertised in its SubscribeCOVPropertyMultiple request.
 //! Older changes go first, and the last notification carries the newest with
 //! the untimestamped values; `cov_timed_capture_order_tests` covers latest
-//! changes that do not fit it (#1008), and `cov_untimed_split_tests`
-//! untimestamped values that do not (#1038). Every envelope names the last
-//! change its notification carries. Time is paused.
+//! changes that do not fit it (#1008), `cov_timed_value_split_tests` changes
+//! too large for a notification of their own (#1090), and
+//! `cov_untimed_split_tests` untimestamped values that do not fit (#1038).
+//! Every envelope names the last change its notification carries. Time is
+//! paused.
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::analog::AnalogValueObject;
@@ -597,7 +599,7 @@ async fn cancelling_while_parts_are_deferred_holds_and_sends_nothing() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_change_too_large_for_any_notification_is_dropped_and_counted() {
+async fn a_value_too_large_for_any_notification_is_dropped_and_counted() {
     use bacnet_objects::value_types::CharacterStringValueObject;
     let csv = ObjectIdentifier::new(ObjectType::CHARACTERSTRING_VALUE, 1).unwrap();
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
@@ -635,8 +637,19 @@ async fn a_change_too_large_for_any_notification_is_dropped_and_counted() {
     h.server.comm_state.store(0, Ordering::Release);
     h.set_clock(2);
     write("b".repeat(200)).await;
-    // Neither could ever be sent, the latest no more than the earlier one,
-    // so both are dropped and counted, and nothing goes over the limit (#1008).
+    // Neither value could ever be sent, the latest no more than the earlier
+    // one, so both are dropped and counted, and nothing goes over the limit
+    // (#1008). The rest of each change, its Status_Flags, goes out alone, in
+    // capture order (#1090).
+    for second in 1..=2 {
+        let flags = h.notification().await;
+        let carried: Vec<_> = flags.list_of_cov_notifications[0]
+            .list_of_values
+            .iter()
+            .map(|value| (value.property_identifier, value.time_of_change))
+            .collect();
+        assert_eq!(carried, vec![(SF, Some(time(second)))]);
+    }
     h.no_notification().await;
     assert_eq!(h.server.cov_counters().timed_changes_dropped, 2);
     // Nothing is left to hold the context back.
@@ -653,55 +666,4 @@ async fn a_change_too_large_for_any_notification_is_dropped_and_counted() {
     assert_eq!(h.server.cov_counters().timed_changes_dropped, 2);
     h.no_notification().await;
     h.server.stop().await.unwrap();
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_subscriber_too_small_for_any_timestamped_change_warns_once_per_admission() {
-    // The smallest maximum APDU a request can advertise. One timestamped
-    // Present_Value and Status_Flags change of AV-1 takes 58 octets or more.
-    const TINY_APDU: u16 = 50;
-    for confirmed in [false, true] {
-        let warnings = crate::cov::timed::DropWarningCount::default();
-        let _guard = warnings.install();
-        let mut h = Harness::start(ServerConfig::default()).await;
-        h.request_max_apdu = TINY_APDU;
-        h.subscribe(confirmed).await;
-        // Not even the initial report's change fits: it is dropped, counted
-        // and logged.
-        h.no_notification().await;
-        // Changes dropped and warnings logged so far.
-        let seen = |h: &Harness| {
-            (
-                h.server.cov_counters().timed_changes_dropped,
-                warnings.get(),
-            )
-        };
-        assert_eq!(seen(&h), (1, 1), "confirmed: {confirmed}");
-        // Every later change goes the same way: each is counted, and the
-        // context does not warn again (#1039).
-        for second in 1..=3 {
-            h.set_clock(second);
-            h.write_local(f32::from(second)).await;
-        }
-        h.no_notification().await;
-        assert_eq!(seen(&h), (4, 1), "confirmed: {confirmed}");
-        // Re-admitting the reference warns afresh, once.
-        h.subscribe(confirmed).await;
-        h.set_clock(4);
-        h.write_local(4.0).await;
-        h.no_notification().await;
-        assert_eq!(seen(&h), (6, 2), "confirmed: {confirmed}");
-        // Without timestamps the same values fit the same subscriber.
-        h.subscribe_process(857, confirmed, vec![(av1(), vec![(PV, false)])], Some(10))
-            .await;
-        let report = h.notification().await;
-        assert!(apdu_len(&report, confirmed) <= usize::from(TINY_APDU));
-        assert_eq!(pv_rows(&report), vec![(real(4.0), None)]);
-        if confirmed {
-            h.ack().await;
-        }
-        h.no_notification().await;
-        assert_eq!(seen(&h), (6, 2), "confirmed: {confirmed}");
-        h.server.stop().await.unwrap();
-    }
 }

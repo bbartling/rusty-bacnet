@@ -206,13 +206,15 @@ pub struct CovCounters {
     pub notifications_throttled_peer: u64,
     /// Total number of pending timestamped COV-multiple changes discarded while
     /// their reference stayed subscribed: evicted on overflow of the
-    /// per-context history bound, too large for any notification to the
-    /// subscriber even alone, or superseded by a newer delivered change when an
-    /// older notification failed. Changes split across several notifications
-    /// are not counted. Only the first drop of each cause in a context logs a
-    /// warning until the context is admitted afresh, so this count is the
-    /// running signal, for instance for a subscriber whose maximum APDU cannot
-    /// hold one timestamped change.
+    /// per-context history bound, superseded by a newer delivered change when
+    /// an older notification failed, or, counted once per change, losing a
+    /// value too large for any notification to the subscriber even alone (the
+    /// rest of such a change still goes out). Changes split across several
+    /// notifications, one value per notification included, are not counted.
+    /// Only the first drop of each cause in a context logs a warning until the
+    /// context is admitted afresh, so this count is the running signal, for
+    /// instance for a subscriber whose maximum APDU cannot hold one timestamped
+    /// value.
     pub timed_changes_dropped: u64,
     /// Total number of times a COV-multiple report left out an untimestamped
     /// reference because its values alone exceed one notification to the
@@ -252,13 +254,15 @@ pub struct AtomicCovCounters {
     pub notifications_throttled_peer: AtomicU64,
     /// Total number of pending timestamped COV-multiple changes discarded while
     /// their reference stayed subscribed: evicted on overflow of the
-    /// per-context history bound, too large for any notification to the
-    /// subscriber even alone, or superseded by a newer delivered change when an
-    /// older notification failed. Changes split across several notifications
-    /// are not counted. Only the first drop of each cause in a context logs a
-    /// warning until the context is admitted afresh, so this count is the
-    /// running signal, for instance for a subscriber whose maximum APDU cannot
-    /// hold one timestamped change.
+    /// per-context history bound, superseded by a newer delivered change when
+    /// an older notification failed, or, counted once per change, losing a
+    /// value too large for any notification to the subscriber even alone (the
+    /// rest of such a change still goes out). Changes split across several
+    /// notifications, one value per notification included, are not counted.
+    /// Only the first drop of each cause in a context logs a warning until the
+    /// context is admitted afresh, so this count is the running signal, for
+    /// instance for a subscriber whose maximum APDU cannot hold one timestamped
+    /// value.
     pub timed_changes_dropped: AtomicU64,
     /// Total number of times a COV-multiple report left out an untimestamped
     /// reference because its values alone exceed one notification to the

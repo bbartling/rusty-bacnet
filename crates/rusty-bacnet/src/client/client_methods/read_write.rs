@@ -304,7 +304,7 @@ impl BACnetClient {
         requests: Vec<(u32, Vec<PyReadAccessSpec>)>,
         max_concurrent: Option<NonZeroUsize>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        use bacnet_services::common::PropertyReference;
+        use bacnet_types::constructed::PropertyReference;
 
         let inner = self.inner.clone();
         let rust_requests: Vec<_> = requests
@@ -313,7 +313,7 @@ impl BACnetClient {
                 let rust_specs = specs
                     .into_iter()
                     .map(
-                        |(oid, props)| bacnet_services::rpm::ReadAccessSpecification {
+                        |(oid, props)| bacnet_types::constructed::ReadAccessSpecification {
                             object_identifier: oid.to_rust(),
                             list_of_property_references: props
                                 .into_iter()

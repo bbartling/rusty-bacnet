@@ -449,10 +449,8 @@ async fn recipient_unavailable_old_route_cannot_be_bypassed_by_a_valid_new_route
 #[tokio::test]
 async fn recipient_active_metadata_rpm_and_property_list_follow_runtime_presence() {
     use bacnet_objects::property_metadata::{PropertyConformance, PropertyPresenceCondition};
-    use bacnet_services::{
-        common::PropertyReference,
-        rpm::{ReadAccessSpecification, ReadPropertyMultipleACK, ReadPropertyMultipleRequest},
-    };
+    use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
     let mut fixture = fixture(reporter()).await;
     let target = oid(ObjectType::DEVICE, 10);
     let property = PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT;

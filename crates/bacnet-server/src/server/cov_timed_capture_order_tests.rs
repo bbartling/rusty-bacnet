@@ -10,8 +10,10 @@
 //! (#1038). A reference whose latest change went out in an earlier part
 //! completes its
 //! observation when that part is sent, or, when confirmed, acknowledged. A
-//! change too large for any notification is dropped and counted, latest or
-//! not, so it never stalls the context. Time is paused.
+//! change too large for any notification goes out one value per
+//! notification (`cov_timed_value_split_tests`, #1090), and a value too large
+//! even alone is dropped and counted, latest or not, so it never stalls the
+//! context. Time is paused.
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::analog::AnalogValueObject;
@@ -470,11 +472,21 @@ async fn a_confirmed_latest_change_too_large_for_any_notification_never_stalls_t
     let (mut h, csv) = string_harness(true).await;
     // A 200-character value alone exceeds a 206-octet notification: no
     // report could ever carry it, so it is dropped and counted rather than
-    // sent over the subscriber's limit and retried without end.
+    // sent over the subscriber's limit and retried without end. The rest of
+    // its change, the Status_Flags, goes out on its own (#1090).
     h.set_clock(1);
     write_string(&h, csv, "a".repeat(200)).await;
-    h.no_notification().await;
+    let flags = h.notification().await;
+    let carried: Vec<_> = flags.list_of_cov_notifications[0]
+        .list_of_values
+        .iter()
+        .map(|value| (value.property_identifier, value.time_of_change))
+        .collect();
+    assert_eq!(carried, vec![(SF, Some(time(1)))]);
     assert_eq!(h.server.cov_counters().timed_changes_dropped, 1);
+    h.ack().await;
+    h.settle().await;
+    h.no_notification().await;
     // The context is idle, so the next change reports at once.
     h.set_clock(2);
     write_string(&h, csv, "short".into()).await;

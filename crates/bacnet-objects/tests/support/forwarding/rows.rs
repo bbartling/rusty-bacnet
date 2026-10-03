@@ -382,6 +382,12 @@ pub const COMMANDS: &[(&str, Command)] = &[
             o.add_averaging_sample_internal(Some(PropertyValue::Real(3.0)))
         )
     }),
+    ("take_due_averaging_sample_internal", |o| {
+        format!(
+            "{:?}",
+            o.take_due_averaging_sample_internal(Duration::from_secs(42))
+        )
+    }),
     ("set_audit_log_parent_internal", |o| {
         let parent = BACnetDeviceObjectReference {
             device_identifier: None,

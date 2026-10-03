@@ -225,6 +225,46 @@ async fn confirmed_report_rejected_holds_off_then_is_reported_again() {
     }
 }
 
+/// The subscriber serves a confirmed report, so its Abort has the server flag
+/// set (Clause 5.4) and ends the report like an Error, with no retry. One with
+/// the flag clear is refused and leaves the report outstanding (#1155).
+#[tokio::test(start_paused = true)]
+async fn confirmed_report_aborted_by_the_subscriber_is_not_retried() {
+    for family in FAMILIES {
+        let mut h = start(3000).await;
+        family.start(&mut h).await;
+        write(&h, ACTIVE).await;
+        assert_eq!(family.report(&h).await, enumerated(ACTIVE), "{family:?}");
+        let (invoke_id, _) = h.take_confirmed();
+        for sent_by_server in [false, true] {
+            h.respond(Apdu::Abort(AbortPdu {
+                sent_by_server,
+                invoke_id,
+                abort_reason: AbortReason::OTHER,
+            }))
+            .await;
+            h.settle().await;
+            assert_eq!(
+                h.server.notification_transactions.active_count(),
+                usize::from(!sent_by_server),
+                "{family:?}: Abort with server flag {sent_by_server}"
+            );
+        }
+        assert_eq!(baseline(&h).await, Some(sample(INACTIVE)), "{family:?}");
+        // One full retry cycle, the 3 s timeout times four attempts, sends nothing.
+        tokio::time::sleep(Duration::from_secs(12)).await;
+        assert!(
+            !h.frames
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|frame| matches!(frame, Apdu::ConfirmedRequest(_))),
+            "{family:?}: no retry after the Abort"
+        );
+        h.server.stop().await.unwrap();
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn confirmed_follow_up_under_dcc_is_dropped_not_deferred() {
     for family in FAMILIES {
