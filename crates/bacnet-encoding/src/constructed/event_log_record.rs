@@ -8,10 +8,8 @@
 //! request parameters, or a primitive context 2 holding the clock change as
 //! a REAL.
 
-use super::log_fields::{
-    constructed, decode_log_status, decode_timestamp, encode_log_status, encode_timestamp,
-    primitive,
-};
+use super::log_fields::{decode_log_status, decode_timestamp, encode_log_status, encode_timestamp};
+use super::tagged::{contents, decode_ctx_constructed, expect_end};
 use super::validate_tlv_sequence;
 use crate::{primitives, tags};
 use bacnet_types::constructed::{BACnetEventLogRecord, EventLogDatum};
@@ -19,6 +17,8 @@ use bacnet_types::error::Error;
 use bytes::BytesMut;
 
 const RECORD: &str = "BACnetEventLogRecord";
+const TIMESTAMP: &str = "BACnetEventLogRecord timestamp";
+const DATUM: &str = "BACnetEventLogRecord log-datum";
 
 const LOG_STATUS: u8 = 0;
 const NOTIFICATION: u8 = 1;
@@ -62,8 +62,8 @@ pub fn decode_event_log_record(
     data: &[u8],
     offset: usize,
 ) -> Result<(BACnetEventLogRecord, usize), Error> {
-    let (date, time, datum_start) = decode_timestamp(data, offset, RECORD)?;
-    let (body, end) = constructed(data, datum_start, 1, RECORD, "log-datum")?;
+    let (date, time, datum_start) = decode_timestamp(data, offset, TIMESTAMP)?;
+    let (body, end) = decode_ctx_constructed(data, datum_start, 1, DATUM)?;
     let log_datum = decode_datum(body, datum_start)?;
     Ok((
         BACnetEventLogRecord {
@@ -78,17 +78,17 @@ pub fn decode_event_log_record(
 fn decode_datum(data: &[u8], offset: usize) -> Result<EventLogDatum, Error> {
     let (tag, start) = tags::decode_tag(data, 0)?;
     let (datum, end) = if tag.is_context(LOG_STATUS) {
-        let (contents, end) = primitive(data, tag, start)?;
-        let status = decode_log_status(contents, offset, RECORD)?;
+        let (octets, end) = contents(data, start, tag.length)?;
+        let status = decode_log_status(octets, offset, RECORD)?;
         (EventLogDatum::LogStatus(status), end)
     } else if tag.is_opening_tag(NOTIFICATION) {
         let (parameters, end) = tags::extract_context_value(data, start, NOTIFICATION)?;
         validate_tlv_sequence(parameters, "BACnetEventLogRecord notification")?;
         (EventLogDatum::Notification(parameters.to_vec()), end)
     } else if tag.is_context(TIME_CHANGE) {
-        let (contents, end) = primitive(data, tag, start)?;
+        let (octets, end) = contents(data, start, tag.length)?;
         (
-            EventLogDatum::TimeChange(primitives::decode_real(contents)?),
+            EventLogDatum::TimeChange(primitives::decode_real(octets)?),
             end,
         )
     } else {
@@ -97,11 +97,6 @@ fn decode_datum(data: &[u8], offset: usize) -> Result<EventLogDatum, Error> {
             "BACnetEventLogRecord log-datum expected context [0], constructed [1], or context [2]",
         ));
     };
-    if end != data.len() {
-        return Err(Error::decoding(
-            offset,
-            "BACnetEventLogRecord log-datum has trailing fields",
-        ));
-    }
+    expect_end(data, end, offset, DATUM)?;
     Ok(datum)
 }

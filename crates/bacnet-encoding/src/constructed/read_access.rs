@@ -10,9 +10,11 @@
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
+use super::tagged::{
+    decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx, expect_opening,
+};
 use super::MAX_FRAMED_ITEMS;
 use crate::{primitives, tags};
 
@@ -32,16 +34,13 @@ pub fn decode_property_reference(
     data: &[u8],
     offset: usize,
 ) -> Result<(PropertyReference, usize), Error> {
-    let (property, mut offset) = decode_ctx_u32(data, offset, 0, "PropertyReference property-id")?;
-    let mut property_array_index = None;
-    if offset < data.len() {
-        let (tag, _) = tags::decode_tag(data, offset)?;
-        if tag.is_context(1) {
-            let (index, end) = decode_ctx_u32(data, offset, 1, "PropertyReference array-index")?;
-            property_array_index = Some(index);
-            offset = end;
-        }
-    }
+    const PROPERTY: &str = "PropertyReference property-id";
+    const INDEX: &str = "PropertyReference array-index";
+    let (property, next) = decode_ctx_unsigned::<u32>(data, offset, 0, PROPERTY)
+        .map_err(short_as_malformed(data, offset, PROPERTY))?;
+    let (property_array_index, offset) =
+        decode_optional_ctx(data, next, 1, INDEX, decode_ctx_unsigned::<u32>)
+            .map_err(short_as_malformed(data, next, INDEX))?;
     Ok((
         PropertyReference {
             property_identifier: PropertyIdentifier::from_raw(property),
@@ -71,26 +70,9 @@ pub fn decode_read_access_specification(
     offset: usize,
 ) -> Result<(ReadAccessSpecification, usize), Error> {
     const WHAT: &str = "ReadAccessSpecification";
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if !tag.is_context(0) {
-        return Err(Error::decoding(
-            offset,
-            format!("{WHAT} expected context tag 0"),
-        ));
-    }
-    let end = pos
-        .checked_add(tag.length as usize)
-        .filter(|&end| end <= data.len())
-        .ok_or_else(|| Error::decoding(pos, format!("{WHAT} truncated at object-id")))?;
-    let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-
-    let (tag, mut offset) = tags::decode_tag(data, end)?;
-    if !tag.is_opening_tag(1) {
-        return Err(Error::decoding(
-            end,
-            format!("{WHAT} expected opening tag 1"),
-        ));
-    }
+    let (object_identifier, end) = decode_ctx_object_id(data, offset, 0, WHAT)
+        .map_err(short_as_malformed(data, offset, WHAT))?;
+    let mut offset = expect_opening(data, end, 1, WHAT)?;
     let mut list_of_property_references = Vec::new();
     loop {
         if offset >= data.len() {
@@ -123,21 +105,21 @@ pub fn decode_read_access_specification(
     ))
 }
 
-/// A primitive context tag `tag` holding an Unsigned that fits `u32`.
-fn decode_ctx_u32(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<(u32, usize), Error> {
-    let (t, pos) = tags::decode_tag(data, offset)?;
-    if !t.is_context(tag) {
-        return Err(Error::decoding(
-            offset,
-            format!("{what} expected context tag {tag}"),
-        ));
+/// Map the member at `at` cut short by the end of the data to
+/// [`Error::Decoding`] at its first contents octet. These two decoders came
+/// from `bacnet-services` (#1134), whose decoders report truncation as
+/// malformed rather than as a short buffer, and their callers still see it
+/// that way.
+fn short_as_malformed<'a>(
+    data: &'a [u8],
+    at: usize,
+    what: &'a str,
+) -> impl FnOnce(Error) -> Error + 'a {
+    move |error| match error {
+        Error::BufferTooShort { need, have } => Error::decoding(
+            tags::decode_tag(data, at).map_or(at, |(_, contents)| contents),
+            format!("{what}: truncated, need {need} bytes, have {have}"),
+        ),
+        error => error,
     }
-    let end = pos
-        .checked_add(t.length as usize)
-        .filter(|&end| end <= data.len())
-        .ok_or_else(|| Error::decoding(pos, format!("{what} truncated")))?;
-    let value = primitives::decode_unsigned(&data[pos..end])?;
-    let value =
-        u32::try_from(value).map_err(|_| Error::decoding(offset, format!("{what} exceeds u32")))?;
-    Ok((value, end))
 }

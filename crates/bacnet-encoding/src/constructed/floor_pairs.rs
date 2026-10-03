@@ -10,7 +10,8 @@
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-use super::members::{member_content, narrow, unsigned_member};
+use super::members::{narrow, unsigned_member};
+use super::tagged::{decode_ctx_primitive, expect_closing, expect_opening, next_is_closing};
 use super::MAX_FRAMED_ITEMS;
 use crate::primitives;
 use crate::tags;
@@ -19,11 +20,11 @@ use crate::tags;
 pub(super) struct PairNames {
     /// The production, e.g. "landing door status".
     pub(super) value: &'static str,
-    /// The framed member, e.g. "landing-doors \[0\]".
+    /// The framed list member, e.g. "landing door status landing-doors".
     pub(super) frame: &'static str,
-    /// One list entry, e.g. "landing door".
-    pub(super) entry: &'static str,
-    /// The enumerated member, e.g. "door-status \[1\]".
+    /// An entry's floor-number member, e.g. "landing door floor-number".
+    pub(super) floor: &'static str,
+    /// An entry's enumerated member, e.g. "landing door door-status".
     pub(super) second: &'static str,
     /// The range error for an oversized enumerated member, e.g.
     /// "door-status \[1\] exceeds 32 bits".
@@ -58,21 +59,14 @@ pub(super) fn decode_floor_pairs(
     names: &PairNames,
 ) -> Result<(Vec<(u8, u32)>, usize), Error> {
     let mut oversized = None;
-    let (tag, mut offset) = tags::decode_tag(data, offset)?;
-    if !tag.is_opening_tag(0) {
-        return Err(Error::decoding(
-            offset,
-            format!("{} requires {}", names.value, names.frame),
-        ));
-    }
+    let mut offset = expect_opening(data, offset, 0, names.frame)?;
     let mut pairs = Vec::new();
     loop {
-        let (tag, content) = tags::decode_tag(data, offset)?;
-        if tag.is_closing_tag(0) {
+        if next_is_closing(data, offset, 0)? {
             if let Some(member) = oversized {
                 return Err(Error::OutOfRange(format!("{} {member}", names.value)));
             }
-            return Ok((pairs, content));
+            return Ok((pairs, expect_closing(data, offset, 0, names.frame)?));
         }
         if pairs.len() >= MAX_FRAMED_ITEMS {
             return Err(Error::decoding(
@@ -80,29 +74,16 @@ pub(super) fn decode_floor_pairs(
                 format!("{} exceeds the decoded item limit", names.value),
             ));
         }
-        if !tag.is_context(0) {
-            return Err(Error::decoding(
-                offset,
-                format!("{} requires floor-number [0]", names.entry),
-            ));
-        }
-        let (floor, next) = member_content(data, content, tag.length)?;
+        let (floor, next) = decode_ctx_primitive(data, offset, 0, names.floor)?;
         let floor_number = narrow(
-            unsigned_member(floor, content)?,
+            unsigned_member(floor, next - floor.len())?,
             "floor-number [0] exceeds an Unsigned8",
             &mut oversized,
         );
 
-        let (tag, content) = tags::decode_tag(data, next)?;
-        if !tag.is_context(1) {
-            return Err(Error::decoding(
-                next,
-                format!("{} requires {}", names.entry, names.second),
-            ));
-        }
-        let (raw, next) = member_content(data, content, tag.length)?;
+        let (raw, next) = decode_ctx_primitive(data, next, 1, names.second)?;
         let value: u32 = narrow(
-            unsigned_member(raw, content)?,
+            unsigned_member(raw, next - raw.len())?,
             names.second_oversized,
             &mut oversized,
         );
