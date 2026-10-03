@@ -466,7 +466,7 @@ impl StructuredViewObject {
         annotation: impl Into<String>,
     ) -> Result<(), Error> {
         let reference = reference.into();
-        common::check_device_reference(&reference)?;
+        crate::device_reference::check_device_member(reference.device_identifier)?;
         self.subordinate_list.push(reference);
         self.subordinate_annotations.push(annotation.into());
         Ok(())

@@ -2702,7 +2702,7 @@
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-types/src/constructed/mod.rs::device_identifier_is_device",
-    "crates/bacnet-objects/src/common/device_reference.rs",
+    "crates/bacnet-objects/src/device_reference.rs::check_device_member",
     "crates/bacnet-objects/src/access_control/door.rs::set_door_members",
     "crates/bacnet-objects/src/access_control/point.rs::set_access_doors",
     "crates/bacnet-objects/src/staging.rs",
@@ -2731,14 +2731,14 @@
     "docs/python-api.md#access-control"
    ],
    "notes": [
-    "One check covers Door_Members, Access_Doors, Access_Event_Credential, Assigned_Access_Rights, Subordinate_List, Energy_Meter_Ref and Staging Target_References; a refused list leaves the property unchanged.",
+    "One check, `check_device_member` on the bacnet-types rule, covers Door_Members, Access_Doors, Access_Event_Credential, Assigned_Access_Rights, Subordinate_List, Energy_Meter_Ref, Target_References and the log and averaging references.",
     "A Staging Target_References member gets this answer ahead of the remote-device refusal, and one naming another object type at the local Device's instance is not localized.",
     "Python raises ValueError for a `(device, object)` pair whose device is not a Device, before any object is built.",
     "Audit Log Member_Of keeps any parent and reports an unusable one as CONFIGURATION_ERROR, outside this check.",
     "Channel List_Of_Object_Property_References members get the same check from `set_members` and from network writes, ahead of the remote-device refusal and the empty-member test."
    ],
    "gaps": [
-    "Schedule, Averaging, Event Enrollment, Trend Log Multiple, Global Group and Command action lists don't run this check on their device members (no issue)"
+    "#1308: Schedule List_Of_Object_Property_References, Global Group members, Command action lists and the Event Enrollment setter don't run this check"
    ]
   },
   {

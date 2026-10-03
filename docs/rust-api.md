@@ -1860,7 +1860,9 @@ framing, through the shared `bacnet-encoding` codecs.
 - **Device references**: a
   `BACnetDeviceObjectReference` whose device identifier is present must name
   a Device object (Clause 21);
-  `BACnetDeviceObjectReference::device_identifier_is_device` tells. Every
+  `BACnetDeviceObjectReference::device_identifier_is_device` tells, as does
+  `bacnet_types::constructed::device_identifier_is_device` for a bare
+  optional identifier. Every
   setter that stores these references refuses one that breaks the rule with
   VALUE_OUT_OF_RANGE and keeps what it held: `set_door_members`,
   `set_access_doors`, `set_access_event`'s credential,

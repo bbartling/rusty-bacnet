@@ -383,8 +383,6 @@ pub(crate) fn value_out_of_range_error() -> bacnet_types::error::Error {
     )
 }
 
-mod device_reference;
-pub(crate) use device_reference::{check_device_property_reference, check_device_reference};
 mod encoded_elements;
 mod list_element;
 pub(crate) use encoded_elements::{chunks, decode_element, decode_elements};

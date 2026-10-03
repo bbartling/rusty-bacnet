@@ -210,7 +210,7 @@ pub(super) fn check_assigned_access_rights(
     element: &BACnetAssignedAccessRights,
 ) -> Result<(), Error> {
     let reference = &element.assigned_access_rights;
-    common::check_device_reference(reference)?;
+    crate::device_reference::check_device_member(reference.device_identifier)?;
     let object = reference.object_identifier;
     if object.object_type() == ObjectType::ACCESS_RIGHTS
         || object.instance_number() == ObjectIdentifier::MAX_INSTANCE

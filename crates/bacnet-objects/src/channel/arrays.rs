@@ -71,7 +71,7 @@ pub(super) fn is_empty(member: &BACnetDeviceObjectPropertyReference) -> bool {
 /// Refuse a member whose device identifier isn't a Device object (#1285),
 /// empty or not, then a member that names another device.
 pub(super) fn check_member(member: &BACnetDeviceObjectPropertyReference) -> Result<(), Error> {
-    common::check_device_property_reference(member)?;
+    crate::device_reference::check_device_member(member.device_identifier)?;
     if member.device_identifier.is_some() && !is_empty(member) {
         return Err(common::protocol_error(
             ErrorClass::PROPERTY,

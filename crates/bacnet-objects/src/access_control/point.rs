@@ -114,7 +114,7 @@ impl AccessPointObject {
         credential: Option<BACnetDeviceObjectReference>,
     ) -> Result<(), Error> {
         let credential = credential.unwrap_or_else(no_credential);
-        common::check_device_reference(&credential)?;
+        crate::device_reference::check_device_member(credential.device_identifier)?;
         if credential.object_identifier.object_type() != ObjectType::ACCESS_CREDENTIAL {
             return Err(common::value_out_of_range_error());
         }
@@ -163,7 +163,7 @@ impl AccessPointObject {
     ) -> Result<(), Error> {
         let doors: Vec<BACnetDeviceObjectReference> = doors.into_iter().map(Into::into).collect();
         for door in &doors {
-            common::check_device_reference(door)?;
+            crate::device_reference::check_device_member(door.device_identifier)?;
             if door.object_identifier.object_type() != ObjectType::ACCESS_DOOR {
                 return Err(common::value_out_of_range_error());
             }

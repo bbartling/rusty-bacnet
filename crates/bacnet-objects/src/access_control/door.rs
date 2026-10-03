@@ -136,9 +136,9 @@ impl AccessDoorObject {
     ) -> Result<(), Error> {
         let members: Vec<BACnetDeviceObjectReference> =
             members.into_iter().map(Into::into).collect();
-        members
-            .iter()
-            .try_for_each(common::check_device_reference)?;
+        members.iter().try_for_each(|member| {
+            crate::device_reference::check_device_member(member.device_identifier)
+        })?;
         self.door_members = members;
         Ok(())
     }

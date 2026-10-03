@@ -15,7 +15,6 @@ use bacnet_encoding::constructed::{
 };
 use bacnet_encoding::tags;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference};
-use bacnet_types::enums::ObjectType;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
@@ -99,11 +98,22 @@ pub(crate) fn decode_property_reference(
 /// Refuse a Device member that isn't a Device object identifier with
 /// PROPERTY / VALUE_OUT_OF_RANGE: the member names the device holding the
 /// object, so any other object type can't be honoured.
+///
+/// The rule is bacnet-types' `device_identifier_is_device`, which the
+/// reference types' methods and the Python bindings apply too. Every setter
+/// and write path that stores a device-qualified reference runs this on each
+/// one before storing any, so a refused list leaves the property as it was:
+/// the reference rows above, and Access Door Door_Members, Access Point
+/// Access_Doors and Access_Event_Credential, Access Credential
+/// Assigned_Access_Rights, Staging Target_References, Structured View
+/// Subordinate_List, the elevator family's Energy_Meter_Ref and Channel
+/// List_Of_Object_Property_References (#1285).
 pub(crate) fn check_device_member(device: Option<ObjectIdentifier>) -> Result<(), Error> {
-    if device.is_some_and(|device| device.object_type() != ObjectType::DEVICE) {
-        return Err(common::value_out_of_range_error());
+    if bacnet_types::constructed::device_identifier_is_device(device) {
+        Ok(())
+    } else {
+        Err(common::value_out_of_range_error())
     }
-    Ok(())
 }
 
 #[cfg(test)]
