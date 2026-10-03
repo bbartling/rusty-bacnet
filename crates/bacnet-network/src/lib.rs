@@ -8,6 +8,9 @@ pub mod router;
 pub mod router_table;
 
 #[cfg(test)]
+mod address_bound_tests;
+
+#[cfg(test)]
 #[path = "rb07_provenance_tests.rs"]
 mod rb07_provenance_tests;
 

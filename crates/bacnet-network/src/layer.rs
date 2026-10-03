@@ -257,12 +257,15 @@ pub struct RoutedTarget<'a> {
 /// local routers using NPDU destination addressing.
 /// See the [receive-queue contract](self#receive-queue-admission) for raw/tracked
 /// receiver choices, admission limits, drop attribution and lifecycle.
+/// An inbound NPDU whose DLEN or SLEN is past [`NpduAddress::MAX_MAC_LEN`] is
+/// dropped before admission and counted by [`Self::address_length_drops`].
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     response_scope: bacnet_transport::port::DirectResponseScope,
     dispatch_task: Option<JoinHandle<()>>,
     network_control_tx: Option<AdmissionSender<ReceivedNetworkControl>>,
     network_control_ingress_sequence: Arc<AtomicU64>,
+    address_length_drops: Arc<AtomicU64>,
 }
 
 impl<T: TransportPort + 'static> NetworkLayer<T> {
@@ -274,6 +277,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             dispatch_task: None,
             network_control_tx: None,
             network_control_ingress_sequence: Arc::new(AtomicU64::new(0)),
+            address_length_drops: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -578,6 +582,18 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         self.network_control_ingress_sequence.load(Ordering::SeqCst)
     }
 
+    /// Inbound NPDUs dropped since this layer was created because their DLEN
+    /// or SLEN was past [`NpduAddress::MAX_MAC_LEN`] (#1141). Saturates at
+    /// `u64::MAX`.
+    ///
+    /// Only routers answer an NPDU with Reject-Message-To-Network (Clause
+    /// 6.6.3.5), so this non-router layer discards the NPDU and counts it.
+    /// The NPDU reaches neither the APDU nor the control receiver, so it
+    /// never shows up in their admission counters.
+    pub fn address_length_drops(&self) -> u64 {
+        self.address_length_drops.load(Ordering::Relaxed)
+    }
+
     /// Encode an APDU into an NPDU whose destination is `dest_network` /
     /// `dest_mac`, ready for whichever link send the caller chooses.
     fn encode_routed_npdu_buf(
@@ -630,6 +646,13 @@ fn next_ingress_sequence(sequence: &AtomicU64) -> u64 {
         })
         .unwrap_or(u64::MAX);
     previous.saturating_add(1)
+}
+
+/// Count one NPDU refused for an over-long DADR or SADR, saturating at
+/// `u64::MAX`. Shared by [`NetworkLayer`] and the router.
+pub(crate) fn count_address_length_drop(counter: &AtomicU64) {
+    #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
+    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1));
 }
 
 impl<T: TransportPort> NetworkLayer<T> {
