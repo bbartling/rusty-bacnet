@@ -175,7 +175,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             network,
             notification_transactions,
             device_bindings,
-            comm_state,
             super::audit_reporter::RequestSource {
                 mac: source_mac,
                 network: source_network.as_ref(),
@@ -409,7 +408,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 network,
                                 notification_transactions,
                                 device_bindings,
-                                comm_state,
                                 config.max_apdu_length,
                             );
                         }

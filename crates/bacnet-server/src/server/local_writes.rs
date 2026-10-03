@@ -586,7 +586,6 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                             self.config,
                             self.network,
                             self.notification_transactions,
-                            self.comm_state,
                             &db,
                         );
                         let encoded = audit_reporter::small_value(&value).unwrap_or_default();

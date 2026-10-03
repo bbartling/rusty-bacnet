@@ -33,7 +33,6 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         record_resource_drop(
             self.transactions,
             self.network,
-            self.comm_state,
             &pending.status,
             pending.failure.clone(),
             pending
@@ -47,7 +46,6 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
 pub(in crate::server) fn record_resource_drop<T: TransportPort + 'static>(
     transactions: &Arc<NotificationTransactions>,
     network: &Arc<NetworkLayer<T>>,
-    comm_state: &Arc<AtomicU8>,
     status: &Arc<AuditReporterStatus>,
     ticket: Option<AuditFailureTicket<Arc<ConfirmedRecipientRoute>>>,
     timestamp: bacnet_types::primitives::BACnetTimeStamp,
@@ -62,7 +60,6 @@ pub(in crate::server) fn record_resource_drop<T: TransportPort + 'static>(
         return;
     };
     let network = Arc::clone(network);
-    let comm_state = Arc::clone(comm_state);
     transactions.spawn(async move {
         while let Some((batch, _permit, reserved)) = worker.next().await {
             let completion = DeliveryCompletion::auditing_failure(
@@ -81,15 +78,8 @@ pub(in crate::server) fn record_resource_drop<T: TransportPort + 'static>(
             ) else {
                 continue;
             };
-            let delivered = deliver(
-                &network,
-                &comm_state,
-                &batch.context.route,
-                &bytes,
-                reserved,
-                deadline,
-            )
-            .await;
+            let delivered =
+                deliver(&network, &batch.context.route, &bytes, reserved, deadline).await;
             if let Some(completion) = completion {
                 completion.finish(delivered);
             }

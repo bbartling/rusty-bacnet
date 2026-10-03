@@ -436,7 +436,8 @@
     "crates/bacnet-server/src/server/audit_batching_tests.rs",
     "crates/bacnet-server/src/server/audit_delay_property_tests.rs",
     "crates/bacnet-server/src/server/audit_batch_history_tests.rs",
-    "crates/rusty-bacnet/tests/test_delayed_target_audit.py"
+    "crates/rusty-bacnet/tests/test_delayed_target_audit.py",
+    "crates/bacnet-server/src/server/audit_dcc_tests.rs::{audit_notifications_start_under_disable_initiation_and_keep_the_reporter_healthy,audit_owing_writes_commit_and_notify_under_disable_initiation}"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/audit_batch_resources_tests.rs",
@@ -459,7 +460,8 @@
     "TRUE always commands current unsent prefix, FALSE does not cancel it, internal reset does not create WRITE. FALSE after terminal failure means quiescent, not delivered; ACK health is separate from local-send completion.",
     "No retries/outbound segmentation/durability. Captured non-NONE level and AUDITING_FAILURE bit continue to filter summaries in this partial profile; normative tension with complete 19.6.6 remains tracked by #345/#732/#783.",
     "Earliest loss uses original admission ordinal, not callback or timestamp order. Historical summary cannot alter current health. Mandatory actual changes and dedicated Reporter attempts remain immediate; ordinary pressure does not deny service mutation.",
-    "First target stop gates application work and retains one absolute three-second drain deadline across cancellation, with ACK/control progress, joined workers and DB uninstall. Source rejects the optional pair and retains current-only loss semantics. This row supersedes only the earlier target no-batching/current-only-loss descriptions; historical slice evidence and global pins/statuses are unchanged. No full Audit/BIBB/BTL claim."
+    "First target stop gates application work and retains one absolute three-second drain deadline across cancellation, with ACK/control progress, joined workers and DB uninstall. Source rejects the optional pair and retains current-only loss semantics. This row supersedes only the earlier target no-batching/current-only-loss descriptions; historical slice evidence and global pins/statuses are unchanged. No full Audit/BIBB/BTL claim.",
+    "Delayed batches and Send_Now records go out under DISABLE_INITIATION like immediate ones, and the DCC timer re-enabling initiation sends none of them again."
    ]
   },
   {
@@ -5394,7 +5396,9 @@
     "crates/bacnet-objects/src/audit/staging_tests.rs::a_staged_log_enable_write_its_request_dropped_leaves_storage_with_the_served_log",
     "crates/bacnet-objects/src/audit/staging_tests.rs::a_finished_batch_its_request_forgot_lands_from_the_operation_task",
     "crates/bacnet-objects/src/audit/staging_tests.rs::staging_skips_a_write_with_nothing_to_commit",
-    "crates/bacnet-server/src/server/audit_notification_staging_tests.rs::a_confirmed_notification_commits_while_the_database_stays_available"
+    "crates/bacnet-server/src/server/audit_notification_staging_tests.rs::a_confirmed_notification_commits_while_the_database_stays_available",
+    "crates/bacnet-server/src/server/audit_dcc_tests.rs::{audit_notifications_start_under_disable_initiation_and_keep_the_reporter_healthy,audit_owing_writes_commit_and_notify_under_disable_initiation,a_resource_drop_under_disable_initiation_is_summarized}",
+    "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_goes_out_under_disable_initiation"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/audit_forwarder_tests.rs::audit_forwarding_invalid_parent_is_visible_at_startup_without_send",
@@ -5485,7 +5489,8 @@
     "crates/bacnet-objects/src/audit/staging_tests.rs::a_staged_batch_whose_commit_fails_leaves_the_log_as_it_was",
     "crates/bacnet-server/src/server/audit_notification_staging_tests.rs::a_confirmed_notification_whose_commit_fails_is_refused_and_stores_nothing",
     "crates/bacnet-encoding/src/constructed/tests/audit_notification.rs::{an_object_identifier_of_the_wrong_length_is_malformed_even_when_cut_short,an_object_identifier_cut_short_is_a_short_buffer}",
-    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::confirmed_audit_notification_cut_short_draws_services_other"
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::confirmed_audit_notification_cut_short_draws_services_other",
+    "crates/bacnet-server/src/server/audit_dcc_tests.rs::disable_initiation_still_holds_back_cov_and_events_beside_audit"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -5520,7 +5525,9 @@
     "FileAuditLogPersistence writes snapshot schema v3. Loading a v1 or v2 snapshot reverses the three bits of each log-status record, which 0.11.0 stored reversed, so an old log-disabled record reads back as LOG_DISABLED; the next commit saves v3.",
     "The built-in Audit Log commits on its own writer thread. The server stages each inbound batch and awaits the commit without the database guard; the batch reaches memory, and a confirmed one its SimpleACK, once records and receipt are durable.",
     "One commit is staged per Audit Log at a time; a second batch waits for the first without the guard. A network or write_local Log_Enable change stages the same way; add_record and other in-place changes commit under the caller's guard.",
-    "Storage holds a staged batch a moment before the log serves it: the commit returns on the writer thread, then the request applies the batch under the guard. A query made after the SimpleACK sees the batch."
+    "Storage holds a staged batch a moment before the log serves it: the commit returns on the writer thread, then the request applies the batch under the guard. A query made after the SimpleACK sees the batch.",
+    "Audit notifications, AUDITING_FAILURE summaries and Audit Log forwards go out under DISABLE_INITIATION (Clause 16.1). DCC never holds one back, marks a Reporter COMMUNICATION_FAILURE or refuses a write that owes one; COV and events stay held.",
+    "The endpoint has no DeviceCommunicationControl service, so nothing gates its source audit notifications on DCC."
    ],
    "target_device_recipient": {
     "scope": "Target portion of #728; the completed bounded source endpoint migration is recorded separately in BACNET-19-SOURCE-READ-PROPERTY. Broader Audit conformance remains open. Corrected Device recipient requirement: Clause 12.11 with 135-2020 Errata Summary 2024-04-29 item 25 (PDF page 7), preserving base O and footnotes 19-20; NULL operation semantics in 15.9/15.10/19.2; record shape Table 19-4 and BACnetRecipient in Clause 21.",

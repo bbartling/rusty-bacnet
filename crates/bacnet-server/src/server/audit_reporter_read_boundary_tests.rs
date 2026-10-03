@@ -245,7 +245,12 @@ async fn audit_reporter_read_malformed_and_dcc_denials_are_silent() {
             1,
             "only DISABLE_INITIATION executes"
         );
-        assert!(records(&fixture).is_empty());
+        // That read is audited: Clause 16.1 leaves audit notifications
+        // running under DISABLE_INITIATION.
+        let records = records(&fixture);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].operation, AuditOperation::READ);
+        assert_eq!(records[0].target_object, Some(probe_oid()));
         fixture.server.stop().await.unwrap();
     }
 }

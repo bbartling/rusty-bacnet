@@ -151,7 +151,12 @@ async fn audit_reporter_query_dcc_duplicate_and_overload_are_silent() {
             reads.load(Ordering::Acquire),
             usize::from(case == "disable initiation")
         );
-        assert!(records(&fixture).is_empty());
+        // Only the query DISABLE_INITIATION lets run is audited (Clause 16.1).
+        assert_eq!(
+            records(&fixture).len(),
+            usize::from(case == "disable initiation"),
+            "{case}"
+        );
         assert_idle(&fixture);
         if let Some(pending) = pending {
             drop(pending);

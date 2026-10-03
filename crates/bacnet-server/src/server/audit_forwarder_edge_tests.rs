@@ -133,17 +133,36 @@ async fn audit_forwarding_denial_disabled_and_malformed_batches_are_silent() {
     f.server.stop().await.unwrap();
 }
 
+/// A forward is an audit notification, which Clause 16.1 leaves running under
+/// DISABLE_INITIATION: both receipt paths forward, and the ACK keeps the
+/// sink healthy.
 #[tokio::test(start_paused = true)]
-async fn audit_forwarding_dcc_oversize_and_send_errors_leave_local_success() {
+async fn audit_forwarding_goes_out_under_disable_initiation() {
     let mut f = ready().await;
     f.server.comm_state.store(2, Ordering::Release); // DISABLE_INITIATION
     assert!(matches!(
         f.confirmed(1, &[3], payload(false)).await,
         Some(Apdu::SimpleAck(_))
     ));
+    f.unconfirmed(payload(false)).await;
     settle().await;
-    assert!(f.requests().is_empty());
-    f.server.comm_state.store(0, Ordering::Release);
+    let requests = f.requests();
+    assert_eq!(requests.len(), 2, "both receipts forward under DCC");
+    for request in &requests {
+        assert!(f.ack(request.invoke_id, &[2], request.service_choice));
+    }
+    settle().await;
+    assert_eq!(
+        f.reliability().await,
+        PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
+    );
+    assert_eq!(f.server.notification_transactions.active_count(), 0);
+    f.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn audit_forwarding_oversize_and_send_errors_leave_local_success() {
+    let mut f = ready().await;
     f.server.config.max_apdu_length = 50;
     assert!(matches!(
         f.confirmed(2, &[3], payload(false)).await,
@@ -177,7 +196,7 @@ async fn audit_forwarding_dcc_oversize_and_send_errors_leave_local_success() {
             .unwrap()
             .completed_receipts
             .len(),
-        3
+        2
     );
     assert_eq!(f.server.notification_transactions.active_count(), 0);
     f.server.stop().await.unwrap();
