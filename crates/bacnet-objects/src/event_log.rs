@@ -59,6 +59,10 @@ impl EventLogObject {
 
     /// Add a record to the event log buffer.
     ///
+    /// The record is kept as given; ReadRange serves its encoding, which for
+    /// an ACK_NOTIFICATION leaves out ack-required, from-state and event
+    /// values (see `EventLogDatum::Notification`).
+    ///
     /// Success does not guarantee a resident ordinary record: disabled logging
     /// is ignored, zero-capacity logging may only count, and a stop-before-full
     /// transition records status instead. Missing/invalid status clocks fail

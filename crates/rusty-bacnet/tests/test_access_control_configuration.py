@@ -1,8 +1,10 @@
-"""Installed-artifact tests for the access-control array keyword arguments.
+"""Installed-artifact tests for the access-control keyword arguments.
 
 add_access_door(door_members=...), add_access_point(access_doors=...) and
 add_credential_data_input(supported_formats=...) set arrays that are
-read-only over the network (#1249).
+read-only over the network (#1249). add_access_point also takes the policy
+count, the supported authorization modes and Priority_For_Writing, which are
+read-only over the network too (#1307).
 """
 
 from __future__ import annotations
@@ -29,11 +31,19 @@ REMOTE_DEVICE = ObjectIdentifier(ObjectType.DEVICE, 99)
 REMOTE_DOOR = ObjectIdentifier(ObjectType.ACCESS_DOOR, 4)
 
 
-# Each registration method and the keyword-only argument that sets its array.
-ARRAY_KEYWORDS = (
-    ("add_access_door", "door_members"),
-    ("add_access_point", "access_doors"),
-    ("add_credential_data_input", "supported_formats"),
+# Each registration method and its keyword-only arguments.
+KEYWORDS = (
+    ("add_access_door", ["door_members"]),
+    (
+        "add_access_point",
+        [
+            "access_doors",
+            "number_of_authentication_policies",
+            "supported_authorization_modes",
+            "priority_for_writing",
+        ],
+    ),
+    ("add_credential_data_input", ["supported_formats"]),
 )
 
 
@@ -70,26 +80,31 @@ def factor(format_type: int, format_class: int, value: bytes) -> PropertyValue:
 
 
 class AccessControlStubContractTests(unittest.TestCase):
-    def test_runtime_and_stub_expose_the_array_keywords(self) -> None:
-        for method_name, keyword in ARRAY_KEYWORDS:
+    def test_runtime_and_stub_expose_the_keywords(self) -> None:
+        for method_name, keywords in KEYWORDS:
             with self.subTest(method=method_name):
                 parameters = inspect.signature(
                     getattr(BACnetServer, method_name)
                 ).parameters
-                self.assertEqual(list(parameters), ["self", "instance", "name", keyword])
-                self.assertIs(parameters[keyword].kind, inspect.Parameter.KEYWORD_ONLY)
-                self.assertIsNone(parameters[keyword].default)
+                self.assertEqual(
+                    list(parameters), ["self", "instance", "name", *keywords]
+                )
+                for keyword in keywords:
+                    self.assertIs(
+                        parameters[keyword].kind, inspect.Parameter.KEYWORD_ONLY
+                    )
+                    self.assertIsNone(parameters[keyword].default)
                 method = installed_stub_method(method_name)
                 self.assertEqual(
                     [argument.arg for argument in method.args.args],
                     ["self", "instance", "name"],
                 )
                 self.assertEqual(
-                    [argument.arg for argument in method.args.kwonlyargs], [keyword]
+                    [argument.arg for argument in method.args.kwonlyargs], keywords
                 )
-                [default] = method.args.kw_defaults
-                self.assertIsInstance(default, ast.Constant)
-                self.assertIsNone(default.value)
+                for default in method.args.kw_defaults:
+                    self.assertIsInstance(default, ast.Constant)
+                    self.assertIsNone(default.value)
 
 
 class AccessControlConfigurationTests(unittest.TestCase):
@@ -148,6 +163,91 @@ class AccessControlConfigurationTests(unittest.TestCase):
                         ObjectIdentifier(ObjectType.ACCESS_POINT, instance), doors, 0
                     )
                 self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
+        finally:
+            await server.stop()
+
+    def test_point_settings_reach_the_rows_and_gate_writes(self) -> None:
+        asyncio.run(self._point_settings())
+
+    async def _point_settings(self) -> None:
+        server = make_server()
+        # Three policies; AUTHORIZE (0), DENY_ALL (2) and a proprietary 300;
+        # doors commanded at priority 8.
+        server.add_access_point(
+            1,
+            "Lobby",
+            number_of_authentication_policies=3,
+            supported_authorization_modes=[0, 2, 300],
+            priority_for_writing=8,
+        )
+        server.add_access_point(2, "Side")
+        for instance, settings in (
+            (3, {"number_of_authentication_policies": 0}),
+            (4, {"supported_authorization_modes": [1, 2]}),  # no AUTHORIZE
+            (5, {"supported_authorization_modes": [0, 6]}),  # reserved
+            (6, {"priority_for_writing": 17}),
+        ):
+            with self.assertRaises(BacnetProtocolError) as raised:
+                server.add_access_point(instance, "Refused", **settings)
+            self.assert_value_out_of_range(raised.exception)
+        await server.start()
+        try:
+            lobby = ObjectIdentifier(ObjectType.ACCESS_POINT, 1)
+            side = ObjectIdentifier(ObjectType.ACCESS_POINT, 2)
+            policy = PropertyIdentifier.ACTIVE_AUTHENTICATION_POLICY
+            policies = PropertyIdentifier.NUMBER_OF_AUTHENTICATION_POLICIES
+            mode = PropertyIdentifier.AUTHORIZATION_MODE
+            priority = PropertyIdentifier.PRIORITY_FOR_WRITING
+
+            async def value(point: ObjectIdentifier, property: PropertyIdentifier) -> int:
+                return (await server.read_property(point, property)).value
+
+            self.assertEqual(await value(lobby, policies), 3)
+            self.assertEqual(await value(lobby, priority), 8)
+            self.assertEqual(
+                [await value(side, p) for p in (policy, policies, mode, priority)],
+                [1, 1, 0, 16],
+            )
+
+            async def write(property: PropertyIdentifier, value: PropertyValue) -> None:
+                await server.write_property_local(lobby, property, value, source_object=None)
+
+            # A point registered without supported modes takes AUTHORIZE
+            # alone, so DENY_ALL (2) is refused there.
+            with self.assertRaises(BacnetProtocolError) as raised:
+                await server.write_property_local(
+                    side, mode, PropertyValue.enumerated(2), source_object=None
+                )
+            self.assert_value_out_of_range(raised.exception)
+
+            await write(policy, PropertyValue.unsigned(3))
+            await write(mode, PropertyValue.enumerated(300))
+            self.assertEqual(await value(lobby, policy), 3)
+            self.assertEqual(await value(lobby, mode), 300)
+            # Past the policy count, and a mode the point didn't declare.
+            for property, refused in (
+                (policy, PropertyValue.unsigned(4)),
+                (mode, PropertyValue.enumerated(1)),
+            ):
+                with self.assertRaises(BacnetProtocolError) as raised:
+                    await write(property, refused)
+                self.assert_value_out_of_range(raised.exception)
+            # Another datatype.
+            with self.assertRaises(BacnetProtocolError) as raised:
+                await write(mode, PropertyValue.unsigned(2))
+            self.assertEqual(
+                raised.exception.error_code, ErrorCode.INVALID_DATA_TYPE.to_raw()
+            )
+            for property in (policies, priority):
+                with self.assertRaises(BacnetProtocolError) as raised:
+                    await write(property, PropertyValue.unsigned(2))
+                self.assertEqual(
+                    raised.exception.error_code, ErrorCode.WRITE_ACCESS_DENIED.to_raw()
+                )
+            self.assertEqual(
+                [await value(lobby, p) for p in (policy, policies, mode, priority)],
+                [3, 3, 300, 8],
+            )
         finally:
             await server.stop()
 

@@ -1,7 +1,7 @@
 use super::*;
 use bacnet_client::client::EventNotificationDelivery;
 use bacnet_encoding::constructed::{
-    encode_destination_list, encode_event_notification_subscription_list,
+    encode_destination_list, encode_event_notification, encode_event_notification_subscription_list,
 };
 use bacnet_objects::notification_forwarder::NotificationForwarderObject;
 use bacnet_services::alarm_event::EventNotificationRequest;
@@ -132,7 +132,7 @@ async fn forwarder_relays_a_notification_between_clients_over_the_wire() {
         .unwrap();
 
     let mut request = BytesMut::new();
-    alarm(5).encode(&mut request).unwrap();
+    encode_event_notification(&alarm(5), &mut request).unwrap();
     let ack = sender
         .confirmed_request(
             &server_mac,

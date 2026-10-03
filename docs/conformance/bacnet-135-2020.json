@@ -1169,7 +1169,7 @@
      "Trend Log Multiple holds BACnetLogMultipleRecord values: one LogValue per Log_DeviceObjectProperty member, a log status, or a time change. Its LOG_BUFFER serves each record framed as the Clause 21 production, with no status flags (#1203).",
      "LogRecordIdentity holds a u64 sequence number. These three families still count in Unsigned32 and wrap at u32::MAX; an Audit Log's identities come from its record store and wrap at u64::MAX (BACNET-12-AUDIT-LOG-BUFFER, #1092).",
      "Each family stores its own Clause 21 record: Trend Log a BACnetLogRecord with optional StatusFlags, Event Log a BACnetEventLogRecord, Trend Log Multiple a BACnetLogMultipleRecord. BACnetObject::log_buffer_internal lends the buffer to ReadRange, which encodes each record as a page reaches it (#1233).",
-     "An Event Log notification record holds the encoded ConfirmedEventNotification parameters, which bacnet-services' EventNotificationRequest writes and reads. The server does not log notifications into an Event Log by itself; the application adds records.",
+     "An Event Log notification record holds a typed EventNotificationRequest (bacnet-types), which bacnet-encoding's event notification codec writes and reads inside the record. The server does not log notifications into an Event Log by itself; the application adds records.",
      "Log statuses are the typed LogStatus flags, sent bit 0 first: log-disabled 05 80, buffer-purged 05 40, log-interrupted 05 20. Trend Log status flags are a StatusFlags value.",
      "add_record and the trend hooks refuse a record that would not encode before any change, so LogBufferRecords::encode_record cannot fail and every stored record can be served."
     ]
@@ -1283,7 +1283,9 @@
      "crates/bacnet-encoding/src/constructed/log_record.rs::decode_log_record",
      "crates/bacnet-encoding/src/constructed/event_log_record.rs::encode_event_log_record",
      "crates/bacnet-encoding/src/constructed/event_log_record.rs::decode_event_log_record",
-     "crates/bacnet-services/src/read_range.rs::RangeSpec"
+     "crates/bacnet-encoding/src/constructed/event_notification/tolerant.rs::decode_event_notification_tolerant",
+     "crates/bacnet-services/src/read_range.rs::RangeSpec",
+     "crates/bacnet-cli/src/commands/read_range.rs::read_range_cmd"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/handlers/tests/read_range.rs::by_position_is_one_based_signed_and_reports_exact_endpoints",
@@ -1304,6 +1306,8 @@
      "crates/bacnet-encoding/src/constructed/tests/log_record.rs::consecutive_log_records_decode_by_returned_offset",
      "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_kinds_have_exact_bytes_and_round_trip",
      "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::consecutive_event_log_records_decode_by_returned_offset",
+     "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_notification_records_round_trip_typed_event_values",
+     "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_drops_a_message_text_it_cannot_read",
      "crates/bacnet-encoding/src/constructed/tests/log_record.rs::log_record_bit_strings_put_bit0_in_the_top_bit",
      "crates/bacnet-encoding/src/constructed/tests/log_record.rs::log_record_from_a_peer_keeps_a_five_octet_integer",
      "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::log_multiple_record_from_a_peer_keeps_wide_integers",
@@ -1315,7 +1319,9 @@
      "crates/bacnet-server/src/handlers/tests/read_range_time.rs::client_accepts_by_time_ack_and_continues_by_returned_sequence",
      "crates/bacnet-client/src/client/file_list.rs::tests::first_sequence_number_must_match_the_requested_range",
      "crates/bacnet-services/src/read_range_width_tests.rs::{request_unsigned_fields_accept_their_widest_values,ack_unsigned_fields_enforce_their_widths_without_rejecting_leading_zero}",
-     "crates/bacnet-server/src/handlers/tests/read_range_page_encoding.rs::exact_envelopes_include_property_index_and_changing_first_sequence_widths"
+     "crates/bacnet-server/src/handlers/tests/read_range_page_encoding.rs::exact_envelopes_include_property_index_and_changing_first_sequence_widths",
+     "crates/bacnet-cli/tests/cli_read_range.rs::read_range_prints_decoded_log_records",
+     "crates/bacnet-cli/src/commands/read_range_tests.rs::{trend_log_records_show_datum_and_status_flags,event_log_records_show_the_typed_notification,trend_log_multiple_records_show_every_value,audit_log_records_show_the_operation_and_its_target}"
    ],
    "negative_tests": [
      "crates/bacnet-server/src/handlers/tests/read_range.rs::by_sequence_rejects_unnumbered_properties_and_misalignment",
@@ -1328,11 +1334,13 @@
      "crates/bacnet-encoding/src/constructed/tests/log_record.rs::log_record_decoder_rejects_malformed_records",
      "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_rejects_unencodable_values_without_writing",
      "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_decoder_rejects_malformed_records",
+     "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_decoder_rejects_notifications_that_are_not_requests",
      "crates/bacnet-server/src/handlers/tests/property_metadata/log.rs::rpm_and_rp_refuse_log_buffer_while_read_range_serves_framed_records",
      "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_logs_refuse_read_property_of_log_buffer",
      "crates/bacnet-objects/src/event_log/tests.rs::read_property_refuses_log_buffer",
      "crates/bacnet-server/src/handlers/tests/read_range_time.rs::zero_array_index_is_rejected_by_request_decoder",
-     "crates/bacnet-services/src/read_range_width_tests.rs::request_unsigned_fields_reject_overflow"
+     "crates/bacnet-services/src/read_range_width_tests.rs::request_unsigned_fields_reject_overflow",
+     "crates/bacnet-cli/src/commands/read_range_tests.rs::records_after_an_undecodable_one_fall_back_to_hex"
    ],
    "benchmarks": [],
    "public_claims": [],
@@ -1348,7 +1356,9 @@
      "Trend Log and Event Log items are BACnetLogRecord and BACnetEventLogRecord encodings, read from the object's record buffer through BACnetObject::log_buffer_internal and encoded only where a page reaches them. All three range forms return them byte for byte (#1233).",
      "Trend Log Multiple, Trend Log and Event Log objects answer ReadProperty of LOG_BUFFER with PROPERTY / READ_ACCESS_DENIED, so RP, RPM (inline, also for ALL and REQUIRED), local and endpoint reads all refuse it; ReadRange is the only way to read the records (#1237).",
      "Trend Log and Event Log records page under the ReadRangeBudget byte cap as other lists do: a page ends at the last whole record that fits and sets MORE_ITEMS, and a backward page keeps the newest records.",
-     "The record decoders keep INTEGER values as i64 and ENUMERATED and Unsigned values as u64, up to eight octets, since a peer's log need not hold them to 32 bits."
+     "The record decoders keep INTEGER values as i64 and ENUMERATED and Unsigned values as u64, up to eight octets, since a peer's log need not hold them to 32 bits.",
+     "The CLI's read-range picks the record decoder by the log object's type and prints each record's timestamp, datum and Trend Log status flags; anything from the first record that does not decode is shown as hex.",
+     "An Event Log notification record whose message text does not decode reads with no message text, as the client reads a received notification; any other malformed notification fails the record."
     ]
   },
   {
@@ -1363,7 +1373,8 @@
     "crates/bacnet-objects/src/audit/log_metadata.rs",
     "crates/bacnet-server/src/handlers/read_range_logs.rs::log_buffer",
     "crates/bacnet-server/src/handlers/read_range.rs::prepare_read_range",
-    "crates/bacnet-services/src/read_range.rs::ReadRangeAck"
+    "crates/bacnet-services/src/read_range.rs::ReadRangeAck",
+    "crates/bacnet-encoding/src/constructed/audit_record.rs::decode_audit_log_record_at"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/handlers/tests/read_range_audit_log.rs::{audit_log_buffer_pages_retained_records_by_position_sequence_and_time,audit_log_buffer_empty_and_out_of_range_windows_succeed_without_items,audit_log_buffer_reports_unsigned64_sequence_numbers_across_wrap,audit_log_buffer_shows_records_appended_after_a_read_and_matches_audit_log_query,audit_log_buffer_pages_are_bounded_by_the_request_budget,running_server_serves_audit_log_buffer_and_later_records}",
@@ -1371,7 +1382,7 @@
     "crates/bacnet-server/src/handlers/tests/read_rpm/audit_log.rs::rpm_audit_log_indexed_reads_and_list_bytes_are_unchanged",
     "crates/bacnet-server/src/handlers/tests/property_metadata/audit_log.rs::rpm_audit_log_metadata_selectors_preserve_bytes_and_budgets",
     "crates/bacnet-server/src/pics/property_metadata_tests/audit_log.rs::pics_audit_log_property_metadata_is_exact",
-    "crates/bacnet-encoding/src/constructed/audit_record.rs::tests::audit_record_log_status_has_bit0_first_wire_bytes"
+    "crates/bacnet-encoding/src/constructed/audit_record.rs::tests::{audit_record_log_status_has_bit0_first_wire_bytes,consecutive_audit_records_decode_by_returned_offset}"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/handlers/tests/read_range_audit_log.rs::audit_log_buffer_refuses_read_property_and_indexes_but_read_range_serves_it",
@@ -2081,7 +2092,7 @@
     "None was a documented extension with a purpose of its own, so all go, as #984 did for Calendar, #985 for the Trend Logs, #997 for Elevator Group and #979 for the Access Credential Present_Value. Object types with Status_Flags but no Out_Of_Service read their shared rows through the no_out_of_service form of read_common_properties!, which holds the OUT_OF_SERVICE flag FALSE as each of those types requires; before, a write of the stray Out_Of_Service set that flag.",
     "File, Group, Structured View and Averaging read only read_identity_properties!. The Event Enrollment evaluator used to skip an enrollment whose Out_Of_Service was TRUE; with the property gone the gate goes too, and Event_Detection_Enable still suspends evaluation.",
     "Credential Data Input was a candidate, but Table 12-43 lists Out_Of_Service, so it keeps the row. Color and Color Temperature have no 135-2020 table and were not swept; Lift, Schedule and Loop had no undefined rows. Not covered: the required rows these objects still don't serve, and any datatype review of the rows that remain.",
-    "Access Rights serves Positive_Access_Rules and Negative_Access_Rules as empty arrays: no octets for the whole value and a size of 0 at index 0."
+    "Access Rights serves Positive_Access_Rules and Negative_Access_Rules as arrays, empty until the application sets rules (BACNET-12-ACCESS-RIGHTS-RULES): no octets for the whole value and a size of 0 at index 0."
    ]
   },
   {
@@ -2727,8 +2738,49 @@
     "Access_Event_Credential rides along in the SubscribeCOV report; only Access_Event_Time and Status_Flags trigger it."
    ],
    "gaps": [
-    "Active_Authentication_Policy, Number_Of_Authentication_Policies, Authorization_Mode and Priority_For_Writing, required Table 12-36 rows, are not served (no issue)",
     "#1132: the application can set Authentication_Status and the event rows only before the server holds the point"
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-POINT-POLICY-AND-AUTHORIZATION",
+   "standard_anchor": "Clause 12.31, Table 12-36, Clauses 12.31.10, 12.31.11, 12.31.14 and 12.31.33, Table K-10",
+   "priority": "P1",
+   "summary": "An Access Point serves its active authentication policy, policy count, authorization mode and Priority_For_Writing; clients write the policy in effect and the mode.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/point_authorization.rs::Authorization",
+    "crates/bacnet-objects/src/access_control/point.rs::AccessPointObject",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs::access_point"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/point_authorization_tests.rs::{access_point_serves_policy_mode_and_priority_defaults,access_point_active_policy_write_names_one_of_the_policies,access_point_authorization_mode_write_takes_each_declared_standard_mode,access_point_authorization_mode_follows_the_supported_modes}",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_point_exact_sets_readable_rows_and_indexed_list,property_metadata_access_trio_write_capabilities_match_dispatch}",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_point_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/access_point_authorization_writes.rs::write_property_sets_the_access_point_policy_and_mode",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_point_settings_reach_the_access_point_rows",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_point_settings_reach_the_rows_and_gate_writes",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_keywords"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/point_authorization_tests.rs::{access_point_active_policy_refuses_writes_outside_the_policies,access_point_authorization_mode_refuses_other_values,access_point_supported_modes_refuse_sets_without_authorize_or_the_mode_in_effect,access_point_policy_count_refuses_zero_and_a_count_below_the_active_policy,access_point_count_and_priority_come_from_the_application}",
+    "crates/bacnet-server/src/handlers/tests/access_point_authorization_writes.rs::{write_property_refuses_other_policy_mode_and_read_only_writes,write_property_multiple_refuses_other_policy_mode_values}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#access-control-7",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "Active_Authentication_Policy and Number_Of_Authentication_Policies start at 1. A policy write is an Unsigned from 1 to the count; zero or a value past the count is VALUE_OUT_OF_RANGE, another datatype INVALID_DATA_TYPE.",
+    "`set_number_of_authentication_policies` refuses zero and a count below the policy in effect, so the active policy never drops to zero and Reliability never reads CONFIGURATION_ERROR on that account.",
+    "Authorization_Mode starts at AUTHORIZE, the only supported mode until `set_supported_authorization_modes` declares more; a set keeps AUTHORIZE and the mode in effect. A write outside the set is VALUE_OUT_OF_RANGE.",
+    "The policy and the mode are writable because Table K-10 lists them for DS-ACM-A. The policy count and Priority_For_Writing (16 until set, 1 to 16) come from the application only.",
+    "The point stores and checks these values; the application carries out the policy and the mode, and commands the doors at Priority_For_Writing."
+   ],
+   "gaps": [
+    "#1325: Authentication_Policy_List and Authentication_Policy_Names, optional Table 12-36 rows, are not served"
    ]
   },
   {
@@ -2743,6 +2795,8 @@
     "crates/bacnet-objects/src/access_control/door.rs::set_door_members",
     "crates/bacnet-objects/src/access_control/point.rs::set_access_doors",
     "crates/bacnet-objects/src/staging.rs",
+    "crates/bacnet-objects/src/access_control/rights.rs::check_access_rule",
+    "crates/rusty-bacnet/src/types/access_rule.rs::check_device",
     "crates/bacnet-objects/src/group.rs::add_subordinate",
     "crates/bacnet-objects/src/channel/arrays.rs::check_member",
     "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs"
@@ -2755,6 +2809,8 @@
     "crates/bacnet-objects/src/access_control/device_reference_tests.rs::{access_door_door_members_refuse_a_non_device_device_identifier,access_point_access_doors_refuse_a_non_device_device_identifier,access_point_event_credential_refuses_a_non_device_device_identifier,access_credential_assigned_access_rights_refuse_a_non_device_device_identifier}",
     "crates/bacnet-objects/src/group/tests.rs::{structured_view_add_subordinate_refuses_a_non_device_device_identifier,structured_view_set_subordinates_replaces_both_arrays_or_nothing}",
     "crates/bacnet-objects/src/staging/tests.rs::target_references_refuse_a_non_device_device_identifier",
+    "crates/bacnet-objects/src/access_control/rights_tests.rs::access_rights_rules_refuse_a_non_device_device_identifier",
+    "crates/rusty-bacnet/src/types/access_rule_tests.rs::access_rule_mappings_refuse_wrong_shapes_and_non_device_devices",
     "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::set_energy_meter_ref_refuses_objects_that_are_not_meters_atomically",
     "crates/bacnet-server/src/server/staging_reference_write_tests.rs::a_target_whose_device_member_is_not_a_device_is_out_of_range",
     "crates/bacnet-objects/src/channel/array_tests.rs::channel_members_refuse_a_non_device_device_identifier",
@@ -2805,7 +2861,7 @@
     "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::{python_door_members_and_access_doors_reach_the_arrays,python_supported_formats_reach_both_arrays}",
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_door_members_reach_the_array",
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_access_doors_reach_the_array_and_name_doors_only",
-    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_array_keywords",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_keywords",
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_supported_formats_reach_both_arrays_and_gate_simulated_reads",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_object_references_read_as_written",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_supported_formats_read_as_the_formats_written",
@@ -2831,6 +2887,59 @@
     "Python sets the arrays at registration through add_access_door(door_members=...), add_access_point(access_doors=...) and add_credential_data_input(supported_formats=...). A reference is an ObjectIdentifier in this device or a (device, object) pair; a format is a type number or a (type, vendor id, vendor format) triple.",
     "Both setters, and the Python keyword arguments, refuse a reference whose device identifier is not a Device object (BACNET-21-DEVICE-OBJECT-REFERENCE-DEVICE-MEMBER).",
     "Python reads Door_Members, Access_Doors and Supported_Formats back in the keyword arguments' forms: an ObjectIdentifier or (device, object) pair per reference, and a type number or (type, vendor id, vendor format) triple per format."
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-RIGHTS-RULES",
+   "standard_anchor": "Clause 12.34, Table 12-39, Clauses 12.34.9 to 12.34.10.1; Clause 21",
+   "priority": "P1",
+   "summary": "Access Rights serves Positive_Access_Rules and Negative_Access_Rules as BACnetARRAYs of BACnetAccessRule that the application sets and the network reads whole or by index.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-types/src/constructed/access.rs::BACnetAccessRule",
+    "crates/bacnet-types/src/enums/access.rs::AccessRuleTimeRangeSpecifier",
+    "crates/bacnet-types/src/enums/access.rs::AccessRuleLocationSpecifier",
+    "crates/bacnet-encoding/src/constructed/access_rule.rs",
+    "crates/bacnet-objects/src/access_control/rights.rs::AccessRightsObject",
+    "crates/bacnet-objects/src/access_control/rights.rs::check_access_rule",
+    "crates/rusty-bacnet/src/types/access_rule.rs::access_rules_from_py",
+    "crates/rusty-bacnet/src/server/server_methods/access_rights_methods.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-types/src/enums/tests/access_production.rs::access_rule_specifier_values_match_clause_21",
+    "crates/bacnet-types/src/constructed/tests.rs::access_rule_new_sets_each_specifier_from_its_reference",
+    "crates/bacnet-encoding/src/constructed/tests/access_rule.rs::{access_rule_golden_bytes_and_round_trip,access_rule_decoder_keeps_what_the_object_judges,access_rules_decode_one_element_at_a_time,access_rule_all_keeps_an_unspecified_location}",
+    "crates/bacnet-objects/src/access_control/rights_tests.rs::access_rights_rule_arrays_read_whole_and_by_index",
+    "crates/bacnet-server/src/handlers/tests/access_rights_rules.rs::{access_rights_rule_arrays_read_per_index,rpm_all_carries_both_configured_rule_arrays}",
+    "crates/rusty-bacnet/src/types/access_rule_tests.rs::access_rule_mappings_fill_the_rule_and_default_to_always_and_all",
+    "crates/rusty-bacnet/src/server/server_methods/access_rights_methods_tests.rs::python_access_rules_reach_both_arrays",
+    "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsRulesTests::test_rules_reach_both_arrays_and_read_back",
+    "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsStubContractTests::test_runtime_and_stub_expose_the_rule_keywords"
+   ],
+   "negative_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/access_rule.rs::access_rule_rejects_malformed_elements",
+    "crates/bacnet-objects/src/access_control/rights_tests.rs::{access_rights_setters_refuse_ill_formed_rules_and_keep_the_old_ones,access_rights_rules_refuse_a_non_device_device_identifier,access_rights_rule_arrays_stay_read_only_on_the_network}",
+    "crates/bacnet-server/src/handlers/tests/access_rights_rules.rs::access_rights_rule_arrays_refuse_network_writes",
+    "crates/rusty-bacnet/src/types/access_rule_tests.rs::access_rule_mappings_refuse_wrong_shapes_and_non_device_devices",
+    "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsRulesTests::test_ill_formed_rules_register_nothing"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#constructed-property-framing",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "Table 12-39 makes both arrays R rows, so they are read-only on the network: WriteProperty of the whole array, one element or index 0 gets WRITE_ACCESS_DENIED.",
+    "`set_positive_access_rules` and `set_negative_access_rules` keep the stored rules and answer VALUE_OUT_OF_RANGE for a non-Device device member, a specifier outside its two values, or a reference whose presence disagrees with its specifier.",
+    "ALWAYS and ALL take an absent or unspecified reference (instance 4194303). A SPECIFIED location names an Access Point or Access Zone or is unspecified; a time range may name any object's property.",
+    "The codec keeps any specifier value it reads and leaves the specifier checks to the object.",
+    "Python sets both arrays through `add_access_rights(positive_access_rules=..., negative_access_rules=...)`: lists of `AccessRule` mappings, where a missing time range or location means ALWAYS or ALL."
+   ],
+   "gaps": [
+    "#1330: network writes of both arrays, indexed writes and the index 0 resize with Clause 12.34.9.3 defaults",
+    "#1331: nothing evaluates the stored rules; the Clause 12.34.9.2 authorization check isn't modeled",
+    "#1332: Access Rights doesn't serve its required Enable row (Table 12-39)",
+    "#1344: Python reads each rule as application_data octets, not the AccessRule mapping add_access_rights takes"
    ]
   },
   {
@@ -3363,10 +3472,13 @@
     "crates/bacnet-server/src/handlers/list.rs::ElementCodec::for_datatype",
     "crates/bacnet-server/src/handlers/list.rs::Added::request_position",
     "crates/bacnet-server/src/handlers/read_range_items.rs::FramedElement",
-    "crates/bacnet-objects/src/notification_forwarder/persistence.rs::SubscribedRecipientsPersistence",
-    "crates/bacnet-objects/src/notification_forwarder/persistence.rs::FileSubscribedRecipientsPersistence",
+    "crates/rusty-bacnet/src/server/server_methods/notification_forwarder.rs::forwarder_save_counters",
+    "crates/bacnet-objects/src/notification_forwarder/persistence.rs::NotificationForwarderPersistence",
+    "crates/bacnet-objects/src/notification_forwarder/persistence.rs::FileNotificationForwarderPersistence",
     "crates/bacnet-objects/src/notification_forwarder/mod.rs::NotificationForwarderObject::with_persistence",
-    "crates/rusty-bacnet/src/server/server_methods/notification_forwarder.rs::forwarder_save_counters"
+    "crates/bacnet-objects/src/notification_forwarder/saving.rs::Storage",
+    "crates/bacnet-objects/src/durable.rs::SaveWriter",
+    "crates/bacnet-server/src/server/durable_writes.rs::stage"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/event_notification_subscription.rs::event_notification_subscription_round_trips_golden_elements",
@@ -3400,7 +3512,33 @@
     "crates/bacnet-integration-tests/tests/server/notification_forwarder.rs::forwarder_relays_a_notification_between_clients_over_the_wire",
     "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::subscribed_recipients_keep_running_out_across_repeated_restarts",
     "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::subscribed_recipients_minute_saves_come_at_most_once_a_minute",
-    "crates/bacnet-objects/src/subscribed_recipients_tests.rs::unbinding_the_clock_keeps_the_time_each_entry_has_left"
+    "crates/bacnet-objects/src/subscribed_recipients_tests.rs::unbinding_the_clock_keeps_the_time_each_entry_has_left",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_staged_write_saves_while_the_forwarder_serves_the_old_list",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_second_write_waits_until_the_first_has_landed",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_staged_write_its_request_never_made_leaves_storage_with_the_served_list",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_write_nobody_staged_supersedes_a_staged_one",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_forgotten_staged_write_frees_the_forwarder",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::staging_skips_writes_the_forwarder_does_not_save_or_will_refuse",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::operation_task_saves_coalesce_and_never_hold_the_forwarder",
+    "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::an_add_list_element_save_runs_while_the_database_stays_available",
+    "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::a_recipient_list_write_property_save_runs_while_the_database_stays_available",
+    "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::a_write_property_multiple_save_runs_while_the_database_stays_available",
+    "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::a_write_property_multiple_under_an_authorizer_saves_in_place",
+    "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::a_write_property_multiple_stages_a_list_write_that_follows_another_attempt",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::an_operation_task_save_returns_while_storage_is_held",
+    "crates/bacnet-objects/src/durable/tests.rs::saves_run_in_order_on_the_writer_thread",
+    "crates/bacnet-objects/src/durable/tests.rs::a_burst_of_unwaited_saves_coalesces_to_the_latest",
+    "crates/bacnet-objects/src/durable/tests.rs::a_waited_save_is_never_replaced_and_keeps_its_place",
+    "crates/bacnet-objects/src/durable/tests.rs::dropping_the_writer_waits_for_queued_saves",
+    "crates/bacnet-objects/src/durable/tests.rs::the_done_hook_sees_every_result",
+    "crates/bacnet-objects/src/durable/tests.rs::a_save_wait_wakes_its_task_when_the_save_runs",
+    "crates/bacnet-objects/src/durable/tests.rs::a_directory_sync_follows_a_rename",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_release_from_another_request_leaves_the_staged_write_alone",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_slow_save_keeps_its_staged_write_for_a_lifetime_after_it_finishes",
+    "crates/bacnet-objects/src/durable/tests.rs::a_staged_lifetime_counts_from_the_end_of_the_save",
+    "crates/bacnet-objects/src/durable/tests.rs::a_ticket_recognizes_only_its_own_wait",
+    "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::a_write_property_multiple_stopped_before_its_list_write_puts_the_served_list_back",
+    "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::deleting_a_forwarder_while_its_save_is_held_leaves_the_database_available"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/event_notification_subscription.rs::event_notification_subscription_refuses_truncated_and_malformed_elements",
@@ -3417,7 +3555,13 @@
     "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::subscribed_recipients_saved_out_of_range_refuses_the_forwarder",
     "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::file_persistence_round_trips_and_refuses_another_objects_file",
     "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::a_failed_save_is_counted_and_retried_a_minute_later",
-    "crates/rusty-bacnet/tests/test_notification_forwarder.py::NotificationForwarderServerTests::test_a_failed_save_is_counted"
+    "crates/rusty-bacnet/tests/test_notification_forwarder.py::NotificationForwarderServerTests::test_a_failed_save_is_counted",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_staged_write_whose_save_fails_is_refused_and_the_old_list_stays",
+    "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::a_list_that_cannot_be_saved_is_refused_on_the_wire_and_the_old_list_stays",
+    "crates/bacnet-objects/src/durable/tests.rs::a_panicking_save_fails_its_ticket_and_the_writer_goes_on",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_released_staged_write_whose_save_failed_saves_nothing_more",
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::file_persistence_refuses_a_file_past_its_size_or_entry_caps",
+    "crates/bacnet-objects/src/durable/tests.rs::a_filesystem_that_cannot_sync_a_directory_is_passed_over"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3438,12 +3582,20 @@
     "WriteProperty and WritePropertyMultiple of the whole list reach the object as framed ApplicationData.",
     "A forwarder built with with_persistence saves the list, each entry with the whole minutes it has left, when a write changes it and when an entry lapses, and restores it when built again. A restored entry counts down from its saved minutes, which lie between the time it had left at the restart and its last subscribed time.",
     "A write that cannot be saved fails with DEVICE / OPERATIONAL_PROBLEM and leaves the list as it was. A failed save after a lapse keeps the older copy.",
-    "FileSubscribedRecipientsPersistence keeps one forwarder's list in one file, replaced through a synchronized temporary file and rename; a file for another object, or one that does not decode, refuses the forwarder.",
+    "FileNotificationForwarderPersistence keeps one forwarder's lists in one file, replaced through a synchronized temporary file and rename; a file for another object, or one that does not decode, refuses the forwarder.",
     "Binding a monotonic clock keeps the time each entry has left, so a list restored before the object joins a database lapses on time.",
     "An entry written with the same recipient, process and confirmation flag, and with the minutes it reads now or one more, keeps its deadline; the one more covers a minute boundary between the handler's read and its write. Any other Time Remaining restarts the lifetime.",
     "Between writes the operation task, which calls the object each second, saves the list when an entry lapses and at most once a minute while the served minutes differ from the saved copy. A saved entry so carries at most about a minute more than it had left, and repeated restarts still run it out.",
     "A failed save logs a warning, counts in ForwarderSaveCounters::failed_saves (a handle shared with the object, from save_counters) and is retried a minute later.",
-    "Python BACnetServer.forwarder_save_counters() returns each forwarder's failed_saves by instance while the server runs; the totals count from registration."
+    "Python BACnetServer.forwarder_save_counters() returns each forwarder's failed_saves by instance while the server runs; the totals count from registration.",
+    "Saves run on the forwarder's own writer thread, one at a time (bacnet_objects::durable). The server awaits them without the database guard; application code writing a list through the database waits in place.",
+    "The server stages each WriteProperty, AddListElement, RemoveListElement and write_local list write: the forwarder queues the save, the server awaits it without the guard, and the write takes the saved list or is refused.",
+    "WritePropertyMultiple attempts stage the same way unless a mutation_authorizer is configured; then the authorizer sees each attempt under the guard, and the attempt saves in place.",
+    "The operation task's lapse and minute saves coalesce on the writer, so a burst costs one save of the latest lists. A staged write holds the forwarder until its request takes or drops it; a second one waits.",
+    "The file backend synchronizes the directory after its rename, except on Windows, where std cannot open a directory. Dropping the forwarder waits for queued saves.",
+    "A staged write its request never makes is dropped, and the forwarder queues a save of the lists it serves at once. A request releases only the staged write it made.",
+    "A staged write waits for its request for 10 s from the end of its save. DeleteObject drops a removed forwarder on a blocking thread after releasing the guard.",
+    "Once the rename succeeds the save has landed: a directory sync the filesystem does not support is skipped, and any other sync failure is logged, not returned."
    ]
   },
   {
@@ -3466,7 +3618,9 @@
     "crates/rusty-bacnet/src/types/destination.rs::destination",
     "crates/bacnet-server/src/server/event_forwarding.rs::MAX_FORWARDED_DESTINATIONS",
     "crates/bacnet-server/src/server/event_forwarding_repeats.rs::ConfirmedEventRepeats",
-    "crates/bacnet-server/src/server/lifecycle.rs"
+    "crates/bacnet-server/src/server/lifecycle.rs",
+    "crates/bacnet-objects/src/notification_forwarder/persistence.rs::ForwarderSnapshot",
+    "crates/bacnet-objects/src/notification_forwarder/mod.rs::NotificationForwarderObject::add_destination"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::forwarder_sends_to_its_recipient_list_and_its_subscriptions",
@@ -3495,6 +3649,11 @@
     "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_recipient_naming_this_network_by_number_is_local_to_the_loop_rules",
     "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_network_number_is_remote_while_this_network_has_none",
     "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::a_repeat_is_matched_by_source_invoke_id_and_octets",
+    "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::a_written_recipient_list_reads_back_after_a_rebuild",
+    "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::saved_recipient_list_wins_over_configured_destinations",
+    "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::a_saved_empty_recipient_list_still_wins",
+    "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::configured_destinations_apply_at_every_start_until_a_write",
+    "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::a_recipient_list_write_saves_the_subscriptions_with_it",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_port_filter_reads_as_the_pairs_written",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_a_cov_notification_value_reads_typed",
     "crates/rusty-bacnet/src/types/constructed_read_tests.rs::port_filters_read_as_the_pairs_written_whole_and_by_index"
@@ -3523,7 +3682,9 @@
     "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::an_expired_entry_out_of_time_order_does_not_match",
     "crates/bacnet-server/src/server/event_forwarding_cap_tests.rs::the_cap_counts_only_copies_the_loop_rules_let_through",
     "crates/bacnet-server/src/server/event_forwarding_cap_tests.rs::a_local_notification_under_several_process_identifiers_has_one_cap",
-    "crates/bacnet-server/src/server/event_forwarding_cap_tests.rs::the_cap_warning_goes_out_at_most_once_an_interval"
+    "crates/bacnet-server/src/server/event_forwarding_cap_tests.rs::the_cap_warning_goes_out_at_most_once_an_interval",
+    "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::a_recipient_list_write_that_cannot_be_saved_is_refused",
+    "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::a_saved_recipient_list_past_the_cap_refuses_the_forwarder"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3539,8 +3700,6 @@
     "Within one device a forwarder takes a notification once, a destination gets one copy, and at most 64 copies that would be sent go out across all forwarders, local or received; forwarding_cap_dropped counts the rest."
    ],
    "gaps": [
-    "#1256: Recipient_List writes are kept in memory only, so a restart loses them.",
-    "#1270: Subscribed_Recipients saves run while the ObjectDatabase write lock is held."
    ]
   },
   {
@@ -3757,7 +3916,7 @@
     "crates/bacnet-encoding/src/constructed/fault_parameter.rs",
     "crates/bacnet-encoding/src/constructed/mod.rs",
     "crates/bacnet-types/src/constructed/property_states.rs",
-    "crates/bacnet-services/src/alarm_event/property_states.rs",
+    "crates/bacnet-encoding/src/constructed/event_notification/property_states.rs",
      "crates/bacnet-objects/src/event_enrollment/mod.rs",
     "crates/bacnet-server/src/event_enrollment/mod.rs"
    ],
@@ -3766,7 +3925,7 @@
     "crates/bacnet-encoding/src/constructed/tests/fault_parameter.rs",
     "crates/bacnet-encoding/src/constructed/tests/mod.rs",
     "crates/bacnet-types/src/constructed/event_parameter/tests.rs",
-    "crates/bacnet-services/src/alarm_event/tests/property_states.rs",
+    "crates/bacnet-encoding/src/constructed/tests/event_notification/property_states.rs",
     "crates/bacnet-objects/src/event_enrollment/tests",
     "crates/bacnet-server/src/event_enrollment/tests"
    ],
@@ -3774,7 +3933,7 @@
     "crates/bacnet-encoding/src/constructed/tests/event_parameter.rs",
     "crates/bacnet-encoding/src/constructed/tests/fault_parameter.rs",
     "crates/bacnet-encoding/src/constructed/tests/mod.rs",
-    "crates/bacnet-services/src/alarm_event/tests/property_states.rs",
+    "crates/bacnet-encoding/src/constructed/tests/event_notification/property_states.rs",
     "crates/bacnet-objects/src/event_enrollment/tests"
    ],
    "benchmarks": [],
@@ -4884,6 +5043,8 @@
     "crates/bacnet-objects/src/audit/notification.rs",
     "crates/bacnet-objects/src/audit/persistence.rs",
     "crates/bacnet-objects/src/audit/persistence/receipt_codec.rs",
+    "crates/bacnet-objects/src/audit/staging.rs",
+    "crates/bacnet-objects/src/durable.rs",
     "crates/bacnet-objects/src/audit/receipt.rs",
     "crates/bacnet-objects/src/traits.rs",
     "crates/bacnet-server/src/handlers/audit_log_query.rs",
@@ -5060,7 +5221,16 @@
     "crates/bacnet-server/src/server/request_tasks.rs::admitted_request_retains_audit_membership_until_its_frame_is_destroyed",
     "crates/bacnet-server/src/server/audit_policy_precommit_tests.rs::mandatory_policy_wire_matrix_capacity_retry_provenance_and_sequence",
     "crates/bacnet-server/src/server/audit_policy_precommit_tests.rs::mandatory_policy_wpm_denial_keeps_prefix_and_exact_coordinate_then_retries",
-    "crates/bacnet-server/src/server/audit_policy_precommit_edge_tests.rs::mandatory_policy_datetime_local_identity_and_capacity_rollback"
+    "crates/bacnet-server/src/server/audit_policy_precommit_edge_tests.rs::mandatory_policy_datetime_local_identity_and_capacity_rollback",
+    "crates/bacnet-objects/src/audit/staging_tests.rs::a_staged_batch_commits_while_the_log_serves_its_committed_state",
+    "crates/bacnet-objects/src/audit/staging_tests.rs::a_second_batch_waits_for_the_first_commit_then_builds_on_it",
+    "crates/bacnet-objects/src/audit/staging_tests.rs::an_in_place_change_lets_a_staged_batch_land_first",
+    "crates/bacnet-objects/src/audit/staging_tests.rs::a_duplicate_or_empty_change_stages_nothing",
+    "crates/bacnet-objects/src/audit/staging_tests.rs::a_staged_log_enable_write_commits_off_the_lock_and_is_taken_by_the_write",
+    "crates/bacnet-objects/src/audit/staging_tests.rs::a_staged_log_enable_write_its_request_dropped_leaves_storage_with_the_served_log",
+    "crates/bacnet-objects/src/audit/staging_tests.rs::a_finished_batch_its_request_forgot_lands_from_the_operation_task",
+    "crates/bacnet-objects/src/audit/staging_tests.rs::staging_skips_a_write_with_nothing_to_commit",
+    "crates/bacnet-server/src/server/audit_notification_staging_tests.rs::a_confirmed_notification_commits_while_the_database_stays_available"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/audit_forwarder_tests.rs::audit_forwarding_invalid_parent_is_visible_at_startup_without_send",
@@ -5147,7 +5317,9 @@
     "crates/rusty-bacnet/tests/test_object_audit_policy.py::test_unresolved_route_refuses_mandatory_policy_change_before_commit",
     "crates/bacnet-objects/src/device/tests/audit_recipient.rs::provisioned_audit_recipient_mac_longer_than_the_bound_is_refused",
     "crates/bacnet-services/src/audit/address_bound_tests.rs::audit_log_query_address_filter_holds_to_the_bacnet_address_bound",
-    "crates/bacnet-services/src/audit/address_bound_tests.rs::audit_notification_recipients_hold_to_the_bacnet_address_bound"
+    "crates/bacnet-services/src/audit/address_bound_tests.rs::audit_notification_recipients_hold_to_the_bacnet_address_bound",
+    "crates/bacnet-objects/src/audit/staging_tests.rs::a_staged_batch_whose_commit_fails_leaves_the_log_as_it_was",
+    "crates/bacnet-server/src/server/audit_notification_staging_tests.rs::a_confirmed_notification_whose_commit_fails_is_refused_and_stores_nothing"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -5169,7 +5341,7 @@
     "Retention remains 60 seconds and 256 completed entries with deterministic oldest-completion eviction; age 60 seconds expires, while clock rollback or a future timestamp fails open and is pruned on the next accepted commit.",
     "A retained durable duplicate is checked before authorization and atomically rechecked by the mutation owner, then discarded without record, generation, authorization, or response effects. The general process-local tracker remains the all-service pending/session guard.",
     "Complementary record matching still uses twice Device APDU_Timeout; like Time/DateTime variants compare temporal distance while SequenceNumber requires equality and mixed variants do not match. Receiver payload/list caps of 64 KiB/256 remain repository policy.",
-    "Unconfirmed receipt never writes the ledger. Synchronous persistence under the database writer limits availability. Missing/non-Audit identifiers and absent query capability retain their existing errors; malformed payloads retain SERVICES/OTHER mapping.",
+    "Unconfirmed receipt never writes the ledger. Missing/non-Audit identifiers and absent query capability retain their existing errors; malformed payloads retain SERVICES/OTHER mapping.",
     "Raw target/current ANY values receive structural TLV validation only, not property-schema validation. Python exposes typed Audit clients (integer 0..2 success filter with the deprecated Boolean rejected, Unsigned64 cursor) alongside the byte-compatible raw outbound escape hatches.",
     "RB-21a adds only the target-WRITE immediate-send profile described in target_write_immediate. Unconfirmed durable idempotency, query authorization, sustained rate limiting, durable provenance, broader producer/report generation, forwarding, multi-log routing, and Audit BIBB claims remain unsupported or deferred. The u64 continuation cursor stays literal (only identities below the cursor match, newest-first insertion order even across MAX-to-1 wrap); no modular wrap-around cursor is added.",
     "Refs #782: target_multiple_reporters supersedes earlier per-slice singular target selection/live configuration exclusions only for the qualified plural target owner. Source exactly-one and remaining parent345 scope are unchanged.",
@@ -5179,7 +5351,9 @@
     "#1156: every BACnetAddress the audit codecs carry (the AuditLogQuery device-address filters, and an AuditNotification's two recipient fields [2] and [10]) holds to the same 18 octets in both directions: a longer one does not decode, and the encoders refuse it before writing, so an audit record that could not be reported is never stored.",
     "#1204: with several Devices the target Audit identity is the lowest (ObjectDatabase::local_device). It names this device in records and owns the recipient, and active membership refuses a new Device, so it stays the lowest.",
     "#1204: notification receipt reads the lowest Device's APDU_Timeout. Forwarding skips a parent naming the lowest Device and forwards to any other, including a Device in the same database; with only a wildcard Device it forwards nothing.",
-    "FileAuditLogPersistence writes snapshot schema v3. Loading a v1 or v2 snapshot reverses the three bits of each log-status record, which 0.11.0 stored reversed, so an old log-disabled record reads back as LOG_DISABLED; the next commit saves v3."
+    "FileAuditLogPersistence writes snapshot schema v3. Loading a v1 or v2 snapshot reverses the three bits of each log-status record, which 0.11.0 stored reversed, so an old log-disabled record reads back as LOG_DISABLED; the next commit saves v3.",
+    "The built-in Audit Log commits on its own writer thread. The server stages each inbound batch and awaits the commit without the database guard; the batch reaches memory, and a confirmed one its SimpleACK, once records and receipt are durable.",
+    "One commit is staged per Audit Log at a time; a second batch waits for the first without the guard. A network or write_local Log_Enable change stages the same way; add_record and other in-place changes commit under the caller's guard."
    ],
    "target_device_recipient": {
     "scope": "Target portion of #728; the completed bounded source endpoint migration is recorded separately in BACNET-19-SOURCE-READ-PROPERTY. Broader Audit conformance remains open. Corrected Device recipient requirement: Clause 12.11 with 135-2020 Errata Summary 2024-04-29 item 25 (PDF page 7), preserving base O and footnotes 19-20; NULL operation semantics in 15.9/15.10/19.2; record shape Table 19-4 and BACnetRecipient in Clause 21.",

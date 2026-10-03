@@ -1,4 +1,6 @@
 //! Read commands: ReadProperty (RP) and ReadPropertyMultiple (RPM).
+//!
+//! ReadRange is in [`super::read_range`].
 
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::primitives::decode_application_value;
@@ -10,8 +12,9 @@ use bacnet_types::primitives::ObjectIdentifier;
 use crate::output::{self, OutputFormat};
 use crate::parse;
 
-/// Decode all application-tagged values from raw bytes and format them.
-fn decode_and_format(data: &[u8]) -> String {
+/// Decode the application-tagged values in `data` and format each one, with
+/// the hex of whatever follows the last value that decoded.
+pub(super) fn format_application_values(data: &[u8]) -> (Vec<String>, Option<String>) {
     let mut offset = 0;
     let mut values = Vec::new();
     while offset < data.len() {
@@ -20,18 +23,27 @@ fn decode_and_format(data: &[u8]) -> String {
                 values.push(output::format_property_value(&value));
                 offset = next;
             }
-            Err(_) => {
-                let hex: String = data[offset..]
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                values.push(format!("[raw: {hex}]"));
-                break;
-            }
+            Err(_) => return (values, Some(hex(&data[offset..]))),
         }
     }
+    (values, None)
+}
+
+/// Decode all application-tagged values from raw bytes and format them.
+pub(super) fn decode_and_format(data: &[u8]) -> String {
+    let (mut values, undecoded) = format_application_values(data);
+    if let Some(hex) = undecoded {
+        values.push(format!("[raw: {hex}]"));
+    }
     values.join(", ")
+}
+
+/// Octets as space-separated lowercase hex.
+pub(super) fn hex(data: &[u8]) -> String {
+    data.iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Read a single property and print its value.
@@ -139,91 +151,6 @@ pub async fn read_multiple_cmd<T: TransportPort + 'static>(
 
     let ack = client.read_property_multiple(mac, access_specs).await?;
     print_rpm_results(&ack.list_of_read_access_results, format);
-    Ok(())
-}
-
-/// Read a range of items from a list or log-buffer property.
-pub async fn read_range_cmd<T: TransportPort + 'static>(
-    client: &BACnetClient<T>,
-    mac: &[u8],
-    object_type: ObjectType,
-    instance: u32,
-    property: PropertyIdentifier,
-    index: Option<u32>,
-    format: OutputFormat,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let oid = ObjectIdentifier::new(object_type, instance)?;
-
-    let ack = client.read_range(mac, oid, property, index, None).await?;
-
-    // Display results
-    let obj_str = format!("{}:{}", object_type, instance);
-    let prop_str = format!("{}", property);
-
-    match format {
-        OutputFormat::Table => {
-            println!(
-                "ReadRange {}  {}  count={}",
-                obj_str, prop_str, ack.item_count
-            );
-            // Decode items from item_data
-            let mut offset = 0;
-            let mut item_num = 0;
-            while offset < ack.item_data.len() {
-                match decode_application_value(&ack.item_data, offset) {
-                    Ok((value, next)) => {
-                        item_num += 1;
-                        println!(
-                            "  [{}] {}",
-                            item_num,
-                            crate::output::format_property_value(&value)
-                        );
-                        offset = next;
-                    }
-                    Err(_) => {
-                        let hex: String = ack.item_data[offset..]
-                            .iter()
-                            .map(|b| format!("{b:02x}"))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        println!("  [raw] {hex}");
-                        break;
-                    }
-                }
-            }
-        }
-        OutputFormat::Json => {
-            let mut items = Vec::new();
-            let mut offset = 0;
-            while offset < ack.item_data.len() {
-                match decode_application_value(&ack.item_data, offset) {
-                    Ok((value, next)) => {
-                        items.push(crate::output::format_property_value(&value));
-                        offset = next;
-                    }
-                    Err(_) => {
-                        let hex: String = ack.item_data[offset..]
-                            .iter()
-                            .map(|b| format!("{b:02x}"))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        items.push(format!("[raw: {hex}]"));
-                        break;
-                    }
-                }
-            }
-            let json = serde_json::json!({
-                "object": format!("{}:{}", object_type, instance),
-                "property": format!("{}", property),
-                "item_count": ack.item_count,
-                "items": items,
-            });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json).unwrap_or_default()
-            );
-        }
-    }
     Ok(())
 }
 

@@ -300,7 +300,15 @@ fn initialize(
 /// (Device and NetworkPort, which model the running node itself). The set
 /// of non-deleteable types is kept in sync with `BACnetObject::is_deleteable`
 /// so PICS and runtime dispatch share one truth source.
-pub fn handle_delete_object(db: &mut ObjectDatabase, service_data: &[u8]) -> Result<(), Error> {
+///
+/// Returns the removed object. Drop it after releasing the database guard,
+/// and off the async runtime: an object that saves its state (a Notification
+/// Forwarder or Audit Log with persistence) waits for its queued saves when
+/// dropped (see [`bacnet_objects::durable`]).
+pub fn handle_delete_object(
+    db: &mut ObjectDatabase,
+    service_data: &[u8],
+) -> Result<Box<dyn bacnet_objects::traits::BACnetObject>, Error> {
     let request = DeleteObjectRequest::decode(service_data)?;
 
     match request.object_identifier.object_type() {
@@ -317,7 +325,5 @@ pub fn handle_delete_object(db: &mut ObjectDatabase, service_data: &[u8]) -> Res
         .ok_or(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-        })?;
-
-    Ok(())
+        })
 }

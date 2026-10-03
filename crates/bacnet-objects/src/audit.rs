@@ -40,6 +40,7 @@ pub use reporter_delay::AuditSendDelay;
 mod reporter_metadata;
 mod reporter_object;
 mod reporter_status;
+mod staging;
 pub use notification::AuditLogNotificationSink;
 use persistence::{validate_record, validate_snapshot};
 pub use persistence::{
@@ -53,6 +54,7 @@ pub use reporter_change::{
     AuditReporterAuthority, AuditReporterChangeSink, AuditReporterConfiguration,
 };
 pub use reporter_status::{AuditDeliveryToken, AuditReporterStatus};
+pub use staging::{AuditBatchStage, StagedAuditBatch};
 
 /// One owned page returned by an object-level AuditLogQuery capability.
 #[derive(Debug, Clone, PartialEq)]
@@ -108,7 +110,13 @@ pub struct AuditLogObject {
     status_flags: StatusFlags,
     forwarding: Option<Arc<AuditLogForwarding>>,
     generation: u64,
-    persistence: Arc<dyn AuditLogPersistence>,
+    /// Commits each snapshot to the application's storage on its own thread.
+    writer: crate::durable::SaveWriter<Arc<AuditLogSnapshot>>,
+    /// The next snapshot, while its staged commit runs.
+    staged: Option<staging::StagedCommit>,
+    /// Staged batches settled before their requests finished them.
+    settled: VecDeque<staging::Settled>,
+    next_token: u64,
     clock: Option<Arc<dyn ClockReader>>,
 }
 
@@ -164,7 +172,10 @@ impl AuditLogObject {
             status_flags: StatusFlags::empty(),
             forwarding: None,
             generation: snapshot.generation,
-            persistence,
+            writer: staging::writer(oid, persistence),
+            staged: None,
+            settled: VecDeque::new(),
+            next_token: 0,
             clock: None,
         })
     }
@@ -249,7 +260,10 @@ impl AuditLogObject {
         Ok((frame.local_date, frame.local_time))
     }
 
-    fn snapshot_for_next_generation(&self) -> Result<AuditLogSnapshot, Error> {
+    /// The current state as the next generation's snapshot, once whatever
+    /// is staged has landed.
+    fn snapshot_for_next_generation(&mut self) -> Result<AuditLogSnapshot, Error> {
+        self.settle_staged();
         let generation = self
             .generation
             .checked_add(1)
@@ -270,16 +284,23 @@ impl AuditLogObject {
             completed_receipts: self.completed_receipts.clone(),
         }
     }
+}
 
-    fn commit_and_apply(&mut self, snapshot: AuditLogSnapshot) -> Result<(), Error> {
-        validate_snapshot(&snapshot)?;
-        self.persistence.commit(&snapshot)?;
-        self.generation = snapshot.generation;
-        self.log_enable = snapshot.log_enable;
-        self.total_record_count = snapshot.total_record_count;
-        self.buffer = snapshot.records.into();
-        self.completed_receipts = snapshot.completed_receipts;
-        Ok(())
+/// The log-status record a Log_Enable change appends.
+fn log_enable_record(
+    timestamp: (
+        bacnet_types::primitives::Date,
+        bacnet_types::primitives::Time,
+    ),
+    log_enable: bool,
+) -> BACnetAuditLogRecord {
+    BACnetAuditLogRecord {
+        timestamp,
+        datum: BACnetAuditLogDatum::LogStatus(if log_enable {
+            LogStatus::empty()
+        } else {
+            LogStatus::LOG_DISABLED
+        }),
     }
 }
 
@@ -542,20 +563,13 @@ impl BACnetObject for AuditLogObject {
                 if v == self.log_enable {
                     return Ok(());
                 }
+                if let Some(claimed) = self.claim_log_enable(v) {
+                    return claimed;
+                }
                 let timestamp = self.valid_timestamp()?;
                 let mut prospective = self.snapshot_for_next_generation()?;
                 prospective.log_enable = v;
-                append_record(
-                    &mut prospective,
-                    BACnetAuditLogRecord {
-                        timestamp,
-                        datum: BACnetAuditLogDatum::LogStatus(if v {
-                            LogStatus::empty()
-                        } else {
-                            LogStatus::LOG_DISABLED
-                        }),
-                    },
-                );
+                append_record(&mut prospective, log_enable_record(timestamp, v));
                 self.commit_and_apply(prospective)?;
                 return Ok(());
             }
@@ -621,6 +635,15 @@ impl BACnetObject for AuditLogObject {
         &mut self,
     ) -> Option<&mut dyn AuditLogNotificationSink> {
         Some(self)
+    }
+
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        Some(self)
+    }
+
+    fn advance_monotonic_time_internal(&mut self, _now: std::time::Duration) -> bool {
+        self.settle_finished();
+        false
     }
 }
 
@@ -746,3 +769,7 @@ mod reporter_configuration;
 #[cfg(test)]
 #[path = "audit/reporter_delay_tests.rs"]
 mod reporter_delay_tests;
+
+#[cfg(test)]
+#[path = "audit/staging_tests.rs"]
+mod staging_tests;

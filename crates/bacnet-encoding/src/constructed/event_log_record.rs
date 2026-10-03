@@ -10,7 +10,7 @@
 
 use super::log_fields::{decode_log_status, decode_timestamp, encode_log_status, encode_timestamp};
 use super::tagged::{contents, decode_ctx_constructed, expect_end};
-use super::validate_tlv_sequence;
+use super::{decode_event_notification_tolerant, encode_event_notification};
 use crate::{primitives, tags};
 use bacnet_types::constructed::{BACnetEventLogRecord, EventLogDatum};
 use bacnet_types::error::Error;
@@ -26,8 +26,9 @@ const TIME_CHANGE: u8 = 2;
 
 /// Encode one Event Log record.
 ///
-/// Fails, leaving `buf` unchanged, for notification bytes that aren't a
-/// well-formed run of tagged fields.
+/// Fails, leaving `buf` unchanged, for a notification that would not encode,
+/// such as one whose raw event values aren't a well-formed run of tagged
+/// fields.
 pub fn encode_event_log_record(
     record: &BACnetEventLogRecord,
     buf: &mut BytesMut,
@@ -37,11 +38,9 @@ pub fn encode_event_log_record(
     tags::encode_opening_tag(&mut out, 1);
     match &record.log_datum {
         EventLogDatum::LogStatus(status) => encode_log_status(&mut out, LOG_STATUS, *status),
-        EventLogDatum::Notification(parameters) => {
-            validate_tlv_sequence(parameters, "BACnetEventLogRecord notification")
-                .map_err(|error| Error::Encoding(error.to_string()))?;
+        EventLogDatum::Notification(notification) => {
             tags::encode_opening_tag(&mut out, NOTIFICATION);
-            out.extend_from_slice(parameters);
+            encode_event_notification(notification, &mut out)?;
             tags::encode_closing_tag(&mut out, NOTIFICATION);
         }
         EventLogDatum::TimeChange(seconds) => {
@@ -56,8 +55,11 @@ pub fn encode_event_log_record(
 /// Decode one Event Log record starting at `offset`, returning it and the
 /// offset just past it.
 ///
-/// A notification is checked only as a well-formed run of tagged fields;
-/// `bacnet_services`' `EventNotificationRequest::decode` parses it.
+/// A notification decodes in full, so a record whose notification isn't a
+/// valid request fails as a whole. The one exception is a message text whose
+/// characters don't decode, such as one in a character set this stack doesn't
+/// support: the notification reads with no message text, as a received
+/// notification does at the client ([`decode_event_notification_tolerant`]).
 pub fn decode_event_log_record(
     data: &[u8],
     offset: usize,
@@ -83,8 +85,8 @@ fn decode_datum(data: &[u8], offset: usize) -> Result<EventLogDatum, Error> {
         (EventLogDatum::LogStatus(status), end)
     } else if tag.is_opening_tag(NOTIFICATION) {
         let (parameters, end) = tags::extract_context_value(data, start, NOTIFICATION)?;
-        validate_tlv_sequence(parameters, "BACnetEventLogRecord notification")?;
-        (EventLogDatum::Notification(parameters.to_vec()), end)
+        let notification = decode_event_notification_tolerant(parameters)?;
+        (EventLogDatum::Notification(notification), end)
     } else if tag.is_context(TIME_CHANGE) {
         let (octets, end) = contents(data, start, tag.length)?;
         (

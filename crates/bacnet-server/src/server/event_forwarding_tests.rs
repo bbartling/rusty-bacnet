@@ -6,7 +6,9 @@ use super::event_forwarding::Reception;
 use super::event_recipient_routing_tests::{address_recipient, LITERAL_BROADCAST_MAC};
 use super::*;
 use crate::server::test_transport::{SendLog, TestTransport, TestTransportHandle, BIP_LOCAL_MAC};
-use bacnet_encoding::constructed::encode_event_notification_subscription_list;
+use bacnet_encoding::constructed::{
+    encode_event_notification, encode_event_notification_subscription_list,
+};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::notification_forwarder::NotificationForwarderObject;
 use bacnet_objects::traits::{BACnetObject, MonotonicClock};
@@ -69,7 +71,7 @@ pub(super) fn notification(process_identifier: u32) -> EventNotificationRequest 
 
 pub(super) fn encoded(request: &EventNotificationRequest) -> Bytes {
     let mut buf = BytesMut::new();
-    request.encode(&mut buf).unwrap();
+    encode_event_notification(request, &mut buf).unwrap();
     buf.freeze()
 }
 

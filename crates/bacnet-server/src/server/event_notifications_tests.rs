@@ -1,5 +1,6 @@
 use super::*;
 use crate::server::test_transport::{SendLog, SendMode, TestTransport, BIP_LOCAL_MAC};
+use bacnet_encoding::constructed::decode_event_notification;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event::EventStateChange;
@@ -115,8 +116,7 @@ pub(super) fn decode_broadcast_notification(sent: &[Bytes]) -> EventNotification
                 req.service_choice,
                 UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION
             );
-            EventNotificationRequest::decode(&req.service_request)
-                .expect("decode EventNotification")
+            decode_event_notification(&req.service_request).expect("decode EventNotification")
         }
         other => panic!("expected UnconfirmedRequest, got {other:?}"),
     }

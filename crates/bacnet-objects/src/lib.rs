@@ -15,6 +15,7 @@ pub(crate) mod common;
 pub mod database;
 pub mod device;
 pub(crate) mod device_reference;
+pub mod durable;
 pub mod elevator;
 pub mod event;
 pub mod event_enrollment;

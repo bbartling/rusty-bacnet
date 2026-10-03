@@ -76,16 +76,25 @@ pub fn decode_audit_log_record_result_at(
 
 /// Decode a complete bare `BACnetAuditLogRecord` field sequence.
 pub fn decode_audit_log_record(data: &[u8]) -> Result<BACnetAuditLogRecord, Error> {
-    let (timestamp_body, datum_start) =
-        decode_ctx_constructed(data, 0, 0, "AuditLogQuery-ACK record timestamp")?;
-    let timestamp = decode_date_time(timestamp_body)?;
+    let (record, end) = decode_audit_log_record_at(data, 0)?;
+    expect_end(data, end, end, "BACnetAuditLogRecord")?;
+    Ok(record)
+}
 
+/// Decode one bare `BACnetAuditLogRecord` starting at `offset`, returning it
+/// and the offset just past it, so the records of a ReadRange item list
+/// decode one after another.
+pub fn decode_audit_log_record_at(
+    data: &[u8],
+    offset: usize,
+) -> Result<(BACnetAuditLogRecord, usize), Error> {
+    let (timestamp_body, datum_start) =
+        decode_ctx_constructed(data, offset, 0, "AuditLogQuery-ACK record timestamp")?;
+    let timestamp = decode_date_time(timestamp_body)?;
     let (datum_body, end) =
         decode_ctx_constructed(data, datum_start, 1, "AuditLogQuery-ACK record datum")?;
-    expect_end(data, end, end, "BACnetAuditLogRecord")?;
     let datum = decode_datum(datum_body)?;
-
-    Ok(BACnetAuditLogRecord { timestamp, datum })
+    Ok((BACnetAuditLogRecord { timestamp, datum }, end))
 }
 
 fn decode_date_time(data: &[u8]) -> Result<(Date, Time), Error> {
@@ -247,6 +256,28 @@ mod tests {
 
         encoded.extend_from_slice(&[0]);
         assert!(decode_audit_log_record(&encoded).is_err());
+    }
+
+    #[test]
+    fn consecutive_audit_records_decode_by_returned_offset() {
+        let first = audit_record();
+        let second = BACnetAuditLogRecord {
+            datum: BACnetAuditLogDatum::TimeChange(-1.5),
+            ..audit_record()
+        };
+        let mut encoded = BytesMut::new();
+        encode_audit_log_record(&first, &mut encoded).unwrap();
+        let split = encoded.len();
+        encode_audit_log_record(&second, &mut encoded).unwrap();
+        assert_eq!(
+            decode_audit_log_record_at(&encoded, 0).unwrap(),
+            (first, split)
+        );
+        assert_eq!(
+            decode_audit_log_record_at(&encoded, split).unwrap(),
+            (second, encoded.len())
+        );
+        assert!(decode_audit_log_record_at(&encoded[..encoded.len() - 1], split).is_err());
     }
 
     #[test]
