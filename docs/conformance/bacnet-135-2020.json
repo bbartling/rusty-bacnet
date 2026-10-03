@@ -2427,12 +2427,16 @@
     "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_default_fade_time_starts_at_100_ms_and_takes_writes_within_its_range",
     "crates/bacnet-server/src/handlers/tests/lighting_required_rows.rs::lighting_output_default_fade_time_over_write_property",
     "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_duo_write_capabilities_match_dispatch",
-    "crates/bacnet-server/src/pics/property_metadata_tests/lighting.rs::pics_lighting_property_metadata_is_exact"
+    "crates/bacnet-server/src/pics/property_metadata_tests/lighting.rs::pics_lighting_property_metadata_is_exact",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_cov_increment_starts_at_zero_and_takes_writes",
+    "crates/bacnet-server/src/server/value_cov_increment_tests.rs::lighting_output_cov_notifies_at_and_above_its_increment_only"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/value_types/tests/required_rows.rs::non_numeric_value_types_have_no_cov_increment",
     "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_default_fade_time_setter_refuses_values_outside_its_range",
-    "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_output_writes_store_verbatim_with_range_gates"
+    "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_output_writes_store_verbatim_with_range_gates",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_cov_increment_refuses_bad_values_and_keeps_the_old_one",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::binary_lighting_output_has_no_cov_increment"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2443,7 +2447,8 @@
     "Current_Command_Priority comes from the value macro through `common::current_command_priority`, as on the analog, binary, multi-state and lighting objects. Its metadata matches Priority_Array: Optional with the Commandable presence condition, read-only.",
     "The value macro takes an optional `cov_increment` entry naming the table's datatype (`u64` for Unsigned, `f64` for Double), so only the three numeric types serve the row, with a validated `set_cov_increment` setter. Its metadata is the Analog Value shape: Optional, no presence condition, writable.",
     "`BACnetObject::cov_increment` returns an `f64` so a Double increment is compared without rounding through a REAL; a subscription's own REAL increment widens exactly. Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions report the increment in use as a REAL, so a Large Analog Value increment is narrowed there.",
-    "Default_Fade_Time starts at 100 ms, the shortest fade the range allows, as Default_Ramp_Rate starts at its fastest rate; `set_default_fade_time` applies the same range as WriteProperty. No fade operation runs: Lighting_Command is stored as opaque bytes."
+    "Default_Fade_Time starts at 100 ms, the shortest fade the range allows, as Default_Ramp_Rate starts at its fastest rate; `set_default_fade_time` applies the same range as WriteProperty. No fade operation runs: Lighting_Command is stored as opaque bytes.",
+    "Lighting Output serves a writable REAL COV_Increment, starting at 0, through `common::write_cov_increment`: a negative or non-finite value is VALUE_OUT_OF_RANGE and another datatype INVALID_DATA_TYPE. It is an optional row in Property_List, the metadata (writable) and the PICS, and a SubscribeCOV notification goes out when Present_Value moves by at least the increment. Binary Lighting Output has no COV_Increment."
    ]
   },
   {
