@@ -444,3 +444,43 @@ async fn concrete_broadcast_validation_rejects_before_transport_start() {
     assert!(builder.build().await.is_err());
     assert_eq!(handle.starts(), 0);
 }
+
+#[test]
+fn who_is_scope_follows_the_last_observation_and_a_fruitless_probe_drops_it() {
+    use super::binding_probes::WhoIsScope;
+    let now = Instant::now();
+    let stale = now + OBSERVED_BINDING_TTL;
+    let routed = NpduAddress {
+        network: 100,
+        mac_address: MacAddr::from_slice(FINAL_PEER),
+    };
+    let mut table = DeviceBindingTable::new();
+    table
+        .insert_configured(
+            DeviceBinding::local(device(1), LOCAL_PEER).unwrap(),
+            no_broadcast,
+        )
+        .unwrap();
+    table.observe_i_am_at(device(2), LOCAL_PEER, None, now, no_broadcast);
+    table.observe_i_am_at(device(3), ROUTER, Some(&routed), now, no_broadcast);
+    // A device never heard from is asked on every network; one last seen
+    // here, or behind a router on network 100, is asked there.
+    assert_eq!(table.who_is_scope(&device(4)), WhoIsScope::Global);
+    assert_eq!(table.who_is_scope(&device(2)), WhoIsScope::Local);
+    assert_eq!(table.who_is_scope(&device(3)), WhoIsScope::Remote(100));
+
+    // A fresh observation and a configured binding are kept.
+    for kept in [device(1), device(2), device(3)] {
+        table.forget_stale(&kept, stale - Duration::from_millis(1));
+    }
+    table.forget_stale(&device(1), stale);
+    assert_eq!(table.len(), 3);
+    // A stale one is dropped, so the device's next Who-Is goes global.
+    table.forget_stale(&device(3), stale);
+    assert_eq!(table.len(), 2);
+    assert_eq!(
+        table.resolve_at(&device(3), stale, no_broadcast),
+        DeviceResolution::Unknown
+    );
+    assert_eq!(table.who_is_scope(&device(3)), WhoIsScope::Global);
+}

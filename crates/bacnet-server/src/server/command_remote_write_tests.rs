@@ -49,9 +49,14 @@ fn objects(db: &mut ObjectDatabase) {
     db.add(Box::new(command)).unwrap();
 }
 
+/// A harness whose server has no binding for Device 9.
+pub(super) async fn start_unbound() -> Harness {
+    Harness::start_with(ServerConfig::default(), objects).await
+}
+
 /// A harness whose server reaches Device 9 through `binding`.
 async fn start(binding: DeviceBinding) -> Harness {
-    let h = Harness::start_with(ServerConfig::default(), objects).await;
+    let h = start_unbound().await;
     h.server
         .device_bindings
         .write()

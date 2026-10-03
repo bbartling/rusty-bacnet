@@ -1,3 +1,4 @@
+use super::binding_probes::{BindingProbes, WhoIsScope};
 use super::*;
 
 /// Maximum number of configured and observed device bindings held by a server.
@@ -150,9 +151,12 @@ enum BindingEntry {
     },
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub(super) struct DeviceBindingTable {
     entries: HashMap<ObjectIdentifier, BindingEntry>,
+    /// Targeted Who-Is requests out or held off, kept under the same guard
+    /// so an I-Am can wake the writes waiting on them (#1322).
+    pub(super) probes: BindingProbes,
 }
 
 impl DeviceBindingTable {
@@ -303,6 +307,22 @@ impl DeviceBindingTable {
             return ObservationOutcome::RejectedInvalid;
         }
 
+        let outcome = self.record_observation(device, target, now);
+        if matches!(
+            outcome,
+            ObservationOutcome::Inserted | ObservationOutcome::Refreshed
+        ) {
+            self.probes.answer(&device);
+        }
+        outcome
+    }
+
+    fn record_observation(
+        &mut self,
+        device: ObjectIdentifier,
+        target: DeviceBindingTarget,
+        now: Instant,
+    ) -> ObservationOutcome {
         match self.entries.get_mut(&device) {
             Some(BindingEntry::Configured(_)) => ObservationOutcome::ConfiguredPreserved,
             Some(BindingEntry::Observed {
@@ -333,6 +353,34 @@ impl DeviceBindingTable {
                     },
                 );
                 ObservationOutcome::Inserted
+            }
+        }
+    }
+
+    /// Where a targeted Who-Is for `device` goes: the network its last I-Am
+    /// came from while that observation is held, or every network for a
+    /// device never heard from.
+    pub(super) fn who_is_scope(&self, device: &ObjectIdentifier) -> WhoIsScope {
+        match self.entries.get(device) {
+            Some(BindingEntry::Observed {
+                target: DeviceBindingTarget::Local { .. },
+                ..
+            }) => WhoIsScope::Local,
+            Some(BindingEntry::Observed {
+                target: DeviceBindingTarget::Routed { network, .. },
+                ..
+            }) => WhoIsScope::Remote(*network),
+            Some(BindingEntry::Configured(_)) | None => WhoIsScope::Global,
+        }
+    }
+
+    /// Drop `device`'s observation if it is stale at `now`: a Who-Is to
+    /// where it was last seen drew nothing, so its next one goes global. A
+    /// configured binding, or an observation an I-Am refreshed, stays.
+    pub(super) fn forget_stale(&mut self, device: &ObjectIdentifier, now: Instant) {
+        if let Some(BindingEntry::Observed { observed_at, .. }) = self.entries.get(device) {
+            if now.saturating_duration_since(*observed_at) >= OBSERVED_BINDING_TTL {
+                self.entries.remove(device);
             }
         }
     }
