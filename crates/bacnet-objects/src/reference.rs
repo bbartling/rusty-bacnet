@@ -17,12 +17,12 @@
 //!    shape is exact: extra or wrong-typed members are refused, never
 //!    silently ignored.
 //! 3. **Framed network form** — the reference's primitive context-tagged
-//!    members [0]/[1]/[2] verbatim: one or more `ApplicationData` elements
+//!    members \[0\]/\[1\]/\[2\] verbatim: one or more `ApplicationData` elements
 //!    (the service decode splits at context-tag boundaries, one element per
 //!    member; a `Setpoint_Reference` write wrapped in the
 //!    `BACnetSetpointReference` opening/closing tag 0 arrives as a single
 //!    element). Concatenation is strictly decoded by the Clause 21 codec in
-//!    `bacnet-encoding`, which rejects a device-qualifying member [3] (not
+//!    `bacnet-encoding`, which rejects a device-qualifying member \[3\] (not
 //!    part of this production — these references are local-device only) and
 //!    any unknown trailing context tag.
 //!
@@ -159,12 +159,12 @@ fn decode_legacy_list(items: &[PropertyValue]) -> Result<BACnetObjectPropertyRef
 
 /// Strict framed decode; every codec failure is INVALID_DATA_ENCODING.
 ///
-/// `Setpoint` accepts the `BACnetSetpointReference` [0]-framed production as
+/// `Setpoint` accepts the `BACnetSetpointReference` \[0\]-framed production as
 /// well as the bare member sequence: the two are unambiguous (a bare
-/// reference always opens with *primitive* context tag [0], the frame with
-/// *opening* tag [0]), and the bare form is what a peer handling the
+/// reference always opens with *primitive* context tag \[0\], the frame with
+/// *opening* tag \[0\]), and the bare form is what a peer handling the
 /// reference generically — and this stack's own test tooling — may send. The
-/// [0] frame with NO inner members is the production's absent-alternative
+/// \[0\] frame with NO inner members is the production's absent-alternative
 /// (the member is OPTIONAL; Clause 12.17 Setpoint_Reference uses the fixed
 /// value in Setpoint when no reference exists) and clears, exactly like a
 /// `Null` write. `Device` decodes the device-qualified production instead
