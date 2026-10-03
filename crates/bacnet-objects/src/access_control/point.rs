@@ -98,9 +98,14 @@ impl AccessPointObject {
     /// `credential` names the Access Credential object behind the event.
     /// `None` stores the no-credential reference, instance 4194303, for an
     /// event no credential belongs to or one whose credential is unknown or
-    /// kept back (Clause 12.31.30). A reference to another object type, or
-    /// one whose device identifier isn't a Device (#1285), is refused with
-    /// VALUE_OUT_OF_RANGE and none of the four changes.
+    /// kept back (Clause 12.31.30). Given explicitly, that reference carries
+    /// 4194303 as the object instance and, when it names a device, as the
+    /// device instance too. Refused with VALUE_OUT_OF_RANGE, with none of the
+    /// four changing: a reference to another object type, one whose device
+    /// identifier isn't a Device (#1285), and one with 4194303 in only one of
+    /// the two instances, which is neither a credential nor the
+    /// no-credential reference. Access_Event_Credential has no network write
+    /// route, so this setter is the only check.
     ///
     /// While Out_Of_Service is TRUE the point performs no authentication or
     /// authorization (Clause 12.31.8), so its access logic has nothing to
@@ -116,6 +121,12 @@ impl AccessPointObject {
         let credential = credential.unwrap_or_else(no_credential);
         crate::device_reference::check_device_member(credential.device_identifier)?;
         if credential.object_identifier.object_type() != ObjectType::ACCESS_CREDENTIAL {
+            return Err(common::value_out_of_range_error());
+        }
+        let empty = |instance: u32| instance == ObjectIdentifier::MAX_INSTANCE;
+        if credential.device_identifier.is_some_and(|device| {
+            empty(device.instance_number()) != empty(credential.object_identifier.instance_number())
+        }) {
             return Err(common::value_out_of_range_error());
         }
         self.access_event = event;

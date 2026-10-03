@@ -6,8 +6,10 @@
 //! context-tagged members, encoded by the shared codecs in
 //! `bacnet_encoding::constructed`: an array or list of them is one such value
 //! per element. Averaging, Event Enrollment, Trend Log, Trend Log Multiple and
-//! both Life Safety objects go through these helpers, so each reference type
-//! has one encoding whichever object serves it.
+//! both Life Safety objects encode through these helpers, so each reference
+//! type has one encoding whichever object serves it. Sharing the encoding
+//! doesn't mean sharing the Device check: [`check_device_member`] lists the
+//! setters that run it and the ones that don't yet.
 
 use bacnet_encoding::constructed::{
     decode_device_object_property_reference, encode_device_object_property_reference,
@@ -100,14 +102,19 @@ pub(crate) fn decode_property_reference(
 /// object, so any other object type can't be honoured.
 ///
 /// The rule is bacnet-types' `device_identifier_is_device`, which the
-/// reference types' methods and the Python bindings apply too. Every setter
-/// and write path that stores a device-qualified reference runs this on each
-/// one before storing any, so a refused list leaves the property as it was:
-/// the reference rows above, and Access Door Door_Members, Access Point
-/// Access_Doors and Access_Event_Credential, Access Credential
-/// Assigned_Access_Rights, Staging Target_References, Structured View
-/// Subordinate_List, the elevator family's Energy_Meter_Ref and Channel
-/// List_Of_Object_Property_References (#1285).
+/// reference types' methods and the Python bindings apply too. These setters
+/// and write paths run this on each reference before storing any, so a
+/// refused list leaves the property as it was: Averaging
+/// Object_Property_Reference, Trend Log and Trend Log Multiple
+/// Log_DeviceObjectProperty, the Life Safety member lists (#1182), Access
+/// Door Door_Members, Access Point Access_Doors and Access_Event_Credential,
+/// Access Credential Assigned_Access_Rights, Staging Target_References,
+/// Structured View Subordinate_List, the elevator family's Energy_Meter_Ref
+/// and Channel List_Of_Object_Property_References (#1285).
+///
+/// Not all of them yet: Event Enrollment's setter, Schedule
+/// List_Of_Object_Property_References, Global Group members and Command
+/// action lists store a reference without this check (#1308).
 pub(crate) fn check_device_member(device: Option<ObjectIdentifier>) -> Result<(), Error> {
     if bacnet_types::constructed::device_identifier_is_device(device) {
         Ok(())

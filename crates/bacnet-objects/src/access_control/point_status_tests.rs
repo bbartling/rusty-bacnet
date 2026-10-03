@@ -145,3 +145,46 @@ fn access_point_access_event_refuses_a_credential_of_another_type() {
         );
     }
 }
+
+#[test]
+fn access_point_access_event_refuses_a_half_empty_credential() {
+    let empty = ObjectIdentifier::MAX_INSTANCE;
+    let reference = |object: u32, device: Option<u32>| BACnetDeviceObjectReference {
+        device_identifier: device
+            .map(|device| ObjectIdentifier::new(ObjectType::DEVICE, device).unwrap()),
+        object_identifier: ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, object).unwrap(),
+    };
+    let mut point = AccessPointObject::new(1, "AP-1").unwrap();
+    point
+        .set_access_event(AccessEvent::GRANTED, 1, stamp(9), Some(credential()))
+        .unwrap();
+    // 4194303 in only one of the two instances is neither a credential nor
+    // the no-credential reference (Clause 12.31.30), and nothing changes.
+    for half_empty in [reference(empty, Some(9)), reference(3, Some(empty))] {
+        assert_value_out_of_range(point.set_access_event(
+            AccessEvent::DENIED_OTHER,
+            2,
+            stamp(10),
+            Some(half_empty),
+        ));
+        assert_eq!(
+            event_credential(&point),
+            PropertyValue::ApplicationData(CREDENTIAL_3.to_vec())
+        );
+        assert_eq!(
+            point.read_property(P::ACCESS_EVENT_TAG, None).unwrap(),
+            PropertyValue::Unsigned(1)
+        );
+    }
+    // Both empty with a device, or the object alone without one, is the
+    // no-credential reference; a credential in another device is accepted.
+    for accepted in [
+        reference(empty, Some(empty)),
+        reference(empty, None),
+        reference(3, Some(9)),
+    ] {
+        point
+            .set_access_event(AccessEvent::DENIED_OTHER, 2, stamp(10), Some(accepted))
+            .unwrap();
+    }
+}

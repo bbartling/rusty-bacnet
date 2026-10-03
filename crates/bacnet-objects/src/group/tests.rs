@@ -248,6 +248,77 @@ fn structured_view_add_subordinate_refuses_a_non_device_device_identifier() {
 }
 
 #[test]
+fn structured_view_set_subordinates_replaces_both_arrays_or_nothing() {
+    let mut sv = StructuredViewObject::new(1, "SV").unwrap();
+    let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    let bi2 = ObjectIdentifier::new(ObjectType::BINARY_INPUT, 2).unwrap();
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap();
+    sv.add_subordinate(ai1, "Temperature").unwrap();
+    let remote = BACnetDeviceObjectReference {
+        device_identifier: Some(device),
+        object_identifier: bi2,
+    };
+    // A replace drops the old subordinates and keeps both arrays one size.
+    sv.set_subordinates(vec![
+        (bi2.into(), "Occupancy".to_string()),
+        (remote.clone(), "Remote".to_string()),
+    ])
+    .unwrap();
+    let served: Vec<_> = sv
+        .subordinates()
+        .map(|(reference, annotation)| (reference.clone(), annotation.to_string()))
+        .collect();
+    assert_eq!(
+        served,
+        [
+            (bi2.into(), "Occupancy".to_string()),
+            (remote, "Remote".to_string())
+        ]
+    );
+    let size = |sv: &StructuredViewObject, property| sv.read_property(property, Some(0)).unwrap();
+    for property in [
+        PropertyIdentifier::SUBORDINATE_LIST,
+        PropertyIdentifier::SUBORDINATE_ANNOTATIONS,
+    ] {
+        assert_eq!(
+            size(&sv, property),
+            PropertyValue::Unsigned(2),
+            "{property:?}"
+        );
+    }
+    // One reference whose device isn't a Device refuses the whole list
+    // (#1285), and the two subordinates stay.
+    let not_a_device = BACnetDeviceObjectReference {
+        device_identifier: Some(ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 9).unwrap()),
+        object_identifier: ai1,
+    };
+    let result = sv.set_subordinates(vec![
+        (ai1.into(), "Temperature".to_string()),
+        (not_a_device, "Elsewhere".to_string()),
+    ]);
+    assert!(
+        matches!(result, Err(Error::Protocol { class, code })
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32),
+        "{result:?}"
+    );
+    assert_eq!(sv.subordinates().count(), 2);
+    assert_eq!(sv.subordinates().next().unwrap().1, "Occupancy");
+    // An empty list clears both arrays.
+    sv.set_subordinates(Vec::new()).unwrap();
+    for property in [
+        PropertyIdentifier::SUBORDINATE_LIST,
+        PropertyIdentifier::SUBORDINATE_ANNOTATIONS,
+    ] {
+        assert_eq!(
+            size(&sv, property),
+            PropertyValue::Unsigned(0),
+            "{property:?}"
+        );
+    }
+}
+
+#[test]
 fn structured_view_node_type() {
     let sv = StructuredViewObject::new(1, "SV").unwrap();
     let val = sv

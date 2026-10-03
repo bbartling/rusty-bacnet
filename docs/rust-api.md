@@ -1813,7 +1813,9 @@ framing, through the shared `bacnet-encoding` codecs.
   `Subordinate_Annotations`. A Subordinate_List element is a
   BACnetDeviceObjectReference; `add_subordinate` takes one, or an
   `ObjectIdentifier` for an object in this device, and returns `Result` (see
-  device references below). An Action element is a
+  device references below). `set_subordinates` replaces every subordinate
+  with (reference, annotation) pairs, so both arrays keep one size, and
+  `subordinates()` reads them back. An Action element is a
   BACnetActionList, the BACnetActionCommand writes that Present_Value N
   selects, framed in `[0]`. `CommandObject::set_action` takes
   `BACnetActionList` values and refuses a command whose priority is outside 1
@@ -2573,7 +2575,8 @@ these values before adding the object with
 `AccessDoorObject::set_door_alarm_state`,
 `AccessPointObject::set_access_event(event, tag, time, credential)` (its time
 a `BACnetTimeStamp`, its credential an Access Credential reference or `None`
-for the no-credential reference, instance 4194303; another object type is
+for the no-credential reference, instance 4194303; another object type, or
+4194303 in only one of the object and device instances, is
 VALUE_OUT_OF_RANGE) and `CredentialDataInputObject::set_present_value` (the
 factor read and its Update_Time), and a door's Door_Status and Lock_Status
 with `set_door_status` and `set_lock_status`.

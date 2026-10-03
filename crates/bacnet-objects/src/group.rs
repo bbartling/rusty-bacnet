@@ -471,6 +471,30 @@ impl StructuredViewObject {
         self.subordinate_annotations.push(annotation.into());
         Ok(())
     }
+
+    /// Replace every subordinate, each a reference with its annotation, so
+    /// Subordinate_List and Subordinate_Annotations keep one size. An empty
+    /// list clears both.
+    ///
+    /// A reference whose device identifier isn't a Device object is refused
+    /// with VALUE_OUT_OF_RANGE and neither array changes (#1285).
+    pub fn set_subordinates(
+        &mut self,
+        subordinates: Vec<(BACnetDeviceObjectReference, String)>,
+    ) -> Result<(), Error> {
+        for (reference, _) in &subordinates {
+            crate::device_reference::check_device_member(reference.device_identifier)?;
+        }
+        (self.subordinate_list, self.subordinate_annotations) = subordinates.into_iter().unzip();
+        Ok(())
+    }
+
+    /// The subordinates in order, each reference with its annotation.
+    pub fn subordinates(&self) -> impl Iterator<Item = (&BACnetDeviceObjectReference, &str)> {
+        self.subordinate_list
+            .iter()
+            .zip(self.subordinate_annotations.iter().map(String::as_str))
+    }
 }
 
 impl BACnetObject for StructuredViewObject {

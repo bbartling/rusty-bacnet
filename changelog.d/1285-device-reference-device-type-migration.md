@@ -5,5 +5,6 @@ section: Migration notes
   `AccessPointObject::set_access_event` takes a fourth argument, the
   credential (`None` for none), and returns `Result`;
   `AccessDoorObject::set_door_members` and
-  `StructuredViewObject::add_subordinate` return `Result`, and the Structured
-  View subordinate fields are private.
+  `StructuredViewObject::add_subordinate` return `Result`. The Structured
+  View subordinate fields are private: replace them with `set_subordinates`
+  and read them with `subordinates()`.

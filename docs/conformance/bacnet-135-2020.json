@@ -2362,7 +2362,7 @@
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/action_list.rs::{action_command_golden_vectors_round_trip,action_lists_frame_in_tag_zero_and_decode_one_array_element_at_a_time,action_command_values_keep_lists_and_context_tagged_elements}",
     "crates/bacnet-objects/src/command/tests.rs::command_read_action_serves_one_framed_action_list_per_index",
-    "crates/bacnet-objects/src/group/tests.rs::structured_view_add_subordinates",
+    "crates/bacnet-objects/src/group/tests.rs::{structured_view_add_subordinates,structured_view_set_subordinates_replaces_both_arrays_or_nothing}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/command.rs::rpm_command_action_serves_one_action_list_per_index",
     "crates/bacnet-server/src/handlers/tests/read_rpm/group.rs::rpm_structured_view_arrays_serve_one_element_per_index",
     "crates/bacnet-server/src/server/array_element_wire_tests.rs::array_elements_bip_wire_rp_and_rpm_serve_each_index"
@@ -2380,7 +2380,7 @@
     "Split child of BACNET-12-OBJECT-MODEL (#1135, found in #1107). Breaking pre-1.0 wire and Rust API changes. Tables 12-12 and 12-34 and the Clause 21 productions were read as page images. Before, all three arrays returned the whole array for any index; Subordinate_List elements went out as bare application-tagged object identifiers, which can't name a subordinate in another device, and Action elements as application-tagged Octet Strings of opaque bytes, which no peer could read as action lists.",
     "A command's members are context tags [0] to [8] in order, with the value framed in [4]; the decoder returns a one-element value as itself and any other count as a list, and keeps context-tagged content as ApplicationData, so a decoded command re-encodes to the same octets.",
     "Local policies: CommandObject::set_action takes typed BACnetActionList values and refuses, with PROPERTY / VALUE_OUT_OF_RANGE and Action unchanged, a command whose priority is outside 1..=16 or whose value has no encoding; the codec refuses the same priorities both ways.",
-    "StructuredViewObject::add_subordinate takes anything that converts into a BACnetDeviceObjectReference, so an ObjectIdentifier alone still adds a subordinate in this device. The application sizes Subordinate_List and Subordinate_Annotations through the public fields, and each array serves its own length.",
+    "StructuredViewObject::add_subordinate takes anything that converts into a BACnetDeviceObjectReference, so an ObjectIdentifier alone still adds a subordinate in this device. The application adds subordinates with add_subordinate or replaces them all with set_subordinates (reference and annotation pairs), so the two arrays keep one size; both refuse a device identifier that is not a Device.",
     "Running the action lists and Action_Text are BACNET-12-COMMAND-ACTION-EXECUTION (#1150). Not covered: Subordinate_Tags, Subordinate_Node_Types and Subordinate_Relationships aren't served; writable Subordinate_List with the Clause 12.29.7 resizing of its sibling arrays."
    ]
   },
@@ -2677,7 +2677,7 @@
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_point_cov_leads_with_access_event_and_triggers_on_its_time"
    ],
    "negative_tests": [
-    "crates/bacnet-objects/src/access_control/point_status_tests.rs::{access_point_authentication_status_refuses_values_past_the_production,access_point_access_event_refuses_a_credential_of_another_type}"
+    "crates/bacnet-objects/src/access_control/point_status_tests.rs::{access_point_authentication_status_refuses_values_past_the_production,access_point_access_event_refuses_a_credential_of_another_type,access_point_access_event_refuses_a_half_empty_credential}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2686,7 +2686,7 @@
    "notes": [
     "Authentication_Status is READY until the application reports another status with `set_authentication_status`; a value past IN_PROGRESS is VALUE_OUT_OF_RANGE. Both rows are read-only on the network.",
     "Out of service the reported status is kept and DISABLED is served; the return to service serves the reported status again.",
-    "`set_access_event` takes the credential with the event, tag and time; `None` stores the no-credential reference, Access Credential 4194303 with no device identifier, and another object type is VALUE_OUT_OF_RANGE.",
+    "`set_access_event` takes the credential with the event, tag and time; `None` stores the no-credential reference. Another object type, or 4194303 in only one of the object and Device instances, is VALUE_OUT_OF_RANGE.",
     "Access_Event_Credential rides along in the SubscribeCOV report; only Access_Event_Time and Status_Flags trigger it."
    ],
    "gaps": [
@@ -2716,7 +2716,7 @@
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/access_control/device_reference_tests.rs::{access_door_door_members_refuse_a_non_device_device_identifier,access_point_access_doors_refuse_a_non_device_device_identifier,access_point_event_credential_refuses_a_non_device_device_identifier,access_credential_assigned_access_rights_refuse_a_non_device_device_identifier}",
-    "crates/bacnet-objects/src/group/tests.rs::structured_view_add_subordinate_refuses_a_non_device_device_identifier",
+    "crates/bacnet-objects/src/group/tests.rs::{structured_view_add_subordinate_refuses_a_non_device_device_identifier,structured_view_set_subordinates_replaces_both_arrays_or_nothing}",
     "crates/bacnet-objects/src/staging/tests.rs::target_references_refuse_a_non_device_device_identifier",
     "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::set_energy_meter_ref_refuses_objects_that_are_not_meters_atomically",
     "crates/bacnet-server/src/server/staging_reference_write_tests.rs::a_target_whose_device_member_is_not_a_device_is_out_of_range",
