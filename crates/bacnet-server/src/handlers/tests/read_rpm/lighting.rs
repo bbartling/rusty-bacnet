@@ -78,7 +78,7 @@ fn assert_cases(
             }
         }
     }
-    use crate::handlers::rpm_budget::{handle_rpm_budgeted, RpmFailure};
+    use crate::handlers::{rpm_budget::handle_rpm_budgeted, ReadFailure};
     let budget = crate::server::ReadPropertyMultipleBudget {
         max_result_elements: cases.len(),
         max_service_ack_bytes: legacy.len(),
@@ -97,7 +97,7 @@ fn assert_cases(
                 ..budget
             }
         ),
-        Err(RpmFailure::Work)
+        Err(ReadFailure::Work)
     ));
     assert_eq!(&prefix[..], b"prefix");
     assert!(matches!(
@@ -110,7 +110,7 @@ fn assert_cases(
                 ..budget
             }
         ),
-        Err(RpmFailure::Bytes)
+        Err(ReadFailure::Bytes)
     ));
     assert_eq!(&prefix[..], b"prefix");
 }
@@ -407,10 +407,11 @@ fn rpm_lighting_output_indexed_reads_and_bytes_are_unchanged() {
                     0x91, 28, 0x91, 85, 0x91, 164, 0x92, 0x01, 0x7C, 0x92, 0x01, 0x7D, 0x92, 0x01,
                     0x7A, 0x92, 0x01, 0x75, 0x92, 0x01, 0x79, 0x92, 0x01, 0x82, 0x91, 111, 0x91,
                     81, 0x91, 103, 0x91, 87, 0x91, 104, 0x92, 0x01, 0x76, 0x92, 0x01, 0x77, 0x92,
-                    0x01, 0x78, 0x92, 0x01, 0xAF,
+                    0x01, 0x78, 0x92, 0x01, 0xAF, 0x91, 22,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 18])),
+            (P::COV_INCREMENT, None, Ok(&[0x44, 0x00, 0x00, 0x00, 0x00])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 19])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 164])),
@@ -429,9 +430,10 @@ fn rpm_lighting_output_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(16), Ok(&[0x92, 0x01, 0x77])),
             (P::PROPERTY_LIST, Some(17), Ok(&[0x92, 0x01, 0x78])),
             (P::PROPERTY_LIST, Some(18), Ok(&[0x92, 0x01, 0xAF])),
+            (P::PROPERTY_LIST, Some(19), Ok(&[0x91, 22])),
             (
                 P::PROPERTY_LIST,
-                Some(19),
+                Some(20),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (

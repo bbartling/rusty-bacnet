@@ -17,7 +17,8 @@ mod action;
 pub use action::{BACnetActionCommand, BACnetActionList};
 mod access;
 pub use access::{
-    BACnetAssignedAccessRights, BACnetAuthenticationFactor, BACnetCredentialAuthenticationFactor,
+    BACnetAssignedAccessRights, BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat,
+    BACnetCredentialAuthenticationFactor,
 };
 mod audit;
 pub use audit::{
@@ -313,9 +314,11 @@ impl BACnetAddress {
     /// configured recipient (a Recipient_List destination or the
     /// Audit_Notification_Recipient) refuse one too, so a stored recipient
     /// always decodes again. The NPDU codec refuses a longer DLEN or SLEN
-    /// (`NpduAddress::MAX_MAC_LEN` in bacnet-encoding), so the source addresses
-    /// the stack learns off the network, which COV subscription lists and audit
-    /// records report, fit the bound as well.
+    /// (`NpduAddress::MAX_MAC_LEN` in bacnet-encoding), and bacnet-network's
+    /// `NetworkLayer` and `BACnetRouter` drop a frame whose link-layer source
+    /// MAC is longer (#1198), so the source addresses the stack learns off the
+    /// network, which COV subscription lists and audit records report, fit the
+    /// bound as well. So does the device MAC a You-Are request assigns (#1200).
     pub const MAX_MAC_LEN: usize = 18;
 
     /// Create a local-broadcast address.

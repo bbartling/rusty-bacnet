@@ -14,14 +14,17 @@
 //! member is read, the answer ReadPropertyMultiple gives any request over its
 //! work limit. ReadProperty and ReadRange have no work limit of their own, so
 //! they get the limit of a ReadPropertyMultiple that names only this
-//! Present_Value: the row itself plus the member rows. The low-level helpers
-//! with no executor view have no limit.
+//! Present_Value: the row itself plus the member rows. On the shared
+//! endpoint, which has no ReadPropertyMultiple budget, ReadProperty uses the
+//! session's configured read work limit (#1215). The low-level helpers with
+//! no executor view have no limit.
 //!
-//! A member may name the Device's COV subscription lists. The request
-//! pre-scan (`active_cov_device`, `active_cov_device_for_rpm`) looks through
-//! the members of every Group whose Present_Value a request may read, so those
-//! rows serve the request's one live snapshot (#1171).
-use super::rpm_budget::{self, PlannedObject, RpmFailure, Work};
+//! A member may name the Device's COV subscription lists. Every read service
+//! plans its rows, a Group's member rows included, before it reads a value,
+//! and samples the live lists once for the request when the plan reads one,
+//! so those member rows serve the request's one live snapshot (#1171, #1213).
+use super::read_budget::{ReadFailure, Work};
+use super::rpm_budget::{self, PlannedObject, PlannedRow};
 use super::*;
 use bacnet_encoding::constructed::decode_read_access_specification;
 use bacnet_objects::traits::BACnetObject;
@@ -31,30 +34,48 @@ use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 /// A list that doesn't decode keeps its error for the row to report.
 pub(super) struct GroupMembers(Result<Vec<PlannedObject>, Error>);
 
+impl GroupMembers {
+    /// Every planned member row, with the member object it reads; none when
+    /// the list didn't decode.
+    pub(super) fn rows(&self) -> impl Iterator<Item = (ObjectIdentifier, &PlannedRow)> {
+        self.0
+            .as_deref()
+            .into_iter()
+            .flat_map(rpm_budget::planned_rows)
+    }
+}
+
+/// Plan a single-property read (ReadProperty, ReadRange, the local read) of
+/// a found object: the read's own row and, for a Group's whole
+/// Present_Value, the member rows, all charged to the view's work limit.
+pub(super) fn plan_property(
+    db: &ObjectDatabase,
+    view: Option<&DeviceReadContext<'_>>,
+    object: &dyn BACnetObject,
+    reference: &PropertyReference,
+) -> Result<Option<GroupMembers>, ReadFailure> {
+    let mut work = Work::new(view.map_or(usize::MAX, |view| view.work_limit));
+    // This read's own row, as a one-property ReadPropertyMultiple counts it.
+    work.charge()?;
+    plan_members(db, view, object, reference, &mut work)
+}
+
 /// Read `property` of a found object the way the single-property services
-/// (ReadProperty, ReadRange) serve it. A Group's whole Present_Value is
-/// rebuilt from its members, charged with the read's own row to the view's
-/// work limit; every other read is the object's own answer (the executor's,
-/// when `object` is a served view).
+/// serve it. A Group's whole Present_Value is rebuilt from the `members` the
+/// read planned; every other read is the object's own answer (the
+/// executor's, when `object` is a served view).
 pub(super) fn read_served_property(
     db: &ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
     object: &dyn BACnetObject,
     property: PropertyIdentifier,
     array_index: Option<u32>,
-) -> Result<PropertyValue, RpmFailure> {
-    let reference = PropertyReference {
-        property_identifier: property,
-        property_array_index: array_index,
-    };
-    let mut work = Work::new(view.map_or(usize::MAX, |view| view.work_limit));
-    // This read's own row, as a one-property ReadPropertyMultiple counts it.
-    work.charge()?;
-    match plan_members(db, view, object, &reference, &mut work)? {
+    members: Option<GroupMembers>,
+) -> Result<PropertyValue, Error> {
+    match members {
         Some(members) => value(db, view, members),
         None => object.read_property(property, array_index),
     }
-    .map_err(RpmFailure::Service)
 }
 
 /// The members, when `reference` reads the whole Present_Value of `object`
@@ -67,7 +88,7 @@ pub(super) fn plan_members(
     object: &dyn BACnetObject,
     reference: &PropertyReference,
     work: &mut Work,
-) -> Result<Option<GroupMembers>, RpmFailure> {
+) -> Result<Option<GroupMembers>, ReadFailure> {
     if reference.property_identifier != PropertyIdentifier::PRESENT_VALUE
         || reference.property_array_index.is_some()
         || object.object_identifier().object_type() != ObjectType::GROUP

@@ -127,7 +127,7 @@ fn rpm_work_aggregate_boundaries_preflight_no_reads() {
         let mut out = BytesMut::from(&b"prefix"[..]);
         let result = handle_rpm_budgeted(&db, &data, &mut out, budget(4, 1024));
         if count > 4 {
-            assert!(matches!(result, Err(RpmFailure::Work)));
+            assert!(matches!(result, Err(ReadFailure::Work)));
             assert_eq!(reads.load(Ordering::SeqCst), 0);
             assert_eq!(&out[..], b"prefix");
         } else {
@@ -152,11 +152,11 @@ fn rpm_wildcards_duplicates_unknown_and_index_count_results() {
         let decoded = ReadPropertyMultipleRequest::decode(&data).unwrap();
         assert!(matches!(
             plan(&db, &decoded, count * 2, None),
-            Err(RpmFailure::Work)
+            Err(ReadFailure::Work)
         ));
         assert!(matches!(
             handle_rpm_budgeted(&db, &data, &mut BytesMut::new(), budget(count * 2, 1024)),
-            Err(RpmFailure::Work)
+            Err(ReadFailure::Work)
         ));
         assert_eq!(reads.load(Ordering::SeqCst), 0);
         assert_eq!(
@@ -180,7 +180,7 @@ fn rpm_wildcards_duplicates_unknown_and_index_count_results() {
     )]);
     assert!(matches!(
         handle_rpm_budgeted(&db, &data, &mut BytesMut::new(), budget(1, 1024)),
-        Err(RpmFailure::Work)
+        Err(ReadFailure::Work)
     ));
     handle_rpm_budgeted(&db, &data, &mut BytesMut::new(), budget(2, 1024)).unwrap();
     assert_eq!(reads.load(Ordering::SeqCst), 0);
@@ -208,7 +208,7 @@ fn rpm_bytes_exact_wrappers_errors_index_atomic_and_legacy_parity() {
         let mut out = BytesMut::from(&b"prefix"[..]);
         let result = handle_rpm_budgeted(&db, &data, &mut out, budget(5, cap));
         if cap < legacy.len() {
-            assert!(matches!(result, Err(RpmFailure::Bytes)));
+            assert!(matches!(result, Err(ReadFailure::Bytes)));
             assert_eq!(&out[..], b"prefix");
         } else {
             result.unwrap();
@@ -228,7 +228,7 @@ fn rpm_byte_overflow_stops_reads_and_whole_array_is_not_preempted() {
         // Header + footer fit (7 bytes), but the first value does not.
         assert!(matches!(
             handle_rpm_budgeted(&db, &data, &mut BytesMut::new(), budget(3, 7)),
-            Err(RpmFailure::Bytes)
+            Err(ReadFailure::Bytes)
         ));
         assert_eq!(reads.load(Ordering::SeqCst), 1);
         reads.store(0, Ordering::SeqCst);
@@ -236,7 +236,7 @@ fn rpm_byte_overflow_stops_reads_and_whole_array_is_not_preempted() {
         // but the third property is never read. A whole array still fails first.
         assert!(matches!(
             handle_rpm_budgeted(&db, &data, &mut BytesMut::new(), budget(3, 13)),
-            Err(RpmFailure::Bytes)
+            Err(ReadFailure::Bytes)
         ));
         assert_eq!(reads.load(Ordering::SeqCst), if array { 1 } else { 2 });
     }
@@ -250,7 +250,7 @@ fn rpm_empty_expansions_still_charge_object_wrappers() {
         let mut out = BytesMut::new();
         let result = handle_rpm_budgeted(&db, &data, &mut out, budget(1, cap));
         if cap == 6 {
-            assert!(matches!(result, Err(RpmFailure::Bytes)));
+            assert!(matches!(result, Err(ReadFailure::Bytes)));
         } else {
             result.unwrap();
             // Independently worked context-0 AI:1, open-1, close-1.
@@ -270,12 +270,12 @@ fn rpm_scratch_growth_never_exceeds_cap_even_on_overflow() {
     assert_eq!(scratch.bytes.len(), 2);
     assert!(matches!(
         scratch.append(&[3, 4, 5], 0),
-        Err(RpmFailure::Bytes)
+        Err(ReadFailure::Bytes)
     ));
     assert_eq!(scratch.bytes.len(), 2);
     assert!(matches!(
         scratch.append(&[], usize::MAX),
-        Err(RpmFailure::Bytes)
+        Err(ReadFailure::Bytes)
     ));
     scratch.append(&[3, 4], 0).unwrap();
     assert_eq!(scratch.bytes.len(), 4);
@@ -287,7 +287,7 @@ fn rpm_decode_failure_keeps_priority_and_caller_prefix() {
     let mut out = BytesMut::from(&b"prefix"[..]);
     assert!(matches!(
         handle_rpm_budgeted(&db, &[0xff], &mut out, budget(1, 1)),
-        Err(RpmFailure::Service(_))
+        Err(ReadFailure::Service(_))
     ));
     assert_eq!(&out[..], b"prefix");
     assert_eq!(reads.load(Ordering::SeqCst), 0);
@@ -351,7 +351,7 @@ fn rpm_migrated_metadata_device_wildcard_and_index_legacy_parity() {
             let mut out = BytesMut::new();
             let result = handle_rpm_budgeted(&db, &data, &mut out, budget(work, legacy.len()));
             if work < count {
-                assert!(matches!(result, Err(RpmFailure::Work)));
+                assert!(matches!(result, Err(ReadFailure::Work)));
             } else {
                 result.unwrap();
                 assert_eq!(out, legacy);
@@ -427,7 +427,7 @@ fn rpm_device_result_identity_errors_and_exact_byte_budget() {
             let mut bounded = BytesMut::from(&b"prefix"[..]);
             let result = handle_rpm_budgeted(&db, &data, &mut bounded, budget(8, cap));
             if cap < legacy.len() {
-                assert!(matches!(result, Err(RpmFailure::Bytes)));
+                assert!(matches!(result, Err(ReadFailure::Bytes)));
                 assert_eq!(
                     &bounded[..],
                     b"prefix",

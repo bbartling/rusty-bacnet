@@ -1,5 +1,5 @@
 //! COV_Increment on Integer, Positive Integer and Large Analog Value, end to
-//! end (#1111).
+//! end (#1111), and on Lighting Output (#1227).
 //!
 //! Table 13-1 puts these three types with the analog objects: a SubscribeCOV
 //! notification goes out when Present_Value moves by COV_Increment from the
@@ -8,6 +8,7 @@
 //! notification), by less again, and by more (a notification).
 use super::cov_wire_test_support::*;
 use super::*;
+use bacnet_objects::lighting::LightingOutputObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::value_types::{
     IntegerValueObject, LargeAnalogValueObject, PositiveIntegerValueObject,
@@ -214,4 +215,28 @@ async fn numeric_value_cov_increment_written_over_the_wire_takes_effect() {
     );
     h.no_notification().await;
     h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn lighting_output_cov_notifies_at_and_above_its_increment_only() {
+    let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
+    lo.write_property(
+        PropertyIdentifier::COV_INCREMENT,
+        None,
+        PropertyValue::Real(5.0),
+        None,
+    )
+    .unwrap();
+    use PropertyValue::Real;
+    run(
+        Box::new(lo),
+        Real(0.0),
+        &[
+            (Real(4.0), false),
+            (Real(5.0), true),
+            (Real(9.0), false),
+            (Real(20.0), true),
+        ],
+    )
+    .await;
 }

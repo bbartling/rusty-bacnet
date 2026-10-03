@@ -111,6 +111,10 @@ pub struct CovSubscriptionTable {
     revisits: Arc<CovRevisits>,
     dispatch_turn: usize,
     timed: timed::TimedStore,
+    /// Live list samples taken for read requests, so tests can see which
+    /// requests snapshot the table (#1213).
+    #[cfg(test)]
+    live_samples: std::sync::atomic::AtomicUsize,
 }
 
 impl Default for CovSubscriptionTable {
@@ -140,6 +144,8 @@ impl CovSubscriptionTable {
             revisits: Arc::default(),
             dispatch_turn: 0,
             timed,
+            #[cfg(test)]
+            live_samples: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 

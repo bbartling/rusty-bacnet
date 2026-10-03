@@ -2027,7 +2027,12 @@ on a Load Control. While a door's Out_Of_Service is TRUE, clients can write
 its Door_Status, Lock_Status and Door_Alarm_State to simulate it (Table 12-30
 footnote 1); returning it to service brings back the door's own values. A
 door's Secured_Status follows its command, Door_Status and Lock_Status,
-simulated or not (Clause 12.26.14).
+simulated or not (Clause 12.26.14). A Credential Data Input's Present_Value
+and Reliability take writes the same way (Table 12-43 footnote 1); a
+simulated Present_Value must name a format the reader declares, and the Python
+API declares none yet, so only the UNDEFINED and ERROR factors are accepted.
+Supported_Formats, Supported_Format_Classes, Door_Members and Access_Doors
+read as arrays (index 0 is the size).
 
 #### Transportation
 
@@ -2306,8 +2311,8 @@ server = BACnetServer(
 | `max_subscriptions_global` | 1024 | subscriptions | Positive. Subscriptions held across all peers | `subscriptions_rejected_capacity` |
 | `max_subscriptions_per_peer` | 64 | subscriptions | Positive. Subscriptions one peer may hold | `subscriptions_rejected_quota` |
 | `reserved_capacity` | 64 | subscriptions | Slots of the global cap kept for reserved peers, clamped to it. Has no effect while both reserved lists are empty; 0 keeps none | `subscriptions_rejected_capacity` |
-| `reserved_peers` | `[]` | MAC `bytes` | Directly attached peers that may use the reserved slots; each MAC is 1 to 255 octets | |
-| `reserved_recipients` | `[]` | `(network, bytes)` | As `dcc_source_restriction`: `None` for a local peer, otherwise its routed source network (1 to 65534) and MAC (1 to 255 octets) | |
+| `reserved_peers` | `[]` | MAC `bytes` | Directly attached peers that may use the reserved slots; each MAC is 1 to 18 octets, the longest source the network layer delivers | |
+| `reserved_recipients` | `[]` | `(network, bytes)` | As `dcc_source_restriction`: `None` for a local peer, otherwise its routed source network (1 to 65534), and a MAC of 1 to 18 octets | |
 | `allow_indefinite_subscriptions` | `True` | `bool` | Whether a subscription without a lifetime is admitted | `subscriptions_rejected_indefinite` |
 | `max_indefinite_per_peer` | 16 | subscriptions | Indefinite subscriptions one peer may hold, clamped to its per-peer cap; 0 admits none | `subscriptions_rejected_indefinite` |
 | `max_notifications_per_event` | 64 | notifications | Positive. Notifications one change of a monitored object may send | `notifications_throttled_fanout` |
@@ -2355,6 +2360,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `confirmed_no_invoke_id` | Confirmed notifications to one recipient not sent because no invoke ID was free |
 | `confirmed_rejected` | Confirmed notifications the recipient answered with an Error, Reject or Abort |
 | `confirmed_unanswered` | Confirmed notifications with no acknowledgment after the last retry |
+| `unconfirmed_send_failed` | Unconfirmed notifications the transport refused to send, once per destination; the other destinations are still served |
 
 The first four count event and acknowledgment notifications alike, once per
 transition. A class whose list is empty, or whose destinations all filter the
@@ -2363,7 +2369,9 @@ counted. Neither are notifications held back by DeviceCommunicationControl or
 Event_Enable, nor confirmed reservations refused while the server stops. The
 three route fields (#1160) count once per skipped destination, and the
 transition's other destinations are still served; the warning logged with each
-skip gives the finer reason. The binding builds the dict from an exhaustive
+skip gives the finer reason. `unconfirmed_send_failed` (#1196) counts once
+per destination whose send fails; no field counts an encode failure, since a
+well-formed transition always encodes. The binding builds the dict from an exhaustive
 pattern over the Rust struct, like `cov_counters()`.
 
 #### `local_address() -> str`

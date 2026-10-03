@@ -10,6 +10,7 @@ use bacnet_types::enums::ObjectType;
 mod access_credential;
 mod action_list;
 mod assigned_landing_calls;
+mod authentication_factor_format;
 mod calendar;
 mod cov_subscription;
 mod event_log_record;

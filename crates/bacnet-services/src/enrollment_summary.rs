@@ -98,7 +98,7 @@ impl GetEnrollmentSummaryRequest {
             ..
         }) = &self.enrollment_filter
         {
-            check_encoded_mac_len(address, "EnrollmentSummary enrollmentFilter")?;
+            check_encoded_mac_len(&address.mac_address, "EnrollmentSummary enrollmentFilter")?;
         }
         // [0] acknowledgmentFilter
         primitives::encode_ctx_enumerated(buf, 0, self.acknowledgment_filter.to_raw());
