@@ -1668,8 +1668,8 @@
    "benchmarks": [],
    "public_claims": [],
    "notes": [
-    "Split child of BACNET-12-OBJECT-MODEL (#401). Passenger_Alarm is modeled as Boolean with FALSE default. Fault_Signals uses typed EscalatorFault storage and reads as a List of Enumerated raw values; the write arm accepts the empty List, the wire decoder's singleton Enumerated shape, and multi-element Lists.",
-    "A zero-element propertyValue is admitted only for Fault_Signals and Calendar Date_List (#996); the generic decoder still rejects empty payloads for other properties. Runtime dispatch and PICS use the same exact Escalator is_writable_property set: Description, Out_Of_Service, and the six status properties; Object_Name is not advertised because no arm accepts it.",
+    "Split child of BACNET-12-OBJECT-MODEL (#401). Passenger_Alarm is modeled as Boolean with FALSE default. Fault_Signals uses typed EscalatorFault storage and reads as a List of Enumerated raw values; the write arm accepts the empty List, a lone Enumerated (a local write's shape), and multi-element Lists; WriteProperty hands it over as a List at every length (#1328).",
+    "A zero-element propertyValue is the empty list for any property the target object holds as a BACnetLIST, Fault_Signals included (#1328); the generic decoder refuses it for a property that is not a list. Runtime dispatch and PICS use the same exact Escalator is_writable_property set: Description, Out_Of_Service, and the six status properties; Object_Name is not advertised because no arm accepts it.",
     "The served property set, including Elevator_Group, Group_ID, Installation_ID and Energy_Meter_Ref, is BACNET-12-ESCALATOR-PROPERTY-SET (#1022); while the application has set Energy_Meter_Ref, Energy_Meter takes only 0.0 and refuses other values with VALUE_OUT_OF_RANGE (#1036, covered there). Reliability simulation, intrinsic reporting and physical-device arbitration remain outside this row, which is not a complete Escalator-object conformance claim."
    ]
   },
@@ -2920,7 +2920,8 @@
    "positive_tests": [
     "crates/bacnet-objects/src/access_control/zone_event_tests.rs::{access_zone_serves_the_event_rows,access_zone_goes_offnormal_after_time_delay_and_back_to_normal,access_zone_time_delay_normal_governs_only_the_return_to_normal,access_zone_event_enable_gates_distribution_not_the_transition,access_zone_acknowledges_its_latest_offnormal_transition,access_zone_simulated_fault_and_count_drive_the_event_state}",
     "crates/bacnet-server/src/server/access_zone_event_tests.rs::{access_zone_occupancy_alarm_reaches_notification_class_recipients,access_zone_event_enable_withholds_only_the_distribution,access_zone_fault_notification_reports_occupancy_state,access_zone_in_alarm_is_listed_by_the_summary_services}",
-    "crates/bacnet-server/src/server/list_element_event_tests.rs::alarm_values_list_edits_move_a_zone_at_once",
+    "crates/bacnet-server/src/server/list_element_event_tests.rs::{alarm_values_list_edits_move_a_zone_at_once,alarm_values_writes_move_a_zone_at_once}",
+    "crates/bacnet-server/src/handlers/tests/list_value_writes.rs::{empty_alarm_values_write_clears_the_list,one_element_alarm_values_write_is_a_list_of_one}",
     "crates/bacnet-server/src/handlers/tests/access_zone_oos_writes.rs::alarm_values_take_occupancy_states_over_the_wire",
     "crates/bacnet-objects/src/database/tests.rs::all_ten_builtin_intrinsic_families_implement_atomic_commit",
     "crates/bacnet-objects/src/enrollment_summary_capability_tests.rs::all_ten_intrinsic_families_report_implied_algorithm_and_shared_commit_coordinate",
@@ -2932,7 +2933,8 @@
     "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact"
    ],
    "negative_tests": [
-    "crates/bacnet-objects/src/access_control/zone_event_tests.rs::{access_zone_alarm_values_take_occupancy_states_only,access_zone_alarm_values_past_the_cap_are_no_space,access_zone_condition_cleared_within_time_delay_reports_nothing,access_zone_event_detection_enable_suspends_and_resets_reporting}"
+    "crates/bacnet-objects/src/access_control/zone_event_tests.rs::{access_zone_alarm_values_take_occupancy_states_only,access_zone_alarm_values_past_the_cap_are_no_space,access_zone_condition_cleared_within_time_delay_reports_nothing,access_zone_event_detection_enable_suspends_and_resets_reporting}",
+    "crates/bacnet-server/src/handlers/tests/list_value_writes.rs::one_element_of_another_datatype_is_refused_as_element_one"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2940,14 +2942,13 @@
    ],
    "notes": [
     "Time_Delay, Notification_Class, Alarm_Values, Event_Enable, Notify_Type, Event_Detection_Enable and Time_Delay_Normal are writable; Acked_Transitions, Event_Time_Stamps and Event_Message_Texts are read-only.",
-    "Alarm_Values takes named BACnetAccessZoneOccupancyState values and proprietary ones from 64 to 65535, else VALUE_OUT_OF_RANGE naming the element. A WriteProperty of one element reaches the zone as that element alone.",
+    "Alarm_Values takes named BACnetAccessZoneOccupancyState values and proprietary ones from 64 to 65535, else VALUE_OUT_OF_RANGE naming the element. WriteProperty and WritePropertyMultiple take it at any length; an empty value clears it.",
     "The algorithm watches the Occupancy_State and Reliability served, so a count or fault simulated out of service raises events as a real one does.",
     "A CHANGE_OF_STATE notification carries Occupancy_State as its `zone-occupancy-state` New_State; a CHANGE_OF_RELIABILITY one lists Occupancy_State.",
     "Moving from one alarm value to another keeps OFFNORMAL and sends nothing, the optional re-indication of Clause 13.3.2 being left out."
    ],
    "gaps": [
     "#1132: a count the application sets on the object reaches the algorithm at the next one-second tick, as no runtime route runs it at once",
-    "#1328: WriteProperty can't write an empty Alarm_Values list",
     "#1329: Event_Message_Texts_Config, Event_Algorithm_Inhibit and Event_Algorithm_Inhibit_Ref are not served"
    ]
   },
@@ -6024,9 +6025,9 @@
   },
   {
    "id": "BACNET-15-STRUCTURED-WRITE-DECODE",
-   "standard_anchor": "Clause 15.9 WriteProperty (15.9.1.2 Result(+), 15.9.1.3 Result(-)), Clause 15.10 WritePropertyMultiple, Clause 20.2.1 (concatenated elements)",
+   "standard_anchor": "Clauses 15.9, 15.9.1.2, 15.9.1.3, 15.10, 20.2.1, 20.2.17",
    "priority": "P1",
-   "requirement_summary": "WriteProperty and WritePropertyMultiple decode the entire propertyValue payload: elements are decoded with decode_application_value until the input is exhausted - the mirror of encode_property_value's List flattening - so one element yields the scalar PropertyValue and more than one yields PropertyValue::List. Full consumption is required: a partial or undecodable trailing element is PROPERTY / INVALID_DATA_ENCODING per Clause 15.9.1.3 (an encoding incompatible with the property's datatype) - never a silent drop - with the stored value proven unchanged; a well-formed extra element reaches a scalar arm and fails its shape as INVALID_DATA_TYPE. Empty payloads are also INVALID_DATA_ENCODING except for Fault_Signals (Clause 12.60) and Calendar Date_List (Clause 12.9), BACnetLISTs that may be empty, which are delivered as an empty PropertyValue::List. The RECIPIENT_LIST verbatim special-case keeps its precedence and the context-tagged ApplicationData widening of the single-element decoder is preserved (framed CHOICE properties, Clause 12.17 reference members).",
+   "requirement_summary": "WriteProperty and WritePropertyMultiple decode the entire propertyValue payload: elements are decoded with decode_application_value until the input is exhausted - the mirror of encode_property_value's List flattening - so one element yields the scalar PropertyValue and more than one yields PropertyValue::List, except that a property the target object holds as a BACnetLIST (BACnetObject::is_list_property), written whole, is a PropertyValue::List at every length. Full consumption is required: a partial or undecodable trailing element is PROPERTY / INVALID_DATA_ENCODING per Clause 15.9.1.3 (an encoding incompatible with the property's datatype) - never a silent drop - with the stored value proven unchanged; a well-formed extra element reaches a scalar arm and fails its shape as INVALID_DATA_TYPE. An empty payload is the empty list for such a property (Clause 20.2.17), so a client can clear Alarm_Values, Fault_Signals or Date_List, and PROPERTY / INVALID_DATA_ENCODING for any other property the decoder does not pass through as raw octets. The RECIPIENT_LIST verbatim special-case keeps its precedence and the context-tagged ApplicationData widening of the single-element decoder is preserved (framed CHOICE properties, Clause 12.17 reference members).",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-server/src/handlers/write_property.rs",
@@ -6040,13 +6041,15 @@
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::wpm_reference_write_commits_in_order_and_keeps_prefix_on_failure",
     "crates/bacnet-server/src/handlers/tests/framed_properties.rs::recipient_list_framed_wire_round_trip",
     "crates/bacnet-server/src/handlers/tests/framed_properties.rs::event_parameters_framed_wire_round_trip",
-    "crates/bacnet-server/src/handlers/tests/escalator_writes.rs::escalator_fault_signals_empty_singleton_and_multi_reach_the_object_over_wp"
+    "crates/bacnet-server/src/handlers/tests/escalator_writes.rs::escalator_fault_signals_empty_singleton_and_multi_reach_the_object_over_wp",
+    "crates/bacnet-server/src/handlers/tests/list_value_writes.rs::{empty_alarm_values_write_clears_the_list,one_element_alarm_values_write_is_a_list_of_one}",
+    "crates/bacnet-server/src/server/list_element_event_tests.rs::{alarm_values_writes_move_a_multi_state_input_at_once,alarm_values_write_multiple_moves_a_multi_state_value_at_once,alarm_values_writes_move_a_zone_at_once}"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::scalar_write_with_undecodable_trailing_element_is_refused_and_preserves",
     "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::list_write_with_undecodable_trailing_element_is_refused_and_preserves",
     "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::list_write_with_tlv_truncated_tail_is_refused_before_the_value_decode",
-    "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::empty_property_value_is_refused",
+    "crates/bacnet-server/src/handlers/tests/list_value_writes.rs::{empty_value_on_a_scalar_property_is_still_invalid_data_encoding,empty_value_on_a_read_only_list_is_write_access_denied,empty_value_on_a_list_the_object_lacks_is_unknown_property,one_element_of_another_datatype_is_refused_as_element_one}",
     "crates/bacnet-server/src/handlers/tests/multi_element_writes.rs::datetime_write_with_mispaired_members_is_refused_and_preserves"
    ],
    "benchmarks": [],
@@ -6054,7 +6057,8 @@
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#182; behavior change - trailing bytes previously dropped between the single-element decoder and the arm now decide the write, and malformed value payloads map to PROPERTY / INVALID_DATA_ENCODING instead of the SERVICES/OTHER a propagated raw decoding error produced).",
     "A value TLV-truncated so far that framing breaks is refused by the shared incremental service grammar before that write is attempted. Unlocks covered here: MSI Alarm_Values whole-list writes (the pin in handlers/list.rs flipped from pinned failure to per-element-validated success) and the datetime-paired value properties completing #270 (DateTime Value PV / Priority_Array entries, Relinquish_Default on DateTime Value + DateTime Pattern Value; see BACNET-12-RELINQUISH-DEFAULT-WRITABILITY).",
-    "#401 adds the narrow zero-element exception for Fault_Signals and #996 one for Calendar Date_List; other empty propertyValue payloads remain refused. WPM decodes and commits each complete attempt in order and stops at the first failure.",
+    "WPM decodes and commits each complete attempt in order and stops at the first failure.",
+    "WP, WPM, write_local_encoded and a Command's writes ask the target object whether the property is a list; the durable-write pre-pass uses the standard classification. The object then judges every list write: an empty value on a read-only list is WRITE_ACCESS_DENIED, one on an object without the property UNKNOWN_PROPERTY, and a lone element of the wrong datatype is refused as element 1.",
     "AddListElement/RemoveListElement now validate all elements before mutation and reject malformed tails atomically (#279). Remaining separate residues: Enumerated contents wider than four octets still truncate to u32 (#277, explicitly untouched); and properties declared SEQUENCE OF beyond the four reference arms (e.g. LIST_OF_OBJECT_PROPERTY_REFERENCES) keep their pre-existing arm-level behavior."
    ]
   },

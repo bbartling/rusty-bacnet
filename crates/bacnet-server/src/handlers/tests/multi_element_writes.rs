@@ -35,7 +35,8 @@ fn write_raw(
 }
 
 /// Read a property over the wire and loop-decode the flattened result the
-/// same way the write path decodes (single element → scalar, else `List`).
+/// way the write path decodes a property that is not a list (single element
+/// → scalar, else `List`).
 fn read_prop(
     db: &ObjectDatabase,
     oid: ObjectIdentifier,
@@ -104,8 +105,9 @@ fn assert_refused(
 // unassigned application tag 13) fails the decode loop as PROPERTY /
 // INVALID_DATA_ENCODING; a whole extra decodable element reaches the arm and
 // fails its shape check as INVALID_DATA_TYPE; a TLV-truncated tail never
-// survives the service request's own framing walk. An empty payload is
-// refused outright.
+// survives the service request's own framing walk. An empty payload is an
+// empty list for a list property and refused for the rest
+// (list_value_writes.rs).
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -238,22 +240,6 @@ fn well_formed_trailing_element_reaches_scalar_arm_as_list_and_is_refused() {
         ErrorCode::INVALID_DATA_TYPE,
         PropertyValue::Real(72.0),
         "scalar + well-formed second element",
-    );
-}
-
-#[test]
-fn empty_property_value_is_refused() {
-    let mut db = make_db_with_msi();
-    let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
-
-    assert_refused(
-        &mut db,
-        oid,
-        PropertyIdentifier::ALARM_VALUES,
-        Vec::new(),
-        ErrorCode::INVALID_DATA_ENCODING,
-        PropertyValue::List(vec![]),
-        "empty propertyValue",
     );
 }
 

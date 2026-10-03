@@ -129,7 +129,7 @@ fn access_zone_alarm_values_take_occupancy_states_only() {
     let both = states(&[S::ABOVE_UPPER_LIMIT, S::BELOW_LOWER_LIMIT]);
     write(&mut zone, P::ALARM_VALUES, both.clone()).unwrap();
     assert_eq!(read(&zone, P::ALARM_VALUES), both);
-    // WriteProperty hands over a one-element list as the element alone.
+    // A local write may give a one-element list as the element alone.
     write(&mut zone, P::ALARM_VALUES, PropertyValue::Enumerated(5)).unwrap();
     assert_eq!(read(&zone, P::ALARM_VALUES), states(&[S::DISABLED]));
     // A proprietary state is a BACnetAccessZoneOccupancyState too.
