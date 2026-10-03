@@ -21,7 +21,7 @@ const WHAT: &str = "BACnetValueSource";
 /// refuses, returns an error before modifying the output buffer (#1156).
 pub fn encode_value_source(buf: &mut BytesMut, source: &BACnetValueSource) -> Result<(), Error> {
     if let BACnetValueSource::Address(address) = source {
-        check_encoded_mac_len(address, WHAT)?;
+        check_encoded_mac_len(&address.mac_address, WHAT)?;
     }
     match source {
         BACnetValueSource::None => tags::encode_tag(buf, 0, tags::TagClass::Context, 0),

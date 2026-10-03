@@ -1,5 +1,5 @@
 //! Wire-level router fixtures shared by the loopback test modules
-//! (`address_bound_tests`, `reject_route_tests`).
+//! (`address_bound_tests`, `link_source_bound_tests`, `reject_route_tests`).
 //!
 //! Raw NPDU bytes go in through [`LoopbackTransport`] peers, and the frames
 //! the router sends come back out of them, so a test sees exactly what a

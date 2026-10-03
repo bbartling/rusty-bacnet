@@ -481,6 +481,10 @@ use bacnet_services::who_am_i::{WhoAmIRequest, YouAreRequest};
 `device_identifier` (which must name a Device object) and `device_mac_address`; at
 least one of those two must be present. Both `encode` methods are fallible and both
 `decode` methods reject missing fields, context-tagged layouts and trailing data.
+`device_mac_address` is the MAC the matching device takes on the port the request
+arrived on (Clauses 16.11.3.1.5 and 16.11.4), so it is held to
+`BACnetAddress::MAX_MAC_LEN` (18 octets) in both directions (#1200): `decode`
+refuses a longer one and `encode` returns `Error::Encoding` without writing.
 
 ### Virtual Terminal
 
@@ -1513,6 +1517,14 @@ to send. `BACnetRouter` neither forwards nor delivers it, counts it in its own
 with Reject-Message-To-Network reason 6 (`ADDRESSING_ERROR`, Clause 6.4.4) for
 that DNET, as it does a DNET it cannot reach. A global broadcast or an NPDU
 without a DNET is dropped without a reject.
+
+Both also drop a frame whose link-layer source MAC, as the transport reports
+it, is longer than `NpduAddress::MAX_MAC_LEN`, before decoding it, and count it
+in the same `address_length_drops()` (#1198). Nothing answers such a frame, and
+a router learns no route from it. No built-in transport reports a MAC that long
+(B/IP, BACnet/SC and Ethernet use 6 octets, MS/TP 1, B/IPv6 18), so only a
+custom `TransportPort` can, and every address the stack learns off the network
+fits a `BACnetAddress`.
 
 `BACnetRouter` sends each Reject-Message-To-Network it originates to whoever
 first sent the refused NPDU (Clause 6.4.4, #1158). An NPDU that arrived
