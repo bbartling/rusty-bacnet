@@ -12,11 +12,13 @@
 use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use super::cov_subscription::decode_ctx_boolean;
-use super::{decode_ctx_unsigned, decode_framed_value, expect_opening, MAX_FRAMED_ITEMS};
+use super::tagged::{
+    decode_ctx_boolean, decode_ctx_object_id, decode_ctx_unsigned, decode_framed_value,
+    decode_optional_ctx, expect_opening,
+};
+use super::MAX_FRAMED_ITEMS;
 use crate::{primitives, tags};
 
 const WHAT: &str = "BACnetActionCommand";
@@ -76,24 +78,18 @@ pub fn decode_action_command(
     data: &[u8],
     offset: usize,
 ) -> Result<(BACnetActionCommand, usize), Error> {
-    let (device_identifier, offset) = if next_is_context(data, offset, 0)? {
-        let (device, next) = decode_ctx_object_id(data, offset, 0)?;
-        (Some(device), next)
-    } else {
-        (None, offset)
-    };
-    let (object_identifier, offset) = decode_ctx_object_id(data, offset, 1)?;
-    let (property, next) = decode_ctx_unsigned(data, offset, 2, WHAT)?;
-    let property_identifier = PropertyIdentifier::from_raw(
-        u32::try_from(property)
-            .map_err(|_| Error::decoding(offset, format!("{WHAT}: [2] exceeds u32")))?,
-    );
-    let (property_array_index, offset) = optional_u32(data, next, 3)?;
+    let (device_identifier, offset) =
+        decode_optional_ctx(data, offset, 0, WHAT, decode_ctx_object_id)?;
+    let (object_identifier, offset) = decode_ctx_object_id(data, offset, 1, WHAT)?;
+    let (property, offset) = decode_ctx_unsigned::<u32>(data, offset, 2, WHAT)?;
+    let property_identifier = PropertyIdentifier::from_raw(property);
+    let (property_array_index, offset) =
+        decode_optional_ctx(data, offset, 3, WHAT, decode_ctx_unsigned::<u32>)?;
 
     let content = expect_opening(data, offset, 4, WHAT)?;
     let (property_value, offset) = decode_framed_value(data, content, 4, WHAT)?;
 
-    let (priority, next) = optional_u32(data, offset, 5)?;
+    let (priority, next) = decode_optional_ctx(data, offset, 5, WHAT, decode_ctx_unsigned::<u32>)?;
     let priority = priority
         .map(|value| {
             u8::try_from(value)
@@ -107,7 +103,8 @@ pub fn decode_action_command(
                 })
         })
         .transpose()?;
-    let (post_delay, offset) = optional_u32(data, next, 6)?;
+    let (post_delay, offset) =
+        decode_optional_ctx(data, next, 6, WHAT, decode_ctx_unsigned::<u32>)?;
     let (quit_on_failure, offset) = decode_ctx_boolean(data, offset, 7, WHAT)?;
     let (write_successful, offset) = decode_ctx_boolean(data, offset, 8, WHAT)?;
     Ok((
@@ -162,44 +159,4 @@ pub fn decode_action_list(data: &[u8], offset: usize) -> Result<(BACnetActionLis
         offset = next;
     }
     Ok((BACnetActionList { commands }, end))
-}
-
-/// Whether a primitive context tag `tag` starts at `offset`; `false` at the
-/// end of the data.
-fn next_is_context(data: &[u8], offset: usize, tag: u8) -> Result<bool, Error> {
-    if offset >= data.len() {
-        return Ok(false);
-    }
-    Ok(tags::decode_tag(data, offset)?.0.is_context(tag))
-}
-
-/// Decode a context-tagged object identifier, which has exactly four octets.
-fn decode_ctx_object_id(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-) -> Result<(ObjectIdentifier, usize), Error> {
-    let (t, pos) = tags::decode_tag(data, offset)?;
-    if !t.is_context(tag) || t.length != 4 {
-        return Err(Error::decoding(
-            offset,
-            format!("{WHAT}: expected [{tag}] object identifier (4 octets)"),
-        ));
-    }
-    let end = pos + 4;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok((ObjectIdentifier::decode(&data[pos..end])?, end))
-}
-
-/// Decode an optional context-tagged Unsigned that must fit in a u32.
-fn optional_u32(data: &[u8], offset: usize, tag: u8) -> Result<(Option<u32>, usize), Error> {
-    if !next_is_context(data, offset, tag)? {
-        return Ok((None, offset));
-    }
-    let (value, end) = decode_ctx_unsigned(data, offset, tag, WHAT)?;
-    let value = u32::try_from(value)
-        .map_err(|_| Error::decoding(offset, format!("{WHAT}: [{tag}] exceeds u32")))?;
-    Ok((Some(value), end))
 }

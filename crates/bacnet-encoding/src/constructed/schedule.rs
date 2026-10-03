@@ -28,11 +28,15 @@
 
 use bacnet_types::constructed::{BACnetSpecialEvent, BACnetTimeValue, SpecialEventPeriod};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, Time};
+use bacnet_types::primitives::Time;
 use bytes::BytesMut;
 
 use super::calendar::{decode_calendar_entry, encode_calendar_entry};
-use super::{decode_ctx_unsigned, expect_closing, expect_opening, MAX_FRAMED_ITEMS};
+use super::tagged::{
+    contents, decode_ctx_object_id, decode_ctx_unsigned, expect_closing, expect_end,
+    expect_opening, next_is_closing,
+};
+use super::MAX_FRAMED_ITEMS;
 use crate::primitives;
 use crate::tags::{self, TagClass};
 
@@ -63,11 +67,8 @@ pub fn decode_time_value(data: &[u8], offset: usize) -> Result<(BACnetTimeValue,
             "time-value: expected an application-tagged Time (4 octets)",
         ));
     }
-    let value_start = content + 4;
-    if value_start > data.len() {
-        return Err(Error::buffer_too_short(value_start, data.len()));
-    }
-    let time = Time::decode(&data[content..value_start])?;
+    let (octets, value_start) = contents(data, content, 4)?;
+    let time = Time::decode(octets)?;
 
     let (tag, _) = tags::decode_tag(data, value_start)?;
     if tag.class != TagClass::Application {
@@ -108,8 +109,7 @@ fn decode_time_values(
     let mut pos = expect_opening(data, offset, tag, what)?;
     let mut time_values = Vec::new();
     loop {
-        let (peek, _) = tags::decode_tag(data, pos)?;
-        if peek.is_closing_tag(tag) {
+        if next_is_closing(data, pos, tag)? {
             return Ok((time_values, expect_closing(data, pos, tag, what)?));
         }
         if time_values.len() >= MAX_FRAMED_ITEMS {
@@ -148,20 +148,7 @@ pub fn decode_special_event_period(
         return Ok((SpecialEventPeriod::CalendarEntry(entry), end));
     }
     if tag.is_context(1) {
-        if tag.length != 4 {
-            return Err(Error::decoding(
-                offset,
-                format!(
-                    "special event calendar-reference [1]: expected 4 content octets, got {}",
-                    tag.length
-                ),
-            ));
-        }
-        let end = content + 4;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        let oid = ObjectIdentifier::decode(&data[content..end])?;
+        let (oid, end) = decode_ctx_object_id(data, offset, 1, "special event calendar-reference")?;
         return Ok((SpecialEventPeriod::CalendarReference(oid), end));
     }
     Err(Error::decoding(
@@ -195,7 +182,8 @@ pub fn decode_special_event(
     let (period, pos) = decode_special_event_period(data, offset)?;
     let (list_of_time_values, pos) =
         decode_time_values(data, pos, 2, "special event list-of-time-values")?;
-    let (event_priority, end) = decode_ctx_unsigned(data, pos, 3, "special event event-priority")?;
+    let (event_priority, end) =
+        decode_ctx_unsigned::<u64>(data, pos, 3, "special event event-priority")?;
     Ok((
         BACnetSpecialEvent {
             period,
@@ -248,15 +236,7 @@ pub fn decode_weekly_schedule(data: &[u8]) -> Result<[Vec<BACnetTimeValue>; 7], 
         *day = time_values;
         pos = next;
     }
-    if pos != data.len() {
-        return Err(Error::decoding(
-            pos,
-            format!(
-                "weekly schedule: {} trailing byte(s) after 7 daily schedules",
-                data.len() - pos
-            ),
-        ));
-    }
+    expect_end(data, pos, pos, "weekly schedule after 7 daily schedules")?;
     Ok(days)
 }
 

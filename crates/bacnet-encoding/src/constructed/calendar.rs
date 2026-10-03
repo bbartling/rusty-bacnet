@@ -21,7 +21,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::Date;
 use bytes::BytesMut;
 
-use super::{expect_closing, MAX_FRAMED_ITEMS};
+use super::tagged::{contents, expect_closing};
+use super::MAX_FRAMED_ITEMS;
 use crate::primitives;
 use crate::tags::{self, TagClass};
 
@@ -153,9 +154,5 @@ fn fixed_content<'a>(
             format!("{what}: expected {expected} content octets, got {length}"),
         ));
     }
-    let end = content + expected;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok((&data[content..end], end))
+    contents(data, content, length)
 }

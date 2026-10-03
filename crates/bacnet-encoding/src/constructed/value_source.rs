@@ -3,10 +3,9 @@ use bacnet_types::constructed::{BACnetAddress, BACnetValueSource};
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-use super::{
-    decode_device_object_reference, encode_device_object_reference, expect_closing,
-    recipient::{check_encoded_mac_len, decode_app_mac_address, decode_app_unsigned},
-};
+use super::recipient::{check_encoded_mac_len, decode_app_mac_address};
+use super::tagged::{decode_app_unsigned, expect_closing};
+use super::{decode_device_object_reference, encode_device_object_reference};
 use crate::{primitives, tags};
 
 const WHAT: &str = "BACnetValueSource";

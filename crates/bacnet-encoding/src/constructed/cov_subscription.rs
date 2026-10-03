@@ -12,15 +12,18 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 use crate::{primitives, tags};
 
 use super::recipient::{check_encoded_recipient, write_recipient};
+use super::tagged::{
+    decode_ctx_boolean, decode_ctx_constructed, decode_ctx_object_id, decode_ctx_real,
+    decode_ctx_unsigned, decode_optional_ctx, expect_closing, expect_opening, next_is_closing,
+};
 use super::{
-    decode_ctx_real, decode_ctx_unsigned, decode_object_property_reference, decode_recipient,
-    encode_object_property_reference, expect_closing, expect_opening, MAX_FRAMED_ITEMS,
+    decode_object_property_reference, decode_recipient, encode_object_property_reference,
+    MAX_FRAMED_ITEMS,
 };
 
 /// Encode one bare `BACnetCOVSubscription` sequence. A recipient MAC past
@@ -153,17 +156,11 @@ pub fn decode_cov_subscription(
 ) -> Result<(BACnetCOVSubscription, usize), Error> {
     let what = "BACnetCOVSubscription";
     let (recipient, pos) = decode_recipient_process(data, offset, what)?;
-    let pos = expect_opening(data, pos, 1, what)?;
-    let (reference, pos) = tags::extract_context_value(data, pos, 1)?;
+    let (reference, pos) = decode_ctx_constructed(data, pos, 1, what)?;
     let monitored_property_reference = decode_object_property_reference(reference)?;
     let (issue_confirmed_notifications, pos) = decode_ctx_boolean(data, pos, 2, what)?;
-    let (time_remaining, pos) = decode_ctx_u32(data, pos, 3, what)?;
-    let (cov_increment, pos) = if next_is_primitive_context(data, pos, 4)? {
-        let (increment, end) = decode_ctx_real(data, pos, 4, what)?;
-        (Some(increment), end)
-    } else {
-        (None, pos)
-    };
+    let (time_remaining, pos) = decode_ctx_unsigned::<u32>(data, pos, 3, what)?;
+    let (cov_increment, pos) = decode_optional_ctx(data, pos, 4, what, decode_ctx_real)?;
     Ok((
         BACnetCOVSubscription {
             recipient,
@@ -187,8 +184,8 @@ pub fn decode_cov_multiple_subscription(
     let what = "BACnetCOVMultipleSubscription";
     let (recipient, pos) = decode_recipient_process(data, offset, what)?;
     let (issue_confirmed_notifications, pos) = decode_ctx_boolean(data, pos, 1, what)?;
-    let (time_remaining, pos) = decode_ctx_u32(data, pos, 2, what)?;
-    let (max_notification_delay, pos) = decode_ctx_u32(data, pos, 3, what)?;
+    let (time_remaining, pos) = decode_ctx_unsigned::<u32>(data, pos, 2, what)?;
+    let (max_notification_delay, pos) = decode_ctx_unsigned::<u32>(data, pos, 3, what)?;
     let mut pos = expect_opening(data, pos, 4, what)?;
     let mut specifications = Vec::new();
     while !is_closing(data, pos, 4)? {
@@ -222,19 +219,8 @@ fn decode_specification(
     offset: usize,
     what: &str,
 ) -> Result<(BACnetCOVSubscriptionSpecification, usize), Error> {
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if !tag.is_context(0) || tag.length != 4 {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: expected [0] monitored-object-identifier (4 octets)"),
-        ));
-    }
-    let end = pos + 4;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    let monitored_object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-    let mut pos = expect_opening(data, end, 1, what)?;
+    let (monitored_object_identifier, pos) = decode_ctx_object_id(data, offset, 0, what)?;
+    let mut pos = expect_opening(data, pos, 1, what)?;
     let mut references = Vec::new();
     while !is_closing(data, pos, 1)? {
         if references.len() >= MAX_FRAMED_ITEMS {
@@ -264,20 +250,11 @@ fn decode_cov_reference(
     what: &str,
 ) -> Result<(BACnetCOVReference, usize), Error> {
     let pos = expect_opening(data, offset, 0, what)?;
-    let (property_identifier, pos) = decode_ctx_u32(data, pos, 0, what)?;
-    let (property_array_index, pos) = if next_is_primitive_context(data, pos, 1)? {
-        let (index, end) = decode_ctx_u32(data, pos, 1, what)?;
-        (Some(index), end)
-    } else {
-        (None, pos)
-    };
+    let (property_identifier, pos) = decode_ctx_unsigned::<u32>(data, pos, 0, what)?;
+    let (property_array_index, pos) =
+        decode_optional_ctx(data, pos, 1, what, decode_ctx_unsigned::<u32>)?;
     let pos = expect_closing(data, pos, 0, what)?;
-    let (cov_increment, pos) = if next_is_primitive_context(data, pos, 1)? {
-        let (increment, end) = decode_ctx_real(data, pos, 1, what)?;
-        (Some(increment), end)
-    } else {
-        (None, pos)
-    };
+    let (cov_increment, pos) = decode_optional_ctx(data, pos, 1, what, decode_ctx_real)?;
     let (timestamped, pos) = decode_ctx_boolean(data, pos, 2, what)?;
     Ok((
         BACnetCOVReference {
@@ -301,7 +278,7 @@ fn decode_recipient_process(
     let pos = expect_opening(data, pos, 0, what)?;
     let (recipient, pos) = decode_recipient(data, pos)?;
     let pos = expect_closing(data, pos, 0, what)?;
-    let (process_identifier, pos) = decode_ctx_u32(data, pos, 1, what)?;
+    let (process_identifier, pos) = decode_ctx_unsigned::<u32>(data, pos, 1, what)?;
     let pos = expect_closing(data, pos, 0, what)?;
     Ok((
         BACnetRecipientProcess {
@@ -312,58 +289,11 @@ fn decode_recipient_process(
     ))
 }
 
-/// A context-tagged Unsigned that must fit Unsigned32.
-pub(super) fn decode_ctx_u32(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    what: &str,
-) -> Result<(u32, usize), Error> {
-    let (value, end) = decode_ctx_unsigned(data, offset, tag, what)?;
-    let value = u32::try_from(value)
-        .map_err(|_| Error::decoding(offset, format!("{what}: [{tag}] exceeds Unsigned32")))?;
-    Ok((value, end))
-}
-
-/// A context-tagged BOOLEAN has one contents octet, 0 or 1 (Clause 20.2.3).
-pub(super) fn decode_ctx_boolean(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    what: &str,
-) -> Result<(bool, usize), Error> {
-    let (t, pos) = tags::decode_tag(data, offset)?;
-    if !t.is_context(tag) || t.length != 1 {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: expected context tag [{tag}] BOOLEAN (1 octet)"),
-        ));
-    }
-    match data.get(pos) {
-        Some(0) => Ok((false, pos + 1)),
-        Some(1) => Ok((true, pos + 1)),
-        Some(_) => Err(Error::decoding(
-            pos,
-            format!("{what}: [{tag}] BOOLEAN contents must be 0 or 1"),
-        )),
-        None => Err(Error::buffer_too_short(pos + 1, data.len())),
-    }
-}
-
-/// Whether a primitive context tag `tag` starts at `offset`; `false` at the
-/// end of the data.
-fn next_is_primitive_context(data: &[u8], offset: usize, tag: u8) -> Result<bool, Error> {
-    if offset >= data.len() {
-        return Ok(false);
-    }
-    Ok(tags::decode_tag(data, offset)?.0.is_context(tag))
-}
-
 /// Whether closing tag `tag` starts at `offset`. A list that runs off the end
-/// of the data is truncated.
+/// of the data is truncated, so it fails as a short buffer.
 fn is_closing(data: &[u8], offset: usize, tag: u8) -> Result<bool, Error> {
     if offset >= data.len() {
         return Err(Error::buffer_too_short(offset + 1, data.len()));
     }
-    Ok(tags::decode_tag(data, offset)?.0.is_closing_tag(tag))
+    next_is_closing(data, offset, tag)
 }

@@ -11,7 +11,8 @@ use bacnet_types::constructed::BACnetLiftCarCallList;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-use super::members::{member_content, narrow, unsigned_member};
+use super::members::{narrow, unsigned_member};
+use super::tagged::{contents, expect_opening};
 use super::MAX_FRAMED_ITEMS;
 use crate::primitives;
 use crate::tags::{self, app_tag, TagClass};
@@ -44,13 +45,7 @@ pub fn decode_lift_car_call_list(
     offset: usize,
 ) -> Result<(BACnetLiftCarCallList, usize), Error> {
     let mut oversized = None;
-    let (tag, mut offset) = tags::decode_tag(data, offset)?;
-    if !tag.is_opening_tag(0) {
-        return Err(Error::decoding(
-            offset,
-            "lift car call list requires floor-numbers [0]",
-        ));
-    }
+    let mut offset = expect_opening(data, offset, 0, "lift car call list floor-numbers")?;
     let mut floor_numbers = Vec::new();
     loop {
         let (tag, content) = tags::decode_tag(data, offset)?;
@@ -72,7 +67,7 @@ pub fn decode_lift_car_call_list(
                 "lift car call list floor number must be an application Unsigned",
             ));
         }
-        let (floor, next) = member_content(data, content, tag.length)?;
+        let (floor, next) = contents(data, content, tag.length)?;
         floor_numbers.push(narrow(
             unsigned_member(floor, content)?,
             "floor number exceeds an Unsigned8",
