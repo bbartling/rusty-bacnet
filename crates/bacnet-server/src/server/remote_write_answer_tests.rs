@@ -31,6 +31,9 @@ async fn start_write(h: &Harness) -> (JoinHandle<Result<(), RemoteWriteError>>, 
     (task, invoke_id)
 }
 
+/// A device's answer to the request with this invoke ID.
+type Answer = fn(u8) -> Apdu;
+
 fn error_for(invoke_id: u8, service_choice: ConfirmedServiceChoice) -> Apdu {
     Apdu::Error(ErrorPdu {
         invoke_id,
@@ -60,28 +63,50 @@ async fn remote_write_ignores_answers_from_another_peer_or_for_another_service()
 }
 
 #[tokio::test(start_paused = true)]
-async fn remote_write_reject_or_abort_ends_it_at_once_without_retries() {
+async fn remote_write_error_reject_or_abort_ends_it_at_once_saying_why() {
     let h = start_local().await;
-    let answers: [fn(u8) -> Apdu; 2] = [
-        |invoke_id| {
-            Apdu::Reject(RejectPdu {
-                invoke_id,
-                reject_reason: RejectReason::UNRECOGNIZED_SERVICE,
-            })
-        },
-        |invoke_id| {
-            Apdu::Abort(AbortPdu {
-                sent_by_server: true,
-                invoke_id,
-                abort_reason: AbortReason::OTHER,
-            })
-        },
+    let answers: [(Answer, Refusal); 3] = [
+        (
+            |invoke_id| {
+                Apdu::Error(ErrorPdu {
+                    invoke_id,
+                    service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
+                    error_class: ErrorClass::PROPERTY,
+                    error_code: ErrorCode::INVALID_DATA_TYPE,
+                    error_data: Bytes::new(),
+                })
+            },
+            Refusal::Error {
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::INVALID_DATA_TYPE,
+            },
+        ),
+        (
+            |invoke_id| {
+                Apdu::Reject(RejectPdu {
+                    invoke_id,
+                    reject_reason: RejectReason::INVALID_PARAMETER_DATA_TYPE,
+                })
+            },
+            Refusal::Reject(RejectReason::INVALID_PARAMETER_DATA_TYPE),
+        ),
+        (
+            |invoke_id| {
+                Apdu::Abort(AbortPdu {
+                    sent_by_server: true,
+                    invoke_id,
+                    abort_reason: AbortReason::SEGMENTATION_NOT_SUPPORTED,
+                })
+            },
+            Refusal::Abort(AbortReason::SEGMENTATION_NOT_SUPPORTED),
+        ),
     ];
-    for answer in answers {
+    for (answer, refusal) in answers {
         let (task, invoke_id) = start_write(&h).await;
         let sent = tokio::time::Instant::now();
         deliver(&h, &answer(invoke_id), &PEER, None).await;
-        assert_eq!(task.await.unwrap(), Err(RemoteWriteError::Refused));
+        // The run host gets what the device said (#1323).
+        assert_eq!(task.await.unwrap(), Err(RemoteWriteError::Refused(refusal)));
         assert!(sent.elapsed() < Duration::from_millis(100));
         assert_eq!(h.server.notification_transactions.active_count(), 0);
         tokio::time::sleep(Duration::from_secs(15)).await;

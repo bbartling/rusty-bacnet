@@ -24,6 +24,20 @@
 //!   saves, coalesces: a queued save the thread has not started is replaced by
 //!   the newer one, so a burst costs one save of the latest state.
 //!
+//! # Storage leads the served state
+//!
+//! A staged state reaches storage before anyone can read it from the object.
+//! The storage call returns on the writer's thread, and the object serves the
+//! new state only when the request that staged it holds the guard again and
+//! takes it (or a later stage, or the object's operation task, settles it).
+//! Peers never see that gap: the request answers, and a confirmed Audit
+//! notification is acknowledged, only after the object serves the saved
+//! state. Code that watches storage directly does see it. A storage call
+//! that has returned, such as an in-memory [`AuditLogPersistence`] whose
+//! `commit` has stored a record, does not mean a read or an AuditLogQuery
+//! finds the record yet; wait on the served state, such as the log's
+//! Record_Count, instead.
+//!
 //! Some paths still wait for a save while the guard is held. They get the
 //! same outcome through the same writer; the object just queues the save and
 //! waits for it where it is:

@@ -4,6 +4,7 @@
 use super::probe::{
     address, clock, day, monotonic, noon, oid, schedule_write, CUSTOM, CUSTOM_LIST,
 };
+use bacnet_objects::command::WriteFailure;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use bacnet_objects::event_enrollment::{
@@ -13,8 +14,8 @@ use bacnet_objects::schedule::ScheduleTargetOutcome;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
 use bacnet_types::constructed::{
-    BACnetDeviceObjectReference, BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum,
-    LogValue,
+    BACnetDeviceObjectReference, BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord,
+    EventLogDatum, LogData, LogDatum, LogValue,
 };
 use bacnet_types::enums::{
     AuditLevel, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier as P, Reliability,
@@ -86,6 +87,19 @@ fn record() -> BACnetLogRecord {
         time: noon(),
         log_datum: LogDatum::UnsignedValue(77),
         status_flags: None,
+    }
+}
+
+fn event_log_record() -> BACnetEventLogRecord {
+    BACnetEventLogRecord {
+        date: Date {
+            year: 126,
+            month: 10,
+            day: 2,
+            day_of_week: 5,
+        },
+        time: noon(),
+        log_datum: EventLogDatum::TimeChange(1.5),
     }
 }
 
@@ -293,7 +307,8 @@ pub const COMMANDS: &[(&str, Command)] = &[
         o.record_command_write_internal(11, 2, false).to_string()
     }),
     ("complete_command_run_internal", |o| {
-        o.complete_command_run_internal(11, false).to_string()
+        o.complete_command_run_internal(11, Err(WriteFailure::Communication))
+            .to_string()
     }),
     ("set_overridden", |o| {
         format!("{:?}", o.set_overridden(true))
@@ -452,5 +467,8 @@ pub const COMMANDS: &[(&str, Command)] = &[
     }),
     ("add_trend_multiple_record", |o| {
         format!("{:?}", o.add_trend_multiple_record(multiple_record()))
+    }),
+    ("add_event_log_record", |o| {
+        format!("{:?}", o.add_event_log_record(event_log_record()))
     }),
 ];

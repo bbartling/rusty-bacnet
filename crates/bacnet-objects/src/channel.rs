@@ -15,8 +15,18 @@
 //! honouring each member's Execution_Delay. The outcome comes back through
 //! [`BACnetObject::complete_command_run_internal`].
 //!
-//! Members are inside this device only: a reference naming another Device is
-//! refused when it's written (Clause 12.53.11 allows that restriction).
+//! A member may name another Device (Clause 12.53.11): the server writes it
+//! there as a confirmed WriteProperty, from its device bindings.
+//!
+//! Reliability reports how the last distribution ended (Clause 12.53.9). A
+//! SUCCESSFUL one sets NO_FAULT_DETECTED; a FAILED one sets the kind of its
+//! first failure ([`WriteFailure::reliability`]): CONFIGURATION_ERROR,
+//! PROCESS_ERROR or COMMUNICATION_FAILURE. It keeps its value while a
+//! distribution is in progress, and Status_Flags shows FAULT whenever it isn't
+//! NO_FAULT_DETECTED. Out of service, Reliability is decoupled from the
+//! distributions (Clause 12.53.10): it holds what it read when the object
+//! went out of service, a client may write any Reliability value to it, and
+//! back in service it reads the last distribution's verdict again.
 //!
 //! Channel_Number and Control_Groups are what the bundled server's WriteGroup
 //! execution matches on (Clause 15.11). Allow_Group_Delay_Inhibit is served
@@ -37,7 +47,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 
-use crate::command::{next_generation, CommandRun, RunPlan};
+use crate::command::{next_generation, CommandRun, RunPlan, WriteFailure};
 use crate::common::{self, read_identity_properties};
 use crate::property_metadata::{property_list_from_metadata, PropertyMetadata};
 use crate::traits::BACnetObject;
@@ -57,8 +67,8 @@ const DEFAULT_PRIORITY: u8 = 16;
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChannelMember {
-    /// The property written; never an empty reference, and never one naming
-    /// another device.
+    /// The property written; never an empty reference. One naming a Device
+    /// other than this one is written in that device.
     pub reference: BACnetDeviceObjectPropertyReference,
     /// Milliseconds after the distribution starts before this member is
     /// written: its Execution_Delay element.
@@ -86,6 +96,13 @@ pub struct ChannelObject {
     present_value: PropertyValue,
     last_priority: u8,
     write_status: WriteStatus,
+    /// The verdict of the last distribution to end, or of a Present_Value
+    /// write that had nothing to distribute.
+    reliability: Reliability,
+    /// What Reliability reads while out of service: the value it read when
+    /// the object went out of service, or one a client wrote since. `None`
+    /// in service.
+    simulated_reliability: Option<Reliability>,
     out_of_service: bool,
     members: Vec<BACnetDeviceObjectPropertyReference>,
     execution_delay: Vec<u32>,
@@ -100,8 +117,8 @@ pub struct ChannelObject {
 
 impl ChannelObject {
     /// Create a Channel with no members, in control group 0 alone (no
-    /// assignment), Present_Value NULL, Write_Status IDLE and
-    /// Allow_Group_Delay_Inhibit FALSE.
+    /// assignment), Present_Value NULL, Write_Status IDLE, Reliability
+    /// NO_FAULT_DETECTED and Allow_Group_Delay_Inhibit FALSE.
     pub fn new(instance: u32, name: impl Into<String>, channel_number: u16) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::CHANNEL, instance)?;
         Ok(Self {
@@ -111,6 +128,8 @@ impl ChannelObject {
             present_value: PropertyValue::Null,
             last_priority: DEFAULT_PRIORITY,
             write_status: WriteStatus::IDLE,
+            reliability: Reliability::NO_FAULT_DETECTED,
+            simulated_reliability: None,
             out_of_service: false,
             members: Vec::new(),
             execution_delay: Vec::new(),
@@ -125,13 +144,11 @@ impl ChannelObject {
     /// Replace List_Of_Object_Property_References.
     ///
     /// Execution_Delay follows the new size, keeping its leading delays and
-    /// adding zeros. Refused, leaving the list as it was, with PROPERTY /
-    /// VALUE_OUT_OF_RANGE for a member whose device identifier isn't a
-    /// Device object (#1285), with PROPERTY /
-    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED for a member naming a Device
-    /// (other than the empty instance 4194303), since the object writes only
-    /// inside its own device, and with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY
-    /// past [`MAX_CHANNEL_MEMBERS`].
+    /// adding zeros. A member may name another Device, which the server then
+    /// writes over the network. Refused, leaving the list as it was, with
+    /// PROPERTY / VALUE_OUT_OF_RANGE for a member whose device identifier
+    /// isn't a Device object (#1285), and with RESOURCES /
+    /// NO_SPACE_TO_WRITE_PROPERTY past [`MAX_CHANNEL_MEMBERS`].
     pub fn set_members(
         &mut self,
         members: Vec<BACnetDeviceObjectPropertyReference>,
@@ -203,6 +220,7 @@ impl ChannelObject {
         }
         if self.members.is_empty() {
             self.write_status = WriteStatus::IDLE;
+            self.reliability = Reliability::NO_FAULT_DETECTED;
             return Ok(());
         }
         self.generation = next_generation();
@@ -220,6 +238,7 @@ impl ChannelObject {
             // Every member is an empty reference: nothing to write, nothing
             // to fail.
             self.write_status = WriteStatus::SUCCESSFUL;
+            self.reliability = Reliability::NO_FAULT_DETECTED;
             return Ok(());
         }
         self.write_status = WriteStatus::IN_PROGRESS;
@@ -233,6 +252,42 @@ impl ChannelObject {
             }),
             chain: Arc::from([]),
         });
+        Ok(())
+    }
+
+    /// What Reliability reads: a client's simulated value while out of
+    /// service, otherwise the last distribution's verdict.
+    fn served_reliability(&self) -> Reliability {
+        self.simulated_reliability.unwrap_or(self.reliability)
+    }
+
+    fn write_out_of_service(&mut self, value: PropertyValue) -> Result<(), Error> {
+        let PropertyValue::Boolean(value) = value else {
+            return Err(common::invalid_data_type_error());
+        };
+        if value != self.out_of_service {
+            // Out of service a client simulates Reliability, starting from
+            // what it reads now; back in service the verdict shows again.
+            self.simulated_reliability = value.then_some(self.reliability);
+        }
+        self.out_of_service = value;
+        Ok(())
+    }
+
+    /// A client's simulated Reliability, taken only while out of service
+    /// (Clause 12.53.10).
+    fn write_reliability(&mut self, value: PropertyValue) -> Result<(), Error> {
+        if !self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        let PropertyValue::Enumerated(raw) = value else {
+            return Err(common::invalid_data_type_error());
+        };
+        let reliability = Reliability::from_raw(raw);
+        if !common::is_reliability_value_valid(reliability) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.simulated_reliability = Some(reliability);
         Ok(())
     }
 }
@@ -281,13 +336,17 @@ impl BACnetObject for ChannelObject {
             PropertyIdentifier::WRITE_STATUS => {
                 Ok(PropertyValue::Enumerated(self.write_status.to_raw()))
             }
-            // No Reliability and no intrinsic reporting, so only the
-            // OUT_OF_SERVICE flag can be set (Clause 12.53.8).
+            // FAULT follows Reliability; with no intrinsic reporting and
+            // nothing overriding the value, IN_ALARM and OVERRIDDEN stay
+            // clear (Clause 12.53.8).
             PropertyIdentifier::STATUS_FLAGS => Ok(common::compute_status_flags(
                 StatusFlags::empty(),
-                Reliability::NO_FAULT_DETECTED,
+                self.served_reliability(),
                 self.out_of_service,
                 EventState::NORMAL,
+            )),
+            PropertyIdentifier::RELIABILITY => Ok(PropertyValue::Enumerated(
+                self.served_reliability().to_raw(),
             )),
             PropertyIdentifier::OUT_OF_SERVICE => Ok(PropertyValue::Boolean(self.out_of_service)),
             PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => common::read_array(
@@ -343,13 +402,8 @@ impl BACnetObject for ChannelObject {
         }
         match property {
             PropertyIdentifier::PRESENT_VALUE => self.write_present_value(value, priority),
-            PropertyIdentifier::OUT_OF_SERVICE => {
-                let PropertyValue::Boolean(value) = value else {
-                    return Err(common::invalid_data_type_error());
-                };
-                self.out_of_service = value;
-                Ok(())
-            }
+            PropertyIdentifier::OUT_OF_SERVICE => self.write_out_of_service(value),
+            PropertyIdentifier::RELIABILITY => self.write_reliability(value),
             PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
                 self.write_members(array_index, value)
             }
@@ -394,14 +448,17 @@ impl BACnetObject for ChannelObject {
         Some(self.generation)
     }
 
-    fn complete_command_run_internal(&mut self, generation: u64, all_succeeded: bool) -> bool {
+    fn complete_command_run_internal(
+        &mut self,
+        generation: u64,
+        outcome: Result<(), WriteFailure>,
+    ) -> bool {
         if generation != self.generation || self.write_status != WriteStatus::IN_PROGRESS {
             return false;
         }
-        self.write_status = if all_succeeded {
-            WriteStatus::SUCCESSFUL
-        } else {
-            WriteStatus::FAILED
+        (self.write_status, self.reliability) = match outcome {
+            Ok(()) => (WriteStatus::SUCCESSFUL, Reliability::NO_FAULT_DETECTED),
+            Err(failure) => (WriteStatus::FAILED, failure.reliability()),
         };
         true
     }
@@ -415,3 +472,6 @@ mod array_tests;
 
 #[cfg(test)]
 mod coercion_tests;
+
+#[cfg(test)]
+mod reliability_tests;

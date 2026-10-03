@@ -101,7 +101,7 @@ pub(super) fn encoded(value: &PropertyValue) -> Vec<u8> {
 }
 
 /// WriteProperty over the wire.
-async fn write_wire(
+pub(super) async fn write_wire(
     h: &mut Harness,
     object: ObjectIdentifier,
     property: PropertyIdentifier,
@@ -355,7 +355,7 @@ async fn channel_distribution_starts_from_write_local_and_write_property_multipl
 }
 
 #[tokio::test(start_paused = true)]
-async fn channel_member_list_takes_local_members_over_the_wire_and_refuses_other_devices() {
+async fn channel_member_list_takes_members_here_and_in_other_devices_over_the_wire() {
     let mut h = start().await;
     let reference = |device: Option<u32>| {
         let mut bytes = BytesMut::new();
@@ -369,12 +369,14 @@ async fn channel_member_list_takes_local_members_over_the_wire_and_refuses_other
         );
         bytes.to_vec()
     };
-    // Another device: Clause 12.53.11 lets a Channel that writes only inside
-    // its own device refuse it.
-    assert_error(
-        write_wire(&mut h, ch(2), LIST, None, reference(Some(9)), None).await,
-        ErrorClass::PROPERTY,
-        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+    // Another device keeps its identifier: the Channel writes that member
+    // there (Clause 12.53.11, #1264).
+    write_wire(&mut h, ch(2), LIST, None, reference(Some(9)), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        read_wire(&mut h, ch(2), LIST, Some(1)).await,
+        Ok(reference(Some(9)))
     );
     // This device's own identifier is the local member it names.
     write_wire(&mut h, ch(2), LIST, None, reference(Some(856)), None)

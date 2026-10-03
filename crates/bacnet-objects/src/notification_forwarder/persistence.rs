@@ -38,7 +38,10 @@ pub struct ForwarderSnapshot {
 
 /// Application-owned storage for one Notification Forwarder's lists.
 ///
-/// The forwarder calls it from its writer thread, one call at a time.
+/// The forwarder calls it from its writer thread, one call at a time. A
+/// written list lands in storage a moment before the forwarder serves it: see
+/// [storage leads the served
+/// state](crate::durable#storage-leads-the-served-state).
 pub trait NotificationForwarderPersistence: Send + Sync {
     /// The lists last saved for `forwarder`, or `None` when nothing was
     /// saved.

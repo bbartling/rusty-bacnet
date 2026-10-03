@@ -54,11 +54,13 @@ fn device_references(
 
 /// One Supported_Formats element as Python gives it: a format type number,
 /// or a `(format_type, vendor_id, vendor_format)` triple for a format that
-/// names its vendor members (a CUSTOM format must).
+/// names its vendor members (a CUSTOM format must name both). Each vendor
+/// member is optional in the datatype, so either may be `None`, the form a
+/// read gives a format that carries only one of them.
 #[derive(FromPyObject)]
 enum PyFactorFormat {
     Standard(u32),
-    Vendor(u32, u32, u32),
+    Vendor(u32, Option<u32>, Option<u32>),
 }
 
 impl TryFrom<PyFactorFormat> for BACnetAuthenticationFactorFormat {
@@ -73,8 +75,8 @@ impl TryFrom<PyFactorFormat> for BACnetAuthenticationFactorFormat {
             }
             PyFactorFormat::Vendor(format_type, vendor_id, vendor_format) => Self {
                 format_type: AuthenticationFactorType::from_raw(format_type),
-                vendor_id: Some(unsigned16(vendor_id)?),
-                vendor_format: Some(unsigned16(vendor_format)?),
+                vendor_id: vendor_id.map(unsigned16).transpose()?,
+                vendor_format: vendor_format.map(unsigned16).transpose()?,
             },
         })
     }
@@ -154,7 +156,8 @@ impl BACnetServer {
     ///
     /// `supported_formats` sets Supported_Formats and Supported_Format_Classes
     /// as `(format, format_class)` pairs. A format is a format type number,
-    /// or a `(format_type, vendor_id, vendor_format)` triple. A format outside
+    /// or a `(format_type, vendor_id, vendor_format)` triple whose vendor
+    /// members may each be `None`, as a read gives them. A format outside
     /// the closed production, a CUSTOM format without its vendor members, a
     /// nonzero vendor member on another format or one above 65535 raises
     /// VALUE_OUT_OF_RANGE.

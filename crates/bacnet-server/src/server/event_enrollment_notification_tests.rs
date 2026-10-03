@@ -265,7 +265,7 @@ async fn every_evaluated_normal_algorithm_uses_committed_history_once_on_wire() 
             .read_property(PropertyIdentifier::RECORD_COUNT, None)
             .unwrap(),
         PropertyValue::Unsigned(0),
-        "this slice deliberately has no Event Log side effect"
+        "a clockless server has no timestamp for an Event Log record"
     );
     drop(db);
     server.stop().await.unwrap();

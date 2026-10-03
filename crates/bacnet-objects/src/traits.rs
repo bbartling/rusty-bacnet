@@ -11,7 +11,7 @@ use std::time::Duration;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
-    BACnetLogMultipleRecord, BACnetLogRecord, BACnetObjectPropertyReference,
+    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, BACnetObjectPropertyReference,
 };
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier,
@@ -511,11 +511,16 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     }
 
     /// End the current run, setting a Command's All_Writes_Successful or a
-    /// Channel's Write_Status.
+    /// Channel's Write_Status and Reliability. `outcome` is `Ok` when every
+    /// write was made and succeeded, otherwise the run's first failure.
     ///
     /// Returns whether readable state changed; a stale generation is ignored.
     #[doc(hidden)]
-    fn complete_command_run_internal(&mut self, _generation: u64, _all_succeeded: bool) -> bool {
+    fn complete_command_run_internal(
+        &mut self,
+        _generation: u64,
+        _outcome: Result<(), crate::command::WriteFailure>,
+    ) -> bool {
         false
     }
 
@@ -1236,6 +1241,21 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Objects without Trend Log Multiple insertion return
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
     fn add_trend_multiple_record(&mut self, _record: BACnetLogMultipleRecord) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Submit an Event Log record to an object's log lifecycle.
+    ///
+    /// The server hands the event notifications this device builds to its
+    /// Event Logs through this hook
+    /// ([`ObjectDatabase::log_event_notification`](crate::database::ObjectDatabase::log_event_notification)).
+    /// The outcomes match [`add_trend_record`](Self::add_trend_record).
+    /// Objects without Event Log insertion return
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+    fn add_event_log_record(&mut self, _record: BACnetEventLogRecord) -> Result<(), Error> {
         Err(Error::Protocol {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,

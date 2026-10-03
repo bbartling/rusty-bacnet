@@ -286,7 +286,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         NotificationWorkerResult::Ack => {
                             debug!(invoke_id = id, "EventNotification acknowledged");
                         }
-                        NotificationWorkerResult::Error => {
+                        NotificationWorkerResult::Error(_) => {
                             suppressions.record(EventSuppression::ConfirmedRejected);
                             warn!(invoke_id = id, "EventNotification rejected by recipient");
                         }

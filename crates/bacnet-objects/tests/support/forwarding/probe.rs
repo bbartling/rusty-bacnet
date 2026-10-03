@@ -14,7 +14,7 @@ use bacnet_objects::audit::{
     AuditReporterObject, AuditSendDelay, ObjectAuditPolicy,
 };
 use bacnet_objects::clock::{ClockFrame, ClockReader};
-use bacnet_objects::command::{CommandRun, RunPlan};
+use bacnet_objects::command::{CommandRun, RunPlan, WriteFailure};
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::device::{DeviceAuthority, DeviceConfig, DeviceObject};
 use bacnet_objects::durable::DurableWrites;
@@ -40,7 +40,7 @@ use bacnet_objects::trend::TrendLogObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
-    BACnetDeviceObjectReference, BACnetLogMultipleRecord, BACnetLogRecord,
+    BACnetDeviceObjectReference, BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord,
     BACnetObjectPropertyReference, BACnetObjectSelector,
 };
 use bacnet_types::enums::{
@@ -418,8 +418,12 @@ impl BACnetObject for Probe {
         );
         true
     }
-    fn complete_command_run_internal(&mut self, generation: u64, all_succeeded: bool) -> bool {
-        self.called("complete_command_run_internal", (generation, all_succeeded));
+    fn complete_command_run_internal(
+        &mut self,
+        generation: u64,
+        outcome: Result<(), WriteFailure>,
+    ) -> bool {
+        self.called("complete_command_run_internal", (generation, outcome));
         true
     }
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
@@ -699,6 +703,14 @@ impl BACnetObject for Probe {
     }
     fn add_trend_multiple_record(&mut self, record: BACnetLogMultipleRecord) -> Result<(), Error> {
         self.called("add_trend_multiple_record", (record,));
+        // An error of the wrapped object's own, unlike the default's.
+        Err(Error::Protocol {
+            class: ErrorClass::DEVICE.to_raw() as u32,
+            code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
+        })
+    }
+    fn add_event_log_record(&mut self, record: BACnetEventLogRecord) -> Result<(), Error> {
+        self.called("add_event_log_record", (record,));
         // An error of the wrapped object's own, unlike the default's.
         Err(Error::Protocol {
             class: ErrorClass::DEVICE.to_raw() as u32,

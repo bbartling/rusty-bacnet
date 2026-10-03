@@ -2,17 +2,17 @@
 BACnetServer.read_property reads through the server's ReadProperty
 evaluator, so a local read matches a network read (#1297).
 
-A value whose octets carry any context tag comes back as application_data
-holding those octets. A whole read of a standard array or list is a list at
-every length. Any other read is the bare value when it holds one element and
-a list otherwise.
+A Recipient_List or a Group's Present_Value reads as typed elements (#1310).
+Any other value whose octets carry a context tag comes back as
+application_data holding those octets. A whole read of a standard array or
+list is a list at every length. Any other read is the bare value when it
+holds one element and a list otherwise.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import struct
 import unittest
 from typing import Any
 
@@ -56,19 +56,21 @@ def destination(device_instance: int, process: int) -> bytes:
     )
 
 
+def destination_read(device_instance: int, process: int) -> dict[str, Any]:
+    """How a read gives back `destination(device_instance, process)`."""
+    return {
+        "recipient": {"kind": "device",
+                      "object_identifier": ObjectIdentifier(ObjectType.DEVICE, device_instance)},
+        "process_identifier": process,
+        "valid_days": 0x7F,
+        "from_time": (0, 0, 0, 0),
+        "to_time": (23, 59, 59, 99),
+        "issue_confirmed_notifications": False,
+        "transitions": 0b111,
+    }
+
+
 RECIPIENTS = destination(10, 1) + destination(11, 2)
-
-
-def present_value_result(instance: int, value: float, name: bytes | None = None) -> bytes:
-    """A Group's result for one Analog Input member: object [0], then its
-    results [1] (property [2], value [4])."""
-    results = b"\x29\x55" + b"\x4e\x44" + struct.pack(">f", value) + b"\x4f"
-    if name is not None:
-        results += b"\x29\x4d" + b"\x4e" + bytes([0x75, len(name) + 1, 0]) + name + b"\x4f"
-    return b"\x0c" + instance.to_bytes(4, "big") + b"\x1e" + results + b"\x1f"
-
-
-GROUP_1_PRESENT_VALUE = present_value_result(1, 21.5, b"AI-1") + present_value_result(2, 22.5)
 GROUP_MEMBERS: Any = [(AI_1, [(P.PRESENT_VALUE, None), (P.OBJECT_NAME, None)]),
                       (AI_2, [(P.PRESENT_VALUE, None)])]
 
@@ -187,12 +189,14 @@ class ClientReadShapeTests(unittest.IsolatedAsyncioTestCase):
         for oid in (NC_1, NF_1):
             with self.subTest(object=oid):
                 value = await self.read(oid, P.RECIPIENT_LIST)
-                self.assertEqual(value, PropertyValue.application_data(RECIPIENTS))
-                self.assertEqual(value.value, RECIPIENTS)
+                self.assertEqual(value.tag, "list")
+                self.assertEqual(value.value, [destination_read(10, 1), destination_read(11, 2)])
 
     async def test_group_present_value_holds_every_member(self) -> None:
-        self.assertEqual(await self.read(GROUP_1, P.PRESENT_VALUE),
-                         PropertyValue.application_data(GROUP_1_PRESENT_VALUE))
+        value = await self.read(GROUP_1, P.PRESENT_VALUE)
+        self.assertEqual(value.value,
+                         await self.client.read_property_multiple(self.address, GROUP_MEMBERS))
+        self.assertEqual(len(value.value), 2)
         self.assertEqual(await self.read(GROUP_2, P.PRESENT_VALUE), PropertyValue.list([]))
 
     async def test_a_scalar_of_several_elements_is_a_list(self) -> None:

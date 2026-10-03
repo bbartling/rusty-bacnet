@@ -31,7 +31,9 @@ pub struct NotificationClassSnapshot {
 
 /// Application-owned storage for one Notification Class's Recipient_List.
 ///
-/// The class calls it from its writer thread, one call at a time.
+/// The class calls it from its writer thread, one call at a time. A written
+/// list lands in storage a moment before the class serves it: see [storage
+/// leads the served state](crate::durable#storage-leads-the-served-state).
 pub trait NotificationClassPersistence: Send + Sync {
     /// What was last saved for `class`, or `None` when nothing was saved.
     fn load(&self, class: ObjectIdentifier) -> Result<Option<NotificationClassSnapshot>, Error>;

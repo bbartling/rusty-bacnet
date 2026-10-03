@@ -382,7 +382,10 @@ fn test_mac(byte: u8) -> MacAddr {
 fn cov_ack_result_debug_and_eq() {
     // Ensure derived traits work.
     assert_eq!(CovAckResult::Ack, CovAckResult::Ack);
-    assert_ne!(CovAckResult::Ack, CovAckResult::Error);
+    assert_ne!(
+        CovAckResult::Ack,
+        CovAckResult::Error(Refusal::Abort(AbortReason::OTHER))
+    );
     let _debug = format!("{:?}", CovAckResult::Ack);
 }
 
