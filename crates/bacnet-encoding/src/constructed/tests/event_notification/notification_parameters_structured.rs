@@ -49,10 +49,10 @@ fn property_value(
 
 fn exact_round_trip(expected: NotificationParameters, literal: &[u8]) {
     let mut encoded = BytesMut::new();
-    expected.encode(&mut encoded).unwrap();
+    encode_notification_parameters(&expected, &mut encoded).unwrap();
     assert_eq!(encoded.as_ref(), literal);
     assert_eq!(
-        NotificationParameters::decode(literal, 0).unwrap(),
+        decode_notification_parameters(literal, 0).unwrap(),
         expected
     );
 }
@@ -122,7 +122,7 @@ fn literal_timer(mask: u8) -> Vec<u8> {
 #[test]
 fn choice_20_is_rejected() {
     let encoded = [0xfe, 0x14, 0xff, 0x14];
-    assert!(NotificationParameters::decode(&encoded, 0).is_err());
+    assert!(decode_notification_parameters(&encoded, 0).is_err());
 }
 
 #[test]
@@ -201,7 +201,7 @@ fn complex_event_type_rejects_malformed_property_fields() {
     ];
     for wire in malformed {
         assert!(
-            NotificationParameters::decode(wire, 0).is_err(),
+            decode_notification_parameters(wire, 0).is_err(),
             "{wire:02x?}"
         );
     }
@@ -211,31 +211,31 @@ fn complex_event_type_rejects_malformed_property_fields() {
 fn complex_event_type_enforces_count_cap_on_encode_and_decode() {
     let value = property_value(PropertyIdentifier::PRESENT_VALUE, None, &[0x00], None);
     let accepted = NotificationParameters::ComplexEventType {
-        property_values: vec![value.clone(); MAX_DECODED_ITEMS],
+        property_values: vec![value.clone(); MAX_FRAMED_ITEMS],
     };
     let mut encoded = BytesMut::new();
-    accepted.encode(&mut encoded).unwrap();
+    encode_notification_parameters(&accepted, &mut encoded).unwrap();
     let NotificationParameters::ComplexEventType { property_values } =
-        NotificationParameters::decode(&encoded, 0).unwrap()
+        decode_notification_parameters(&encoded, 0).unwrap()
     else {
         panic!("expected ComplexEventType");
     };
-    assert_eq!(property_values.len(), MAX_DECODED_ITEMS);
+    assert_eq!(property_values.len(), MAX_FRAMED_ITEMS);
 
     let over_cap = NotificationParameters::ComplexEventType {
-        property_values: vec![value; MAX_DECODED_ITEMS + 1],
+        property_values: vec![value; MAX_FRAMED_ITEMS + 1],
     };
     let mut untouched = BytesMut::from(&[0xaa, 0xbb][..]);
-    assert!(over_cap.encode(&mut untouched).is_err());
+    assert!(encode_notification_parameters(&over_cap, &mut untouched).is_err());
     assert_eq!(untouched.as_ref(), &[0xaa, 0xbb]);
 
-    let mut literal = BytesMut::with_capacity((MAX_DECODED_ITEMS + 1) * 6 + 2);
+    let mut literal = BytesMut::with_capacity((MAX_FRAMED_ITEMS + 1) * 6 + 2);
     literal.extend_from_slice(&[0x6e]);
-    for _ in 0..=MAX_DECODED_ITEMS {
+    for _ in 0..=MAX_FRAMED_ITEMS {
         literal.extend_from_slice(&[0x09, 0x55, 0x2e, 0x00, 0x2f]);
     }
     literal.extend_from_slice(&[0x6f]);
-    assert!(NotificationParameters::decode(&literal, 0).is_err());
+    assert!(decode_notification_parameters(&literal, 0).is_err());
 }
 
 #[test]
@@ -248,7 +248,7 @@ fn complex_event_type_failed_encodes_are_atomic() {
             property_values: vec![property_value],
         };
         let mut untouched = BytesMut::from(&[0xaa, 0xbb][..]);
-        assert!(invalid.encode(&mut untouched).is_err());
+        assert!(encode_notification_parameters(&invalid, &mut untouched).is_err());
         assert_eq!(untouched.as_ref(), &[0xaa, 0xbb]);
     }
 }
@@ -270,15 +270,15 @@ fn complex_event_type_enforces_total_nesting() {
 
     let accepted = nested_value(tags::MAX_CONTEXT_NESTING_DEPTH - 2);
     let mut encoded = BytesMut::new();
-    accepted.encode(&mut encoded).unwrap();
+    encode_notification_parameters(&accepted, &mut encoded).unwrap();
     assert_eq!(
-        NotificationParameters::decode(&encoded, 0).unwrap(),
+        decode_notification_parameters(&encoded, 0).unwrap(),
         accepted
     );
 
     let too_deep = nested_value(tags::MAX_CONTEXT_NESTING_DEPTH - 1);
     let mut untouched = BytesMut::from(&[0xaa, 0xbb][..]);
-    assert!(too_deep.encode(&mut untouched).is_err());
+    assert!(encode_notification_parameters(&too_deep, &mut untouched).is_err());
     assert_eq!(untouched.as_ref(), &[0xaa, 0xbb]);
 
     let mut raw = BytesMut::new();
@@ -293,7 +293,7 @@ fn complex_event_type_enforces_total_nesting() {
     }
     tags::encode_closing_tag(&mut raw, 2);
     tags::encode_closing_tag(&mut raw, 6);
-    assert!(NotificationParameters::decode(&raw, 0).is_err());
+    assert!(decode_notification_parameters(&raw, 0).is_err());
 }
 
 #[test]
@@ -324,7 +324,7 @@ fn access_event_rejects_invalid_device_object_references() {
     ];
     for credential_fields in malformed {
         let wire = raw_access_event(credential_fields, None);
-        assert!(NotificationParameters::decode(&wire, 0).is_err());
+        assert!(decode_notification_parameters(&wire, 0).is_err());
     }
 }
 
@@ -354,13 +354,16 @@ fn access_event_rejects_malformed_authentication_factors_atomically() {
     for factor in malformed {
         let wire = raw_access_event(&credential, Some(factor));
         assert!(
-            NotificationParameters::decode(&wire, 0).is_err(),
+            decode_notification_parameters(&wire, 0).is_err(),
             "{factor:02x?}"
         );
 
         let invalid = access_event(false, Some(factor.to_vec()));
         let mut untouched = BytesMut::from(&[0xaa, 0xbb][..]);
-        assert!(invalid.encode(&mut untouched).is_err(), "{factor:02x?}");
+        assert!(
+            encode_notification_parameters(&invalid, &mut untouched).is_err(),
+            "{factor:02x?}"
+        );
         assert_eq!(untouched.as_ref(), &[0xaa, 0xbb]);
     }
 }
@@ -416,7 +419,7 @@ fn change_of_timer_rejects_noncanonical_optional_fields() {
 
     for wire in malformed {
         assert!(
-            NotificationParameters::decode(&wire, 0).is_err(),
+            decode_notification_parameters(&wire, 0).is_err(),
             "{wire:02x?}"
         );
     }
@@ -457,9 +460,9 @@ fn corrected_variants_preserve_event_values_framing() {
 
     for expected in corrected {
         let mut direct = BytesMut::new();
-        expected.encode(&mut direct).unwrap();
+        encode_notification_parameters(&expected, &mut direct).unwrap();
         assert_eq!(
-            NotificationParameters::decode(&direct, 0).unwrap(),
+            decode_notification_parameters(&direct, 0).unwrap(),
             expected
         );
 
@@ -467,25 +470,21 @@ fn corrected_variants_preserve_event_values_framing() {
         wrapped.extend_from_slice(&direct);
         wrapped.extend_from_slice(&[0xcf]);
         assert_eq!(
-            NotificationParameters::decode(&wrapped, 1).unwrap(),
+            decode_notification_parameters(&wrapped, 1).unwrap(),
             expected
         );
 
         let mut service = BytesMut::new();
-        event_request(Some(expected.clone()))
-            .encode(&mut service)
-            .unwrap();
+        encode_event_notification(&event_request(Some(expected.clone())), &mut service).unwrap();
         assert_eq!(
-            EventNotificationRequest::decode(&service)
-                .unwrap()
-                .event_values,
+            decode_event_notification(&service).unwrap().event_values,
             Some(expected)
         );
     }
 
     let mut without_values = BytesMut::new();
-    event_request(None).encode(&mut without_values).unwrap();
-    assert!(EventNotificationRequest::decode(&without_values)
+    encode_event_notification(&event_request(None), &mut without_values).unwrap();
+    assert!(decode_event_notification(&without_values)
         .unwrap()
         .event_values
         .is_none());

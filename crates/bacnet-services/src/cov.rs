@@ -1,6 +1,6 @@
 //! COV (Change of Value) services per ASHRAE 135-2020 Clauses 13.6, 13.7, 13.14 and 13.15.
 
-use bacnet_encoding::constructed::decode_property_reference;
+use bacnet_encoding::constructed::{decode_property_reference, encode_bacnet_property_value};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_types::enums::PropertyIdentifier;
@@ -318,7 +318,7 @@ impl COVNotificationRequest {
         // [4] list-of-values (opening/closing)
         tags::encode_opening_tag(buf, 4);
         for pv in &self.list_of_values {
-            pv.encode(buf);
+            encode_bacnet_property_value(pv, buf);
         }
         tags::encode_closing_tag(buf, 4);
     }

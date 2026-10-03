@@ -2212,12 +2212,22 @@ it), but refuse a Device member that isn't a Device identifier, and
 `add_property_reference` a 65th reference.
 
 An Event Log record is a `BACnetEventLogRecord`: a timestamp and an
-`EventLogDatum` holding a log status, a time change, or a notification as the
-encoded parameters of a ConfirmedEventNotification request
-(`bacnet_services::alarm_event::EventNotificationRequest::encode` writes them,
-`decode` reads them back). `EventLogObject::add_record` takes one. A Trend Log
-record stays a `BACnetLogRecord`; its optional `status_flags` is a
-`StatusFlags`.
+`EventLogDatum` holding a log status, a time change, or a notification as a
+typed `EventNotificationRequest`, the parameters of a ConfirmedEventNotification
+request. `EventLogObject::add_record` takes one. The request, its
+`NotificationParameters` event values and `BACnetPropertyValue` live in
+`bacnet_types::constructed` (bacnet-services re-exports them). Their codecs
+are functions in `bacnet_encoding::constructed`: `encode_event_notification` /
+`decode_event_notification`, `encode_notification_parameters` /
+`decode_notification_parameters`, and `encode_bacnet_property_value` /
+`decode_bacnet_property_value`. `decode_event_notification_tolerant` reads a
+request whose message text doesn't decode (a character set the stack doesn't
+support, for one) with no message text; the client uses it for received
+notifications and `decode_event_log_record` for a record's notification, which
+otherwise has to be a valid request. The request codec writes an
+ACK_NOTIFICATION without its ack-required, from-state and event values, so
+ReadRange serves such a record without them. A Trend Log record stays a `BACnetLogRecord`; its optional
+`status_flags` is a `StatusFlags`.
 
 Every record kind, the Audit Log's included, carries a log status as the
 typed `bacnet_types::bitstring::LogStatus` flags (`LOG_DISABLED`,
@@ -2229,7 +2239,8 @@ device hold these to 32 bits but doesn't require it, so a record read from a
 peer may carry wider values, and the decoders accept up to eight octets.
 
 `add_record` and the trend hooks refuse a record that would not encode (an
-any-value or notification whose tags don't balance, a bit string with
+any-value, or a notification's raw event values, whose tags don't balance; a
+complex event's property priority outside 1 to 16; a bit string with
 impossible padding) with its encoding error, before anything changes. So
 `LogBufferRecords::encode_record` cannot fail, and one bad record can't break
 every ReadRange window over the log.
@@ -2247,6 +2258,7 @@ each item as one record framed as its Clause 21 production:
 | Trend Log | BACnetLogRecord | `encode_log_record` / `decode_log_record` |
 | Event Log | BACnetEventLogRecord | `encode_event_log_record` / `decode_event_log_record` |
 | Trend Log Multiple | BACnetLogMultipleRecord | `encode_log_multiple_record` / `decode_log_multiple_record` |
+| Audit Log | BACnetAuditLogRecord | `encode_audit_log_record` / `decode_audit_log_record_at` |
 
 Each decoder returns the offset after the record, so a client walks a
 ReadRange ACK's `item_data` record by record. The poller logs a value whose
@@ -2650,7 +2662,28 @@ with `set_door_status` and `set_lock_status`.
 An Access Point's Authentication_Status is READY until the application
 reports another status with `set_authentication_status` (a value past
 IN_PROGRESS is VALUE_OUT_OF_RANGE); it reads DISABLED while Out_Of_Service is
-TRUE and the reported status again afterwards. An Access Zone counts
+TRUE and the reported status again afterwards.
+
+The point also serves Active_Authentication_Policy,
+Number_Of_Authentication_Policies, Authorization_Mode and
+Priority_For_Writing. It serves no policy list, so what each policy holds is
+up to the application. `set_number_of_authentication_policies` sets how many
+there are (1 by default; zero, or a count below the policy in effect, is
+VALUE_OUT_OF_RANGE), and a client picks the policy in effect by writing
+Active_Authentication_Policy, an Unsigned from 1 to that count.
+Authorization_Mode starts at AUTHORIZE and takes a write of any mode in the
+set `set_supported_authorization_modes` gives. The point enforces no mode
+itself, so a new point supports AUTHORIZE alone: an application that acts on
+the mode declares the other standard modes it carries out, and proprietary
+ones from 64 to 65535, in a set that keeps AUTHORIZE and the mode in effect.
+Any other value is VALUE_OUT_OF_RANGE, and another datatype
+INVALID_DATA_TYPE.
+`set_priority_for_writing` sets the priority the application commands the
+Access_Doors at (16 by default, 1 to 16 accepted). The policy count and the
+priority are read-only over the network; the point stores and checks these
+values, and carrying them out is the application's work.
+
+An Access Zone counts
 occupancy: Occupancy_State reads DISABLED while counting is off
 (`set_occupancy_count_enable(false)`, which also zeroes the count and
 Adjust_Value), and otherwise compares Occupancy_Count with the limits

@@ -1166,7 +1166,7 @@
      "Trend Log Multiple holds BACnetLogMultipleRecord values: one LogValue per Log_DeviceObjectProperty member, a log status, or a time change. Its LOG_BUFFER serves each record framed as the Clause 21 production, with no status flags (#1203).",
      "LogRecordIdentity holds a u64 sequence number. These three families still count in Unsigned32 and wrap at u32::MAX; an Audit Log's identities come from its record store and wrap at u64::MAX (BACNET-12-AUDIT-LOG-BUFFER, #1092).",
      "Each family stores its own Clause 21 record: Trend Log a BACnetLogRecord with optional StatusFlags, Event Log a BACnetEventLogRecord, Trend Log Multiple a BACnetLogMultipleRecord. BACnetObject::log_buffer_internal lends the buffer to ReadRange, which encodes each record as a page reaches it (#1233).",
-     "An Event Log notification record holds the encoded ConfirmedEventNotification parameters, which bacnet-services' EventNotificationRequest writes and reads. The server does not log notifications into an Event Log by itself; the application adds records.",
+     "An Event Log notification record holds a typed EventNotificationRequest (bacnet-types), which bacnet-encoding's event notification codec writes and reads inside the record. The server does not log notifications into an Event Log by itself; the application adds records.",
      "Log statuses are the typed LogStatus flags, sent bit 0 first: log-disabled 05 80, buffer-purged 05 40, log-interrupted 05 20. Trend Log status flags are a StatusFlags value.",
      "add_record and the trend hooks refuse a record that would not encode before any change, so LogBufferRecords::encode_record cannot fail and every stored record can be served."
     ]
@@ -1280,7 +1280,9 @@
      "crates/bacnet-encoding/src/constructed/log_record.rs::decode_log_record",
      "crates/bacnet-encoding/src/constructed/event_log_record.rs::encode_event_log_record",
      "crates/bacnet-encoding/src/constructed/event_log_record.rs::decode_event_log_record",
-     "crates/bacnet-services/src/read_range.rs::RangeSpec"
+     "crates/bacnet-encoding/src/constructed/event_notification/tolerant.rs::decode_event_notification_tolerant",
+     "crates/bacnet-services/src/read_range.rs::RangeSpec",
+     "crates/bacnet-cli/src/commands/read_range.rs::read_range_cmd"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/handlers/tests/read_range.rs::by_position_is_one_based_signed_and_reports_exact_endpoints",
@@ -1301,6 +1303,8 @@
      "crates/bacnet-encoding/src/constructed/tests/log_record.rs::consecutive_log_records_decode_by_returned_offset",
      "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_kinds_have_exact_bytes_and_round_trip",
      "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::consecutive_event_log_records_decode_by_returned_offset",
+     "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_notification_records_round_trip_typed_event_values",
+     "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_drops_a_message_text_it_cannot_read",
      "crates/bacnet-encoding/src/constructed/tests/log_record.rs::log_record_bit_strings_put_bit0_in_the_top_bit",
      "crates/bacnet-encoding/src/constructed/tests/log_record.rs::log_record_from_a_peer_keeps_a_five_octet_integer",
      "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::log_multiple_record_from_a_peer_keeps_wide_integers",
@@ -1312,7 +1316,9 @@
      "crates/bacnet-server/src/handlers/tests/read_range_time.rs::client_accepts_by_time_ack_and_continues_by_returned_sequence",
      "crates/bacnet-client/src/client/file_list.rs::tests::first_sequence_number_must_match_the_requested_range",
      "crates/bacnet-services/src/read_range_width_tests.rs::{request_unsigned_fields_accept_their_widest_values,ack_unsigned_fields_enforce_their_widths_without_rejecting_leading_zero}",
-     "crates/bacnet-server/src/handlers/tests/read_range_page_encoding.rs::exact_envelopes_include_property_index_and_changing_first_sequence_widths"
+     "crates/bacnet-server/src/handlers/tests/read_range_page_encoding.rs::exact_envelopes_include_property_index_and_changing_first_sequence_widths",
+     "crates/bacnet-cli/tests/cli_read_range.rs::read_range_prints_decoded_log_records",
+     "crates/bacnet-cli/src/commands/read_range_tests.rs::{trend_log_records_show_datum_and_status_flags,event_log_records_show_the_typed_notification,trend_log_multiple_records_show_every_value,audit_log_records_show_the_operation_and_its_target}"
    ],
    "negative_tests": [
      "crates/bacnet-server/src/handlers/tests/read_range.rs::by_sequence_rejects_unnumbered_properties_and_misalignment",
@@ -1325,11 +1331,13 @@
      "crates/bacnet-encoding/src/constructed/tests/log_record.rs::log_record_decoder_rejects_malformed_records",
      "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_rejects_unencodable_values_without_writing",
      "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_decoder_rejects_malformed_records",
+     "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_decoder_rejects_notifications_that_are_not_requests",
      "crates/bacnet-server/src/handlers/tests/property_metadata/log.rs::rpm_and_rp_refuse_log_buffer_while_read_range_serves_framed_records",
      "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_logs_refuse_read_property_of_log_buffer",
      "crates/bacnet-objects/src/event_log/tests.rs::read_property_refuses_log_buffer",
      "crates/bacnet-server/src/handlers/tests/read_range_time.rs::zero_array_index_is_rejected_by_request_decoder",
-     "crates/bacnet-services/src/read_range_width_tests.rs::request_unsigned_fields_reject_overflow"
+     "crates/bacnet-services/src/read_range_width_tests.rs::request_unsigned_fields_reject_overflow",
+     "crates/bacnet-cli/src/commands/read_range_tests.rs::records_after_an_undecodable_one_fall_back_to_hex"
    ],
    "benchmarks": [],
    "public_claims": [],
@@ -1345,7 +1353,9 @@
      "Trend Log and Event Log items are BACnetLogRecord and BACnetEventLogRecord encodings, read from the object's record buffer through BACnetObject::log_buffer_internal and encoded only where a page reaches them. All three range forms return them byte for byte (#1233).",
      "Trend Log Multiple, Trend Log and Event Log objects answer ReadProperty of LOG_BUFFER with PROPERTY / READ_ACCESS_DENIED, so RP, RPM (inline, also for ALL and REQUIRED), local and endpoint reads all refuse it; ReadRange is the only way to read the records (#1237).",
      "Trend Log and Event Log records page under the ReadRangeBudget byte cap as other lists do: a page ends at the last whole record that fits and sets MORE_ITEMS, and a backward page keeps the newest records.",
-     "The record decoders keep INTEGER values as i64 and ENUMERATED and Unsigned values as u64, up to eight octets, since a peer's log need not hold them to 32 bits."
+     "The record decoders keep INTEGER values as i64 and ENUMERATED and Unsigned values as u64, up to eight octets, since a peer's log need not hold them to 32 bits.",
+     "The CLI's read-range picks the record decoder by the log object's type and prints each record's timestamp, datum and Trend Log status flags; anything from the first record that does not decode is shown as hex.",
+     "An Event Log notification record whose message text does not decode reads with no message text, as the client reads a received notification; any other malformed notification fails the record."
     ]
   },
   {
@@ -1360,7 +1370,8 @@
     "crates/bacnet-objects/src/audit/log_metadata.rs",
     "crates/bacnet-server/src/handlers/read_range_logs.rs::log_buffer",
     "crates/bacnet-server/src/handlers/read_range.rs::prepare_read_range",
-    "crates/bacnet-services/src/read_range.rs::ReadRangeAck"
+    "crates/bacnet-services/src/read_range.rs::ReadRangeAck",
+    "crates/bacnet-encoding/src/constructed/audit_record.rs::decode_audit_log_record_at"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/handlers/tests/read_range_audit_log.rs::{audit_log_buffer_pages_retained_records_by_position_sequence_and_time,audit_log_buffer_empty_and_out_of_range_windows_succeed_without_items,audit_log_buffer_reports_unsigned64_sequence_numbers_across_wrap,audit_log_buffer_shows_records_appended_after_a_read_and_matches_audit_log_query,audit_log_buffer_pages_are_bounded_by_the_request_budget,running_server_serves_audit_log_buffer_and_later_records}",
@@ -1368,7 +1379,7 @@
     "crates/bacnet-server/src/handlers/tests/read_rpm/audit_log.rs::rpm_audit_log_indexed_reads_and_list_bytes_are_unchanged",
     "crates/bacnet-server/src/handlers/tests/property_metadata/audit_log.rs::rpm_audit_log_metadata_selectors_preserve_bytes_and_budgets",
     "crates/bacnet-server/src/pics/property_metadata_tests/audit_log.rs::pics_audit_log_property_metadata_is_exact",
-    "crates/bacnet-encoding/src/constructed/audit_record.rs::tests::audit_record_log_status_has_bit0_first_wire_bytes"
+    "crates/bacnet-encoding/src/constructed/audit_record.rs::tests::{audit_record_log_status_has_bit0_first_wire_bytes,consecutive_audit_records_decode_by_returned_offset}"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/handlers/tests/read_range_audit_log.rs::audit_log_buffer_refuses_read_property_and_indexes_but_read_range_serves_it",
@@ -2716,8 +2727,49 @@
     "Access_Event_Credential rides along in the SubscribeCOV report; only Access_Event_Time and Status_Flags trigger it."
    ],
    "gaps": [
-    "Active_Authentication_Policy, Number_Of_Authentication_Policies, Authorization_Mode and Priority_For_Writing, required Table 12-36 rows, are not served (no issue)",
     "#1132: the application can set Authentication_Status and the event rows only before the server holds the point"
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-POINT-POLICY-AND-AUTHORIZATION",
+   "standard_anchor": "Clause 12.31, Table 12-36, Clauses 12.31.10, 12.31.11, 12.31.14 and 12.31.33, Table K-10",
+   "priority": "P1",
+   "summary": "An Access Point serves its active authentication policy, policy count, authorization mode and Priority_For_Writing; clients write the policy in effect and the mode.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/point_authorization.rs::Authorization",
+    "crates/bacnet-objects/src/access_control/point.rs::AccessPointObject",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs::access_point"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/point_authorization_tests.rs::{access_point_serves_policy_mode_and_priority_defaults,access_point_active_policy_write_names_one_of_the_policies,access_point_authorization_mode_write_takes_each_declared_standard_mode,access_point_authorization_mode_follows_the_supported_modes}",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_point_exact_sets_readable_rows_and_indexed_list,property_metadata_access_trio_write_capabilities_match_dispatch}",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_point_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/access_point_authorization_writes.rs::write_property_sets_the_access_point_policy_and_mode",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_point_settings_reach_the_access_point_rows",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_point_settings_reach_the_rows_and_gate_writes",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_keywords"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/point_authorization_tests.rs::{access_point_active_policy_refuses_writes_outside_the_policies,access_point_authorization_mode_refuses_other_values,access_point_supported_modes_refuse_sets_without_authorize_or_the_mode_in_effect,access_point_policy_count_refuses_zero_and_a_count_below_the_active_policy,access_point_count_and_priority_come_from_the_application}",
+    "crates/bacnet-server/src/handlers/tests/access_point_authorization_writes.rs::{write_property_refuses_other_policy_mode_and_read_only_writes,write_property_multiple_refuses_other_policy_mode_values}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#access-control-7",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "Active_Authentication_Policy and Number_Of_Authentication_Policies start at 1. A policy write is an Unsigned from 1 to the count; zero or a value past the count is VALUE_OUT_OF_RANGE, another datatype INVALID_DATA_TYPE.",
+    "`set_number_of_authentication_policies` refuses zero and a count below the policy in effect, so the active policy never drops to zero and Reliability never reads CONFIGURATION_ERROR on that account.",
+    "Authorization_Mode starts at AUTHORIZE, the only supported mode until `set_supported_authorization_modes` declares more; a set keeps AUTHORIZE and the mode in effect. A write outside the set is VALUE_OUT_OF_RANGE.",
+    "The policy and the mode are writable because Table K-10 lists them for DS-ACM-A. The policy count and Priority_For_Writing (16 until set, 1 to 16) come from the application only.",
+    "The point stores and checks these values; the application carries out the policy and the mode, and commands the doors at Priority_For_Writing."
+   ],
+   "gaps": [
+    "#1325: Authentication_Policy_List and Authentication_Policy_Names, optional Table 12-36 rows, are not served"
    ]
   },
   {
@@ -2798,7 +2850,7 @@
     "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::{python_door_members_and_access_doors_reach_the_arrays,python_supported_formats_reach_both_arrays}",
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_door_members_reach_the_array",
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_access_doors_reach_the_array_and_name_doors_only",
-    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_array_keywords",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_keywords",
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_supported_formats_reach_both_arrays_and_gate_simulated_reads"
    ],
    "negative_tests": [
@@ -3787,7 +3839,7 @@
     "crates/bacnet-encoding/src/constructed/fault_parameter.rs",
     "crates/bacnet-encoding/src/constructed/mod.rs",
     "crates/bacnet-types/src/constructed/property_states.rs",
-    "crates/bacnet-services/src/alarm_event/property_states.rs",
+    "crates/bacnet-encoding/src/constructed/event_notification/property_states.rs",
      "crates/bacnet-objects/src/event_enrollment/mod.rs",
     "crates/bacnet-server/src/event_enrollment/mod.rs"
    ],
@@ -3796,7 +3848,7 @@
     "crates/bacnet-encoding/src/constructed/tests/fault_parameter.rs",
     "crates/bacnet-encoding/src/constructed/tests/mod.rs",
     "crates/bacnet-types/src/constructed/event_parameter/tests.rs",
-    "crates/bacnet-services/src/alarm_event/tests/property_states.rs",
+    "crates/bacnet-encoding/src/constructed/tests/event_notification/property_states.rs",
     "crates/bacnet-objects/src/event_enrollment/tests",
     "crates/bacnet-server/src/event_enrollment/tests"
    ],
@@ -3804,7 +3856,7 @@
     "crates/bacnet-encoding/src/constructed/tests/event_parameter.rs",
     "crates/bacnet-encoding/src/constructed/tests/fault_parameter.rs",
     "crates/bacnet-encoding/src/constructed/tests/mod.rs",
-    "crates/bacnet-services/src/alarm_event/tests/property_states.rs",
+    "crates/bacnet-encoding/src/constructed/tests/event_notification/property_states.rs",
     "crates/bacnet-objects/src/event_enrollment/tests"
    ],
    "benchmarks": [],
