@@ -452,6 +452,61 @@ fn value_parts_keep_capture_order_and_rejoin_whatever_order_they_return_in() {
 }
 
 #[test]
+fn value_parts_rejoin_in_captured_order_from_any_return_order() {
+    let (store, counters) = store(8, 4);
+    let k = key(1, 1);
+    store.lock().reset(&k, 1, 0);
+    let whole = change_of(1, &[4, 5, 6]);
+    let bytes = |store: &TimedStore| store.lock().context_bytes.get(&context(1)).copied();
+    // Every order three parts can come back in, the middle part last
+    // included: each time they rejoin as the change, in captured order, and
+    // count against the bound exactly what the change counted.
+    for order in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        store.lock().push(&k, 1, whole.clone());
+        let mut parts: Vec<_> = claim_all(&store, &k)
+            .split_values(|_, _| ValueFit::Fits)
+            .into_iter()
+            .map(Some)
+            .collect();
+        for at in order {
+            drop(parts[at].take());
+        }
+        assert_eq!(bytes(&store), Some(whole.cost), "{order:?}");
+        let rejoined = store.lock().drain(&k, 1).1;
+        assert_eq!(payloads(&rejoined), [vec![4, 5, 6]], "{order:?}");
+        assert_eq!(rejoined[0].cost, whole.cost, "{order:?}");
+        assert_eq!(bytes(&store), None, "{order:?}");
+    }
+    // After the first value went out, the other two coming back last first
+    // still rejoin in order, counting only what is left.
+    store.lock().push(&k, 1, whole.clone());
+    let mut parts = claim_all(&store, &k)
+        .split_values(|_, _| ValueFit::Fits)
+        .into_iter();
+    let (first, second, third) = (
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+    );
+    first.commit();
+    drop(third);
+    drop(second);
+    let rest_cost = bytes(&store).expect("the rest is queued");
+    let rest = store.lock().drain(&k, 1).1;
+    assert_eq!(payloads(&rest), [vec![5, 6]]);
+    assert_eq!(rest[0].cost, rest_cost);
+    assert_eq!(rest_cost, change_cost(rest[0].values()));
+    assert_eq!(dropped(&counters), 0, "nothing was lost");
+}
+
+#[test]
 fn only_the_part_with_a_changes_last_value_delivers_the_change() {
     let (store, counters) = store(8, 4);
     let k = key(1, 1);

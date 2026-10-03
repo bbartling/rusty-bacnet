@@ -2765,6 +2765,7 @@
     "crates/bacnet-server/src/server/cov_timed_value_split_tests.rs::a_50_octet_subscriber_gets_each_timestamped_change_one_value_per_notification",
     "crates/bacnet-server/src/server/cov_timed_value_split_tests.rs::changes_that_fit_go_out_whole_between_ones_sent_value_by_value",
     "crates/bacnet-server/src/cov/timed_split_tests.rs::value_parts_keep_capture_order_and_rejoin_whatever_order_they_return_in",
+    "crates/bacnet-server/src/cov/timed_split_tests.rs::value_parts_rejoin_in_captured_order_from_any_return_order",
     "crates/bacnet-server/src/cov/timed_split_tests.rs::only_the_part_with_a_changes_last_value_delivers_the_change",
     "crates/bacnet-server/src/server/cov_untimed_split_tests.rs::an_unconfirmed_initial_report_too_large_for_one_apdu_goes_out_by_object_item",
     "crates/bacnet-server/src/server/cov_untimed_split_tests.rs::a_confirmed_initial_report_too_large_for_one_apdu_goes_out_one_part_per_ack",

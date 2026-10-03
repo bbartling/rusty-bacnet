@@ -107,10 +107,11 @@ pub(crate) struct TimedChange {
     /// Octets the change counts against its context's bound: its encoding,
     /// one item's framing and [`CHANGE_OVERHEAD`].
     cost: usize,
-    /// Position of the first of `values` among those the change was captured
-    /// with. Only a part of a change sent one value per notification starts
-    /// past zero, so returned parts rejoin in order (#1090).
-    first_value: usize,
+    /// Position of each of `values`, in the same order, among those the change
+    /// was captured with: `0..n` at capture. A part of a change sent one value
+    /// per notification keeps its value's position, so parts that come back in
+    /// any order rejoin in captured order (#1090).
+    positions: Vec<usize>,
     /// Whether later values of this change go out in later notifications of
     /// the same report, so delivering this part alone does not deliver the
     /// change (#1090).
@@ -159,9 +160,9 @@ impl TimedChange {
             frame,
             captured_at: Instant::now(),
             cost: change_cost(&values),
+            positions: (0..values.len()).collect(),
             values,
             observation,
-            first_value: 0,
             continues: false,
         }
     }
@@ -172,28 +173,30 @@ impl TimedChange {
     fn into_values(self) -> impl Iterator<Item = TimedChange> {
         self.values
             .into_iter()
-            .enumerate()
-            .map(move |(at, value)| TimedChange {
+            .zip(self.positions)
+            .map(move |(value, position)| TimedChange {
                 seq: self.seq,
                 frame: self.frame,
                 captured_at: self.captured_at,
                 cost: change_cost(std::slice::from_ref(&value)),
                 values: vec![value],
                 observation: self.observation.clone(),
-                first_value: self.first_value + at,
+                positions: vec![position],
                 continues: true,
             })
     }
 
-    /// Take back `other`, another part of this change, so the values are in
-    /// their captured order again. Returns the octets this adds to the
-    /// context's bound.
-    fn rejoin(&mut self, mut other: TimedChange) -> usize {
-        if other.first_value < self.first_value {
-            std::mem::swap(&mut self.values, &mut other.values);
-            self.first_value = other.first_value;
-        }
-        self.values.append(&mut other.values);
+    /// Take back `other`, another part of this change, and order the values
+    /// by their captured positions again, whichever parts came back before.
+    /// Returns the octets this adds to the context's bound.
+    fn rejoin(&mut self, other: TimedChange) -> usize {
+        let mut merged: Vec<_> = std::mem::take(&mut self.positions)
+            .into_iter()
+            .zip(std::mem::take(&mut self.values))
+            .chain(other.positions.into_iter().zip(other.values))
+            .collect();
+        merged.sort_by_key(|(position, _)| *position);
+        (self.positions, self.values) = merged.into_iter().unzip();
         let before = self.cost;
         self.cost = change_cost(&self.values);
         self.cost - before
