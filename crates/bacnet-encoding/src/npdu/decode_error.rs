@@ -42,8 +42,10 @@ pub enum NpduDecodeError {
     /// one this stack serves.
     ///
     /// Clause 6.4.4 gives routers Reject-Message-To-Network reason 6
-    /// (`ADDRESSING_ERROR`) for an NPDU whose DADR or SADR length is invalid;
-    /// [`dnet`](Self::AddressTooLong::dnet) lets a router address that reject.
+    /// (`ADDRESSING_ERROR`) for an NPDU whose DADR or SADR length is invalid.
+    /// [`dnet`](Self::AddressTooLong::dnet) is the network the reject names,
+    /// and [`source`](Self::AddressTooLong::source) is where it goes when a
+    /// router relayed the refused NPDU (#1158).
     AddressTooLong {
         /// Which address the length octet introduces.
         field: NpduAddressField,
@@ -52,6 +54,11 @@ pub enum NpduDecodeError {
         /// The NPDU's DNET, when its control octet announces one. It precedes
         /// both length octets on the wire, so it is always known here.
         dnet: Option<u16>,
+        /// The NPDU's SNET/SADR, when the over-long field is the DADR and a
+        /// complete, valid source follows the DLEN octets the frame announces.
+        /// It is `None` when the SADR itself is the over-long field, since
+        /// that source names no node.
+        source: Option<NpduAddress>,
     },
     /// Any other malformation: a short buffer, an unknown protocol version, a
     /// reserved network number, SLEN 0, or a truncated address or field.

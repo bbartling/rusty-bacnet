@@ -443,7 +443,7 @@ impl ClientRoleHandle {
 
     /// Internal close for the session owner only.
     ///
-    /// Owner-only seam (`pub(crate)`): the session [`Drop`](std::ops::Drop)
+    /// Owner-only seam (`pub(crate)`): the session [`Drop`]
     /// path currently closes the inner requester directly; this stays for
     /// owner-driven shutdown without exposing lifecycle on the handle.
     #[allow(dead_code)]
