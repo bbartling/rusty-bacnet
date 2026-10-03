@@ -661,11 +661,12 @@ fn rpm_structured_view_arrays_serve_one_element_per_index() {
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             // Unserved StructuredView table rows stay unknown.
+            // An array this object doesn't hold: absent, indexed or not.
             (P::SUBORDINATE_TAGS, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::SUBORDINATE_TAGS,
                 Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+                Err(ErrorCode::UNKNOWN_PROPERTY),
             ),
         ]);
         assert_cases(&db, oid, &cases);

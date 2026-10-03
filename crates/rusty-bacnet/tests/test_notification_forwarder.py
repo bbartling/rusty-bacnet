@@ -2,7 +2,6 @@
 import ast
 import asyncio
 import inspect
-import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -73,32 +72,6 @@ def stub_parameters() -> list[tuple[str, inspect._ParameterKind]]:
         *((arg.arg, POSITIONAL) for arg in method.args.args if arg.arg != "self"),
         *((arg.arg, KEYWORD) for arg in method.args.kwonlyargs),
     ]
-
-
-def unsigned(tag: int, value: int) -> bytes:
-    """A context-tagged Unsigned."""
-    body = value.to_bytes(max(1, (value.bit_length() + 7) // 8), "big")
-    return bytes([(tag << 4) | 0x08 | len(body)]) + body
-
-
-async def read_octets(sock: socket.socket, address: str, oid: ObjectIdentifier,
-                      prop: PropertyIdentifier, index: int | None = None) -> bytes:
-    """ReadProperty over B/IP from a raw socket; returns the value octets
-    between the ACK's opening and closing tag 3. BACnetClient decodes only a
-    value's first element, so a list is read this way."""
-    request = (bytes([0x0C]) + ((oid.object_type.to_raw() << 22) | oid.instance).to_bytes(4, "big")
-               + unsigned(1, prop.to_raw())
-               + (b"" if index is None else unsigned(2, index)))
-    npdu = b"\x01\x04" + bytes([0x00, 0x05, 1, 0x0C]) + request
-    ip, port = address.rsplit(":", 1)
-    loop = asyncio.get_running_loop()
-    await loop.sock_sendto(sock, b"\x81\x0a" + (len(npdu) + 4).to_bytes(2, "big") + npdu,
-                           (ip, int(port)))
-    reply, _ = await asyncio.wait_for(loop.sock_recvfrom(sock, 2048), 3)
-    header = bytes([0x30, 1, 0x0C]) + request + b"\x3e"
-    ack = reply[6:]  # BVLL, then an NPDU with no routing fields
-    assert ack.startswith(header) and ack.endswith(b"\x3f"), ack.hex()
-    return ack[len(header):-1]
 
 
 class NotificationForwarderRegistrationTests(unittest.TestCase):
@@ -183,21 +156,13 @@ class NotificationForwarderServerTests(unittest.IsolatedAsyncioTestCase):
             await self.client.__aexit__(None, None, None)
 
         self.addAsyncCleanup(stop_client)
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.addCleanup(self.sock.close)
-        self.sock.bind(("127.0.0.1", 0))
-        self.sock.setblocking(False)
 
-    async def read(self, instance: int, property_id: PropertyIdentifier) -> PropertyValue:
+    async def read(self, instance: int, property_id: PropertyIdentifier,
+                   index: int | None = None) -> PropertyValue:
         oid = ObjectIdentifier(ObjectType.NOTIFICATION_FORWARDER, instance)
         return await asyncio.wait_for(
-            self.client.read_property(self.address, oid, property_id), 3
+            self.client.read_property(self.address, oid, property_id, index), 3
         )
-
-    async def octets(self, instance: int, property_id: PropertyIdentifier,
-                     index: int | None = None) -> bytes:
-        oid = ObjectIdentifier(ObjectType.NOTIFICATION_FORWARDER, instance)
-        return await read_octets(self.sock, self.address, oid, property_id, index)
 
     async def test_configured_rows_read_back(self) -> None:
         self.assertEqual(
@@ -218,15 +183,19 @@ class NotificationForwarderServerTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_seeded_recipient_list_and_port_filter_read_back(self) -> None:
+        # Constructed values come back as their octets; an empty list as [].
         self.assertEqual(
-            await self.octets(3, PropertyIdentifier.RECIPIENT_LIST),
-            ALWAYS_OCTETS + WEEKDAYS_OCTETS,
+            await self.read(3, PropertyIdentifier.RECIPIENT_LIST),
+            PropertyValue.application_data(ALWAYS_OCTETS + WEEKDAYS_OCTETS),
         )
-        self.assertEqual(await self.octets(2, PropertyIdentifier.RECIPIENT_LIST), b"")
+        self.assertEqual(await self.read(2, PropertyIdentifier.RECIPIENT_LIST),
+                         PropertyValue.list([]))
         port_filter = PropertyIdentifier.PORT_FILTER
-        self.assertEqual(await self.octets(3, port_filter), PORT_0_ENABLED + PORT_1_DISABLED)
-        self.assertEqual(await self.octets(3, port_filter, 0), b"\x21\x02")
-        self.assertEqual(await self.octets(3, port_filter, 2), PORT_1_DISABLED)
+        self.assertEqual(await self.read(3, port_filter),
+                         PropertyValue.application_data(PORT_0_ENABLED + PORT_1_DISABLED))
+        self.assertEqual(await self.read(3, port_filter, 0), PropertyValue.unsigned(2))
+        self.assertEqual(await self.read(3, port_filter, 2),
+                         PropertyValue.application_data(PORT_1_DISABLED))
         # Without port_filter the property is absent.
         with self.assertRaises(BacnetProtocolError) as raised:
             await self.read(2, port_filter)

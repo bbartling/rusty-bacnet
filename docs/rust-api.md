@@ -212,6 +212,12 @@ the default generic writer unless they implement the new hook. Writable
 decorators must forward it, as the endpoint source-reporting decorator does.
 The endpoint inbound write allowlist is unchanged.
 
+`BACnetServer::write_local_encoded` takes the value as the octets a network
+WriteProperty would carry, with the same `LocalCommandSource`. It applies that
+handler's array-index check and per-property decoding, then the `write_local`
+path, so a value from `read_local`, encoded, writes back (the Python
+`write_property_local` uses it).
+
 Each priority retains its original command owner separately from its correctable
 source claim. Remote correction requires the same uniquely known Device at both
 operations, or the same actual address without conflicting known identities or

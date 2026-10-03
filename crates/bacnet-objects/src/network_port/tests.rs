@@ -334,7 +334,13 @@ fn non_bip_application_rows_do_not_claim_ipv4_fields() {
                 .write_property(p, None, PropertyValue::Unsigned(1), None)
                 .is_err());
         }
-        assert!(!object.is_array_property(P::IP_DNS_SERVER));
+        // The classification follows the datatype, not this object's rows:
+        // IP_DNS_SERVER is an array the non-B/IP port doesn't hold.
+        assert!(object.is_array_property(P::IP_DNS_SERVER));
+        error(
+            object.read_property(P::IP_DNS_SERVER, Some(1)),
+            ErrorCode::UNKNOWN_PROPERTY,
+        );
     }
     assert!(
         NetworkPortObject::new_non_bip(1, "bad", NetworkType::IPV4, 0, MacAddr::new(), 1476)

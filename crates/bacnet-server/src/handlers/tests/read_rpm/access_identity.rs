@@ -453,18 +453,16 @@ fn rpm_access_rights_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::POSITIVE_ACCESS_RULES, None, Ok(&[0x21, 0])),
+            // Empty arrays: no octets whole, a zero size at index 0.
+            (P::POSITIVE_ACCESS_RULES, None, Ok(&[])),
+            (P::POSITIVE_ACCESS_RULES, Some(0), Ok(&[0x21, 0])),
             (
                 P::POSITIVE_ACCESS_RULES,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+                Some(1),
+                Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            (P::NEGATIVE_ACCESS_RULES, None, Ok(&[0x21, 0])),
-            (
-                P::NEGATIVE_ACCESS_RULES,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
+            (P::NEGATIVE_ACCESS_RULES, None, Ok(&[])),
+            (P::NEGATIVE_ACCESS_RULES, Some(0), Ok(&[0x21, 0])),
             // No Out_Of_Service row (#1064), so the flag stays clear.
             (P::STATUS_FLAGS, None, Ok(status_flags_bytes(false))),
             (

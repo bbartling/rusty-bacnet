@@ -1,8 +1,8 @@
 """BACnetServer.add_group with members (#1286).
 
 Members take the read_property_multiple spec shape and the checks of the
-endpoint owners' add_group; a B/IP read serves the Group's Present_Value, and
-rpm_max_result_elements limits it.
+endpoint owners' add_group; a B/IP read serves the Group's Present_Value, a
+local read returns the same value, and rpm_max_result_elements limits it.
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from __future__ import annotations
 import ast
 import asyncio
 import inspect
-import socket
 import unittest
 from pathlib import Path
 
@@ -23,6 +22,7 @@ from rusty_bacnet import (
     ObjectIdentifier,
     ObjectType,
     PropertyIdentifier,
+    PropertyValue,
 )
 
 OUT_OF_RESOURCES = 9
@@ -61,24 +61,6 @@ def make_server(**keywords: int) -> BACnetServer:
         broadcast_address="127.0.0.1",
         **keywords,
     )
-
-
-async def read_present_value(sock: socket.socket, address: str, instance: int) -> bytes:
-    """ReadProperty of a Group's Present_Value over B/IP from a raw socket;
-    returns the value octets. BACnetClient decodes only a value's first
-    element, so the list is read this way."""
-    request = (b"\x0c" + ((ObjectType.GROUP.to_raw() << 22) | instance).to_bytes(4, "big")
-               + bytes([0x19, PV.to_raw()]))
-    npdu = b"\x01\x04" + bytes([0x00, 0x05, 1, 0x0C]) + request
-    ip, port = address.rsplit(":", 1)
-    loop = asyncio.get_running_loop()
-    await loop.sock_sendto(sock, b"\x81\x0a" + (len(npdu) + 4).to_bytes(2, "big") + npdu,
-                           (ip, int(port)))
-    reply, _ = await asyncio.wait_for(loop.sock_recvfrom(sock, 2048), 3)
-    header = bytes([0x30, 1, 0x0C]) + request + b"\x3e"
-    ack = reply[6:]  # BVLL, then an NPDU with no routing fields
-    assert ack.startswith(header) and ack.endswith(b"\x3f"), ack.hex()
-    return ack[len(header):-1]
 
 
 class ServerGroupRegistrationTests(unittest.TestCase):
@@ -146,15 +128,18 @@ class ServerGroupWireTests(unittest.IsolatedAsyncioTestCase):
         server.add_analog_input(1, "AI-1", present_value=21.5)
         server.add_group(1, "Zone", [(AI_1, [(PV, None), (NAME, None)])])
         server.add_group(2, "Empty")
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.addCleanup(sock.close)
-        sock.bind(("127.0.0.1", 0))
-        sock.setblocking(False)
         await server.start()
         try:
             address = await server.local_address()
-            self.assertEqual(await read_present_value(sock, address, 1), GROUP_1_PRESENT_VALUE)
-            self.assertEqual(await read_present_value(sock, address, 2), b"")
+            async with BACnetClient(interface="127.0.0.1", port=0, apdu_timeout_ms=2000) as client:
+                for instance, expected in (
+                    (1, PropertyValue.application_data(GROUP_1_PRESENT_VALUE)),
+                    (2, PropertyValue.list([])),
+                ):
+                    group = ObjectIdentifier(ObjectType.GROUP, instance)
+                    with self.subTest(group=instance):
+                        self.assertEqual(await client.read_property(address, group, PV), expected)
+                        self.assertEqual(await server.read_property(group, PV), expected)
         finally:
             await server.stop()
 
