@@ -54,7 +54,8 @@ pub(crate) struct DeviceReadContext<'a> {
     pub(crate) registered_port: Option<ObjectIdentifier>,
     /// Result rows a single-property read of a Group's Present_Value may
     /// expand, its own row and the member rows (#1172). ReadPropertyMultiple
-    /// charges its own budget instead; this starts at that budget's default.
+    /// charges its own budget instead; this starts at that budget's default,
+    /// and the endpoint responder sets its configured limit (#1215).
     pub(crate) work_limit: usize,
     execution: DeviceExecution,
     clock: bool,

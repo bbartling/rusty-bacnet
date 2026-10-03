@@ -14,8 +14,10 @@
 //! member is read, the answer ReadPropertyMultiple gives any request over its
 //! work limit. ReadProperty and ReadRange have no work limit of their own, so
 //! they get the limit of a ReadPropertyMultiple that names only this
-//! Present_Value: the row itself plus the member rows. The low-level helpers
-//! with no executor view have no limit.
+//! Present_Value: the row itself plus the member rows. On the shared
+//! endpoint, which has no ReadPropertyMultiple budget, ReadProperty uses the
+//! session's configured read work limit (#1215). The low-level helpers with
+//! no executor view have no limit.
 //!
 //! A member may name the Device's COV subscription lists. Every read service
 //! plans its rows, a Group's member rows included, before it reads a value,

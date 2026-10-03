@@ -2101,7 +2101,8 @@
     "crates/bacnet-server/src/handlers/read_budget.rs::Work",
     "crates/bacnet-server/src/handlers/rpm_budget.rs::RpmPlan",
     "crates/bacnet-server/src/handlers/rpm_budget.rs::live_cov_selection",
-    "crates/bacnet-server/src/handlers/read_property.rs::PropertyPlan"
+    "crates/bacnet-server/src/handlers/read_property.rs::PropertyPlan",
+    "crates/bacnet-endpoint/src/session.rs::SessionConfig"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{property_references_encode_and_decode_with_and_without_an_index,read_access_specifications_decode_one_element_at_an_offset}",
@@ -2119,13 +2120,15 @@
     "crates/bacnet-objects/src/group/metadata.rs::tests::property_metadata_group_trio_write_capabilities_match_dispatch",
     "crates/bacnet-server/src/handlers/tests/read_rpm/group_present_value.rs::member_rows_are_charged_to_the_rpm_work_budget_and_shared_between_groups",
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::group_present_value_past_the_work_limit_aborts_as_any_rpm_does",
-    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/snapshot_plan.rs::a_read_past_its_work_limit_aborts_before_sampling_the_cov_table"
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/snapshot_plan.rs::a_read_past_its_work_limit_aborts_before_sampling_the_cov_table",
+    "crates/bacnet-endpoint/src/read_work_limit_tests.rs::{endpoint_group_read_past_the_read_work_limit_aborts_out_of_resources,endpoint_read_work_limit_defaults_to_256_and_refuses_zero}"
    ],
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Fixed entry for #1134 (Group List_Of_Group_Members and Present_Value), from changelog.d/1134-group-datatypes.md",
     "CHANGELOG.md Unreleased Fixed entry for #1171 (Group members read the live Device COV lists), from changelog.d/1171-group-member-cov-lists.md",
     "CHANGELOG.md Unreleased Changed entry for #1172 (Group Present_Value charged to the request's work limit), from changelog.d/1172-group-present-value-work-limit.md",
+    "CHANGELOG.md Unreleased Added entry for #1215 (endpoint read work limit), from changelog.d/1215-endpoint-read-work-limit.md",
     "docs/rust-api.md#constructed-property-framing Group List_Of_Group_Members and Present_Value"
    ],
    "notes": [
@@ -2138,6 +2141,7 @@
     "Several Groups in one ReadPropertyMultiple share that limit, and an RPM that would pass it is aborted with OUT_OF_RESOURCES before reading anything, as any RPM over its work limit is. ReadProperty and ReadRange have no work limit of their own, so a read of a Group's Present_Value through either gets the limit of an RPM that names only that property, its own row plus the member rows, and draws the same abort; BACnetServer::read_local uses the same limit and fails with Error::Abort (OUT_OF_RESOURCES).",
     "The low-level handlers with no executor view have no limit. The rebuilt octets still count toward the RPM byte budget.",
     "Every read plans its rows, a Group's member rows included and ALL, REQUIRED and OPTIONAL expanded, before it reads a value. A request samples the COV table once, under the database guard and before the COV table guard, only when a planned row names the Device's Active_COV_Subscriptions or Active_COV_Multiple_Subscriptions, directly or through the Device wildcard; a request past its work limit samples nothing (#1171, #1213).",
+    "The shared endpoint has no ReadPropertyMultiple budget: its ReadProperty charges a Group's Present_Value to SessionConfig::read_work_limit (default 256, zero refused), also set with the endpoint builders' read_work_limit, and aborts with OUT_OF_RESOURCES past it (#1215).",
     "PropertyReference and ReadAccessSpecification moved from bacnet-services into bacnet_types::constructed, with their codecs as free functions in bacnet_encoding::constructed, so the Group stores them the way other objects store their Clause 21 types; the ReadPropertyMultiple, COV and Audit codecs call the same functions. Not covered: writable List_Of_Group_Members; the Audit_Level, Auditable_Operations, Tags and profile rows."
    ]
   },

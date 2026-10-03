@@ -75,6 +75,7 @@ pub struct EndpointResponder {
     open: AtomicBool,
     device_writes: Option<(ObjectIdentifier, MutationAuthorizer)>,
     registered_port: Option<(ObjectIdentifier, std::sync::Weak<()>)>,
+    read_work_limit: usize,
 }
 
 impl EndpointResponder {
@@ -86,7 +87,18 @@ impl EndpointResponder {
             open: AtomicBool::new(true),
             device_writes: None,
             registered_port: None,
+            read_work_limit: crate::server::ReadPropertyMultipleBudget::default()
+                .max_result_elements,
         }
+    }
+
+    /// Result rows one ReadProperty may expand: its own row plus, for a
+    /// Group's Present_Value, every member row (#1215). A read past it is
+    /// aborted with OUT_OF_RESOURCES. The session validates it positive.
+    #[doc(hidden)]
+    pub fn with_read_work_limit(mut self, limit: usize) -> Self {
+        self.read_work_limit = limit;
+        self
     }
 
     /// Receiving-port identity selected by this owner, never inferred from DB rows.
@@ -244,6 +256,7 @@ impl EndpointResponder {
                 &request,
                 self.device_writes.is_some(),
                 self.registered_port.as_ref().map(|(oid, _)| *oid),
+                self.read_work_limit,
             )
             .await
         } else if request.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY
