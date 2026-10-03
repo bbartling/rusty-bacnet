@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Clippy and rustdoc for each publishable crate on its own, with default
 # features and only its lib/bin targets, denying warnings. Also covers the
-# no_std build of bacnet-types.
+# feature-off builds of bacnet-types (no_std) and bacnet-cli (no TUI). Every
+# rustdoc run documents private items, so a broken intra-doc link on an item
+# that exists only in one feature configuration fails here (#1192).
 #
 #   check-default-features.sh               for the host
 #   check-default-features.sh <triple>...   for those targets; cargo checks
@@ -43,9 +45,12 @@ export RUSTDOCFLAGS="-D warnings"
 for crate in $crates; do
   echo "==> $crate (default features$label)"
   cargo_for clippy -p "$crate" --locked -- -D warnings
-  cargo_for doc -p "$crate" --no-deps --locked
+  cargo_for doc -p "$crate" --no-deps --locked --document-private-items
 done
 
 echo "==> bacnet-types (no_std$label)"
 cargo_for clippy -p bacnet-types --no-default-features --locked -- -D warnings
-cargo_for doc -p bacnet-types --no-default-features --no-deps --locked
+cargo_for doc -p bacnet-types --no-default-features --no-deps --locked --document-private-items
+
+echo "==> bacnet-cli (rustdoc, no default features, without the TUI$label)"
+cargo_for doc -p bacnet-cli --no-default-features --no-deps --locked --document-private-items
