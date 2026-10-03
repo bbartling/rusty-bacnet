@@ -5,10 +5,12 @@
 //! Each report carries the row's values in the row's order. A change of a
 //! trigger sends a report on its own; a value that only rides along waits for
 //! the next report. Access Point has no Present_Value, so its report starts
-//! with Access_Event. Door_Alarm_State, Update_Time and the Access Point event
-//! rows have no network write route, so those tests put an object holding the
-//! changed value into the database (`ObjectDatabase::add` replaces by
-//! identifier) and run the fanout a write commit would.
+//! with Access_Event. Update_Time and the Access Point event rows have no
+//! network write route, and Door_Alarm_State has one only while the door is out
+//! of service (#1131), so those tests put an object holding the changed value
+//! into the database (`ObjectDatabase::add` replaces by identifier) and run the
+//! fanout a write commit would. The door's simulation test writes it over the
+//! wire instead.
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::access_control::{
@@ -16,10 +18,14 @@ use bacnet_objects::access_control::{
 };
 use bacnet_objects::load_control::LoadControlObject;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov::{COVNotificationRequest, SubscribeCOVRequest};
+use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::BACnetShedLevel;
-use bacnet_types::enums::{AccessEvent, DoorAlarmState, DoorValue, ObjectType};
+use bacnet_types::enums::{
+    AccessEvent, DoorAlarmState, DoorStatus, DoorValue, LockStatus, ObjectType,
+};
 use bacnet_types::primitives::{Date, Time};
 
 type Values = Vec<(PropertyIdentifier, Vec<u8>)>;
@@ -90,12 +96,13 @@ async fn subscribed(h: &mut Harness, oid: ObjectIdentifier) -> Values {
     values(&h.cov_notification().await, oid)
 }
 
-async fn write(
+/// WriteProperty of `property` and the answer to it.
+async fn try_write(
     h: &mut Harness,
     oid: ObjectIdentifier,
     property: PropertyIdentifier,
     value: Vec<u8>,
-) {
+) -> Result<(), ErrorCode> {
     let mut body = BytesMut::new();
     WritePropertyRequest {
         object_identifier: oid,
@@ -108,7 +115,48 @@ async fn write(
     .unwrap();
     h.request(ConfirmedServiceChoice::WRITE_PROPERTY, body)
         .await;
-    assert_eq!(response(h).await, Ok(()), "write of {property:?}");
+    response(h).await
+}
+
+async fn write(
+    h: &mut Harness,
+    oid: ObjectIdentifier,
+    property: PropertyIdentifier,
+    value: Vec<u8>,
+) {
+    assert_eq!(
+        try_write(h, oid, property, value).await,
+        Ok(()),
+        "write of {property:?}"
+    );
+}
+
+/// One WritePropertyMultiple of `writes` to `oid`, answered with a SimpleACK.
+async fn write_multiple(
+    h: &mut Harness,
+    oid: ObjectIdentifier,
+    writes: Vec<(PropertyIdentifier, Vec<u8>)>,
+) {
+    let mut body = BytesMut::new();
+    WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: oid,
+            list_of_properties: writes
+                .into_iter()
+                .map(|(property_identifier, value)| BACnetPropertyValue {
+                    property_identifier,
+                    property_array_index: None,
+                    value,
+                    priority: None,
+                })
+                .collect(),
+        }],
+    }
+    .encode(&mut body)
+    .unwrap();
+    h.request(ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE, body)
+        .await;
+    assert_eq!(response(h).await, Ok(()), "WritePropertyMultiple");
 }
 
 fn door(alarm: DoorAlarmState) -> Box<dyn BACnetObject> {
@@ -158,6 +206,122 @@ async fn access_door_cov_reports_and_triggers_on_door_alarm_state() {
         unsigned(20),
     )
     .await;
+    h.no_notification().await;
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn access_door_simulated_door_alarm_state_reports_and_restores() {
+    const ALARM: PropertyIdentifier = PropertyIdentifier::DOOR_ALARM_STATE;
+    const OUT_OF_SERVICE: PropertyIdentifier = PropertyIdentifier::OUT_OF_SERVICE;
+    let oid = ObjectIdentifier::new(ObjectType::ACCESS_DOOR, 1).unwrap();
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        db.add(door(DoorAlarmState::DOOR_OPEN_TOO_LONG)).unwrap();
+    })
+    .await;
+    let report = |alarm: DoorAlarmState, flags: Vec<u8>| {
+        vec![
+            (PV, enumerated(DoorValue::LOCK.to_raw())),
+            (SF, flags),
+            (ALARM, enumerated(alarm.to_raw())),
+        ]
+    };
+    // Status_Flags with only OUT_OF_SERVICE set.
+    let out_of_service = || vec![0x82, 0x04, 0x10];
+    assert_eq!(
+        subscribed(&mut h, oid).await,
+        report(DoorAlarmState::DOOR_OPEN_TOO_LONG, normal())
+    );
+
+    // In service the write is refused and nothing reports.
+    assert_eq!(
+        try_write(
+            &mut h,
+            oid,
+            ALARM,
+            enumerated(DoorAlarmState::FORCED_OPEN.to_raw())
+        )
+        .await,
+        Err(ErrorCode::WRITE_ACCESS_DENIED)
+    );
+    h.no_notification().await;
+
+    // Out of service the OUT_OF_SERVICE flag reports, then a simulated
+    // Door_Alarm_State reports on its own.
+    write(
+        &mut h,
+        oid,
+        OUT_OF_SERVICE,
+        encode(PropertyValue::Boolean(true)),
+    )
+    .await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(DoorAlarmState::DOOR_OPEN_TOO_LONG, out_of_service())
+    );
+    write(
+        &mut h,
+        oid,
+        ALARM,
+        enumerated(DoorAlarmState::FORCED_OPEN.to_raw()),
+    )
+    .await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(DoorAlarmState::FORCED_OPEN, out_of_service())
+    );
+    h.no_notification().await;
+
+    // Door_Status and Lock_Status aren't in the row, so simulating them
+    // alone reports nothing.
+    write(
+        &mut h,
+        oid,
+        PropertyIdentifier::DOOR_STATUS,
+        enumerated(DoorStatus::OPENED.to_raw()),
+    )
+    .await;
+    write(
+        &mut h,
+        oid,
+        PropertyIdentifier::LOCK_STATUS,
+        enumerated(LockStatus::UNLOCKED.to_raw()),
+    )
+    .await;
+    h.no_notification().await;
+
+    // One WritePropertyMultiple that simulates two rows reports once.
+    write_multiple(
+        &mut h,
+        oid,
+        vec![
+            (
+                PropertyIdentifier::DOOR_STATUS,
+                enumerated(DoorStatus::CLOSED.to_raw()),
+            ),
+            (ALARM, enumerated(DoorAlarmState::TAMPER.to_raw())),
+        ],
+    )
+    .await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(DoorAlarmState::TAMPER, out_of_service())
+    );
+    h.no_notification().await;
+
+    // The return to service brings back the device's Door_Alarm_State and
+    // clears the flag, in one report.
+    write(
+        &mut h,
+        oid,
+        OUT_OF_SERVICE,
+        encode(PropertyValue::Boolean(false)),
+    )
+    .await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(DoorAlarmState::DOOR_OPEN_TOO_LONG, normal())
+    );
     h.no_notification().await;
     h.server.stop().await.unwrap();
 }

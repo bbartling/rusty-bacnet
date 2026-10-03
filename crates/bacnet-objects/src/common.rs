@@ -245,25 +245,53 @@ pub(crate) fn write_out_of_service_with_reliability_restore(
     property: bacnet_types::enums::PropertyIdentifier,
     value: &bacnet_types::primitives::PropertyValue,
 ) -> Option<Result<(), bacnet_types::error::Error>> {
-    if property == bacnet_types::enums::PropertyIdentifier::OUT_OF_SERVICE {
-        if let bacnet_types::primitives::PropertyValue::Boolean(v) = value {
-            if !*out_of_service && *v {
-                *saved_reliability = Some(*reliability);
-            } else if *out_of_service && !*v {
-                *reliability = saved_reliability
-                    .take()
-                    .unwrap_or(bacnet_types::enums::Reliability::NO_FAULT_DETECTED);
+    write_out_of_service_with_restore(
+        out_of_service,
+        reliability,
+        saved_reliability,
+        Some(bacnet_types::enums::Reliability::NO_FAULT_DETECTED),
+        property,
+        value,
+    )
+}
+
+/// Handle writing OUT_OF_SERVICE for an object that serves a client's
+/// simulated values while it is out of service.
+///
+/// On the FALSE-to-TRUE edge the object's own `served` value is copied into
+/// `set_aside`. On the TRUE-to-FALSE edge `served` takes back the value set
+/// aside, or `fallback` when the entry edge was not observed; with neither,
+/// it keeps what it holds. NULL relinquishment changes none of the fields.
+/// `None` for any property other than OUT_OF_SERVICE.
+#[inline]
+pub(crate) fn write_out_of_service_with_restore<T: Copy>(
+    out_of_service: &mut bool,
+    served: &mut T,
+    set_aside: &mut Option<T>,
+    fallback: Option<T>,
+    property: bacnet_types::enums::PropertyIdentifier,
+    value: &bacnet_types::primitives::PropertyValue,
+) -> Option<Result<(), bacnet_types::error::Error>> {
+    if property != bacnet_types::enums::PropertyIdentifier::OUT_OF_SERVICE {
+        return None;
+    }
+    Some(match value {
+        bacnet_types::primitives::PropertyValue::Boolean(v) => {
+            match (*out_of_service, *v) {
+                (false, true) => *set_aside = Some(*served),
+                (true, false) => {
+                    if let Some(own) = set_aside.take().or(fallback) {
+                        *served = own;
+                    }
+                }
+                _ => {}
             }
             *out_of_service = *v;
-            Some(Ok(()))
-        } else if matches!(value, bacnet_types::primitives::PropertyValue::Null) {
-            Some(Ok(()))
-        } else {
-            Some(Err(invalid_data_type_error()))
+            Ok(())
         }
-    } else {
-        None
-    }
+        bacnet_types::primitives::PropertyValue::Null => Ok(()),
+        _ => Err(invalid_data_type_error()),
+    })
 }
 
 pub(crate) use crate::reliability_inhibit::ReliabilityInhibitState;
