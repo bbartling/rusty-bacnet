@@ -1,11 +1,17 @@
 //! Conformance ledger schema and public-claim guard tests.
+//!
+//! Row tests check structure (status, test membership, code anchors, gaps)
+//! through `row_checks`, never the wording of the ledger or the changelog
+//! (#1209). The generator's `--check` resolves anchors, checks row style and
+//! checks the links into and out of the conformance pages.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::{fs, process::Command};
 
-use notes::notes_text;
-use published_doc::read_published_doc;
+use row_checks::{
+    assert_listed, assert_open_work_recorded, assert_status, assert_test_family, summary,
+};
 use serde_json::{json, Value};
 
 const LEDGER_JSON: &str = include_str!("../../../docs/conformance/bacnet-135-2020.json");
@@ -18,10 +24,12 @@ const STANDARD_LEDGER: &str = include_str!("../../../docs/conformance/standard-1
 mod endpoint_device_write;
 #[path = "conformance_ledger/notes.rs"]
 mod notes;
-#[path = "conformance_ledger/published_doc.rs"]
-mod published_doc;
+#[path = "conformance_ledger/row_checks.rs"]
+mod row_checks;
 #[path = "conformance_ledger/sc_hub_response_silence.rs"]
 mod sc_hub_response_silence;
+#[path = "conformance_ledger/sc_identity.rs"]
+mod sc_identity;
 #[path = "conformance_ledger/sc_mu_liveness.rs"]
 mod sc_mu_liveness;
 #[path = "conformance_ledger/sc_zero_limits.rs"]
@@ -200,11 +208,10 @@ fn read_repo_file(path: &str) -> String {
 fn ledger_schema_has_required_seed_rows_and_unique_ids() {
     let data = ledger();
     assert_eq!(data["standard"], "ANSI/ASHRAE Standard 135-2020");
+    // Slices cite their own reviews in rows; only a repository-wide review
+    // moves these (see row_evidence_policy).
     assert_eq!(data["reviewed_at"], "2026-09-17");
-    assert!(
-        data["repo_sha"].as_str().is_some_and(|sha| sha.len() == 40),
-        "repo_sha must be a full git SHA"
-    );
+    assert_eq!(data["repo_sha"], "b4c845caf920db279b0aefbd2824ac1348bba1cb");
 
     let rows = data["rows"].as_array().expect("rows should be an array");
     let allowed_statuses: BTreeSet<&str> = ALLOWED_STATUSES.iter().copied().collect();
@@ -218,9 +225,7 @@ fn ledger_schema_has_required_seed_rows_and_unique_ids() {
         assert!(row["priority"]
             .as_str()
             .is_some_and(|p| matches!(p, "P0" | "P1" | "P2" | "P3")));
-        assert!(row["requirement_summary"]
-            .as_str()
-            .is_some_and(|s| !s.is_empty()));
+        assert!(!summary(row).is_empty(), "{id} has no summary");
         let status = row["status"].as_str().expect("status should be a string");
         assert!(
             allowed_statuses.contains(status),
@@ -329,102 +334,6 @@ fn current_ledger_does_not_cite_retired_one_way_sc_benchmarks() {
 }
 
 #[test]
-fn sc_credential_evidence_does_not_promote_the_full_security_profile() {
-    let data = ledger();
-    let rows = rows_by_id(&data);
-    let row = rows["BACNET-AB-SC-WEBSOCKET-TLS"];
-    assert_eq!(row["status"], "implementation-present-needs-security-tests");
-    let tests = row["negative_tests"]
-        .as_array()
-        .expect("negative tests should be an array");
-    for anchor in [
-        "crates/bacnet-transport/tests/sc_hub_tls.rs::typed_config_rejects_empty_ca_before_startup",
-        "crates/bacnet-transport/src/sc_tls/tls_config_tests.rs::node_tls_factory_requires_nonempty_ca_and_identity",
-        "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::HubMtlsTests::test_invalid_files_fail_before_bind",
-        "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::NodeMtlsTests::test_invalid_local_files_do_not_dial_or_drain",
-        "crates/bacnet-cli/tests/sc_ca.rs::missing_ca_rejected_before_dial",
-    ] {
-        assert!(
-            tests.iter().any(|test| test.as_str() == Some(anchor)),
-            "SC credential acceptance must retain preflight evidence: {anchor}"
-        );
-    }
-}
-
-#[test]
-fn sc_identity_evidence_keeps_caller_storage_and_raw_transport_limits_explicit() {
-    let data = ledger();
-    let rows = rows_by_id(&data);
-    let row = rows["BACNET-AB-SC-WEBSOCKET-TLS"];
-    assert_eq!(row["status"], "implementation-present-needs-security-tests");
-    for anchor in [
-        "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::NodeIdentityMtlsTests::test_uuid_owned_wire_bytes_across_stop_start_and_recreation",
-        "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::NodeIdentityMtlsTests::test_distinct_nodes_and_same_uuid_replacement_leave_other_node_usable",
-        "benchmarks/tests/sc_mtls/node_identity.rs::sc_server_uuid_wire_bytes_survive_reconnect_and_fresh_builds",
-        "crates/bacnet-transport/tests/sc_hub_tls.rs::local_hub_identity_wire_bytes_survive_fresh_start_on_every_api",
-        "crates/rusty-bacnet/tests/test_sc_hub_mtls.py::NodeIdentityMtlsTests::test_hub_owned_identity_survives_stop_start_and_fresh_object",
-        "benchmarks/tests/sc_binary/handshake.rs::hub_identity_is_explicit_and_stable_across_binary_restart",
-    ] {
-        assert!(row["positive_tests"].as_array().unwrap().iter().any(|test| test == anchor));
-    }
-    // The machine-readable tranche notes retain their slice-time issue status.
-    let notes = notes_text(row);
-    assert!(notes.contains("#517 remains open"));
-    for body in [notes.as_str(), STANDARD_LEDGER] {
-        assert!(body.contains("changed UUIDs cannot be detected without application history"));
-        assert!(body.contains("before transport-owned I/O or startup state changes"));
-        assert!(body.contains("same owned WebSocket"));
-        assert!(body.contains("not lifetime immutability"));
-        assert!(body.contains("later application mutation through public connection()"));
-        assert!(body.contains("Wire admission, peer replacement"));
-        assert!(body.contains("hosting port VMAC and hosting device UUID"));
-        assert!(body.contains("one shared Rust check"));
-        assert!(body.contains("TEST-ONLY hub UUID"));
-        assert!(
-            !body.contains("the Python two-node sketch is illustrative, not validated end-to-end")
-        );
-    }
-}
-
-#[test]
-fn sc_hub_identity_evidence_retains_pre_io_checks_and_no_status_promotion() {
-    let data = ledger();
-    let rows = rows_by_id(&data);
-    let row = rows["BACNET-AB-SC-WEBSOCKET-TLS"];
-    for anchor in [
-        "crates/bacnet-transport/tests/sc_hub_tls.rs::local_hub_identity_rejected_before_bind_on_every_start_api",
-        "crates/rusty-bacnet/tests/test_sc_hub_identity.py::HubIdentityTests::test_uuid_required_length_zero_and_vmac_errors_precede_io",
-        "crates/rusty-bacnet/tests/test_sc_hub_identity.py::HubIdentityTests::test_installed_hub_stub_matches_runtime_keyword_contract",
-        "benchmarks/tests/sc_binary/preflight.rs::missing_empty_and_invalid_identity_precede_file_or_network_io",
-    ] {
-        assert!(row["negative_tests"].as_array().unwrap().iter().any(|test| test == anchor));
-    }
-    assert_eq!(row["status"], "implementation-present-needs-security-tests");
-}
-
-#[test]
-fn sc_raw_identity_evidence_retains_startup_only_boundary() {
-    let data = ledger();
-    let rows = rows_by_id(&data);
-    let row = rows["BACNET-AB-SC-WEBSOCKET-TLS"];
-    for anchor in [
-        "crates/bacnet-transport/src/sc/identity_tests.rs::explicit_zero_uuid_rejected_without_io_and_repaired_on_same_socket",
-        "crates/bacnet-transport/src/sc/identity_tests.rs::zero_vmac_rejected_without_io_or_socket_consumption",
-        "crates/bacnet-transport/src/sc/identity_tests.rs::broadcast_vmac_rejected_without_io_or_socket_consumption",
-        "crates/bacnet-transport/src/sc/identity_tests.rs::reconnect_then_heartbeat_then_identity_error_precedence",
-    ] {
-        assert!(row["negative_tests"].as_array().unwrap().iter().any(|test| test == anchor));
-    }
-    let docs = read_repo_file("docs/rust-api.md");
-    assert!(
-        docs.contains("startup enforcement, not lifetime immutability")
-            || docs.contains("startup\nenforcement, not lifetime immutability")
-    );
-    assert!(docs.contains("cannot undo caller-owned WebSocket creation"));
-    assert!(docs.contains("There is no\nnew VMAC repair setter"));
-}
-
-#[test]
 fn public_claim_guard_rejects_missing_ledger_row() {
     let data = json!({"rows": []});
     let row_map = rows_by_id(&data);
@@ -438,67 +347,6 @@ fn public_claim_guard_rejects_missing_ledger_row() {
     assert!(errors
         .iter()
         .any(|e| e.contains("missing ledger row BACNET-AB-SC-FRAME")));
-}
-
-#[test]
-fn sc_peer_uuid_evidence_retains_silent_accept_policy_without_status_promotion() {
-    let data = ledger();
-    let rows = rows_by_id(&data);
-    let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
-    assert_eq!(
-        row["status"],
-        "implementation-present-needs-state-machine-audit"
-    );
-    for anchor in [
-        "crates/bacnet-transport/src/sc/connect_validation_tests.rs",
-        "crates/bacnet-transport/src/sc/reconnect_validation_tests.rs",
-        "crates/bacnet-transport/src/sc_tls/connect_accept_tests.rs",
-    ] {
-        assert!(row["code_anchors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|code| code == anchor));
-    }
-    for anchor in [
-        "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_uuid_mtls_request_never_reaches_admission",
-        "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_uuid_mtls_collision_at_capacity_preserves_live_peers",
-        "crates/bacnet-transport/src/sc_hub/peer_uuid_tests.rs::zero_uuid_mtls_repeat_flood_preserves_activity_probe_and_registration",
-        "crates/rusty-bacnet/tests/test_sc_peer_uuid.py::PeerUuidTests::test_nil_request_nak_close_repeat_and_surviving_native_read",
-        "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_zero_uuid_is_transactional_in_every_state",
-        "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_nil_only_and_flood_keep_absolute_deadline",
-        "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_nil_wrong_id_is_discarded_but_valid_wrong_id_is_terminal",
-        "crates/bacnet-transport/src/sc/reconnect_validation_tests.rs::nil_accept_failover_and_failed_primary_probe_preserve_active_identity_and_limits",
-        "crates/bacnet-transport/src/sc/reconnect_validation_tests.rs::nil_accept_reconnect_probe_times_out_then_redials_without_reseeding",
-        "crates/bacnet-transport/src/sc_tls/connect_accept_tests.rs::nil_accept_tls_expires_without_peer_identity_or_limits",
-        "crates/rusty-bacnet/tests/test_sc_accept_uuid.py::AcceptUuidTests::test_native_nodes_nil_accept_expires_without_connecting",
-    ] {
-        assert!(row["negative_tests"].as_array().unwrap().iter().any(|test| test == anchor));
-    }
-    for anchor in [
-        "crates/bacnet-transport/src/sc_frame/connect.rs::tests::nonzero_uuid_bits_remain_opaque",
-        "crates/bacnet-transport/src/sc/connect_validation_tests.rs::connect_accept_invalid_matrix_waits_silently_for_valid_accept",
-        "crates/bacnet-transport/src/sc_tls/connect_accept_tests.rs::nil_accept_tls_is_silent_until_later_valid_accept",
-        "crates/rusty-bacnet/tests/test_sc_accept_uuid.py::AcceptUuidTests::test_native_nodes_wait_silently_then_accept_valid_uuid",
-    ] {
-        assert!(row["positive_tests"].as_array().unwrap().iter().any(|test| test == anchor));
-    }
-    for phrase in [
-        "Local security policy",
-        "Nonzero bits remain opaque",
-        "Owner-approved scoped resolution",
-        "Connect-Accept with a zero UUID is silently discarded",
-        "prohibits replies to response messages",
-        "local diagnostic, not a wire NAK",
-        "without publishing Connected or resetting the absolute connect",
-        "manual raw sending still permit nil syntax",
-        "not a pre-dial check",
-    ] {
-        assert!(
-            STANDARD_LEDGER.contains(phrase),
-            "missing boundary: {phrase}"
-        );
-    }
 }
 
 #[test]
@@ -521,96 +369,6 @@ fn public_claim_guard_rejects_unknown_status_for_public_claim() {
     assert!(errors
         .iter()
         .any(|e| e.contains("unknown-pending-source-review")));
-}
-
-fn sc_identity_closeout() -> &'static str {
-    let heading = "### Device identity acceptance closeout\n";
-    let section = STANDARD_LEDGER.split_once(heading).unwrap();
-    section.1.split("\n## ").next().unwrap()
-}
-
-#[test]
-fn sc_identity_closeout_maps_six_criteria_without_promoting_excluded_guarantees() {
-    let body = sc_identity_closeout();
-    let criteria: Vec<_> = body.split("\n| A").skip(1).collect();
-    assert_eq!(criteria.len(), 6);
-    for (index, evidence) in [
-        "test_distinct_nodes_and_same_uuid_replacement_leave_other_node_usable",
-        "test_sc_uuid_validation_precedes_file_and_socket_io",
-        "test_uuid_owned_wire_bytes_across_stop_start_and_recreation",
-        "documented provisioning boundary",
-        "strict_hub_start_family_requires_mutual_tls13_and_preserves_uuid",
-        "sc_client_builder_sends_configured_vmac_and_device_uuid",
-    ]
-    .iter()
-    .enumerate()
-    {
-        let row = criteria[index].lines().next().unwrap();
-        assert!(row.starts_with(&format!("{} |", index + 1)));
-        assert!(row.contains(evidence) && row.contains("]("), "{evidence}");
-    }
-    let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
-    for boundary in [
-        "proposed closeout",
-        "caller-owned provisioning/storage",
-        "non-colliding VMACs",
-        "all nonzero 128-bit values",
-        "deferred/excluded",
-        "not fully implemented",
-        "not literal all-public-API coverage",
-        "post-start mutation",
-        "cannot undo caller-owned WebSocket",
-        "VMAC validation may follow dialing",
-        "not application disk-storage qualification",
-        "Runtime evidence is reused",
-        "no fresh native/platform qualification",
-        "full Annex AB/PICS/BTL",
-        "bde599405c38e2ceb62e23ee628a0f15d1ac9fe2",
-    ] {
-        let present = normalized.contains(boundary);
-        assert!(present, "missing boundary: {boundary}");
-    }
-    for section in ["4.1.1", "4.1.3", "4.1.7"] {
-        let rfc = "https://www.rfc-editor.org/rfc/rfc4122.html";
-        assert!(body.contains(&format!("{rfc}#section-{section}")));
-    }
-    assert!(!body.contains("#517 remains open"));
-}
-
-#[test]
-fn sc_identity_closeout_links_and_symbol_anchors_resolve_offline() {
-    let target = "conformance/standard-135-2020-ledger.md#device-identity-acceptance-closeout";
-    for (doc, prefix) in [
-        ("CHANGELOG.md", "docs/"),
-        ("docs/rust-api.md", ""),
-        ("docs/python-api.md", ""),
-    ] {
-        let link = format!("]({prefix}{target})");
-        assert!(read_published_doc(doc).contains(&link), "{doc}");
-    }
-    let links = sc_identity_closeout()
-        .split('[')
-        .filter_map(|s| s.split_once("]("));
-    for (label, link) in links {
-        let target = link.split(')').next().unwrap();
-        if target.starts_with("https://") {
-            continue;
-        }
-        let (path, anchor) = target.split_once('#').unwrap_or((target, ""));
-        let source = read_repo_file(&format!("docs/conformance/{path}"));
-        if !anchor.is_empty() {
-            // Both provisioning links target level-four, plain-word headings.
-            let heading = format!("#### {}", anchor.replace('-', " "));
-            let lower = source.to_lowercase();
-            assert!(lower.lines().any(|s| s == heading), "{target}");
-        }
-        if label.starts_with('`') {
-            let symbol = label.trim_matches('`');
-            let rust = source.contains(&format!("fn {symbol}("));
-            let python = source.contains(&format!("def {symbol}("));
-            assert!(rust || python, "missing {symbol} in {path}");
-        }
-    }
 }
 
 #[test]
@@ -649,8 +407,6 @@ fn generated_support_docs_are_current_with_ledger() {
         )),
         "standard ledger evidence SHA differs from the machine-readable ledger"
     );
-    assert!(STANDARD_LEDGER.contains("## Clause 4 Architecture"));
-    assert!(STANDARD_LEDGER.contains("## Annex AB BACnet/SC"));
     for id in REQUIRED_IDS {
         assert!(SUPPORT_SUMMARY.contains(id), "support summary missing {id}");
     }
