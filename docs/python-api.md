@@ -1942,16 +1942,21 @@ value. The server doesn't follow Controlled_Variable_Reference itself.
 65535 or a priority outside 1 to 16 raise VALUE_OUT_OF_RANGE. Peers can write
 the Loop's Action (DIRECT until written).
 
-The application feeds an Averaging object too, because the server doesn't
-read its Object_Property_Reference: about every Window_Interval /
-Window_Samples seconds it samples the referenced property and passes the
-result with `await server.add_averaging_sample_local(averaging_id,
-PropertyValue.real(21.5))`, or `None` when the read failed. A BOOLEAN (counted
-as 0 or 1), Signed, Unsigned and Enumerated sample is accepted as well as a
-finite REAL. Another datatype, Double included, raises INVALID_DATA_TYPE and
-NaN or an infinity VALUE_OUT_OF_RANGE, and a refused sample isn't counted;
+A running server samples an Averaging object's Object_Property_Reference
+itself, every Window_Interval / Window_Samples seconds but never more often
+than every 100 ms, starting one spacing after `start()` and over again after
+each write that empties the window. A missing object or property, a failed
+read, or a value it can't average counts as a missed attempt. An object
+without a reference is the application's to feed: about that often it passes
+each result with `await server.add_averaging_sample_local(averaging_id,
+PropertyValue.real(21.5))`, or `None` when its reading failed. On an object
+the server samples, such a call is one more attempt and doesn't move the
+server's spacing. A BOOLEAN (counted as 0 or 1), Signed, Unsigned and
+Enumerated sample is accepted as well as a finite REAL. Another datatype,
+Double included, raises INVALID_DATA_TYPE and NaN or an infinity
+VALUE_OUT_OF_RANGE, and a refused sample isn't counted;
 other objects raise OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. The object keeps the
-most recent Window_Samples attempts and treats each call as the next one;
+most recent Window_Samples attempts, each sample filling the next slot;
 Minimum_Value, Maximum_Value and Average_Value cover the valid samples among
 them, Attempted_Samples counts the attempts and Valid_Samples the valid ones.
 With no valid sample in the window the statistics read `math.inf`,
@@ -2259,7 +2264,7 @@ counters["timed_changes_dropped"]         # timestamped COV-multiple changes los
 | `notification_bytes_sent` | APDU bytes of the notifications in `notifications_sent` |
 | `notifications_throttled_fanout` | Notifications not sent because the per-event count or byte budget ran out |
 | `notifications_throttled_peer` | Confirmed notifications not sent because the peer was at its in-flight limit |
-| `timed_changes_dropped` | Timestamped COV-multiple changes discarded for good, the running signal for a subscriber whose maximum APDU can't hold one |
+| `timed_changes_dropped` | Timestamped COV-multiple changes discarded for good, in whole or in part, the running signal for a subscriber whose maximum APDU can't hold one timestamped value |
 | `untimed_references_oversized` | Each COV-multiple report that left out an untimestamped reference too large for one notification |
 
 The binding builds the dict from an exhaustive pattern over the Rust struct, so
@@ -2309,6 +2314,40 @@ the Rust `CovPolicy::validate` refuses `ValueError`. The Rust server runs the
 same check before it starts a transport. The conversion names every field of
 the Rust struct without `..`, so a field added in Rust must get a key here
 before the bindings compile.
+
+#### `event_notification_counters() -> EventNotificationCounters`
+
+Sample the totals of event notifications the server did not deliver: a dict
+holding every field of the Rust `EventNotificationCounters` under the same name,
+typed as the `EventNotificationCounters` TypedDict in the stub. Every field is a
+running total that starts at zero on each `start()` and saturates at 2**64-1.
+Each field is read on its own, so one sample is not an atomic aggregate. Like
+`cov_counters()`, it raises `RuntimeError` before start and after stop. Each
+counted refusal also logs a warning; the counters are the running signal.
+
+```python
+counters = await server.event_notification_counters()
+counters["notification_class_missing"]  # transitions whose class doesn't exist
+counters["confirmed_unanswered"]        # confirmed notifications never acknowledged
+```
+
+| Field | Counts |
+|---|---|
+| `notification_class_missing` | Transitions sent nowhere because no Notification Class object has the class number the event object names |
+| `recipient_list_unavailable` | Transitions sent nowhere because reading the class's Recipient_List failed |
+| `recipient_list_invalid` | Transitions sent nowhere because the Recipient_List did not decode as a whole (no decodable prefix is used) |
+| `recipient_list_too_long` | Transitions sent nowhere because a custom class served more than 32 destinations |
+| `confirmed_no_invoke_id` | Confirmed notifications to one recipient not sent because no invoke ID was free |
+| `confirmed_rejected` | Confirmed notifications the recipient answered with an Error, Reject or Abort |
+| `confirmed_unanswered` | Confirmed notifications with no acknowledgment after the last retry |
+
+The first four count event and acknowledgment notifications alike, once per
+transition. A class whose list is empty, or whose destinations all filter the
+transition out by day, time or transition, is configured behaviour and is not
+counted. Neither are notifications held back by DeviceCommunicationControl or
+Event_Enable, nor confirmed reservations refused while the server stops. The
+binding builds the dict from an exhaustive pattern over the Rust struct, like
+`cov_counters()`.
 
 #### `local_address() -> str`
 

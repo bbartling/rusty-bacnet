@@ -80,4 +80,4 @@ impl BACnetServer {
 
 #[cfg(test)]
 #[path = "cov_counters_tests.rs"]
-mod tests;
+pub(super) mod tests;

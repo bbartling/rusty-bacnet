@@ -186,12 +186,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         .await
     }
 
-    /// Record one sample of an Averaging object's referenced property, taken
-    /// by the application.
+    /// Record one sample for an Averaging object, taken by the application.
     ///
-    /// The server doesn't read `Object_Property_Reference` itself, so the
-    /// application samples that property, spacing its reads Window_Interval /
-    /// Window_Samples seconds apart, and passes each result here. A value may be
+    /// The server samples an object that holds an `Object_Property_Reference`
+    /// itself, every Window_Interval / Window_Samples seconds (#1144). For an
+    /// object without one, the application samples whatever it averages,
+    /// spacing its readings that far apart, and passes each result here. On an
+    /// object the server samples, a call is one more attempt in the window
+    /// and doesn't move the server's schedule. A value may be
     /// a BOOLEAN (FALSE and TRUE count as 0 and 1), Signed, Unsigned,
     /// Enumerated or finite REAL; the object keeps its statistics in REAL
     /// (Clause 12.5). `None` records an attempt that produced no value, such
@@ -457,6 +459,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 learned_routers: &self.learned_routers,
                 notification_transactions: &self.notification_transactions,
                 device_bindings: &self.device_bindings,
+                suppressions: &self.event_suppressions,
                 retry_timeout_ms: self.config.cov_retry_timeout_ms,
                 local_apdu_capacity: self.config.max_apdu_length,
             },
@@ -520,6 +523,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             learned_routers: &self.learned_routers,
             notification_transactions: &self.notification_transactions,
             device_bindings: &self.device_bindings,
+            suppressions: &self.event_suppressions,
             retry_timeout_ms: self.config.cov_retry_timeout_ms,
             local_apdu_capacity: self.config.max_apdu_length,
         }

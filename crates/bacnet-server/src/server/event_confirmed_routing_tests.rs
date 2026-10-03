@@ -28,7 +28,10 @@ use bacnet_types::enums::{EventState, EventType};
 use bacnet_types::primitives::StatusFlags;
 use bytes::Bytes;
 
+mod recipient_abort;
+
 mod learned_router_cache;
+mod suppression_counters;
 
 /// One recorded unicast send: destination MAC and NPDU bytes.
 type UnicastFrame = (Vec<u8>, Bytes);
@@ -42,6 +45,7 @@ struct Harness {
     notification_transactions: Arc<NotificationTransactions>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     comm_state: Arc<AtomicU8>,
+    suppressions: Arc<super::event_suppression::EventSuppressions>,
     sent: SendLog,
     retry_timeout_ms: u64,
 }
@@ -96,6 +100,7 @@ impl Harness {
             notification_transactions,
             device_bindings: Arc::new(RwLock::new(device_bindings)),
             comm_state,
+            suppressions: Arc::default(),
             sent,
             retry_timeout_ms,
         }
@@ -111,6 +116,7 @@ impl Harness {
                 learned_routers: &self.learned_routers,
                 notification_transactions: &self.notification_transactions,
                 device_bindings: &self.device_bindings,
+                suppressions: &self.suppressions,
                 retry_timeout_ms: self.retry_timeout_ms,
                 local_apdu_capacity: 1474,
             },
@@ -163,6 +169,7 @@ impl Harness {
                 learned_routers: &self.learned_routers,
                 notification_transactions: &self.notification_transactions,
                 device_bindings: &self.device_bindings,
+                suppressions: &self.suppressions,
                 retry_timeout_ms: self.retry_timeout_ms,
                 local_apdu_capacity: 1474,
             },

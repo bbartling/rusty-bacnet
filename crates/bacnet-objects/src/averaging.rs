@@ -1,21 +1,27 @@
 //! Averaging (type 18) object per ASHRAE 135-2020 Clause 12.5.
 //!
 //! Computes minimum, maximum and average statistics over a sliding window of
-//! samples taken from a referenced object property. The application takes the
-//! samples: the object doesn't read Object_Property_Reference itself.
+//! samples taken from a referenced object property. The object keeps the
+//! schedule those samples follow; the database reads the referenced property
+//! when a sample falls due (`ObjectDatabase::sample_due_averaging_objects`),
+//! and the application can feed samples of its own.
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use std::borrow::Cow;
+use std::sync::Arc;
+use std::time::Duration;
 
 use crate::common::{self, read_identity_properties};
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, MonotonicClock};
 
 mod metadata;
+mod schedule;
 mod window;
 
+pub use schedule::MIN_SAMPLE_PERIOD;
 pub use window::{DEFAULT_WINDOW_INTERVAL, DEFAULT_WINDOW_SAMPLES, MAX_WINDOW_SAMPLES};
 
 /// BACnet Averaging object (type 18).
@@ -25,16 +31,20 @@ pub use window::{DEFAULT_WINDOW_INTERVAL, DEFAULT_WINDOW_SAMPLES, MAX_WINDOW_SAM
 /// Present_Value, Status_Flags, Event_State, Reliability or Out_Of_Service,
 /// so the object serves none of them (#1064).
 ///
-/// The application samples the referenced property and feeds each value in
-/// (see [`add_sample`](Self::add_sample)). Clause 12.5 spaces the samples
-/// Window_Interval / Window_Samples seconds apart, but the object
-/// keeps no clock: it treats each call as the next sample in the window, so
-/// Window_Interval tells the application how often to sample and tells a
-/// reader how much time Attempted_Samples covers. Changing Window_Interval,
-/// Window_Samples or Object_Property_Reference, or writing zero to
-/// Attempted_Samples, discards the samples: both counts read zero and the
-/// statistics read positive infinity, NaN and negative infinity until the next
-/// valid sample.
+/// Once the object is in a running server and holds an
+/// Object_Property_Reference, the server samples that property every
+/// Window_Interval / Window_Samples seconds (Clauses 12.5.14 and 12.5.15), at
+/// most every [`MIN_SAMPLE_PERIOD`]. A failed read, or a value the object can't
+/// average, is recorded as a missed attempt. Without a reference the
+/// application feeds the samples (see [`add_sample`](Self::add_sample) and
+/// `BACnetServer::add_averaging_sample_local`); with one, an application
+/// sample is one more attempt in the window and doesn't move the schedule.
+///
+/// Changing Window_Interval, Window_Samples or Object_Property_Reference, or
+/// writing zero to Attempted_Samples, discards the samples: both counts read
+/// zero and the statistics read positive infinity, NaN and negative infinity
+/// until the next valid sample. The schedule starts over at the same moment,
+/// so the next server sample is one spacing later.
 pub struct AveragingObject {
     oid: ObjectIdentifier,
     name: String,
@@ -297,10 +307,31 @@ impl BACnetObject for AveragingObject {
             }
         }
     }
+
+    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
+        self.window.bind_clock(clock);
+    }
+
+    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+        // Only an object with a reference has anything for the server to read.
+        self.object_property_reference.as_ref()?;
+        self.window.next_due()
+    }
+
+    fn take_due_averaging_sample_internal(
+        &mut self,
+        now: Duration,
+    ) -> Option<BACnetObjectPropertyReference> {
+        let reference = self.object_property_reference.clone()?;
+        self.window.take_due(now).then_some(reference)
+    }
 }
 
 #[cfg(test)]
 mod sample_tests;
+
+#[cfg(test)]
+mod schedule_tests;
 
 #[cfg(test)]
 mod tests;
