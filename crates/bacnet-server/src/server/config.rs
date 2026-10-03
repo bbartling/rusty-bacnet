@@ -47,7 +47,8 @@ pub struct ServerConfig {
     pub segmentation_supported: Segmentation,
     /// Vendor identifier.
     pub vendor_id: u16,
-    /// APDU timeout in ms of confirmed COV and event notifications (default
+    /// APDU timeout in ms of confirmed COV and event notifications and of the
+    /// WriteProperty a Command action sends to another device (default
     /// 3000 ms): how long each attempt waits for the reply once its send has
     /// completed, before the next retry. The transport bounds the send itself.
     /// It is also the base of the COV hold-off after a failed confirmed report,
