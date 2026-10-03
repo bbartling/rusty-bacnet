@@ -1,14 +1,15 @@
 //! Staging writes whose new state an object saves first (#1270).
 //!
 //! A Notification Forwarder saves a written Recipient_List or
-//! Subscribed_Recipients, and an Audit Log a Log_Enable change, before
-//! serving it, and refuses the write if the save fails. So that the save
-//! never runs while the database guard is held, a request that makes such a
-//! write stages it first ([`DurableWrites`]): under the guard the object
-//! queues the save, the request awaits it with the guard dropped, and then
-//! runs as it always has, the object taking the saved state or refusing the
-//! write. The request releases what it staged in the critical section that
-//! makes the write.
+//! Subscribed_Recipients, and an Audit Log a Log_Enable or Buffer_Size
+//! change, before serving it, and refuses the write if the save fails. So
+//! that the save never runs while the database guard is held, a request that
+//! makes such a write stages it first ([`DurableWrites`]): under the guard
+//! the object queues the save, the request awaits it with the guard dropped,
+//! and then runs as it always has, the object taking the saved state or
+//! refusing the write. The request releases what it staged in the critical
+//! section that makes the write. An application's Audit Log purge (#1238) is
+//! staged the same way.
 //!
 //! Other requests read and write the database while the save runs. One that
 //! stages a write to the same object waits for the first to land; requests
@@ -37,12 +38,21 @@ use crate::handlers;
 /// while, so a retry gets through even then.
 pub(super) const BUSY_RECHECK: Duration = Duration::from_secs(1);
 
-/// One write a request is about to make to an object that may save it.
+/// One change a request is about to make to an object that may save it.
 pub(super) struct DurableTarget {
     oid: ObjectIdentifier,
-    property: PropertyIdentifier,
-    array_index: Option<u32>,
-    value: TargetValue,
+    change: Change,
+}
+
+enum Change {
+    /// A property write.
+    Write {
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: TargetValue,
+    },
+    /// The application's purge of the object's records.
+    Purge,
 }
 
 enum TargetValue {
@@ -84,12 +94,28 @@ impl DurableTarget {
         ) else {
             return Vec::new();
         };
-        vec![Self {
-            oid: request.object_identifier,
-            property: request.property_identifier,
-            array_index: request.property_array_index,
-            value: TargetValue::Written(value),
-        }]
+        vec![Self::write(
+            request.object_identifier,
+            request.property_identifier,
+            request.property_array_index,
+            TargetValue::Written(value),
+        )]
+    }
+
+    fn write(
+        oid: ObjectIdentifier,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: TargetValue,
+    ) -> Self {
+        Self {
+            oid,
+            change: Change::Write {
+                property,
+                array_index,
+                value,
+            },
+        }
     }
 
     /// The writes a WritePropertyMultiple request makes to objects that may
@@ -114,12 +140,12 @@ impl DurableTarget {
                 reference.property_array_index,
                 &attempt.value,
             ) {
-                targets.push(Self {
+                targets.push(Self::write(
                     oid,
                     property,
-                    array_index: reference.property_array_index,
-                    value: TargetValue::Written(value),
-                });
+                    reference.property_array_index,
+                    TargetValue::Written(value),
+                ));
             }
         }
         targets.sort_by_key(|target| {
@@ -140,15 +166,15 @@ impl DurableTarget {
         if !may_save(request.object_identifier) {
             return Vec::new();
         }
-        vec![Self {
-            oid: request.object_identifier,
-            property: request.property_identifier,
-            array_index: request.property_array_index,
-            value: TargetValue::ListEdit {
+        vec![Self::write(
+            request.object_identifier,
+            request.property_identifier,
+            request.property_array_index,
+            TargetValue::ListEdit {
                 service_data: service_data.clone(),
                 remove,
             },
-        }]
+        )]
     }
 
     /// A local property write, if its object may save it.
@@ -161,27 +187,58 @@ impl DurableTarget {
         if !may_save(oid) {
             return Vec::new();
         }
-        vec![Self {
+        vec![Self::write(
             oid,
             property,
             array_index,
-            value: TargetValue::Written(value.clone()),
+            TargetValue::Written(value.clone()),
+        )]
+    }
+
+    /// The application's purge of `oid`, if its object may save it.
+    pub(super) fn purge(oid: ObjectIdentifier) -> Vec<Self> {
+        if !may_save(oid) {
+            return Vec::new();
+        }
+        vec![Self {
+            oid,
+            change: Change::Purge,
         }]
     }
 
-    fn value_in(&self, db: &ObjectDatabase) -> Option<PropertyValue> {
-        match &self.value {
-            TargetValue::Written(value) => Some(crate::local_references::localize(
-                db,
-                self.oid,
-                self.property,
-                value.clone(),
-            )),
-            TargetValue::ListEdit {
-                service_data,
-                remove,
-            } => handlers::edited_list_value(db, service_data, *remove),
-        }
+    /// Stage this change on its object, under the guard. `None` when there
+    /// is nothing to stage: the object is gone, does not save, or the
+    /// written list cannot be worked out.
+    fn stage_in(&self, db: &mut ObjectDatabase) -> Option<StageStep> {
+        let written = match &self.change {
+            Change::Write {
+                property,
+                array_index,
+                value,
+            } => {
+                let value = match value {
+                    TargetValue::Written(value) => Some(crate::local_references::localize(
+                        db,
+                        self.oid,
+                        *property,
+                        value.clone(),
+                    )),
+                    TargetValue::ListEdit {
+                        service_data,
+                        remove,
+                    } => handlers::edited_list_value(db, service_data, *remove),
+                }?;
+                Some((*property, *array_index, value))
+            }
+            Change::Purge => None,
+        };
+        let writes = db.get_mut(&self.oid)?.durable_writes_internal()?;
+        Some(match written {
+            Some((property, array_index, value)) => {
+                writes.stage_write(property, array_index, &value)
+            }
+            None => writes.stage_purge(),
+        })
     }
 }
 
@@ -245,16 +302,10 @@ pub(super) async fn stage(
         loop {
             let step = {
                 let mut guard = db.write().await;
-                let Some(value) = target.value_in(&guard) else {
-                    break;
-                };
-                let Some(writes) = guard
-                    .get_mut(&target.oid)
-                    .and_then(|object| object.durable_writes_internal())
-                else {
-                    break;
-                };
-                writes.stage_write(target.property, target.array_index, &value)
+                target.stage_in(&mut guard)
+            };
+            let Some(step) = step else {
+                break;
             };
             match step {
                 StageStep::Staged(wait) => {

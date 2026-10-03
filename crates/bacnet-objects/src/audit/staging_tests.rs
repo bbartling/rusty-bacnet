@@ -21,29 +21,29 @@ use super::{
     AuditLogSnapshot, CompletedAuditReceipt, ConfirmedAuditNotificationOutcome, StagedAuditBatch,
 };
 
-const WAIT: Duration = Duration::from_secs(10);
+pub(super) const WAIT: Duration = Duration::from_secs(10);
 
 /// Storage in memory whose commits can fail, or wait until the test lets
 /// each one go.
 #[derive(Default)]
-struct SlowPersistence {
+pub(super) struct SlowPersistence {
     snapshot: Mutex<Option<AuditLogSnapshot>>,
-    commits: AtomicUsize,
-    fail: AtomicBool,
+    pub(super) commits: AtomicUsize,
+    pub(super) fail: AtomicBool,
     hold: Mutex<Option<(mpsc::Sender<u64>, mpsc::Receiver<()>)>>,
 }
 
 impl SlowPersistence {
     /// Make every later commit report its generation on the first channel
     /// and wait for a message on the second.
-    fn hold(&self) -> (mpsc::Receiver<u64>, mpsc::Sender<()>) {
+    pub(super) fn hold(&self) -> (mpsc::Receiver<u64>, mpsc::Sender<()>) {
         let (started, started_rx) = mpsc::channel();
         let (go, go_rx) = mpsc::channel();
         *self.hold.lock().unwrap() = Some((started, go_rx));
         (started_rx, go)
     }
 
-    fn committed(&self) -> AuditLogSnapshot {
+    pub(super) fn committed(&self) -> AuditLogSnapshot {
         self.snapshot.lock().unwrap().clone().unwrap()
     }
 }
@@ -69,7 +69,7 @@ impl AuditLogPersistence for SlowPersistence {
     }
 }
 
-struct FixedClock;
+pub(super) struct FixedClock;
 
 impl ClockReader for FixedClock {
     fn read_clock(&self) -> Option<ClockFrame> {
@@ -101,7 +101,7 @@ fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
 }
 
 /// A complete target report with invoke ID `invoke_id`.
-fn notification(invoke_id: u8) -> BACnetAuditNotification {
+pub(super) fn notification(invoke_id: u8) -> BACnetAuditNotification {
     BACnetAuditNotification {
         source_timestamp: Some(BACnetTimeStamp::Time(time(0))),
         target_timestamp: Some(BACnetTimeStamp::Time(time(0))),
@@ -126,18 +126,18 @@ fn notification(invoke_id: u8) -> BACnetAuditNotification {
     }
 }
 
-fn receipt(key: &[u8]) -> CompletedAuditReceipt {
+pub(super) fn receipt(key: &[u8]) -> CompletedAuditReceipt {
     CompletedAuditReceipt::new(key.to_vec(), 1_725_000_000_000).unwrap()
 }
 
-fn log() -> (AuditLogObject, Arc<SlowPersistence>) {
+pub(super) fn log() -> (AuditLogObject, Arc<SlowPersistence>) {
     let storage = Arc::new(SlowPersistence::default());
     let mut log = AuditLogObject::new(1, "audit", 10, storage.clone()).unwrap();
     log.bind_clock_internal(Some(Arc::new(FixedClock)));
     (log, storage)
 }
 
-fn staged(stage: Result<AuditBatchStage, Error>) -> StagedAuditBatch {
+pub(super) fn staged(stage: Result<AuditBatchStage, Error>) -> StagedAuditBatch {
     match stage.unwrap() {
         AuditBatchStage::Staged(staged) => staged,
         other => panic!("expected a staged batch, got {other:?}"),
@@ -152,7 +152,7 @@ impl Wake for ThreadWaker {
     }
 }
 
-fn block_on(future: impl Future<Output = ()>) {
+pub(super) fn block_on(future: impl Future<Output = ()>) {
     let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
     let mut cx = Context::from_waker(&waker);
     let mut future = pin!(future);
@@ -331,7 +331,7 @@ fn a_duplicate_or_empty_change_stages_nothing() {
     assert_eq!(storage.commits.load(Ordering::SeqCst), commits);
 }
 
-fn staged_write(step: StageStep) -> SaveWait {
+pub(super) fn staged_write(step: StageStep) -> SaveWait {
     match step {
         StageStep::Staged(wait) => wait,
         other => panic!("expected a staged write, got {other:?}"),

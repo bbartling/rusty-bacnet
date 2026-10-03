@@ -41,7 +41,8 @@ pub struct AuditLogSnapshot {
     pub object_identifier: ObjectIdentifier,
     /// Nonzero two-slot snapshot generation.
     pub generation: u64,
-    /// Persisted ring-buffer capacity.
+    /// Persisted ring-buffer capacity: Buffer_Size, as configured or last
+    /// written.
     pub capacity: u32,
     /// Persisted Enable policy.
     pub log_enable: bool,
@@ -505,10 +506,9 @@ pub(super) fn validate_snapshot(snapshot: &AuditLogSnapshot) -> Result<(), Error
         )));
     }
     receipt::validate_receipts(&snapshot.completed_receipts)?;
+    // A counted log may hold no records: one grown from Buffer_Size 0 keeps
+    // its count with an empty ring (#1238).
     if (snapshot.total_record_count == 0 && !snapshot.records.is_empty())
-        || (snapshot.total_record_count != 0
-            && snapshot.capacity != 0
-            && snapshot.records.is_empty())
         || snapshot
             .records
             .last()

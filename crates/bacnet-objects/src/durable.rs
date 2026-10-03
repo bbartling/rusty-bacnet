@@ -19,7 +19,8 @@
 //!   saved state, or refuses the request if the save failed. So a forwarder
 //!   list write that cannot be saved is refused and leaves the old list, and an
 //!   Audit notification is stored, and a confirmed one acknowledged, only once
-//!   its commit is durable.
+//!   its commit is durable. An application's Audit Log purge (#1238) stages
+//!   the same way, though no property is written.
 //! - A save no request waits for, such as a forwarder's lapse and minute
 //!   saves, coalesces: a queued save the thread has not started is replaced by
 //!   the newer one, so a burst costs one save of the latest state.
@@ -78,7 +79,7 @@ use std::task::{Context, Poll, Waker};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
@@ -543,6 +544,24 @@ pub trait DurableWrites {
         array_index: Option<u32>,
         value: &PropertyValue,
     ) -> StageStep;
+
+    /// Stage a purge of the object's records, which the application asks
+    /// for through the server (an Audit Log's, #1238). The server goes on as
+    /// for a staged write, calling [`purge`](Self::purge) where it would
+    /// make the write. The default has nothing to purge.
+    fn stage_purge(&mut self) -> StageStep {
+        StageStep::Skip
+    }
+
+    /// Purge the object's records: take the purge staged on the state the
+    /// object serves, if there is one, or purge in place. The default
+    /// refuses with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+    fn purge(&mut self) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
 
     /// The request that staged a write is done, whether or not the write
     /// reached the object. `staged` is the wait [`StageStep::Staged`] gave

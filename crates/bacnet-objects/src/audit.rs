@@ -28,6 +28,7 @@ mod policy_authority;
 pub use object_policy::{AuditPriorityPolicy, EffectiveAuditPolicy, ObjectAuditPolicy};
 pub use policy_authority::{AuditPolicyAuthority, PreparedAuditPolicyWrite};
 
+mod buffer;
 mod forwarding;
 mod log_metadata;
 pub use forwarding::AuditLogForwarding;
@@ -122,6 +123,10 @@ pub struct AuditLogObject {
 
 impl AuditLogObject {
     /// Open or initialize one AuditLog using the explicitly supplied storage.
+    ///
+    /// `buffer_size` sizes a log that storage does not hold yet. A log
+    /// reopened from storage keeps the Buffer_Size it stored, which a write
+    /// may have changed since (#1238).
     pub fn new(
         instance: u32,
         name: impl Into<String>,
@@ -136,10 +141,9 @@ impl AuditLogObject {
         }
         let snapshot = match persistence.load(oid)? {
             Some(snapshot) => {
-                if snapshot.object_identifier != oid || snapshot.capacity != buffer_size {
+                if snapshot.object_identifier != oid {
                     return Err(Error::Encoding(
-                        "AuditLog persisted identity or capacity does not match configuration"
-                            .into(),
+                        "AuditLog persisted identity does not match configuration".into(),
                     ));
                 }
                 validate_snapshot(&snapshot)?;
@@ -197,7 +201,7 @@ impl AuditLogObject {
         &self.buffer
     }
 
-    /// Configured and persisted ring capacity.
+    /// Buffer_Size: the ring's capacity, as configured or last written.
     pub fn buffer_size(&self) -> u32 {
         self.buffer_size
     }
@@ -215,23 +219,6 @@ impl AuditLogObject {
     /// Current durable snapshot generation.
     pub fn generation(&self) -> u64 {
         self.generation
-    }
-
-    /// Clear buffered records and append the internal BUFFER_PURGED status.
-    #[cfg(test)]
-    fn purge(&mut self) -> Result<u64, Error> {
-        let timestamp = self.valid_timestamp()?;
-        let mut prospective = self.snapshot_for_next_generation()?;
-        prospective.records.clear();
-        let sequence_number = append_record(
-            &mut prospective,
-            BACnetAuditLogRecord {
-                timestamp,
-                datum: BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED),
-            },
-        );
-        self.commit_and_apply(prospective)?;
-        Ok(sequence_number)
     }
 
     /// Set the description string.
@@ -563,21 +550,20 @@ impl BACnetObject for AuditLogObject {
                 if v == self.log_enable {
                     return Ok(());
                 }
-                if let Some(claimed) = self.claim_log_enable(v) {
-                    return claimed;
-                }
-                let timestamp = self.valid_timestamp()?;
-                let mut prospective = self.snapshot_for_next_generation()?;
-                prospective.log_enable = v;
-                append_record(&mut prospective, log_enable_record(timestamp, v));
-                self.commit_and_apply(prospective)?;
-                return Ok(());
+                return self.commit_change(staging::StagedChange::LogEnable(v), |log| {
+                    log.log_enable_snapshot(v)
+                });
             }
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
                 code: ErrorCode::INVALID_DATA_TYPE.to_raw() as u32,
             });
         }
+        if property == PropertyIdentifier::BUFFER_SIZE {
+            return self.write_buffer_size(&value);
+        }
+        // Clause 12.64.11 keeps an Audit Log's Record_Count read-only, so no
+        // peer can purge the log; the application uses `purge`.
         if property == PropertyIdentifier::RECORD_COUNT {
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
@@ -773,3 +759,7 @@ mod reporter_delay_tests;
 #[cfg(test)]
 #[path = "audit/staging_tests.rs"]
 mod staging_tests;
+
+#[cfg(test)]
+#[path = "audit/buffer_tests.rs"]
+mod buffer_tests;

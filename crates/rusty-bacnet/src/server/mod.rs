@@ -177,6 +177,7 @@ impl BACnetServer {
 mod server_methods {
     mod access_control_methods;
     mod access_rights_methods;
+    mod audit_log_methods;
     mod averaging_methods;
     mod constructor_budgets;
     mod cov_counters;
