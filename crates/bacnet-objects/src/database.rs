@@ -11,6 +11,7 @@ use crate::clock::{ClockFrame, ClockReader};
 use crate::event_enrollment::EventEnrollmentMonitoredSource;
 use crate::traits::{BACnetObject, MonotonicClock};
 
+mod averaging_sampling;
 mod network_port;
 mod trend_poll;
 use trend_poll::TrendPollSchedule;

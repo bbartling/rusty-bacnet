@@ -18,6 +18,9 @@ use std::collections::BTreeMap;
 #[path = "averaging_window_tests.rs"]
 mod window_tests;
 
+#[path = "averaging_sampling_tests.rs"]
+mod sampling_tests;
+
 const MIN: PropertyIdentifier = PropertyIdentifier::MINIMUM_VALUE;
 const MAX: PropertyIdentifier = PropertyIdentifier::MAXIMUM_VALUE;
 const AVG: PropertyIdentifier = PropertyIdentifier::AVERAGE_VALUE;

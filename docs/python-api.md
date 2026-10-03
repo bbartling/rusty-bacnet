@@ -1942,16 +1942,21 @@ value. The server doesn't follow Controlled_Variable_Reference itself.
 65535 or a priority outside 1 to 16 raise VALUE_OUT_OF_RANGE. Peers can write
 the Loop's Action (DIRECT until written).
 
-The application feeds an Averaging object too, because the server doesn't
-read its Object_Property_Reference: about every Window_Interval /
-Window_Samples seconds it samples the referenced property and passes the
-result with `await server.add_averaging_sample_local(averaging_id,
-PropertyValue.real(21.5))`, or `None` when the read failed. A BOOLEAN (counted
-as 0 or 1), Signed, Unsigned and Enumerated sample is accepted as well as a
-finite REAL. Another datatype, Double included, raises INVALID_DATA_TYPE and
-NaN or an infinity VALUE_OUT_OF_RANGE, and a refused sample isn't counted;
+A running server samples an Averaging object's Object_Property_Reference
+itself, every Window_Interval / Window_Samples seconds but never more often
+than every 100 ms, starting one spacing after `start()` and over again after
+each write that empties the window. A missing object or property, a failed
+read, or a value it can't average counts as a missed attempt. An object
+without a reference is the application's to feed: about that often it passes
+each result with `await server.add_averaging_sample_local(averaging_id,
+PropertyValue.real(21.5))`, or `None` when its reading failed. On an object
+the server samples, such a call is one more attempt and doesn't move the
+server's spacing. A BOOLEAN (counted as 0 or 1), Signed, Unsigned and
+Enumerated sample is accepted as well as a finite REAL. Another datatype,
+Double included, raises INVALID_DATA_TYPE and NaN or an infinity
+VALUE_OUT_OF_RANGE, and a refused sample isn't counted;
 other objects raise OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. The object keeps the
-most recent Window_Samples attempts and treats each call as the next one;
+most recent Window_Samples attempts, each sample filling the next slot;
 Minimum_Value, Maximum_Value and Average_Value cover the valid samples among
 them, Attempted_Samples counts the attempts and Valid_Samples the valid ones.
 With no valid sample in the window the statistics read `math.inf`,
