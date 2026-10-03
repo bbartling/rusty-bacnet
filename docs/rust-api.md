@@ -1867,7 +1867,12 @@ framing, through the shared `bacnet-encoding` codecs.
   `AccessCredentialObject::set_assigned_access_rights`,
   `StructuredViewObject::add_subordinate`, `set_energy_meter_ref` and the
   Staging configuration. A Staging `Target_References` write over the network
-  gets the same answer, ahead of the refusal of a remote device.
+  gets the same answer, ahead of the refusal of a remote device. A Channel
+  member is a `BACnetDeviceObjectPropertyReference`, which has the same
+  method and rule: `ChannelObject::set_members` and network writes of
+  `List_Of_Object_Property_References` refuse a member whose device
+  identifier isn't a Device with VALUE_OUT_OF_RANGE, before the remote-device
+  refusal.
 
 ### ObjectDatabase
 

@@ -2691,9 +2691,9 @@
   },
   {
    "id": "BACNET-21-DEVICE-OBJECT-REFERENCE-DEVICE-MEMBER",
-   "standard_anchor": "Clause 21 BACnetDeviceObjectReference, Clause 15.9.1.3",
+   "standard_anchor": "Clause 21 BACnetDeviceObjectReference and BACnetDeviceObjectPropertyReference, Clause 15.9.1.3",
    "priority": "P1",
-   "summary": "Setters and write paths that store a BACnetDeviceObjectReference refuse one whose device identifier is not a Device object with VALUE_OUT_OF_RANGE.",
+   "summary": "Setters and write paths that store a device object reference, or a Channel member, refuse a device identifier that is not a Device object with VALUE_OUT_OF_RANGE.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-types/src/constructed/mod.rs::device_identifier_is_device",
@@ -2702,10 +2702,11 @@
     "crates/bacnet-objects/src/access_control/point.rs::set_access_doors",
     "crates/bacnet-objects/src/staging.rs",
     "crates/bacnet-objects/src/group.rs::add_subordinate",
+    "crates/bacnet-objects/src/channel/arrays.rs::check_member",
     "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-types/src/constructed/tests.rs::device_object_reference_device_identifier_must_be_a_device",
+    "crates/bacnet-types/src/constructed/tests.rs::{device_object_reference_device_identifier_must_be_a_device,device_object_property_reference_device_identifier_must_be_a_device}",
     "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_door_members_and_access_doors_reach_the_arrays"
    ],
    "negative_tests": [
@@ -2714,6 +2715,8 @@
     "crates/bacnet-objects/src/staging/tests.rs::target_references_refuse_a_non_device_device_identifier",
     "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::set_energy_meter_ref_refuses_objects_that_are_not_meters_atomically",
     "crates/bacnet-server/src/server/staging_reference_write_tests.rs::a_target_whose_device_member_is_not_a_device_is_out_of_range",
+    "crates/bacnet-objects/src/channel/array_tests.rs::channel_members_refuse_a_non_device_device_identifier",
+    "crates/bacnet-server/src/server/channel_wire_tests.rs::channel_member_list_refuses_a_non_device_device_identifier_over_the_wire",
     "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_device_reference_pairs_name_a_device",
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_device_reference_pairs_name_a_device"
    ],
@@ -2726,10 +2729,11 @@
     "One check covers Door_Members, Access_Doors, Access_Event_Credential, Assigned_Access_Rights, Subordinate_List, Energy_Meter_Ref and Staging Target_References; a refused list leaves the property unchanged.",
     "A Staging Target_References member gets this answer ahead of the remote-device refusal, and one naming another object type at the local Device's instance is not localized.",
     "Python raises ValueError for a `(device, object)` pair whose device is not a Device, before any object is built.",
-    "Audit Log Member_Of keeps any parent and reports an unusable one as CONFIGURATION_ERROR, outside this check."
+    "Audit Log Member_Of keeps any parent and reports an unusable one as CONFIGURATION_ERROR, outside this check.",
+    "Channel List_Of_Object_Property_References members get the same check from `set_members` and from network writes, ahead of the remote-device refusal and the empty-member test."
    ],
    "gaps": [
-    "The device member of a BACnetDeviceObjectPropertyReference and of a BACnetActionCommand is not checked the same way (no issue)"
+    "Schedule, Averaging, Event Enrollment, Trend Log Multiple, Global Group and Command action lists don't run this check on their device members (no issue)"
    ]
   },
   {
@@ -3517,6 +3521,8 @@
     "crates/bacnet-server/src/server/channel_wire_tests.rs::{channel_value_no_member_can_take_fails_without_writing,channel_writing_its_own_present_value_is_refused_busy}",
     "crates/bacnet-objects/src/channel/tests.rs::{channel_stale_completion_is_ignored,channel_read_only_rows_refuse_writes}",
     "crates/bacnet-objects/src/channel/array_tests.rs::channel_member_writes_refuse_other_devices_bad_indexes_and_oversize",
+    "crates/bacnet-objects/src/channel/array_tests.rs::channel_members_refuse_a_non_device_device_identifier",
+    "crates/bacnet-server/src/server/channel_wire_tests.rs::channel_member_list_refuses_a_non_device_device_identifier_over_the_wire",
     "crates/bacnet-server/src/server/channel_run_tests.rs::{channel_deleted_during_a_delay_leaves_the_rest_of_its_members_unwritten,channel_replaced_during_a_delay_leaves_the_new_object_to_its_own_run}",
     "crates/bacnet-server/src/server/run_cycle_tests.rs::{run_cycle_two_channels_naming_each_other_stop_after_one_round_trip,run_cycle_a_channel_and_a_command_naming_each_other_stop,run_cycle_a_chain_of_ten_channels_stops_past_eight_runs_deep}",
     "crates/bacnet-server/src/command_lists/chain.rs::tests::a_run_chain_refuses_its_own_objects_and_more_than_eight_ancestors",

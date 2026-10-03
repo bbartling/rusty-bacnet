@@ -23,7 +23,10 @@
 //! Channel that writes only inside its own device. The object can't tell
 //! which Device holds it, so the bundled server drops a Device identifier
 //! naming its own Device before the value gets here (#1136); a reference
-//! whose Device instance is 4194303 is an empty one, not a remote one.
+//! whose Device instance is 4194303 is an empty one, not a remote one. Ahead
+//! of both, a member whose device identifier isn't a Device object at all is
+//! refused with PROPERTY / VALUE_OUT_OF_RANGE (#1285), so the server's
+//! localizing, which compares the whole identifier, leaves it to that check.
 
 use bacnet_encoding::constructed::decode_device_object_property_reference;
 use bacnet_encoding::tags::Tag;
@@ -65,8 +68,10 @@ pub(super) fn is_empty(member: &BACnetDeviceObjectPropertyReference) -> bool {
             .is_some_and(|device| device.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE)
 }
 
-/// Refuse a member that names another device.
+/// Refuse a member whose device identifier isn't a Device object (#1285),
+/// empty or not, then a member that names another device.
 pub(super) fn check_member(member: &BACnetDeviceObjectPropertyReference) -> Result<(), Error> {
+    common::check_device_property_reference(member)?;
     if member.device_identifier.is_some() && !is_empty(member) {
         return Err(common::protocol_error(
             ErrorClass::PROPERTY,

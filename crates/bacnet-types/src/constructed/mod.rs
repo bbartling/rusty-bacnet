@@ -278,6 +278,20 @@ impl BACnetDeviceObjectPropertyReference {
         self.property_array_index = Some(array_index);
         self
     }
+
+    /// Whether the device identifier is absent or names a Device object,
+    /// the rule [`BACnetDeviceObjectReference::device_identifier_is_device`]
+    /// applies to that type's device member.
+    pub fn device_identifier_is_device(&self) -> bool {
+        absent_or_device(self.device_identifier)
+    }
+}
+
+/// An optional device member that is absent or a Device object identifier,
+/// the only object type the member of a device-qualified reference can hold
+/// (Clause 21).
+fn absent_or_device(device: Option<ObjectIdentifier>) -> bool {
+    device.is_none_or(|device| device.object_type() == crate::enums::ObjectType::DEVICE)
 }
 
 // ---------------------------------------------------------------------------
@@ -519,8 +533,7 @@ impl BACnetDeviceObjectReference {
     /// a valid reference. Setters and write paths that take these references
     /// refuse one that fails this check.
     pub fn device_identifier_is_device(&self) -> bool {
-        self.device_identifier
-            .is_none_or(|device| device.object_type() == crate::enums::ObjectType::DEVICE)
+        absent_or_device(self.device_identifier)
     }
 }
 

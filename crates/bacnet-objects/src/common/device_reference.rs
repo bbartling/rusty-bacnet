@@ -1,6 +1,6 @@
-//! The device identifier of a BACnetDeviceObjectReference (#1285).
+//! The device identifier of a device-qualified reference (#1285).
 
-use bacnet_types::constructed::BACnetDeviceObjectReference;
+use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference};
 use bacnet_types::error::Error;
 
 /// VALUE_OUT_OF_RANGE for a reference whose device identifier names anything
@@ -14,7 +14,21 @@ use bacnet_types::error::Error;
 /// Target_References, Structured View Subordinate_List and the elevator
 /// family's Energy_Meter_Ref.
 pub(crate) fn check_device_reference(reference: &BACnetDeviceObjectReference) -> Result<(), Error> {
-    if reference.device_identifier_is_device() {
+    device_member(reference.device_identifier_is_device())
+}
+
+/// The same rule for a BACnetDeviceObjectPropertyReference, whose optional
+/// device member holds the same kind of identifier. Channel
+/// List_Of_Object_Property_References runs it on each member, from the
+/// setter and from network writes alike.
+pub(crate) fn check_device_property_reference(
+    reference: &BACnetDeviceObjectPropertyReference,
+) -> Result<(), Error> {
+    device_member(reference.device_identifier_is_device())
+}
+
+fn device_member(is_device: bool) -> Result<(), Error> {
+    if is_device {
         Ok(())
     } else {
         Err(super::value_out_of_range_error())
