@@ -241,6 +241,13 @@ bacnet read-range 192.168.1.100 trend-log:1 log-buffer
 bacnet read-range 192.168.1.100 trend-log:1     # defaults to log-buffer
 ```
 
+`read-range` decodes the Log_Buffer of a Trend Log, Event Log, Trend Log
+Multiple or Audit Log record by record, showing each record's timestamp, datum
+(a value, log status, time change, event notification or audit notification)
+and, for a Trend Log, status flags. JSON output lists them under `records`.
+Other properties decode as application values under `items`. Anything that
+doesn't decode is shown as hex.
+
 **Aliases:** `rp` = read, `rpm` = readm, `rr` = read-range
 
 ### Writing Properties

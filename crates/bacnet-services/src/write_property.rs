@@ -7,7 +7,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::{extract_property_value, PropertyValueBoundary};
+use bacnet_encoding::constructed::{extract_property_value, PropertyValueBoundary};
 
 fn decode_context_u32(
     data: &[u8],

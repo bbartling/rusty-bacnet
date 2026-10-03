@@ -1,5 +1,5 @@
 use super::*;
-use bacnet_encoding::{primitives, tags};
+use bacnet_encoding::{constructed, primitives, tags};
 use bacnet_services::alarm_event::EventNotificationRequest;
 use std::ops::Range;
 
@@ -150,7 +150,7 @@ pub(super) fn receive_unconfirmed_event_notification(
 // remaining request with the unchanged shared decoder. A missing charset byte,
 // malformed framing, or any other invalid field must not gain acceptance.
 fn decode_event_notification(data: &[u8]) -> Result<EventNotificationRequest, Error> {
-    let original_error = match EventNotificationRequest::decode(data) {
+    let original_error = match constructed::decode_event_notification(data) {
         Ok(notification) => return Ok(notification),
         Err(error) => error,
     };
@@ -161,7 +161,7 @@ fn decode_event_notification(data: &[u8]) -> Result<EventNotificationRequest, Er
     let mut without_text = Vec::with_capacity(data.len() - text.len());
     without_text.extend_from_slice(&data[..text.start]);
     without_text.extend_from_slice(&data[text.end..]);
-    EventNotificationRequest::decode(&without_text)
+    constructed::decode_event_notification(&without_text)
 }
 
 fn invalid_message_text_range(data: &[u8]) -> Option<Range<usize>> {

@@ -1,4 +1,5 @@
 use super::super::*;
+use bacnet_encoding::constructed::decode_event_notification;
 
 use crate::server::test_transport::{SendLog, TestTransport, BIP_LOCAL_MAC};
 use bacnet_encoding::apdu::decode_apdu;
@@ -306,12 +307,12 @@ fn decode_notification(frame: &Bytes) -> (bool, Option<u8>, EventNotificationReq
         Apdu::ConfirmedRequest(request) => (
             true,
             Some(request.invoke_id),
-            EventNotificationRequest::decode(&request.service_request).unwrap(),
+            decode_event_notification(&request.service_request).unwrap(),
         ),
         Apdu::UnconfirmedRequest(request) => (
             false,
             None,
-            EventNotificationRequest::decode(&request.service_request).unwrap(),
+            decode_event_notification(&request.service_request).unwrap(),
         ),
         other => panic!("expected EventNotification request, got {other:?}"),
     }

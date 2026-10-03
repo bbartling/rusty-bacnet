@@ -1,6 +1,9 @@
 //! The Notification Forwarder's view of an event notification (#1225).
 
 use super::*;
+use bacnet_encoding::constructed::decode_event_notification;
+use bacnet_types::enums::EventType;
+use bacnet_types::primitives::StatusFlags;
 
 fn alarm() -> EventNotificationRequest {
     EventNotificationRequest {
@@ -27,7 +30,7 @@ fn alarm() -> EventNotificationRequest {
 
 fn encoded(request: &EventNotificationRequest) -> BytesMut {
     let mut buf = BytesMut::new();
-    request.encode(&mut buf).unwrap();
+    bacnet_encoding::constructed::encode_event_notification(request, &mut buf).unwrap();
     buf
 }
 
@@ -77,7 +80,7 @@ fn forwarded_notification_keeps_a_message_text_in_any_character_set() {
     tags::encode_tag(&mut raw, 7, tags::TagClass::Context, 3);
     raw.extend_from_slice(&[2, 0x30, 0x22]);
     raw.extend_from_slice(&plain[split..]);
-    assert!(EventNotificationRequest::decode(&raw).is_err());
+    assert!(decode_event_notification(&raw).is_err());
 
     let forwarded = ForwardedEventNotification::decode(&raw).unwrap();
     let sent = forwarded.encode_for(5);

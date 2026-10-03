@@ -1,6 +1,7 @@
 //! Encoded WP/WPM coverage for Binary Lighting Output command operations.
 
 use super::*;
+use bacnet_encoding::constructed::encode_bacnet_property_value;
 use bacnet_objects::lighting::BinaryLightingOutputObject;
 use bacnet_services::common::BACnetPropertyValue;
 use std::time::Duration;
@@ -50,13 +51,15 @@ fn wpm(
     bacnet_encoding::primitives::encode_ctx_object_id(&mut bytes, 0, &oid);
     bacnet_encoding::tags::encode_opening_tag(&mut bytes, 1);
     for (property_identifier, property_array_index, value, priority) in writes {
-        BACnetPropertyValue {
-            property_identifier,
-            property_array_index,
-            value: encode_value(value),
-            priority,
-        }
-        .encode(&mut bytes);
+        encode_bacnet_property_value(
+            &BACnetPropertyValue {
+                property_identifier,
+                property_array_index,
+                value: encode_value(value),
+                priority,
+            },
+            &mut bytes,
+        );
     }
     bacnet_encoding::tags::encode_closing_tag(&mut bytes, 1);
     handle_write_property_multiple(db, &bytes).map(|_| ())

@@ -1,7 +1,5 @@
 use super::decode_helpers::{decode_context_status_flags, finish_variant};
 use super::*;
-use crate::common::{decode_context, decode_context_enum, decode_context_u32};
-use bacnet_encoding::constructed::validate_tlv_sequence;
 
 pub(super) fn validate_authentication_factor(data: &[u8]) -> Result<(), Error> {
     let (_, pos) = decode_context_u32(data, 0, 0, "AuthenticationFactor format-type")?;
@@ -25,13 +23,13 @@ pub(super) fn decode_complex_event_type(
     let mut property_values = Vec::new();
     let mut pos = inner_start;
     while pos < variant_body_end {
-        if property_values.len() >= MAX_DECODED_ITEMS {
+        if property_values.len() >= MAX_FRAMED_ITEMS {
             return Err(Error::decoding(
                 pos,
-                format!("ComplexEventType exceeds {MAX_DECODED_ITEMS} property values"),
+                format!("ComplexEventType exceeds {MAX_FRAMED_ITEMS} property values"),
             ));
         }
-        let (property_value, next) = BACnetPropertyValue::decode_in_list(data, pos, 6)?;
+        let (property_value, next) = decode_bacnet_property_value_in_list(data, pos, 6)?;
         if next <= pos || next > variant_body_end {
             return Err(Error::decoding(
                 pos,

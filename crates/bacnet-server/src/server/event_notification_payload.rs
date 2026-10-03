@@ -4,7 +4,7 @@
 //! server still owns the database write guard. The resulting private wrapper
 //! is the immutable payload carried to all recipients and confirmed retries.
 
-use bacnet_encoding::constructed::encode_property_state;
+use bacnet_encoding::constructed::{encode_bacnet_property_value, encode_property_state};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_encoding::{constructed::validate_tlv_sequence, tags};
 use bacnet_objects::database::ObjectDatabase;
@@ -680,7 +680,7 @@ fn append_property_value(
         priority: None,
     };
     let mut entry = BytesMut::new();
-    property_value.encode(&mut entry);
+    encode_bacnet_property_value(&property_value, &mut entry);
     validate_tlv_sequence(&entry, "committed reliability property value").ok()?;
     encoded.extend_from_slice(&entry);
     Some(())

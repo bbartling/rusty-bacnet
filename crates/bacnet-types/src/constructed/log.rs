@@ -6,6 +6,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use super::EventNotificationRequest;
 use crate::bitstring::LogStatus;
 use crate::primitives::{Date, StatusFlags, Time};
 
@@ -114,12 +115,9 @@ pub struct BACnetLogRecord {
 pub enum EventLogDatum {
     /// A status change of the log itself.
     LogStatus(LogStatus),
-    /// An event notification, as the encoded parameters of a
-    /// ConfirmedEventNotification request: its tagged fields from the process
-    /// identifier through the optional event values, with no frame around
-    /// them. `bacnet_services`' `EventNotificationRequest` encodes and
-    /// decodes these bytes.
-    Notification(Vec<u8>),
+    /// An event notification: the parameters of the ConfirmedEventNotification
+    /// request, from the process identifier through the optional event values.
+    Notification(EventNotificationRequest),
     /// The device clock moved by this many seconds; zero when unknown.
     TimeChange(f32),
 }

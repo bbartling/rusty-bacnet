@@ -2,9 +2,9 @@ use super::*;
 
 fn assert_literal(params: NotificationParameters, literal: &[u8]) {
     let mut encoded = BytesMut::new();
-    params.encode(&mut encoded).unwrap();
+    encode_notification_parameters(&params, &mut encoded).unwrap();
     assert_eq!(encoded.as_ref(), literal);
-    assert_eq!(NotificationParameters::decode(literal, 0).unwrap(), params);
+    assert_eq!(decode_notification_parameters(literal, 0).unwrap(), params);
 }
 
 #[test]

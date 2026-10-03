@@ -2198,12 +2198,16 @@ it), but refuse a Device member that isn't a Device identifier, and
 `add_property_reference` a 65th reference.
 
 An Event Log record is a `BACnetEventLogRecord`: a timestamp and an
-`EventLogDatum` holding a log status, a time change, or a notification as the
-encoded parameters of a ConfirmedEventNotification request
-(`bacnet_services::alarm_event::EventNotificationRequest::encode` writes them,
-`decode` reads them back). `EventLogObject::add_record` takes one. A Trend Log
-record stays a `BACnetLogRecord`; its optional `status_flags` is a
-`StatusFlags`.
+`EventLogDatum` holding a log status, a time change, or a notification as a
+typed `EventNotificationRequest`, the parameters of a ConfirmedEventNotification
+request. `EventLogObject::add_record` takes one. The request, its
+`NotificationParameters` event values and `BACnetPropertyValue` live in
+`bacnet_types::constructed` (bacnet-services re-exports them). Their codecs
+are functions in `bacnet_encoding::constructed`: `encode_event_notification` /
+`decode_event_notification`, `encode_notification_parameters` /
+`decode_notification_parameters`, and `encode_bacnet_property_value` /
+`decode_bacnet_property_value`. A Trend Log record stays a `BACnetLogRecord`;
+its optional `status_flags` is a `StatusFlags`.
 
 Every record kind, the Audit Log's included, carries a log status as the
 typed `bacnet_types::bitstring::LogStatus` flags (`LOG_DISABLED`,
@@ -2215,7 +2219,8 @@ device hold these to 32 bits but doesn't require it, so a record read from a
 peer may carry wider values, and the decoders accept up to eight octets.
 
 `add_record` and the trend hooks refuse a record that would not encode (an
-any-value or notification whose tags don't balance, a bit string with
+any-value, or a notification's raw event values, whose tags don't balance; a
+complex event's property priority outside 1 to 16; a bit string with
 impossible padding) with its encoding error, before anything changes. So
 `LogBufferRecords::encode_record` cannot fail, and one bad record can't break
 every ReadRange window over the log.
@@ -2233,6 +2238,7 @@ each item as one record framed as its Clause 21 production:
 | Trend Log | BACnetLogRecord | `encode_log_record` / `decode_log_record` |
 | Event Log | BACnetEventLogRecord | `encode_event_log_record` / `decode_event_log_record` |
 | Trend Log Multiple | BACnetLogMultipleRecord | `encode_log_multiple_record` / `decode_log_multiple_record` |
+| Audit Log | BACnetAuditLogRecord | `encode_audit_log_record` / `decode_audit_log_record_at` |
 
 Each decoder returns the offset after the record, so a client walks a
 ReadRange ACK's `item_data` record by record. The poller logs a value whose

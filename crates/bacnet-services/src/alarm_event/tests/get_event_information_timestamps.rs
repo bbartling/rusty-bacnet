@@ -8,6 +8,7 @@
 //! (ASHRAE 135-2020 Clauses 13.12, 20.2.1.5, 21).
 
 use super::*;
+use bacnet_types::primitives::{Date, Time};
 
 fn ts_time() -> BACnetTimeStamp {
     BACnetTimeStamp::Time(Time {

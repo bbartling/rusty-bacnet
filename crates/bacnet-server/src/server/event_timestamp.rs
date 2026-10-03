@@ -75,6 +75,7 @@ pub(super) fn sample_event_timestamp(db: &mut ObjectDatabase) -> EventTimestampS
 
 #[cfg(test)]
 mod tests {
+    use bacnet_encoding::constructed::decode_event_notification;
     use std::sync::Arc;
 
     use bacnet_encoding::apdu::{decode_apdu, Apdu};
@@ -227,8 +228,7 @@ mod tests {
             request.service_choice,
             UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION
         );
-        EventNotificationRequest::decode(&request.service_request)
-            .expect("decode EventNotification")
+        decode_event_notification(&request.service_request).expect("decode EventNotification")
     }
 
     async fn send_event(

@@ -253,9 +253,16 @@ pub(super) async fn handle_read_range<T: TransportPort + 'static>(
         }
     };
 
-    if let Err(e) =
-        commands::read::read_range_cmd(client, &mac, object_type, instance, property, index, format)
-            .await
+    if let Err(e) = commands::read_range::read_range_cmd(
+        client,
+        &mac,
+        object_type,
+        instance,
+        property,
+        index,
+        format,
+    )
+    .await
     {
         output::print_error(&e.to_string());
     }
