@@ -200,6 +200,7 @@ impl Fixture {
                 source_network: None,
                 link_layer_group: false,
                 is_group: false,
+                global_broadcast: false,
                 data_attributes: vec![],
                 provenance: TransportProvenance::unverified(),
                 reply_tx: None,

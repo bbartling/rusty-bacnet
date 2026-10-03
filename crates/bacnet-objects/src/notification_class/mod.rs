@@ -29,7 +29,7 @@ use crate::traits::BACnetObject;
 
 mod enrollment_summary;
 mod metadata;
-mod recipient_list;
+pub(crate) mod recipient_list;
 #[doc(hidden)]
 pub use enrollment_summary::{
     resolve_enrollment_summary_class_internal, EnrollmentSummaryClassProjection,

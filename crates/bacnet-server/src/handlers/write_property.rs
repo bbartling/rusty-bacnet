@@ -345,6 +345,7 @@ pub(crate) fn decode_write_property_value(
     if matches!(
         property,
         PropertyIdentifier::RECIPIENT_LIST
+            | PropertyIdentifier::SUBSCRIBED_RECIPIENTS
             | PropertyIdentifier::VALUE_SOURCE
             | PropertyIdentifier::EFFECTIVE_PERIOD
             | PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
@@ -394,6 +395,13 @@ pub(crate) fn decode_write_property_value(
         // This validates the single Recipient value, not its deliverability.
         // Address routing and broadcast policy belong to the mutation owner.
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
+    }
+    // A Notification Forwarder's Port_Filter goes one BACnetPortPermission
+    // per chunk (#1225).
+    if array_index != Some(0) && property == PropertyIdentifier::PORT_FILTER {
+        return decode_structured_array(bytes, array_index, |data, offset| {
+            bacnet_encoding::constructed::decode_port_permission(data, offset).map(|(_, end)| end)
+        });
     }
     if array_index != Some(0) && property == PropertyIdentifier::STAGES {
         return decode_structured_array(bytes, array_index, |data, offset| {

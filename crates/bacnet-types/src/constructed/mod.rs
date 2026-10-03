@@ -397,6 +397,22 @@ pub struct BACnetEventNotificationSubscription {
 }
 
 // ---------------------------------------------------------------------------
+// BACnetPortPermission (Clause 21)
+// ---------------------------------------------------------------------------
+
+/// One element of a Notification Forwarder's Port_Filter (Clause 12.51.11):
+/// whether notifications that arrive through one network port are forwarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BACnetPortPermission {
+    /// The port, by its Clause 6 port ID; 0 on a node that does not route
+    /// (`[0]`).
+    pub port_id: u8,
+    /// `true` when notifications received through the port are forwarded
+    /// (`[1]`).
+    pub enabled: bool,
+}
+
+// ---------------------------------------------------------------------------
 // LogDatum (Clause 12.25 -- TrendLog Log_Buffer; Clause 21.6)
 // ---------------------------------------------------------------------------
 

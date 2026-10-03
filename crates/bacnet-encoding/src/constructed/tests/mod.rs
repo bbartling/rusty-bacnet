@@ -19,6 +19,7 @@ mod landing_call_status;
 mod landing_door_status;
 mod lift_car_call_list;
 mod object_identifier_invariant;
+mod port_permission;
 mod property_access_result;
 mod read_access;
 mod recipient;

@@ -1,10 +1,11 @@
 //! A Notification Forwarder reduced to its identity and Subscribed_Recipients,
 //! for the server's tests (#1049).
 //!
-//! The stack bundles no forwarder object (#188). An application's forwarder
-//! keeps the list in a [`SubscribedRecipients`] and routes the property and
-//! the monotonic clock hooks to it, as this one does, so the list services,
-//! reads and the operation task can be driven against it.
+//! It stands for an application's own forwarder type, which keeps the list in
+//! a [`SubscribedRecipients`] and routes the property and the monotonic clock
+//! hooks to it, as this one does, so the list services, reads and the
+//! operation task can be driven against it. Having no filter rows, it takes no
+//! notifications to forward.
 
 use std::borrow::Cow;
 use std::sync::Arc;

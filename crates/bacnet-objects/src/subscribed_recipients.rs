@@ -2,11 +2,10 @@
 //! a bounded BACnetLIST of BACnetEventNotificationSubscription whose entries
 //! lapse when their time runs out.
 //!
-//! The stack bundles no Notification Forwarder object. The placeholder was
-//! withdrawn because it forwarded nothing (#188), and the object stays
-//! unsupported until forwarding exists. An application that implements one
-//! keeps the property in a [`SubscribedRecipients`] and routes to it the
-//! property's reads and writes ([`read`](SubscribedRecipients::read) and
+//! The bundled [`NotificationForwarderObject`] keeps its list in a
+//! [`SubscribedRecipients`]. An application that implements its own type-51
+//! object can do the same, routing to the store the property's reads and
+//! writes ([`read`](SubscribedRecipients::read) and
 //! [`write`](SubscribedRecipients::write)) and the object's monotonic clock
 //! hooks ([`bind_monotonic_clock`](SubscribedRecipients::bind_monotonic_clock),
 //! [`advance_to`](SubscribedRecipients::advance_to) and
@@ -15,6 +14,8 @@
 //! its AddListElement and RemoveListElement handlers edit it the way the
 //! clause asks: an entry is named by its recipient and process identifier, and
 //! adding one already present renews it with the other members given.
+//!
+//! [`NotificationForwarderObject`]: crate::notification_forwarder::NotificationForwarderObject
 //!
 //! # Lifetimes
 //!
@@ -25,10 +26,15 @@
 //! once its deadline passes: reads and writes skip it from then on, and the
 //! server's operation task drops it at its deadline (through
 //! `advance_monotonic_time_internal`). With no clock bound the store counts
-//! the time [`advance_by`](SubscribedRecipients::advance_by) gives it.
+//! the time [`advance_by`](SubscribedRecipients::advance_by) gives it, and
+//! binding a clock later keeps the time each entry has left.
 //!
-//! Clause 12.51.9 asks for the list to survive a restart. The store keeps it
-//! in memory only, like the rest of the object model.
+//! Clause 12.51.9 asks for the list to survive a restart. The store itself
+//! lives in memory; the forwarder object saves it through a
+//! [`SubscribedRecipientsPersistence`] and restores it with
+//! [`write`](SubscribedRecipients::write).
+//!
+//! [`SubscribedRecipientsPersistence`]: crate::notification_forwarder::SubscribedRecipientsPersistence
 
 use std::fmt;
 use std::sync::Arc;
@@ -234,10 +240,18 @@ impl SubscribedRecipients {
     }
 
     /// Bind the database's monotonic clock, from the object's
-    /// `bind_monotonic_clock_internal`. Deadlines already set stay where they
-    /// are.
+    /// `bind_monotonic_clock_internal`. Each held entry keeps the time it has
+    /// left: its deadline moves from the old time base to the new one, so a
+    /// list written or restored before the object joins a database lapses on
+    /// time.
     pub fn bind_monotonic_clock(&mut self, clock: Option<Arc<MonotonicClock>>) {
+        let before = self.now();
         self.monotonic_clock = clock;
+        let after = self.now();
+        for entry in &mut self.entries {
+            let left = entry.expires_at.saturating_sub(before);
+            entry.expires_at = after.saturating_add(left);
+        }
     }
 
     /// Drop every entry whose deadline is at or before `now`, a monotonic

@@ -6,6 +6,7 @@ use bacnet_types::enums::{
 };
 use bacnet_types::primitives::StatusFlags;
 
+mod event_forwarding;
 mod event_notification_decode;
 mod get_event_information_decode;
 mod get_event_information_timestamps;

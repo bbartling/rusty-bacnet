@@ -60,6 +60,7 @@ async fn deny_all_leaves_read_discovery_and_password_authorized_dcc_working() {
             source_network: route(),
             link_layer_group: false,
             is_group: false,
+            global_broadcast: false,
             data_attributes: vec![],
             provenance: TransportProvenance::unverified(),
             reply_tx: None,

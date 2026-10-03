@@ -48,6 +48,7 @@ pub mod landing_door_status;
 pub mod lift_car_call_list;
 mod members;
 pub mod object_property_reference;
+pub mod port_permission;
 mod property_access_result;
 mod read_access;
 pub mod recipient;
@@ -94,6 +95,7 @@ pub use object_property_reference::{
     decode_object_property_reference, decode_setpoint_reference, encode_object_property_reference,
     encode_setpoint_reference,
 };
+pub use port_permission::{decode_port_permission, encode_port_permission};
 pub use property_access_result::{decode_property_access_result, encode_property_access_result};
 pub use read_access::{
     decode_property_reference, decode_read_access_specification, encode_property_reference,

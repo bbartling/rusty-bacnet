@@ -1483,6 +1483,13 @@ from rusty_bacnet import EventType
 server.add_calendar(instance=1, name="Holiday Calendar")
 server.add_schedule(instance=1, name="Occupancy Schedule")
 server.add_notification_class(instance=1, name="Critical Alarms", notification_class=1)
+server.add_notification_forwarder(
+    instance=1,
+    name="Forwarder",
+    process_identifier_filter=None,  # None forwards every process identifier
+    local_forwarding_only=False,
+    storage_path="/application/state/forwarder-1",  # optional
+)
 server.add_alert_enrollment(
     instance=1,
     name="Alert",
@@ -1494,6 +1501,14 @@ server.add_event_enrollment(
     event_type=EventType.OUT_OF_RANGE,  # default: EventType.CHANGE_OF_BITSTRING
 )
 ```
+
+The Notification Forwarder sends each event notification the server
+receives, and each one its own objects address to its Device, on to the
+destinations its Recipient_List and Subscribed_Recipients name. Clients
+configure both lists over the network. `storage_path` keeps
+Subscribed_Recipients in one file, replaced whole on each change, so the
+list and each entry's remaining minutes survive a restart; without it the
+list lives in memory only.
 
 `initial_source` is required and becomes the Alert Enrollment object's
 read-only `Present_Value`. This is an intentional breaking correction; there

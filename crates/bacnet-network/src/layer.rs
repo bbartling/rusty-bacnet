@@ -136,6 +136,13 @@ pub struct ReceivedApdu {
     /// A specific DNET/DADR remains a unicast even when a router used a
     /// group data-link destination to reach that remote device.
     pub is_group: bool,
+    /// Whether the NPDU named the global broadcast network (DNET 65535).
+    ///
+    /// A global broadcast is also a group delivery, but [`Self::is_group`]
+    /// alone cannot tell it from a local or one-network broadcast once a
+    /// router has passed it on. A Notification Forwarder ignores event
+    /// notifications that arrive this way (Clause 12.51).
+    pub global_broadcast: bool,
     /// Data-link attributes associated with the NPDU, if the transport supplied any.
     pub data_attributes: Vec<DataAttribute>,
     /// Honest transport + origin provenance, immutable by value (RB-07).
@@ -205,6 +212,7 @@ impl Clone for ReceivedApdu {
             source_network: self.source_network.clone(),
             link_layer_group: self.link_layer_group,
             is_group: self.is_group,
+            global_broadcast: self.global_broadcast,
             data_attributes: self.data_attributes.clone(),
             provenance: self.provenance,
             direct_response: self.direct_response.clone(),
@@ -229,11 +237,17 @@ impl std::fmt::Debug for ReceivedApdu {
             .field("source_network", &source_network_len)
             .field("link_layer_group", &self.link_layer_group)
             .field("is_group", &self.is_group)
+            .field("global_broadcast", &self.global_broadcast)
             .field("data_attributes", &self.data_attributes)
             .field("provenance", &self.provenance)
             .field("reply_tx", &self.reply_tx.as_ref().map(|_| "Some(...)"))
             .finish_non_exhaustive()
     }
+}
+
+/// Whether an NPDU destination names the global broadcast network.
+pub(crate) fn is_global_broadcast(destination: Option<&NpduAddress>) -> bool {
+    destination.is_some_and(|destination| destination.network == 0xFFFF)
 }
 
 pub(crate) fn is_group_delivery(link_layer_group: bool, destination: Option<&NpduAddress>) -> bool {

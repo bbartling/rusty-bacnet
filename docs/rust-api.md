@@ -1684,17 +1684,19 @@ framing, through the shared `bacnet-encoding` codecs.
   is refused (#1125). Routing holds every Notification Class, a custom object
   included, to the same cap: a class serving a longer list gets
   `RecipientLookupOutcome::RecipientListTooLong`, and the transition reaches
-  none of its destinations. The codec is not a Notification Forwarder object,
-  which is unsupported.
+  none of its destinations. A Notification Forwarder's Recipient_List takes the
+  same writes, with the same cap.
 - **Notification Forwarder `Subscribed_Recipients`** is a BACnetLIST of
   BACnetEventNotificationSubscription (Clause 12.51.9): a recipient, a process
   identifier, a confirmation flag and the minutes the entry has left, under
   context tags 0 to 3 (`encode_event_notification_subscription`,
-  `decode_event_notification_subscription`). The stack bundles no forwarder
-  object (#188), but an application's own one can hold the list in
-  `bacnet_objects::subscribed_recipients::SubscribedRecipients` and route the
-  property's read and write and the `*_monotonic_*_internal` clock hooks to
-  it. Nothing forwards notifications to the entries. The store keeps at most
+  `decode_event_notification_subscription`). The bundled
+  `NotificationForwarderObject` holds the list in
+  `bacnet_objects::subscribed_recipients::SubscribedRecipients`, and an
+  application's own forwarder type can do the same, routing the property's
+  read and write and the `*_monotonic_*_internal` clock hooks to it. The
+  server forwards notifications to every live entry (see
+  [Notification forwarding](#notification-forwarding)). The store keeps at most
   `MAX_SUBSCRIBED_RECIPIENTS` (32) entries and takes 1 to
   `MAX_SUBSCRIPTION_MINUTES` (1,440) minutes, refusing anything else by
   position, as a Recipient_List write does. It serves whole minutes left,
@@ -1814,7 +1816,7 @@ Enrollment evaluation (monitored, setpoint and fault references) both resolve
 references through it, so a FLOATING_LIMIT setpoint naming this device is read
 and reported like an unqualified one (#1184).
 
-### Object Types (62)
+### Object Types (63)
 
 #### Core I/O (9)
 
@@ -1872,13 +1874,14 @@ Loop's measured input has its own route,
 `BACnetServer::set_controlled_variable_value_local` (see
 [Building Control](#building-control-7)).
 
-#### Schedule & Notification (5)
+#### Schedule & Notification (6)
 
 | Type | Constructor |
 |------|-------------|
 | `CalendarObject` | `::new(instance, name)` |
 | `ScheduleObject` | `::new(instance, name, default_value)` |
 | `NotificationClass` | `::new(instance, name)` |
+| `NotificationForwarderObject` | `::new(instance, name)`, `::with_persistence(instance, name, persistence)` |
 | `AlertEnrollmentObject` | `::new(instance, name, initial_source)` |
 | `EventEnrollmentObject` | `::new(instance, name, event_type)` |
 
@@ -3707,6 +3710,7 @@ The server automatically dispatches:
 - ConfirmedTextMessage
 - LifeSafetyOperation (authorized silence/unsilence; reset via configured application executor)
 - ConfirmedAuditNotification (explicit sink and fail-closed authorizer; process-local duplicate detection)
+- ConfirmedEventNotification (acknowledged once it decodes, then offered to the Notification Forwarder objects)
 - AuditLogQuery (retained records; three-state success filter; no query authorization)
 - ReadRange
 - AtomicReadFile, AtomicWriteFile (writes are mutation-gated)
@@ -3717,11 +3721,12 @@ The server automatically dispatches:
 - WhoHas / IHave
 - TimeSynchronization, UTCTimeSynchronization
 - UnconfirmedTextMessage
+- UnconfirmedEventNotification (offered to the Notification Forwarder objects)
 - UnconfirmedAuditNotification (explicit sink and distinct fail-closed authorizer; no response or duplicate tracking)
 
 **Outgoing (server-initiated):**
 - COV notifications (confirmed and unconfirmed, with `NotificationTransactions` retries for confirmed)
-- Event notifications (confirmed and unconfirmed, routed via NotificationClass recipients)
+- Event notifications (confirmed and unconfirmed, routed via NotificationClass recipients, and the copies Notification Forwarder objects send on)
 
 Confirmed notification invoke IDs, terminal admission and retries belong to
 `NotificationTransactions`. A separate private learned-router cache stores up to
@@ -3731,6 +3736,42 @@ later retries; a configured Device binding keeps its fixed next hop. The former
 public `ServerTsm` type and its unused transaction methods have been removed
 without a compatibility alias. `CovAckResult` remains available at its existing
 `bacnet_server::server` path.
+
+### Notification forwarding
+
+A `NotificationForwarderObject` (type 51, Clause 12.51) originates no events.
+The server offers it every ConfirmedEventNotification and
+UnconfirmedEventNotification it receives, and every notification one of its
+own objects sends to a Notification Class recipient naming the server's own
+Device object, with that recipient's process identifier. A forwarder takes a
+notification when it is in service, its `Process_Identifier_Filter` is NULL
+or equals the notification's process identifier, its `Local_Forwarding_Only`
+is FALSE or the notification is the device's own, and, for a received
+notification, its `Port_Filter` (absent unless configured with
+`set_port_filter`) enables Port_ID 0, the server's one port. It sends a copy to
+each `Recipient_List` destination whose days, times and transitions admit the
+notification and to each live `Subscribed_Recipients` entry, confirmed or not
+as the destination asks. A copy differs from the received notification only in
+its process identifier: the rest goes on octet for octet, whatever the
+character set of its message text. Copies go through the same send path, route
+skips and counters as the server's own notifications.
+
+No copy goes by global broadcast, a notification received by global broadcast
+is not forwarded, a received notification is not broadcast back onto the local
+network, and one received by broadcast goes to no node on the local network.
+A destination naming the server's own Device object hands the copy to the
+forwarders that have not yet taken it. A ConfirmedEventNotification is
+acknowledged once it decodes, before any copy is sent, whatever forwarding
+then finds. One that does not decode is rejected with
+INVALID_PARAMETER_DATA_TYPE.
+
+`with_persistence` keeps `Subscribed_Recipients` in an application-owned
+`SubscribedRecipientsPersistence`, saving the list, each entry with the minutes
+it has left, whenever it changes or an entry lapses, and restoring it when the
+forwarder is built again (Clause 12.51.9). `FileSubscribedRecipientsPersistence`
+keeps it in one file, replaced whole through a synchronized temporary file. A
+write that cannot be saved fails with DEVICE / OPERATIONAL_PROBLEM.
+`Recipient_List` writes stay in memory, as a Notification Class's do.
 
 ### Undelivered event notification counters
 

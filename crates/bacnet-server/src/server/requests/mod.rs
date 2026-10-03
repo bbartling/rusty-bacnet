@@ -1,5 +1,7 @@
 use super::cov_notify_context::CovNotifyContext;
+use super::event_forwarding::{ForwardOrigin, Reception};
 use super::*;
+use bacnet_services::alarm_event::ForwardedEventNotification;
 
 mod acknowledge_alarm;
 mod alarm_summary;
@@ -113,6 +115,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut effects = MutationEffects::default();
         let mut initial_cov_notifications: Vec<InitialCovNotification> = Vec::new();
         let mut accepted_acknowledgment = None;
+        let mut received_event = None;
 
         let state = comm_state.load(Ordering::Acquire);
         if state == 1
@@ -413,6 +416,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Err(error) => Self::error_apdu_from_error(invoke_id, service_choice, &error),
                 }
             }
+            // The sender's acknowledgment depends only on the request being
+            // well formed; forwarding runs after the response and its outcome
+            // never reaches the sender (Clause 12.51).
+            s if s == ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION => {
+                match ForwardedEventNotification::decode(&req.service_request) {
+                    Ok(notification) => {
+                        received_event = Some(notification);
+                        simple_ack()
+                    }
+                    // As the client rejects one it cannot read.
+                    Err(_) => Apdu::Reject(RejectPdu {
+                        invoke_id,
+                        reject_reason: RejectReason::INVALID_PARAMETER_DATA_TYPE,
+                    }),
+                }
+            }
             s if s == ConfirmedServiceChoice::CONFIRMED_TEXT_MESSAGE => {
                 match handlers::handle_text_message(&req.service_request) {
                     Ok(_msg) => simple_ack(),
@@ -656,6 +675,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Self::send_acknowledgment_notification_with_bindings(
                 &services.event_delivery(),
                 accepted,
+            )
+            .await;
+        }
+        if let Some(notification) = received_event {
+            // A confirmed request is never broadcast (Clause 6.3), so it is
+            // taken as addressed to this device alone.
+            Self::forward_event_notification(
+                &services.event_delivery(),
+                notification,
+                ForwardOrigin::Received(Reception::UNICAST),
             )
             .await;
         }

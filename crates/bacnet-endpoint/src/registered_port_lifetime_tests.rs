@@ -296,6 +296,7 @@ async fn registered_port_admitted_read_survives_independent_ingress_end() {
                         source_network: None,
                         link_layer_group: false,
                         is_group: false,
+                        global_broadcast: false,
                         data_attributes: vec![],
                         provenance: bacnet_transport::port::TransportProvenance::unverified(),
                         reply_tx: None,

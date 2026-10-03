@@ -13,8 +13,8 @@ use std::borrow::Cow;
 
 const SUBSCRIBED_RECIPIENTS: PropertyIdentifier = PropertyIdentifier::SUBSCRIBED_RECIPIENTS;
 
-/// An application's Notification Forwarder, reduced to the identity
-/// properties and Subscribed_Recipients: the stack bundles none (#188).
+/// An application's own Notification Forwarder type, reduced to the identity
+/// properties and Subscribed_Recipients.
 struct Forwarder {
     oid: ObjectIdentifier,
     subscribed_recipients: SubscribedRecipients,

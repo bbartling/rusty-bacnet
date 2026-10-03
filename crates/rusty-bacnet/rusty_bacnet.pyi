@@ -2544,6 +2544,19 @@ class BACnetServer:
 
     # --- Notification/logging ---
     def add_notification_class(self, instance: int, name: str, notification_class: int = 0) -> None: ...
+    def add_notification_forwarder(
+        self,
+        instance: int,
+        name: str,
+        process_identifier_filter: Optional[int] = None,
+        local_forwarding_only: bool = False,
+        storage_path: Optional[str] = None,
+    ) -> None:
+        """Add a Notification Forwarder (Clause 12.51) that sends the event
+        notifications this server receives on to its Recipient_List and
+        Subscribed_Recipients. ``process_identifier_filter=None`` forwards every
+        process identifier. With ``storage_path``, Subscribed_Recipients is kept
+        in that file across restarts."""
     def add_trend_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
     def add_trend_log_multiple(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
     def add_event_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...

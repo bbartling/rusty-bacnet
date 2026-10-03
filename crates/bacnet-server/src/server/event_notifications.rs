@@ -7,10 +7,7 @@ use self::profile::{
     CommittedHistorySnapshot, CommittedMessageProjection, NotificationConstruction,
     NotificationHistorySource, NotificationTransition,
 };
-use super::event_recipient_route::{
-    network_priority_for_event, system_utc_recipient_filter_time, ConfirmedRecipientRoute,
-    RecipientRoute,
-};
+use super::event_recipient_route::system_utc_recipient_filter_time;
 use super::event_timestamp::{
     confirm_event_timestamp, sample_event_timestamp, stage_event_timestamp, SampledEventClock,
 };
@@ -18,16 +15,12 @@ use super::*;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::event::{EventTransition, EventTransitionCommit, TransitionOutcome};
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::constructed::BACnetRecipient;
 
 use crate::event_enrollment::{CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult};
 
 #[path = "event_recipient_lookup.rs"]
 mod recipient_lookup;
 use recipient_lookup::matched_recipients_or_log;
-
-use super::event_suppression::EventSuppression;
-use super::notification_transactions::NotificationReserveError;
 
 /// Read one exact committed transition coordinate through the object contract.
 ///
@@ -253,14 +246,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) {
         let &EventDelivery {
             db,
-            network,
             comm_state,
-            learned_routers,
-            notification_transactions,
-            device_bindings,
             suppressions,
-            retry_timeout_ms,
-            local_apdu_capacity,
+            ..
         } = ctx;
         if comm_state.load(Ordering::Acquire) >= 1 {
             return;
@@ -395,278 +383,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             (base_notification, recipients)
         };
 
-        let notification_class = notification.notification_class;
-        // Clause 13.2.5.4 sets the NPDU priority from the notification's
-        // event priority, on every send of this notification — retries too.
-        let network_priority = network_priority_for_event(notification.priority);
-
-        for (recipient, process_id, confirmed) in &recipients {
-            let route = match recipient {
-                BACnetRecipient::Address(address) => {
-                    RecipientRoute::resolve_address(address, |mac| {
-                        network.transport().is_broadcast_mac(mac)
-                    })
-                }
-                BACnetRecipient::Device(identifier) => {
-                    let resolution = {
-                        let table = device_bindings.read().await;
-                        table.resolve_at(identifier, Instant::now(), |mac| {
-                            network.transport().is_broadcast_mac(mac)
-                        })
-                    };
-                    RecipientRoute::from_device_resolution(resolution)
-                }
-            };
-
-            // A route that can't carry this notification is skipped and
-            // counted (#1160); the remaining destinations are still served.
-            if let Some(skip) = route.skip(*confirmed, notification_class) {
-                suppressions.record(skip);
-                continue;
-            }
-
-            let mut targeted = notification.clone();
-            targeted.process_identifier = *process_id;
-
-            let mut service_buf = BytesMut::new();
-            if let Err(e) = targeted.encode(&mut service_buf) {
-                warn!(error = %e, "Failed to encode EventNotification");
-                continue;
-            }
-
-            let service_bytes = service_buf.freeze();
-
-            if *confirmed {
-                // Convert only the unicast route shapes admitted above and
-                // fail closed if the route classification changes.
-                let Some(ConfirmedRecipientRoute {
-                    canonical_peer,
-                    local_target,
-                    remote,
-                    freshness,
-                }) = route.into_confirmed()
-                else {
-                    warn!(
-                        notification_class,
-                        "Confirmed notification route is unusable"
-                    );
-                    continue;
-                };
-                let (operation, result_rx) = match notification_transactions.reserve(
-                    canonical_peer,
-                    ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
-                ) {
-                    Ok(reservation) => reservation,
-                    // Stopping closes the adapter, which is not a delivery
-                    // failure, so it is not counted.
-                    Err(NotificationReserveError::Closed) => {
-                        debug!("Server stopping; confirmed EventNotification not sent");
-                        continue;
-                    }
-                    Err(error) => {
-                        suppressions.record(EventSuppression::ConfirmedNoInvokeId);
-                        warn!(%error, "No free invoke ID for confirmed EventNotification");
-                        continue;
-                    }
-                };
-                let id = operation.invoke_id();
-
-                let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
-                    segmented: false,
-                    more_follows: false,
-                    segmented_response_accepted: false,
-                    max_segments: None,
-                    max_apdu_length: apdu::max_apdu_header_at_or_below(local_apdu_capacity)
-                        .expect("validated local APDU capacity"),
-                    invoke_id: id,
-                    sequence_number: None,
-                    proposed_window_size: None,
-                    service_choice: ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
-                    service_request: service_bytes,
-                });
-
-                let mut buf = BytesMut::new();
-                encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
-
-                let network = Arc::clone(network);
-                let learned_routers = Arc::clone(learned_routers);
-                let suppressions = Arc::clone(suppressions);
-                let timeout = Duration::from_millis(retry_timeout_ms);
-                let apdu_retries = DEFAULT_APDU_RETRIES;
-                notification_transactions.spawn(async move {
-                    let result = run_notification_worker(
-                        operation,
-                        result_rx,
-                        timeout,
-                        apdu_retries,
-                        |attempt| {
-                            let network = Arc::clone(&network);
-                            let learned_routers = Arc::clone(&learned_routers);
-                            let buf = buf.clone();
-                            let local_target = local_target.clone();
-                            let remote = remote.clone();
-                            async move {
-                                if freshness.is_some_and(|freshness| {
-                                    !freshness.permits_attempt_at(tokio::time::Instant::now())
-                                }) {
-                                    debug!(
-                                        invoke_id = id,
-                                        attempt,
-                                        "Observed Device binding expired before notification attempt"
-                                    );
-                                    return Err(());
-                                }
-                                let send_result = match (local_target, remote) {
-                                    (Some(target), None) => {
-                                        network
-                                            .send_apdu(&buf, &target, true, network_priority)
-                                            .await
-                                    }
-                                    (None, Some((dnet, dadr, configured_router))) => {
-                                        // A Device binding keeps its fixed next hop for
-                                        // each permitted attempt. Address recipients retain
-                                        // the learned-router/broadcast behavior.
-                                        let router = match configured_router {
-                                            Some(router) => Some(router),
-                                            None if attempt == 0 => {
-                                                learned_routers.lock().await.cached_router(dnet)
-                                            }
-                                            None => None,
-                                        };
-                                        match router {
-                                            Some(router_mac) => {
-                                                network
-                                                    .send_apdu_routed(
-                                                        &buf,
-                                                        dnet,
-                                                        &dadr,
-                                                        &router_mac,
-                                                        true,
-                                                        network_priority,
-                                                    )
-                                                    .await
-                                            }
-                                            None => {
-                                                network
-                                                    .send_apdu_routed_via_local_broadcast(
-                                                        &buf,
-                                                        dnet,
-                                                        &dadr,
-                                                        true,
-                                                        network_priority,
-                                                    )
-                                                    .await
-                                            }
-                                        }
-                                    }
-                                    _ => unreachable!("confirmed route validated before spawn"),
-                                };
-                                match &send_result {
-                                    Ok(()) => debug!(
-                                        invoke_id = id,
-                                        attempt, "Confirmed EventNotification sent"
-                                    ),
-                                    Err(error) => warn!(
-                                        %error,
-                                        attempt, "Confirmed EventNotification send failed"
-                                    ),
-                                }
-                                send_result.map_err(|_| ())
-                            }
-                        },
-                    )
-                    .await;
-                    match result {
-                        NotificationWorkerResult::Ack => {
-                            debug!(invoke_id = id, "EventNotification acknowledged");
-                        }
-                        NotificationWorkerResult::Error => {
-                            suppressions.record(EventSuppression::ConfirmedRejected);
-                            warn!(invoke_id = id, "EventNotification rejected by recipient");
-                        }
-                        NotificationWorkerResult::Exhausted => {
-                            suppressions.record(EventSuppression::ConfirmedUnanswered);
-                            warn!(
-                                invoke_id = id,
-                                "EventNotification failed after {} retries", apdu_retries
-                            );
-                        }
-                        NotificationWorkerResult::Closed => {}
-                    }
-                });
-            } else {
-                let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
-                    service_choice: UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION,
-                    service_request: service_bytes,
-                });
-
-                let mut buf = BytesMut::new();
-                encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
-
-                let send_result = match &route {
-                    RecipientRoute::LocalUnicast(mac) => {
-                        network.send_apdu(&buf, mac, false, network_priority).await
-                    }
-                    RecipientRoute::BoundLocalUnicast { mac, .. } => {
-                        network.send_apdu(&buf, mac, false, network_priority).await
-                    }
-                    RecipientRoute::LocalBroadcast => {
-                        network.broadcast_apdu(&buf, false, network_priority).await
-                    }
-                    // Carries DNET with DLEN zero, so routers forward it
-                    // onto the remote network as a broadcast there.
-                    RecipientRoute::RemoteBroadcast(net) => {
-                        network
-                            .broadcast_to_network(&buf, *net, false, network_priority)
-                            .await
-                    }
-                    // Carries DNET 0xFFFF, which routers forward to every
-                    // reachable network. `broadcast_to_network` rejects that
-                    // DNET, so it needs its own send.
-                    RecipientRoute::GlobalBroadcast => {
-                        network
-                            .broadcast_global_apdu(&buf, false, network_priority)
-                            .await
-                    }
-                    // DNET/DADR name the recipient; the link DA is the local
-                    // broadcast because this non-routing device keeps no
-                    // router table (Clause 6.5.3's unknown-router form).
-                    RecipientRoute::RemoteUnicast { network: net, mac } => {
-                        network
-                            .send_apdu_routed_via_local_broadcast(
-                                &buf,
-                                *net,
-                                mac,
-                                false,
-                                network_priority,
-                            )
-                            .await
-                    }
-                    RecipientRoute::BoundRoutedUnicast {
-                        network: net,
-                        mac,
-                        router,
-                        ..
-                    } => {
-                        network
-                            .send_apdu_routed(&buf, *net, mac, router, false, network_priority)
-                            .await
-                    }
-                    // Skipped by `RecipientRoute::skip` above.
-                    RecipientRoute::ContradictoryGlobal
-                    | RecipientRoute::UnknownDevice
-                    | RecipientRoute::StaleDevice
-                    | RecipientRoute::InvalidDevice => continue,
-                };
-
-                if let Err(e) = send_result {
-                    warn!(
-                        error = %e,
-                        "Failed to send unconfirmed EventNotification"
-                    );
-                }
-            }
-        }
+        Self::deliver_local_notification(ctx, notification, &recipients).await;
     }
 
     /// Distribute a successfully accepted acknowledgment after its requester
