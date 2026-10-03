@@ -66,25 +66,24 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let db = Arc::get_mut(db)
             .expect("database is unshared before startup")
             .get_mut();
-        let devices = db.find_by_type(ObjectType::DEVICE);
-        if devices.len() != 1 || devices[0].instance_number() == ObjectIdentifier::MAX_INSTANCE {
-            return Err(Error::Encoding(
-                "source Audit Reporter requires exactly one local Device".into(),
-            ));
-        }
+        // The local Device is the audit identity. Source ownership refuses any
+        // new Device and keeps this one, so it stays the lowest while owned.
+        let device = db.local_device().identifier().ok_or_else(|| {
+            Error::Encoding("source Audit Reporter requires a concrete local Device".into())
+        })?;
         if self
             .identity
             .as_ref()
-            .is_some_and(|identity| devices[0].instance_number() != identity.instance())
+            .is_some_and(|identity| device.instance_number() != identity.instance())
         {
             return Err(Error::Encoding(
                 "source Audit Reporter local Device does not match session identity".into(),
             ));
         }
         let recipient = db
-            .get_mut(&devices[0])
+            .get_mut(&device)
             .and_then(|object| object.device_authority_internal())
-            .filter(|authority| authority.object_identifier() == devices[0])
+            .filter(|authority| authority.object_identifier() == device)
             .and_then(|authority| authority.provisioned_audit_recipient().cloned())
             .ok_or_else(|| {
                 Error::Encoding(

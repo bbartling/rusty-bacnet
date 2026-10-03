@@ -24,7 +24,7 @@ pub(crate) fn resolve_local(
         class: ErrorClass::PROPERTY.to_raw() as u32,
         code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
     };
-    let owner_device = crate::local_device::selected_device(db).ok_or_else(denied)?;
+    let owner_device = db.local_device().identifier().ok_or_else(denied)?;
     let initiating_object = match source {
         LocalCommandSource::ServerDevice => None,
         LocalCommandSource::Object(oid) => {

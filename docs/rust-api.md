@@ -1872,6 +1872,34 @@ Enrollment evaluation (monitored, setpoint and fault references) both resolve
 references through it, so a FLOATING_LIMIT setpoint naming this device is read
 and reported like an unqualified one (#1184).
 
+#### Databases with several Devices
+
+A BACnet device has one Device object (Clause 12.11), but a database may hold
+several. The stack then treats the lowest instance as this device everywhere,
+whatever order the Devices were added in (#1204):
+
+- **This device's Device object** is `selected_device`: wildcard Device reads,
+  Who-Is and Who-Has answers, I-Am, the identity in COV and event
+  notifications, the startup APDU capacity check, the APDU_Timeout an Audit Log
+  sink uses on receipt, and the services the standalone PICS reports.
+- **Device-qualified references** go through `local_device().is_local`: Trend
+  Log polling, Event Enrollment references, Command action lists, the Schedule,
+  Staging and Averaging reference rewrites, and an Audit Log's forwarding
+  parent. A reference naming another Device in the same database still points
+  at another device.
+- **Audit and endpoint identity** need `local_device` to be a concrete built-in
+  Device: target Audit Reporters, the endpoint's source Audit Reporter and
+  endpoint Device writes. It names this device in audit records, owns the Audit
+  recipient, and is the only Device endpoint writes reach; a session identity
+  must match it. While an Audit runtime is active the database refuses a new
+  Device and keeps this one, so the choice holds for the runtime's life.
+- **Other Devices** take no part. Their recipient, APDU_Timeout and declared
+  services are plain object data.
+
+When the only Device has the wildcard instance there is a selected Device but
+no concrete identity, so Audit, endpoint Device writes, local command sources
+and Audit Log forwarding refuse to start or stay unconfigured.
+
 ### Object Types (62)
 
 #### Core I/O (9)
@@ -4283,8 +4311,10 @@ immediate peer, claimed routed source, transport provenance and invoke ID.
 The callback must be fast, nonblocking and side-effect-free. Refusal or panic
 denies before mutation. Provenance is channel scope, not authenticated leaf identity.
 
-Startup requires a server role and exactly one concrete built-in Device in
-the attached database. An optional `DeviceIdentity` must match that Device
+Startup requires a server role and a concrete built-in local Device in the
+attached database (the lowest when it holds several; see
+[Databases with several Devices](#databases-with-several-devices)). An optional
+`DeviceIdentity` must match that Device
 and contain only ReadProperty/WriteProperty service bits. Configuration
 validation precedes transport startup and any profile/source-ownership changes.
 The enabled Device and identity advertise exactly RP+WP, including sessions
@@ -4403,8 +4433,10 @@ failed attempted read and is reported using the caller's terminal result.
 On direct B/IP IPv4, provision the typed recipient on the built-in Device and
 select `EndpointSession::with_source_audit_reporter`. Device recipient choices
 resolve through immutable `BipEndpointBuilder::source_audit_device_binding` entries;
-a direct Address choice needs no binding. The local database must have exactly
-one concrete built-in Device and the selected Audit Reporter. Configure the Reporter's READ bit
+a direct Address choice needs no binding. The local database must have a
+concrete built-in local Device (the lowest when it holds several; see
+[Databases with several Devices](#databases-with-several-devices)) and the
+selected Audit Reporter. Configure the Reporter's READ bit
 and audit level before startup; both `ClientOnly` and `Both` sessions support
 confirmed and unconfirmed notifications. `Both` additionally requires an explicit
 Device write authorizer. Startup itself emits nothing.

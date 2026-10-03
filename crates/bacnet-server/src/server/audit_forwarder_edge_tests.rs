@@ -303,3 +303,59 @@ async fn audit_forwarding_isolated_cycle_is_content_bounded_not_global_deduplica
     a.server.stop().await.unwrap();
     b.server.stop().await.unwrap();
 }
+
+/// With several Devices the lowest is this device (#1204). Receipt reads its
+/// APDU_Timeout, and a parent naming any other Device is forwarded, even one
+/// this database also holds; a parent naming the lowest is this device and
+/// isn't. A database whose only Device is the wildcard has no identity to tell
+/// a parent from itself, so it forwards nothing.
+#[tokio::test(start_paused = true)]
+async fn audit_forwarding_follows_the_lowest_of_several_devices() {
+    let wildcard = ObjectIdentifier::WILDCARD_INSTANCE;
+    for (devices, parent_device, forwards) in [
+        (&[30, 10][..], 20, true),
+        (&[10, 20][..], 20, true),
+        (&[30, 10][..], 10, false),
+        (&[wildcard][..], 20, false),
+    ] {
+        let store = Arc::new(MemoryPersistence::default());
+        let mut log = AuditLogObject::new(7, "forwarder", 16, store.clone()).unwrap();
+        log.set_member_of(Some(BACnetDeviceObjectReference {
+            device_identifier: Some(oid(ObjectType::DEVICE, parent_device)),
+            ..parent()
+        }));
+        let binding = DeviceBinding::local(oid(ObjectType::DEVICE, 20), [2]).unwrap();
+        let (server, wire) = start_on(devices, log, Some(binding), 1476).await;
+        let mut f = Fixture {
+            server,
+            store,
+            wire,
+        };
+        let case = format!("{devices:?} naming Device {parent_device}");
+        assert!(
+            matches!(
+                f.confirmed(201, &[3], payload(false)).await,
+                Some(Apdu::SimpleAck(_))
+            ),
+            "{case}"
+        );
+        settle().await;
+        assert_eq!(f.requests().len(), usize::from(forwards), "{case}");
+        let expected = if forwards {
+            Reliability::NO_FAULT_DETECTED
+        } else {
+            Reliability::CONFIGURATION_ERROR
+        };
+        if forwards {
+            let request = f.requests().remove(0);
+            assert!(f.ack(request.invoke_id, &[2], request.service_choice));
+            settle().await;
+        }
+        assert_eq!(
+            f.reliability().await,
+            PropertyValue::Enumerated(expected.to_raw()),
+            "{case}"
+        );
+        f.server.stop().await.unwrap();
+    }
+}
