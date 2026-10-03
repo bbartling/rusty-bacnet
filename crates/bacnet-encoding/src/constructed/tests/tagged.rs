@@ -367,9 +367,16 @@ fn application_items_refuse_another_tag() {
         decoding(decode_app_unsigned(&[0x09, 0x07], 0, W)),
         (0, "Thing: expected application-tagged Unsigned".into())
     );
-    assert_eq!(decode_app_enumerated(&[0x91, 0x02], 0, W).unwrap(), (2, 2));
     assert_eq!(
-        decoding(decode_app_enumerated(&[0x95, 5, 1, 0, 0, 0, 0], 0, W)),
+        decode_app_enumerated::<u32>(&[0x91, 0x02], 0, W).unwrap(),
+        (2, 2)
+    );
+    assert_eq!(
+        decoding(decode_app_enumerated::<u32>(
+            &[0x95, 5, 1, 0, 0, 0, 0],
+            0,
+            W
+        )),
         (2, "Thing: ENUMERATED exceeds u32".into())
     );
     assert_eq!(
@@ -384,4 +391,59 @@ fn application_items_refuse_another_tag() {
         )
     );
     assert_eq!(short(decode_app_unsigned(&[0x22, 0x07], 0, W)), (3, 2));
+}
+
+#[test]
+fn application_enumerated_items_narrow_and_canonical_ones_refuse_padding() {
+    // An error class or code fits u16.
+    assert_eq!(
+        decode_app_enumerated::<u16>(&[0x92, 0xFF, 0xFF], 0, W).unwrap(),
+        (0xFFFF, 3)
+    );
+    assert_eq!(
+        decoding(decode_app_enumerated::<u16>(&[0x93, 1, 0, 0], 0, W)),
+        (1, "Thing: ENUMERATED exceeds u16".into())
+    );
+    // Leading zero octets are accepted, unless the codec needs the shortest
+    // encoding.
+    assert_eq!(
+        decode_app_enumerated::<u16>(&[0x92, 0, 7], 0, W).unwrap(),
+        (7, 3)
+    );
+    assert_eq!(
+        decode_app_canonical_enumerated::<u16>(&[0x91, 7], 0, W).unwrap(),
+        (7, 2)
+    );
+    assert_eq!(
+        decoding(decode_app_canonical_enumerated::<u16>(
+            &[0xAA, 0x92, 0, 7],
+            1,
+            W
+        )),
+        (
+            1,
+            "Thing: must use the shortest Unsigned/Enumerated encoding".into()
+        )
+    );
+    assert_eq!(
+        decoding(decode_app_canonical_enumerated::<u16>(
+            &[0x93, 1, 0, 0],
+            0,
+            W
+        )),
+        (1, "Thing: ENUMERATED exceeds u16".into())
+    );
+    assert_eq!(
+        decoding(decode_app_canonical_enumerated::<u16>(&[0x21, 7], 0, W)),
+        (0, "Thing: expected application-tagged ENUMERATED".into())
+    );
+    // Contents cut short are a short buffer for both.
+    assert_eq!(
+        short(decode_app_enumerated::<u16>(&[0x92, 0], 0, W)),
+        (3, 2)
+    );
+    assert_eq!(
+        short(decode_app_canonical_enumerated::<u16>(&[0x92, 0], 0, W)),
+        (3, 2)
+    );
 }

@@ -9,6 +9,7 @@ use crate::constructed::{
 use crate::primitives;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
@@ -111,4 +112,36 @@ fn malformed_read_access_specifications_are_refused() {
     // The object under the wrong tag, and no opening [1].
     assert!(decode_read_access_specification(&[0x1C, 0, 0x80, 0, 2, 0x1E, 0x1F], 0).is_err());
     assert!(decode_read_access_specification(&[0x0C, 0, 0x80, 0, 2, 0x2E, 0x2F], 0).is_err());
+}
+
+/// The need and have of a short-buffer error, failing on any other result.
+fn short<T: std::fmt::Debug>(result: Result<T, Error>) -> (usize, usize) {
+    match result {
+        Err(Error::BufferTooShort { need, have }) => (need, have),
+        other => panic!("expected a short buffer, got {other:?}"),
+    }
+}
+
+#[test]
+fn contents_cut_short_are_a_short_buffer() {
+    // [0] property identifier says two octets and holds one.
+    assert_eq!(short(decode_property_reference(&[0x0A, 0x55], 0)), (3, 2));
+    // Present_Value, then [1] array index saying two octets and holding one.
+    assert_eq!(
+        short(decode_property_reference(&[0x09, 0x55, 0x1A, 0x00], 0)),
+        (5, 4)
+    );
+    // [0] object identifier with three of its four octets.
+    assert_eq!(
+        short(decode_read_access_specification(&[0x0C, 0, 0x80, 0], 0)),
+        (5, 4)
+    );
+    // AV-2, [1] open, then a property identifier cut short.
+    assert_eq!(
+        short(decode_read_access_specification(
+            &[0x0C, 0, 0x80, 0, 2, 0x1E, 0x0A, 0x00],
+            0
+        )),
+        (9, 8)
+    );
 }

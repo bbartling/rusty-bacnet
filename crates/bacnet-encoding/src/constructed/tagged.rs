@@ -1,4 +1,5 @@
-//! Decode helpers the constructed codecs share for their tagged fields.
+//! Decode helpers the constructed codecs and the formal Error bodies in
+//! `apdu/` share for their tagged fields.
 //!
 //! Each helper reads one field at an offset and returns what it read with the
 //! offset just past it. Each takes the `what` label its codec passes (the
@@ -16,7 +17,17 @@
 //!   byte(s)`.
 //!
 //! Contents that run past the end of the data fail with
-//! [`Error::BufferTooShort`]; every other refusal is [`Error::Decoding`].
+//! [`Error::BufferTooShort`]; every other refusal is [`Error::Decoding`],
+//! including a tag header cut short, which [`tags::decode_tag`] refuses. A
+//! fixed-size member (an object identifier, REAL or BOOLEAN) has its length
+//! checked against the header before its contents are read, so a wrong
+//! length is reported as such even when the data also stops early.
+//!
+//! One exception remains: a member cut short inside a constructed frame is
+//! found while [`decode_ctx_constructed`] or [`decode_framed_value`] extracts
+//! the frame, and [`tags::extract_context_value`] reports it as
+//! [`Error::Decoding`]. Once a frame's body is extracted, every member in it
+//! fits.
 
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -39,20 +50,20 @@ fn next_tag_is(data: &[u8], offset: usize, test: impl FnOnce(&Tag) -> bool) -> R
 
 /// Whether a primitive context tag `tag` starts at `offset`; `false` at the
 /// end of the data, so an optional member may be the last one.
-pub(super) fn next_is_context(data: &[u8], offset: usize, tag: u8) -> Result<bool, Error> {
+pub(crate) fn next_is_context(data: &[u8], offset: usize, tag: u8) -> Result<bool, Error> {
     next_tag_is(data, offset, |t| t.is_context(tag))
 }
 
 /// Whether an opening context tag `tag` starts at `offset`; `false` at the
 /// end of the data.
-pub(super) fn next_is_opening(data: &[u8], offset: usize, tag: u8) -> Result<bool, Error> {
+pub(crate) fn next_is_opening(data: &[u8], offset: usize, tag: u8) -> Result<bool, Error> {
     next_tag_is(data, offset, |t| t.is_opening_tag(tag))
 }
 
 /// Whether a closing context tag `tag` starts at `offset`, for walking the
 /// items inside a frame. Unlike [`next_is_context`], running out of data is
 /// an error: the frame never closed.
-pub(super) fn next_is_closing(data: &[u8], offset: usize, tag: u8) -> Result<bool, Error> {
+pub(crate) fn next_is_closing(data: &[u8], offset: usize, tag: u8) -> Result<bool, Error> {
     Ok(tags::decode_tag(data, offset)?.0.is_closing_tag(tag))
 }
 
@@ -62,7 +73,7 @@ pub(super) fn next_is_closing(data: &[u8], offset: usize, tag: u8) -> Result<boo
 
 /// Require an opening context tag `tag` at `offset`; return the offset of its
 /// content.
-pub(super) fn expect_opening(
+pub(crate) fn expect_opening(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -79,7 +90,7 @@ pub(super) fn expect_opening(
 }
 
 /// Require a closing context tag `tag` at `offset`; return the offset past it.
-pub(super) fn expect_closing(
+pub(crate) fn expect_closing(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -98,7 +109,7 @@ pub(super) fn expect_closing(
 /// Require constructed context tag `tag` at `offset`; return its body (the
 /// octets between its opening and closing tags, with nested frames balanced)
 /// and the offset past its closing tag.
-pub(super) fn decode_ctx_constructed<'a>(
+pub(crate) fn decode_ctx_constructed<'a>(
     data: &'a [u8],
     offset: usize,
     tag: u8,
@@ -116,7 +127,7 @@ pub(super) fn decode_ctx_constructed<'a>(
 /// included, as a [`PropertyValue::List`] (an array written or read whole). A
 /// context-tagged element decodes to [`PropertyValue::ApplicationData`], so
 /// the value re-encodes to the same octets.
-pub(super) fn decode_framed_value(
+pub(crate) fn decode_framed_value(
     data: &[u8],
     content: usize,
     tag: u8,
@@ -149,7 +160,7 @@ pub(super) fn decode_framed_value(
 /// `at` is the offset the error reports: `end` itself when `data` is the
 /// whole input, or the frame's own offset in the larger input when `data` is
 /// a frame body sliced out of it (offsets into the slice would mislead).
-pub(super) fn expect_end(data: &[u8], end: usize, at: usize, what: &str) -> Result<(), Error> {
+pub(crate) fn expect_end(data: &[u8], end: usize, at: usize, what: &str) -> Result<(), Error> {
     if end == data.len() {
         return Ok(());
     }
@@ -173,7 +184,7 @@ pub(super) fn expect_end(data: &[u8], end: usize, at: usize, what: &str) -> Resu
 /// [`tags::decode_tag`] caps a length at 1 MiB and puts `start` inside
 /// `data`, so the end can't overflow; saturating keeps that true for any
 /// caller.
-pub(super) fn contents(data: &[u8], start: usize, length: u32) -> Result<(&[u8], usize), Error> {
+pub(crate) fn contents(data: &[u8], start: usize, length: u32) -> Result<(&[u8], usize), Error> {
     let end = usize::try_from(length).map_or(usize::MAX, |length| start.saturating_add(length));
     if end > data.len() {
         return Err(Error::buffer_too_short(end, data.len()));
@@ -204,7 +215,7 @@ fn ctx_header(
 
 /// Require a primitive context tag `tag` at `offset`; return its contents and
 /// the offset past them.
-pub(super) fn decode_ctx_primitive<'a>(
+pub(crate) fn decode_ctx_primitive<'a>(
     data: &'a [u8],
     offset: usize,
     tag: u8,
@@ -238,7 +249,7 @@ fn decode_ctx_fixed<'a>(
 }
 
 /// Require a primitive context tag `tag` at `offset` holding a REAL.
-pub(super) fn decode_ctx_real(
+pub(crate) fn decode_ctx_real(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -250,7 +261,7 @@ pub(super) fn decode_ctx_real(
 
 /// Require a primitive context tag `tag` at `offset` holding a BOOLEAN: one
 /// contents octet, 0 or 1 (Clause 20.2.3).
-pub(super) fn decode_ctx_boolean(
+pub(crate) fn decode_ctx_boolean(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -269,7 +280,7 @@ pub(super) fn decode_ctx_boolean(
 
 /// Require a primitive context tag `tag` at `offset` holding an object
 /// identifier, which is always four octets.
-pub(super) fn decode_ctx_object_id(
+pub(crate) fn decode_ctx_object_id(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -281,7 +292,7 @@ pub(super) fn decode_ctx_object_id(
 
 /// Require a primitive context tag `tag` at `offset` holding a BIT STRING;
 /// returns its unused-bit count and data octets.
-pub(super) fn decode_ctx_bit_string(
+pub(crate) fn decode_ctx_bit_string(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -294,7 +305,7 @@ pub(super) fn decode_ctx_bit_string(
 
 /// Require a primitive context tag `tag` at `offset` holding an OCTET STRING;
 /// returns a copy of its octets.
-pub(super) fn decode_ctx_octet_string(
+pub(crate) fn decode_ctx_octet_string(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -307,7 +318,7 @@ pub(super) fn decode_ctx_octet_string(
 
 /// Require a primitive context tag `tag` at `offset` holding a
 /// CharacterString.
-pub(super) fn decode_ctx_character_string(
+pub(crate) fn decode_ctx_character_string(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -319,7 +330,7 @@ pub(super) fn decode_ctx_character_string(
 
 /// Read the optional member under primitive context tag `tag` with `decode`
 /// when that tag comes next; otherwise `None` with the offset unchanged.
-pub(super) fn decode_optional_ctx<T>(
+pub(crate) fn decode_optional_ctx<T>(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -338,7 +349,7 @@ pub(super) fn decode_optional_ctx<T>(
 // ---------------------------------------------------------------------------
 
 /// An unsigned integer type a decoded Unsigned or ENUMERATED is narrowed to.
-pub(super) trait UnsignedWidth: TryFrom<u64> {
+pub(crate) trait UnsignedWidth: TryFrom<u64> {
     /// The type's name, for the error when a value doesn't fit it.
     const NAME: &'static str;
 }
@@ -373,7 +384,7 @@ fn narrow<T: UnsignedWidth>(value: u64, offset: usize, tag: u8, what: &str) -> R
 /// that fits `T`. An ENUMERATED's contents are encoded the same way, so this
 /// reads those too. Leading zero octets are accepted, as
 /// [`primitives::decode_unsigned`] accepts them.
-pub(super) fn decode_ctx_unsigned<T: UnsignedWidth>(
+pub(crate) fn decode_ctx_unsigned<T: UnsignedWidth>(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -387,7 +398,7 @@ pub(super) fn decode_ctx_unsigned<T: UnsignedWidth>(
 /// [`decode_ctx_unsigned`] for a codec that must re-encode what it read octet
 /// for octet: the contents must also be the shortest encoding (see
 /// [`decode_canonical_unsigned`]).
-pub(super) fn decode_ctx_canonical_unsigned<T: UnsignedWidth>(
+pub(crate) fn decode_ctx_canonical_unsigned<T: UnsignedWidth>(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -401,7 +412,7 @@ pub(super) fn decode_ctx_canonical_unsigned<T: UnsignedWidth>(
 /// The value of Unsigned or ENUMERATED contents in their shortest encoding:
 /// one to eight octets, and no leading zero octet unless it is the only one.
 /// Errors report `offset`, the field's tag.
-pub(super) fn decode_canonical_unsigned(
+pub(crate) fn decode_canonical_unsigned(
     octets: &[u8],
     offset: usize,
     what: &str,
@@ -448,7 +459,7 @@ fn decode_app_primitive<'a>(
 }
 
 /// Decode one application-tagged Unsigned.
-pub(super) fn decode_app_unsigned(
+pub(crate) fn decode_app_unsigned(
     data: &[u8],
     offset: usize,
     what: &str,
@@ -459,7 +470,7 @@ pub(super) fn decode_app_unsigned(
 }
 
 /// Decode one application-tagged BIT STRING (`SEQUENCE OF BIT STRING` item).
-pub(super) fn decode_app_bit_string(
+pub(crate) fn decode_app_bit_string(
     data: &[u8],
     offset: usize,
     what: &str,
@@ -469,25 +480,46 @@ pub(super) fn decode_app_bit_string(
     Ok((primitives::decode_bit_string(octets)?, end))
 }
 
-/// Decode one application-tagged ENUMERATED (`SEQUENCE OF enumerated` item).
-pub(super) fn decode_app_enumerated(
+/// Decode one application-tagged ENUMERATED (a `SEQUENCE OF` item, or an
+/// error class or code) that fits `T`. Leading zero octets are accepted.
+pub(crate) fn decode_app_enumerated<T: UnsignedWidth>(
     data: &[u8],
     offset: usize,
     what: &str,
-) -> Result<(u32, usize), Error> {
+) -> Result<(T, usize), Error> {
     let (octets, end) =
         decode_app_primitive(data, offset, tags::app_tag::ENUMERATED, "ENUMERATED", what)?;
-    let value = u32::try_from(primitives::decode_unsigned(octets)?).map_err(|_| {
-        Error::decoding(
-            end - octets.len(),
-            format!("{what}: ENUMERATED exceeds u32"),
-        )
-    })?;
-    Ok((value, end))
+    let value = primitives::decode_unsigned(octets)?;
+    Ok((narrow_enumerated(value, end - octets.len(), what)?, end))
+}
+
+/// [`decode_app_enumerated`] for a codec that must re-encode what it read
+/// octet for octet: the contents must also be the shortest encoding (see
+/// [`decode_canonical_unsigned`]).
+pub(crate) fn decode_app_canonical_enumerated<T: UnsignedWidth>(
+    data: &[u8],
+    offset: usize,
+    what: &str,
+) -> Result<(T, usize), Error> {
+    let (octets, end) =
+        decode_app_primitive(data, offset, tags::app_tag::ENUMERATED, "ENUMERATED", what)?;
+    let value = decode_canonical_unsigned(octets, offset, what)?;
+    Ok((narrow_enumerated(value, end - octets.len(), what)?, end))
+}
+
+/// Narrow an application ENUMERATED whose contents start at `contents` to
+/// `T`.
+fn narrow_enumerated<T: UnsignedWidth>(
+    value: u64,
+    contents: usize,
+    what: &str,
+) -> Result<T, Error> {
+    T::try_from(value)
+        .map_err(|_| Error::decoding(contents, format!("{what}: ENUMERATED exceeds {}", T::NAME)))
 }
 
 /// Decode one application-tagged CharacterString.
-pub(super) fn decode_app_character_string(
+pub(crate) fn decode_app_character_string(
     data: &[u8],
     offset: usize,
     what: &str,

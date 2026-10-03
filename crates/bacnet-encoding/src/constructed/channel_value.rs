@@ -9,6 +9,7 @@
 
 use bacnet_types::error::Error;
 
+use super::tagged::contents;
 use crate::primitives;
 use crate::tags::{self, TagClass};
 
@@ -92,11 +93,8 @@ fn lighting_command_end(data: &[u8], mut offset: usize) -> Result<usize, Error> 
                 format!("lighting command field {} is not defined", tag.number),
             ));
         }
-        let end = pos
-            .checked_add(tag.length as usize)
-            .filter(|end| *end <= data.len())
-            .ok_or_else(|| Error::decoding(pos, "lighting command truncated"))?;
-        check_lighting_field(tag.number, &data[pos..end], offset)?;
+        let (content, end) = contents(data, pos, tag.length)?;
+        check_lighting_field(tag.number, content, offset)?;
         next_number = tag.number + 1;
         offset = end;
     }
@@ -109,7 +107,9 @@ fn lighting_command_end(data: &[u8], mut offset: usize) -> Result<usize, Error> 
 /// set, or a constructed context-\[0\] BACnetLightingCommand. The lighting
 /// command is checked for structure (field order, tag class, content lengths)
 /// and for its priority range, but not for the REAL level ranges or the
-/// operation value.
+/// operation value. Contents that run past the end of `data` fail with
+/// [`Error::BufferTooShort`]; any other malformed value with
+/// [`Error::Decoding`].
 pub fn channel_value_end(data: &[u8], offset: usize) -> Result<usize, Error> {
     if offset >= data.len() {
         return Err(Error::decoding(offset, "missing channel value"));

@@ -65,3 +65,17 @@ fn malformed_lighting_commands_are_refused() {
     assert!(channel_value_end(&[0x19, 0x01], 0).is_err());
     assert!(channel_value_end(&[], 0).is_err());
 }
+
+#[test]
+fn contents_cut_short_are_a_short_buffer() {
+    let short = |value: &[u8]| match channel_value_end(value, 0) {
+        Err(bacnet_types::error::Error::BufferTooShort { need, have }) => (need, have),
+        other => panic!("expected a short buffer for {value:02X?}, got {other:?}"),
+    };
+    // The operation field says one octet and the data stops.
+    assert_eq!(short(&[0x0E, 0x09]), (3, 2));
+    // A target level REAL with two of its four octets.
+    assert_eq!(short(&[0x0E, 0x09, 0x01, 0x1C, 0x42, 0x48]), (8, 6));
+    // An application REAL cut short reads the same way.
+    assert_eq!(short(&[0x44, 0x42, 0x90]), (5, 3));
+}

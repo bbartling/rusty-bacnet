@@ -11,6 +11,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 mod access_credential;
 mod action_list;
 mod assigned_landing_calls;
+mod audit_notification;
 mod authentication_factor_format;
 mod calendar;
 mod channel_value;

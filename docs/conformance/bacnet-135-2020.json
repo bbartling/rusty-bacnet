@@ -2308,6 +2308,7 @@
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{malformed_property_references_are_refused,malformed_read_access_specifications_are_refused}",
+    "crates/bacnet-encoding/src/constructed/tests/read_access.rs::contents_cut_short_are_a_short_buffer",
     "crates/bacnet-objects/src/group/group_members_tests.rs::{add_member_refuses_a_member_that_reports_a_group_present_value,add_member_refuses_a_member_without_properties,group_lists_refuse_an_array_index,add_member_refuses_a_property_identifier_past_22_bits}",
     "crates/bacnet-objects/src/group/metadata.rs::tests::property_metadata_group_trio_write_capabilities_match_dispatch",
     "crates/bacnet-server/src/handlers/tests/read_rpm/group_present_value.rs::member_rows_are_charged_to_the_rpm_work_budget_and_shared_between_groups",
@@ -3546,6 +3547,7 @@
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/channel_wire_tests.rs::{channel_value_no_member_can_take_fails_without_writing,channel_writing_its_own_present_value_is_refused_busy}",
+    "crates/bacnet-encoding/src/constructed/tests/channel_value.rs::contents_cut_short_are_a_short_buffer",
     "crates/bacnet-objects/src/channel/tests.rs::{channel_stale_completion_is_ignored,channel_read_only_rows_refuse_writes}",
     "crates/bacnet-objects/src/channel/array_tests.rs::channel_member_writes_refuse_other_devices_bad_indexes_and_oversize",
     "crates/bacnet-objects/src/channel/array_tests.rs::channel_members_refuse_a_non_device_device_identifier",
@@ -4406,6 +4408,7 @@
    ],
    "negative_tests": [
         "crates/bacnet-server/src/server/cov_identity_completion_tests/completion_order.rs::cov_order_newer_failure_or_cancellation_does_not_block_older_success",
+        "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{subscribe_cov_property_cut_short_draws_services_other,subscribe_cov_property_multiple_cut_short_draws_the_general_error}",
         "crates/bacnet-server/src/cov/observation_order/tests.rs::cov_order_counter_checked_exhaustion_covers_both_modes",
         "crates/bacnet-server/src/cov/confirmed/tests.rs::a_replaced_subscription_starts_unmarked",
         "crates/bacnet-server/src/cov/confirmed/tests.rs::a_route_change_fences_the_report_and_revisits_its_references",
@@ -5101,7 +5104,9 @@
     "crates/rusty-bacnet/tests/test_object_audit_policy.py::test_unresolved_route_refuses_mandatory_policy_change_before_commit",
     "crates/bacnet-objects/src/device/tests/audit_recipient.rs::provisioned_audit_recipient_mac_longer_than_the_bound_is_refused",
     "crates/bacnet-services/src/audit/address_bound_tests.rs::audit_log_query_address_filter_holds_to_the_bacnet_address_bound",
-    "crates/bacnet-services/src/audit/address_bound_tests.rs::audit_notification_recipients_hold_to_the_bacnet_address_bound"
+    "crates/bacnet-services/src/audit/address_bound_tests.rs::audit_notification_recipients_hold_to_the_bacnet_address_bound",
+    "crates/bacnet-encoding/src/constructed/tests/audit_notification.rs::{an_object_identifier_of_the_wrong_length_is_malformed_even_when_cut_short,an_object_identifier_cut_short_is_a_short_buffer}",
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::confirmed_audit_notification_cut_short_draws_services_other"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -5614,6 +5619,7 @@
     "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::malformed_structured_error_bodies_are_refused",
     "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::structured_error_projection_must_match_body",
     "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::structured_bodies_are_formal_only_for_their_services",
+    "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::formal_members_cut_short_are_a_short_buffer",
     "crates/bacnet-services/src/object_mgmt/error.rs::tests::create_object_error_refuses_malformed_plain_and_mismatched",
     "crates/bacnet-services/src/cov_multiple_error.rs::tests::decode_refuses_malformed_plain_and_mismatched",
     "crates/bacnet-services/src/private_transfer/error.rs::tests::private_transfer_error_refuses_malformed_plain_and_mismatched",
@@ -5811,7 +5817,8 @@
    "code_anchors": [
     "crates/bacnet-encoding/src/primitives",
     "crates/bacnet-encoding/src/tags.rs",
-    "crates/bacnet-types/src/primitives.rs"
+    "crates/bacnet-types/src/primitives.rs",
+    "crates/bacnet-encoding/src/constructed/tagged.rs"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/primitives/tests.rs",
@@ -5824,7 +5831,9 @@
     "crates/bacnet-types/src/primitives.rs::object_identifier_new_rejects_type_overflow",
     "crates/bacnet-types/src/primitives.rs::object_identifier_addressable_rejects_type_overflow",
     "crates/bacnet-types/src/primitives.rs::object_identifier_checked_instance_boundaries",
-    "crates/rusty-bacnet/tests/test_object_identifier_invariant.py"
+    "crates/rusty-bacnet/tests/test_object_identifier_invariant.py",
+    "crates/bacnet-encoding/src/constructed/tests/tagged.rs::{contents_past_the_end_are_a_short_buffer,fixed_size_primitives_refuse_any_other_length,application_enumerated_items_narrow_and_canonical_ones_refuse_padding}",
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::read_property_multiple_cut_short_draws_services_other"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -5835,7 +5844,11 @@
    ],
    "notes": [
     "Refs #847: Clause 20.2.14 ObjectIdentifier constructors and bounded wire decode establish 10-bit type and 22-bit instance widths. Safe unchecked construction and release masking are removed; infallible encoding preserves identity, including proprietary type1023 and wildcard instance.",
-    "Primitive, application/context and reference codec boundary vectors plus Python rejection/valid controls provide narrow evidence. Generic ObjectType remains unrestricted; no serde API or producer behavior is added. Broader encoding status is unchanged: still needs a complete malformed fixture catalog and byte-equivalence guard for optimizations."
+    "Primitive, application/context and reference codec boundary vectors plus Python rejection/valid controls provide narrow evidence. Generic ObjectType remains unrestricted; no serde API or producer behavior is added. Broader encoding status is unchanged: still needs a complete malformed fixture catalog and byte-equivalence guard for optimizations.",
+    "In the shared tagged-field helpers and the codecs and formal Error bodies read with them, contents that run past the end of the data are Error::BufferTooShort; a cut-short or malformed tag header is Error::Decoding.",
+    "A fixed-size context member (object identifier, REAL, BOOLEAN) has its length checked before its contents, so a wrong length is Error::Decoding even when the data also stops early.",
+    "A member cut short inside a constructed frame is caught when the frame is extracted (tags::extract_context_value), which reports Error::Decoding.",
+    "The server answers a confirmed request whose contents are cut short with SERVICES / OTHER, whichever kind its decoder reports."
    ]
   },
   {

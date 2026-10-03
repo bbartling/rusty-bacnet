@@ -63,7 +63,7 @@ pub mod recipient;
 pub mod schedule;
 mod shed_level;
 pub mod staging;
-mod tagged;
+pub(crate) mod tagged;
 mod value_source;
 
 pub use access_credential::{
