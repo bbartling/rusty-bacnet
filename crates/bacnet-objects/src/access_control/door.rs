@@ -1,8 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::door_alarm::{alarm_state_in_range, DoorAlarmLists};
 use super::door_out_of_service::DoorState;
 use super::*;
+use crate::event::state_reporting::ChangeOfStateReporting;
 use crate::traits::MonotonicClock;
 
 // AccessDoorObject (type 30)
@@ -42,6 +44,24 @@ pub const DEFAULT_DOOR_OPEN_TOO_LONG_TIME: u32 = 300;
 /// serves (Clause 12.26.14; #1148), so it moves with every command, relock,
 /// device report and simulated value. See `secured_status` for how the
 /// inputs combine and when the answer is UNKNOWN.
+///
+/// The door reports intrinsically on Door_Alarm_State with the
+/// CHANGE_OF_STATE algorithm (Clause 12.26; #1149): Event_State goes
+/// OFFNORMAL once Door_Alarm_State has stayed in Alarm_Values for Time_Delay
+/// seconds and back to NORMAL once it has stayed out of them for
+/// Time_Delay_Normal. Fault_Values feeds the FAULT_STATE algorithm, so a
+/// Door_Alarm_State among them makes Reliability MULTI_STATE_FAULT and
+/// Event_State FAULT. Masked_Alarm_Values keeps Door_Alarm_State out of the
+/// states it lists. The module `door_alarm` has the rules the three lists
+/// set; the event rows are served and written through
+/// `ChangeOfStateReporting`, and the server sends the notifications to the
+/// Notification Class recipients.
+///
+/// The application decides when the door is in alarm and reports it with
+/// [`Self::set_door_alarm_state`]; Clause 12.26.20 leaves that to the
+/// device. That includes DOOR_OPEN_TOO_LONG: the door serves
+/// Door_Open_Too_Long_Time for the application's logic to read but runs no
+/// timer of its own.
 #[derive(Clone)]
 pub struct AccessDoorObject {
     oid: ObjectIdentifier,
@@ -55,10 +75,11 @@ pub struct AccessDoorObject {
     device_state: Option<DoorState>,
     door_members: Vec<BACnetDeviceObjectReference>,
     status_flags: StatusFlags,
-    /// Event_State.
-    event_state: EventState,
     out_of_service: bool,
-    reliability: Reliability,
+    /// Fault_Values and Masked_Alarm_Values.
+    alarm_lists: DoorAlarmLists,
+    /// Intrinsic reporting on Door_Alarm_State, Alarm_Values included.
+    reporting: ChangeOfStateReporting,
     /// 16-level priority array for commandable Present_Value.
     priority_array: [Option<DoorValue>; 16],
     relinquish_default: DoorValue,
@@ -66,8 +87,8 @@ pub struct AccessDoorObject {
     door_pulse_time: u32,
     /// Door_Extended_Pulse_Time, tenths of a second.
     door_extended_pulse_time: u32,
-    /// Door_Open_Too_Long_Time, tenths of a second. Stored and served; no
-    /// door-open-too-long alarm logic is modelled.
+    /// Door_Open_Too_Long_Time, tenths of a second. Stored and served for
+    /// the application, which decides when the door has been open too long.
     door_open_too_long_time: u32,
     /// For each priority slot holding a pulse, the monotonic instant it is
     /// relinquished.
@@ -91,9 +112,9 @@ impl AccessDoorObject {
             device_state: None,
             door_members: Vec::new(),
             status_flags: StatusFlags::empty(),
-            event_state: EventState::NORMAL,
             out_of_service: false,
-            reliability: Reliability::NO_FAULT_DETECTED,
+            alarm_lists: DoorAlarmLists::default(),
+            reporting: ChangeOfStateReporting::new(alarm_state_in_range),
             priority_array: Default::default(),
             relinquish_default: DoorValue::LOCK,
             door_pulse_time: DEFAULT_DOOR_PULSE_TIME,
@@ -175,13 +196,97 @@ impl AccessDoorObject {
     }
 
     /// Set Door_Alarm_State, the alarm condition the application's door
-    /// logic has worked out (Clause 12.26 leaves that to the device).
+    /// logic has worked out (Clause 12.26.20 leaves that to the device),
+    /// DOOR_OPEN_TOO_LONG included.
     ///
-    /// A change of the value served triggers a SubscribeCOV notification
-    /// (Table 13-1). While Out_Of_Service is TRUE a client's simulated value
-    /// keeps being served, and this one takes over on the return to service.
-    pub fn set_door_alarm_state(&mut self, state: DoorAlarmState) {
+    /// The state has to be NORMAL or a member of Alarm_Values or
+    /// Fault_Values, and no member of Masked_Alarm_Values; any other is
+    /// refused with VALUE_OUT_OF_RANGE and the state held is kept. A change
+    /// of the value served triggers a SubscribeCOV notification (Table 13-1)
+    /// and feeds the event algorithm, which a running server evaluates at its
+    /// next one-second tick. While Out_Of_Service is TRUE a client's
+    /// simulated value keeps being served, and this one takes over on the
+    /// return to service.
+    pub fn set_door_alarm_state(&mut self, state: DoorAlarmState) -> Result<(), Error> {
+        if !self.admits(state) {
+            return Err(common::value_out_of_range_error());
+        }
         self.device_state_mut().door_alarm_state = state;
+        Ok(())
+    }
+
+    /// Set Alarm_Values, the Door_Alarm_State values the door reports as
+    /// offnormal (Clause 12.26.25). A value outside the BACnetDoorAlarmState
+    /// production, named or proprietary (256 to 65535), is refused with
+    /// VALUE_OUT_OF_RANGE and the values set before are kept. A
+    /// Door_Alarm_State the lists no longer admit drops to NORMAL. Clients
+    /// can write the list too, as they can the door's other event
+    /// configuration.
+    pub fn set_alarm_values(
+        &mut self,
+        states: impl IntoIterator<Item = DoorAlarmState>,
+    ) -> Result<(), Error> {
+        self.reporting.set_alarm_values(raw_states(states))?;
+        self.settle_door_alarm_state();
+        Ok(())
+    }
+
+    /// Set Fault_Values, the Door_Alarm_State values that make Reliability
+    /// MULTI_STATE_FAULT (Clause 12.26.26), checked as
+    /// [`Self::set_alarm_values`] checks its list.
+    pub fn set_fault_values(
+        &mut self,
+        states: impl IntoIterator<Item = DoorAlarmState>,
+    ) -> Result<(), Error> {
+        self.alarm_lists.set_fault_values(raw_states(states))?;
+        self.settle_door_alarm_state();
+        Ok(())
+    }
+
+    /// Set Masked_Alarm_Values, the states Door_Alarm_State is kept out of
+    /// (Clause 12.26.21), checked as [`Self::set_alarm_values`] checks its
+    /// list; NORMAL can't be masked. A door in a state the list now masks
+    /// returns to NORMAL at once.
+    pub fn set_masked_alarm_values(
+        &mut self,
+        states: impl IntoIterator<Item = DoorAlarmState>,
+    ) -> Result<(), Error> {
+        self.alarm_lists
+            .set_masked_alarm_values(raw_states(states))?;
+        self.settle_door_alarm_state();
+        Ok(())
+    }
+
+    /// Whether the door's lists let Door_Alarm_State take `state`.
+    fn admits(&self, state: DoorAlarmState) -> bool {
+        self.alarm_lists
+            .admits(self.reporting.alarm_values(), state)
+    }
+
+    /// Send a Door_Alarm_State the lists no longer admit back to NORMAL,
+    /// both the one served and the device's own one put aside out of
+    /// service.
+    fn settle_door_alarm_state(&mut self) {
+        let (lists, alarm_values) = (&self.alarm_lists, self.reporting.alarm_values());
+        for state in std::iter::once(&mut self.state).chain(self.device_state.as_mut()) {
+            if !lists.admits(alarm_values, state.door_alarm_state) {
+                state.door_alarm_state = DoorAlarmState::NORMAL;
+            }
+        }
+    }
+
+    /// The value the event algorithm watches: Door_Alarm_State, raw.
+    fn watched_alarm_state(&self) -> u32 {
+        self.state.door_alarm_state.to_raw()
+    }
+
+    /// Reliability as served: a client's simulated value while out of
+    /// service, else what the FAULT_STATE algorithm makes of the
+    /// Door_Alarm_State served.
+    fn served_reliability(&self) -> Reliability {
+        self.state
+            .reliability
+            .unwrap_or_else(|| self.alarm_lists.fault_state(self.state.door_alarm_state))
     }
 
     /// The device's own door state: the one put aside while out of service,
@@ -250,11 +355,10 @@ impl AccessDoorObject {
     }
 
     /// Whether Status_Flags carries IN_ALARM, which follows Event_State
-    /// (Clause 12.26.6). The door runs no intrinsic reporting, so Event_State
-    /// stays NORMAL. Status_Flags is served from the same field, so the flag
-    /// and Secured_Status agree once an event algorithm moves it.
+    /// (Clause 12.26.6). Status_Flags and Secured_Status both read it here,
+    /// so the two agree.
     fn in_alarm(&self) -> bool {
-        self.event_state != EventState::NORMAL
+        self.reporting.event_state() != EventState::NORMAL
     }
 
     /// Secured_Status, worked out from what the door serves (Clause
@@ -268,17 +372,16 @@ impl AccessDoorObject {
     ///
     /// An input is undetermined only when the door's own monitor says it
     /// can't tell: Door_Status or Lock_Status reads UNKNOWN, or reports its
-    /// input faulted (DOOR_FAULT, LOCK_FAULT). Reliability plays no part:
-    /// this door applies no fault algorithm and nothing moves it off
-    /// NO_FAULT_DETECTED. Door_Status and Lock_Status are the served values,
-    /// so while Out_Of_Service is TRUE a client's simulation moves the result
-    /// as a device report would (Clause 12.26.9).
+    /// input faulted (DOOR_FAULT, LOCK_FAULT). Reliability is no input of its
+    /// own: a fault moves Event_State to FAULT, which sets IN_ALARM and so
+    /// fails the first input. Door_Status and Lock_Status are the served
+    /// values, so while Out_Of_Service is TRUE a client's simulation moves
+    /// the result as a device report would (Clause 12.26.9).
     fn secured_status(&self) -> DoorSecuredStatus {
         let inputs = [
             Some(!self.in_alarm()),
-            // Masked_Alarm_Values joins here once the door serves it (#1149):
-            // a list with any member fails the door. A door without the list
-            // has nothing to fail, so the input is met.
+            // Any masked state fails the door, whichever it is.
+            Some(!self.alarm_lists.masks_any()),
             Some(self.present_value == DoorValue::LOCK),
             door_closed(self.state.door_status),
             door_locked(self.state.lock_status),
@@ -356,23 +459,33 @@ impl BACnetObject for AccessDoorObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        // Served here rather than by the shared arm so IN_ALARM comes from
-        // the door's Event_State, the flag Secured_Status reads.
-        if property == PropertyIdentifier::STATUS_FLAGS {
-            return Ok(common::compute_status_flags(
-                self.status_flags,
-                self.reliability,
-                self.out_of_service,
-                self.event_state,
-            ));
-        }
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        if let Some(result) = common::read_identity_properties!(self, property, array_index) {
             return result;
+        }
+        if let Some(result) = self.reporting.read(property, array_index) {
+            return result;
+        }
+        if let Some(value) = self.alarm_lists.read(property) {
+            return Ok(value);
         }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::ACCESS_DOOR.to_raw()))
             }
+            // IN_ALARM comes from the door's Event_State, the flag
+            // Secured_Status reads, and FAULT from the Reliability served.
+            p if p == PropertyIdentifier::STATUS_FLAGS => Ok(common::compute_status_flags(
+                self.status_flags,
+                self.served_reliability(),
+                self.out_of_service,
+                self.reporting.event_state(),
+            )),
+            p if p == PropertyIdentifier::OUT_OF_SERVICE => {
+                Ok(PropertyValue::Boolean(self.out_of_service))
+            }
+            p if p == PropertyIdentifier::RELIABILITY => Ok(PropertyValue::Enumerated(
+                self.served_reliability().to_raw(),
+            )),
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Enumerated(self.present_value.to_raw()))
             }
@@ -390,9 +503,6 @@ impl BACnetObject for AccessDoorObject {
             )),
             p if p == PropertyIdentifier::DOOR_MEMBERS => {
                 common::read_array(device_object_references(&self.door_members), array_index)
-            }
-            p if p == PropertyIdentifier::EVENT_STATE => {
-                Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }
             p if p == PropertyIdentifier::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, |v: DoorValue| {
@@ -423,7 +533,7 @@ impl BACnetObject for AccessDoorObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
@@ -442,7 +552,29 @@ impl BACnetObject for AccessDoorObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        if let Some(result) = self.state.write(self.out_of_service, property, &value) {
+        let (lists, alarm_values) = (&self.alarm_lists, self.reporting.alarm_values());
+        if let Some(result) = self.state.write(
+            self.out_of_service,
+            |state| lists.admits(alarm_values, state),
+            property,
+            &value,
+        ) {
+            return result;
+        }
+        // An edit of any of the three lists can leave Door_Alarm_State in a
+        // state they no longer admit.
+        let list_edit = match property {
+            p if p == PropertyIdentifier::ALARM_VALUES => {
+                self.reporting.write(property, array_index, &value)
+            }
+            _ => self.alarm_lists.write(property, array_index, &value),
+        };
+        if let Some(result) = list_edit {
+            result?;
+            self.settle_door_alarm_state();
+            return Ok(());
+        }
+        if let Some(result) = self.reporting.write(property, array_index, &value) {
             return result;
         }
         match property {
@@ -480,7 +612,7 @@ impl BACnetObject for AccessDoorObject {
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                _array_index,
+                array_index,
             )),
         }
     }
@@ -496,6 +628,12 @@ impl BACnetObject for AccessDoorObject {
     fn supports_cov(&self) -> bool {
         true
     }
+
+    crate::event::impl_change_of_state_reporting!(
+        reporting,
+        Self::watched_alarm_state,
+        Self::served_reliability
+    );
 
     fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
         self.logical_now = self.logical_now.saturating_add(elapsed);
@@ -519,8 +657,11 @@ impl BACnetObject for AccessDoorObject {
     }
 }
 
-// A child of this module so the tests can set the door's Event_State, which
-// no route reaches yet.
+/// The raw values of `states`, for the list setters.
+fn raw_states(states: impl IntoIterator<Item = DoorAlarmState>) -> Vec<u32> {
+    states.into_iter().map(DoorAlarmState::to_raw).collect()
+}
+
 #[cfg(test)]
 #[path = "door_secured_status_tests.rs"]
 mod secured_status_tests;

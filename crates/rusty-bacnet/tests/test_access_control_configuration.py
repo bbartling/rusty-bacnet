@@ -6,6 +6,9 @@ read-only over the network (#1249), and add_access_zone(entry_points=...,
 exit_points=...) the zone's lists of Access Points (#1306). add_access_point
 also takes the policy count, the supported authorization modes and
 Priority_For_Writing, which are read-only over the network too (#1307).
+add_access_door also takes the door's starting Alarm_Values, Fault_Values and
+Masked_Alarm_Values, which keep Door_Alarm_State to the states they admit
+(#1149).
 """
 
 from __future__ import annotations
@@ -43,7 +46,10 @@ REMOTE_POINT_REFERENCE = bytes(
 
 # Each registration method and its keyword-only arguments.
 KEYWORDS = (
-    ("add_access_door", ["door_members"]),
+    (
+        "add_access_door",
+        ["door_members", "alarm_values", "fault_values", "masked_alarm_values"],
+    ),
     (
         "add_access_point",
         [
@@ -174,6 +180,66 @@ class AccessControlConfigurationTests(unittest.TestCase):
                         ObjectIdentifier(ObjectType.ACCESS_POINT, instance), doors, 0
                     )
                 self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
+        finally:
+            await server.stop()
+
+    def test_door_alarm_lists_reach_the_door_and_gate_its_alarm_state(self) -> None:
+        asyncio.run(self._door_alarm_lists())
+
+    async def _door_alarm_lists(self) -> None:
+        server = make_server()
+        # Alarms on DOOR_OPEN_TOO_LONG (2) and FORCED_OPEN (3), a fault on
+        # DOOR_FAULT (5), and TAMPER (4) masked.
+        server.add_access_door(
+            1,
+            "Main Entry",
+            alarm_values=[2, 3],
+            fault_values=[5],
+            masked_alarm_values=[4],
+        )
+        server.add_access_door(2, "Side Entry")
+        # A reserved state, and NORMAL (0) among the masked ones.
+        for settings in ({"alarm_values": [9]}, {"masked_alarm_values": [0]}):
+            with self.assertRaises(BacnetProtocolError) as raised:
+                server.add_access_door(3, "Refused", **settings)
+            self.assert_value_out_of_range(raised.exception)
+        await server.start()
+        try:
+            door = ObjectIdentifier(ObjectType.ACCESS_DOOR, 1)
+            state = PropertyIdentifier.DOOR_ALARM_STATE
+            masked = PropertyIdentifier.MASKED_ALARM_VALUES
+
+            def states(*raw: int) -> PropertyValue:
+                return PropertyValue.list([PropertyValue.enumerated(r) for r in raw])
+
+            for property, expected in (
+                (PropertyIdentifier.ALARM_VALUES, states(2, 3)),
+                (PropertyIdentifier.FAULT_VALUES, states(5)),
+                (masked, states(4)),
+            ):
+                self.assertEqual(await server.read_property(door, property), expected)
+            side = ObjectIdentifier(ObjectType.ACCESS_DOOR, 2)
+            self.assertEqual(await server.read_property(side, masked), states())
+
+            async def write(property: PropertyIdentifier, value: PropertyValue) -> None:
+                await server.write_property_local(door, property, value, source_object=None)
+
+            # Out of service a client simulates an alarm value, but neither
+            # a masked state nor one in no list.
+            await write(PropertyIdentifier.OUT_OF_SERVICE, PropertyValue.boolean(True))
+            for refused in (4, 6):
+                with self.assertRaises(BacnetProtocolError) as raised:
+                    await write(state, PropertyValue.enumerated(refused))
+                self.assert_value_out_of_range(raised.exception)
+            await write(state, PropertyValue.enumerated(3))
+            self.assertEqual(
+                await server.read_property(door, state), PropertyValue.enumerated(3)
+            )
+            # Masking the state the door is in returns it to NORMAL.
+            await write(masked, states(3, 4))
+            self.assertEqual(
+                await server.read_property(door, state), PropertyValue.enumerated(0)
+            )
         finally:
             await server.stop()
 

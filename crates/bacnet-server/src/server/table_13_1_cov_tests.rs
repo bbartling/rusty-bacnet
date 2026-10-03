@@ -170,9 +170,25 @@ async fn write_multiple(
     assert_eq!(response(h).await, Ok(()), "WritePropertyMultiple");
 }
 
+/// A door in `alarm`, whose Alarm_Values admit every alarm state these tests
+/// use. Event detection is off, so only the COV row moves: an event
+/// transition would set IN_ALARM in Status_Flags (#1149).
 fn door(alarm: DoorAlarmState) -> Box<dyn BACnetObject> {
     let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
-    door.set_door_alarm_state(alarm);
+    door.set_alarm_values([
+        DoorAlarmState::DOOR_OPEN_TOO_LONG,
+        DoorAlarmState::FORCED_OPEN,
+        DoorAlarmState::TAMPER,
+    ])
+    .unwrap();
+    door.write_property(
+        PropertyIdentifier::EVENT_DETECTION_ENABLE,
+        None,
+        PropertyValue::Boolean(false),
+        None,
+    )
+    .unwrap();
+    door.set_door_alarm_state(alarm).unwrap();
     Box::new(door)
 }
 

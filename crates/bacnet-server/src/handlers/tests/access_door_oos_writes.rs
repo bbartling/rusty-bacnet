@@ -11,12 +11,20 @@ use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleReques
 use bacnet_types::enums::{DoorAlarmState, DoorStatus, DoorValue, LockStatus};
 
 /// An in-service door whose device reports it open, unlocked and held open
-/// too long.
+/// too long. Its Alarm_Values admit every alarm state these tests simulate.
 fn door_db() -> (ObjectDatabase, ObjectIdentifier) {
     let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
+    door.set_alarm_values([
+        DoorAlarmState::DOOR_OPEN_TOO_LONG,
+        DoorAlarmState::FORCED_OPEN,
+        DoorAlarmState::TAMPER,
+        DoorAlarmState::from_raw(256),
+    ])
+    .unwrap();
     door.set_door_status(DoorStatus::OPENED);
     door.set_lock_status(LockStatus::UNLOCKED);
-    door.set_door_alarm_state(DoorAlarmState::DOOR_OPEN_TOO_LONG);
+    door.set_door_alarm_state(DoorAlarmState::DOOR_OPEN_TOO_LONG)
+        .unwrap();
     let oid = door.object_identifier();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(door)).unwrap();
@@ -372,4 +380,178 @@ fn read_property_derives_secured_status_from_the_served_door() {
     )
     .unwrap();
     assert_eq!(secured_status(&db), UNSECURED);
+}
+
+/// An AddListElement or RemoveListElement request on one of the door's alarm
+/// lists.
+fn list_request(oid: ObjectIdentifier, list: PropertyIdentifier, elements: &[u8]) -> Vec<u8> {
+    let mut request = BytesMut::new();
+    bacnet_services::list_manipulation::ListElementRequest {
+        object_identifier: oid,
+        property_identifier: list,
+        property_array_index: None,
+        list_of_elements: elements.to_vec(),
+    }
+    .encode(&mut request)
+    .unwrap();
+    request.to_vec()
+}
+
+fn alarm_states(raw: &[u32]) -> PropertyValue {
+    PropertyValue::List(raw.iter().copied().map(enumerated).collect())
+}
+
+#[test]
+fn door_alarm_lists_take_door_alarm_states_over_the_wire() {
+    let (mut db, oid) = door_db();
+    for list in [
+        PropertyIdentifier::ALARM_VALUES,
+        PropertyIdentifier::FAULT_VALUES,
+        PropertyIdentifier::MASKED_ALARM_VALUES,
+    ] {
+        // TAMPER alone, then with LOCK_DOWN (#1149).
+        write_property(&mut db, oid, list, alarm_states(&[4])).unwrap();
+        assert_eq!(read_bytes(&db, oid, list), [0x91, 4], "{list:?}");
+        write_property_multiple(&mut db, oid, &[(list, alarm_states(&[4, 6]))]).unwrap();
+        assert_eq!(read_bytes(&db, oid, list), [0x91, 4, 0x91, 6], "{list:?}");
+        // 9 is reserved for ASHRAE, and an Unsigned is the wrong datatype;
+        // the refusal names the element and changes nothing.
+        for (value, code, element) in [
+            (alarm_states(&[4, 9]), ErrorCode::VALUE_OUT_OF_RANGE, 2),
+            (
+                PropertyValue::List(vec![PropertyValue::Unsigned(4)]),
+                ErrorCode::INVALID_DATA_TYPE,
+                1,
+            ),
+        ] {
+            assert_eq!(
+                list_refusal(write_property(&mut db, oid, list, value)),
+                (ErrorClass::PROPERTY, code, element),
+                "{list:?}"
+            );
+            assert_eq!(read_bytes(&db, oid, list), [0x91, 4, 0x91, 6], "{list:?}");
+        }
+
+        // The list services edit it too.
+        handle_add_list_element(&mut db, &list_request(oid, list, &[0x91, 7])).unwrap();
+        assert_eq!(
+            read_bytes(&db, oid, list),
+            [0x91, 4, 0x91, 6, 0x91, 7],
+            "{list:?}"
+        );
+        assert_eq!(
+            list_refusal(handle_add_list_element(
+                &mut db,
+                &list_request(oid, list, &[0x91, 8, 0x91, 9])
+            )),
+            (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, 2),
+            "{list:?}"
+        );
+        handle_remove_list_element(&mut db, &list_request(oid, list, &[0x91, 4, 0x91, 6]))
+            .unwrap();
+        assert_eq!(read_bytes(&db, oid, list), [0x91, 7], "{list:?}");
+    }
+    // NORMAL can't be masked.
+    assert_eq!(
+        list_refusal(handle_add_list_element(
+            &mut db,
+            &list_request(oid, PropertyIdentifier::MASKED_ALARM_VALUES, &[0x91, 0])
+        )),
+        (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, 1)
+    );
+}
+
+#[test]
+fn simulated_door_alarm_state_outside_the_lists_is_refused() {
+    let (mut db, oid) = door_db();
+    write_property(
+        &mut db,
+        oid,
+        PropertyIdentifier::MASKED_ALARM_VALUES,
+        alarm_states(&[4]),
+    )
+    .unwrap();
+    write_property(
+        &mut db,
+        oid,
+        PropertyIdentifier::OUT_OF_SERVICE,
+        PropertyValue::Boolean(true),
+    )
+    .unwrap();
+    // LOCK_DOWN (6) is in no list and TAMPER (4) is masked: both refused,
+    // over WriteProperty and WritePropertyMultiple, with the device's
+    // DOOR_OPEN_TOO_LONG still served.
+    for refused in [6, 4] {
+        let write = (PropertyIdentifier::DOOR_ALARM_STATE, enumerated(refused));
+        assert_property_error(
+            write_property(&mut db, oid, write.0, write.1.clone()),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+        assert_property_error(
+            write_property_multiple(&mut db, oid, &[write]),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+        assert_eq!(
+            read_bytes(&db, oid, PropertyIdentifier::DOOR_ALARM_STATE),
+            [0x91, 2]
+        );
+    }
+    // FORCED_OPEN is an alarm value, and NORMAL is always admitted.
+    for taken in [3, 0] {
+        write_property(
+            &mut db,
+            oid,
+            PropertyIdentifier::DOOR_ALARM_STATE,
+            enumerated(taken),
+        )
+        .unwrap();
+        assert_eq!(
+            read_bytes(&db, oid, PropertyIdentifier::DOOR_ALARM_STATE),
+            [0x91, taken as u8]
+        );
+    }
+}
+
+#[test]
+fn masking_the_door_alarm_state_over_the_wire_returns_it_to_normal() {
+    let (mut db, oid) = door_db();
+    let alarm_state =
+        |db: &ObjectDatabase| read_bytes(db, oid, PropertyIdentifier::DOOR_ALARM_STATE);
+    assert_eq!(alarm_state(&db), [0x91, 2]);
+    // A WriteProperty of the masked list holding the current state.
+    write_property(
+        &mut db,
+        oid,
+        PropertyIdentifier::MASKED_ALARM_VALUES,
+        alarm_states(&[2]),
+    )
+    .unwrap();
+    assert_eq!(alarm_state(&db), [0x91, 0]);
+    // A masked list fails Secured_Status too.
+    assert_eq!(
+        read_bytes(&db, oid, PropertyIdentifier::SECURED_STATUS),
+        [0x91, 1]
+    );
+
+    // AddListElement does the same for a simulated state.
+    write_property(
+        &mut db,
+        oid,
+        PropertyIdentifier::OUT_OF_SERVICE,
+        PropertyValue::Boolean(true),
+    )
+    .unwrap();
+    write_property(
+        &mut db,
+        oid,
+        PropertyIdentifier::DOOR_ALARM_STATE,
+        enumerated(3),
+    )
+    .unwrap();
+    handle_add_list_element(
+        &mut db,
+        &list_request(oid, PropertyIdentifier::MASKED_ALARM_VALUES, &[0x91, 3]),
+    )
+    .unwrap();
+    assert_eq!(alarm_state(&db), [0x91, 0]);
 }

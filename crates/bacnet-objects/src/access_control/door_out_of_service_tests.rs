@@ -10,8 +10,21 @@ use super::*;
 /// The three rows footnote 1 marks.
 const SIMULATED: [P; 3] = [P::DOOR_STATUS, P::LOCK_STATUS, P::DOOR_ALARM_STATE];
 
+/// A door whose Alarm_Values hold every named BACnetDoorAlarmState and the
+/// proprietary ones these tests simulate, so only the enumeration's range
+/// and the in-service gate refuse a write here (`door_alarm_tests` has the
+/// list checks).
 fn door() -> AccessDoorObject {
-    AccessDoorObject::new(1, "DOOR-1").unwrap()
+    let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
+    let proprietary = [256, 65_535].map(DoorAlarmState::from_raw);
+    door.set_alarm_values(
+        DoorAlarmState::ALL_NAMED
+            .iter()
+            .map(|&(_, state)| state)
+            .chain(proprietary),
+    )
+    .unwrap();
+    door
 }
 
 fn read(door: &AccessDoorObject, property: P) -> PropertyValue {
@@ -169,7 +182,7 @@ fn access_door_return_to_service_serves_the_device_state_again() {
     let mut door = door();
     door.set_door_status(DoorStatus::OPENED);
     door.set_lock_status(LockStatus::UNLOCKED);
-    door.set_door_alarm_state(DoorAlarmState::DOOR_OPEN_TOO_LONG);
+    door.set_door_alarm_state(DoorAlarmState::DOOR_OPEN_TOO_LONG).unwrap();
     let device = served(&door);
     assert_eq!(
         device,
@@ -196,7 +209,7 @@ fn access_door_return_to_service_serves_the_device_state_again() {
     // held for the return to service.
     door.set_door_status(DoorStatus::CLOSED);
     door.set_lock_status(LockStatus::LOCKED);
-    door.set_door_alarm_state(DoorAlarmState::NORMAL);
+    door.set_door_alarm_state(DoorAlarmState::NORMAL).unwrap();
     assert_eq!(served(&door), simulated);
     // A NULL or same-value Out_Of_Service write is not an edge.
     write(&mut door, P::OUT_OF_SERVICE, PropertyValue::Null).unwrap();
@@ -207,7 +220,7 @@ fn access_door_return_to_service_serves_the_device_state_again() {
     assert_eq!(served(&door), served(&self::door()));
     // In service the device's values are served directly again, and the
     // rows refuse writes once more.
-    door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN);
+    door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN).unwrap();
     assert_eq!(
         read(&door, P::DOOR_ALARM_STATE),
         enumerated(DoorAlarmState::FORCED_OPEN.to_raw())

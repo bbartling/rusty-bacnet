@@ -73,11 +73,15 @@ impl ChangeOfStateReporting {
         self.event_detector.event_state
     }
 
+    /// Alarm_Values as held, raw.
+    pub(crate) fn alarm_values(&self) -> &[u32] {
+        &self.event_detector.alarm_values
+    }
+
     /// Replace Alarm_Values, checking each value as a network write would;
     /// a refused list leaves the one held.
     pub(crate) fn set_alarm_values(&mut self, values: Vec<u32>) -> Result<(), Error> {
-        let values = values.into_iter().map(PropertyValue::Enumerated).collect();
-        self.event_detector.alarm_values = self.alarm_values(None, &PropertyValue::List(values))?;
+        self.event_detector.alarm_values = checked_raw_list(values, self.in_range)?;
         Ok(())
     }
 
@@ -91,13 +95,7 @@ impl ChangeOfStateReporting {
             return Some(Ok(PropertyValue::Boolean(self.event_detection_enable)));
         }
         if property == PropertyIdentifier::ALARM_VALUES {
-            return Some(Ok(PropertyValue::List(
-                self.event_detector
-                    .alarm_values
-                    .iter()
-                    .map(|&value| PropertyValue::Enumerated(value))
-                    .collect(),
-            )));
+            return Some(Ok(enumerated_list_value(&self.event_detector.alarm_values)));
         }
         if let Some(result) = read_generic_event_properties!(self, property) {
             return Some(result);
@@ -117,9 +115,11 @@ impl ChangeOfStateReporting {
         value: &PropertyValue,
     ) -> Option<Result<(), Error>> {
         if property == PropertyIdentifier::ALARM_VALUES {
-            return Some(self.alarm_values(array_index, value).map(|values| {
-                self.event_detector.alarm_values = values;
-            }));
+            return Some(
+                enumerated_list(array_index, value, self.in_range).map(|values| {
+                    self.event_detector.alarm_values = values;
+                }),
+            );
         }
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
             let PropertyValue::Boolean(enable) = *value else {
@@ -143,48 +143,6 @@ impl ChangeOfStateReporting {
         self.event_detector.pending = None;
         self.event_detector.fault_reliability = None;
         self.event_history.reset();
-    }
-
-    /// The values a written Alarm_Values holds: a list of Enumerated, where a
-    /// value that isn't a list is its one element, which is how WriteProperty
-    /// hands over a one-element list. An index is PROPERTY_IS_NOT_AN_ARRAY;
-    /// an element of another datatype is INVALID_DATA_TYPE and one outside
-    /// the enumeration VALUE_OUT_OF_RANGE, each naming the element.
-    fn alarm_values(
-        &self,
-        array_index: Option<u32>,
-        value: &PropertyValue,
-    ) -> Result<Vec<u32>, Error> {
-        if array_index.is_some() {
-            return Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
-            });
-        }
-        let items = match value {
-            PropertyValue::List(items) => items.as_slice(),
-            single => std::slice::from_ref(single),
-        };
-        let cap = crate::multistate::MAX_ALARM_VALUES;
-        if items.len() > cap {
-            let full = Error::Protocol {
-                class: ErrorClass::RESOURCES.to_raw() as u32,
-                code: ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32,
-            };
-            return Err(common::at_list_element(full, cap));
-        }
-        items
-            .iter()
-            .enumerate()
-            .map(|(index, item)| {
-                match *item {
-                    PropertyValue::Enumerated(raw) if (self.in_range)(raw) => Ok(raw),
-                    PropertyValue::Enumerated(_) => Err(common::value_out_of_range_error()),
-                    _ => Err(common::invalid_data_type_error()),
-                }
-                .map_err(|error| common::at_list_element(error, index))
-            })
-            .collect()
     }
 
     /// The per-write evaluation, suspended while detection is off.
@@ -257,6 +215,63 @@ impl ChangeOfStateReporting {
             last_transition: self.event_history.last_transition(),
         }
     }
+}
+
+/// The values a written list of enumerated values holds, such as
+/// Alarm_Values: a list of Enumerated, where a value that isn't a list is its
+/// one element, which is how WriteProperty hands over a one-element list. An
+/// index is PROPERTY_IS_NOT_AN_ARRAY; more than
+/// [`MAX_ALARM_VALUES`](crate::multistate::MAX_ALARM_VALUES) elements is
+/// NO_SPACE_TO_WRITE_PROPERTY; an element of another datatype is
+/// INVALID_DATA_TYPE and one `in_range` refuses VALUE_OUT_OF_RANGE, each
+/// naming the element.
+pub(crate) fn enumerated_list(
+    array_index: Option<u32>,
+    value: &PropertyValue,
+    in_range: fn(u32) -> bool,
+) -> Result<Vec<u32>, Error> {
+    if array_index.is_some() {
+        return Err(Error::Protocol {
+            class: ErrorClass::PROPERTY.to_raw() as u32,
+            code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
+        });
+    }
+    let items = match value {
+        PropertyValue::List(items) => items.as_slice(),
+        single => std::slice::from_ref(single),
+    };
+    let cap = crate::multistate::MAX_ALARM_VALUES;
+    if items.len() > cap {
+        let full = Error::Protocol {
+            class: ErrorClass::RESOURCES.to_raw() as u32,
+            code: ErrorCode::NO_SPACE_TO_WRITE_PROPERTY.to_raw() as u32,
+        };
+        return Err(common::at_list_element(full, cap));
+    }
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            match *item {
+                PropertyValue::Enumerated(raw) if in_range(raw) => Ok(raw),
+                PropertyValue::Enumerated(_) => Err(common::value_out_of_range_error()),
+                _ => Err(common::invalid_data_type_error()),
+            }
+            .map_err(|error| common::at_list_element(error, index))
+        })
+        .collect()
+}
+
+/// [`enumerated_list`] for values an application sets: the same checks, as
+/// a network write of the same list would meet them.
+pub(crate) fn checked_raw_list(values: Vec<u32>, in_range: fn(u32) -> bool) -> Result<Vec<u32>, Error> {
+    let values = values.into_iter().map(PropertyValue::Enumerated).collect();
+    enumerated_list(None, &PropertyValue::List(values), in_range)
+}
+
+/// [`enumerated_list`] read back: the raw values as a list of Enumerated.
+pub(crate) fn enumerated_list_value(values: &[u32]) -> PropertyValue {
+    PropertyValue::List(values.iter().copied().map(PropertyValue::Enumerated).collect())
 }
 
 /// Implement the `BACnetObject` intrinsic-reporting hooks of an object that

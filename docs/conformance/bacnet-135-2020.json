@@ -2034,7 +2034,7 @@
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1073). The relock reuses the server's existing monotonic operation task (spawn_binary_lighting_operation_task, which already drives Binary Lighting Output egress): the door records each pulse slot's deadline from the database's monotonic clock when the command is written, reports its earliest deadline through next_monotonic_deadline_internal, relinquishes due slots in advance_monotonic_time_internal and hands the task a snapshot for COV.",
     "No new task, trait method or clock source was added; a door with no bound clock advances a logical clock through advance_time_internal, which the object tests use. Local policies: the clause lets the controller relinquish a pulse early as a local matter; this implementation lets an outranked pulse run to its own deadline.",
-    "Changing a pulse time leaves an armed deadline as it was. The defaults are 5 s, 15 s and 30 s. Not covered: Door_Unlock_Delay_Time (an optional row the object doesn't serve, so no unlock delay is applied) and the door-open-too-long alarm, since Door_Open_Too_Long_Time is stored and served but no Door_Alarm_State logic consumes it.",
+    "Changing a pulse time leaves an armed deadline as it was. The defaults are 5 s, 15 s and 30 s. Not covered: Door_Unlock_Delay_Time (an optional row the object doesn't serve, so no unlock delay is applied) and a door-open-too-long timer: the application reads Door_Open_Too_Long_Time and reports DOOR_OPEN_TOO_LONG itself (BACNET-12-ACCESS-DOOR-INTRINSIC-REPORTING).",
     "#1131: the relock reads none of Door_Status, Lock_Status or Door_Alarm_State, so values a client simulates while Out_Of_Service is TRUE neither move nor follow it (BACNET-12-ACCESS-DOOR-OUT-OF-SERVICE-SIMULATION)."
    ]
   },
@@ -2057,7 +2057,8 @@
     "crates/bacnet-server/src/handlers/tests/access_door_oos_writes.rs::{write_property_takes_door_status_rows_only_out_of_service,write_property_multiple_takes_door_status_rows_only_out_of_service,read_property_derives_secured_status_from_the_served_door}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_door_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_door_simulated_door_alarm_state_reports_and_restores",
-    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact"
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact",
+    "crates/bacnet-objects/src/access_control/door_secured_status_tests.rs::access_door_secured_status_fails_while_any_state_is_masked"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/access_control/door_out_of_service_tests.rs::{access_door_refuses_simulated_rows_in_service,access_door_simulated_rows_outside_their_datatypes_are_refused_unchanged}",
@@ -2072,17 +2073,17 @@
    ],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1131, found during #1061). Breaking pre-1.0 wire change: the three rows used to refuse every write. Footnote 1 of Table 12-30 marks exactly Door_Status, Lock_Status and Door_Alarm_State.",
-    "Clause 12.26.9 also lists Reliability, but only for a door whose Reliability can leave NO_FAULT_DETECTED; this door applies no fault algorithm and nothing changes its Reliability, so Reliability stays read-only, and Present_Value is commandable in both states already.",
+    "Clause 12.26.9 also lists Reliability for a door whose Reliability can leave NO_FAULT_DETECTED. The FAULT_STATE check on Fault_Values can, so Reliability takes writes out of service too, and a simulated value holds until the return to service.",
     "Local policies, each recorded in access_control/door_out_of_service.rs: the door holds the three values as one DoorState and sets it aside on the FALSE-to-TRUE edge through common::write_out_of_service_with_restore, the generic form #1131 extracted from write_out_of_service_with_reliability_restore (now a wrapper with its NO_FAULT_DETECTED fallback); the return to service restores it and drops the simulated values.",
     "Meanwhile set_door_alarm_state and the new set_door_status and set_lock_status update the state set aside. A NULL write of one of the three is INVALID_DATA_TYPE, as for the Life Safety Tracking_Value.",
-    "Clause 12.26.20 restricts Door_Alarm_State to NORMAL and the members of Alarm_Values and Fault_Values and keeps it out of Masked_Alarm_Values; the door serves none of those lists, so a simulated value is checked against the enumeration only.",
-    "The pulse relock (BACNET-12-ACCESS-DOOR-PULSE-TIMING) runs on the timer the command armed and reads none of the three values. The door runs no intrinsic reporting (Event_State stays NORMAL), so a simulated Door_Alarm_State raises no event of its own; an Event Enrollment monitoring the property reads the served value.",
-    "COV needed no server change: the Table 13-1 row values are compared around every committed write. Not covered: a runtime application route for the three values once the server holds the door (the setters reach it only before), Alarm_Values, Fault_Values and Masked_Alarm_Values, and the CHANGE_OF_STATE and FAULT_STATE algorithms.",
+    "A simulated Door_Alarm_State is also checked against Alarm_Values, Fault_Values and Masked_Alarm_Values (BACNET-12-ACCESS-DOOR-INTRINSIC-REPORTING).",
+    "The pulse relock (BACNET-12-ACCESS-DOOR-PULSE-TIMING) runs on the timer the command armed and reads none of the three values. The CHANGE_OF_STATE and FAULT_STATE algorithms watch the served Door_Alarm_State, so a simulated one raises events.",
+    "COV needed no server change: the Table 13-1 row values are compared around every committed write. Not covered: a runtime application route for the three values once the server holds the door (the setters reach it only before).",
     "#1148 (wire change): Secured_Status used to read a stored SECURED whatever the door did; AccessDoorObject::secured_status now derives it on each read and nothing stores it, so COV snapshots, ReadProperty, ReadPropertyMultiple and an Event Enrollment monitoring it all see the current value.",
     "Secured_Status is not in the Access Door row of Table 13-1 (#1061), so no COV path needed a change. Local policies, recorded on AccessDoorObject::secured_status: each input is met, failed or undetermined, a failed input gives UNSECURED even when another is undetermined (a door commanded UNLOCK is not secure whatever its contact reports), and UNKNOWN needs every input met or undetermined.",
-    "The only undetermined inputs are Door_Status UNKNOWN or DOOR_FAULT and Lock_Status UNKNOWN or LOCK_FAULT: the door's own monitor saying it can't tell. The option of keying UNKNOWN on Reliability was not taken, because this door applies no fault algorithm and nothing moves its Reliability off NO_FAULT_DETECTED; a new door starts CLOSED and LOCKED, so a never-reported Door_Status reads CLOSED, not UNKNOWN.",
-    "Door_Status values the clause does not describe for a door (NONE, CLOSING, OPENING, SAFETY_LOCKED, LIMITED_OPENED) and proprietary ones count as not closed. IN_ALARM comes from Event_State (Clause 12.26.6); the door now serves Status_Flags from its own Event_State field so the flag and Secured_Status read the same source, which stays NORMAL until intrinsic reporting is modelled (no wire change).",
-    "Masked_Alarm_Values is not served, so that input is treated as met; #1149 adds the list and its input next to the others in secured_status. Door_Alarm_State is not an input: it reaches Secured_Status only through Event_State once an event algorithm runs.",
+    "The only undetermined inputs are Door_Status UNKNOWN or DOOR_FAULT and Lock_Status UNKNOWN or LOCK_FAULT: the door's own monitor saying it can't tell. Reliability is no input of its own; a fault reaches Secured_Status through Event_State FAULT and IN_ALARM. A new door starts CLOSED and LOCKED, so a never-reported Door_Status reads CLOSED, not UNKNOWN.",
+    "Door_Status values the clause does not describe for a door (NONE, CLOSING, OPENING, SAFETY_LOCKED, LIMITED_OPENED) and proprietary ones count as not closed. IN_ALARM comes from Event_State (Clause 12.26.6), which the door's intrinsic reporting moves.",
+    "A Masked_Alarm_Values list with any member fails the door. Door_Alarm_State is not an input: it reaches Secured_Status only through Event_State.",
     "Door_Members is a BACnetARRAY of BACnetDeviceObjectReference, set by AccessDoorObject::set_door_members (BACNET-12-ACCESS-CONTROL-ARRAYS)."
    ]
   },
@@ -2800,6 +2801,60 @@
    ]
   },
   {
+   "id": "BACNET-12-ACCESS-DOOR-INTRINSIC-REPORTING",
+   "standard_anchor": "Clause 12.26, Table 12-30, Clauses 12.26.20 to 12.26.36, Clauses 13.3.2 and 13.4.5, Table 13-5",
+   "priority": "P1",
+   "summary": "An Access Door serves its three alarm lists, keeps Door_Alarm_State within them and reports CHANGE_OF_STATE and fault transitions to its Notification Class recipients.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/door_alarm.rs",
+    "crates/bacnet-objects/src/access_control/door.rs::AccessDoorObject",
+    "crates/bacnet-objects/src/access_control/door_out_of_service.rs",
+    "crates/bacnet-objects/src/event/state_reporting.rs",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs",
+    "crates/bacnet-server/src/server/event_notification_payload.rs::project_intrinsic_payload"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/door_alarm_tests.rs::{access_door_serves_the_event_rows_and_alarm_lists,access_door_masking_the_current_state_returns_it_to_normal,access_door_goes_offnormal_after_time_delay_and_back_to_normal,access_door_fault_values_report_multi_state_fault,access_door_simulated_reliability_holds_until_the_return_to_service}",
+    "crates/bacnet-objects/src/access_control/door_secured_status_tests.rs::{access_door_secured_status_follows_the_in_alarm_flag,access_door_secured_status_fails_while_any_state_is_masked}",
+    "crates/bacnet-server/src/server/access_door_event_tests.rs::{access_door_open_too_long_reaches_recipients_until_masked,access_door_simulated_alarm_goes_into_and_out_of_alarm,access_door_fault_value_reports_door_alarm_state_and_present_value}",
+    "crates/bacnet-server/src/server/list_element_event_tests.rs::masked_alarm_values_list_edit_returns_a_door_to_normal_at_once",
+    "crates/bacnet-server/src/handlers/tests/access_door_oos_writes.rs::{door_alarm_lists_take_door_alarm_states_over_the_wire,masking_the_door_alarm_state_over_the_wire_returns_it_to_normal}",
+    "crates/bacnet-objects/src/database/tests.rs::all_eleven_builtin_intrinsic_families_implement_atomic_commit",
+    "crates/bacnet-objects/src/enrollment_summary_capability_tests.rs::all_eleven_intrinsic_families_report_implied_algorithm_and_shared_commit_coordinate",
+    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::{all_eleven_builtin_normal_families_project_exact_typed_values,builtin_fault_projection_is_tag_19_with_explicit_property_order}",
+    "crates/bacnet-server/src/server/event_message_policy_tests.rs::all_eleven_builtin_families_store_each_policy_message_in_only_its_coordinate",
+    "crates/bacnet-server/src/pics/acked_transitions_policy_tests.rs::acked_transitions_network_policy_is_uniform_on_all_supported_types",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_door_exact_sets_readable_rows_and_indexed_list,property_metadata_access_trio_write_capabilities_match_dispatch}",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_door_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_door_alarm_lists_reach_the_door",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_door_alarm_lists_reach_the_door_and_gate_its_alarm_state",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_keywords"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/door_alarm_tests.rs::{access_door_alarm_lists_take_door_alarm_states_only,access_door_alarm_state_outside_the_lists_is_refused}",
+    "crates/bacnet-server/src/handlers/tests/access_door_oos_writes.rs::simulated_door_alarm_state_outside_the_lists_is_refused"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#access-control-7",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "The application decides when the door is in alarm, DOOR_OPEN_TOO_LONG included: the door serves Door_Open_Too_Long_Time for it to read and runs no timer of its own.",
+    "Door_Alarm_State is refused outside NORMAL, Alarm_Values and Fault_Values or inside Masked_Alarm_Values. A list edit that leaves it outside, masking included, returns it to NORMAL, and Masked_Alarm_Values refuses NORMAL.",
+    "Reliability is MULTI_STATE_FAULT while Door_Alarm_State is a fault value; it takes writes only out of service, where a simulated value overrides the check. Moving between fault or alarm values sends no new transition.",
+    "A CHANGE_OF_STATE notification carries Door_Alarm_State as `door-alarm-state`; a CHANGE_OF_RELIABILITY one lists Door_Alarm_State, then Present_Value.",
+    "A Masked_Alarm_Values list with any member makes Secured_Status UNSECURED."
+   ],
+   "gaps": [
+    "#1132: a Door_Alarm_State the application sets on the held object reaches the algorithm at the one-second tick, and no door-open-too-long timer runs",
+    "#1328: WriteProperty can't write an empty alarm list",
+    "#1329: Event_Message_Texts_Config, Event_Algorithm_Inhibit and Event_Algorithm_Inhibit_Ref are not served"
+   ]
+  },
+  {
    "id": "BACNET-12-ACCESS-ZONE-INTRINSIC-REPORTING",
    "standard_anchor": "Clause 12.32, Table 12-37, Clauses 12.32.25 to 12.32.37, Clause 13.3.2, Table 13-5",
    "priority": "P1",
@@ -2816,10 +2871,10 @@
     "crates/bacnet-server/src/server/access_zone_event_tests.rs::{access_zone_occupancy_alarm_reaches_notification_class_recipients,access_zone_event_enable_withholds_only_the_distribution,access_zone_fault_notification_reports_occupancy_state,access_zone_in_alarm_is_listed_by_the_summary_services}",
     "crates/bacnet-server/src/server/list_element_event_tests.rs::alarm_values_list_edits_move_a_zone_at_once",
     "crates/bacnet-server/src/handlers/tests/access_zone_oos_writes.rs::alarm_values_take_occupancy_states_over_the_wire",
-    "crates/bacnet-objects/src/database/tests.rs::all_ten_builtin_intrinsic_families_implement_atomic_commit",
-    "crates/bacnet-objects/src/enrollment_summary_capability_tests.rs::all_ten_intrinsic_families_report_implied_algorithm_and_shared_commit_coordinate",
-    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::{all_ten_builtin_normal_families_project_exact_typed_values,builtin_fault_projection_is_tag_19_with_explicit_property_order}",
-    "crates/bacnet-server/src/server/event_message_policy_tests.rs::all_ten_builtin_families_store_each_policy_message_in_only_its_coordinate",
+    "crates/bacnet-objects/src/database/tests.rs::all_eleven_builtin_intrinsic_families_implement_atomic_commit",
+    "crates/bacnet-objects/src/enrollment_summary_capability_tests.rs::all_eleven_intrinsic_families_report_implied_algorithm_and_shared_commit_coordinate",
+    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::{all_eleven_builtin_normal_families_project_exact_typed_values,builtin_fault_projection_is_tag_19_with_explicit_property_order}",
+    "crates/bacnet-server/src/server/event_message_policy_tests.rs::all_eleven_builtin_families_store_each_policy_message_in_only_its_coordinate",
     "crates/bacnet-server/src/pics/acked_transitions_policy_tests.rs::acked_transitions_network_policy_is_uniform_on_all_supported_types",
     "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list,property_metadata_access_trio_write_capabilities_match_dispatch}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_zone_indexed_reads_and_bytes_are_unchanged",
@@ -8642,8 +8697,8 @@
     "crates/bacnet-server/src/server/lifecycle.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-objects/src/database/tests.rs::all_ten_builtin_intrinsic_families_implement_atomic_commit",
-    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::all_ten_builtin_normal_families_project_exact_typed_values",
+    "crates/bacnet-objects/src/database/tests.rs::all_eleven_builtin_intrinsic_families_implement_atomic_commit",
+    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::all_eleven_builtin_normal_families_project_exact_typed_values",
     "crates/bacnet-server/src/server/event_notifications_custom_tests.rs::custom_immediate_proposal_commits_exact_history_before_distribution",
     "crates/bacnet-server/src/server/event_notifications_custom_tests.rs::custom_delayed_proposal_commits_exact_history_before_distribution",
     "crates/bacnet-server/src/server/event_notifications_custom_tests.rs::custom_local_commit_survives_distribution_gates",

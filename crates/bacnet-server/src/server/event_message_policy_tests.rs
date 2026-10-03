@@ -24,6 +24,10 @@ fn builtin_intrinsic_objects() -> Vec<Box<dyn BACnetObject>> {
             bacnet_objects::access_control::AccessZoneObject::new(41, "localized access zone")
                 .unwrap(),
         ),
+        Box::new(
+            bacnet_objects::access_control::AccessDoorObject::new(41, "localized access door")
+                .unwrap(),
+        ),
     ]
 }
 
@@ -82,9 +86,9 @@ fn committed_properties(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<Prope
 }
 
 #[test]
-fn all_ten_builtin_families_store_each_policy_message_in_only_its_coordinate() {
+fn all_eleven_builtin_families_store_each_policy_message_in_only_its_coordinate() {
     let objects = builtin_intrinsic_objects();
-    assert_eq!(objects.len(), 10);
+    assert_eq!(objects.len(), 11);
 
     for object in objects {
         let oid = object.object_identifier();

@@ -8,7 +8,7 @@
 //! past a second; `settle` stays well inside the first one.
 use super::cov_wire_test_support::*;
 use super::*;
-use bacnet_objects::access_control::AccessZoneObject;
+use bacnet_objects::access_control::{AccessDoorObject, AccessZoneObject};
 use bacnet_objects::multistate::MultiStateInputObject;
 use bacnet_services::cov::SubscribeCOVRequest;
 use bacnet_services::list_manipulation::ListElementRequest;
@@ -27,10 +27,15 @@ fn msi1() -> ObjectIdentifier {
 
 /// An AddListElement or RemoveListElement body for `object`'s Alarm_Values.
 fn alarm_values(object: ObjectIdentifier, elements: &[u8]) -> BytesMut {
+    list_body(object, PropertyIdentifier::ALARM_VALUES, elements)
+}
+
+/// An AddListElement or RemoveListElement body for `object`'s `list`.
+fn list_body(object: ObjectIdentifier, list: PropertyIdentifier, elements: &[u8]) -> BytesMut {
     let mut body = BytesMut::new();
     ListElementRequest {
         object_identifier: object,
-        property_identifier: PropertyIdentifier::ALARM_VALUES,
+        property_identifier: list,
         property_array_index: None,
         list_of_elements: elements.to_vec(),
     }
@@ -107,4 +112,32 @@ async fn alarm_values_list_edit_moves_a_multi_state_input_at_once() {
         .find(|value| value.property_identifier == SF)
         .expect("Status_Flags in the report");
     assert_eq!(flags.value, [0x82, 0x04, 0x80]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn masked_alarm_values_list_edit_returns_a_door_to_normal_at_once() {
+    use bacnet_types::enums::DoorAlarmState;
+    let door1 = ObjectIdentifier::new(ObjectType::ACCESS_DOOR, 1).unwrap();
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        // FORCED_OPEN (3) is an alarm value, with Time_Delay 0 (#1149).
+        let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
+        door.set_alarm_values([DoorAlarmState::FORCED_OPEN]).unwrap();
+        door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN)
+            .unwrap();
+        db.add(Box::new(door)).unwrap();
+    })
+    .await;
+    // The application's report reaches the algorithm at the periodic tick.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(event_state(&h, door1).await, EventState::OFFNORMAL);
+
+    // Masking the state the door is in sends it back to NORMAL, and the
+    // edit's own evaluation follows it without waiting for a tick.
+    h.request(
+        ADD,
+        list_body(door1, PropertyIdentifier::MASKED_ALARM_VALUES, &[0x91, 3]),
+    )
+    .await;
+    h.settle().await;
+    assert_eq!(event_state(&h, door1).await, EventState::NORMAL);
 }
