@@ -9,6 +9,7 @@ use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventLogRecord, BACnetLogMultipleRecord,
     BACnetLogRecord, EventLogDatum, LogData, LogDatum, LogValue,
 };
+use bacnet_types::enums::LoggingType;
 use bacnet_types::primitives::{Date, PropertyValue, StatusFlags, Time};
 use PropertyIdentifier as P;
 
@@ -27,8 +28,8 @@ fn log_objects(capacity: u32, configured: bool) -> [Box<dyn BACnetObject>; 3] {
             .set_log_device_object_property(Some(reference.clone()))
             .unwrap();
         multiple.add_property_reference(reference).unwrap();
-        trend.set_logging_type(2);
-        multiple.set_logging_type(2);
+        trend.set_logging_type(LoggingType::TRIGGERED);
+        multiple.set_logging_type(LoggingType::TRIGGERED).unwrap();
         for (log_datum, status_flags, log_data, event_datum) in [
             (
                 LogDatum::UnsignedValue(42),
@@ -96,18 +97,17 @@ fn log_objects(capacity: u32, configured: bool) -> [Box<dyn BACnetObject>; 3] {
 // Independent (identifier, optional, writable) fixtures in legacy order.
 // Kept with the log-family consumer tests so existing near-cap PICS and RPM
 // test files need no unrelated splits.
-fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
+/// `triggered`: the trend logs' Logging_Type is TRIGGERED, which makes a
+/// Trend Log Multiple's Log_Interval read-only (Table 12-35 footnote 2).
+fn expected_rows(kind: ObjectType, triggered: bool) -> Vec<(P, bool, bool)> {
+    let multiple = kind == ObjectType::TREND_LOG_MULTIPLE;
     let mut rows = vec![
         (P::OBJECT_IDENTIFIER, false, false),
         (P::OBJECT_NAME, false, false),
         (P::DESCRIPTION, true, true),
         (P::OBJECT_TYPE, false, false),
         (P::LOG_ENABLE, false, true),
-        (
-            P::LOG_INTERVAL,
-            kind != ObjectType::TREND_LOG_MULTIPLE,
-            true,
-        ),
+        (P::LOG_INTERVAL, !multiple, !(multiple && triggered)),
         (P::STOP_WHEN_FULL, false, true),
         (P::BUFFER_SIZE, false, false),
         (P::LOG_BUFFER, false, false),
@@ -123,7 +123,8 @@ fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
     }
     if kind != ObjectType::EVENT_LOG {
         rows.extend([
-            (P::LOGGING_TYPE, false, false),
+            // A Trend Log Multiple takes POLLED or TRIGGERED (#1235).
+            (P::LOGGING_TYPE, false, multiple),
             // Writable on both trend objects (#1234).
             (
                 P::LOG_DEVICE_OBJECT_PROPERTY,
@@ -131,6 +132,19 @@ fn expected_rows(kind: ObjectType) -> Vec<(P, bool, bool)> {
                 true,
             ),
         ]);
+    }
+    if multiple {
+        // The window, clock alignment and Trigger, all writable (#1235).
+        rows.extend(
+            [
+                P::START_TIME,
+                P::STOP_TIME,
+                P::ALIGN_INTERVALS,
+                P::INTERVAL_OFFSET,
+                P::TRIGGER,
+            ]
+            .map(|p| (p, true, true)),
+        );
     }
     rows.push((P::PROPERTY_LIST, false, false));
     rows
@@ -142,7 +156,7 @@ fn rpm_metadata_log_selectors_pics_rows_and_budgets_are_exact() {
         for configured in [false, true] {
             for object in log_objects(capacity, configured) {
                 let oid = object.object_identifier();
-                let expected = expected_rows(oid.object_type());
+                let expected = expected_rows(oid.object_type(), configured);
                 let all: Vec<_> = expected
                     .iter()
                     .map(|&(p, _, _)| p)
@@ -257,7 +271,7 @@ fn assert_budget_parity(db: &ObjectDatabase, request: &[u8], legacy: &[u8], coun
 fn rpm_log_indexed_property_list_and_list_gates_preserve_bytes() {
     for object in log_objects(3, true) {
         let oid = object.object_identifier();
-        let wire: Vec<_> = expected_rows(oid.object_type())
+        let wire: Vec<_> = expected_rows(oid.object_type(), true)
             .iter()
             .filter_map(|&(p, _, _)| {
                 (!matches!(

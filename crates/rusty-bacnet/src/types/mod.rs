@@ -35,6 +35,7 @@ mod device;
 mod enums;
 mod mapping;
 mod object_identifier;
+mod property_reference;
 mod property_value;
 mod read_value;
 mod rpm_wpm;
@@ -51,12 +52,14 @@ pub(crate) use destination::destination as destination_from_py;
 pub use device::PyDiscoveredDevice;
 pub use enums::*;
 pub use object_identifier::PyObjectIdentifier;
+pub(crate) use property_reference::property_references_from_py;
 pub use property_value::PyPropertyValue;
 pub(crate) use read_value::{decode_read_ack, decode_read_value};
 pub(crate) use rpm_wpm::{
     py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyDeviceWrite, PyPropertyWrite,
     PyReadAccessSpec, PyWriteAccessSpec,
 };
+pub(crate) use timestamp::date_time_tuple;
 pub use timestamp::PyBACnetTimeStamp;
 
 // Module registration

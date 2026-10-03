@@ -1,7 +1,11 @@
 use super::*;
+use crate::types::PyPropertyIdentifier;
+use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::{
     AccessRuleLocationSpecifier, AccessRuleTimeRangeSpecifier, ObjectType, PropertyIdentifier,
 };
+use bacnet_types::primitives::ObjectIdentifier;
+use pyo3::exceptions::PyValueError;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {

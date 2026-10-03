@@ -106,6 +106,39 @@ pub(super) fn time_tuple(value: &Bound<'_, PyAny>, name: &str) -> PyResult<primi
     )
 }
 
+/// Read a `(full_year, month, day, day_of_week)` tuple into a `Date`, with
+/// the ranges `BACnetTimeStamp.date_time` takes.
+fn date_tuple(value: &Bound<'_, PyAny>, name: &str) -> PyResult<primitives::Date> {
+    let date = tuple4(value, name, "(full_year, month, day, day_of_week)")?;
+    Ok(primitives::Date {
+        year: full_year(&date.get_item(0)?)?,
+        month: ranged_or_unspecified(&date.get_item(1)?, "month", 1, 14)?,
+        day: ranged_or_unspecified(&date.get_item(2)?, "day", 1, 34)?,
+        day_of_week: ranged_or_unspecified(&date.get_item(3)?, "day_of_week", 1, 7)?,
+    })
+}
+
+/// Read a BACnetDateTime given as a `(date, time)` pair of those tuples.
+pub(crate) fn date_time_tuple(
+    value: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<(primitives::Date, primitives::Time)> {
+    let shape = || {
+        PyValueError::new_err(format!(
+            "{name} must be a (date, time) pair: ((full_year, month, day, day_of_week), \
+             (hour, minute, second, hundredths))"
+        ))
+    };
+    let pair = value.cast::<PyTuple>().map_err(|_| shape())?;
+    if pair.len() != 2 {
+        return Err(shape());
+    }
+    Ok((
+        date_tuple(&pair.get_item(0)?, &format!("{name} date"))?,
+        time_tuple(&pair.get_item(1)?, &format!("{name} time"))?,
+    ))
+}
+
 fn actual_year(date: &primitives::Date) -> u16 {
     date.actual_year()
         .unwrap_or(u16::from(primitives::Date::UNSPECIFIED))
@@ -150,20 +183,11 @@ impl PyBACnetTimeStamp {
     /// and `(hour, minute, second, hundredths)` tuples.
     #[staticmethod]
     fn date_time(date: &Bound<'_, PyAny>, time: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let date = tuple4(date, "date", "(full_year, month, day, day_of_week)")?;
-        let time = tuple4(time, "time", "(hour, minute, second, hundredths)")?;
-        let date = primitives::Date {
-            year: full_year(&date.get_item(0)?)?,
-            month: ranged_or_unspecified(&date.get_item(1)?, "month", 1, 14)?,
-            day: ranged_or_unspecified(&date.get_item(2)?, "day", 1, 34)?,
-            day_of_week: ranged_or_unspecified(&date.get_item(3)?, "day_of_week", 1, 7)?,
-        };
-        let time = time_parts(
-            &time.get_item(0)?,
-            &time.get_item(1)?,
-            &time.get_item(2)?,
-            &time.get_item(3)?,
-        )?;
+        // Both shapes are checked before any field.
+        tuple4(date, "date", "(full_year, month, day, day_of_week)")?;
+        tuple4(time, "time", "(hour, minute, second, hundredths)")?;
+        let date = date_tuple(date, "date")?;
+        let time = time_tuple(time, "time")?;
         Ok(Self {
             inner: primitives::BACnetTimeStamp::DateTime { date, time },
         })

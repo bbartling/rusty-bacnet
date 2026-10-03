@@ -342,7 +342,18 @@ async fn write_group_malformed_requests_are_dropped_without_an_answer() {
     assert_eq!(group_zero[..2], [0x09, 27]);
     group_zero[1] = 0;
     let truncated = good[..good.len() - 1].to_vec();
-    for bad in [trailing, group_zero, truncated, Vec::new()] {
+    // Channel 11's value a lighting command whose operation field says one
+    // octet and the data stops (#1303).
+    let mut lighting_cut_short = good[..7].to_vec();
+    assert_eq!(lighting_cut_short[4..], [0x2E, 0x09, 11]);
+    lighting_cut_short.extend_from_slice(&[0x0E, 0x09]);
+    for bad in [
+        trailing,
+        group_zero,
+        truncated,
+        lighting_cut_short,
+        Vec::new(),
+    ] {
         send_raw(&h, &bad).await;
     }
     assert_untouched(&h).await;

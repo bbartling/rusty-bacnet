@@ -421,6 +421,22 @@ pub(crate) fn decode_write_property_value(
         }
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
+    // The Loop and Pulse Converter references reach the object as their raw
+    // octets too, which it decodes with the shared codecs: an empty value is
+    // a Setpoint_Reference holding no reference, and an application Null
+    // alone clears one of the other three (#1312).
+    if matches!(
+        property,
+        PropertyIdentifier::CONTROLLED_VARIABLE_REFERENCE
+            | PropertyIdentifier::MANIPULATED_VARIABLE_REFERENCE
+            | PropertyIdentifier::SETPOINT_REFERENCE
+            | PropertyIdentifier::INPUT_REFERENCE
+    ) {
+        if bytes == [0x00] {
+            return Ok(PropertyValue::Null);
+        }
+        return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
+    }
     // A Notification Forwarder's Port_Filter goes one BACnetPortPermission
     // per chunk (#1225).
     if array_index != Some(0) && property == PropertyIdentifier::PORT_FILTER {

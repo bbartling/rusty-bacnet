@@ -48,10 +48,25 @@ mod tests {
     use crate::property_metadata::PropertyConformance::RequiredWrite;
     use crate::traits::BACnetObject;
     use crate::trend::TrendLogMultipleObject;
-    use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
+    use bacnet_types::enums::{ErrorClass, ErrorCode, LoggingType, ObjectType};
     use bacnet_types::error::Error;
     use bacnet_types::primitives::{Date, PropertyValue, Time};
     use std::sync::Arc;
+
+    const LOGGING_TYPES: [LoggingType; 3] = [
+        LoggingType::POLLED,
+        LoggingType::COV,
+        LoggingType::TRIGGERED,
+    ];
+
+    /// The rows only a Trend Log Multiple serves (Table 12-35).
+    const MULTIPLE_ONLY: [P; 5] = [
+        P::START_TIME,
+        P::STOP_TIME,
+        P::ALIGN_INTERVALS,
+        P::INTERVAL_OFFSET,
+        P::TRIGGER,
+    ];
 
     struct FixedClock;
 
@@ -76,12 +91,15 @@ mod tests {
         }
     }
 
-    fn objects(capacity: u32, logging_type: u32) -> [Box<dyn BACnetObject>; 3] {
+    fn objects(capacity: u32, logging_type: LoggingType) -> [Box<dyn BACnetObject>; 3] {
         let mut trend = TrendLogObject::new(1, "TL-1", capacity).unwrap();
         let mut multiple = TrendLogMultipleObject::new(1, "TLM-1", capacity).unwrap();
         let event = EventLogObject::new(1, "EL-1", capacity).unwrap();
         trend.set_logging_type(logging_type);
-        multiple.set_logging_type(logging_type);
+        // A Trend Log Multiple refuses COV (Clause 12.30.12) and stays POLLED.
+        if logging_type != LoggingType::COV {
+            multiple.set_logging_type(logging_type).unwrap();
+        }
         // None of the three has Out_Of_Service (Tables 12-29, 12-35, 12-31).
         [Box::new(trend), Box::new(multiple), Box::new(event)]
     }
@@ -127,7 +145,7 @@ mod tests {
             P::EVENT_STATE,
         ];
         for capacity in [0, 1, 3] {
-            for logging_type in [0, 1, 2] {
+            for logging_type in LOGGING_TYPES {
                 for object in objects(capacity, logging_type) {
                     let kind = object.object_identifier().object_type();
                     let mut all = base.to_vec();
@@ -141,6 +159,7 @@ mod tests {
                         required.push(P::LOGGING_TYPE);
                     }
                     if kind == ObjectType::TREND_LOG_MULTIPLE {
+                        all.extend(MULTIPLE_ONLY);
                         required.insert(4, P::LOG_INTERVAL);
                         required.push(P::LOG_DEVICE_OBJECT_PROPERTY);
                     }
@@ -208,20 +227,28 @@ mod tests {
 
     #[test]
     fn property_metadata_log_family_write_capabilities_match_dispatch() {
-        for logging_type in [0, 1, 2] {
+        for logging_type in LOGGING_TYPES {
             for mut object in objects(8, logging_type) {
                 object.bind_clock_internal(Some(Arc::new(FixedClock)));
                 let kind = object.object_identifier().object_type();
+                let multiple = kind == ObjectType::TREND_LOG_MULTIPLE;
                 let metadata = object.property_metadata().into_owned();
                 for row in &metadata {
                     let p = row.property_identifier;
                     let capability = match p {
                         P::LOG_ENABLE
-                        | P::LOG_INTERVAL
                         | P::STOP_WHEN_FULL
                         | P::RECORD_COUNT
                         | P::DESCRIPTION
                         | P::LOG_DEVICE_OBJECT_PROPERTY => Always,
+                        // Read-only while a Trend Log Multiple is TRIGGERED
+                        // (Table 12-35 footnote 2).
+                        P::LOG_INTERVAL if multiple && logging_type == LoggingType::TRIGGERED => {
+                            ReadOnly
+                        }
+                        P::LOG_INTERVAL => Always,
+                        P::LOGGING_TYPE if multiple => Always,
+                        p if MULTIPLE_ONLY.contains(&p) => Always,
                         _ => ReadOnly,
                     };
                     assert_eq!(row.write_capability, capability, "{kind:?} {p:?}");
@@ -297,15 +324,17 @@ mod tests {
                     ErrorClass::PROPERTY,
                     ErrorCode::INVALID_DATA_TYPE,
                 );
-                // No log object has Out_Of_Service (#985, #1064).
-                for p in [
+                // No log object has Out_Of_Service (#985, #1064), and only a
+                // Trend Log Multiple serves the window, alignment and Trigger.
+                let absent = [
                     P::PRESENT_VALUE,
                     P::PRIORITY_ARRAY,
-                    P::START_TIME,
-                    P::STOP_TIME,
                     P::ALL,
                     P::OUT_OF_SERVICE,
-                ] {
+                ]
+                .into_iter()
+                .chain(MULTIPLE_ONLY.into_iter().filter(|_| !multiple));
+                for p in absent {
                     assert!(!object.is_writable_property(p));
                     assert_error(
                         object.read_property(p, None).unwrap_err(),
@@ -327,7 +356,7 @@ mod tests {
 
     #[test]
     fn property_metadata_log_capability_does_not_bypass_clock_validation() {
-        for mut object in objects(3, 0) {
+        for mut object in objects(3, LoggingType::POLLED) {
             let metadata = object.property_metadata().into_owned();
             for (p, value) in [
                 (P::LOG_ENABLE, PropertyValue::Boolean(false)),

@@ -58,9 +58,9 @@ pub(super) fn for_object(_object: &LoopObject) -> Cow<'_, [PropertyMetadata]> {
 mod tests {
     use super::*;
     use crate::traits::BACnetObject;
-    use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
     use bacnet_types::error::Error;
-    use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+    use bacnet_types::primitives::PropertyValue;
 
     #[test]
     fn property_metadata_loop_exact_sets_and_indexed_list() {
@@ -207,18 +207,16 @@ mod tests {
                     assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
                 }
             }
-            for p in [
-                P::CONTROLLED_VARIABLE_REFERENCE,
-                P::MANIPULATED_VARIABLE_REFERENCE,
-                P::SETPOINT_REFERENCE,
+            // [0] analog-input 2, [1] present-value, [2] index 3: bare for
+            // the two variable references, framed in tag 0 for the setpoint.
+            let members = [0x0C, 0x00, 0x00, 0x00, 0x02, 0x19, 0x55, 0x29, 0x03];
+            let framed = [&[0x0E][..], &members, &[0x0F]].concat();
+            for (p, bytes) in [
+                (P::CONTROLLED_VARIABLE_REFERENCE, members.to_vec()),
+                (P::MANIPULATED_VARIABLE_REFERENCE, members.to_vec()),
+                (P::SETPOINT_REFERENCE, framed),
             ] {
-                let value = PropertyValue::List(vec![
-                    PropertyValue::ObjectIdentifier(
-                        ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap(),
-                    ),
-                    PropertyValue::Enumerated(P::PRESENT_VALUE.to_raw()),
-                    PropertyValue::Unsigned(3),
-                ]);
+                let value = PropertyValue::ApplicationData(bytes);
                 object.write_property(p, None, value.clone(), None).unwrap();
                 assert_eq!(object.read_property(p, None).unwrap(), value);
             }
