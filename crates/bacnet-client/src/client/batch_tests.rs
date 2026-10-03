@@ -30,9 +30,9 @@ async fn batch(
             assert_eq!(result.len(), count);
         }
         1 => {
-            let spec = bacnet_services::rpm::ReadAccessSpecification {
+            let spec = bacnet_types::constructed::ReadAccessSpecification {
                 object_identifier: oid,
-                list_of_property_references: vec![bacnet_services::common::PropertyReference {
+                list_of_property_references: vec![bacnet_types::constructed::PropertyReference {
                     property_identifier: pid,
                     property_array_index: None,
                 }],

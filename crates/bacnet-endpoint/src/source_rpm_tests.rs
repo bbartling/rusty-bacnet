@@ -1,11 +1,8 @@
 use super::*;
-use bacnet_services::{
-    common::PropertyReference,
-    rpm::{
-        ReadAccessResult, ReadAccessSpecification, ReadPropertyMultipleACK,
-        ReadPropertyMultipleRequest, ReadResultElement,
-    },
+use bacnet_services::rpm::{
+    ReadAccessResult, ReadPropertyMultipleACK, ReadPropertyMultipleRequest, ReadResultElement,
 };
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
 fn specs() -> Vec<ReadAccessSpecification> {
     vec![

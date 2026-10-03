@@ -2,7 +2,7 @@ use super::*;
 
 #[path = "rpm_optional_fallback.rs"]
 mod optional_fallback;
-use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::constructed::ReadAccessSpecification;
 use std::borrow::Cow;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},

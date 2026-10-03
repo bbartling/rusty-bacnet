@@ -32,6 +32,8 @@ pub use lift::{
 };
 mod property_access;
 pub use property_access::{AccessResult, BACnetPropertyAccessResult};
+mod read_access;
+pub use read_access::{PropertyReference, ReadAccessSpecification};
 mod staging;
 pub use staging::BACnetStageLimitValue;
 

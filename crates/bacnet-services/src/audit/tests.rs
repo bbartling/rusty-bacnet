@@ -218,14 +218,14 @@ fn by_source_address_object_and_flags_match_corrected_golden() {
 
 #[test]
 fn audit_property_reference_shared_conversion_is_checked() {
-    let shared = crate::common::PropertyReference {
+    let shared = bacnet_types::constructed::PropertyReference {
         property_identifier: PropertyIdentifier::PRESENT_VALUE,
         property_array_index: Some(u32::MAX),
     };
     let audit = AuditPropertyReference::from(shared.clone());
     assert_eq!(audit.property_array_index, Some(u64::from(u32::MAX)));
     assert_eq!(
-        crate::common::PropertyReference::try_from(audit).unwrap(),
+        bacnet_types::constructed::PropertyReference::try_from(audit).unwrap(),
         shared
     );
 
@@ -233,7 +233,7 @@ fn audit_property_reference_shared_conversion_is_checked() {
         property_identifier: PropertyIdentifier::PRESENT_VALUE,
         property_array_index: Some(u64::from(u32::MAX) + 1),
     };
-    assert!(crate::common::PropertyReference::try_from(too_wide).is_err());
+    assert!(bacnet_types::constructed::PropertyReference::try_from(too_wide).is_err());
 }
 
 #[test]
