@@ -4213,8 +4213,9 @@ represents receipt only; no Audit Reporting BIBB, including AR-L-A, is claimed.
 `AuditLogObject` makes every `AuditLogPersistence::commit` call on a writer
 thread of its own, one at a time, so a custom backend never sees two calls at
 once; dropping the object waits for queued commits. The bundled server stages
-each inbound notification batch and each network or `write_local` Log_Enable
-change: the log builds the next snapshot and queues its commit, the server
+each inbound notification batch, each network or `write_local` Log_Enable or
+Buffer_Size change, and each `purge_audit_log`: the log builds the next
+snapshot and queues its commit, the server
 waits for the commit with the object database guard dropped, and only then
 does the log take the snapshot. Other requests read and write the database
 meanwhile, and the promises above hold: a batch reaches memory, and a
@@ -4236,6 +4237,50 @@ creates that slot (on Unix; on Windows `std` cannot open a directory, so that
 step is skipped). The commit has landed by then, so a filesystem that cannot
 synchronize a directory is passed over and any other failure there is logged,
 not returned.
+
+#### Buffer_Size and purging
+
+Buffer_Size takes a write, from a peer or through `write_local`, only while
+Log_Enable is FALSE (Clause 12.64.9). With logging on the write fails with
+`PROPERTY / WRITE_ACCESS_DENIED`, whatever the value. The value is an
+Unsigned up to `MAX_AUDIT_RECORDS`: another datatype is `INVALID_DATA_TYPE`,
+and a larger size, 2^32-1 included, `VALUE_OUT_OF_RANGE`. A smaller size
+keeps the newest records that fit and drops the rest without a status
+record, as the ring does when it overflows; a larger size keeps them all, and
+the current size changes nothing. The size is part of the stored snapshot:
+a reopened log keeps the size last written, and the `buffer_size` passed to
+`AuditLogObject::new` only sizes a log its storage does not hold yet. When the
+two differ the log keeps the stored size and logs a warning. To give a stored
+log a new size, turn Log_Enable off, write Buffer_Size and turn Log_Enable on
+again, or start from empty storage.
+
+Peers cannot purge an Audit Log. Its Record_Count is read-only, unlike the
+other logs' (Clause 12.64.11), so a Record_Count write fails with
+`WRITE_ACCESS_DENIED`. The application purges the log with
+`BACnetServer::purge_audit_log(&oid)`, or with `AuditLogObject::purge` on a
+log it holds itself. A purge clears the ring and appends a BUFFER_PURGED
+status record, whether or not logging is enabled, flagged LOG_DISABLED too
+while it is not (Clause 12.64.10). Total_Record_Count keeps counting, and the
+completed-receipt ledger survives, so a confirmed notification already stored
+is still a duplicate afterwards. AuditLogQuery then returns no records, since
+it returns notifications only; ReadRange shows the purge record.
+
+Both stage like a Log_Enable write, so the commit runs with the database
+guard dropped and the log serves the new state only once storage holds it.
+A WritePropertyMultiple that turns Log_Enable off and then writes
+Buffer_Size stages the two together as one commit, made off the guard as
+well; the request takes each change as it reaches it, and if it stops
+between them, storage is set back to the state the log serves.
+A commit that fails refuses the write or the purge with
+`DEVICE / OPERATIONAL_PROBLEM` and leaves the log as it was; a Log_Enable
+write whose commit fails is refused the same way. Changes to one log land one
+at a time, in the order they were staged, so a notification batch lands whole
+on one side of a purge: a batch already committing when the purge is asked for
+lands first and is purged with the rest, and one that arrives while the purge
+commits follows the purge record. `purge_audit_log` also refuses an unknown
+object with `OBJECT / UNKNOWN_OBJECT`, any object other than a built-in Audit
+Log with `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`, a missing clock with
+`DEVICE / OPERATIONAL_PROBLEM`, and any call once the server has stopped.
 
 ---
 

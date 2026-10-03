@@ -1,12 +1,14 @@
 //! VTClose-Error (Clause 21): `[0]` Error, then an optional `[1]` frame of
 //! application Unsigned8 VT session identifiers.
 
-use super::decode_app_u8;
 use crate::common::error_type::{
-    decode_constructed, decode_error_pdu, decode_error_type, encode_error_type, error_pdu, finish,
+    decode_error_pdu, decode_error_type, encode_error_type, error_pdu,
 };
 use crate::common::MAX_DECODED_ITEMS;
 use bacnet_encoding::apdu::ErrorPdu;
+use bacnet_encoding::constructed::tagged::{
+    decode_app_unsigned, decode_ctx_constructed, expect_end,
+};
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, ErrorDetail};
@@ -45,7 +47,7 @@ impl VTCloseError {
         let ((error_class, error_code), mut offset) = decode_error_type(data, WHAT)?;
         let mut list_of_vt_session_identifiers = None;
         if offset < data.len() {
-            let (frame, end) = decode_constructed(data, offset, 1, WHAT)?;
+            let (frame, end) = decode_ctx_constructed(data, offset, 1, WHAT)?;
             let mut sessions = Vec::new();
             let mut position = 0;
             while position < frame.len() {
@@ -53,14 +55,14 @@ impl VTCloseError {
                     return Err(Error::decoding(position, "VTClose-Error too many sessions"));
                 }
                 let (session, next) =
-                    decode_app_u8(frame, position, "VTClose-Error session-identifier")?;
+                    decode_app_unsigned::<u8>(frame, position, "VTClose-Error session-identifier")?;
                 sessions.push(session);
                 position = next;
             }
             list_of_vt_session_identifiers = Some(sessions);
             offset = end;
         }
-        finish(data, offset, WHAT)?;
+        expect_end(data, offset, offset, WHAT)?;
         Ok(Self {
             error_class,
             error_code,
