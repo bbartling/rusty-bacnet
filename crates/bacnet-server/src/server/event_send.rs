@@ -67,24 +67,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
         let notification_class = outbound.notification_class;
         let network_priority = network_priority_for_event(outbound.priority);
+        // One reading for every destination of this notification, taken
+        // without the database lock (#1298).
+        let local_network = network.local_network_number().get();
+        let is_link_broadcast = |mac: &[u8]| network.transport().is_broadcast_mac(mac);
 
         for (recipient, process_id, confirmed) in recipients {
             let route = match recipient {
                 BACnetRecipient::Address(address) => {
-                    RecipientRoute::resolve_address(address, |mac| {
-                        network.transport().is_broadcast_mac(mac)
-                    })
+                    RecipientRoute::resolve_address(address, is_link_broadcast)
                 }
                 BACnetRecipient::Device(identifier) => {
                     let resolution = {
                         let table = device_bindings.read().await;
-                        table.resolve_at(identifier, Instant::now(), |mac| {
-                            network.transport().is_broadcast_mac(mac)
-                        })
+                        table.resolve_at(identifier, Instant::now(), is_link_broadcast)
                     };
                     RecipientRoute::from_device_resolution(resolution)
                 }
-            };
+            }
+            // A recipient on this network by number is sent to as a local
+            // one (#1299).
+            .localize(local_network, is_link_broadcast);
 
             // A route that can't carry this notification is skipped and
             // counted (#1160); the remaining destinations are still served.

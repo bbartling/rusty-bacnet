@@ -51,3 +51,24 @@ fn number_control_independent_wire_vectors_and_reply_flags() {
         Some([1, 0x80, 0x13, 0, 77, 1])
     );
 }
+
+#[test]
+fn local_network_number_shares_the_last_published_state() {
+    let slot = LocalNetworkNumber::default();
+    let reader = slot.clone();
+    assert_eq!(reader.get(), None);
+    let mut state = NetworkNumber::default();
+    slot.publish(state);
+    assert_eq!(reader.get(), None);
+    state.observe(77, 0);
+    slot.publish(state);
+    assert_eq!(reader.get(), Some(77));
+    state.observe(78, 1);
+    slot.publish(state);
+    assert_eq!(reader.get(), Some(78));
+    slot.publish(NetworkNumber::configured(65534).unwrap());
+    assert_eq!(reader.get(), Some(65534));
+    // A new state that is unknown again (a fresh owner) reads as unknown.
+    slot.publish(NetworkNumber::configured(0).unwrap());
+    assert_eq!(reader.get(), None);
+}

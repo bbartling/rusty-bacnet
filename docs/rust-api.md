@@ -2210,6 +2210,43 @@ the buffer alone and may name another device (the poller logs a failure for
 it), but refuse a Device member that isn't a Device identifier, and
 `add_property_reference` a 65th reference.
 
+A Trend Log Multiple also serves Start_Time, Stop_Time, Align_Intervals,
+Interval_Offset and Trigger, and its Logging_Type is writable (#1235); each
+has a local setter returning `Result` where a write can be refused:
+
+- **Logging_Type** is POLLED or TRIGGERED. COV, which this object type never
+  uses (Clause 12.30.12), and any other value are PROPERTY /
+  VALUE_OUT_OF_RANGE, through `set_logging_type(LoggingType)` as over the
+  wire. POLLED with a zero Log_Interval sets
+  `trend::DEFAULT_LOG_INTERVAL` (6000 hundredths, one minute); TRIGGERED sets
+  Log_Interval to 0 and makes it read-only, so a write or
+  `set_log_interval` then is WRITE_ACCESS_DENIED.
+- **Trigger** written TRUE (or `trigger()`) asks a TRIGGERED log for one
+  acquisition; it reads TRUE until the poller's record is accepted, and
+  `add_record` clears it. TRUE on a POLLED log is PROPERTY /
+  NOT_CONFIGURED_FOR_TRIGGERED_LOGGING; FALSE is accepted and changes nothing.
+- **Start_Time / Stop_Time** (`set_start_time`, `set_stop_time`) are
+  BACnetDateTime values, served as an application Date then Time. Every field
+  unspecified leaves that side open. Any other value has to name an actual
+  date and time or it is VALUE_OUT_OF_RANGE: the weekday may be unspecified,
+  and unspecified seconds or hundredths count as zero, as workstations often
+  send them. Records are kept while Enable is TRUE and the local time is on
+  or after the start and before the stop; each record is judged at its own
+  timestamp. When the window opens or closes while Enable is TRUE the log
+  records it, LOG_DISABLED on closing and a clear status on opening; a write
+  records it at once, and the poller's next pass records a change that time
+  brings. Enable changes while the window is shut leave logging off, so they
+  add no record. The local setters are configuration: the first
+  look afterwards notes the window without a record. The window logic lives
+  in the shared log lifecycle, so the other log objects can take it up.
+- **Align_Intervals / Interval_Offset** (`set_align_intervals`,
+  `set_interval_offset`) make a POLLED log acquire when the Device clock's
+  time of day is Interval_Offset (modulo Log_Interval) past a multiple of
+  Log_Interval, when Log_Interval divides a day. The poller checks the Device
+  clock on every pass, so a clock change moves the plan with it: a boundary a
+  forward jump skips isn't made up off the grid, and one a backward jump
+  repeats, a daylight-saving fall-back say, is logged again when reached.
+
 An Event Log record is a `BACnetEventLogRecord`: a timestamp and an
 `EventLogDatum` holding a log status, a time change, or a notification as a
 typed `EventNotificationRequest`, the parameters of a ConfirmedEventNotification
@@ -2313,9 +2350,19 @@ Trend Log Multiple records. The void hook and `try_add_trend_record_internal`
 adapter have been replaced. Custom implementations return their insertion result
 directly; the default returns `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
 The server poller (`ObjectDatabase::poll_trend_logs`) samples both object types
-and retries failed insertions without advancing its last-log time. Bounded
-evidence is recorded in `BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family
-conformance is not claimed.
+and retries failed insertions without advancing its last-log time. For a Trend
+Log Multiple it also makes one acquisition for each Trigger of a TRIGGERED log
+(a log with no members records an empty set of values, so Trigger never stays
+TRUE), waits for each clock-aligned boundary of an aligned POLLED log, and on
+every pass calls the hidden `refresh_log_window_internal` hook so each log
+records its window opening or closing. Wrappers forward that hook, as
+`SourceReporter` does. `TrendLogObject::set_logging_type` takes a
+`LoggingType` too; a Trend Log keeps its read-only Logging_Type and has no
+window, alignment or Trigger yet (#1353, #1354). Only POLLED and TRIGGERED
+logs are polled: a Trend Log set to a proprietary Logging_Type, which used to
+be polled as POLLED, no longer is. Bounded evidence is recorded in
+`BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family conformance is not
+claimed.
 
 #### Audit Reporter configuration and send delay
 
@@ -3453,16 +3500,24 @@ size less the octets the encoder puts around them for the context: the request
 header, confirmed or not, the process identifier and the lifetime left at the
 context's last admission in their fewest octets, the device identifier, the
 timestamp and the list's tags, 25 to 33 octets in all (#1197). Each change counts
-its encoding, one item's framing and a fixed overhead of 32 octets for the memory
-it holds besides its values, so many tiny changes cannot outgrow the estimate. The
+its encoding and one item's framing, as if it started an item of its own. The
 context also keeps room, at most one notification's worth, for the most its
 untimestamped values have taken in one report since it was last admitted or lost
-a reference. Only on overflow, the last resort, is a change dropped: the oldest
-of the same reference first, then the oldest in the context, never a reference's
-latest. Nor is a reference's change in delivery dropped: once a change sent one
-value per notification has a part delivered, or sent as a confirmed report's
-first part, the rest of it stays queued until its last value is delivered,
-however small the subscriber's maximum APDU (#1163). Beyond the bound, a context
+a reference. Memory has a ceiling of its own (#1287): counting each change with a
+fixed 32 octets more for the memory it holds besides its values, one context
+never holds more than four notifications of the server's own maximum APDU,
+whatever its subscriber's size, so many tiny changes cannot outgrow it. The
+overhead takes no room in a notification, so with the shortest envelope a
+50-octet subscriber keeps four REAL Present_Value changes, one per notification,
+on a server whose own maximum APDU is 78 octets or more. Near the local maximum
+the ceiling binds first, and the subscription caps (`CovPolicy`) limit how many
+contexts there are, so the history as a whole stays bounded. Only on overflow
+of either limit, the last resort, is a change dropped: the oldest of the same
+reference first, then the oldest in the context, never a reference's latest.
+Nor is a reference's change in delivery dropped: once a change sent one value
+per notification has a part delivered, or sent as a confirmed report's first
+part, the rest of it stays queued until its last value is delivered, however
+small the subscriber's maximum APDU (#1163). Beyond the bound, a context
 therefore holds at most two changes per reference. Parts a confirmed report
 defers return to the queue without that check, so the bound never drops what the
 report just planned to send. Changes returned by a failed notification wait
@@ -4441,6 +4496,27 @@ only ask whether the request was taken; a Channel member in another device
 uses the payload to tell a NULL refused as the wrong datatype, which counts as
 written, from other refusals.
 
+A recipient on the local network by number is sent to as a local recipient,
+for Notification Class delivery and forwarded copies alike (#1299). Once the
+server knows its network's number (see
+[Local Network Number controls](#local-network-number-controls)), an Address
+recipient naming that number gets its notification with no DNET: a unicast to
+its MAC, or a local broadcast when the MAC is empty or the link's broadcast
+MAC. A Device binding routed to that network is sent straight to its final
+MAC rather than through its router, and a confirmed notification then waits
+for the answer from that MAC directly. Such a binding whose final MAC is the
+link's broadcast MAC names no single device here, so it is skipped and counts
+in `recipient_unroutable`, as a local binding at a broadcast MAC does, so no
+forwarded copy goes to it either. Clause 6.5.1 sends traffic for the local
+network without a DNET, and a non-routing node drops an NPDU whose DNET names
+a network (Clause 6.5.2.1), so the routed form might never arrive. The
+number is read once per notification from `NetworkLayer::local_network_number`,
+without the database lock, and a confirmed notification keeps the route it
+was first sent on for its retries. While the number is unknown, an address
+naming any network is sent routed, as it is written. The server has one port,
+so the local network is that port's; a multi-port device would need the
+network attached to each port (#863).
+
 ### Notification forwarding
 
 A `NotificationForwarderObject` (type 51, Clause 12.51) originates no events.
@@ -4474,12 +4550,13 @@ not broadcast back onto the local network, and one received by broadcast goes
 to no node on the local network. The server ignores every confirmed request
 that arrives by broadcast or multicast (`ReceivedApdu::is_group`), whatever
 its service, with no answer (Clause 5.4.5.1), so a ConfirmedEventNotification
-it answers was addressed to it alone. When the registered Network Port
-(`ServerBuilder::registered_network_port`) knows the local network's number,
-configured or learned, a recipient address naming that number is local to
-these rules; a copy they let through still goes as the address is written.
-With no registered port, or while its number is unknown, such an address is
-taken as remote. These skips are configured behaviour and move no counter.
+it answers was addressed to it alone. Once the server knows the local
+network's number, configured on the registered Network Port
+(`ServerBuilder::registered_network_port`) or learned from Network-Number-Is
+with or without one (#1298), a recipient naming that number is on the local
+network to these rules, and a copy they let through goes to it as a local
+recipient, with no DNET. While the number is unknown, such an address is taken
+as remote. These skips are configured behaviour and move no counter.
 DeviceCommunicationControl's DISABLE_INITIATION stops every copy.
 A destination naming the server's own Device object hands the copy to the
 forwarders that have not yet taken it, and across such a chain each
@@ -4864,6 +4941,8 @@ Three owners consume the two local nonrouter controls automatically, one per tra
 A valid local-broadcast announcement with flag zero updates an unknown/learned owner to `LEARNED`. Flag one sets `LEARNED_CONFIGURED` and takes precedence over all subsequent flag-zero announcements. Further flag-one announcements may replace that learned value, including conflicts; an equal value still upgrades its quality. Both learned qualities transmit flag zero in their own responses. Selected-object `Network_Number` and `Network_Number_Quality` reads use the same database-owned state. Configuration remains immutable, so a new registration resets the pair from configured provenance; a new unregistered runtime starts unknown. There is no persistence of learned state across constructing a new runtime. After stop, the object retains the last observed pair until reconstruction or a new registration.
 
 Routed controls, malformed payloads and unicast Network-Number-Is are ignored. A BBMD Forwarded-NPDU is a logical broadcast even when its UDP hop is unicast and remains eligible. Ignoring number zero, 65535 and flags outside zero/one is this implementation's validation policy, rather than an additional quoted Standard mandate. Conflicting announcements against a locally configured number produce a debug diagnostic without changing configuration.
+
+The full server publishes the number its owner holds on `NetworkLayer::local_network_number` (a `bacnet_network::network_number::LocalNetworkNumber` handle), where event routing reads it without the database lock (#1298). With a registered Network Port the port stays the one authority: startup copies the port's number there once the bind is published, and the worker copies the port's state after each control under the same database write lock that changed it, so the handle never holds a number the port does not. Without a registered port, the handle holds the number the worker learned. A later announcement that replaces the number takes effect for the next notification sent. Nothing withdraws a known number, since no announcement can, so it stays until a new runtime starts again from the configured number or unknown. The standalone client publishes its learned number on its own layer the same way, though nothing in the client reads it yet; neither exposes its layer. The shared endpoint exposes no layer and does not publish.
 
 Standalone clients start UNKNOWN on transports that opt into local nonrouter Number controls. They learn and reply using the same validation and precedence rules, without a Device object, registered Network Port, configured-number setter or persistence. One 256-entry serial worker owns this state; full or closed admission drops only Number controls. A held Number send leaves routed reason-4 Reject correlation and independent APDU dispatch available. Stop aborts and joins both the Number worker and dispatch before transport cleanup, retaining their joins across a canceled stop waiter. Drop aborts both. Already transmitted bytes cannot be retracted. Controlled-client tests qualify the shared intake/lifecycle behavior; Linux NORMAL-B/IP loopback and Ethernet virtual-link tests independently observe actual reply frames. Constrained-TLS SC tests observe Hub broadcast VMAC and exact Number bytes, including replies to direct-peer queries, while ordinary confirmed client requests complete. SC stop/drop retires client connections; the external DirectListener must separately be stopped and joined before its bind is released. Pending-send/queue cancellation remains covered by the generic controlled-client tests, rather than inferred from wire silence. Rust standalone-client B/IPv6 tests independently capture normal selected-link OriginalBroadcast and configured-foreign DBTN with exact source, destination, interface and Number bytes. Positive reply fences cover UNKNOWN, precedence and invalid/admission refusal; stop and eventual Drop release the socket, and reconstruction starts UNKNOWN. These external ignored Linux tests require the integration `ipv6` feature and isolated observer; ordinary hosted CI does not execute them. They add no Python foreign-device API, configured-client authority or physical-LAN claim. Separate isolated Linux standalone-client BBMD/foreign tests capture own Original-Broadcast versus forwarding traffic and exact DBTN to the configured BBMD. Positive Number fences cover UNKNOWN, BDT/FDT admission/refusal, alternate-sender compatibility, precedence and representative invalid/routed controls; registration NAKs retain DBTN attempts and the timer retries registration. An ordinary client ReadProperty completes during live Number controls, and awaited stop permits exclusive socket rebind before client Drop. No configured client number, new registration policy or complete Annex J claim is added. MS/TP LoopbackSerial tests also cover the standalone client in both execution modes, with the same frame decoding and fences as the full server and shared endpoint below; its own ReadProperty to the peer completes while a Number send is held.
 

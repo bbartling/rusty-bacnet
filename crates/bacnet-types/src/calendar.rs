@@ -96,7 +96,14 @@ impl SpecificDate {
 
     /// The day of the week, 1 (Monday) to 7 (Sunday), as BACnet numbers it.
     pub fn weekday(self) -> u8 {
-        // Days since 1970-01-01 (a Thursday) by the civil-from-days inverse.
+        // 1970-01-01 was a Thursday.
+        (self.days_since_1970() + 3).rem_euclid(7) as u8 + 1
+    }
+
+    /// Days from 1970-01-01 to this day, negative before it: a day number
+    /// that runs on across month and year ends.
+    pub fn days_since_1970(self) -> i64 {
+        // The civil-from-days inverse.
         let year = i64::from(self.year) - i64::from(self.month <= 2);
         let era = year.div_euclid(400);
         let year_of_era = year - era * 400;
@@ -104,8 +111,7 @@ impl SpecificDate {
         let month_prime = month + if month > 2 { -3 } else { 9 };
         let day_of_year = (153 * month_prime + 2) / 5 + i64::from(self.day) - 1;
         let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-        let days = era * 146_097 + day_of_era - 719_468;
-        (days + 3).rem_euclid(7) as u8 + 1
+        era * 146_097 + day_of_era - 719_468
     }
 
     /// This day as a fully specified BACnet Date, weekday included.

@@ -63,25 +63,44 @@ pub(super) fn seconds(changes: &[TimedChange]) -> Vec<u8> {
         .collect()
 }
 
-/// Octets one change of `payload` octets counts against its context's bound.
+/// Octets one change of `payload` octets counts against its context's room
+/// for items.
+pub(super) fn item_len(payload: usize) -> usize {
+    change(0, payload).octets
+}
+
+/// Octets one change of `payload` octets counts against its context's memory
+/// ceiling.
 pub(super) fn change_len(payload: usize) -> usize {
-    change(0, payload).cost
+    item_len(payload) + CHANGE_OVERHEAD
 }
 
 /// Lifetime these tests' contexts are sized with: the longest, so their
 /// envelope is the one a context has before its admission sizes it.
 pub(super) const LIFETIME: u32 = u32::MAX;
 
-/// A maximum APDU whose context bound holds exactly `n` changes of `payload`
-/// octets, with no reserve, for the contexts of [`context`] sized with
-/// [`LIFETIME`] (every process identifier here takes the same octets).
-pub(super) fn apdu_for(n: usize, payload: usize) -> usize {
-    let octets = n * change_len(payload);
+/// A maximum APDU whose [`HISTORY_NOTIFICATIONS`] notifications carry
+/// `octets`, for the contexts of [`context`] sized with [`LIFETIME`] (every
+/// process identifier here takes the same octets).
+fn apdu_carrying(octets: usize) -> usize {
     assert_eq!(octets % HISTORY_NOTIFICATIONS, 0, "an exact bound");
     envelope_len(&context(1), LIFETIME) + octets / HISTORY_NOTIFICATIONS
 }
 
-/// Capacity for exactly `n` changes of `payload` octets in one context.
+/// A local maximum APDU whose memory ceiling holds exactly `n` changes of
+/// `payload` octets. The room for items there holds more, so at this size
+/// the ceiling is what binds.
+pub(super) fn apdu_for(n: usize, payload: usize) -> usize {
+    apdu_carrying(n * change_len(payload))
+}
+
+/// A subscriber's maximum APDU whose room for items holds exactly `n`
+/// changes of `payload` octets, with no reserve.
+pub(super) fn subscriber_for(n: usize, payload: usize) -> u16 {
+    u16::try_from(apdu_carrying(n * item_len(payload))).unwrap()
+}
+
+/// Memory for exactly `n` changes of `payload` octets in one context.
 pub(super) fn histories(n: usize, payload: usize) -> (TimedHistories, Arc<AtomicCovCounters>) {
     let counters = Arc::new(AtomicCovCounters::default());
     (
