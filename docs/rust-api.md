@@ -2637,7 +2637,28 @@ with `set_door_status` and `set_lock_status`.
 An Access Point's Authentication_Status is READY until the application
 reports another status with `set_authentication_status` (a value past
 IN_PROGRESS is VALUE_OUT_OF_RANGE); it reads DISABLED while Out_Of_Service is
-TRUE and the reported status again afterwards. An Access Zone counts
+TRUE and the reported status again afterwards.
+
+The point also serves Active_Authentication_Policy,
+Number_Of_Authentication_Policies, Authorization_Mode and
+Priority_For_Writing. It serves no policy list, so what each policy holds is
+up to the application. `set_number_of_authentication_policies` sets how many
+there are (1 by default; zero, or a count below the policy in effect, is
+VALUE_OUT_OF_RANGE), and a client picks the policy in effect by writing
+Active_Authentication_Policy, an Unsigned from 1 to that count.
+Authorization_Mode starts at AUTHORIZE and takes a write of any mode in the
+set `set_supported_authorization_modes` gives. The point enforces no mode
+itself, so a new point supports AUTHORIZE alone: an application that acts on
+the mode declares the other standard modes it carries out, and proprietary
+ones from 64 to 65535, in a set that keeps AUTHORIZE and the mode in effect.
+Any other value is VALUE_OUT_OF_RANGE, and another datatype
+INVALID_DATA_TYPE.
+`set_priority_for_writing` sets the priority the application commands the
+Access_Doors at (16 by default, 1 to 16 accepted). The policy count and the
+priority are read-only over the network; the point stores and checks these
+values, and carrying them out is the application's work.
+
+An Access Zone counts
 occupancy: Occupancy_State reads DISABLED while counting is off
 (`set_occupancy_count_enable(false)`, which also zeroes the count and
 Adjust_Value), and otherwise compares Occupancy_Count with the limits

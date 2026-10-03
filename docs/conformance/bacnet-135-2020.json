@@ -2716,8 +2716,49 @@
     "Access_Event_Credential rides along in the SubscribeCOV report; only Access_Event_Time and Status_Flags trigger it."
    ],
    "gaps": [
-    "Active_Authentication_Policy, Number_Of_Authentication_Policies, Authorization_Mode and Priority_For_Writing, required Table 12-36 rows, are not served (no issue)",
     "#1132: the application can set Authentication_Status and the event rows only before the server holds the point"
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-POINT-POLICY-AND-AUTHORIZATION",
+   "standard_anchor": "Clause 12.31, Table 12-36, Clauses 12.31.10, 12.31.11, 12.31.14 and 12.31.33, Table K-10",
+   "priority": "P1",
+   "summary": "An Access Point serves its active authentication policy, policy count, authorization mode and Priority_For_Writing; clients write the policy in effect and the mode.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/point_authorization.rs::Authorization",
+    "crates/bacnet-objects/src/access_control/point.rs::AccessPointObject",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs::access_point"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/point_authorization_tests.rs::{access_point_serves_policy_mode_and_priority_defaults,access_point_active_policy_write_names_one_of_the_policies,access_point_authorization_mode_write_takes_each_declared_standard_mode,access_point_authorization_mode_follows_the_supported_modes}",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_point_exact_sets_readable_rows_and_indexed_list,property_metadata_access_trio_write_capabilities_match_dispatch}",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_point_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/access_point_authorization_writes.rs::write_property_sets_the_access_point_policy_and_mode",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_point_settings_reach_the_access_point_rows",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_point_settings_reach_the_rows_and_gate_writes",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_keywords"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/point_authorization_tests.rs::{access_point_active_policy_refuses_writes_outside_the_policies,access_point_authorization_mode_refuses_other_values,access_point_supported_modes_refuse_sets_without_authorize_or_the_mode_in_effect,access_point_policy_count_refuses_zero_and_a_count_below_the_active_policy,access_point_count_and_priority_come_from_the_application}",
+    "crates/bacnet-server/src/handlers/tests/access_point_authorization_writes.rs::{write_property_refuses_other_policy_mode_and_read_only_writes,write_property_multiple_refuses_other_policy_mode_values}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#access-control-7",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "Active_Authentication_Policy and Number_Of_Authentication_Policies start at 1. A policy write is an Unsigned from 1 to the count; zero or a value past the count is VALUE_OUT_OF_RANGE, another datatype INVALID_DATA_TYPE.",
+    "`set_number_of_authentication_policies` refuses zero and a count below the policy in effect, so the active policy never drops to zero and Reliability never reads CONFIGURATION_ERROR on that account.",
+    "Authorization_Mode starts at AUTHORIZE, the only supported mode until `set_supported_authorization_modes` declares more; a set keeps AUTHORIZE and the mode in effect. A write outside the set is VALUE_OUT_OF_RANGE.",
+    "The policy and the mode are writable because Table K-10 lists them for DS-ACM-A. The policy count and Priority_For_Writing (16 until set, 1 to 16) come from the application only.",
+    "The point stores and checks these values; the application carries out the policy and the mode, and commands the doors at Priority_For_Writing."
+   ],
+   "gaps": [
+    "#1325: Authentication_Policy_List and Authentication_Policy_Names, optional Table 12-36 rows, are not served"
    ]
   },
   {
@@ -2794,7 +2835,7 @@
     "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::{python_door_members_and_access_doors_reach_the_arrays,python_supported_formats_reach_both_arrays}",
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_door_members_reach_the_array",
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_access_doors_reach_the_array_and_name_doors_only",
-    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_array_keywords",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_keywords",
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_supported_formats_reach_both_arrays_and_gate_simulated_reads"
    ],
    "negative_tests": [

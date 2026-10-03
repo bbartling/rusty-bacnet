@@ -2832,6 +2832,9 @@ class BACnetServer:
         access_doors: Optional[
             list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
         ] = None,
+        number_of_authentication_policies: Optional[int] = None,
+        supported_authorization_modes: Optional[list[int]] = None,
+        priority_for_writing: Optional[int] = None,
     ) -> None:
         """Add an Access Point object to the server (before starting).
 
@@ -2840,6 +2843,18 @@ class BACnetServer:
         whose device isn't a Device object identifier raises ValueError, and a
         reference to anything but an Access Door raises BacnetProtocolError
         with VALUE_OUT_OF_RANGE; either way nothing is registered.
+
+        ``number_of_authentication_policies`` (1 when omitted, never 0) and
+        ``priority_for_writing`` (16 when omitted, else 1 to 16) set
+        Number_Of_Authentication_Policies and Priority_For_Writing, which are
+        read-only over the network. ``supported_authorization_modes`` lists
+        the BACnetAuthorizationMode numbers the application carries out, the
+        values a write of Authorization_Mode can take: AUTHORIZE (0) alone
+        when omitted, and AUTHORIZE must be in any list given; proprietary
+        modes run from 64 to 65535. A value outside those raises
+        BacnetProtocolError with VALUE_OUT_OF_RANGE. Peers write
+        Active_Authentication_Policy (1 to the policy count) and
+        Authorization_Mode (one of the supported modes).
         """
         ...
     def add_access_rights(self, instance: int, name: str) -> None: ...
