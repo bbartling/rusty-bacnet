@@ -2216,6 +2216,33 @@ ACK_NOTIFICATION without its ack-required, from-state and event values, so
 ReadRange serves such a record without them. A Trend Log record stays a `BACnetLogRecord`; its optional
 `status_flags` is a `StatusFlags`.
 
+A running server records its own event notifications in every Event Log. Each
+notification it builds for an event or acknowledgment transition, intrinsic or
+from an Event Enrollment, goes through `ObjectDatabase::log_event_notification`,
+which adds a notification record stamped with the Device clock's local date and
+time to each Event Log through `BACnetObject::add_event_log_record` (the
+built-in `EventLogObject` takes it like `add_record`; the trait default refuses
+with `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`). The rules:
+
+- The record holds the notification as recipients get it, with Process
+  Identifier 0 in place of a recipient's own.
+- It is logged whether or not a Notification Class recipient matched: the
+  Recipient_List selects network recipients, not local objects (Clause 13.2.5).
+- A transition whose Event_Enable bit is off, or one made while
+  DeviceCommunicationControl stops initiation, builds no notification and
+  leaves no record.
+- Notifications the server receives are not logged.
+- A log never takes a notification about itself, one from the log or from an
+  Event Enrollment monitoring one of its properties, so such a report can't add
+  the record that prompts the next.
+- Each log applies its own Enable, Buffer_Size and Stop_When_Full handling.
+  Event Log has no Start_Time or Stop_Time, so Enable alone switches logging.
+- Without a valid Device clock nothing is logged, since a record needs a
+  timestamp.
+
+The record is added under its own short database write guard once the guard
+that built the notification is released, before the network send.
+
 Every record kind, the Audit Log's included, carries a log status as the
 typed `bacnet_types::bitstring::LogStatus` flags (`LOG_DISABLED`,
 `BUFFER_PURGED`, `LOG_INTERRUPTED`). The codecs send bit 0 first, as for

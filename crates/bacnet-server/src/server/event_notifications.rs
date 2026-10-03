@@ -115,6 +115,22 @@ pub(super) fn resolve_committed_event_enrollment_transition(
     ))
 }
 
+/// Record a notification this device built in its Event Log objects, under
+/// a database guard taken only for that.
+///
+/// The notification keeps Process Identifier 0, the value it has before a
+/// recipient's own is filled in; Clause 12.27 leaves that parameter of a
+/// locally generated record to the device. Only notifications the device
+/// builds reach here, so Event_Enable and DCC, which stop a notification
+/// being built, also keep it out of the logs. A received notification is not
+/// logged.
+async fn log_built_notification(
+    db: &Arc<RwLock<ObjectDatabase>>,
+    notification: &EventNotificationRequest,
+) {
+    db.write().await.log_event_notification(notification);
+}
+
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Resolve policy and atomically commit one intrinsic proposal.
     pub(super) fn commit_intrinsic_transition(
@@ -239,6 +255,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// notifications. Skipped when DCC is active (comm_state >= 1). Re-reads
     /// `Notification_Class` / `Notify_Type` under a brief `db.write()` guard,
     /// then drops the lock before any network send.
+    ///
+    /// Every notification built here also goes to the device's Event Log
+    /// objects, whether or not a recipient matched: Clause 13.2.5 keeps the
+    /// Recipient_List out of distribution to local objects. The record is
+    /// added under a guard of its own once the build guard is gone, before
+    /// the network send ([`log_built_notification`]).
     pub(super) async fn build_and_send_event_notification_with_bindings(
         ctx: &EventDelivery<'_, T>,
         oid: &ObjectIdentifier,
@@ -265,7 +287,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let system_utc = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
-        let (notification, recipients) = {
+        let (notification, recipients, has_event_logs) = {
             let mut db = db.write().await;
 
             let (timestamp, message_text, recipient_clock) = match history_source {
@@ -338,7 +360,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 resolve_transition_priority_ack(&db, notification_class, transition);
             let ack_required = ack_required_snapshot.unwrap_or(resolved_ack_required);
 
-            let Some(recipients) = matched_recipients_or_log(
+            let recipients = matched_recipients_or_log(
                 lookup_notification_recipients(
                     &db,
                     notification_class,
@@ -349,9 +371,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 notification_class,
                 transition,
                 suppressions,
-            ) else {
-                return;
-            };
+            );
 
             let base_notification = EventNotificationRequest {
                 process_identifier: 0,
@@ -381,10 +401,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 },
             };
 
-            (base_notification, recipients)
+            let has_event_logs = !db.find_by_type(ObjectType::EVENT_LOG).is_empty();
+            (base_notification, recipients, has_event_logs)
         };
 
-        Self::deliver_local_notification(ctx, notification, &recipients).await;
+        if has_event_logs {
+            log_built_notification(db, &notification).await;
+        }
+        if let Some(recipients) = recipients {
+            Self::deliver_local_notification(ctx, notification, &recipients).await;
+        }
     }
 
     /// Distribute a successfully accepted acknowledgment after its requester
