@@ -262,10 +262,19 @@ use bacnet_encoding::apdu::*;
 ### NPDU
 
 ```rust
-use bacnet_encoding::npdu::{NpduHeader, encode_npdu, decode_npdu};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, NpduDecodeError, encode_npdu, decode_npdu};
 
 // Handles source/destination network addresses, hop count, priority
 ```
+
+DADR and SADR are capped at `NpduAddress::MAX_MAC_LEN` (18) octets, the same
+limit as `BACnetAddress::MAX_MAC_LEN` and the longest MAC any built-in data
+link uses (B/IPv6) (#1141). `encode_npdu` refuses a longer address with
+`Error::Encoding`. `decode_npdu` returns `NpduDecodeError`: a DLEN or SLEN past
+the cap is `AddressTooLong { field, length, dnet }`, checked before the address
+octets are read, and every other malformation is `Malformed(Error)`. The error
+converts into `Error` (an over-long address becomes `Error::OutOfRange`), so `?`
+still works in functions that return `Result<_, Error>`.
 
 ---
 
@@ -1471,9 +1480,18 @@ before the local send and does not depend on it, so in BBMD mode an `Err` from
 Network layer routing, router tables, and the multi-port router.
 
 ```rust
-use bacnet_network::network_layer::NetworkLayer;
+use bacnet_network::layer::NetworkLayer;
 use bacnet_network::router::BACnetRouter;
 ```
+
+An inbound NPDU whose DLEN or SLEN is past `NpduAddress::MAX_MAC_LEN` is
+refused before anything else happens to it (#1141). `NetworkLayer` discards it
+and counts it in `address_length_drops()`; a non-router has no reject message
+to send. `BACnetRouter` neither forwards nor delivers it, counts it in its own
+`address_length_drops()`, and, when the NPDU names a specific DNET, answers the
+sender with Reject-Message-To-Network reason 6 (`ADDRESSING_ERROR`, Clause
+6.4.4) for that DNET, as it does for a DNET it cannot reach. A global broadcast
+or an NPDU without a DNET is dropped without a reject.
 
 ---
 
