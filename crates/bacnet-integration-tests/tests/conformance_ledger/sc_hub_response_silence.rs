@@ -1,285 +1,73 @@
 //! Bind the narrow accepting-hub supplement to actual tests, not a promotion.
 use super::*;
 
+const ROW: &str = "BACNET-AB-SC-CONNECTION-STATE";
+const STATUS: &str = "implementation-present-needs-state-machine-audit";
+
 #[test]
 fn node_resolution_capability_evidence_keeps_live_policy_and_uri_knowledge_distinct() {
     let data = ledger();
-    let rows = rows_by_id(&data);
-    let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
-    assert_eq!(
-        row["status"],
-        "implementation-present-needs-state-machine-audit"
-    );
-    let policy = row["address_resolution_accepting_capability"]
-        .as_str()
-        .unwrap();
-    for phrase in [
-        "AB.3.3",
-        "7/45",
-        "URI configuration alone",
-        "local policy",
-        "RejectionBudget",
-        "best-effort",
-        "No new URI discovery",
-    ] {
-        assert!(policy.contains(phrase), "{phrase}");
-    }
-    for (field, anchor) in [
-        ("positive_tests", "crates/bacnet-transport/src/sc/address_resolution_capability_tests.rs::live_listener_ack_preserves_empty_and_known_uris_ids_and_addresses"),
-        ("negative_tests", "crates/bacnet-transport/src/sc/address_resolution_tests.rs::absent_listener_refuses_regardless_of_configured_uris"),
-        ("negative_tests", "crates/bacnet-transport/src/sc/address_resolution_capability_tests.rs::capability_tracks_identity_application_intake_and_listener_lifecycle"),
-    ] {
-        assert!(row[field].as_array().unwrap().iter().any(|value| value == anchor));
-        let (file, name) = anchor.split_once("::").unwrap();
-        assert!(read_repo_file(file).contains(&format!("fn {name}(")));
-    }
-    assert!(STANDARD_LEDGER.contains("## Node Address-Resolution accepting capability"));
-    assert!(read_repo_file("docs/rust-api.md")
-        .contains("#node-address-resolution-accepting-capability"));
+    let row = rows_by_id(&data)[ROW];
+    assert_status(row, STATUS);
+    assert_listed(row, "positive_tests", &[
+        "crates/bacnet-transport/src/sc/address_resolution_capability_tests.rs::live_listener_ack_preserves_empty_and_known_uris_ids_and_addresses",
+    ]);
+    assert_listed(row, "negative_tests", &[
+        "crates/bacnet-transport/src/sc/address_resolution_tests.rs::absent_listener_refuses_regardless_of_configured_uris",
+        "crates/bacnet-transport/src/sc/address_resolution_capability_tests.rs::capability_tracks_identity_application_intake_and_listener_lifecycle",
+    ]);
+    assert_open_work_recorded(row);
 }
 
 #[test]
 fn hub_response_silence_has_scoped_policy_and_executable_anchors() {
     let data = ledger();
-    let rows = rows_by_id(&data);
-    let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
-    assert_eq!(
-        row["status"],
-        "implementation-present-needs-state-machine-audit"
+    let row = rows_by_id(&data)[ROW];
+    assert_status(row, STATUS);
+    assert_listed(
+        row,
+        "code_anchors",
+        &[
+            "crates/bacnet-transport/src/sc_hub/handler.rs",
+            "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs",
+            "crates/bacnet-transport/src/sc_hub/response_silence_lifecycle_tests.rs",
+        ],
     );
-    assert_eq!(data["reviewed_at"], "2026-09-17");
-    assert_eq!(data["repo_sha"], "b4c845caf920db279b0aefbd2824ac1348bba1cb");
-    for file in [
-        "crates/bacnet-transport/src/sc_hub/handler.rs",
-        "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs",
-        "crates/bacnet-transport/src/sc_hub/response_silence_lifecycle_tests.rs",
-    ] {
-        assert!(row["code_anchors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v == file));
-        assert!(!read_repo_file(file).is_empty());
-    }
-    for (field, anchors) in [
-        ("positive_tests", &[
-            "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs::unsolicited_response_matrix_preserves_lease_activity_and_probe_then_recovers",
-            "crates/rusty-bacnet/tests/test_sc_hub_response_silence.py::HubResponseSilenceTests::test_unsolicited_responses_preserve_native_hub_and_registration",
-        ][..]),
-        ("negative_tests", &[
-            "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs::unsolicited_connect_accept_is_silent_before_and_after_registration",
-            "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs::unsolicited_disconnect_ack_is_silent_before_and_after_registration",
-            "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs::unsolicited_responses_do_not_defer_idle_probe_or_its_original_timeout",
-            "crates/bacnet-transport/src/sc_hub/response_silence_lifecycle_tests.rs::unsolicited_responses_mtls_keep_absolute_connect_deadline_and_release_admission",
-            "crates/bacnet-transport/src/sc_hub/response_silence_lifecycle_tests.rs::unsolicited_responses_at_capacity_preserve_owners_then_allow_real_replacement",
-        ][..]),
-    ] {
-        for anchor in anchors {
-            assert!(row[field].as_array().unwrap().iter().any(|v| v == anchor), "{anchor}");
-            let parts: Vec<_> = anchor.split("::").collect();
-            let source = read_repo_file(parts[0]);
-            let name = parts.last().unwrap();
-            assert!(source.contains(&format!("fn {name}(")) || source.contains(&format!("def {name}(")), "{anchor}");
-        }
-    }
-    let policy = row["unsolicited_response_admission"].as_str().unwrap();
-    for phrase in [
-        "only unsolicited",
-        "0x07",
-        "0x09",
-        "AB.2",
-        "AB.6.2.3",
-        "scoped local liveness policy",
-        "Result relay",
-        "matching Heartbeat-ACK",
-        "Address-Resolution-ACK",
-        "excluded",
-        "open/partial",
-        "No full Annex AB claim",
-    ] {
-        assert!(policy.contains(phrase), "{phrase}");
-    }
-    let section = STANDARD_LEDGER
-        .split_once("## Accepting hub unsolicited-response silence\n")
-        .unwrap()
-        .1
-        .split("\n## ")
-        .next()
-        .unwrap();
-    let normalized = section.split_whitespace().collect::<Vec<_>>().join(" ");
-    for phrase in [
-        "Base Standard 135-2020",
-        "AB.2.11",
-        "AB.2.13",
-        "AB.6.2.3",
-        "local liveness policy",
-        "not a claim that AB.6.3",
-        "no Disconnect-ACK waiter",
-        "Address-Resolution-ACK is not included",
-        "Result relay",
-        "matching Heartbeat-ACK",
-        "#519 remains open/partial",
-        "not full Annex AB",
-    ] {
-        assert!(normalized.contains(phrase), "{phrase}");
-    }
-    assert!(
-        read_published_doc("CHANGELOG.md").contains("#accepting-hub-unsolicited-response-silence")
-    );
-    assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
+    assert_listed(row, "positive_tests", &[
+        "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs::unsolicited_response_matrix_preserves_lease_activity_and_probe_then_recovers",
+        "crates/rusty-bacnet/tests/test_sc_hub_response_silence.py::HubResponseSilenceTests::test_unsolicited_responses_preserve_native_hub_and_registration",
+    ]);
+    assert_listed(row, "negative_tests", &[
+        "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs::unsolicited_connect_accept_is_silent_before_and_after_registration",
+        "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs::unsolicited_disconnect_ack_is_silent_before_and_after_registration",
+        "crates/bacnet-transport/src/sc_hub/response_silence_tests.rs::unsolicited_responses_do_not_defer_idle_probe_or_its_original_timeout",
+        "crates/bacnet-transport/src/sc_hub/response_silence_lifecycle_tests.rs::unsolicited_responses_mtls_keep_absolute_connect_deadline_and_release_admission",
+        "crates/bacnet-transport/src/sc_hub/response_silence_lifecycle_tests.rs::unsolicited_responses_at_capacity_preserve_owners_then_allow_real_replacement",
+    ]);
 }
 
 #[test]
 fn hub_unknown_transit_evidence_keeps_family_scope_and_existing_lifecycle() {
     let data = ledger();
-    let rows = rows_by_id(&data);
-    let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
-    assert_eq!(
-        row["status"],
-        "implementation-present-needs-state-machine-audit"
-    );
-    assert_eq!(data["reviewed_at"], "2026-09-17");
-    assert_eq!(data["repo_sha"], "b4c845caf920db279b0aefbd2824ac1348bba1cb");
-    let policy = row["hub_unknown_transit"].as_str().unwrap();
-    for phrase in [
-        "AB.5.1",
-        "AB.5.3/.1/.2/.3",
-        "registered Unknown 0x0D..0xFF",
-        "encoded BVLC limits only",
-        "same socket only",
-        "no source echo",
-        "7/143",
-        "ResultForUnknown",
-        "NODE production/fatal policy unchanged",
-        "owner-local policy",
-        "Pending ACK timeout was already independent",
-        "idle-probe deferral",
-        "no new global NAK deadline",
-        "not rollback",
-        "General known-function forwarding",
-        "open/partial",
-        "No full Annex AB claim",
-    ] {
-        assert!(policy.contains(phrase), "{phrase}");
-    }
-    let mut count = 0;
-    for field in ["positive_tests", "negative_tests"] {
-        for anchor in row[field].as_array().unwrap() {
-            let anchor = anchor.as_str().unwrap();
-            if !anchor.contains("unknown_transit") {
-                continue;
-            }
-            let parts: Vec<_> = anchor.split("::").collect();
-            let source = read_repo_file(parts[0]);
-            let name = parts.last().unwrap();
-            assert!(
-                source.contains(&format!("fn {name}(")) || source.contains(&format!("def {name}(")),
-                "{anchor}"
-            );
-            count += 1;
-        }
-    }
-    assert_eq!(count, 11);
-    assert!(STANDARD_LEDGER.contains("## Hub Unknown transit and Result return\n"));
-    assert!(read_published_doc("CHANGELOG.md").contains("#hub-unknown-transit-and-result-return"));
-    assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
+    let row = rows_by_id(&data)[ROW];
+    assert_status(row, STATUS);
+    assert_test_family(row, "unknown_transit", 11);
 }
 
 #[test]
 fn hub_resolution_transit_is_unicast_hub_only_with_executable_evidence() {
     let data = ledger();
-    let rows = rows_by_id(&data);
-    let row = rows["BACNET-AB-SC-CONNECTION-STATE"];
-    assert_eq!(
-        row["status"],
-        "implementation-present-needs-state-machine-audit"
+    let row = rows_by_id(&data)[ROW];
+    assert_status(row, STATUS);
+    assert_listed(
+        row,
+        "code_anchors",
+        &[
+            "crates/bacnet-transport/src/sc_hub/opaque_relay.rs",
+            "crates/bacnet-transport/src/sc_hub/resolution_transit.rs",
+            "crates/bacnet-transport/src/sc_hub/resolution_transit_tests.rs",
+            "crates/bacnet-transport/src/sc_hub/resolution_transit_lifecycle_tests.rs",
+        ],
     );
-    assert_eq!(data["reviewed_at"], "2026-09-17");
-    assert_eq!(data["repo_sha"], "b4c845caf920db279b0aefbd2824ac1348bba1cb");
-    let policy = row["hub_resolution_transit"].as_str().unwrap();
-    for phrase in [
-        "HUB-only",
-        "Request0x02/ACK0x03",
-        "AB.2.6/.1",
-        "AB.2.7/.1",
-        "zero-byte ACK URI lists",
-        "AB.5.1/AB.5.3.2",
-        "no self echo",
-        "encoded BVLC limits only",
-        "not Max-NPDU",
-        "Every nonforwardable ACK is silent",
-        "7/150 UNEXPECTED_DATA",
-        "marker zero",
-        "same socket only",
-        "not AB.3.3 node behavior",
-        "ResultFor2 and ResultFor3 ACK/NAK join the guarded return path",
-        "no Result-on-Result",
-        "Pending ACK timeout was already independent",
-        "no new timers or write budgets",
-        "NODE production/fatal ResultFor2 policy unchanged",
-        "raw B owns AR semantics",
-        "No node URI discovery, URI parser, dialing, direct connections",
-        "not rollback",
-        "open/partial",
-        "68/19/statuses/global/historical/#517 A1-A6 preserved",
-    ] {
-        assert!(policy.contains(phrase), "{phrase}");
-    }
-    for file in [
-        "crates/bacnet-transport/src/sc_hub/opaque_relay.rs",
-        "crates/bacnet-transport/src/sc_hub/resolution_transit.rs",
-        "crates/bacnet-transport/src/sc_hub/resolution_transit_tests.rs",
-        "crates/bacnet-transport/src/sc_hub/resolution_transit_lifecycle_tests.rs",
-    ] {
-        assert!(row["code_anchors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v == file));
-        assert!(!read_repo_file(file).is_empty());
-    }
-    let mut count = 0;
-    for field in ["positive_tests", "negative_tests"] {
-        for anchor in row[field].as_array().unwrap() {
-            let anchor = anchor.as_str().unwrap();
-            if !anchor.contains("resolution_transit") {
-                continue;
-            }
-            let parts: Vec<_> = anchor.split("::").collect();
-            let source = read_repo_file(parts[0]);
-            let name = parts.last().unwrap();
-            assert!(
-                source.contains(&format!("fn {name}(")) || source.contains(&format!("def {name}(")),
-                "{anchor}"
-            );
-            count += 1;
-        }
-    }
-    assert_eq!(count, 12);
-    let section = STANDARD_LEDGER
-        .split_once("## Hub Address-Resolution transit\n")
-        .unwrap()
-        .1
-        .split("\n## ")
-        .next()
-        .unwrap()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    for phrase in [
-        "Base Standard 135-2020",
-        "zero bytes",
-        "not endpoint format conformance",
-        "not AB.3.3 node behavior",
-        "same socket only",
-        "relays ResultFor2 and ResultFor3",
-        "192 preregistered and 168 registered",
-        "192 preregistered and 192 registered",
-        "native NODE answers valid AR-Requests with its configured-or-empty ACK only while accepting direct connections",
-        "#519 remains open/partial",
-    ] {
-        assert!(section.contains(phrase), "{phrase}");
-    }
-    assert!(read_published_doc("CHANGELOG.md").contains("#hub-address-resolution-transit"));
-    assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
+    assert_test_family(row, "resolution_transit", 12);
 }
