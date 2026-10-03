@@ -3,12 +3,14 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use bacnet_encoding::primitives::encode_property_value;
 use bacnet_types::constructed::{
     BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bytes::BytesMut;
 use tracing::warn;
 
 use super::{LocalDevice, ObjectDatabase};
@@ -335,6 +337,10 @@ fn member(value: &PropertyValue, wildcard_is_empty: bool) -> Option<Member> {
     })
 }
 
+/// A read value as the log stores it: one of the datatypes both record kinds
+/// name, or else the any-value alternative holding the value's own encoding,
+/// the bytes a ReadProperty of it would carry (Clauses 12.25.14 and
+/// 12.30.19).
 fn property_value_to_log_value(value: &PropertyValue) -> LogValue {
     match value {
         PropertyValue::Real(v) => LogValue::RealValue(*v),
@@ -342,7 +348,19 @@ fn property_value_to_log_value(value: &PropertyValue) -> LogValue {
         PropertyValue::Signed(v) => LogValue::SignedValue(*v),
         PropertyValue::Boolean(v) => LogValue::BooleanValue(*v),
         PropertyValue::Enumerated(v) => LogValue::EnumValue(*v),
-        _ => LogValue::NullValue,
+        PropertyValue::BitString { unused_bits, data } => LogValue::BitstringValue {
+            unused_bits: *unused_bits,
+            data: data.clone(),
+        },
+        PropertyValue::Null => LogValue::NullValue,
+        other => {
+            let mut encoded = BytesMut::new();
+            match encode_property_value(&mut encoded, other) {
+                Ok(()) => LogValue::AnyValue(encoded.to_vec()),
+                // A value the read could not have carried either.
+                Err(_) => failure(ErrorClass::SERVICES, ErrorCode::OTHER),
+            }
+        }
     }
 }
 

@@ -8,10 +8,13 @@ use bacnet_objects::log_buffer::LogRecordIdentity;
 use bacnet_objects::trend::{TrendLogMultipleObject, TrendLogObject};
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
 use bacnet_types::constructed::{
-    BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue,
+    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
+    LogDatum, LogValue,
 };
 use bacnet_types::primitives::{Date, Time};
 
+#[path = "read_range_log_records.rs"]
+mod log_records;
 #[path = "read_range_multiple.rs"]
 mod multiple;
 #[path = "read_range_pages.rs"]
@@ -380,12 +383,21 @@ fn by_sequence_rejects_unnumbered_properties_and_misalignment() {
     }
 }
 
-fn record(value: u64) -> BACnetLogRecord {
+pub(super) fn record(value: u64) -> BACnetLogRecord {
     BACnetLogRecord {
         date: DATE,
         time: time(value as u8),
         log_datum: LogDatum::UnsignedValue(value),
         status_flags: None,
+    }
+}
+
+/// [`record`]'s sample as an Event Log record, carried as a clock change.
+pub(super) fn event_record(value: u64) -> BACnetEventLogRecord {
+    BACnetEventLogRecord {
+        date: DATE,
+        time: time(value as u8),
+        log_datum: EventLogDatum::TimeChange(value as f32),
     }
 }
 
@@ -398,29 +410,24 @@ pub(super) fn multiple_record(value: u64) -> BACnetLogMultipleRecord {
     }
 }
 
-/// A sample record of `family` as a ReadRange item carries it: a Trend Log
-/// Multiple record framed whole, the others field by field.
+/// A sample record of `family` as a ReadRange item carries it: one record
+/// framed as its Clause 21 production.
 pub(super) fn projected(family: LogFamily, value: u64) -> PropertyValue {
+    let mut framed = BytesMut::new();
     match family {
-        LogFamily::TrendMultiple => {
-            let mut framed = BytesMut::new();
-            bacnet_encoding::constructed::encode_log_multiple_record(
-                &multiple_record(value),
-                &mut framed,
-            )
-            .unwrap();
-            PropertyValue::ApplicationData(framed.to_vec())
+        LogFamily::Event => {
+            bacnet_encoding::constructed::encode_event_log_record(&event_record(value), &mut framed)
         }
-        _ => projected_record(value),
+        LogFamily::Trend => {
+            bacnet_encoding::constructed::encode_log_record(&record(value), &mut framed)
+        }
+        LogFamily::TrendMultiple => bacnet_encoding::constructed::encode_log_multiple_record(
+            &multiple_record(value),
+            &mut framed,
+        ),
     }
-}
-
-pub(super) fn projected_record(value: u64) -> PropertyValue {
-    PropertyValue::List(vec![
-        PropertyValue::Date(DATE),
-        PropertyValue::Time(time(value as u8)),
-        PropertyValue::Unsigned(value),
-    ])
+    .unwrap();
+    PropertyValue::ApplicationData(framed.to_vec())
 }
 
 #[derive(Clone, Copy)]
@@ -435,7 +442,7 @@ pub(super) fn fifo_log(family: LogFamily) -> Box<dyn BACnetObject> {
         LogFamily::Event => {
             let mut object = EventLogObject::new(1, "EL-1", 3).unwrap();
             for value in 1..=4 {
-                object.add_record(record(value)).unwrap();
+                object.add_record(event_record(value)).unwrap();
             }
             Box::new(object)
         }
@@ -520,8 +527,8 @@ impl ClockReader for FixedClock {
 fn purge_status_record_replaces_old_sequence_continuation() {
     let mut object = EventLogObject::new(7, "EL-7", 3).unwrap();
     object.bind_clock_internal(Some(Arc::new(FixedClock)));
-    object.add_record(record(1)).unwrap();
-    object.add_record(record(2)).unwrap();
+    object.add_record(event_record(1)).unwrap();
+    object.add_record(event_record(2)).unwrap();
     object
         .write_property(
             PropertyIdentifier::RECORD_COUNT,

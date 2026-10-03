@@ -81,23 +81,14 @@ fn multiple(
     log
 }
 
-/// The log's records, decoded from the framed Log_Buffer a read serves.
+/// The log's records, decoded from the framed records ReadRange serves.
 fn records(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<BACnetLogMultipleRecord> {
-    let PropertyValue::List(items) = db
-        .get(&oid)
-        .unwrap()
-        .read_property(P::LOG_BUFFER, None)
-        .unwrap()
-    else {
-        panic!("Log_Buffer is a list")
-    };
-    items
-        .iter()
-        .map(|item| {
-            let PropertyValue::ApplicationData(bytes) = item else {
-                panic!("each record is framed: {item:?}")
-            };
-            let (record, end) = decode_log_multiple_record(bytes, 0).unwrap();
+    let records = db.get(&oid).unwrap().log_buffer_internal().unwrap();
+    (0..records.record_count())
+        .map(|index| {
+            let mut bytes = BytesMut::new();
+            records.encode_record(index, &mut bytes).unwrap();
+            let (record, end) = decode_log_multiple_record(&bytes, 0).unwrap();
             assert_eq!(end, bytes.len());
             record
         })
@@ -196,10 +187,58 @@ fn an_indexed_member_reads_its_element() {
             LogValue::RealValue(61.5),
             failed(ErrorClass::PROPERTY, ErrorCode::INVALID_ARRAY_INDEX),
             failed(ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            // A whole array is no loggable datatype.
-            LogValue::NullValue,
+            // A whole array is logged as an any-value holding its elements:
+            // NULL at every priority but 8 (#1236).
+            LogValue::AnyValue(
+                [&[0x00; 7][..], &[0x44, 0x42, 0x76, 0x00, 0x00], &[0x00; 8]].concat()
+            ),
         ]
     );
+}
+
+/// Datatypes outside the member alternatives are logged as any-values
+/// carrying the value's own encoding, which reads back exactly (#1236).
+#[test]
+fn members_of_other_datatypes_are_logged_as_any_values() {
+    let (mut db, _) = database();
+    let mut large = crate::value_types::LargeAnalogValueObject::new(1, "LAV").unwrap();
+    large.set_relinquish_default(2.5).unwrap();
+    let large_oid = large.object_identifier();
+    db.add(Box::new(large)).unwrap();
+    let log = multiple(
+        u32::MAX,
+        8,
+        vec![
+            member(av(), P::OBJECT_NAME, None, None),
+            member(large_oid, P::PRESENT_VALUE, None, None),
+        ],
+    );
+    let oid = log.object_identifier();
+    db.add(Box::new(log)).unwrap();
+    db.poll_trend_logs();
+    let records = records(&db, oid);
+    let LogData::Values(values) = &records[0].log_data else {
+        panic!("a sample, not {:?}", records[0].log_data)
+    };
+    let character_string = vec![0x73, 0x00, b'A', b'V'];
+    let double = vec![0x55, 0x08, 0x40, 0x04, 0, 0, 0, 0, 0, 0];
+    assert_eq!(
+        values,
+        &[
+            LogValue::AnyValue(character_string.clone()),
+            LogValue::AnyValue(double.clone()),
+        ]
+    );
+    let read_back = |bytes: &[u8]| {
+        let (value, end) = bacnet_encoding::primitives::decode_application_value(bytes, 0).unwrap();
+        assert_eq!(end, bytes.len());
+        value
+    };
+    assert_eq!(
+        read_back(&character_string),
+        PropertyValue::CharacterString("AV".into())
+    );
+    assert_eq!(read_back(&double), PropertyValue::Double(2.5));
 }
 
 #[test]

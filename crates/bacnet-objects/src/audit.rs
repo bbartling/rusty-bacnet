@@ -522,14 +522,11 @@ impl BACnetObject for AuditLogObject {
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }
-            // Clause 12.64.10 opens the log buffer to ReadRange and
-            // AuditLogQuery only, so a property read names the property as
-            // present but not readable this way (Clause 15.5.1.3.1). ReadRange
-            // pages the ring through `AuditLogStorage::retained_records`.
-            p if p == PropertyIdentifier::LOG_BUFFER => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::READ_ACCESS_DENIED.to_raw() as u32,
-            }),
+            // ReadRange pages the ring through
+            // `AuditLogStorage::retained_records`.
+            p if p == PropertyIdentifier::LOG_BUFFER => {
+                Err(crate::log_buffer::log_buffer_read_denied())
+            }
             _ => Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
                 code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,

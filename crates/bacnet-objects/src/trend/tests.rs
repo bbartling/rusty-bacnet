@@ -1,9 +1,34 @@
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
-use bacnet_encoding::constructed::decode_log_multiple_record;
+use bacnet_encoding::constructed::{decode_log_multiple_record, decode_log_record};
 use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogDatum, LogValue};
 use bacnet_types::primitives::{Date, Time};
+use bytes::BytesMut;
 use std::sync::Arc;
+
+/// Each resident record as ReadRange serves it, still encoded.
+fn served(object: &dyn BACnetObject) -> Vec<Vec<u8>> {
+    let records = object.log_buffer_internal().unwrap();
+    (0..records.record_count())
+        .map(|index| {
+            let mut buf = BytesMut::new();
+            records.encode_record(index, &mut buf).unwrap();
+            buf.to_vec()
+        })
+        .collect()
+}
+
+/// A Trend Log's served records, decoded.
+fn served_records(tl: &TrendLogObject) -> Vec<BACnetLogRecord> {
+    served(tl)
+        .iter()
+        .map(|bytes| {
+            let (record, end) = decode_log_record(bytes, 0).unwrap();
+            assert_eq!(end, bytes.len());
+            record
+        })
+        .collect()
+}
 
 struct FixedClock;
 
@@ -208,42 +233,34 @@ fn trendlog_description_in_property_list() {
 }
 
 #[test]
-fn trendlog_read_log_buffer() {
+fn trendlog_serves_log_buffer_records_framed() {
     let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
     tl.add_record(make_record(10, 72.5)).unwrap();
     tl.add_record(make_record(11, 73.0)).unwrap();
-    let val = tl
-        .read_property(PropertyIdentifier::LOG_BUFFER, None)
-        .unwrap();
-    if let PropertyValue::List(records) = val {
-        assert_eq!(records.len(), 2);
-        // First record
-        if let PropertyValue::List(fields) = &records[0] {
-            assert_eq!(fields.len(), 3);
-            assert_eq!(fields[0], PropertyValue::Date(make_record(10, 72.5).date));
-            assert_eq!(fields[1], PropertyValue::Time(make_record(10, 72.5).time));
-            assert_eq!(fields[2], PropertyValue::Real(72.5));
-        } else {
-            panic!("Expected List for log record");
-        }
-        // Second record
-        if let PropertyValue::List(fields) = &records[1] {
-            assert_eq!(fields[2], PropertyValue::Real(73.0));
-        } else {
-            panic!("Expected List for log record");
-        }
-    } else {
-        panic!("Expected List for LOG_BUFFER");
-    }
+    assert_eq!(
+        served(&tl)[0],
+        vec![
+            0x0E, 0xA4, 0x7C, 0x03, 0x0F, 0x05, 0xB4, 0x0A, 0x00, 0x00, 0x00,
+            0x0F, // timestamp
+            0x1E, 0x2C, 0x42, 0x91, 0x00, 0x00, 0x1F, // real-value [2]: 72.5
+        ]
+    );
+    assert_eq!(
+        served_records(&tl),
+        vec![make_record(10, 72.5), make_record(11, 73.0)]
+    );
 }
 
 #[test]
 fn trendlog_log_buffer_empty() {
     let tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
-    let val = tl
-        .read_property(PropertyIdentifier::LOG_BUFFER, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::List(vec![]));
+    assert_eq!(tl.log_buffer_internal().unwrap().record_count(), 0);
+    assert!(matches!(
+        tl.read_property(PropertyIdentifier::LOG_BUFFER, None),
+        Err(Error::Protocol { class, code })
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::READ_ACCESS_DENIED.to_raw() as u32
+    ));
 }
 
 #[test]
@@ -260,31 +277,11 @@ fn trendlog_log_buffer_overflow_stop_when_full() {
     for i in 0..5u8 {
         tl.add_record(make_record(i, i as f32 * 10.0)).unwrap();
     }
-    // Buffer capped at 3; only first 3 records accepted
-    let val = tl
-        .read_property(PropertyIdentifier::LOG_BUFFER, None)
-        .unwrap();
-    if let PropertyValue::List(records) = val {
-        assert_eq!(records.len(), 3);
-        if let PropertyValue::List(fields) = &records[0] {
-            assert_eq!(fields[2], PropertyValue::Real(0.0));
-        } else {
-            panic!("Expected List");
-        }
-        if let PropertyValue::List(fields) = &records[2] {
-            assert_eq!(
-                fields[2],
-                PropertyValue::BitString {
-                    unused_bits: 5,
-                    data: vec![0b0010_0000],
-                }
-            );
-        } else {
-            panic!("Expected List");
-        }
-    } else {
-        panic!("Expected List for LOG_BUFFER");
-    }
+    // Buffer capped at 3: two samples, then the log-disabled status record.
+    let records = served_records(&tl);
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0].log_datum, LogDatum::RealValue(0.0));
+    assert_eq!(records[2].log_datum, LogDatum::LogStatus(0b001));
 }
 
 #[test]
@@ -343,51 +340,22 @@ fn trendlog_log_buffer_various_datum_types() {
         hundredths: 0,
     };
 
-    tl.add_record(BACnetLogRecord {
+    let records = [
+        (LogDatum::BooleanValue(true), None),
+        (LogDatum::EnumValue(42), Some(0b0100)),
+        (LogDatum::NullValue, None),
+        (LogDatum::AnyValue(vec![0x72, 0x00, b'x']), None),
+    ]
+    .map(|(log_datum, status_flags)| BACnetLogRecord {
         date,
         time,
-        log_datum: LogDatum::BooleanValue(true),
-        status_flags: None,
-    })
-    .unwrap();
-    tl.add_record(BACnetLogRecord {
-        date,
-        time,
-        log_datum: LogDatum::EnumValue(42),
-        status_flags: Some(0b0100),
-    })
-    .unwrap();
-    tl.add_record(BACnetLogRecord {
-        date,
-        time,
-        log_datum: LogDatum::NullValue,
-        status_flags: None,
-    })
-    .unwrap();
-
-    let val = tl
-        .read_property(PropertyIdentifier::LOG_BUFFER, None)
-        .unwrap();
-    if let PropertyValue::List(records) = val {
-        assert_eq!(records.len(), 3);
-        if let PropertyValue::List(fields) = &records[0] {
-            assert_eq!(fields[2], PropertyValue::Boolean(true));
-        } else {
-            panic!("Expected List");
-        }
-        if let PropertyValue::List(fields) = &records[1] {
-            assert_eq!(fields[2], PropertyValue::Enumerated(42));
-        } else {
-            panic!("Expected List");
-        }
-        if let PropertyValue::List(fields) = &records[2] {
-            assert_eq!(fields[2], PropertyValue::Null);
-        } else {
-            panic!("Expected List");
-        }
-    } else {
-        panic!("Expected List for LOG_BUFFER");
+        log_datum,
+        status_flags,
+    });
+    for record in &records {
+        tl.add_record(record.clone()).unwrap();
     }
+    assert_eq!(served_records(&tl), records);
 }
 
 // -----------------------------------------------------------------------
@@ -452,23 +420,15 @@ fn trendlog_multiple_ring_buffer() {
 }
 
 #[test]
-fn trendlog_multiple_read_log_buffer() {
+fn trendlog_multiple_serves_log_buffer_records_framed() {
     let mut tlm = TrendLogMultipleObject::new(1, "TLM-1", 100).unwrap();
     tlm.add_record(make_multiple(10, 72.5)).unwrap();
-    let val = tlm
-        .read_property(PropertyIdentifier::LOG_BUFFER, None)
-        .unwrap();
     // Each record is framed as Clause 21's BACnetLogMultipleRecord (#1203).
-    let PropertyValue::List(records) = val else {
-        panic!("Expected List for LOG_BUFFER");
-    };
-    assert_eq!(records.len(), 1);
-    let PropertyValue::ApplicationData(bytes) = &records[0] else {
-        panic!("Expected framed log record");
-    };
+    let served = served(&tlm);
+    assert_eq!(served.len(), 1);
     assert_eq!(
-        decode_log_multiple_record(bytes, 0).unwrap(),
-        (make_multiple(10, 72.5), bytes.len())
+        decode_log_multiple_record(&served[0], 0).unwrap(),
+        (make_multiple(10, 72.5), served[0].len())
     );
 }
 

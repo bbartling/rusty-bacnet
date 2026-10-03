@@ -14,7 +14,9 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use super::{multiple_metadata, reference_value};
 use crate::clock::ClockReader;
 use crate::common::{self, read_property_list_property};
-use crate::log_buffer::{LogRecordBuffer, LogRecordIdentity};
+use crate::log_buffer::{
+    log_buffer_read_denied, LogBufferRecords, LogRecordBuffer, LogRecordIdentity,
+};
 use crate::log_lifecycle::LogLifecycle;
 use crate::traits::BACnetObject;
 
@@ -164,8 +166,8 @@ impl BACnetObject for TrendLogMultipleObject {
             p if p == PropertyIdentifier::RELIABILITY => {
                 Ok(PropertyValue::Enumerated(self.reliability.to_raw()))
             }
-            // Each record framed as Clause 21 gives it (#1203).
-            p if p == PropertyIdentifier::LOG_BUFFER => self.log_buffer.project_framed(),
+            // ReadRange pages it through `log_buffer_internal`.
+            p if p == PropertyIdentifier::LOG_BUFFER => Err(log_buffer_read_denied()),
             p if p == PropertyIdentifier::LOGGING_TYPE => {
                 Ok(PropertyValue::Enumerated(self.logging_type))
             }
@@ -253,6 +255,10 @@ impl BACnetObject for TrendLogMultipleObject {
 
     fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
         Some(self.log_buffer.identities())
+    }
+
+    fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
+        Some(&self.log_buffer)
     }
 
     fn add_trend_multiple_record(&mut self, record: BACnetLogMultipleRecord) -> Result<(), Error> {

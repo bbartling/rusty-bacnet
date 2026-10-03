@@ -74,16 +74,35 @@ fn database(clock: Arc<dyn ClockReader>) -> (Arc<RwLock<ObjectDatabase>>, Object
     (Arc::new(RwLock::new(db)), oid)
 }
 
+/// The records ReadRange serves, each as its encoded bytes.
+fn served(obj: &dyn BACnetObject) -> Vec<Vec<u8>> {
+    let records = obj.log_buffer_internal().unwrap();
+    (0..records.record_count())
+        .map(|index| {
+            let mut bytes = bytes::BytesMut::new();
+            records.encode_record(index, &mut bytes).unwrap();
+            bytes.to_vec()
+        })
+        .collect()
+}
+
+/// The served records, then Record_Count, Total_Record_Count and Log_Enable.
 fn snapshot(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<PropertyValue> {
     let obj = db.get(&oid).unwrap();
-    [
-        PropertyIdentifier::LOG_BUFFER,
-        PropertyIdentifier::RECORD_COUNT,
-        PropertyIdentifier::TOTAL_RECORD_COUNT,
-        PropertyIdentifier::LOG_ENABLE,
-    ]
-    .map(|p| obj.read_property(p, None).unwrap())
-    .to_vec()
+    let records = served(obj)
+        .into_iter()
+        .map(PropertyValue::ApplicationData)
+        .collect();
+    let mut snapshot = vec![PropertyValue::List(records)];
+    snapshot.extend(
+        [
+            PropertyIdentifier::RECORD_COUNT,
+            PropertyIdentifier::TOTAL_RECORD_COUNT,
+            PropertyIdentifier::LOG_ENABLE,
+        ]
+        .map(|p| obj.read_property(p, None).unwrap()),
+    );
+    snapshot
 }
 
 #[tokio::test(start_paused = true)]
@@ -98,18 +117,14 @@ async fn ordinary_poll_uses_exact_device_local_timestamp_and_hundredths() {
     assert_eq!(identities.len(), 1);
     assert_eq!(identities[0].date(), expected.local_date);
     assert_eq!(identities[0].time(), expected.local_time);
-    let PropertyValue::List(records) = obj
-        .read_property(PropertyIdentifier::LOG_BUFFER, None)
-        .unwrap()
-    else {
-        panic!("expected log buffer")
-    };
-    let PropertyValue::List(record) = &records[0] else {
-        panic!("expected record")
-    };
-    assert_eq!(record[0], PropertyValue::Date(expected.local_date));
-    assert_eq!(record[1], PropertyValue::Time(expected.local_time));
-    assert_eq!(record[2], PropertyValue::Real(42.5));
+    let served = served(obj);
+    let (record, _) = bacnet_encoding::constructed::decode_log_record(&served[0], 0).unwrap();
+    assert_eq!(record.date, expected.local_date);
+    assert_eq!(record.time, expected.local_time);
+    assert_eq!(
+        record.log_datum,
+        bacnet_types::constructed::LogDatum::RealValue(42.5)
+    );
     drop(guard);
 
     // The next due attempt samples the current frame rather than caching it.

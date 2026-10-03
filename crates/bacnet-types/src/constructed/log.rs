@@ -1,5 +1,7 @@
-//! Log buffer records of the Trend Log and Trend Log Multiple objects
-//! (Clauses 12.25 and 12.30; the record productions are in Clause 21).
+//! Log buffer records of three log objects: Trend Log (Clause 12.25.14),
+//! Event Log (Clause 12.27.13) and Trend Log Multiple (Clause 12.30.19). The
+//! record productions are in Clause 21; the encoding crate frames each one
+//! on the wire.
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
@@ -7,59 +9,49 @@ use alloc::vec::Vec;
 use crate::primitives::{Date, Time};
 
 // ---------------------------------------------------------------------------
-// LogDatum (Clause 12.25 -- TrendLog Log_Buffer; Clause 21.6)
+// LogDatum (Clause 12.25.14 -- Trend Log Log_Buffer)
 // ---------------------------------------------------------------------------
 
-/// The datum field of a BACnetLogRecord: a CHOICE covering all possible
-/// logged value types.
+/// What a Trend Log record carries: a sampled value, the error that stopped
+/// the sample, a status change of the log, or a clock change.
 ///
-/// Context tags per spec:
-/// - `[0]` log-status (BACnetLogStatus, 8-bit flags)
-/// - `[1]` boolean-value
-/// - `[2]` real-value
-/// - `[3]` enum-value (unsigned)
-/// - `[4]` unsigned-value
-/// - `[5]` signed-value
-/// - `[6]` bitstring-value
-/// - `[7]` null-value
-/// - `[8]` failure (BACnetError)
-/// - `[9]` time-change (REAL, clock-adjustment seconds)
-/// - `[10]` any-value (raw application-tagged bytes)
+/// On the wire each alternative takes a context tag, 0 to 10 in declaration
+/// order; the encoding crate owns that numbering.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogDatum {
-    /// Log-status flags (context tag 0).  Bit 0=log-disabled, bit 1=buffer-purged,
-    /// bit 2=log-interrupted.
+    /// A status change of the log itself: BACnetLogStatus flags, bit 0
+    /// log-disabled, bit 1 buffer-purged, bit 2 log-interrupted.
     LogStatus(u8),
-    /// Boolean value (context tag 1).
+    /// A BOOLEAN value.
     BooleanValue(bool),
-    /// Real (f32) value (context tag 2).
+    /// A REAL value.
     RealValue(f32),
-    /// Enumerated value (context tag 3).
+    /// An ENUMERATED value.
     EnumValue(u32),
-    /// Unsigned integer value (context tag 4).
+    /// An Unsigned value.
     UnsignedValue(u64),
-    /// Signed integer value (context tag 5).
-    SignedValue(i64),
-    /// Bit-string value (context tag 6).
+    /// An INTEGER value.
+    SignedValue(i32),
+    /// A BIT STRING value.
     BitstringValue {
-        /// Padding bits at the end of the final octet.
+        /// Padding bits at the end of the final octet, 0 to 7.
         unused_bits: u8,
         /// The bit data.
         data: Vec<u8>,
     },
-    /// Null value (context tag 7).
+    /// A NULL value.
     NullValue,
-    /// Error (context tag 8): error class + error code.
+    /// The error that kept the value from being logged.
     Failure {
         /// Raw BACnet error class value.
         error_class: u32,
         /// Raw BACnet error code value.
         error_code: u32,
     },
-    /// Time-change: clock-adjustment amount in seconds (context tag 9).
+    /// The device clock moved by this many seconds; zero when unknown.
     TimeChange(f32),
-    /// Any-value: raw application-tagged bytes for types not enumerated above
-    /// (context tag 10).
+    /// A value of any other datatype, as the tagged encoding a property read
+    /// carries for it: one or more complete values, context tags balanced.
     AnyValue(Vec<u8>),
 }
 
@@ -71,7 +63,7 @@ impl From<LogValue> for LogDatum {
             LogValue::RealValue(value) => Self::RealValue(value),
             LogValue::EnumValue(value) => Self::EnumValue(value),
             LogValue::UnsignedValue(value) => Self::UnsignedValue(value),
-            LogValue::SignedValue(value) => Self::SignedValue(i64::from(value)),
+            LogValue::SignedValue(value) => Self::SignedValue(value),
             LogValue::BitstringValue { unused_bits, data } => {
                 Self::BitstringValue { unused_bits, data }
             }
@@ -89,10 +81,10 @@ impl From<LogValue> for LogDatum {
 }
 
 // ---------------------------------------------------------------------------
-// BACnetLogRecord (Clause 12.25 -- TrendLog Log_Buffer; Clause 21.6)
+// BACnetLogRecord (Clause 12.25.14 -- Trend Log Log_Buffer)
 // ---------------------------------------------------------------------------
 
-/// A single record stored in a TrendLog object's log buffer.
+/// One record held in the log buffer of a Trend Log (Clause 12.25.14).
 ///
 /// Contains a timestamp (date + time), the logged datum, and optional
 /// status flags that were in effect at logging time.
@@ -104,8 +96,44 @@ pub struct BACnetLogRecord {
     pub time: Time,
     /// The logged datum.
     pub log_datum: LogDatum,
-    /// Optional status flags at time of logging (4-bit BACnet StatusFlags).
+    /// The monitored object's Status_Flags when the value was acquired, if
+    /// recorded: bit 0 in-alarm, bit 1 fault, bit 2 overridden, bit 3
+    /// out-of-service.
     pub status_flags: Option<u8>,
+}
+
+// ---------------------------------------------------------------------------
+// BACnetEventLogRecord (Clause 12.27.13 -- Event Log Log_Buffer)
+// ---------------------------------------------------------------------------
+
+/// What an Event Log record carries.
+///
+/// On the wire the alternatives take context tags 0 to 2 in declaration
+/// order; the encoding crate owns that numbering.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EventLogDatum {
+    /// A status change of the log itself: BACnetLogStatus flags, bit 0
+    /// log-disabled, bit 1 buffer-purged, bit 2 log-interrupted.
+    LogStatus(u8),
+    /// An event notification, as the encoded parameters of a
+    /// ConfirmedEventNotification request: its tagged fields from the process
+    /// identifier through the optional event values, with no frame around
+    /// them. `bacnet_services`' `EventNotificationRequest` encodes and
+    /// decodes these bytes.
+    Notification(Vec<u8>),
+    /// The device clock moved by this many seconds; zero when unknown.
+    TimeChange(f32),
+}
+
+/// One record held in the log buffer of an Event Log (Clause 12.27.13).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BACnetEventLogRecord {
+    /// The local date at which the record was placed in the buffer.
+    pub date: Date,
+    /// The local time at which the record was placed in the buffer.
+    pub time: Time,
+    /// The record's contents.
+    pub log_datum: EventLogDatum,
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +174,8 @@ pub enum LogValue {
         /// Raw BACnet error code value.
         error_code: u32,
     },
-    /// A value of another datatype, as its application-tagged encoding.
+    /// A value of any other datatype, as the tagged encoding a property read
+    /// carries for it: one or more complete values, context tags balanced.
     AnyValue(Vec<u8>),
 }
 

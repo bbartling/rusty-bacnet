@@ -7,6 +7,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, Time};
 use std::sync::{Arc, Mutex};
 
+#[path = "any_value_tests.rs"]
+mod any_value_tests;
 #[path = "member_tests.rs"]
 mod member_tests;
 #[path = "multiple_tests.rs"]
@@ -282,6 +284,9 @@ impl BACnetObject for ConfigurableTrend {
     fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
         self.inner.add_trend_record(record)
     }
+    fn log_buffer_internal(&self) -> Option<&dyn crate::log_buffer::LogBufferRecords> {
+        self.inner.log_buffer_internal()
+    }
 }
 
 #[test]
@@ -382,23 +387,6 @@ fn slow_acquisition_anchors_success_to_completion_and_yields_when_other_logs_are
 }
 
 #[test]
-fn scalar_projection_preserves_supported_datums_and_unsupported_null() {
-    for (value, expected) in [
-        (PropertyValue::Real(42.5), LogDatum::RealValue(42.5)),
-        (PropertyValue::Unsigned(100), LogDatum::UnsignedValue(100)),
-        (PropertyValue::Signed(-12), LogDatum::SignedValue(-12)),
-        (PropertyValue::Boolean(true), LogDatum::BooleanValue(true)),
-        (PropertyValue::Enumerated(7), LogDatum::EnumValue(7)),
-        (PropertyValue::Null, LogDatum::NullValue),
-    ] {
-        assert_eq!(
-            LogDatum::from(property_value_to_log_value(&value)),
-            expected
-        );
-    }
-}
-
-#[test]
 fn idle_reconciliation_and_max_interval_failure_backoff_are_bounded() {
     let (mut db, oid, time, clock) = fixture(u32::MAX);
     *clock.0.lock().unwrap() = None;
@@ -419,28 +407,24 @@ fn idle_reconciliation_and_max_interval_failure_backoff_are_bounded() {
     assert_eq!(db.poll_trend_logs(), RECONCILE);
 }
 
-/// The datum of `oid`'s newest Log_Buffer record, as a read projects it.
-fn last_datum(db: &ObjectDatabase, oid: ObjectIdentifier) -> PropertyValue {
-    let PropertyValue::List(records) = db
-        .get(&oid)
-        .unwrap()
-        .read_property(P::LOG_BUFFER, None)
-        .unwrap()
-    else {
-        panic!("Log_Buffer is a list")
-    };
-    let Some(PropertyValue::List(fields)) = records.last() else {
-        panic!("a record was logged")
-    };
-    fields[2].clone()
+/// The datum of `oid`'s newest Log_Buffer record, decoded from the framed
+/// record ReadRange serves.
+fn last_datum(db: &ObjectDatabase, oid: ObjectIdentifier) -> LogDatum {
+    let records = db.get(&oid).unwrap().log_buffer_internal().unwrap();
+    let index = records.record_count().checked_sub(1).expect("a record");
+    let mut bytes = BytesMut::new();
+    records.encode_record(index, &mut bytes).unwrap();
+    let (record, end) = bacnet_encoding::constructed::decode_log_record(&bytes, 0).unwrap();
+    assert_eq!(end, bytes.len());
+    record.log_datum
 }
 
-/// A failure datum, as a Log_Buffer read projects it.
-fn failure(class: ErrorClass, code: ErrorCode) -> PropertyValue {
-    PropertyValue::List(vec![
-        PropertyValue::Unsigned(class.to_raw().into()),
-        PropertyValue::Unsigned(code.to_raw().into()),
-    ])
+/// A failure datum.
+fn failure(class: ErrorClass, code: ErrorCode) -> LogDatum {
+    LogDatum::Failure {
+        error_class: class.to_raw().into(),
+        error_code: code.to_raw().into(),
+    }
 }
 
 /// The fixture with AV-1 at 42.5, `local_devices` added, and the Trend Log's
@@ -501,7 +485,7 @@ fn a_reference_naming_this_device_logs_the_local_value() {
     for local_devices in [&[100][..], &[100, 200]] {
         let (mut db, oid) = qualified_fixture(local_devices, Some(100));
         db.poll_trend_logs();
-        assert_eq!(last_datum(&db, oid), PropertyValue::Real(42.5));
+        assert_eq!(last_datum(&db, oid), LogDatum::RealValue(42.5));
     }
 }
 
@@ -510,7 +494,7 @@ fn a_reference_without_a_device_logs_the_local_value() {
     for local_devices in [&[][..], &[100]] {
         let (mut db, oid) = qualified_fixture(local_devices, None);
         db.poll_trend_logs();
-        assert_eq!(last_datum(&db, oid), PropertyValue::Real(42.5));
+        assert_eq!(last_datum(&db, oid), LogDatum::RealValue(42.5));
     }
 }
 

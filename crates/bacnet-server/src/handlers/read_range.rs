@@ -6,9 +6,9 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
 use bacnet_types::primitives::{Date, Time};
 
-#[path = "read_range_audit.rs"]
-mod audit;
-pub(crate) use audit::RangeItems;
+#[path = "read_range_logs.rs"]
+mod logs;
+pub(crate) use logs::RangeItems;
 #[path = "read_range_items.rs"]
 mod items;
 #[path = "read_range_page.rs"]
@@ -178,9 +178,9 @@ where
 /// Handle a ReadRange request against standalone object data.
 ///
 /// By Position uses the list's exact one-based order. By Sequence and By Time
-/// use aligned resident identities supplied for `LOG_BUFFER` by the object; an
-/// Audit Log's `LOG_BUFFER` comes from its record store, which ReadProperty
-/// refuses.
+/// use aligned resident identities supplied for `LOG_BUFFER` by the object. A
+/// built-in log's `LOG_BUFFER`, which ReadProperty refuses, comes from its
+/// record store: each item is one encoded record.
 /// Like [`handle_read_property`], this low-level helper has no executor
 /// context: a built-in Device's COV subscription lists read as the object
 /// holds them, empty. Running server reads page the live subscription table.
@@ -297,8 +297,8 @@ fn read_range_items(
 /// Select the request's page from one read of the target list. A running
 /// server's `view` serves the Device's COV subscription lists from the
 /// snapshot it took for this request, so every item, flag and count comes
-/// from the same instant. An Audit Log's Log_Buffer is paged straight from
-/// the stored object's record store, which the Device view has no part in.
+/// from the same instant. A log's Log_Buffer is paged straight from the
+/// stored object's records, which the Device view has no part in.
 fn prepare_read_range<'a>(
     db: &'a ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
@@ -310,7 +310,7 @@ fn prepare_read_range<'a>(
     })?;
     let served = view.map(|view| view.object(stored));
     let object: &dyn BACnetObject = served.as_ref().map_or(stored, |served| served);
-    let (items, mut audit_identities) = match audit::audit_log_buffer(stored, &request)? {
+    let (items, mut buffer_identities) = match logs::log_buffer(stored, &request)? {
         Some((items, identities)) => (items, Some(identities)),
         None => (
             RangeItems::Values(read_range_items(db, view, object, &request)?),
@@ -318,7 +318,7 @@ fn prepare_read_range<'a>(
         ),
     };
     let mut log_identities = || {
-        audit_identities
+        buffer_identities
             .take()
             .unwrap_or_else(|| object.log_record_identities_internal())
     };

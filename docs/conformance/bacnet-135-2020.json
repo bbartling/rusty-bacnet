@@ -1036,6 +1036,8 @@
     "crates/bacnet-objects/src/log_buffer.rs::LogRecordIdentity",
     "crates/bacnet-objects/src/log_buffer.rs::LogRecordBuffer",
     "crates/bacnet-objects/src/traits.rs::BACnetObject::log_record_identities_internal",
+    "crates/bacnet-objects/src/traits.rs::BACnetObject::log_buffer_internal",
+    "crates/bacnet-objects/src/log_buffer.rs::LogBufferRecords",
     "crates/bacnet-objects/src/event_log.rs::EventLogObject",
     "crates/bacnet-objects/src/trend/mod.rs::TrendLogObject",
     "crates/bacnet-objects/src/trend/multiple.rs::TrendLogMultipleObject"
@@ -1046,8 +1048,11 @@
     "crates/bacnet-objects/src/log_buffer.rs::tests::log_buffer_clear_preserves_counter_and_constructor_resets_it",
     "crates/bacnet-objects/src/event_log/tests.rs::event_log_identities_align_after_eviction_and_differ_from_position",
     "crates/bacnet-objects/src/event_log/tests.rs::event_log_total_record_count_is_u32_and_wraps_max_to_one",
-    "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_log_projects_only_present_status_flags_as_fourth_field",
-    "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_multiple_projects_each_record_framed"
+    "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_log_serves_status_flags_only_when_recorded",
+    "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_multiple_serves_each_record_framed",
+    "crates/bacnet-objects/src/event_log/tests.rs::log_buffer_records_are_framed_event_log_records",
+    "crates/bacnet-objects/src/event_log/tests.rs::log_buffer_serves_every_event_log_datum",
+    "crates/bacnet-objects/src/trend/tests.rs::trendlog_serves_log_buffer_records_framed"
    ],
     "negative_tests": [
      "crates/bacnet-objects/src/log_buffer.rs::tests::log_buffer_rejections_do_not_consume_sequence"
@@ -1055,10 +1060,12 @@
    "benchmarks": [],
    "public_claims": [],
     "notes": [
-     "In-memory storage/model foundation only; this row makes no public support claim. Sequence identity is object metadata and is never serialized in LOG_BUFFER. Trend Log alone projects a present legacy BACnetLogRecord.status_flags value as its formal optional fourth StatusFlags bitstring; Event Log retains that raw shared-Rust field for source compatibility but always projects only Date, Time, and datum.",
-     "Mandatory purge/status lifecycle behavior is tracked separately by BACNET-12-LOG-STATUS-LIFECYCLE, and the server's qualified By Sequence and By Time consumers are tracked by BACNET-15-READ-RANGE-LOG-BUFFER. Restart durability/persistence and formal EventLog notification-record modeling remain deferred.",
+     "In-memory storage/model foundation only; this row makes no public support claim. Sequence identity is object metadata and is never serialized in LOG_BUFFER.",
+     "Mandatory purge/status lifecycle behavior is tracked separately by BACNET-12-LOG-STATUS-LIFECYCLE, and the server's qualified By Sequence and By Time consumers are tracked by BACNET-15-READ-RANGE-LOG-BUFFER. Restart durability/persistence remains deferred.",
      "Trend Log Multiple holds BACnetLogMultipleRecord values: one LogValue per Log_DeviceObjectProperty member, a log status, or a time change. Its LOG_BUFFER serves each record framed as the Clause 21 production, with no status flags (#1203).",
-     "LogRecordIdentity holds a u64 sequence number. These three families still count in Unsigned32 and wrap at u32::MAX; an Audit Log's identities come from its record store and wrap at u64::MAX (BACNET-12-AUDIT-LOG-BUFFER, #1092)."
+     "LogRecordIdentity holds a u64 sequence number. These three families still count in Unsigned32 and wrap at u32::MAX; an Audit Log's identities come from its record store and wrap at u64::MAX (BACNET-12-AUDIT-LOG-BUFFER, #1092).",
+     "Each family stores its own Clause 21 record: Trend Log a BACnetLogRecord with optional StatusFlags, Event Log a BACnetEventLogRecord, Trend Log Multiple a BACnetLogMultipleRecord. BACnetObject::log_buffer_internal lends the buffer to ReadRange, which encodes each record as a page reaches it (#1233).",
+     "An Event Log notification record holds the encoded ConfirmedEventNotification parameters, which bacnet-services' EventNotificationRequest writes and reads. The server does not log notifications into an Event Log by itself; the application adds records."
     ]
   },
   {
@@ -1098,7 +1105,10 @@
     "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::every_local_member_is_sampled_into_one_record_in_member_order",
     "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::an_indexed_member_reads_its_element",
     "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::polled_records_follow_the_buffer_size_and_stop_when_full",
-    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::a_disabled_log_accepts_the_poll_without_a_record"
+    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::a_disabled_log_accepts_the_poll_without_a_record",
+    "crates/bacnet-objects/src/database/trend_poll/any_value_tests.rs::read_values_map_to_their_datum_or_an_any_value",
+    "crates/bacnet-objects/src/database/trend_poll/any_value_tests.rs::a_character_string_and_a_double_are_logged_and_read_back_exactly",
+    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::members_of_other_datatypes_are_logged_as_any_values"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/trend_log_clock_tests.rs::unusable_acquisition_clock_preserves_records_and_schedule_then_retries",
@@ -1136,14 +1146,15 @@
      "Trend Log Multiple: the same poller samples every Log_DeviceObjectProperty member each interval into one record, values in member order, under the shared Enable, Buffer_Size and Stop_When_Full lifecycle (#1203).",
      "Each Trend Log Multiple member resolves through ObjectDatabase::local_device as a Trend Log reference does. A member naming another device, or whose read fails, logs its own failure value; one naming instance 4194303 logs PROPERTY / NO_PROPERTY_SPECIFIED.",
      "A reference with an array index reads that element behind the ReadProperty gate the Averaging sampler shares: an index on a non-array logs PROPERTY / PROPERTY_IS_NOT_AN_ARRAY, one past the end logs INVALID_ARRAY_INDEX. An index that isn't Unsigned leaves the log unpolled (#1205).",
-     "Only POLLED logs with a nonzero Log_Interval and at least one member are polled. Trend Log Multiple triggered acquisition, Align_Intervals, Interval_Offset and intrinsic reporting are not modeled."
+     "Only POLLED logs with a nonzero Log_Interval and at least one member are polled. Trend Log Multiple triggered acquisition, Align_Intervals, Interval_Offset and intrinsic reporting are not modeled.",
+     "Both pollers log a value with no alternative of its own (CharacterString, Double, Date, ObjectIdentifier, OctetString, a whole array, a framed constructed value) as any-value holding the encoding a ReadProperty of it carries. A BitString logs as bitstring-value, and only a NULL value logs as null-value (#1236)."
     ]
   },
   {
    "id": "BACNET-15-READ-RANGE-LOG-BUFFER",
-    "standard_anchor": "Clause 12.1.5.2 (PDF p. 164 / printed p. 162); Clause 12.27 (PDF pp. 337-340 / printed pp. 335-338); Clause 15.8 and Clause 15.8.1.1.4-15.8.1.3 (PDF pp. 747-753 / printed pp. 745-751); Clause 21.6 BACnetEventLogRecord, BACnetLogRecord, and BACnetLogMultipleRecord (PDF pp. 906, 916)",
+    "standard_anchor": "Clause 12.1.5.2 (PDF p. 164 / printed p. 162); Clause 12.27 (PDF pp. 337-340 / printed pp. 335-338); Clause 15.8 and Clause 15.8.1.1.4-15.8.1.3 (PDF pp. 747-753 / printed pp. 745-751); Clause 21.6 BACnetEventLogRecord, BACnetLogRecord, and BACnetLogMultipleRecord (PDF pp. 906, 916); Clauses 12.25.14, 12.27.13 and 12.30.19 Log_Buffer (PDF pp. 320-321, 339-340, 362-363); Clause 15.5.1.3.1 and Clause 15.7.3.1.2 (READ_ACCESS_DENIED)",
    "priority": "P1",
-    "requirement_summary": "The bundled server serves ReadRange only on a BACnetLIST target (BACNET-15-READ-RANGE-TARGET-KIND) and rejects an array index when the object classifies the property as a BACnetLIST or scalar, then selects By Position around an exact one-based list position and By Sequence or By Time through aligned resident identities for Event Log, Trend Log, and Trend Log Multiple LOG_BUFFER properties. By Time anchors positive Count at the first resident timestamp strictly newer than the specific reference and negative Count at the last resident timestamp strictly older, preserves oldest-to-newest resident order across duplicate or nonmonotonic clock-rollback timestamps, and never sorts by time. Empty misses carry no endpoint flags or First Sequence Number; nonempty identity-based results report included resident endpoints and the oldest returned record's nonzero sequence. Trend alone projects its optional top-level StatusFlags; Event projects Date, Time, and datum only, and Trend Log Multiple serves each record framed as BACnetLogMultipleRecord. The client validates the required nonzero First Sequence Number on every nonempty By Sequence or By Time ACK.",
+    "requirement_summary": "The bundled server serves ReadRange only on a BACnetLIST target (BACNET-15-READ-RANGE-TARGET-KIND) and rejects an array index when the object classifies the property as a BACnetLIST or scalar, then selects By Position around an exact one-based list position and By Sequence or By Time through aligned resident identities for the Event Log, Trend Log Multiple and Trend Log LOG_BUFFER properties. By Time anchors positive Count at the first resident timestamp strictly newer than the specific reference and negative Count at the last resident timestamp strictly older, preserves oldest-to-newest resident order across duplicate or nonmonotonic clock-rollback timestamps, and never sorts by time. Empty misses carry no endpoint flags or First Sequence Number; nonempty identity-based results report included resident endpoints and the oldest returned record's nonzero sequence. ReadProperty and ReadPropertyMultiple refuse these LOG_BUFFER properties with PROPERTY / READ_ACCESS_DENIED, inline inside ALL and REQUIRED, and each ReadRange item is one record framed as its Clause 21 production: BACnetLogRecord for Trend Log (with its optional StatusFlags), BACnetEventLogRecord for Event Log, and BACnetLogMultipleRecord for Trend Log Multiple. The client validates the required nonzero First Sequence Number on every nonempty By Sequence or By Time ACK.",
    "status": "in-progress",
     "code_anchors": [
      "crates/bacnet-server/src/handlers/read_range.rs::select_signed_range",
@@ -1155,7 +1166,13 @@
      "crates/bacnet-encoding/src/constructed/log_multiple_record.rs::encode_log_multiple_record",
      "crates/bacnet-encoding/src/constructed/log_multiple_record.rs::decode_log_multiple_record",
      "crates/bacnet-client/src/read_range.rs::validate_ack",
-     "crates/bacnet-server/src/handlers/read_range_audit.rs::RangeItems",
+     "crates/bacnet-server/src/handlers/read_range_logs.rs::RangeItems",
+     "crates/bacnet-server/src/handlers/read_range_logs.rs::log_buffer",
+     "crates/bacnet-objects/src/traits.rs::BACnetObject::log_buffer_internal",
+     "crates/bacnet-encoding/src/constructed/log_record.rs::encode_log_record",
+     "crates/bacnet-encoding/src/constructed/log_record.rs::decode_log_record",
+     "crates/bacnet-encoding/src/constructed/event_log_record.rs::encode_event_log_record",
+     "crates/bacnet-encoding/src/constructed/event_log_record.rs::decode_event_log_record",
      "crates/bacnet-services/src/read_range.rs::RangeSpec"
    ],
    "positive_tests": [
@@ -1170,6 +1187,13 @@
      "crates/bacnet-server/src/handlers/tests/read_range_time.rs::read_range_preserves_family_specific_status_projection_bytes",
      "crates/bacnet-server/src/handlers/tests/read_range_multiple.rs::polled_multiple_records_read_range_with_exact_bytes",
      "crates/bacnet-server/src/handlers/tests/read_range_multiple.rs::read_range_multiple_records_decode_back_to_the_polled_values",
+     "crates/bacnet-server/src/handlers/tests/read_range_log_records.rs::trend_log_read_range_serves_every_record_kind_with_exact_bytes",
+     "crates/bacnet-server/src/handlers/tests/read_range_log_records.rs::event_log_read_range_serves_every_record_kind_with_exact_bytes",
+     "crates/bacnet-encoding/src/constructed/tests/log_record.rs::log_record_kinds_have_exact_bytes_and_round_trip",
+     "crates/bacnet-encoding/src/constructed/tests/log_record.rs::log_record_every_plain_datum_has_its_own_tag",
+     "crates/bacnet-encoding/src/constructed/tests/log_record.rs::consecutive_log_records_decode_by_returned_offset",
+     "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_kinds_have_exact_bytes_and_round_trip",
+     "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::consecutive_event_log_records_decode_by_returned_offset",
      "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::log_multiple_record_values_have_exact_bytes_and_round_trip",
      "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::log_multiple_record_every_alternative_round_trips",
      "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::consecutive_log_multiple_records_decode_by_returned_offset",
@@ -1185,6 +1209,13 @@
      "crates/bacnet-server/src/handlers/tests/read_range_time.rs::indexed_log_buffer_is_rejected_for_every_log_family",
      "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::log_multiple_record_rejects_unencodable_values_without_writing",
      "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::log_multiple_record_decoder_rejects_malformed_records",
+     "crates/bacnet-encoding/src/constructed/tests/log_record.rs::log_record_rejects_unencodable_values_without_writing",
+     "crates/bacnet-encoding/src/constructed/tests/log_record.rs::log_record_decoder_rejects_malformed_records",
+     "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_rejects_unencodable_values_without_writing",
+     "crates/bacnet-encoding/src/constructed/tests/event_log_record.rs::event_log_record_decoder_rejects_malformed_records",
+     "crates/bacnet-server/src/handlers/tests/property_metadata/log.rs::rpm_and_rp_refuse_log_buffer_while_read_range_serves_framed_records",
+     "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_logs_refuse_read_property_of_log_buffer",
+     "crates/bacnet-objects/src/event_log/tests.rs::read_property_refuses_log_buffer",
      "crates/bacnet-server/src/handlers/tests/read_range_time.rs::zero_array_index_is_rejected_by_request_decoder",
      "crates/bacnet-services/src/read_range_width_tests.rs::request_unsigned_fields_reject_overflow"
    ],
@@ -1194,11 +1225,13 @@
      "Qualified PR-0704 evidence only; no full ReadRange or log-family support claim is made. By Sequence and By Time are limited to LOG_BUFFER properties whose object supplies an exactly aligned resident identity view.",
      "Another list property or an absent, malformed, or misaligned timestamp identity view fails PROPERTY / LIST_ITEM_NOT_TIMESTAMPED for By Time; an unnumbered or misaligned sequence identity view fails PROPERTY / LIST_ITEM_NOT_NUMBERED for By Sequence.",
      "ReadRange applies the object-owned BACnetARRAY classification after a whole-property read, so an unknown property keeps UNKNOWN_PROPERTY and every index on these BACnetLIST LOG_BUFFER properties fails PROPERTY / PROPERTY_IS_NOT_AN_ARRAY.",
-     "A target that is not a BACnetLIST fails SERVICES / PROPERTY_IS_NOT_A_LIST before either identity check (#1025). The shared raw Rust record retains status flags for source compatibility, but Clause 21.6 serializes top-level optional StatusFlags only for Trend Log, not Event Log or Trend Log Multiple.",
-     "This implementation fully encodes every selected item without a separate response/PDU cap, so MORE_ITEMS remains FALSE. Response-size pagination/segmentation, persistence/restart, formal Event Log notification records, and complete ReadRange/log conformance remain deferred. No runtime PICS/service bit is changed.",
+     "A target that is not a BACnetLIST fails SERVICES / PROPERTY_IS_NOT_A_LIST before either identity check (#1025).",
+     "This implementation fully encodes every selected item without a separate response/PDU cap, so MORE_ITEMS remains FALSE. Response-size pagination/segmentation, persistence/restart, and complete ReadRange/log conformance remain deferred. No runtime PICS/service bit is changed.",
      "Trend Log Multiple LOG_BUFFER items are BACnetLogMultipleRecord encodings: a context-tagged timestamp and log data, each member value under its own tag 0 to 8. All three range forms return them byte for byte (#1203).",
      "Reference Index and Reference Sequence Number decode as Unsigned64, and First Sequence Number encodes and decodes as Unsigned64, because the stack hosts Audit Log (Clauses 15.8.1.1.4.1.1, 15.8.1.1.4.2.1 and 15.8.1.2.7, #1092). An Event or Trend log holds no sequence above 2^32 - 1, so such a reference reads empty instead of failing to decode.",
-     "An Audit Log's LOG_BUFFER uses the same selection and page budget over identities built from its record store (BACNET-12-AUDIT-LOG-BUFFER). Its items are encoded only as a page reaches them."
+     "An Audit Log's LOG_BUFFER uses the same selection and page budget over identities built from its record store (BACNET-12-AUDIT-LOG-BUFFER). Its items are encoded only as a page reaches them.",
+     "Trend Log and Event Log items are BACnetLogRecord and BACnetEventLogRecord encodings, read from the object's record buffer through BACnetObject::log_buffer_internal and encoded only where a page reaches them. All three range forms return them byte for byte (#1233).",
+     "Trend Log Multiple, Trend Log and Event Log objects answer ReadProperty of LOG_BUFFER with PROPERTY / READ_ACCESS_DENIED, so RP, RPM (inline, also for ALL and REQUIRED), local and endpoint reads all refuse it; ReadRange is the only way to read the records (#1237)."
     ]
   },
   {
@@ -1211,7 +1244,7 @@
     "crates/bacnet-objects/src/audit.rs::AuditLogStorage::retained_records",
     "crates/bacnet-objects/src/audit.rs::AuditLogObject",
     "crates/bacnet-objects/src/audit/log_metadata.rs",
-    "crates/bacnet-server/src/handlers/read_range_audit.rs::audit_log_buffer",
+    "crates/bacnet-server/src/handlers/read_range_logs.rs::log_buffer",
     "crates/bacnet-server/src/handlers/read_range.rs::prepare_read_range",
     "crates/bacnet-services/src/read_range.rs::ReadRangeAck"
    ],
@@ -1239,7 +1272,8 @@
     "A ReadRange item is the record's timestamp and datum without its sequence number; By Sequence and By Time report the first one as First Sequence Number. Log-status and time-change records appear in the buffer, while AuditLogQuery returns notification records only, newest first.",
     "Sequence numbers are Unsigned64 and wrap from u64::MAX to 1. Selection follows insertion order, never numeric order, so a wrapped ring pages correctly. The ReadRange codec carries the wider references and First Sequence Number (BACNET-15-READ-RANGE-LOG-BUFFER).",
     "A page encodes only the records it reaches, so a narrow window over a 10,000-record ring does not encode the rest. The server's ReadRangeBudget bounds items and bytes as for the other logs.",
-    "Not covered: Event Log, Trend Log and Trend Log Multiple still return Log_Buffer through ReadProperty, though their clauses also limit it to ReadRange; Buffer_Size writes; and a network route to purge the ring."
+    "Not covered: Buffer_Size writes, and a network route to purge the ring.",
+    "The other logs (Trend Log Multiple, Trend Log, Event Log) refuse ReadProperty of Log_Buffer the same way, through the same helper (BACNET-15-READ-RANGE-LOG-BUFFER, #1237)."
    ]
   },
   {
@@ -1284,7 +1318,8 @@
     "This is a qualifying slice of #261, not an all-object conformance claim. Canonical metadata includes Property_List; the legacy property_list projection and RPM ALL/REQUIRED omit it, while wire Property_List also omits Object_Identifier, Object_Name, and Object_Type.",
     "Conditional rows record why a present property exists, and conditional write capability contributes to the existing PICS writable flag. Date Value and every object type other than Time Value, Binary Input, Life Safety Point, and Life Safety Zone remain on the explicit legacy fallback.",
     "Life Safety POINT_BASE/ZONE_BASE rows mirror dispatch exactly: Mode carries table W and accepts only the modes in Accepted_Modes, which is network read-only like Silenced and Operation_Expected, and Tracking_Value (served on both objects since #1092) and Reliability are WhenOutOfService, writable only while Out_Of_Service is TRUE as footnote 1 of both tables asks (#1108, BACNET-12-LIFE-SAFETY-OUT-OF-SERVICE-SIMULATION).",
-    "Audit Log metadata lists Log_Buffer as a required read-only row, so it is in Property_List, RPM ALL and REQUIRED and the PICS; a property read of it returns READ_ACCESS_DENIED and ReadRange serves it (#1092, BACNET-12-AUDIT-LOG-BUFFER)."
+    "Audit Log metadata lists Log_Buffer as a required read-only row, so it is in Property_List, RPM ALL and REQUIRED and the PICS; a property read of it returns READ_ACCESS_DENIED and ReadRange serves it (#1092, BACNET-12-AUDIT-LOG-BUFFER).",
+    "Trend Log Multiple, Trend Log and Event Log keep Log_Buffer as a required read-only row the same way: present in Property_List, RPM ALL and REQUIRED and the PICS, refused by a property read and served by ReadRange (#1237)."
    ]
   },
   {

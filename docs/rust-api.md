@@ -2046,9 +2046,35 @@ transition can replace it.
 A Trend Log Multiple record is a `BACnetLogMultipleRecord`: a timestamp and a
 `LogData` holding one `LogValue` per Log_DeviceObjectProperty member, a log
 status, or a time change. `TrendLogMultipleObject::add_record` takes one and
-`records()` returns them; Log_Buffer serves each one framed as Clause 21's
-BACnetLogMultipleRecord (`bacnet_encoding::constructed::encode_log_multiple_record`
-and `decode_log_multiple_record`).
+`records()` returns them.
+
+An Event Log record is a `BACnetEventLogRecord`: a timestamp and an
+`EventLogDatum` holding a log status, a time change, or a notification as the
+encoded parameters of a ConfirmedEventNotification request
+(`bacnet_services::alarm_event::EventNotificationRequest::encode` writes them,
+`decode` reads them back). `EventLogObject::add_record` takes one. A Trend Log
+record stays a `BACnetLogRecord`, whose `LogDatum::SignedValue` is an `i32`.
+
+Trend Log Multiple, Trend Log and Event Log objects list `Log_Buffer` in their
+Property_List, but ReadProperty and ReadPropertyMultiple answer it with
+`PROPERTY / READ_ACCESS_DENIED` (also inside RPM `ALL` and `REQUIRED`):
+Clauses 12.25.14, 12.27.13 and 12.30.19 make the buffer reachable only
+through ReadRange. ReadRange reads each object's records through
+`BACnetObject::log_buffer_internal`, a `LogBufferRecords` view, and returns
+each item as one record framed as its Clause 21 production:
+
+| Object | Record | Codec in `bacnet_encoding::constructed` |
+|--------|--------|------------------------------------------|
+| Trend Log | BACnetLogRecord | `encode_log_record` / `decode_log_record` |
+| Event Log | BACnetEventLogRecord | `encode_event_log_record` / `decode_event_log_record` |
+| Trend Log Multiple | BACnetLogMultipleRecord | `encode_log_multiple_record` / `decode_log_multiple_record` |
+
+Each decoder returns the offset after the record, so a client walks a
+ReadRange ACK's `item_data` record by record. The poller logs a value whose
+datatype has no alternative of its own (a CharacterString, Double, Date,
+ObjectIdentifier, whole array and so on) as `AnyValue` holding the value's
+own encoding, the bytes a ReadProperty of it carries; NULL is logged only
+for a NULL value.
 
 The pre-1.0 `BACnetObject` contract has two fallible trend hooks:
 `add_trend_record` for Trend Log records and `add_trend_multiple_record` for

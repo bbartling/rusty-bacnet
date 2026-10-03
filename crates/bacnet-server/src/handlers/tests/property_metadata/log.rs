@@ -5,8 +5,8 @@ use bacnet_objects::{
     trend::{TrendLogMultipleObject, TrendLogObject},
 };
 use bacnet_types::constructed::{
-    BACnetDeviceObjectPropertyReference, BACnetLogMultipleRecord, BACnetLogRecord, LogData,
-    LogDatum, LogValue,
+    BACnetDeviceObjectPropertyReference, BACnetEventLogRecord, BACnetLogMultipleRecord,
+    BACnetLogRecord, EventLogDatum, LogData, LogDatum, LogValue,
 };
 use bacnet_types::primitives::{Date, PropertyValue, Time};
 use PropertyIdentifier as P;
@@ -26,13 +26,19 @@ fn log_objects(capacity: u32, configured: bool) -> [Box<dyn BACnetObject>; 3] {
         multiple.add_property_reference(reference);
         trend.set_logging_type(2);
         multiple.set_logging_type(2);
-        for (log_datum, status_flags, log_data) in [
+        for (log_datum, status_flags, log_data, event_datum) in [
             (
                 LogDatum::UnsignedValue(42),
                 Some(0b1010),
                 LogData::Values(vec![LogValue::UnsignedValue(42)]),
+                EventLogDatum::TimeChange(42.0),
             ),
-            (LogDatum::LogStatus(3), None, LogData::LogStatus(3)),
+            (
+                LogDatum::LogStatus(3),
+                None,
+                LogData::LogStatus(3),
+                EventLogDatum::LogStatus(3),
+            ),
         ] {
             let record = BACnetLogRecord {
                 date: Date {
@@ -58,7 +64,13 @@ fn log_objects(capacity: u32, configured: bool) -> [Box<dyn BACnetObject>; 3] {
                     log_data,
                 })
                 .unwrap();
-            event.add_record(record).unwrap();
+            event
+                .add_record(BACnetEventLogRecord {
+                    date: record.date,
+                    time: record.time,
+                    log_datum: event_datum,
+                })
+                .unwrap();
         }
     }
     let mut objects: [Box<dyn BACnetObject>; 3] =
@@ -320,30 +332,29 @@ fn rpm_log_indexed_property_list_and_list_gates_preserve_bytes() {
     }
 }
 
+/// Clauses 12.25.14, 12.27.13 and 12.30.19 open a log buffer to ReadRange
+/// only (#1237): RP and RPM refuse Log_Buffer with READ_ACCESS_DENIED, and
+/// ReadRange serves each record framed as its Clause 21 production with no
+/// sequence number inside (#1233).
 #[test]
-fn rpm_log_buffer_profile_bytes_match_rp_without_sequence_identity() {
+fn rpm_and_rp_refuse_log_buffer_while_read_range_serves_framed_records() {
+    use bacnet_services::read_range::{ReadRangeAck, ReadRangeRequest};
     for object in log_objects(3, true) {
         let oid = object.object_identifier();
-        // Independent legacy application-value bytes: Date, Time, Unsigned;
-        // only single-channel Trend appends the supplied StatusFlags. The next
-        // resident record is Date, Time, LogStatus. Trend Log Multiple frames
-        // each record whole instead (#1203): the timestamp [0], then log-data
-        // [1] holding the member list [1] or the log-status [0]. None of them
-        // contains a sequence.
-        let expected = if oid.object_type() == ObjectType::TREND_LOG_MULTIPLE {
-            vec![
-                0x0e, 0xa4, 126, 9, 13, 7, 0xb4, 12, 0, 0, 0, 0x0f, 0x1e, 0x1e, 0x39, 42, 0x1f,
-                0x1f, 0x0e, 0xa4, 126, 9, 13, 7, 0xb4, 12, 0, 0, 0, 0x0f, 0x1e, 0x0a, 5, 0x60,
-                0x1f,
-            ]
-        } else {
-            let mut expected = vec![0xa4, 126, 9, 13, 7, 0xb4, 12, 0, 0, 0, 0x21, 42];
-            if oid.object_type() == ObjectType::TREND_LOG {
-                expected.extend([0x82, 4, 0xa0]);
-            }
-            expected.extend([0xa4, 126, 9, 13, 7, 0xb4, 12, 0, 0, 0, 0x82, 5, 0x60]);
-            expected
+        // Each record opens with its timestamp [0]; the datum [1] follows.
+        // Only a Trend Log appends the supplied StatusFlags as [2]. The
+        // second resident record is a log-status [0] for every family.
+        let timestamp = [0x0e, 0xa4, 126, 9, 13, 7, 0xb4, 12, 0, 0, 0, 0x0f];
+        let first: &[u8] = match oid.object_type() {
+            // unsigned-value [4], then status-flags [2].
+            ObjectType::TREND_LOG => &[0x1e, 0x49, 42, 0x1f, 0x2a, 0x04, 0xa0],
+            // log-data [1] holding the member list [1].
+            ObjectType::TREND_LOG_MULTIPLE => &[0x1e, 0x1e, 0x39, 42, 0x1f, 0x1f],
+            // time-change [2]: 42.0 s.
+            _ => &[0x1e, 0x2c, 0x42, 0x28, 0, 0, 0x1f],
         };
+        let status = [0x1e, 0x0a, 5, 0x60, 0x1f];
+        let expected = [&timestamp[..], first, &timestamp, &status].concat();
         let identities = object.log_record_identities_internal().unwrap();
         assert_eq!(
             identities
@@ -354,6 +365,7 @@ fn rpm_log_buffer_profile_bytes_match_rp_without_sequence_identity() {
         );
         let mut db = ObjectDatabase::new();
         db.add(object).unwrap();
+
         let references = [
             (P::LOG_BUFFER, None),
             (P::RECORD_COUNT, None),
@@ -367,13 +379,6 @@ fn rpm_log_buffer_profile_bytes_match_rp_without_sequence_identity() {
         assert_eq!(results.len(), 3);
         for (result, &(p, _)) in results.iter().zip(&references) {
             assert_eq!(result.property_identifier, p);
-            assert!(result.error.is_none());
-            let value = if p == P::LOG_BUFFER {
-                expected.as_slice()
-            } else {
-                &[0x21, 2]
-            };
-            assert_eq!(result.property_value.as_deref(), Some(value));
             let rp = ReadPropertyRequest {
                 object_identifier: oid,
                 property_identifier: p,
@@ -382,12 +387,62 @@ fn rpm_log_buffer_profile_bytes_match_rp_without_sequence_identity() {
             let mut rp_bytes = BytesMut::new();
             rp.encode(&mut rp_bytes);
             let mut response = BytesMut::new();
-            handle_read_property(&db, &rp_bytes, &mut response).unwrap();
-            assert_eq!(
-                ReadPropertyACK::decode(&response).unwrap().property_value,
-                value
-            );
+            let rp_result = handle_read_property(&db, &rp_bytes, &mut response);
+            if p == P::LOG_BUFFER {
+                assert_eq!(
+                    result.error,
+                    Some((ErrorClass::PROPERTY, ErrorCode::READ_ACCESS_DENIED))
+                );
+                assert!(result.property_value.is_none());
+                assert!(matches!(rp_result, Err(Error::Protocol { class, code })
+                    if class == ErrorClass::PROPERTY.to_raw() as u32
+                        && code == ErrorCode::READ_ACCESS_DENIED.to_raw() as u32));
+            } else {
+                assert!(result.error.is_none());
+                assert_eq!(result.property_value.as_deref(), Some(&[0x21, 2][..]));
+                rp_result.unwrap();
+                assert_eq!(
+                    ReadPropertyACK::decode(&response).unwrap().property_value,
+                    [0x21, 2]
+                );
+            }
         }
         assert_budget_parity(&db, &bytes, &legacy, references.len());
+        // ALL and REQUIRED both name Log_Buffer and report it inline.
+        for selector in [P::ALL, P::REQUIRED] {
+            let mut response = BytesMut::new();
+            handle_read_property_multiple(&db, &request(oid, &[(selector, None)]), &mut response)
+                .unwrap();
+            let ack = ReadPropertyMultipleACK::decode(&response).unwrap();
+            let results = &ack.list_of_read_access_results[0].list_of_results;
+            let log_buffer = results
+                .iter()
+                .find(|result| result.property_identifier == P::LOG_BUFFER)
+                .unwrap();
+            assert_eq!(
+                log_buffer.error,
+                Some((ErrorClass::PROPERTY, ErrorCode::READ_ACCESS_DENIED)),
+                "{oid:?} {selector:?}"
+            );
+            assert!(results
+                .iter()
+                .filter(|result| result.property_identifier != P::LOG_BUFFER)
+                .all(|result| result.error.is_none()));
+        }
+
+        let mut range_request = BytesMut::new();
+        ReadRangeRequest {
+            object_identifier: oid,
+            property_identifier: P::LOG_BUFFER,
+            property_array_index: None,
+            range: None,
+        }
+        .encode(&mut range_request)
+        .unwrap();
+        let mut range_ack = BytesMut::new();
+        handle_read_range(&db, &range_request, &mut range_ack).unwrap();
+        let range_ack = ReadRangeAck::decode(&range_ack).unwrap();
+        assert_eq!(range_ack.item_count, 2);
+        assert_eq!(range_ack.item_data, expected, "{oid:?}");
     }
 }

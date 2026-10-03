@@ -2,13 +2,17 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use bacnet_encoding::constructed::decode_log_multiple_record;
+use bacnet_encoding::constructed::{
+    decode_event_log_record, decode_log_multiple_record, decode_log_record,
+};
 use bacnet_types::constructed::{
-    BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue,
+    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
+    LogDatum, LogValue,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, PropertyValue, Time};
+use bytes::BytesMut;
 
 use crate::clock::{ClockFrame, ClockReader};
 use crate::event_log::EventLogObject;
@@ -65,10 +69,11 @@ impl Family {
         }
     }
 
-    /// The resident records, a Trend Log Multiple's as single-datum records.
+    /// The resident records, an Event Log's and a Trend Log Multiple's as
+    /// Trend Log records.
     fn records(&self) -> VecDeque<BACnetLogRecord> {
         match self {
-            Self::Event(object) => object.records().clone(),
+            Self::Event(object) => object.records().iter().map(single_event).collect(),
             Self::Trend(object) => object.records().clone(),
             Self::TrendMultiple(object) => object.records().iter().map(single).collect(),
         }
@@ -76,9 +81,24 @@ impl Family {
 
     fn add_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
         match self {
-            Self::Event(object) => object.add_record(record),
+            Self::Event(object) => object.add_record(event(record)),
             Self::Trend(object) => object.add_record(record),
             Self::TrendMultiple(object) => object.add_record(multiple(record)),
+        }
+    }
+
+    /// The newest record as ReadRange serves it, decoded back as a Trend Log
+    /// record the way [`Self::records`] maps it.
+    fn served_last(&self) -> BACnetLogRecord {
+        let records = self.object().log_buffer_internal().unwrap();
+        let mut bytes = BytesMut::new();
+        records
+            .encode_record(records.record_count() - 1, &mut bytes)
+            .unwrap();
+        match self {
+            Self::Event(_) => single_event(&decode_event_log_record(&bytes, 0).unwrap().0),
+            Self::Trend(_) => decode_log_record(&bytes, 0).unwrap().0,
+            Self::TrendMultiple(_) => single(&decode_log_multiple_record(&bytes, 0).unwrap().0),
         }
     }
 
@@ -208,6 +228,36 @@ fn multiple(record: BACnetLogRecord) -> BACnetLogMultipleRecord {
     }
 }
 
+/// A single-datum test record as an Event Log record, its sample carried as
+/// a clock change.
+fn event(record: BACnetLogRecord) -> BACnetEventLogRecord {
+    let log_datum = match record.log_datum {
+        LogDatum::LogStatus(bits) => EventLogDatum::LogStatus(bits),
+        LogDatum::UnsignedValue(value) => EventLogDatum::TimeChange(value as f32),
+        other => panic!("no Event Log form for {other:?}"),
+    };
+    BACnetEventLogRecord {
+        date: record.date,
+        time: record.time,
+        log_datum,
+    }
+}
+
+/// The inverse of [`event`].
+fn single_event(record: &BACnetEventLogRecord) -> BACnetLogRecord {
+    let log_datum = match &record.log_datum {
+        EventLogDatum::LogStatus(bits) => LogDatum::LogStatus(*bits),
+        EventLogDatum::TimeChange(value) => LogDatum::UnsignedValue(*value as u64),
+        other => panic!("no single-datum form for {other:?}"),
+    };
+    BACnetLogRecord {
+        date: record.date,
+        time: record.time,
+        log_datum,
+        status_flags: None,
+    }
+}
+
 /// The inverse of [`multiple`].
 fn single(record: &BACnetLogMultipleRecord) -> BACnetLogRecord {
     let log_datum = match &record.log_data {
@@ -242,28 +292,7 @@ fn assert_status(object: &Family, bits: u8) {
     assert_eq!(record.time, valid_frame().local_time);
     assert_eq!(record.log_datum, LogDatum::LogStatus(bits));
     assert_eq!(record.status_flags, None);
-
-    let PropertyValue::List(records) = object.read(PropertyIdentifier::LOG_BUFFER) else {
-        panic!("expected projected records");
-    };
-    if let Family::TrendMultiple(_) = object {
-        let Some(PropertyValue::ApplicationData(bytes)) = records.last() else {
-            panic!("expected a framed status record");
-        };
-        let (decoded, _) = decode_log_multiple_record(bytes, 0).unwrap();
-        assert_eq!(decoded.log_data, LogData::LogStatus(bits));
-        return;
-    }
-    let PropertyValue::List(fields) = records.last().expect("projected status record") else {
-        panic!("expected projected record fields");
-    };
-    assert_eq!(
-        fields[2],
-        PropertyValue::BitString {
-            unused_bits: 5,
-            data: vec![(bits & 0b111) << 5],
-        }
-    );
+    assert_eq!(&object.served_last(), record);
 }
 
 fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {

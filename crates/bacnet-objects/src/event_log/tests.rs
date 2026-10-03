@@ -1,8 +1,10 @@
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
-use bacnet_types::constructed::LogDatum;
+use bacnet_encoding::constructed::encode_event_log_record;
+use bacnet_types::constructed::EventLogDatum;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::primitives::{Date, Time};
+use bytes::BytesMut;
 use std::sync::Arc;
 
 struct FixedClock;
@@ -40,12 +42,40 @@ fn make_time(hour: u8) -> Time {
     }
 }
 
-fn make_record(hour: u8, value: f32) -> BACnetLogRecord {
-    BACnetLogRecord {
+/// A clock-change record, the one ordinary kind that needs no notification.
+fn make_record(hour: u8, value: f32) -> BACnetEventLogRecord {
+    BACnetEventLogRecord {
         date: make_date(),
         time: make_time(hour),
-        log_datum: LogDatum::RealValue(value),
-        status_flags: None,
+        log_datum: EventLogDatum::TimeChange(value),
+    }
+}
+
+fn framed(record: &BACnetEventLogRecord) -> Vec<u8> {
+    let mut buf = BytesMut::new();
+    encode_event_log_record(record, &mut buf).unwrap();
+    buf.to_vec()
+}
+
+/// Each resident record as ReadRange serves it.
+fn served(el: &EventLogObject) -> Vec<Vec<u8>> {
+    let records = el.log_buffer_internal().unwrap();
+    (0..records.record_count())
+        .map(|index| {
+            let mut buf = BytesMut::new();
+            records.encode_record(index, &mut buf).unwrap();
+            buf.to_vec()
+        })
+        .collect()
+}
+
+fn assert_read_access_denied(result: Result<PropertyValue, Error>) {
+    match result {
+        Err(Error::Protocol { class, code }) => {
+            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+            assert_eq!(code, ErrorCode::READ_ACCESS_DENIED.to_raw() as u32);
+        }
+        other => panic!("expected PROPERTY / READ_ACCESS_DENIED, got {other:?}"),
     }
 }
 
@@ -85,52 +115,45 @@ fn add_records_and_read_count() {
     assert_eq!(val, PropertyValue::Unsigned(2));
 }
 
+/// Clause 12.27.13 opens the buffer to ReadRange only (#1237): ReadProperty
+/// refuses it, empty or not, while the records stay available to ReadRange.
 #[test]
-fn read_log_buffer() {
+fn read_property_refuses_log_buffer() {
     let mut el = EventLogObject::new(1, "EL-1", 100).unwrap();
+    assert_read_access_denied(el.read_property(PropertyIdentifier::LOG_BUFFER, None));
     el.add_record(make_record(10, 72.5)).unwrap();
     el.add_record(make_record(11, 73.0)).unwrap();
-    let val = el
-        .read_property(PropertyIdentifier::LOG_BUFFER, None)
-        .unwrap();
-    if let PropertyValue::List(records) = val {
-        assert_eq!(records.len(), 2);
-        if let PropertyValue::List(fields) = &records[0] {
-            assert_eq!(fields.len(), 3);
-            assert_eq!(fields[2], PropertyValue::Real(72.5));
-        } else {
-            panic!("Expected List for log record");
-        }
-        if let PropertyValue::List(fields) = &records[1] {
-            assert_eq!(fields[2], PropertyValue::Real(73.0));
-        } else {
-            panic!("Expected List for log record");
-        }
-    } else {
-        panic!("Expected List for LOG_BUFFER");
-    }
+    assert_read_access_denied(el.read_property(PropertyIdentifier::LOG_BUFFER, None));
+    assert_eq!(el.log_buffer_internal().unwrap().record_count(), 2);
 }
 
+/// Each record is served framed as Clause 21's BACnetEventLogRecord (#1233).
 #[test]
-fn read_log_buffer_empty() {
-    let el = EventLogObject::new(1, "EL-1", 100).unwrap();
-    let val = el
-        .read_property(PropertyIdentifier::LOG_BUFFER, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::List(vec![]));
+fn log_buffer_records_are_framed_event_log_records() {
+    let mut el = EventLogObject::new(1, "EL-1", 100).unwrap();
+    el.add_record(make_record(10, 72.5)).unwrap();
+    assert_eq!(
+        served(&el),
+        vec![vec![
+            0x0E, 0xA4, 0x7C, 0x03, 0x0F, 0x05, 0xB4, 0x0A, 0x00, 0x00, 0x00,
+            0x0F, // timestamp
+            0x1E, 0x2C, 0x42, 0x91, 0x00, 0x00, 0x1F, // time-change [2]: 72.5 s
+        ]]
+    );
+    let mut buf = BytesMut::from(&b"kept"[..]);
+    assert!(el
+        .log_buffer_internal()
+        .unwrap()
+        .encode_record(1, &mut buf)
+        .is_err());
+    assert_eq!(&buf[..], b"kept");
 }
 
 #[test]
 fn ring_buffer_wraps() {
     let mut el = EventLogObject::new(1, "EL-1", 3).unwrap();
     for i in 0..5u8 {
-        el.add_record(BACnetLogRecord {
-            date: make_date(),
-            time: make_time(i),
-            log_datum: LogDatum::UnsignedValue(i as u64),
-            status_flags: None,
-        })
-        .unwrap();
+        el.add_record(make_record(i, f32::from(i))).unwrap();
     }
     assert_eq!(el.records().len(), 3);
     // Oldest records evicted; first remaining is hour=2
@@ -176,7 +199,7 @@ fn disable_logging() {
     .unwrap();
     el.add_record(make_record(10, 72.5)).unwrap();
     assert_eq!(el.records().len(), 1);
-    assert_eq!(el.records()[0].log_datum, LogDatum::LogStatus(0b001));
+    assert_eq!(el.records()[0].log_datum, EventLogDatum::LogStatus(0b001));
 }
 
 #[test]
@@ -193,7 +216,7 @@ fn clear_buffer_via_record_count() {
     )
     .unwrap();
     assert_eq!(el.records().len(), 1);
-    assert_eq!(el.records()[0].log_datum, LogDatum::LogStatus(0b010));
+    assert_eq!(el.records()[0].log_datum, EventLogDatum::LogStatus(0b010));
 }
 
 #[test]
@@ -277,56 +300,26 @@ fn write_absent_property_is_unknown() {
 }
 
 #[test]
-fn log_buffer_various_datum_types() {
+fn log_buffer_serves_every_event_log_datum() {
     let mut el = EventLogObject::new(1, "EL-1", 100).unwrap();
-    let date = make_date();
-    let time = make_time(8);
-
-    el.add_record(BACnetLogRecord {
-        date,
-        time,
-        log_datum: LogDatum::BooleanValue(true),
-        status_flags: None,
-    })
-    .unwrap();
-    el.add_record(BACnetLogRecord {
-        date,
-        time,
-        log_datum: LogDatum::EnumValue(42),
-        status_flags: Some(0b0100),
-    })
-    .unwrap();
-    el.add_record(BACnetLogRecord {
-        date,
-        time,
-        log_datum: LogDatum::NullValue,
-        status_flags: None,
-    })
-    .unwrap();
-
-    let val = el
-        .read_property(PropertyIdentifier::LOG_BUFFER, None)
-        .unwrap();
-    if let PropertyValue::List(records) = val {
-        assert_eq!(records.len(), 3);
-        if let PropertyValue::List(fields) = &records[0] {
-            assert_eq!(fields[2], PropertyValue::Boolean(true));
-        } else {
-            panic!("Expected List");
-        }
-        if let PropertyValue::List(fields) = &records[1] {
-            assert_eq!(fields[2], PropertyValue::Enumerated(42));
-        } else {
-            panic!("Expected List");
-        }
-        if let PropertyValue::List(fields) = &records[2] {
-            assert_eq!(fields[2], PropertyValue::Null);
-        } else {
-            panic!("Expected List");
-        }
-    } else {
-        panic!("Expected List for LOG_BUFFER");
+    // A notification's request parameters as `bacnet_services` encodes them;
+    // the log stores and serves them unchanged.
+    let notification = vec![0x09, 0x01, 0x1C, 0x02, 0x00, 0x00, 0x01];
+    let records = [
+        EventLogDatum::Notification(notification),
+        EventLogDatum::TimeChange(-0.5),
+        EventLogDatum::LogStatus(0b100),
+    ]
+    .map(|log_datum| BACnetEventLogRecord {
+        date: make_date(),
+        time: make_time(8),
+        log_datum,
+    });
+    for record in &records {
+        el.add_record(record.clone()).unwrap();
     }
+    assert_eq!(el.records(), &records);
+    assert_eq!(served(&el), records.iter().map(framed).collect::<Vec<_>>());
 }
 
 #[test]
@@ -337,27 +330,17 @@ fn event_log_identities_align_after_eviction_and_differ_from_position() {
     }
 
     let identities = el.log_record_identities_internal().unwrap();
-    let projected = match el
-        .read_property(PropertyIdentifier::LOG_BUFFER, None)
-        .unwrap()
-    {
-        PropertyValue::List(records) => records,
-        other => panic!("expected projected log list, got {other:?}"),
-    };
+    let wire = served(&el);
     assert_eq!(identities.len(), el.records().len());
-    assert_eq!(identities.len(), projected.len());
+    assert_eq!(identities.len(), wire.len());
     assert_eq!(identities[0].sequence_number(), 2);
     assert_ne!(identities[0].sequence_number(), 1);
-    for ((identity, raw), wire) in identities.iter().zip(el.records()).zip(projected) {
+    for ((identity, raw), wire) in identities.iter().zip(el.records()).zip(wire) {
         assert_eq!(identity.date(), raw.date);
         assert_eq!(identity.time(), raw.time);
         assert_eq!(
             wire,
-            PropertyValue::List(vec![
-                PropertyValue::Date(raw.date),
-                PropertyValue::Time(raw.time),
-                PropertyValue::Real(raw.time.hour as f32),
-            ])
+            framed(&make_record(raw.time.hour, raw.time.hour as f32))
         );
     }
 }
@@ -436,25 +419,4 @@ fn event_log_total_record_count_is_u32_and_wraps_max_to_one() {
         el.log_record_identities_internal().unwrap()[0].sequence_number(),
         1
     );
-}
-
-#[test]
-fn event_log_retains_raw_flags_but_projects_no_status_or_sequence() {
-    let mut el = EventLogObject::new(1, "EL-1", 1).unwrap();
-    let mut record = make_record(1, 42.0);
-    record.status_flags = Some(0b0100);
-    el.add_record(record).unwrap();
-
-    assert_eq!(el.records()[0].status_flags, Some(0b0100));
-    let PropertyValue::List(records) = el
-        .read_property(PropertyIdentifier::LOG_BUFFER, None)
-        .unwrap()
-    else {
-        panic!("expected projected log list");
-    };
-    let PropertyValue::List(fields) = &records[0] else {
-        panic!("expected projected record fields");
-    };
-    assert_eq!(fields.len(), 3);
-    assert_eq!(fields[2], PropertyValue::Real(42.0));
 }

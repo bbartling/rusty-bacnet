@@ -1,7 +1,8 @@
 use super::*;
-use bacnet_encoding::constructed::decode_log_multiple_record;
+use bacnet_encoding::constructed::{decode_log_multiple_record, decode_log_record};
 use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogDatum, LogValue};
 use bacnet_types::primitives::{Date, Time};
+use bytes::BytesMut;
 
 fn record(hour: u8, value: f32, status_flags: Option<u8>) -> BACnetLogRecord {
     BACnetLogRecord {
@@ -31,28 +32,50 @@ fn multiple_record(hour: u8, values: Vec<LogValue>) -> BACnetLogMultipleRecord {
     }
 }
 
-/// Decode one framed Trend Log Multiple Log_Buffer item.
-fn decoded(item: &PropertyValue) -> BACnetLogMultipleRecord {
-    let PropertyValue::ApplicationData(bytes) = item else {
-        panic!("expected a framed record, got {item:?}");
-    };
-    let (record, end) = decode_log_multiple_record(bytes, 0).unwrap();
-    assert_eq!(end, bytes.len());
-    record
+/// Each resident record as ReadRange serves it.
+fn served(object: &dyn BACnetObject) -> Vec<Vec<u8>> {
+    let records = object.log_buffer_internal().unwrap();
+    (0..records.record_count())
+        .map(|index| {
+            let mut buf = BytesMut::new();
+            records.encode_record(index, &mut buf).unwrap();
+            buf.to_vec()
+        })
+        .collect()
 }
 
-fn projected_records(object: &dyn BACnetObject) -> Vec<PropertyValue> {
-    match object
-        .read_property(PropertyIdentifier::LOG_BUFFER, None)
-        .unwrap()
-    {
-        PropertyValue::List(records) => records,
-        other => panic!("expected projected log list, got {other:?}"),
+/// The timestamp field of [`record`] at `hour`.
+fn timestamp(hour: u8) -> Vec<u8> {
+    vec![
+        0x0E, 0xA4, 0x7E, 0x08, 0x1F, 0x01, 0xB4, hour, 0x00, 0x00, 0x00, 0x0F,
+    ]
+}
+
+/// Clauses 12.25.14 and 12.30.19 open the buffer to ReadRange only (#1237).
+#[test]
+fn trend_logs_refuse_read_property_of_log_buffer() {
+    let mut trend = TrendLogObject::new(1, "TL-1", 2).unwrap();
+    trend.add_record(record(1, 10.0, None)).unwrap();
+    let mut multiple = TrendLogMultipleObject::new(1, "TLM-1", 2).unwrap();
+    multiple
+        .add_record(multiple_record(1, vec![LogValue::RealValue(10.0)]))
+        .unwrap();
+    for object in [&trend as &dyn BACnetObject, &multiple] {
+        match object.read_property(PropertyIdentifier::LOG_BUFFER, None) {
+            Err(Error::Protocol { class, code }) => {
+                assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32);
+                assert_eq!(code, ErrorCode::READ_ACCESS_DENIED.to_raw() as u32);
+            }
+            other => panic!("expected READ_ACCESS_DENIED, got {other:?}"),
+        }
+        assert_eq!(object.log_buffer_internal().unwrap().record_count(), 1);
     }
 }
 
+/// A Trend Log record carries status-flags [2] after its datum only when it
+/// recorded them (#1233).
 #[test]
-fn trend_log_projects_only_present_status_flags_as_fourth_field() {
+fn trend_log_serves_status_flags_only_when_recorded() {
     let mut trend = TrendLogObject::new(1, "TL-1", 2).unwrap();
     trend.add_record(record(1, 10.0, Some(0b0100))).unwrap();
     trend.add_record(record(1, 20.0, None)).unwrap();
@@ -64,24 +87,13 @@ fn trend_log_projects_only_present_status_flags_as_fourth_field() {
     assert_eq!(identities[0].time(), identities[1].time());
     assert_eq!(trend.records()[0].status_flags, Some(0b0100));
 
-    let projected = projected_records(&trend);
-    let PropertyValue::List(with_status) = &projected[0] else {
-        panic!("expected projected record fields");
-    };
-    assert_eq!(with_status.len(), 4);
-    assert_eq!(with_status[2], PropertyValue::Real(10.0));
-    assert_eq!(
-        with_status[3],
-        PropertyValue::BitString {
-            unused_bits: 4,
-            data: vec![0b0100_0000],
-        }
-    );
-    let PropertyValue::List(without_status) = &projected[1] else {
-        panic!("expected projected record fields");
-    };
-    assert_eq!(without_status.len(), 3);
-    assert_eq!(without_status[2], PropertyValue::Real(20.0));
+    let with_status = [
+        timestamp(1),
+        vec![0x1E, 0x2C, 0x41, 0x20, 0x00, 0x00, 0x1F, 0x2A, 0x04, 0x40],
+    ]
+    .concat();
+    let without_status = [timestamp(1), vec![0x1E, 0x2C, 0x41, 0xA0, 0x00, 0x00, 0x1F]].concat();
+    assert_eq!(served(&trend), vec![with_status, without_status]);
 }
 
 #[test]
@@ -89,31 +101,26 @@ fn trend_log_keeps_log_status_and_record_status_flags_as_distinct_bitstrings() {
     let mut trend = TrendLogObject::new(1, "TL-1", 1).unwrap();
     let mut status = record(1, 0.0, Some(0b0100));
     status.log_datum = LogDatum::LogStatus(0b101);
-    trend.add_record(status).unwrap();
+    trend.add_record(status.clone()).unwrap();
 
-    let projected = projected_records(&trend);
-    let PropertyValue::List(fields) = &projected[0] else {
-        panic!("expected projected record fields");
-    };
-    assert_eq!(fields.len(), 4);
+    let served = served(&trend);
     assert_eq!(
-        fields[2],
-        PropertyValue::BitString {
-            unused_bits: 5,
-            data: vec![0b1010_0000],
-        }
+        served,
+        vec![[
+            timestamp(1),
+            // log-status [0] inside log-datum [1], then status-flags [2].
+            vec![0x1E, 0x0A, 0x05, 0xA0, 0x1F, 0x2A, 0x04, 0x40],
+        ]
+        .concat()]
     );
     assert_eq!(
-        fields[3],
-        PropertyValue::BitString {
-            unused_bits: 4,
-            data: vec![0b0100_0000],
-        }
+        decode_log_record(&served[0], 0).unwrap(),
+        (status, served[0].len())
     );
 }
 
 #[test]
-fn trend_multiple_projects_each_record_framed() {
+fn trend_multiple_serves_each_record_framed() {
     let mut trend = TrendLogMultipleObject::new(1, "TLM-1", 2).unwrap();
     let sample = multiple_record(
         1,
@@ -127,14 +134,17 @@ fn trend_multiple_projects_each_record_framed() {
     );
     trend.add_record(sample.clone()).unwrap();
 
-    let projected = projected_records(&trend);
-    assert_eq!(projected.len(), 1);
-    assert_eq!(decoded(&projected[0]), sample);
+    let served = served(&trend);
+    assert_eq!(served.len(), 1);
+    assert_eq!(
+        decode_log_multiple_record(&served[0], 0).unwrap(),
+        (sample.clone(), served[0].len())
+    );
     assert_eq!(trend.records()[0], sample);
 }
 
 #[test]
-fn trend_family_identity_raw_and_projection_views_stay_fifo_aligned() {
+fn trend_family_identity_raw_and_served_views_stay_fifo_aligned() {
     let mut trend = TrendLogObject::new(1, "TL-1", 2).unwrap();
     let mut multiple = TrendLogMultipleObject::new(1, "TLM-1", 2).unwrap();
     for hour in 1..=3 {
@@ -149,27 +159,22 @@ fn trend_family_identity_raw_and_projection_views_stay_fifo_aligned() {
 
     for object in [&trend as &dyn BACnetObject, &multiple as &dyn BACnetObject] {
         let identities = object.log_record_identities_internal().unwrap();
-        let projected = projected_records(object);
+        let served = served(object);
         assert_eq!(identities.len(), 2);
-        assert_eq!(identities.len(), projected.len());
+        assert_eq!(identities.len(), served.len());
         assert_eq!(identities[0].sequence_number(), 2);
         assert_eq!(identities[1].sequence_number(), 3);
-        for (identity, wire) in identities.iter().zip(projected) {
-            let (date, time) = match wire {
-                PropertyValue::List(fields) => {
-                    assert_eq!(fields.len(), 3);
-                    (fields[0].clone(), fields[1].clone())
-                }
-                framed => {
-                    let record = decoded(&framed);
-                    (
-                        PropertyValue::Date(record.date),
-                        PropertyValue::Time(record.time),
-                    )
-                }
+        for (identity, wire) in identities.iter().zip(served) {
+            let (date, time) = if object.object_identifier().object_type() == ObjectType::TREND_LOG
+            {
+                let record = decode_log_record(&wire, 0).unwrap().0;
+                (record.date, record.time)
+            } else {
+                let record = decode_log_multiple_record(&wire, 0).unwrap().0;
+                (record.date, record.time)
             };
-            assert_eq!(date, PropertyValue::Date(identity.date()));
-            assert_eq!(time, PropertyValue::Time(identity.time()));
+            assert_eq!(date, identity.date());
+            assert_eq!(time, identity.time());
         }
     }
 }

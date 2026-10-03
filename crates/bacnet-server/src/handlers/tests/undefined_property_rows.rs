@@ -218,7 +218,15 @@ fn undefined_rows_are_absent_from_property_list_rpm_all_and_the_pics() {
         let expanded: Vec<_> = rpm(&db, oid, &[P::ALL])
             .into_iter()
             .map(|result| {
-                assert!(result.error.is_none(), "{kind:?} RPM ALL inline error");
+                // An Event Log's Log_Buffer is present but read only by
+                // ReadRange (Clause 12.27.13), so ALL reports it inline.
+                let refused =
+                    kind == ObjectType::EVENT_LOG && result.property_identifier == P::LOG_BUFFER;
+                assert_eq!(
+                    result.error,
+                    refused.then_some((ErrorClass::PROPERTY, ErrorCode::READ_ACCESS_DENIED)),
+                    "{kind:?} RPM ALL inline error"
+                );
                 result.property_identifier
             })
             .collect();

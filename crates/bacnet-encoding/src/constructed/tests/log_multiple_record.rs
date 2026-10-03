@@ -79,6 +79,11 @@ fn log_multiple_record_every_alternative_round_trips() {
             },
             LogValue::BooleanValue(false),
             LogValue::AnyValue(vec![0xA4, 0x7E, 0x08, 0x1F, 0x01, 0x10]),
+            // A value with context tags of its own, such as one element of
+            // a BACnetTimeStamp array.
+            LogValue::AnyValue(vec![
+                0x2E, 0xA4, 0x7E, 0x08, 0x1F, 0x01, 0xB4, 0, 0, 0, 0, 0x2F,
+            ]),
         ]),
     ] {
         let value = record(log_data);
@@ -126,9 +131,11 @@ fn log_multiple_record_rejects_unencodable_values_without_writing() {
             unused_bits: 1,
             data: Vec::new(),
         }]),
-        // A context tag, and a value cut short.
-        LogData::Values(vec![LogValue::AnyValue(vec![0x09, 0x01])]),
+        // A value cut short, an opening tag left open, and a stray closing
+        // tag.
         LogData::Values(vec![LogValue::AnyValue(vec![0x44, 0x00])]),
+        LogData::Values(vec![LogValue::AnyValue(vec![0x0E, 0x21, 0x01])]),
+        LogData::Values(vec![LogValue::AnyValue(vec![0x21, 0x01, 0x0F])]),
     ] {
         let mut buf = BytesMut::from(&b"kept"[..]);
         assert!(encode_log_multiple_record(&record(log_data), &mut buf).is_err());

@@ -18,7 +18,7 @@ use bacnet_objects::event_enrollment::{
     EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentReliabilityCommit,
 };
 use bacnet_objects::file::{FileConfiguration, FileStorage};
-use bacnet_objects::log_buffer::LogRecordIdentity;
+use bacnet_objects::log_buffer::{LogBufferRecords, LogRecordIdentity};
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::staging::StagingWritePlan;
@@ -503,6 +503,10 @@ impl BACnetObject for SourceReporter {
 
     fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
         self.wrapped.log_record_identities_internal()
+    }
+
+    fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
+        self.wrapped.log_buffer_internal()
     }
 
     fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
