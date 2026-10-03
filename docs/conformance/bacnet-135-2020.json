@@ -361,8 +361,7 @@
     "The rewrite is the one the Schedule and Staging rows use (BACNET-12-SCHEDULE-WRITES, BACNET-12-STAGING-TARGET-REFERENCES), from the table in local_references.rs. The service decode hands the reference over as one chunk per context-tagged member, so the server joins the chunks; when they are exactly one reference whose Device member names the local Device (selected under the write's database guard, never the wildcard instance), the object gets that reference without its Device member, and anything else reaches the object as written.",
     "Local choice: a reference naming another device is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the code the Schedule, Staging, Event Enrollment, Timer, Trend Log Multiple and Life Safety clauses give for the same restriction; 12.5.13 names none, and the encoding is valid for this production, so INVALID_DATA_ENCODING no longer fit.",
     "AveragingObject written directly still refuses every Device member, since it cannot tell which Device holds it. The property holds one reference, so array indexes and the list services do not apply; the mixed case is a value with two references, refused whole.",
-    "The object stores only local references, so the server's sampler (#1144) reads only local properties; the WriteProperty wire test has it sample a reference written with this device's identifier. Audit for #1153, no change needed: Event Enrollment Object_Property_Reference (12.12.8), Log_DeviceObjectProperty on a Trend Log (12.25.8) or a Trend Log Multiple (12.30.11), Life Safety Point and Zone Member_Of and Zone_Members (12.15.29, 12.16.26, 12.16.27) and Global Group Group_Members (12.50.5) are read-only here, and a writable Group_Members would have to accept members in other devices under 12.50.5 in any case; Timer List_Of_Object_Property_References (12.57.21) and the Channel object are not implemented. Not covered: sampling a property in another device (refused).",
-    "Trend Log and Trend Log Multiple Log_DeviceObjectProperty writes take the same local-Device rewrite; Event Enrollment Object_Property_Reference and the Life Safety member lists stay read-only."
+    "The object stores only local references, so the server's sampler (#1144) reads only local properties; the WriteProperty wire test has it sample a reference written with this device's identifier. Log_DeviceObjectProperty on a Trend Log (12.25.8) or a Trend Log Multiple (12.30.11) is writable and takes the same local-Device rewrite. Event Enrollment Object_Property_Reference (12.12.8), Life Safety Point and Zone Member_Of and Zone_Members (12.15.29, 12.16.26, 12.16.27) and Global Group Group_Members (12.50.5) are read-only here, and a writable Group_Members would have to accept members in other devices under 12.50.5 in any case; Timer List_Of_Object_Property_References (12.57.21) and the Channel object are not implemented. Not covered: sampling a property in another device (refused)."
    ]
   },
   {
@@ -1241,7 +1240,7 @@
      "Refs #748/#753: database-owned schedules compare the complete selection configuration, retire on structural access, and use exact hundredths under one exclusive selection/acquisition/append guard. The former external TrendLogState and mutable Box getter are removed.",
      "Successful next intervals start at actual completion without catch-up; configuration reconciliation and failed-attempt retries use a local 100 ms bound, and slow passes yield 1 ms when another entry is already due.",
      "Poller insertion failures preserve last success and retry after clock repair; SourceReporter forwards results. Constructors, records() and raw clear() retain their behavior. ReadRange By Sequence and By Time can select the resident purge status identity under BACNET-15-READ-RANGE-LOG-BUFFER.",
-     "Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, writable Log_DeviceObjectProperty purge paths, formal EventLog notification records, persistence/restart, and complete log conformance remain deferred.",
+     "Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, formal EventLog notification records, persistence/restart, and complete log conformance remain deferred.",
      "#1183: the poller reads only its own database. A Log_DeviceObjectProperty whose Device member names another device (ObjectDatabase::local_device, the rule the server's Event Enrollment evaluation shares) logs a failure record, PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, at the configured interval and is never read from a same-numbered local object; one naming this device reads locally, as one without a Device does.",
      "A failed local read now logs a failure record carrying its error (OBJECT / UNKNOWN_OBJECT for a missing object, the read's own class and code otherwise, SERVICES / OTHER for an error without one) instead of a null value, the failure choice of the Clause 12.25 Log_Buffer datum.",
      "A Device member that is not an object identifier leaves the log unpolled.",
@@ -1393,7 +1392,7 @@
    "id": "BACNET-12-PROPERTY-METADATA-CORE",
    "standard_anchor": "Clause 12.6, Table 12-6 (pp. 189-190); Clause 12.42, Table 12-49 (pp. 444-445); Clause 15.7.3.1 (p. 743); Annex A (pp. 964-965)",
    "priority": "P1",
-    "requirement_summary": "Executable metadata classifies each effective standard property by base R, W, or O conformance, presence condition, and implemented write capability. Time Value, Binary Input, Life Safety Point (POINT_BASE 18 rows), and Life Safety Zone (ZONE_BASE 16 rows) use the metadata for property-list compatibility, ReadPropertyMultiple special selectors, and existing PICS flags; unmigrated object types retain the legacy fallback.",
+    "requirement_summary": "Executable metadata classifies each effective standard property by base R, W, or O conformance, presence condition, and implemented write capability. Time Value, Binary Input, Life Safety Point (POINT_BASE 18 rows), and Life Safety Zone (ZONE_BASE 17 rows) use the metadata for property-list compatibility, ReadPropertyMultiple special selectors, and existing PICS flags; unmigrated object types retain the legacy fallback.",
    "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-objects/src/property_metadata.rs::PropertyMetadata",
@@ -3807,7 +3806,7 @@
    "public_claims": [],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#182). The four arms share one objects-layer helper (reference.rs) so the local List form (in-process compatibility) and the framed ApplicationData form (network) converge on the same strict Clause 21 decode; error pairings follow Clause 15.9.1.3: wrong value datatype is PROPERTY / INVALID_DATA_TYPE, malformed framing / device qualification / unknown trailing context tag is PROPERTY / INVALID_DATA_ENCODING (on the Averaging arm, whose production allows a Device member, that member is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED since #1153), and a mixed flat+framed element list is refused rather than reinterpreted.",
-    "Null clears, and read arms carry the reference's optional array index as a third list element. Setpoint_Reference additionally accepts the BACnetSetpointReference opening/closing tag [0] frame (unambiguous against the bare form's leading primitive [0]) while refusing unbalanced frames.",
+    "Null clears, and the Loop and Pulse Converter read arms carry the reference's optional array index as a third list element (#1312). Setpoint_Reference additionally accepts the BACnetSetpointReference opening/closing tag [0] frame (unambiguous against the bare form's leading primitive [0]) while refusing unbalanced frames.",
     "WritePropertyMultiple ordered prefix commit is proven for a reference+setpoint request failing its second property. Review round: the adversary lane's blocker on the Averaging arm (silent member drop / member retype / as-u32 truncation, newly network-reachable) is fixed by routing it through the same shared decode; the runtime+dataflow empty-frame finding is fixed by the Option-returning decode_setpoint_reference; the dataflow PICS incoherence is fixed by exact is_writable_property overrides on Pulse Converter (PRESENT_VALUE / SCALE_FACTOR / ADJUST_VALUE / INPUT_REFERENCE + DESCRIPTION / OUT_OF_SERVICE / COV_INCREMENT) and Averaging (OBJECT_PROPERTY_REFERENCE + DESCRIPTION / OUT_OF_SERVICE), which also stop advertising OBJECT_NAME on both types (no arm routes it - a truth-toward-arms PICS correction).",
     "Limitation: the Loop and Pulse Converter reads serve the flat application-tagged list form, not the context-tagged members; interop evidence against a second implementation is open.",
     "Averaging Object_Property_Reference reads as the context-tagged BACnetDeviceObjectPropertyReference with no Device member; under that frame the flat list is INVALID_DATA_TYPE and a Device member naming no Device VALUE_OUT_OF_RANGE."
@@ -3841,7 +3840,9 @@
     "crates/bacnet-server/src/handlers/tests/device_reference_reads.rs::life_safety_member_lists_are_served_framed",
     "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_reference_reads_and_writes_in_the_clause_21_form",
     "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_multiple_reference_array_reads_and_writes",
-    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::pollers_sample_the_references_a_client_wrote"
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::pollers_sample_the_references_a_client_wrote",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_multiple_index_0_write_resizes_the_array",
+    "crates/bacnet-server/src/server/log_reference_resize_tests.rs::write_local_of_index_0_resizes_the_reference_array"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/device_reference_tests.rs::decode_refuses_other_shapes_with_the_matching_error",
@@ -3862,7 +3863,7 @@
     "An unset Averaging, Event Enrollment or Trend Log reference reads Null, since the production has no empty form.",
     "Writes decode with the shared codec: another datatype is INVALID_DATA_TYPE, a malformed or second reference INVALID_DATA_ENCODING, and a Device member naming no Device VALUE_OUT_OF_RANGE.",
     "Averaging and both trend objects keep their references inside this device: the server drops a Device member naming its own Device, and any other is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.",
-    "A Trend Log Multiple holds at most 64 references and refuses an index 0 write; an element naming instance 4194303 is empty. A client's change to either trend reference purges the log.",
+    "A Trend Log Multiple holds at most 64 references; an index 0 write resizes it, padding with empty elements, ones naming instance 4194303. A client's change to either trend reference purges the log.",
     "Event Enrollment Object_Property_Reference and the Life Safety member lists are read-only over the network; the application sets them."
    ]
   },
@@ -7763,7 +7764,7 @@
      "WP/WPM/write_local/live-Schedule readback snapshots retain ordered actual deltas. Whole-object Life Safety COV triggers only for Present_Value/Status_Flags and reports exactly both; property COV reports the supported subscribed property plus one Status_Flags and fans out on an actual Status_Flags change.",
      "Point and Zone both support Present_Value, Status_Flags, Tracking_Value, Silenced, and Operation_Expected; the Zone gained Tracking_Value in #1092, and a Zone reset commit may set it as a Point commit can.",
      "The built-in Point/Zone Status_Flags IN_ALARM projection from event_state is latent: no event_state setter exists, so IN_ALARM transitions are unreachable; Event_State is purely intrinsic per R1 outcome (b) with no LSO-driven change.",
-     "Initial and re-subscription notifications follow the same payload sets after ACK; cancellation is quiet. Served property model is pinned by executable metadata: Point POINT_BASE 18 rows and Zone ZONE_BASE 16 rows drive Property_List, required sets, and writability with exact PICS projection tests; Silenced and Operation_Expected are network read-only.",
+     "Initial and re-subscription notifications follow the same payload sets after ACK; cancellation is quiet. Served property model is pinned by executable metadata: Point POINT_BASE 18 rows and Zone ZONE_BASE 17 rows drive Property_List, required sets, and writability with exact PICS projection tests; Silenced and Operation_Expected are network read-only.",
      "Mode writes are checked against Accepted_Modes (#1092, BACNET-12-LIFE-SAFETY-GLOBAL-GROUP-REQUIRED-ROWS). Tracking_Value and Reliability take writes while Out_Of_Service is TRUE, and a simulated change notifies through the same snapshots (#1108, BACNET-12-LIFE-SAFETY-OUT-OF-SERVICE-SIMULATION).",
      "The application sets Present_Value and Tracking_Value at runtime through set_present_value_local and set_tracking_value_local, which notify through the write_local snapshots (#1123, BACNET-12-LIFE-SAFETY-APPLICATION-VALUES). Gaps retained: no BIBB, profile, or device-advertisement claim; broad intrinsic CHANGE_OF_LIFE_SAFETY event algorithm deferred."
     ]

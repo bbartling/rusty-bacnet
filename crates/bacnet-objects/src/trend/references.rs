@@ -4,7 +4,7 @@
 //! Clause 21 encoding and take network writes through the checks here.
 
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -20,6 +20,20 @@ pub const MAX_LOG_DEVICE_OBJECT_PROPERTIES: usize = 64;
 /// past [`MAX_LOG_DEVICE_OBJECT_PROPERTIES`].
 pub(super) fn no_space_error() -> Error {
     common::protocol_error(ErrorClass::RESOURCES, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY)
+}
+
+/// The element a write of index 0 appends when it lengthens a Trend Log
+/// Multiple's array: Analog Input 4194303's Present_Value, an empty element
+/// under Clause 12.30.11, so the poller logs NO_PROPERTY_SPECIFIED for it.
+pub(super) fn empty_element() -> BACnetDeviceObjectPropertyReference {
+    BACnetDeviceObjectPropertyReference::new_local(
+        ObjectIdentifier::new(
+            ObjectType::ANALOG_INPUT,
+            ObjectIdentifier::WILDCARD_INSTANCE,
+        )
+        .expect("the wildcard instance is a valid identifier"),
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )
 }
 
 /// Check a reference a client writes.

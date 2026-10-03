@@ -98,9 +98,12 @@ impl TrendLogMultipleObject {
     ///
     /// A whole write replaces the array, at any length up to
     /// [`MAX_LOG_DEVICE_OBJECT_PROPERTIES`]; an indexed write replaces one
-    /// element, and index 0 (the size) is WRITE_ACCESS_DENIED. Each written
-    /// reference goes through [`references::check_written`], where an element
-    /// naming instance 4194303 is an empty one. A new value purges the buffer,
+    /// element. Writing index 0 resizes the array (Clause 12.1.5.1): a smaller
+    /// Unsigned drops the trailing elements, a larger one appends empty
+    /// elements, one past the cap is RESOURCES / NO_SPACE_TO_WRITE_PROPERTY and
+    /// another datatype PROPERTY / INVALID_DATA_TYPE. Each written reference
+    /// goes through [`references::check_written`], where an element naming
+    /// instance 4194303 is an empty one. A new value purges the buffer,
     /// leaving a BUFFER_PURGED status record, which is the first of the two
     /// actions Clause 12.30.11 offers; without a valid clock the purge fails
     /// with DEVICE / OPERATIONAL_PROBLEM and nothing changes. Writing the value
@@ -122,7 +125,16 @@ impl TrendLogMultipleObject {
                 }
                 candidate = written;
             }
-            Some(0) => return Err(common::write_access_denied_error()),
+            Some(0) => {
+                let PropertyValue::Unsigned(size) = value else {
+                    return Err(common::invalid_data_type_error());
+                };
+                let size = usize::try_from(size)
+                    .ok()
+                    .filter(|size| *size <= MAX_LOG_DEVICE_OBJECT_PROPERTIES)
+                    .ok_or_else(references::no_space_error)?;
+                candidate.resize_with(size, references::empty_element);
+            }
             Some(index) => {
                 let slot = usize::try_from(index - 1)
                     .ok()

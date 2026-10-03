@@ -2151,8 +2151,11 @@ array index reads singly (index 0 is the count). Both are writable over
 WriteProperty, WritePropertyMultiple and `write_local`, in that encoding: a
 Trend Log takes one reference, or Null to unset it; a Trend Log Multiple takes
 the whole array, at any length up to `trend::MAX_LOG_DEVICE_OBJECT_PROPERTIES`
-(64, RESOURCES / NO_SPACE_TO_WRITE_PROPERTY past it), or one element by index,
-while index 0 is WRITE_ACCESS_DENIED. A reference naming this server's Device
+(64, RESOURCES / NO_SPACE_TO_WRITE_PROPERTY past it), or one element by index.
+An Unsigned written to index 0 resizes it: a smaller size drops the trailing
+elements, a larger one appends empty elements (Analog Input 4194303's
+Present_Value), a size past 64 is NO_SPACE_TO_WRITE_PROPERTY and another
+datatype INVALID_DATA_TYPE. A reference naming this server's Device
 is stored without the Device member; one naming another device is
 OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, except that a Trend Log Multiple element
 naming instance 4194303 is an empty element and kept. A Device member that

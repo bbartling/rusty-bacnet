@@ -363,12 +363,60 @@ fn trend_log_multiple_reference_array_reads_and_writes() {
 }
 
 #[test]
+fn trend_log_multiple_index_0_write_resizes_the_array() {
+    // [0] analog-input 4194303, [1] present-value: an empty element.
+    const EMPTY: [u8; 7] = [0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55];
+    // Total_Record_Count: one more for each purge's status record.
+    let total = |db: &ObjectDatabase| {
+        db.get(&tlm1())
+            .unwrap()
+            .read_property(PropertyIdentifier::TOTAL_RECORD_COUNT, None)
+            .unwrap()
+    };
+    let mut db = database();
+    wp(&mut db, tlm1(), None, &[AV1_PV, AV2_PV].concat()).unwrap();
+    assert_eq!(total(&db), PropertyValue::Unsigned(1));
+
+    // A larger size appends empty elements and purges (Clause 12.1.5.1).
+    wp(&mut db, tlm1(), Some(0), &[0x21, 0x04]).unwrap();
+    assert_eq!(rp(&db, tlm1(), Some(0)).unwrap(), [0x21, 0x04]);
+    assert_eq!(
+        rp(&db, tlm1(), None).unwrap(),
+        [AV1_PV, AV2_PV, EMPTY, EMPTY].concat()
+    );
+    assert_eq!(total(&db), PropertyValue::Unsigned(2));
+
+    // The size already held is no change, so the log keeps its records.
+    wp(&mut db, tlm1(), Some(0), &[0x21, 0x04]).unwrap();
+    assert_eq!(total(&db), PropertyValue::Unsigned(2));
+
+    // A smaller size drops the trailing elements and purges.
+    wp(&mut db, tlm1(), Some(0), &[0x21, 0x01]).unwrap();
+    assert_eq!(rp(&db, tlm1(), None).unwrap(), AV1_PV);
+    assert_eq!(total(&db), PropertyValue::Unsigned(3));
+    wp(&mut db, tlm1(), Some(0), &[0x21, 0x00]).unwrap();
+    assert_eq!(rp(&db, tlm1(), None).unwrap(), Vec::<u8>::new());
+    assert_eq!(total(&db), PropertyValue::Unsigned(4));
+
+    // The empty elements are polled as empty.
+    wp(&mut db, tlm1(), Some(0), &[0x21, 0x01]).unwrap();
+    db.poll_trend_logs();
+    assert_eq!(
+        multiple_data(&db, 1),
+        LogData::Values(vec![LogValue::Failure {
+            error_class: u32::from(ErrorClass::PROPERTY.to_raw()),
+            error_code: u32::from(ErrorCode::NO_PROPERTY_SPECIFIED.to_raw()),
+        }])
+    );
+}
+
+#[test]
 fn trend_log_multiple_reference_write_refusals_change_nothing() {
     let mut db = database();
     wp(&mut db, tlm1(), None, &[AV1_PV, AV2_PV].concat()).unwrap();
     let held = [AV1_PV, AV2_PV].concat();
     let too_many = AV1_PV.repeat(65);
-    let cases: [IndexedRefusal; 8] = [
+    let cases: [IndexedRefusal; 9] = [
         (
             None,
             [&AV1_PV[..], &REMOTE_DEVICE].concat(),
@@ -413,10 +461,17 @@ fn trend_log_multiple_reference_write_refusals_change_nothing() {
         ),
         (
             Some(0),
-            vec![0x21, 0x01],
+            vec![0x21, 0x41],
+            ErrorClass::RESOURCES,
+            ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+            "an array size of 65",
+        ),
+        (
+            Some(0),
+            vec![0x44, 0x40, 0x00, 0x00, 0x00],
             ErrorClass::PROPERTY,
-            ErrorCode::WRITE_ACCESS_DENIED,
-            "the array size",
+            ErrorCode::INVALID_DATA_TYPE,
+            "a REAL array size",
         ),
         (
             None,
