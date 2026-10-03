@@ -50,7 +50,8 @@ impl CanonicalPeer {
 pub enum LeaseOwner {
     /// A local client-side confirmed request.
     Requester,
-    /// A confirmed notification initiated by the local server role.
+    /// A confirmed notification initiated by the local server role. The
+    /// recipient answers it as that transaction's server.
     Notification,
 }
 
@@ -514,11 +515,12 @@ fn validate_apdu(metadata: &LeaseMetadata, apdu: &Apdu) -> Result<AdmissionKind,
         }
         Apdu::Reject(_) => Ok(AdmissionKind::Terminal),
         Apdu::Abort(pdu) => {
-            let expected_server_bit = match metadata.owner {
-                LeaseOwner::Requester => true,
-                LeaseOwner::Notification => false,
-            };
-            if pdu.sent_by_server != expected_server_bit {
+            // Every lease is the requesting side of its transaction, a
+            // confirmed notification included, so the peer's Abort comes from
+            // the responding side and has the server flag set (Clause 5.4).
+            // A clear flag marks an Abort meant for a transaction this device
+            // serves, whatever the lease owner.
+            if !pdu.sent_by_server {
                 return Err(AdmissionOutcome::DirectionMismatch);
             }
             Ok(AdmissionKind::Terminal)
