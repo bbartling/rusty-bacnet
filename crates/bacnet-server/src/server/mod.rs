@@ -566,6 +566,7 @@ pub use dcc_disable_rate::DccDisableRateLimit;
 mod dcc_timer;
 pub use dcc_outcomes::DccOutcomeCounters;
 pub use dcc_policy::{DccPolicy, DccSource, DccSourceRestriction};
+mod binding_probes;
 mod device_bindings;
 mod discovery;
 #[doc(hidden)]
@@ -786,6 +787,8 @@ mod pulse_converter_cov_tests;
 mod rb07_provenance_tests;
 #[cfg(test)]
 mod remote_write_answer_tests;
+#[cfg(test)]
+mod remote_write_discovery_tests;
 #[cfg(test)]
 mod run_cycle_tests;
 #[cfg(test)]
