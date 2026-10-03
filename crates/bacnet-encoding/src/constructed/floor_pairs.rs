@@ -19,14 +19,14 @@ use crate::tags;
 pub(super) struct PairNames {
     /// The production, e.g. "landing door status".
     pub(super) value: &'static str,
-    /// The framed member, e.g. "landing-doors [0]".
+    /// The framed member, e.g. "landing-doors \[0\]".
     pub(super) frame: &'static str,
     /// One list entry, e.g. "landing door".
     pub(super) entry: &'static str,
-    /// The enumerated member, e.g. "door-status [1]".
+    /// The enumerated member, e.g. "door-status \[1\]".
     pub(super) second: &'static str,
     /// The range error for an oversized enumerated member, e.g.
-    /// "door-status [1] exceeds 32 bits".
+    /// "door-status \[1\] exceeds 32 bits".
     pub(super) second_oversized: &'static str,
 }
 

@@ -25,7 +25,7 @@ both jobs of the native tests on GitHub (see [Merge evidence](#merge-evidence)).
 | --- | --- | --- | --- | --- |
 | CI image: build and push the job image if its tag is missing | ✓ | ✓ | ✓ | ✓ |
 | Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions, changelog fragments | ✓ | ✓ | ✓ | ✓ |
-| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS | ✓ | ✓ | ✓ | ✓ |
+| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS; the every-feature and PyO3 rustdoc runs include private items | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ | ✓ |
 | Python bindings: `maturin develop` (maturin 1.15.0), then `python -m unittest discover -s crates/rusty-bacnet/tests` and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
 | MSRV 1.93, Linux native (`check-msrv.sh --linux-native`) |  | ✓ |  | ✓ |
@@ -231,7 +231,8 @@ cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$NATIVE
 cargo nextest run -p bacnet-cli --locked --profile ci   # the CLI's feature-off tests
 cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$NATIVE_FEATURES" -- -D warnings
 cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$NATIVE_FEATURES"
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --document-private-items --features "$NATIVE_FEATURES"
+RUSTDOCFLAGS="-D warnings" cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
 # Python 3.12 from actions/setup-python, in a fresh venv
 python -m pip install maturin==1.15.0
 maturin develop -m crates/rusty-bacnet/Cargo.toml --locked
@@ -378,6 +379,15 @@ those, side by side in one cargo run per crate. CI's Clippy job passes
 Neither clippy nor rustdoc links, and no C code builds with default features,
 so another target needs only `rustup target add`, not cargo-xwin or zig.
 
+Rustdoc's every-feature run and the PyO3 crate's run pass
+`--document-private-items` (#1164), so a broken intra-doc link in the docs of
+a private or `pub(crate)` item fails the gate too. The flag still reports a
+public item whose docs link to a private item (`rustdoc::private_intra_doc_links`
+fires with or without it), so the every-feature run replaces the public-only
+run rather than adding a second one. Every module of the PyO3 crate is private, so without the
+flag rustdoc would check none of its docs. The per-crate default-features run
+above stays public, as docs.rs builds.
+
 The individual gates are also runnable anywhere. `FEATURES` is
 `LINUX_FEATURES` from `ci.yml`, without the serial and ethernet entries on macOS:
 
@@ -388,7 +398,8 @@ cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --feature
 cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
 cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
 bash scripts/ci/check-default-features.sh   # the host; or pass target triples, as CI does
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$FEATURES"
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --document-private-items --features "$FEATURES"
+RUSTDOCFLAGS="-D warnings" cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
 cargo nextest run -p bacnet-cli --locked   # the CLI's feature-off tests
 cargo nextest run -p bacnet-cli --no-default-features --locked   # without the TUI
 cargo nextest run -p rusty-bacnet --locked # the PyO3 crate's Rust tests

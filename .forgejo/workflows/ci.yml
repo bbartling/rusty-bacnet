@@ -15,7 +15,8 @@ name: CI
 #           changelog fragments),
 #           clippy and rustdoc with warnings denied (every feature, the PyO3
 #           crate, and each published crate alone with default features, for
-#           Linux, Windows and macOS),
+#           Linux, Windows and macOS; the every-feature and PyO3 rustdoc runs
+#           include private items),
 #           every-feature Linux tests plus bacnet-cli's feature-off tests,
 #           and the Python bindings built with maturin, their unittest suite
 #           and the PyO3 crate's own Rust tests.
@@ -182,11 +183,20 @@ jobs:
         run: |
           # shellcheck disable=SC2086 # one argument per target
           bash scripts/ci/check-default-features.sh $DEFAULT_FEATURES_TARGETS
-      - name: Rustdoc (every feature)
+      # Private and pub(crate) items too, so their intra-doc links can't rot
+      # (#1164). This run still flags public docs that link to private items
+      # (rustdoc::private_intra_doc_links), so it replaces the public-only run.
+      - name: Rustdoc (every feature, private items)
         if: ${{ !cancelled() }}
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --features "$LINUX_FEATURES"
+        run: cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --document-private-items --features "$LINUX_FEATURES"
+      # Every module of the PyO3 crate is private, so only this run checks its docs.
+      - name: Rustdoc (PyO3 bindings, private items)
+        if: ${{ !cancelled() }}
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
 
   test:
     name: Test (Linux, full features)

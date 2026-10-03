@@ -107,7 +107,7 @@ impl SendRequest {
 
     /// Ingress-triggered unicast: carries the ingress data attributes instead
     /// of silently dropping them (RB-03). Locally-originated messages with no
-    /// ingress attributes use [`Self::unicast`].
+    /// ingress attributes pass an empty slice.
     fn unicast_with_attributes(
         npdu: Bytes,
         mac: MacAddr,
