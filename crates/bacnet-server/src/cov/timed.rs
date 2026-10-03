@@ -50,26 +50,31 @@
 //!
 //! Local bound policy: the pending changes of one COV-multiple context are
 //! limited to an estimate of what [`HISTORY_NOTIFICATIONS`] notifications can
-//! carry, each of the smaller of the local maximum APDU and the subscriber's.
-//! The estimate counts each change's values, item framing as if every change
-//! started its own item, and a fixed [`CHANGE_OVERHEAD`] per change for its
-//! bookkeeping, so many tiny changes cannot outgrow it in memory. It keeps a
-//! reserve, per context and at most one notification's worth, for the room the
-//! context's untimestamped values took in its reports since it was last
-//! admitted or lost a reference; they travel with the last notification. Peers
-//! therefore cannot grow this state without limit. Only on overflow, the last
-//! resort, is a change dropped: the oldest of the same reference first, then
-//! the oldest in the context. Two changes of a reference are never evicted:
+//! carry, each sized to the lesser of the local and the subscriber's maximum
+//! APDU, less the envelope the encoder puts around a notification's items for
+//! that context ([`envelope_len`], #1197). The envelope is sized from the
+//! context itself: its confirmed or unconfirmed header, its process
+//! identifier, and the lifetime it had left when last admitted, which later
+//! notifications report as less, never in more octets. The estimate counts
+//! each change's values, item framing as if every change started its own
+//! item, and a fixed [`CHANGE_OVERHEAD`] per change for its bookkeeping, so
+//! many tiny changes cannot outgrow it in memory. It keeps a reserve, per
+//! context and at most one notification's worth, for the room the context's
+//! untimestamped values took in its reports since it was last admitted or
+//! lost a reference; they travel with the last notification. Peers therefore
+//! cannot grow this state without limit. Only on overflow, the last resort,
+//! is a change dropped: the oldest of the same reference first, then the
+//! oldest in the context. Two changes of a reference are never evicted:
 //! - its newest, so the bound never hides the reference's current state;
 //! - its change in delivery (#1163): one sent value by value of which a part
 //!   was delivered, or went out as a confirmed report's first part with the
 //!   rest deferred, kept until its last value is delivered.
 //!
 //! The second is for small subscribers. At a 50-octet maximum APDU the
-//! estimate comes to 68 octets, about one Present_Value and Status_Flags
-//! change, so a value held back by a failed send or a deferral would be
-//! evicted by the next change, and the value-by-value delivery of #1090
-//! could never finish. Counting the bound in values instead would still need
+//! estimate comes to 68 to 100 octets, by the envelope's size, about one
+//! Present_Value and Status_Flags change, so a value held back by a failed
+//! send or a deferral would be evicted by the next change, and the
+//! value-by-value delivery of #1090 could never finish. Counting the bound in values instead would still need
 //! an octet limit, as nothing limits a value's size when it is captured, and
 //! would change eviction for every change of such a context; exempting only
 //! the change already partly sent leaves every other eviction as it was.
@@ -96,11 +101,6 @@ use super::{AtomicCovCounters, CovObservation, CovSubscriptionKey, MultipleConte
 
 /// Notifications' worth of pending history one context may hold.
 pub(crate) const HISTORY_NOTIFICATIONS: usize = 4;
-/// Most octets a COV-multiple notification spends outside its items: the
-/// unsegmented confirmed request header (4), process identifier (5), device
-/// identifier (5), time remaining (5), the date and time envelope (12) and the
-/// list's opening and closing tags (2).
-const ENVELOPE_RESERVE: usize = 33;
 /// Octets of one item's framing: its context-tagged object identifier (5) and
 /// the opening and closing tags of its value list (2).
 pub(crate) const ITEM_FRAMING: usize = 7;
@@ -294,6 +294,9 @@ struct ContextTerms {
     /// Octets one notification to the context may take: the smaller of the
     /// local maximum APDU and the subscriber's, as last admitted.
     apdu: usize,
+    /// Octets each notification to the context spends outside its items, as
+    /// last admitted: see [`envelope_len`].
+    envelope: usize,
     /// Most octets the context's untimestamped values have taken in one
     /// report since the context was last admitted or lost a reference, at
     /// most one notification's worth.
@@ -305,7 +308,7 @@ struct ContextTerms {
 impl ContextTerms {
     /// Octets of items one notification can carry.
     fn notification(self) -> usize {
-        self.apdu.saturating_sub(ENVELOPE_RESERVE)
+        self.apdu.saturating_sub(self.envelope)
     }
 
     /// Octets of pending changes the context may hold.
@@ -407,10 +410,16 @@ impl TimedHistories {
 
     /// Apply an admission of the context, renewals included: the maximum
     /// APDU its subscriber last advertised, if known, sizes notifications and
-    /// the history bound together with the local maximum. The admission may
-    /// have changed the context's references, so the reserve for its
+    /// the history bound together with the local maximum, and the seconds of
+    /// lifetime it has left size the envelope of each (#1197). The admission
+    /// may have changed the context's references, so the reserve for its
     /// untimestamped values starts over and its next report notes it again.
-    pub(super) fn set_apdu(&mut self, context: &MultipleContextKey, subscriber: Option<u16>) {
+    pub(super) fn set_sizing(
+        &mut self,
+        context: &MultipleContextKey,
+        subscriber: Option<u16>,
+        time_remaining: u32,
+    ) {
         let apdu = subscriber.map_or(self.local_apdu, |subscriber| {
             self.local_apdu.min(usize::from(subscriber))
         });
@@ -421,6 +430,7 @@ impl TimedHistories {
                 terms.warned = DropWarnings::default();
             }
             terms.apdu = apdu;
+            terms.envelope = envelope_len(context, time_remaining);
             terms.reserve = 0;
         }
     }
@@ -560,8 +570,12 @@ impl TimedHistories {
         let incarnation = self.next_incarnation;
         if let Some(context) = key.multiple_context() {
             let apdu = self.local_apdu;
+            // Until the admission's sizing, the envelope of the longest
+            // lifetime.
+            let envelope = envelope_len(context, u32::MAX);
             let terms = self.terms.entry(context.clone()).or_insert(ContextTerms {
                 apdu,
+                envelope,
                 reserve: 0,
                 warned: DropWarnings::default(),
             });
@@ -947,6 +961,7 @@ mod bound;
 mod claim;
 mod drops;
 mod owed;
+pub(crate) use bound::{envelope_len, request_header};
 pub(crate) use claim::{SendTurn, TimedClaim, ValueFit};
 #[cfg(test)]
 pub(crate) use drops::DropWarningCount;

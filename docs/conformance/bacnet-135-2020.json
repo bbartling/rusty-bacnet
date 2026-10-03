@@ -3744,7 +3744,8 @@
     "crates/bacnet-server/src/server/cov_multiple_admission_tests.rs::a_cancellation_removes_every_listed_reference_whatever_precedes_it",
     "crates/bacnet-server/src/server/cov_multiple_admission_tests.rs::a_partly_admitted_request_warns_afresh_about_dropped_changes",
     "crates/bacnet-server/src/cov/multiple_admission_tests.rs::cov_multiple_admission_stops_at_the_first_proposal_past_the_quota",
-    "crates/bacnet-server/src/server/cov_quota_tests.rs::subscribe_cov_property_multiple_quota_names_the_overflowing_reference"
+    "crates/bacnet-server/src/server/cov_quota_tests.rs::subscribe_cov_property_multiple_quota_names_the_overflowing_reference",
+    "crates/bacnet-server/src/cov/timed/bound.rs::tests::{the_envelope_is_what_the_encoder_lays_around_the_items,at_a_50_octet_subscriber_a_change_that_fits_the_wire_fits_the_bound,admission_sizes_the_envelope_from_the_lifetime_left}"
    ],
    "negative_tests": [
         "crates/bacnet-server/src/server/cov_identity_completion_tests/completion_order.rs::cov_order_newer_failure_or_cancellation_does_not_block_older_success",
@@ -3862,7 +3863,8 @@
    "benchmarks": [],
    "public_claims": [
     "docs/rust-api.md#cov-subscriptions",
-    "docs/python-api.md#cov-subscriptions"
+    "docs/python-api.md#cov-subscriptions",
+    "CHANGELOG.md Unreleased Changed entry for #1197 (COV-multiple history bound sized from the real envelope), from changelog.d/1197-cov-multiple-envelope.md"
    ],
    "notes": [
     "Issue #826 adds local latest-successful preparation ordering for whole unconfirmed observations, not a Standard-mandated concurrency tie-break. A checked table-owner counter is reserved after coherent eligible capture and before later awaits; each live reference atomically commits a newer successful marker and complete baseline.",
@@ -3942,7 +3944,8 @@
     "Neither error table has a row for it: Clause 18.5 defines that code for service parameters that would need functionality the device lacks, and Clause 16.1.1.3 pairs it with a device without a clock. The general row for a context that cannot be created never fires and stays documented only (#1102 item 2): a context exists only while it holds references and has no storage or limit of its own, so a new context whose first reference finds no room gets the per-reference RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT error.",
     "It ties to the empty-spec context materialization gap below; revisit it if contexts get their own storage or limit. A cancellation validates nothing and removes every listed reference. CovSubscriptionTable::subscribe_multiple returns Err(MultipleRefusal) with the error, the refused position and the kept snapshots.",
     "Issue #1163 keeps a change in delivery out of the local bound's eviction. A change sent one value per notification (#1090) is in delivery from when a part of it is delivered, or sent as a confirmed report's first part with the rest deferred, until its last value is delivered; each reference marks only the change a part last went out ahead of.",
-    "Eviction takes neither that change nor a reference's newest, so at a 50-octet subscriber, where the bound holds about one Present_Value and Status_Flags change, a value held back by a failed send or a deferral still goes out after a newer change, and timed_changes_dropped moves only on a real overflow, for a change not yet begun. Beyond the bound a context holds at most two changes per reference. The bound and this exemption are local policy."
+    "Eviction takes neither that change nor a reference's newest, so at a 50-octet subscriber, where the bound holds about one Present_Value and Status_Flags change, a value held back by a failed send or a deferral still goes out after a newer change, and timed_changes_dropped moves only on a real overflow, for a change not yet begun. Beyond the bound a context holds at most two changes per reference. The bound and this exemption are local policy.",
+    "The bound sizes each notification as the smaller maximum APDU less the octets the encoder puts around its items for that context: the confirmed or unconfirmed header, the process identifier, the lifetime left at the last admission, the device identifier, the timestamp and the list tags, 25 to 33 octets (#1197)."
    ]
   },
   {

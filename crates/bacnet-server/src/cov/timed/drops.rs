@@ -160,7 +160,7 @@ mod tests {
             h.reset(k, 1, 10);
         }
         let context = a.multiple_context().unwrap().clone();
-        h.set_apdu(&context, Some(50));
+        h.set_sizing(&context, Some(50), 60);
         let dropped = || counters.timed_changes_dropped.load(Ordering::Relaxed);
         // Several drops of one cause, across the context's references, warn
         // once; every change is counted.
@@ -173,11 +173,11 @@ mod tests {
         h.dropped(&other, 1, DropReason::TooLarge);
         assert_eq!((warnings.get(), dropped()), (3, 6));
         // A renewal advertising the same maximum APDU changes nothing...
-        h.set_apdu(&context, Some(50));
+        h.set_sizing(&context, Some(50), 60);
         h.dropped(&a, 1, DropReason::TooLarge);
         assert_eq!(warnings.get(), 3);
         // ...while one advertising another size warns afresh,
-        h.set_apdu(&context, Some(128));
+        h.set_sizing(&context, Some(128), 60);
         h.dropped(&a, 1, DropReason::TooLarge);
         assert_eq!(warnings.get(), 4);
         // and so does a re-admitted reference of the context.
