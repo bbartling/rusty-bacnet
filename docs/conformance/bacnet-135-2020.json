@@ -313,7 +313,9 @@
    "positive_tests": [
     "crates/bacnet-server/src/server/staging_reference_write_tests.rs::write_property_takes_a_target_naming_this_device_as_a_local_reference",
     "crates/bacnet-server/src/server/staging_reference_write_tests.rs::write_property_multiple_and_write_local_take_a_target_naming_this_device",
-    "crates/bacnet-server/src/local_references.rs::tests::staging_targets_naming_the_local_device_lose_their_device"
+    "crates/bacnet-server/src/local_references.rs::tests::staging_targets_naming_the_local_device_lose_their_device",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_stages_read_as_the_triples_written",
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::stages_read_as_the_triples_written"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/staging_reference_write_tests.rs::a_target_in_another_device_is_refused_alone_or_in_a_mixed_array",
@@ -328,7 +330,8 @@
    "notes": [
     "Refs #1136. Before, every element carrying a Device identifier was refused, even one naming this device, which 12.62.14 does not permit: like 12.24.10 for the Schedule, it lets a property limited to its own device refuse only references outside it.",
     "The rewrite is the Schedule's (BACNET-12-SCHEDULE-WRITES), generalized in local_references.rs over both reference types: the server, which selects the local Device under the write's database guard, drops a Device member naming that Device from each element before the object decodes the value.",
-    "A Device at the wildcard instance names no device and is never local. StagingObject written directly, or configured through StagingConfig, still refuses every Device member, since it cannot tell which Device holds it. Target_References is an array, so the list services do not apply. Not covered: targets in other devices (refused; the object issues no remote writes)."
+    "A Device at the wildcard instance names no device and is never local. StagingObject written directly, or configured through StagingConfig, still refuses every Device member, since it cannot tell which Device holds it. Target_References is an array, so the list services do not apply. Not covered: targets in other devices (refused; the object issues no remote writes).",
+    "Python reads Stages as (limit, values, deadband) triples and Target_References as ObjectIdentifiers, the forms add_staging takes, or as a (device, object) pair for a reference that keeps its Device member, which add_staging refuses as it takes local targets only."
    ]
   },
   {
@@ -770,7 +773,9 @@
     "crates/bacnet-server/src/server/confirmed_segmented_lifetime_tests.rs",
     "crates/bacnet-server/src/server/confirmed_broadcast_tests.rs::a_confirmed_request_sent_by_broadcast_is_neither_executed_nor_answered",
     "crates/bacnet-server/src/server/confirmed_broadcast_tests.rs::a_segment_sent_by_broadcast_draws_no_segment_ack_or_abort",
-    "crates/bacnet-integration-tests/tests/server/bip6_group_confirmed.rs::a_confirmed_request_forwarded_to_a_bip6_foreign_device_is_ignored"
+    "crates/bacnet-integration-tests/tests/server/bip6_group_confirmed.rs::a_confirmed_request_forwarded_to_a_bip6_foreign_device_is_ignored",
+    "crates/bacnet-integration-tests/tests/server/bip_group_confirmed.rs::an_original_unicast_sent_to_the_broadcast_address_is_not_answered",
+    "crates/bacnet-integration-tests/tests/server/bip6_group_unicast.rs::an_original_unicast_sent_to_the_multicast_group_is_not_answered"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -785,7 +790,8 @@
     "Byte-identical Invoke ID reuse then executes again. Segmented ownership moves to the child through final ACK or terminal outcome; generated terminal Abort retires at local issuance even while its send is held.",
     "Cancellation, errors and rejected spawn drop ownership. Request-task and segmented-send permits remain independent. LSO completed replay and Audit receipts are separate unchanged policies; direct leaf/incarnation keys remain in generic and LSO stores.",
     "Deterministic full-server direct/routed controls and virtual-clock child tests are local operation evidence, not physical emission/peer receipt or #524 response affinity/control confinement. See standard-135-2020-ledger.md#ordinary-confirmed-transaction-lifetimes.",
-    "A ConfirmedRequest whose network destination is a broadcast or multicast (ReceivedApdu::is_group) is dropped before reassembly or dispatch, with no answer, whatever the service."
+    "A ConfirmedRequest whose network destination is a broadcast or multicast (ReceivedApdu::is_group) is dropped before reassembly or dispatch, with no answer, whatever the service.",
+    "A confirmed request in an Original-Unicast-NPDU sent to a B/IP broadcast address or a B/IPv6 multicast group is never answered: the port drops it, and its link_layer_group follows that address."
    ]
   },
   {
@@ -924,7 +930,8 @@
    "negative_tests": [
     "crates/bacnet-encoding/src/npdu/address_bound_tests.rs::{over_long_address_length_is_refused_for_either_field,over_long_length_is_refused_before_the_address_is_read,source_refusal_reports_the_npdu_dnet,destination_refusal_carries_the_source_behind_it,address_too_long_reads_as_out_of_range,encoder_refuses_an_address_past_the_bound_for_either_field}",
     "crates/bacnet-network/src/address_bound_tests.rs::non_router_drops_and_counts_an_over_long_address_in_either_field",
-    "crates/bacnet-network/src/link_source_bound_tests.rs::non_router_drops_and_counts_a_frame_from_an_over_long_source_mac"
+    "crates/bacnet-network/src/link_source_bound_tests.rs::non_router_drops_and_counts_a_frame_from_an_over_long_source_mac",
+    "crates/bacnet-network/src/layer_delivery_tests.rs::sends_naming_network_zero_are_refused_before_any_frame"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -938,7 +945,8 @@
     "Table 6-2 (Clause 6.2.2.2) needs at most 7 octets for any standard data link, and the longest MAC this stack serves is the 18-octet B/IPv6 form. decode_npdu refuses a longer length with NpduDecodeError::AddressTooLong before reading the address octets, whether or not they are present, and reports the NPDU's DNET when it has one.",
     "For an over-long DADR it also reports the SNET/SADR behind it, read past the DLEN octets the frame announces, when a complete and valid one is there (#1158), so the router can address its reject; encode_npdu refuses a longer address with Error::Encoding (the limit was 255).",
     "The non-router NetworkLayer drops such an NPDU before APDU or control admission and counts it in address_length_drops(); a non-router sends no reject. The router side is under BACNET-6-ROUTER-MESSAGES. Tests feed hand-built wire bytes for each address field: 19 and 255 are refused, 1, 6 and 18 decode and re-encode unchanged.",
-    "#1198: NetworkLayer drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN before decoding it and counts it in address_length_drops(). No built-in transport reports one (B/IP, BACnet/SC and Ethernet use 6 octets, MS/TP 1, B/IPv6 18), so only a custom TransportPort can, and every address learned off the network fits a BACnetAddress."
+    "#1198: NetworkLayer drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN before decoding it and counts it in address_length_drops(). No built-in transport reports one (B/IP, BACnet/SC and Ethernet use 6 octets, MS/TP 1, B/IPv6 18), so only a custom TransportPort can, and every address learned off the network fits a BACnetAddress.",
+    "NetworkLayer refuses destination network 0 in broadcast_to_network, send_apdu_routed, send_apdu_routed_via_local_broadcast and send_apdu_on_issuance with a named Error::Encoding before encoding or sending (Clause 6.2.2.1)."
    ]
   },
   {
@@ -1166,7 +1174,8 @@
      "Trend Log Multiple holds BACnetLogMultipleRecord values: one LogValue per Log_DeviceObjectProperty member, a log status, or a time change. Its LOG_BUFFER serves each record framed as the Clause 21 production, with no status flags (#1203).",
      "LogRecordIdentity holds a u64 sequence number. These three families still count in Unsigned32 and wrap at u32::MAX; an Audit Log's identities come from its record store and wrap at u64::MAX (BACNET-12-AUDIT-LOG-BUFFER, #1092).",
      "Each family stores its own Clause 21 record: Trend Log a BACnetLogRecord with optional StatusFlags, Event Log a BACnetEventLogRecord, Trend Log Multiple a BACnetLogMultipleRecord. BACnetObject::log_buffer_internal lends the buffer to ReadRange, which encodes each record as a page reaches it (#1233).",
-     "An Event Log notification record holds a typed EventNotificationRequest (bacnet-types), which bacnet-encoding's event notification codec writes and reads inside the record. The server does not log notifications into an Event Log by itself; the application adds records.",
+     "An Event Log notification record holds a typed EventNotificationRequest (bacnet-types), which bacnet-encoding's event notification codec writes and reads inside the record.",
+     "A running server logs its own event notifications into every Event Log (BACNET-12-EVENT-LOG-NOTIFICATIONS).",
      "Log statuses are the typed LogStatus flags, sent bit 0 first: log-disabled 05 80, buffer-purged 05 40, log-interrupted 05 20. Trend Log status flags are a StatusFlags value.",
      "add_record and the trend hooks refuse a record that would not encode before any change, so LogBufferRecords::encode_record cannot fail and every stored record can be served."
     ]
@@ -1244,7 +1253,7 @@
      "Refs #748/#753: database-owned schedules compare the complete selection configuration, retire on structural access, and use exact hundredths under one exclusive selection/acquisition/append guard. The former external TrendLogState and mutable Box getter are removed.",
      "Successful next intervals start at actual completion without catch-up; configuration reconciliation and failed-attempt retries use a local 100 ms bound, and slow passes yield 1 ms when another entry is already due.",
      "Poller insertion failures preserve last success and retry after clock repair; SourceReporter forwards results. Constructors, records() and raw clear() retain their behavior. ReadRange By Sequence and By Time can select the resident purge status identity under BACNET-15-READ-RANGE-LOG-BUFFER.",
-     "Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, formal EventLog notification records, persistence/restart, and complete log conformance remain deferred.",
+     "Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, persistence/restart, and complete log conformance remain deferred.",
      "#1183: the poller reads only its own database. A Log_DeviceObjectProperty whose Device member names another device (ObjectDatabase::local_device, the rule the server's Event Enrollment evaluation shares) logs a failure record, PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, at the configured interval and is never read from a same-numbered local object; one naming this device reads locally, as one without a Device does.",
      "A failed local read now logs a failure record carrying its error (OBJECT / UNKNOWN_OBJECT for a missing object, the read's own class and code otherwise, SERVICES / OTHER for an error without one) instead of a null value, the failure choice of the Clause 12.25 Log_Buffer datum.",
      "A Device member that is not an object identifier leaves the log unpolled.",
@@ -1256,6 +1265,46 @@
      "An any-value holds at most ANY_VALUE_MAX_OCTETS (256) octets; a longer value logs PROPERTY / VALUE_TOO_LONG and one no record could carry logs SERVICES / OTHER, so the log never refuses a polled record.",
      "A client's change to Log_DeviceObjectProperty purges the log and records BUFFER_PURGED, as a zero Record_Count write does; the poller then samples the references written."
     ]
+  },
+  {
+   "id": "BACNET-12-EVENT-LOG-NOTIFICATIONS",
+   "standard_anchor": "Clauses 12.27, 12.27.8, 12.27.11 and 12.27.13; Clause 13.2.5; Annex K.2.21 and K.2.22",
+   "priority": "P1",
+   "summary": "A running server records every event notification it generates in each Event Log, under that log's Enable, Buffer_Size and Stop_When_Full handling, for ReadRange to serve.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-objects/src/database/event_log.rs::ObjectDatabase::log_event_notification",
+    "crates/bacnet-objects/src/traits.rs::BACnetObject::add_event_log_record",
+    "crates/bacnet-objects/src/event_log.rs::EventLogObject",
+    "crates/bacnet-server/src/server/event_notifications.rs::build_and_send_event_notification_with_bindings",
+    "crates/bacnet-endpoint/src/source_reporter.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_local_alarm_and_its_return_to_normal_are_logged_and_read_back,an_acknowledgment_notification_is_logged,a_notification_no_recipient_takes_is_still_logged,stop_when_full_stops_logging_before_the_buffer_fills}",
+    "crates/bacnet-objects/src/database/event_log_tests.rs::{every_event_log_records_the_notification_at_the_device_clock_time,stop_when_full_stops_the_log_before_it_fills}"
+   ],
+   "negative_tests": [
+    "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_disabled_log_takes_no_notification,a_transition_whose_notification_class_is_missing_is_not_logged,a_transition_event_enable_suppresses_is_not_logged,a_transition_while_dcc_disables_initiation_is_not_logged,a_received_notification_is_not_logged}",
+    "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_report_on_an_event_log_is_logged_nowhere,enrollments_watching_each_others_logs_do_not_feed_each_other}",
+    "crates/bacnet-objects/src/database/event_log_tests.rs::{a_notification_about_an_event_log_goes_in_no_log,an_enrollment_notification_about_any_local_event_log_goes_in_no_log,nothing_is_logged_without_a_valid_device_clock,a_disabled_log_ignores_the_notification,a_log_that_refuses_the_record_leaves_the_others_logging}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#logging--trending-5",
+    "docs/python-api.md#logging--trending"
+   ],
+   "notes": [
+    "Each intrinsic, Event Enrollment or acknowledgment notification is logged with Process Identifier 0, also when the Notification Class selects nobody: the Recipient_List picks network recipients, not local objects.",
+    "No record, as a local choice, for a transition that Event_Enable suppresses or that DCC stops, nor for one whose recipient lookup fails closed: a missing Notification Class, or an unreadable, invalid or over-cap Recipient_List.",
+    "Received notifications are not logged. The logs hold this device's own events, the narrower of the choices Clause 12.27 leaves to the device.",
+    "No log takes a notification about an Event Log: its event object is one, or it comes from an Event Enrollment here monitoring one. So reports can't prompt each other through a log, directly or crosswise.",
+    "The record goes in under the guard that built the notification, before the send. Without a valid Device clock nothing is logged."
+   ],
+   "gaps": [
+    "Start_Time and Stop_Time are not modeled on Event Log, so Enable alone switches logging (no issue)",
+    "#1346: logging received notifications, the AE-EL-E-B collection of Annex K.2.22, is not offered",
+    "#1347: Event Log intrinsic reporting (BUFFER_READY, Notification_Threshold) is not modeled"
+   ]
   },
   {
    "id": "BACNET-15-READ-RANGE-LOG-BUFFER",
@@ -2315,10 +2364,14 @@
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::{group_members_read_the_live_device_cov_lists_through_rp_readrange_and_local_reads,group_members_read_the_live_device_cov_lists_through_rpm}",
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/snapshot_plan.rs::{reads_whose_plan_names_no_device_cov_list_take_no_snapshot,a_read_whose_plan_names_a_device_cov_list_takes_one_snapshot}",
     "crates/rusty-bacnet/tests/test_server_group_members.py::ServerGroupWireTests::test_present_value_is_served_one_result_per_member",
-    "crates/rusty-bacnet/tests/test_read_value_shapes.py::ClientReadShapeTests::test_group_present_value_holds_every_member"
+    "crates/rusty-bacnet/tests/test_read_value_shapes.py::ClientReadShapeTests::test_group_present_value_holds_every_member",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_group_members_read_as_the_specs_written",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_group_present_value_reads_as_its_members_results",
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{group_members_read_as_the_specs_written,group_present_value_reads_as_read_property_multiple_results}"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{malformed_property_references_are_refused,malformed_read_access_specifications_are_refused}",
+    "crates/bacnet-encoding/src/constructed/tests/read_access.rs::contents_cut_short_are_a_short_buffer",
     "crates/bacnet-objects/src/group/group_members_tests.rs::{add_member_refuses_a_member_that_reports_a_group_present_value,add_member_refuses_a_member_without_properties,group_lists_refuse_an_array_index,add_member_refuses_a_property_identifier_past_22_bits}",
     "crates/bacnet-objects/src/group/metadata.rs::tests::property_metadata_group_trio_write_capabilities_match_dispatch",
     "crates/bacnet-server/src/handlers/tests/read_rpm/group_present_value.rs::member_rows_are_charged_to_the_rpm_work_budget_and_shared_between_groups",
@@ -2343,7 +2396,9 @@
     "CHANGELOG.md Unreleased Changed entry for #1250 (GroupObject::add_member refusal reasons), from changelog.d/1250-group-member-refusal.md",
     "docs/python-api.md#endpoint-groups-and-the-read-work-limit Python endpoint add_group and read_work_limit",
     "docs/rust-api.md#constructed-property-framing Group List_Of_Group_Members and Present_Value",
-    "docs/python-api.md#groups--views Python BACnetServer add_group members"
+    "docs/python-api.md#groups--views Python BACnetServer add_group members",
+    "CHANGELOG.md Unreleased Changed entry for #1310 (Python typed reads of constructed lists), from changelog.d/1310-python-typed-list-reads.md",
+    "docs/python-api.md#typed-collections Python typed reads of constructed lists"
    ],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1134, found in #1107). Breaking pre-1.0 wire and Rust API changes. Table 12-17, Clause 12.14 and the Clause 21 productions were read as page images. Before, List_Of_Group_Members went out as bare application-tagged object identifiers with no properties, and Present_Value as whatever values the application had stored, which named no member and could not report a failed read.",
@@ -2360,7 +2415,7 @@
     "GroupObject::add_member also refuses a property identifier above 4194303, and returns a GroupMemberRefusal naming the broken rule, which converts to PROPERTY / VALUE_OUT_OF_RANGE; Python add_group puts that rule and the member's position in its ValueError.",
     "PropertyReference and ReadAccessSpecification moved from bacnet-services into bacnet_types::constructed, with their codecs as free functions in bacnet_encoding::constructed, so the Group stores them the way other objects store their Clause 21 types; the ReadPropertyMultiple, COV and Audit codecs call the same functions. Not covered: writable List_Of_Group_Members; the Audit_Level, Auditable_Operations, Tags and profile rows.",
     "Python BACnetServer.add_group takes the endpoint owners' members through the same group_members conversion and checks, and rpm_max_result_elements limits a read of the Group's Present_Value.",
-    "Python BACnetServer.read_property goes through BACnetServer::read_local, so a local read of a Group's Present_Value equals a network read. Python readers return the rebuilt results as application_data octets, and no members as an empty list."
+    "Python BACnetServer.read_property goes through BACnetServer::read_local, so a local read of a Group's Present_Value equals a network read. Python readers return the rebuilt results as read_property_multiple result mappings, List_Of_Group_Members in the add_group spec shape, and no members as an empty list."
    ]
   },
   {
@@ -2443,7 +2498,9 @@
     "crates/rusty-bacnet/src/server/server_methods/registration_tests.rs::command_builder_applies_action_then_action_text_through_the_object_setters",
     "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_present_value_write_runs_the_configured_list",
     "crates/bacnet-server/src/server/command_remote_write_tests.rs::{command_writes_another_device_and_its_ack_marks_the_command_successful,command_write_through_a_routed_binding_completes_on_the_routed_ack}",
-    "crates/bacnet-integration-tests/tests/server/command_remote.rs::command_writes_a_target_in_another_device_over_bip"
+    "crates/bacnet-integration-tests/tests/server/command_remote.rs::command_writes_a_target_in_another_device_over_bip",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_command_action_reads_as_the_action_commands_written",
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::command_actions_read_as_the_action_commands_written"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/command_action_wire_tests.rs::{command_quit_on_failure_stops_the_list_and_action_reads_back_the_flags,command_present_value_above_the_action_size_is_value_out_of_range,command_naming_another_device_fails_and_naming_this_device_is_local,command_writing_its_own_present_value_is_refused_busy}",
@@ -2491,7 +2548,8 @@
     "A remote write leases its invoke ID from the pool confirmed notifications use, and the lease names the peer and WriteProperty. No database guard is held while it is outstanding. tick_schedules, which has no network, fails remote commands.",
     "stop() ends a cancelled run where it stood: In_Process FALSE, unmade commands FALSE, All_Writes_Successful TRUE only if every write was made and succeeded. Runs let go of while the database was busy, then ownerless ones, end once it is free.",
     "A run whose write panics ends the same way, its unmade commands FALSE, and its property subscribers hear of the end.",
-    "A remote write's refusal reaches the run host with what the device said: the Error class and code, or the Reject or Abort reason. A Command keeps only pass or fail; a Channel member in another device goes through the same remote write path."
+    "A remote write's refusal reaches the run host with what the device said: the Error class and code, or the Reject or Abort reason. A Command keeps only pass or fail; a Channel member in another device goes through the same remote write path.",
+    "Python reads Action as lists of ActionCommand mappings with every key, Write_Successful included; add_command takes those mappings back and ignores write_successful, so a command starts FALSE."
    ],
    "gaps": [
     "#1322: a remote target with no fresh binding fails unsent; no targeted Who-Is is sent on a binding-cache miss",
@@ -2854,7 +2912,11 @@
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_door_members_reach_the_array",
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_access_doors_reach_the_array_and_name_doors_only",
     "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_keywords",
-    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_supported_formats_reach_both_arrays_and_gate_simulated_reads"
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_supported_formats_reach_both_arrays_and_gate_simulated_reads",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_object_references_read_as_written",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_supported_formats_read_as_the_formats_written",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_each_read_is_accepted_by_its_typed_write",
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{object_references_read_as_identifiers_or_device_pairs,supported_formats_read_as_numbers_or_vendor_triples}"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/authentication_factor_format.rs::authentication_factor_format_rejects_malformed_elements",
@@ -2873,7 +2935,8 @@
     "Access Zone has no Access_Doors row, so an indexed read of it fails with UNKNOWN_PROPERTY rather than PROPERTY_IS_NOT_AN_ARRAY, as for the other array identifiers on objects that lack them.",
     "Not covered: network writes and resizing of Supported_Formats and Supported_Format_Classes, which Table 12-43 does not require.",
     "Python sets the arrays at registration through add_access_door(door_members=...), add_access_point(access_doors=...) and add_credential_data_input(supported_formats=...). A reference is an ObjectIdentifier in this device or a (device, object) pair; a format is a type number or a (type, vendor id, vendor format) triple.",
-    "Both setters, and the Python keyword arguments, refuse a reference whose device identifier is not a Device object (BACNET-21-DEVICE-OBJECT-REFERENCE-DEVICE-MEMBER)."
+    "Both setters, and the Python keyword arguments, refuse a reference whose device identifier is not a Device object (BACNET-21-DEVICE-OBJECT-REFERENCE-DEVICE-MEMBER).",
+    "Python reads Door_Members, Access_Doors and Supported_Formats back in the keyword arguments' forms: an ObjectIdentifier or (device, object) pair per reference, and a type number or (type, vendor id, vendor format) triple per format, an absent vendor member as None both ways."
    ]
   },
   {
@@ -2925,7 +2988,8 @@
    "gaps": [
     "#1330: network writes of both arrays, indexed writes and the index 0 resize with Clause 12.34.9.3 defaults",
     "#1331: nothing evaluates the stored rules; the Clause 12.34.9.2 authorization check isn't modeled",
-    "#1332: Access Rights doesn't serve its required Enable row (Table 12-39)"
+    "#1332: Access Rights doesn't serve its required Enable row (Table 12-39)",
+    "#1344: Python reads each rule as application_data octets, not the AccessRule mapping add_access_rights takes"
    ]
   },
   {
@@ -3639,7 +3703,10 @@
     "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::saved_recipient_list_wins_over_configured_destinations",
     "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::a_saved_empty_recipient_list_still_wins",
     "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::configured_destinations_apply_at_every_start_until_a_write",
-    "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::a_recipient_list_write_saves_the_subscriptions_with_it"
+    "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::a_recipient_list_write_saves_the_subscriptions_with_it",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_port_filter_reads_as_the_pairs_written",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_a_cov_notification_value_reads_typed",
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{port_filters_read_as_the_pairs_written_whole_and_by_index,a_list_of_one_productions_elements_is_that_typed_collection}"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::out_of_service_forwarder_takes_nothing",
@@ -3735,6 +3802,8 @@
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/channel_wire_tests.rs::{channel_value_no_member_can_take_fails_without_writing,channel_writing_its_own_present_value_is_refused_busy}",
+    "crates/bacnet-encoding/src/constructed/tests/channel_value.rs::contents_cut_short_are_a_short_buffer",
+    "crates/bacnet-encoding/src/constructed/tests/channel_value.rs::a_level_of_the_wrong_length_is_malformed_even_when_cut_short",
     "crates/bacnet-objects/src/channel/tests.rs::{channel_stale_completion_is_ignored,channel_read_only_rows_refuse_writes}",
     "crates/bacnet-objects/src/channel/array_tests.rs::channel_member_writes_refuse_bad_indexes_and_oversize_and_take_other_devices",
     "crates/bacnet-objects/src/channel/array_tests.rs::channel_members_refuse_a_non_device_device_identifier",
@@ -3853,7 +3922,9 @@
     "crates/bacnet-server/src/server/event_recipient_routing_tests.rs::custom_class_at_the_cap_reaches_every_destination",
     "crates/bacnet-server/src/server/event_confirmed_routing_tests/learned_router_cache.rs::admitted_routes_stop_at_64_but_existing_network_updates_at_capacity",
     "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::every_deliverable_route_moves_no_counter",
-    "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_recipient_list_takes_framed_writes_up_to_the_cap"
+    "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_recipient_list_takes_framed_writes_up_to_the_cap",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_recipient_lists_read_as_the_destinations_written",
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{recipient_lists_read_as_the_destinations_written,equality_and_repr_follow_the_element_production}"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/recipient.rs",
@@ -3875,11 +3946,15 @@
     "crates/bacnet-server/src/server/event_recipient_routing_tests/post_route_counters.rs::failed_broadcast_forms_count_once_each",
     "crates/rusty-bacnet/tests/test_event_notification_counters.py::EventNotificationCountersTests::test_a_failed_unconfirmed_send_is_counted_once_per_destination",
     "crates/bacnet-encoding/src/constructed/tests/recipient.rs::recipient_mac_bound_holds_in_both_directions",
-    "crates/bacnet-services/src/enrollment_summary_width_tests.rs::enrollment_filter_recipient_mac_holds_to_the_bacnet_address_bound"
+    "crates/bacnet-services/src/enrollment_summary_width_tests.rs::enrollment_filter_recipient_mac_holds_to_the_bacnet_address_bound",
+    "crates/rusty-bacnet/tests/test_typed_list_reads.py::FallbackTests::test_a_value_that_is_not_the_expected_production_keeps_its_octets",
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{a_value_that_is_not_the_expected_production_falls_back,empty_values_and_other_properties_keep_the_generic_shape}"
    ],
    "benchmarks": [],
    "public_claims": [
-    "docs/rust-api.md#constructed-property-framing"
+    "docs/rust-api.md#constructed-property-framing",
+    "CHANGELOG.md Unreleased Changed entry for #1310 (Python typed reads of constructed lists), from changelog.d/1310-python-typed-list-reads.md",
+    "docs/python-api.md#typed-collections Python typed reads of constructed lists"
    ],
     "notes": [
      "Split child of BACNET-12-OBJECT-MODEL; scope is the modeled NotificationClass path. The generic recipient codec remains interoperability vocabulary. Golden vectors cover the device, address (nonzero network), and broadcast (zero-length MAC) forms; the 8-entry list round-trip covers the Annex K.2.25 AE-CRL-B minimum-entries posture.",
@@ -3895,7 +3970,8 @@
      "A destination is then at most 47 octets and a full list at most 1,504. Routing applies MAX_RECIPIENT_LIST_DESTINATIONS to every class: a custom NOTIFICATION_CLASS object serving a longer list yields RecipientListTooLong, the server logs a warning, counts the transition in EventNotificationCounters::recipient_list_too_long (#1142) and sends nothing for that transition (never a prefix), and decoding stops at the first destination past the cap. GetEnrollmentSummary membership still reads the list as configured.",
      "#1156: decode_recipient itself holds to the bound, so the separate decode_configured_recipient is gone. COV subscription lists, audit notifications and records, and the GetEnrollmentSummary enrollment filter decode through it, and every recipient encoder (encode_recipient, encode_destination and its list form, the COV subscription encoders, the audit notification encoder) refuses a longer MAC before writing anything.",
      "The ValueSource and AuditLogQuery address codecs share the same check (check_decoded_mac_len, check_encoded_mac_len). Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, and COV admission and remote command origins refuse a longer direct MAC, so nothing the stack stores fails to encode.",
-     "A Notification Forwarder's Recipient_List takes the same framed writes and cap."
+     "A Notification Forwarder's Recipient_List takes the same framed writes and cap.",
+     "Python reads either object's Recipient_List as a list of Destination mappings with every key, the form add_notification_forwarder takes; a value that doesn't decode as destinations stays application_data octets."
     ]
   },
   {
@@ -4104,64 +4180,78 @@
   },
   {
    "id": "BACNET-12-REFERENCE-PROPERTY-WRITABILITY",
-   "standard_anchor": "Clause 12.17 with Table 12-20 (Loop), Clause 12.23 with Table 12-27 (Pulse Converter Input_Reference), Clause 12.5 Table 12-5 (Averaging Object_Property_Reference - BACnetDeviceObjectPropertyReference), Clause 21 BACnetObjectPropertyReference / BACnetSetpointReference productions",
+   "standard_anchor": "Clauses 12.5.13, 12.17.12, 12.17.13, 12.17.16, 12.23.6, 20.2.16; Table 12-5, 12-20, 12-27; Clause 21",
    "priority": "P1",
-   "requirement_summary": "The Loop Controlled_Variable_Reference, Manipulated_Variable_Reference, and Setpoint_Reference properties (Clause 12.17) and the Pulse Converter Input_Reference (Clause 12.23) are typed BACnetObjectPropertyReference - a SEQUENCE of primitive context-tagged members [0]/[1] plus optional property-array-index [2] - with Setpoint_Reference nested [0] inside the BACnetSetpointReference production. Network writes now land in these wire forms through the multi-element service decode: a strict typed codec (bacnet-encoding/src/constructed/object_property_reference.rs) requires full consumption and rejects a device-qualifying member [3], since unlike BACnetDeviceObjectPropertyReference these references are local-device only. Each arm also keeps the legacy local list form [ObjectIdentifier, Enumerated, Unsigned?] in exact shape, with the property-id member accepted as Unsigned OR Enumerated (the Averaging flat form carries Unsigned, the Loop/Pulse form Enumerated; both decode to the same reference). The Averaging arm - typed BACnetDeviceObjectPropertyReference by Table 12-5, whose remote-sample path is the standard's OPTIONAL branch and unmodeled here - routes through the same shared decode (review-round blocker fix), decoding its device-qualified members: a Device member there is PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and the server localizes one naming its own Device first (#1153, BACNET-12-AVERAGING-LOCAL-REFERENCE), and the BACnetSetpointReference frame with its OPTIONAL member absent clears Setpoint_Reference exactly like a Null write (review-round runtime/dataflow item).",
+   "requirement_summary": "The Loop Controlled_Variable_Reference and Manipulated_Variable_Reference and the Pulse Converter Input_Reference are typed BACnetObjectPropertyReference - a SEQUENCE of primitive context-tagged members [0]/[1] plus an optional property-array-index [2] - and the Loop Setpoint_Reference is BACnetSetpointReference, that reference as an optional member inside context tag [0]. Each reads as PropertyValue::ApplicationData holding that encoding, built by the shared codecs in bacnet-encoding/src/constructed/object_property_reference.rs, and takes writes in it over WriteProperty, WritePropertyMultiple and write_local; the server hands the written octets to the object whole. The codec requires full consumption and rejects a device-qualifying member [3], since unlike BACnetDeviceObjectPropertyReference these references are local-device only. The Averaging arm (Table 12-5, BACnetDeviceObjectPropertyReference) shares the write decode: a Device member there is PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and the server localizes one naming its own Device first (BACNET-12-AVERAGING-LOCAL-REFERENCE).",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-encoding/src/constructed/object_property_reference.rs",
     "crates/bacnet-objects/src/reference.rs",
     "crates/bacnet-objects/src/loop_obj.rs",
-    "crates/bacnet-objects/src/accumulator/pulse_converter.rs"
+    "crates/bacnet-objects/src/accumulator/pulse_converter.rs",
+    "crates/bacnet-server/src/handlers/write_property.rs::decode_write_property_value"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::golden_vector_unindexed",
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::golden_vector_indexed",
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_golden_vector",
-    "crates/bacnet-objects/src/reference/tests.rs::legacy_local_list_form_round_trips_with_and_without_index",
-    "crates/bacnet-objects/src/reference/tests.rs::framed_form_decodes_from_one_or_split_application_data",
-    "crates/bacnet-objects/src/reference/tests.rs::setpoint_frame_acceptance_is_scoped_to_the_setpoint_property",
-    "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_framed_indexed_reference_reads_back_with_index",
-    "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_setpoint_reference_accepts_bacnetsetpointreference_frame",
-    "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_local_list_with_index_still_accepted",
-    "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_write_framed_indexed_input_reference_lands",
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_golden_vector_indexed",
-    "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_empty_frame_is_the_absent_alternative",
-    "crates/bacnet-objects/src/reference/tests.rs::empty_setpoint_frame_clears_only_on_the_setpoint_arm",
-    "crates/bacnet-objects/src/reference/tests.rs::legacy_list_accepts_unsigned_or_enumerated_property_member",
-    "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_empty_setpoint_frame_clears_reference",
+    "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_empty_value_is_the_absent_alternative",
+    "crates/bacnet-objects/src/reference/tests.rs::object_property_reference_reads_as_its_members_or_null",
+    "crates/bacnet-objects/src/reference/tests.rs::setpoint_reference_reads_framed_or_empty",
+    "crates/bacnet-objects/src/reference/tests.rs::read_values_write_back_unchanged",
+    "crates/bacnet-objects/src/reference/tests.rs::null_clears_except_on_setpoint_reference",
+    "crates/bacnet-objects/src/reference/tests.rs::empty_value_clears_only_setpoint_reference",
+    "crates/bacnet-objects/src/reference/tests.rs::framed_form_decodes_from_one_or_split_application_data",
+    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_unset_references_read_null_or_the_empty_setpoint_reference",
+    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_set_references_read_as_their_clause_21_encodings",
+    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_reference_writes_take_the_encodings_they_read_as",
+    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_reference_writes_clear_with_null_or_the_empty_setpoint_reference",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_write_framed_indexed_input_reference_lands",
     "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_accepts_the_framed_local_form",
-    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::setpoint_reference_empty_frame_and_null_both_clear_over_the_wire",
+    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::loop_references_read_and_write_in_their_clause_21_encodings",
+    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::pulse_converter_input_reference_reads_and_writes_in_its_clause_21_encoding",
+    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_writes_clear_with_the_unset_values_they_read_as",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::averaging_object_property_reference_over_the_wire",
+    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::wpm_reference_write_commits_in_order_and_keeps_prefix_on_failure",
+    "crates/bacnet-server/src/handlers/tests/loop_reference_follow.rs::loop_follows_the_references_a_client_writes",
     "crates/bacnet-server/src/pics/truth_source_tests.rs::is_writable_property_matches_write_property_on_pulse_converter_and_averaging",
-    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::loop_references_framed_writes_over_the_wire",
-    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_write_flattened_local_form_also_lands_over_the_wire",
-    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::pulse_converter_input_reference_over_the_wire",
-    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::wpm_reference_write_commits_in_order_and_keeps_prefix_on_failure"
+    "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_references_read_and_write_in_their_encodings",
+    "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_null_or_the_empty_setpoint_reference_clears"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::bare_decode_rejects_device_qualified_reference",
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::bare_decode_rejects_unknown_trailing_context_tag",
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::bare_decode_rejects_partial_and_empty",
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_decode_requires_the_frame_and_full_consumption",
-    "crates/bacnet-objects/src/reference/tests.rs::legacy_list_shape_violations_are_invalid_data_type",
+    "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_empty_frame_is_refused",
+    "crates/bacnet-objects/src/reference/tests.rs::flat_list_is_another_datatype_in_every_frame",
+    "crates/bacnet-objects/src/reference/tests.rs::opening_of_another_datatype_is_invalid_data_type",
     "crates/bacnet-objects/src/reference/tests.rs::framed_malformed_is_invalid_data_encoding",
+    "crates/bacnet-objects/src/reference/tests.rs::setpoint_frame_must_hold_one_whole_reference",
     "crates/bacnet-objects/src/reference/tests.rs::mixed_flat_and_framed_list_is_invalid_data_encoding",
     "crates/bacnet-objects/src/reference/tests.rs::wrong_value_datatypes_are_invalid_data_type",
-    "crates/bacnet-objects/src/loop_obj/tests.rs::loop_write_device_qualified_reference_rejected_and_preserves",
+    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_flat_reference_writes_are_refused_and_change_nothing",
+    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_reference_writes_of_other_datatypes_or_bad_octets_change_nothing",
     "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_write_malformed_framed_input_reference_rejected",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_flat_input_reference_write_is_refused_and_changes_nothing",
+    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::flat_reference_writes_are_refused_and_change_nothing",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_write_rejections_over_the_wire_preserve_state",
     "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_rejects_bad_shapes_and_preserves_state",
-    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_refuses_the_flat_list_forms"
+    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_refuses_the_flat_list_forms",
+    "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_flat_list_is_refused_and_changes_nothing"
    ],
    "benchmarks": [],
-   "public_claims": [],
+   "public_claims": [
+    "docs/rust-api.md#building-control-7 Loop references",
+    "docs/rust-api.md#measurement-2 Pulse Converter Input_Reference"
+   ],
    "notes": [
-    "Split child of BACNET-12-OBJECT-MODEL (#182). The four arms share one objects-layer helper (reference.rs) so the local List form (in-process compatibility) and the framed ApplicationData form (network) converge on the same strict Clause 21 decode; error pairings follow Clause 15.9.1.3: wrong value datatype is PROPERTY / INVALID_DATA_TYPE, malformed framing / device qualification / unknown trailing context tag is PROPERTY / INVALID_DATA_ENCODING (on the Averaging arm, whose production allows a Device member, that member is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED since #1153), and a mixed flat+framed element list is refused rather than reinterpreted.",
-    "Null clears, and the Loop and Pulse Converter read arms carry the reference's optional array index as a third list element (#1312). Setpoint_Reference additionally accepts the BACnetSetpointReference opening/closing tag [0] frame (unambiguous against the bare form's leading primitive [0]) while refusing unbalanced frames.",
-    "WritePropertyMultiple ordered prefix commit is proven for a reference+setpoint request failing its second property. Review round: the adversary lane's blocker on the Averaging arm (silent member drop / member retype / as-u32 truncation, newly network-reachable) is fixed by routing it through the same shared decode; the runtime+dataflow empty-frame finding is fixed by the Option-returning decode_setpoint_reference; the dataflow PICS incoherence is fixed by exact is_writable_property overrides on Pulse Converter (PRESENT_VALUE / SCALE_FACTOR / ADJUST_VALUE / INPUT_REFERENCE + DESCRIPTION / OUT_OF_SERVICE / COV_INCREMENT) and Averaging (OBJECT_PROPERTY_REFERENCE + DESCRIPTION / OUT_OF_SERVICE), which also stop advertising OBJECT_NAME on both types (no arm routes it - a truth-toward-arms PICS correction).",
-    "Limitation: the Loop and Pulse Converter reads serve the flat application-tagged list form, not the context-tagged members; interop evidence against a second implementation is open.",
-    "Averaging Object_Property_Reference reads as the context-tagged BACnetDeviceObjectPropertyReference with no Device member; under that frame the flat list is INVALID_DATA_TYPE and a Device member naming no Device VALUE_OUT_OF_RANGE."
+    "The Loop, Pulse Converter and Averaging arms share one write decode (reference.rs): another datatype, the flat list included, is PROPERTY / INVALID_DATA_TYPE; octets that open right but don't fully decode, PROPERTY / INVALID_DATA_ENCODING.",
+    "An unset BACnetObjectPropertyReference reads Null and a Null write clears it. An unset Setpoint_Reference reads as the empty value and writing that value clears it; Null there is INVALID_DATA_TYPE.",
+    "A Setpoint_Reference frame with nothing inside (0E 0F) is INVALID_DATA_ENCODING: a reference that is absent has no octets at all (Clause 20.2.16).",
+    "Averaging Object_Property_Reference reads as the context-tagged BACnetDeviceObjectPropertyReference with no Device member; under that frame the flat list is INVALID_DATA_TYPE and a Device member naming no Device VALUE_OUT_OF_RANGE.",
+    "The stack doesn't follow these references; an application decodes the value it reads with the shared codecs and follows that."
    ]
   },
   {
@@ -4605,6 +4695,7 @@
    ],
    "negative_tests": [
         "crates/bacnet-server/src/server/cov_identity_completion_tests/completion_order.rs::cov_order_newer_failure_or_cancellation_does_not_block_older_success",
+        "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{subscribe_cov_property_cut_short_draws_services_other,subscribe_cov_property_multiple_cut_short_draws_the_general_error}",
         "crates/bacnet-server/src/cov/observation_order/tests.rs::cov_order_counter_checked_exhaustion_covers_both_modes",
         "crates/bacnet-server/src/cov/confirmed/tests.rs::a_replaced_subscription_starts_unmarked",
         "crates/bacnet-server/src/cov/confirmed/tests.rs::a_route_change_fences_the_report_and_revisits_its_references",
@@ -5315,7 +5406,9 @@
     "crates/bacnet-services/src/audit/address_bound_tests.rs::audit_log_query_address_filter_holds_to_the_bacnet_address_bound",
     "crates/bacnet-services/src/audit/address_bound_tests.rs::audit_notification_recipients_hold_to_the_bacnet_address_bound",
     "crates/bacnet-objects/src/audit/staging_tests.rs::a_staged_batch_whose_commit_fails_leaves_the_log_as_it_was",
-    "crates/bacnet-server/src/server/audit_notification_staging_tests.rs::a_confirmed_notification_whose_commit_fails_is_refused_and_stores_nothing"
+    "crates/bacnet-server/src/server/audit_notification_staging_tests.rs::a_confirmed_notification_whose_commit_fails_is_refused_and_stores_nothing",
+    "crates/bacnet-encoding/src/constructed/tests/audit_notification.rs::{an_object_identifier_of_the_wrong_length_is_malformed_even_when_cut_short,an_object_identifier_cut_short_is_a_short_buffer}",
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::confirmed_audit_notification_cut_short_draws_services_other"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -5831,6 +5924,7 @@
     "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::malformed_structured_error_bodies_are_refused",
     "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::structured_error_projection_must_match_body",
     "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::structured_bodies_are_formal_only_for_their_services",
+    "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::formal_members_cut_short_are_a_short_buffer",
     "crates/bacnet-services/src/object_mgmt/error.rs::tests::create_object_error_refuses_malformed_plain_and_mismatched",
     "crates/bacnet-services/src/cov_multiple_error.rs::tests::decode_refuses_malformed_plain_and_mismatched",
     "crates/bacnet-services/src/private_transfer/error.rs::tests::private_transfer_error_refuses_malformed_plain_and_mismatched",
@@ -6028,7 +6122,8 @@
    "code_anchors": [
     "crates/bacnet-encoding/src/primitives",
     "crates/bacnet-encoding/src/tags.rs",
-    "crates/bacnet-types/src/primitives.rs"
+    "crates/bacnet-types/src/primitives.rs",
+    "crates/bacnet-encoding/src/constructed/tagged.rs"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/primitives/tests.rs",
@@ -6041,7 +6136,9 @@
     "crates/bacnet-types/src/primitives.rs::object_identifier_new_rejects_type_overflow",
     "crates/bacnet-types/src/primitives.rs::object_identifier_addressable_rejects_type_overflow",
     "crates/bacnet-types/src/primitives.rs::object_identifier_checked_instance_boundaries",
-    "crates/rusty-bacnet/tests/test_object_identifier_invariant.py"
+    "crates/rusty-bacnet/tests/test_object_identifier_invariant.py",
+    "crates/bacnet-encoding/src/constructed/tests/tagged.rs::{contents_past_the_end_are_a_short_buffer,fixed_size_primitives_refuse_any_other_length,application_enumerated_items_narrow_and_canonical_ones_refuse_padding}",
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::read_property_multiple_cut_short_draws_services_other"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -6052,7 +6149,11 @@
    ],
    "notes": [
     "Refs #847: Clause 20.2.14 ObjectIdentifier constructors and bounded wire decode establish 10-bit type and 22-bit instance widths. Safe unchecked construction and release masking are removed; infallible encoding preserves identity, including proprietary type1023 and wildcard instance.",
-    "Primitive, application/context and reference codec boundary vectors plus Python rejection/valid controls provide narrow evidence. Generic ObjectType remains unrestricted; no serde API or producer behavior is added. Broader encoding status is unchanged: still needs a complete malformed fixture catalog and byte-equivalence guard for optimizations."
+    "Primitive, application/context and reference codec boundary vectors plus Python rejection/valid controls provide narrow evidence. Generic ObjectType remains unrestricted; no serde API or producer behavior is added. Broader encoding status is unchanged: still needs a complete malformed fixture catalog and byte-equivalence guard for optimizations.",
+    "In the shared tagged-field helpers and the codecs and formal Error bodies read with them, contents that run past the end of the data are Error::BufferTooShort; a cut-short or malformed tag header is Error::Decoding.",
+    "A fixed-size context member (object identifier, REAL, BOOLEAN, a lighting-command level) has its length checked before its contents, so a wrong length is Error::Decoding even when the data also stops early.",
+    "A member cut short inside a constructed frame is caught when the frame is extracted (tags::extract_context_value), which reports Error::Decoding.",
+    "The server answers a ReadPropertyMultiple, SubscribeCOVProperty or ConfirmedAuditNotification cut short with SERVICES / OTHER, and a SubscribeCOVPropertyMultiple with its general error, whichever kind the decoder reports."
    ]
   },
   {
@@ -6553,7 +6654,11 @@
    ],
    "negative_tests": [
     "crates/bacnet-transport/src/bvll.rs::decode_slices_payload_to_declared_length",
-    "crates/bacnet-transport/src/bip/original_tests.rs::original_unicast_npdu_uses_udp_sender_source_mac_and_ignores_self"
+    "crates/bacnet-transport/src/bip/original_tests.rs::original_unicast_npdu_uses_udp_sender_source_mac_and_ignores_self",
+    "crates/bacnet-transport/src/bip/group_delivery_tests.rs::original_unicast_sent_to_a_broadcast_address_is_dropped",
+    "crates/bacnet-transport/src/bip/group_delivery_tests.rs::original_unicast_takes_its_group_flag_from_the_delivery",
+    "crates/bacnet-transport/src/bip/group_delivery_tests.rs::the_function_decides_where_the_broadcast_address_is_the_local_one",
+    "crates/bacnet-transport/src/bip/group_delivery_tests.rs::a_broadcast_address_that_is_a_host_address_is_flagged_unless_loopback"
    ],
    "benchmarks": [
     "benchmarks/benches/bip_latency.rs",
@@ -6565,7 +6670,10 @@
     "README.md#transports BACnet/IP row"
    ],
    "notes": [
-    "Generic BVLL envelope coverage exists. J-04 Original-NPDU evidence covers UDP sender B/IP MAC delivery to the upper layer and self-originated frame suppression. Directed reply-path integration remains open."
+    "Generic BVLL envelope coverage exists. J-04 Original-NPDU evidence covers UDP sender B/IP MAC delivery to the upper layer and self-originated frame suppression. Directed reply-path integration remains open.",
+    "An Original-Unicast-NPDU sent to the configured or limited broadcast address, or flagged as a group delivery by Windows, is dropped before the network layer with no BVLC-Result (J.2.11, J.3). Its link_layer_group comes from the same delivery check.",
+    "Where the configured broadcast address is also the local address, as in loopback tests, the BVLC function decides: Original-Unicast reads as unicast and Original-Broadcast as broadcast.",
+    "A B/IP port logs a warning at start when its broadcast address is one of the host's own non-loopback addresses, since broadcasts sent there reach no other node."
    ]
   },
   {
@@ -6944,7 +7052,10 @@
    "negative_tests": [
     "crates/bacnet-transport/src/udp_metadata_ipv6_tests.rs",
     "crates/bacnet-transport/src/bip6/socket.rs::tests",
-    "crates/bacnet-transport/tests/ipv6_selected_link_multi.rs (explicit external two-link fixture)"
+    "crates/bacnet-transport/tests/ipv6_selected_link_multi.rs (explicit external two-link fixture)",
+    "crates/bacnet-transport/src/bip6/group_delivery_tests.rs::original_unicast_sent_to_a_multicast_group_is_dropped",
+    "crates/bacnet-transport/src/bip6/group_delivery_tests.rs::original_unicast_takes_its_group_flag_from_the_destination",
+    "crates/bacnet-transport/src/bip6/group_delivery_tests.rs::original_unicast_for_another_vmac_is_dropped"
    ],
    "benchmarks": [
     "benchmarks/benches/bip6_latency.rs",
@@ -6956,7 +7067,8 @@
    ],
    "notes": [
     "Selected-link source/index and receive authority are qualified with isolated Linux ULA wire controls, foreign BBMD source/trust, collision/lifecycle and fresh installed Python discovery. macOS loopback qualifies multicast intake and unicast/control source, not independent multicast-egress capture.",
-    "Windows compilation and synthetic unique-link-local selection are not runtime wire evidence. External fixtures are intentionally opt-in; deployment topology and full Annex U conformance remain unqualified."
+    "Windows compilation and synthetic unique-link-local selection are not runtime wire evidence. External fixtures are intentionally opt-in; deployment topology and full Annex U conformance remain unqualified.",
+    "An Original-Unicast-NPDU sent to a BACnet multicast group, or flagged as a group delivery by Windows, is dropped before the network layer with no BVLC-Result (U.2.2, U.3). Its link_layer_group is set when either the function or the destination is a group."
    ]
   },
   {
@@ -8052,7 +8164,8 @@
    "public_claims": [],
    "notes": [
     "Qualified delivery evidence only. NotificationParameters.event_values remains None and exact algorithm/reliability payload projection is deferred to PR-0404, so this row does not claim complete EventNotification payload conformance.",
-    "Neither intrinsic nor Event Enrollment production delivery calls EventLogObject::add_record; tests pin an unchanged Event Log record count and shared Event Log integration remains a later cross-cutting slice. Event_Algorithm_Inhibit is not modeled for Event Enrollment and is not approximated here; Event_Detection_Enable is tested separately. Recipient resolution and priority policy are unchanged."
+    "Event_Algorithm_Inhibit is not modeled for Event Enrollment and is not approximated here; Event_Detection_Enable is tested separately. Recipient resolution and priority policy are unchanged.",
+    "The shared sender logs each notification it builds into the device's Event Logs (BACNET-12-EVENT-LOG-NOTIFICATIONS); a clockless server logs none."
    ]
   },
   {

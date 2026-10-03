@@ -13,7 +13,7 @@ use super::{
     PyPropertyIdentifier,
 };
 
-fn recipient_to_py<'py>(
+pub(super) fn recipient_to_py<'py>(
     py: Python<'py>,
     recipient: &BACnetRecipient,
 ) -> PyResult<Bound<'py, PyDict>> {

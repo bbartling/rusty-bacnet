@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_services::rpm::ReadAccessResult;
 
 // ---------------------------------------------------------------------------
 // Python-side RPM/WPM shapes, as PyO3 extracts them from method arguments
@@ -54,50 +55,60 @@ pub(crate) fn py_to_rpm_specs(specs: Vec<PyReadAccessSpec>) -> Vec<ReadAccessSpe
 pub(crate) fn rpm_ack_to_py(py: Python<'_>, ack: ReadPropertyMultipleACK) -> PyResult<Py<PyAny>> {
     let outer = PyList::empty(py);
     for result in ack.list_of_read_access_results {
-        let obj_dict = PyDict::new(py);
-        obj_dict.set_item(
-            "object_id",
-            PyObjectIdentifier::from_rust(result.object_identifier),
-        )?;
-        let results_list = PyList::empty(py);
-        for elem in result.list_of_results {
-            let elem_dict = PyDict::new(py);
-            elem_dict.set_item(
-                "property_id",
-                PyPropertyIdentifier {
-                    inner: elem.property_identifier,
-                },
-            )?;
-            elem_dict.set_item("array_index", elem.property_array_index)?;
-            if let Some(value_bytes) = &elem.property_value {
-                match decode_read_value(
-                    result.object_identifier.object_type(),
-                    elem.property_identifier,
-                    elem.property_array_index,
-                    value_bytes,
-                ) {
-                    Ok(val) => {
-                        elem_dict.set_item("value", PyPropertyValue::from_rust(val))?;
-                    }
-                    Err(_) => {
-                        elem_dict.set_item("value", PyBytes::new(py, value_bytes))?;
-                    }
-                }
-                elem_dict.set_item("error", py.None())?;
-            } else if let Some((ec, ev)) = elem.error {
-                elem_dict.set_item("value", py.None())?;
-                let err_tuple = (PyErrorClass { inner: ec }, PyErrorCode { inner: ev });
-                elem_dict.set_item("error", err_tuple)?;
-            } else {
-                elem_dict.set_item("value", py.None())?;
-                elem_dict.set_item("error", py.None())?;
-            }
-            results_list.append(elem_dict)?;
-        }
-        obj_dict.set_item("results", results_list)?;
-        outer.append(obj_dict)?;
+        outer.append(read_access_result_to_py(py, result)?)?;
     }
     Ok(outer.into_any().unbind())
+}
+
+/// One object's results, as a `dict` with `object_id` and `results`. A
+/// ReadPropertyMultiple ACK is a list of these, and so is a Group's
+/// Present_Value.
+pub(crate) fn read_access_result_to_py(
+    py: Python<'_>,
+    result: ReadAccessResult,
+) -> PyResult<Bound<'_, PyDict>> {
+    let obj_dict = PyDict::new(py);
+    obj_dict.set_item(
+        "object_id",
+        PyObjectIdentifier::from_rust(result.object_identifier),
+    )?;
+    let results_list = PyList::empty(py);
+    for elem in result.list_of_results {
+        let elem_dict = PyDict::new(py);
+        elem_dict.set_item(
+            "property_id",
+            PyPropertyIdentifier {
+                inner: elem.property_identifier,
+            },
+        )?;
+        elem_dict.set_item("array_index", elem.property_array_index)?;
+        if let Some(value_bytes) = &elem.property_value {
+            match decode_read_value(
+                result.object_identifier.object_type(),
+                elem.property_identifier,
+                elem.property_array_index,
+                value_bytes,
+            ) {
+                Ok(val) => {
+                    elem_dict.set_item("value", val)?;
+                }
+                Err(_) => {
+                    elem_dict.set_item("value", PyBytes::new(py, value_bytes))?;
+                }
+            }
+            elem_dict.set_item("error", py.None())?;
+        } else if let Some((ec, ev)) = elem.error {
+            elem_dict.set_item("value", py.None())?;
+            let err_tuple = (PyErrorClass { inner: ec }, PyErrorCode { inner: ev });
+            elem_dict.set_item("error", err_tuple)?;
+        } else {
+            elem_dict.set_item("value", py.None())?;
+            elem_dict.set_item("error", py.None())?;
+        }
+        results_list.append(elem_dict)?;
+    }
+    obj_dict.set_item("results", results_list)?;
+    Ok(obj_dict)
 }
 
 /// Convert Python WPM specs to Rust WriteAccessSpecification list.

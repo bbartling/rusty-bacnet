@@ -2,27 +2,21 @@ use std::net::{Ipv6Addr, SocketAddrV6};
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_encoding::npdu::decode_npdu;
 use bacnet_types::error::Error;
-use bacnet_types::MacAddr;
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-use crate::port::{ReceivedNpdu, TransportPort, TransportProvenance};
+use crate::port::{ReceivedNpdu, TransportPort};
 
-use super::frame::destination_vmac_matches;
-use super::ingress::{
-    forwarded_npdu_is_trusted, forwarded_source_is_usable, is_local_unicast_delivery,
-    original_destination_matches, LocalBinding,
-};
+use super::ingress::{is_local_unicast_delivery, LocalBinding};
+use super::receive::Receiver;
 use super::socket::Bip6Socket;
 use super::vmac_table::{derive_vmac_from_device_instance, generate_random_vmac, VmacTable};
 use super::{
-    decode_bvlc6, decode_forwarded_npdu_payload, encode_address_resolution,
-    encode_address_resolution_ack, encode_bvlc6, encode_bvlc6_original_broadcast,
-    encode_bvlc6_original_unicast, encode_virtual_address_resolution_ack, Bip6Vmac, Bvlc6Function,
+    decode_bvlc6, encode_address_resolution, encode_address_resolution_ack, encode_bvlc6,
+    encode_bvlc6_original_broadcast, encode_bvlc6_original_unicast, Bip6Vmac, Bvlc6Function,
     BVLC6_HEADER_LENGTH, BVLC6_UNICAST_HEADER_LENGTH, MAX_VMAC_RETRIES,
 };
 
@@ -378,271 +372,21 @@ impl TransportPort for Bip6Transport {
 
         let (tx, rx) = mpsc::channel(NPDU_CHANNEL_CAPACITY);
 
-        let source_vmac_copy = source_vmac;
-        let foreign_bbmd = self
-            .foreign_device
-            .as_ref()
-            .map(|fd| (fd.bbmd_ip, fd.bbmd_port));
-        let socket_for_recv = Arc::clone(&socket);
-        let vmac_table_clone = self.vmac_table.clone();
-        let recv_task = tokio::spawn(async move {
-            let mut recv_buf = vec![0u8; 2048];
-            loop {
-                match socket_for_recv.recv_from(&mut recv_buf).await {
-                    Ok(received) => {
-                        let data = &recv_buf[..received.len];
-                        match decode_bvlc6(data) {
-                            Ok(frame) => {
-                                if !destination_vmac_matches(
-                                    frame.function,
-                                    frame.destination_vmac,
-                                    source_vmac_copy,
-                                ) {
-                                    debug!(
-                                        function = frame.function.to_byte(),
-                                        destination_vmac = ?frame.destination_vmac,
-                                        "Dropping BVLC6 message addressed to another VMAC"
-                                    );
-                                    continue;
-                                }
-                                if !original_destination_matches(
-                                    frame.function,
-                                    received.destination,
-                                    frame.destination_vmac,
-                                    &LocalBinding {
-                                        ip: local_ip,
-                                        vmac: source_vmac_copy,
-                                        unicast_ips: &local_unicast_ips,
-                                        wildcard_bind,
-                                    },
-                                    received.os_group_delivery,
-                                ) {
-                                    debug!(
-                                        function = frame.function.to_byte(),
-                                        destination = %received.destination,
-                                        "Dropping BVLC6/IP or Destination-VMAC mismatch"
-                                    );
-                                    continue;
-                                }
-                                if frame.function == Bvlc6Function::ForwardedNpdu
-                                    && !forwarded_npdu_is_trusted(
-                                        received.peer,
-                                        received.destination,
-                                        received.os_group_delivery,
-                                        local_ip,
-                                        &local_unicast_ips,
-                                        wildcard_bind,
-                                        foreign_bbmd,
-                                    )
-                                {
-                                    debug!(
-                                        peer = %received.peer,
-                                        destination = %received.destination,
-                                        "Dropping Forwarded-NPDU from an untrusted path"
-                                    );
-                                    continue;
-                                }
-                                // Forwarded-NPDU's source VMAC identifies the original
-                                // node, not the forwarding BBMD. Its original address is
-                                // learned from the function payload below.
-                                if matches!(
-                                    frame.function,
-                                    Bvlc6Function::OriginalUnicast
-                                        | Bvlc6Function::OriginalBroadcast
-                                        | Bvlc6Function::AddressResolution
-                                        | Bvlc6Function::AddressResolutionAck
-                                        | Bvlc6Function::VirtualAddressResolution
-                                        | Bvlc6Function::VirtualAddressResolutionAck
-                                ) {
-                                    if let std::net::SocketAddr::V6(v6) = received.peer {
-                                        vmac_table_clone.learn(frame.source_vmac, v6).await;
-                                    }
-                                }
-
-                                match frame.function {
-                                    Bvlc6Function::OriginalUnicast
-                                    | Bvlc6Function::OriginalBroadcast => {
-                                        let source_mac =
-                                            if let std::net::SocketAddr::V6(v6) = received.peer {
-                                                MacAddr::from_slice(&encode_bip6_mac(
-                                                    *v6.ip(),
-                                                    v6.port(),
-                                                ))
-                                            } else {
-                                                continue;
-                                            };
-                                        if source_mac[..] == local_mac[..] {
-                                            continue;
-                                        }
-                                        if tx
-                                            .try_send(ReceivedNpdu {
-                                                direct_response: None,
-                                                npdu: frame.payload.clone(),
-                                                source_mac,
-                                                link_layer_group: frame.function
-                                                    == Bvlc6Function::OriginalBroadcast,
-                                                data_attributes: Vec::new(),
-                                                provenance: TransportProvenance::unverified(),
-                                                reply_tx: None,
-                                            })
-                                            .is_err()
-                                        {
-                                            warn!(
-                                                "BIP6: NPDU channel full, dropping incoming frame"
-                                            );
-                                        }
-                                    }
-
-                                    Bvlc6Function::ForwardedNpdu => {
-                                        match decode_forwarded_npdu_payload(&frame.payload) {
-                                            Ok((source_addr, npdu_bytes)) => {
-                                                if npdu_bytes.is_empty() {
-                                                    debug!(
-                                                    "ForwardedNpdu with no NPDU payload, ignoring"
-                                                );
-                                                    continue;
-                                                }
-                                                if !forwarded_source_is_usable(source_addr) {
-                                                    debug!(
-                                                        source = %source_addr,
-                                                        "Dropping Forwarded-NPDU with unusable origin"
-                                                    );
-                                                    continue;
-                                                }
-                                                if decode_npdu(Bytes::copy_from_slice(npdu_bytes))
-                                                    .is_err()
-                                                {
-                                                    debug!(
-                                                        "Dropping Forwarded-NPDU with malformed NPDU"
-                                                    );
-                                                    continue;
-                                                }
-                                                vmac_table_clone
-                                                    .learn(frame.source_vmac, source_addr)
-                                                    .await;
-                                                let source_mac = encode_bip6_mac(
-                                                    *source_addr.ip(),
-                                                    source_addr.port(),
-                                                );
-                                                if tx
-                                                    .try_send(ReceivedNpdu {
-                                                        direct_response: None,
-                                                        npdu: Bytes::copy_from_slice(npdu_bytes),
-                                                        source_mac: MacAddr::from_slice(
-                                                            &source_mac,
-                                                        ),
-                                                        link_layer_group: true,
-                                                        data_attributes: Vec::new(),
-                                                        provenance: TransportProvenance::unverified(
-                                                        ),
-                                                        reply_tx: None,
-                                                    })
-                                                    .is_err()
-                                                {
-                                                    warn!("BIP6: NPDU channel full, dropping forwarded frame");
-                                                }
-                                            }
-                                            Err(e) => {
-                                                debug!(
-                                                    error = %e,
-                                                    "Failed to decode ForwardedNpdu payload"
-                                                );
-                                            }
-                                        }
-                                    }
-
-                                    Bvlc6Function::VirtualAddressResolution => {
-                                        // A node receiving VAR at its unicast B/IPv6 address
-                                        // answers with its own VMAC and the requester's VMAC.
-                                        let ack = encode_virtual_address_resolution_ack(
-                                            &source_vmac_copy,
-                                            &frame.source_vmac,
-                                        );
-                                        let _ = socket_for_recv.send_to(&ack, received.peer).await;
-                                    }
-
-                                    Bvlc6Function::AddressResolution => {
-                                        // AR: sender wants to know our B/IPv6 address from our VMAC.
-                                        // destination_vmac is the target being resolved.
-                                        if let Some(target) = frame.destination_vmac {
-                                            if target == source_vmac_copy {
-                                                debug!(
-                                                    vmac = ?source_vmac_copy,
-                                                    "Received AR for our VMAC, sending AR-Ack"
-                                                );
-                                                let ack = encode_address_resolution_ack(
-                                                    &source_vmac_copy,
-                                                    &frame.source_vmac,
-                                                );
-                                                let _ = socket_for_recv
-                                                    .send_to(&ack, received.peer)
-                                                    .await;
-                                            }
-                                        }
-                                    }
-
-                                    Bvlc6Function::AddressResolutionAck => {
-                                        // AR-ACK: learn the sender's VMAC→address mapping
-                                        // (will be used by VMAC table in future)
-                                        debug!(
-                                            vmac = ?frame.source_vmac,
-                                                addr = %received.peer,
-                                            "Received AR-Ack"
-                                        );
-                                    }
-
-                                    Bvlc6Function::VirtualAddressResolutionAck => {
-                                        // VAR-ACK: someone responded to our collision check
-                                        if frame.source_vmac == source_vmac_copy {
-                                            warn!(
-                                                vmac = ?source_vmac_copy,
-                                                "BIP6 VMAC collision detected! \
-                                                 Another node responded with our VMAC."
-                                            );
-                                        }
-                                    }
-
-                                    Bvlc6Function::Result => {
-                                        // Log BVLC-Result for diagnostics
-                                        if frame.payload.len() >= 2 {
-                                            let result_code = u16::from_be_bytes([
-                                                frame.payload[0],
-                                                frame.payload[1],
-                                            ]);
-                                            if result_code == 0x0000 {
-                                                debug!("BIP6: BVLC-Result successful");
-                                            } else {
-                                                tracing::error!(
-                                                    code = result_code,
-                                                    "BIP6: BVLC-Result NAK"
-                                                );
-                                            }
-                                        }
-                                    }
-
-                                    _ => {
-                                        debug!(
-                                            function = ?frame.function,
-                                            "Unhandled BVLC6 function"
-                                        );
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                warn!(error = %e, "Failed to decode BVLC6 frame");
-                            }
-                        }
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-                        debug!(error = %e, "Dropping UDP datagram with invalid destination metadata");
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "IPv6 UDP recv error");
-                        break;
-                    }
-                }
-            }
-        });
+        let receiver = Receiver {
+            socket: Arc::clone(&socket),
+            tx,
+            local_mac,
+            vmac: source_vmac,
+            local_ip,
+            unicast_ips: local_unicast_ips,
+            wildcard_bind,
+            foreign_bbmd: self
+                .foreign_device
+                .as_ref()
+                .map(|fd| (fd.bbmd_ip, fd.bbmd_port)),
+            vmac_table: self.vmac_table.clone(),
+        };
+        let recv_task = tokio::spawn(receiver.run());
 
         self.local_mac = local_mac;
         self.source_vmac = source_vmac;

@@ -7,10 +7,17 @@
 //! tag headers, lengths and matched opening and closing tags. Only broken
 //! framing is an error. Then:
 //!
+//! - When the property is one of the constructed collections the binding
+//!   also writes as typed values (a Recipient_List, a Group's members and
+//!   results, a Command's Action and others; see
+//!   [`constructed_read::element`]), and the octets decode as that
+//!   collection's elements, the value is a typed read (#1310): each element
+//!   keeps its octets, and `.value` gives the shape the typed write takes. A
+//!   value that doesn't decode that way goes on to the rules below.
 //! - When any element carries a context tag, the value is a constructed
-//!   production (a list of BACnetDestination, a Group's read results, a
-//!   timestamp CHOICE and so on). Nothing in the octets says where one list
-//!   element ends and the next starts, so the whole value comes back as
+//!   production (a timestamp CHOICE, a list of COV subscriptions and so on).
+//!   Nothing in the octets says where one list element ends and the next
+//!   starts, so the whole value comes back as
 //!   [`PropertyValue::ApplicationData`] holding the octets as received. Local
 //!   reads and writes already carry such values that way, and writing one
 //!   back sends the same octets.
@@ -35,6 +42,9 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
+use super::constructed_read;
+use super::PyPropertyValue;
+
 /// Decode the value octets read from `property` of an object of
 /// `object_type`, with the read's `array_index`, by the rules in the module
 /// documentation. Broken framing is an error; a caller that reports raw
@@ -44,25 +54,48 @@ pub(crate) fn decode_read_value(
     property: PropertyIdentifier,
     array_index: Option<u32>,
     octets: &[u8],
-) -> Result<PropertyValue, Error> {
-    let Some(starts) = application_elements(octets)? else {
-        return Ok(PropertyValue::ApplicationData(octets.to_vec()));
+) -> Result<PyPropertyValue, Error> {
+    let starts = application_elements(octets)?;
+    if let Some(value) = constructed_read::decode(object_type, property, array_index, octets) {
+        return Ok(value);
+    }
+    Ok(PyPropertyValue::from_rust(generic(
+        object_type,
+        property,
+        array_index,
+        octets,
+        starts,
+    )))
+}
+
+/// The value of `octets` by the rules after the typed read. `starts` are the
+/// top-level elements [`application_elements`] found, or `None` when one of
+/// them carries a context tag.
+fn generic(
+    object_type: ObjectType,
+    property: PropertyIdentifier,
+    array_index: Option<u32>,
+    octets: &[u8],
+    starts: Option<Vec<usize>>,
+) -> PropertyValue {
+    let Some(starts) = starts else {
+        return PropertyValue::ApplicationData(octets.to_vec());
     };
     let mut elements = Vec::with_capacity(starts.len());
     for start in starts {
         match decode_application_value(octets, start) {
             Ok((element, _)) => elements.push(element),
-            Err(_) => return Ok(PropertyValue::ApplicationData(octets.to_vec())),
+            Err(_) => return PropertyValue::ApplicationData(octets.to_vec()),
         }
     }
     let collection = array_index.is_none()
         && (standard_array_property(object_type, property)
             || standard_list_property(object_type, property));
-    Ok(match <[PropertyValue; 1]>::try_from(elements) {
+    match <[PropertyValue; 1]>::try_from(elements) {
         Ok([element]) if !collection => element,
         Ok([element]) => PropertyValue::List(vec![element]),
         Err(elements) => PropertyValue::List(elements),
-    })
+    }
 }
 
 /// Check the framing of `octets` and return where each top-level element
@@ -100,7 +133,7 @@ fn application_elements(octets: &[u8]) -> Result<Option<Vec<usize>>, Error> {
 
 /// Decode a ReadProperty ACK's value, shaped by the object, property and
 /// array index the ACK names.
-pub(crate) fn decode_read_ack(ack: &ReadPropertyACK) -> Result<PropertyValue, Error> {
+pub(crate) fn decode_read_ack(ack: &ReadPropertyACK) -> Result<PyPropertyValue, Error> {
     decode_read_value(
         ack.object_identifier.object_type(),
         ack.property_identifier,
