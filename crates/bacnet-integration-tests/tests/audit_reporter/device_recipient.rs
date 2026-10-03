@@ -98,8 +98,8 @@ async fn device_recipient_bip_address_change_delivers_to_both_real_loggers() {
             )
             .await
             .unwrap();
-        wait_for_records(&old_records, 1).await;
-        wait_for_records(&new_records, 1).await;
+        wait_for_records(&old_logger, &old_records, 1).await;
+        wait_for_records(&new_logger, &new_records, 1).await;
         let readback = client
             .read_property(
                 target.local_mac(),

@@ -746,6 +746,8 @@ mod event_forwarding_rule_tests;
 #[cfg(test)]
 mod event_forwarding_tests;
 #[cfg(test)]
+mod event_log_notification_tests;
+#[cfg(test)]
 mod event_network_priority_tests;
 #[cfg(test)]
 mod event_notifications_tests;
@@ -797,6 +799,8 @@ pub(crate) mod test_forwarder;
 pub(crate) mod test_transport;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod truncated_request_wire_tests;
 #[cfg(test)]
 mod value_cov_increment_tests;
 

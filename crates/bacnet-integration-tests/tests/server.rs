@@ -97,6 +97,12 @@ mod bbmd_discovery;
 #[cfg(feature = "ipv6")]
 #[path = "server/bip6_group_confirmed.rs"]
 mod bip6_group_confirmed;
+#[cfg(all(feature = "ipv6", unix))]
+#[path = "server/bip6_group_unicast.rs"]
+mod bip6_group_unicast;
+#[cfg(unix)]
+#[path = "server/bip_group_confirmed.rs"]
+mod bip_group_confirmed;
 #[path = "server/channel_remote.rs"]
 mod channel_remote;
 #[path = "server/command_remote.rs"]

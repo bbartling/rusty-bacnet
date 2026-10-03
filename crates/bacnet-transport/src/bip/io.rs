@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 
 use bytes::BytesMut;
@@ -14,71 +14,9 @@ use crate::bvll::{self, encode_bip_mac, encode_bvll, encode_bvll_forwarded};
 use crate::port::{ReceivedNpdu, TransportProvenance};
 
 use super::fanout::FanoutDispatcher;
+use super::ingress::Delivery;
 use super::rate_limit::{is_covered_management_request, ManagementRateLimiter};
 use super::{decode_bvlc_result_code, PendingBvlcResponse};
-
-/// How a datagram reached the B/IP socket, from its destination address.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Delivery {
-    /// Sent to the configured broadcast address or 255.255.255.255, so every
-    /// B/IP device on the subnet received it too.
-    Broadcast,
-    /// Any other destination.
-    Unicast,
-}
-
-impl Delivery {
-    /// Classify a datagram by its destination. An OS that flags the datagram
-    /// as unicast delivery overrides a broadcast destination.
-    pub(super) fn of(
-        destination: IpAddr,
-        configured_broadcast: Ipv4Addr,
-        os_group_delivery: Option<bool>,
-    ) -> Self {
-        let broadcast = matches!(destination, IpAddr::V4(ip) if ip == configured_broadcast || ip == Ipv4Addr::BROADCAST)
-            && os_group_delivery != Some(false);
-        if broadcast {
-            Self::Broadcast
-        } else {
-            Self::Unicast
-        }
-    }
-}
-
-pub(super) fn original_destination_matches(
-    function: BvlcFunction,
-    destination: IpAddr,
-    local_ip: Ipv4Addr,
-    configured_broadcast: Ipv4Addr,
-    local_unicast_ips: &[Ipv4Addr],
-    wildcard_bind: bool,
-    os_group_delivery: Option<bool>,
-) -> bool {
-    // A wildcard bind accepts unicast only to one of the host's listed
-    // addresses, on every OS (#952).
-    let local_unicast = match destination {
-        IpAddr::V4(ip) if wildcard_bind => {
-            ip != configured_broadcast
-                && ip != Ipv4Addr::BROADCAST
-                && !ip.is_multicast()
-                && local_unicast_ips.contains(&ip)
-        }
-        IpAddr::V4(ip) => ip == local_ip,
-        IpAddr::V6(_) => false,
-    } && os_group_delivery != Some(true);
-    let broadcast =
-        Delivery::of(destination, configured_broadcast, os_group_delivery) == Delivery::Broadcast;
-
-    match function {
-        f if f == BvlcFunction::ORIGINAL_UNICAST_NPDU => local_unicast,
-        f if f == BvlcFunction::ORIGINAL_BROADCAST_NPDU => broadcast,
-        // A Forwarded-NPDU may arrive by direct unicast or by a configured
-        // directed/limited broadcast. All BVLL management requests and
-        // responses are point-to-point and must arrive as actual unicast.
-        f if f == BvlcFunction::FORWARDED_NPDU => local_unicast || broadcast,
-        _ => local_unicast,
-    }
-}
 
 /// Ask the BBMD at `bbmd_addr` to register us as a foreign device
 /// (Register-Foreign-Device).
@@ -172,7 +110,10 @@ pub(super) async fn handle_bvll_message(
                     direct_response: None,
                     npdu: msg.payload.clone(),
                     source_mac,
-                    link_layer_group: false,
+                    // From the datagram's address, not its BVLC function, so
+                    // a group-addressed confirmed request is never answered as
+                    // a directed one (Clause 5.4.5.1).
+                    link_layer_group: delivery == Delivery::Broadcast,
                     data_attributes: Vec::new(),
                     provenance: TransportProvenance::unverified(),
                     reply_tx: None,

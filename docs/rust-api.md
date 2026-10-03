@@ -2228,6 +2228,42 @@ ACK_NOTIFICATION without its ack-required, from-state and event values, so
 ReadRange serves such a record without them. A Trend Log record stays a `BACnetLogRecord`; its optional
 `status_flags` is a `StatusFlags`.
 
+A running server records its own event notifications in every Event Log. Each
+notification it builds for an event or acknowledgment transition, intrinsic or
+from an Event Enrollment, goes through `ObjectDatabase::log_event_notification`,
+which adds a notification record stamped with the Device clock's local date and
+time to each Event Log through `BACnetObject::add_event_log_record` (the
+built-in `EventLogObject` takes it like `add_record`; the trait default refuses
+with `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`). The rules:
+
+- The record holds the notification as recipients get it, with Process
+  Identifier 0 in place of a recipient's own.
+- It is logged when the Notification Class reads fine but selects nobody (an
+  empty Recipient_List, or no destination open for that day, time or
+  transition): the Recipient_List picks network recipients, not local objects
+  (Clause 13.2.5).
+- It is not logged when the recipient lookup fails closed: the Notification
+  Class is missing, or its Recipient_List can't be read, is invalid or is past
+  the cap. The server refuses that transition whole, and a record would carry a
+  priority and ack policy the class never gave.
+- A transition whose Event_Enable bit is off, or one made while
+  DeviceCommunicationControl stops initiation, builds no notification and
+  leaves no record. Both are local choices: the logs hold what the device's
+  notification distribution produced.
+- Notifications the server receives are not logged.
+- No log takes a notification about an Event Log: one whose event object is an
+  Event Log, or one from an Event Enrollment of this device monitoring a
+  property of an Event Log. Logging such a report anywhere would add a record
+  that changes what it watches, so reports could prompt each other without end,
+  directly or crosswise between two logs.
+- Each log applies its own Enable, Buffer_Size and Stop_When_Full handling.
+  Event Log has no Start_Time or Stop_Time, so Enable alone switches logging.
+- Without a valid Device clock nothing is logged, since a record needs a
+  timestamp.
+
+The record is added under the database write guard that built the
+notification, before the network send.
+
 Every record kind, the Audit Log's included, carries a log status as the
 typed `bacnet_types::bitstring::LogStatus` flags (`LOG_DISABLED`,
 `BUFFER_PURGED`, `LOG_INTERRUPTED`). The codecs send bit 0 first, as for
@@ -2318,6 +2354,24 @@ are read-only over the network; set them before adding the Loop with
 `set_priority_for_writing`. The object stores the loop's configuration and
 output for the application's algorithm: it neither computes Present_Value nor
 writes it to the Manipulated_Variable_Reference target.
+
+Controlled_Variable_Reference and Manipulated_Variable_Reference read as the
+context-tagged `BACnetObjectPropertyReference` in one
+`PropertyValue::ApplicationData`, Null while unset. Setpoint_Reference reads
+as the `BACnetSetpointReference`: the same members inside opening and closing
+tag 0, or an empty `ApplicationData` while unset, since the sequence's only
+member is optional (#1312). All three take writes in those encodings over
+WriteProperty, WritePropertyMultiple and `write_local`, so a value read writes
+back unchanged; Null clears a variable reference and the empty value clears
+Setpoint_Reference. Another datatype is INVALID_DATA_TYPE: the flat
+`[ObjectIdentifier, Enumerated, Unsigned?]` list these used to read as, Null
+on Setpoint_Reference, or the setpoint frame on a variable reference.
+Malformed octets, such as a Device member `[3]` the production lacks or an
+empty frame `0E 0F`, are INVALID_DATA_ENCODING. The `set_*_reference` setters
+still take a `BACnetObjectPropertyReference`. An application that follows the
+references decodes what it reads with
+`bacnet_encoding::constructed::decode_object_property_reference`, or
+`decode_setpoint_reference`, which gives `None` for the empty value.
 
 While the application runs the algorithm, it also feeds Controlled_Variable_Value,
 the measurement the algorithm compares with Setpoint. The server doesn't follow
@@ -2457,8 +2511,9 @@ Object_Property_Reference reads as the context-tagged
 `BACnetDeviceObjectPropertyReference`, a `PropertyValue::ApplicationData` with
 no Device member (Null while unset), and a write takes that encoding back
 (#1182). The flat application-tagged list reads used to serve is now
-INVALID_DATA_TYPE, and a Device member that isn't a Device identifier
-VALUE_OUT_OF_RANGE.
+INVALID_DATA_TYPE, as are octets that don't open with the object
+identifier's context tag 0 (#1312), and a Device member that isn't a Device
+identifier VALUE_OUT_OF_RANGE.
 
 Staging uses an explicit atomic configuration; the former stage-count-only
 constructor is intentionally removed because it could not create a valid
@@ -2822,6 +2877,12 @@ Simulated values count the same as the device's.
 |------|-------------|
 | `AccumulatorObject` | `::new(instance, name, units)` |
 | `PulseConverterObject` | `::new(instance, name, units)` |
+
+A Pulse Converter's Input_Reference, set with `set_input_reference`, reads and
+takes writes like the Loop's variable references: the context-tagged
+`BACnetObjectPropertyReference` in a `PropertyValue::ApplicationData`, Null
+while unset, with the flat list refused as INVALID_DATA_TYPE (#1312). The
+object doesn't follow it; the application feeds Count with `add_pulses`.
 
 #### System (3)
 
