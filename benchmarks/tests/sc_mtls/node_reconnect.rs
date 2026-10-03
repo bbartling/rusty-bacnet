@@ -55,6 +55,22 @@ fn reconnect() -> ScReconnectConfig {
     }
 }
 
+// How long the client's TSM waits for the reply to one read. The client, the
+// proxy, the hub and the server all run on this test's one current-thread
+// runtime, so a read's round trip is several tasks' turns on a single thread.
+// On a CPU-starved runner that round trip can pass 100 ms with the request
+// still in flight, and a 100 ms budget with no retries then aborted reads that
+// were about to succeed (#1231). The reads don't race setup: each builder
+// returns only after its Connect-Accept, and the hub registers a node's VMAC
+// before it sends that. So this bounds a reply that is coming; it is sized for
+// a loaded runner, not for waiting on readiness.
+const READ_BUDGET_MS: u64 = 2_000;
+
+// One attempt of the post-redial poll. While a server redials, the hub drops
+// requests addressed to it and only a timer ends them, so each attempt is cut
+// off here instead of spending the whole TSM budget on a dropped request.
+const POLL_ATTEMPT: Duration = Duration::from_millis(100);
+
 // An opaque TCP forwarder cuts only the selected node's socket. It never
 // terminates TLS, chooses policy, rewrites SC, or performs application reads.
 struct Proxy {
@@ -149,7 +165,7 @@ impl Fixture {
             .tls_config(try_make_node_tls_config(certs).unwrap())
             .vmac([2; 6])
             .device_uuid(CLIENT_UUID)
-            .apdu_timeout_ms(100)
+            .apdu_timeout_ms(READ_BUDGET_MS)
             .apdu_retries(0)
             .reconnect(reconnect());
         self.client = Some(bounded(boxed(|| builder.build())).await.unwrap());
@@ -170,7 +186,8 @@ impl Fixture {
     async fn reads_after_reconnect(&self) {
         bounded(boxed(|| async {
             loop {
-                if boxed(|| self.read()).await.is_ok() {
+                let attempt = tokio::time::timeout(POLL_ATTEMPT, boxed(|| self.read())).await;
+                if matches!(attempt, Ok(Ok(()))) {
                     break;
                 }
                 tokio::task::yield_now().await;
@@ -366,7 +383,7 @@ async fn node_tls_generic_failover_connector_cannot_bypass_typed_policy() {
                 bounded(
                     BACnetClient::generic_builder()
                         .transport(transport)
-                        .apdu_timeout_ms(100)
+                        .apdu_timeout_ms(READ_BUDGET_MS)
                         .apdu_retries(0)
                         .build(),
                 )

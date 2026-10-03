@@ -82,7 +82,7 @@ fn assert_cases(
             }
         }
     }
-    use crate::handlers::rpm_budget::{handle_rpm_budgeted, RpmFailure};
+    use crate::handlers::{rpm_budget::handle_rpm_budgeted, ReadFailure};
     let budget = crate::server::ReadPropertyMultipleBudget {
         max_result_elements: cases.len(),
         max_service_ack_bytes: legacy.len(),
@@ -101,7 +101,7 @@ fn assert_cases(
                 ..budget
             }
         ),
-        Err(RpmFailure::Work)
+        Err(ReadFailure::Work)
     ));
     assert_eq!(&prefix[..], b"prefix");
     assert!(matches!(
@@ -114,7 +114,7 @@ fn assert_cases(
                 ..budget
             }
         ),
-        Err(RpmFailure::Bytes)
+        Err(ReadFailure::Bytes)
     ));
     assert_eq!(&prefix[..], b"prefix");
 }
@@ -544,9 +544,9 @@ fn rpm_credential_data_input_indexed_reads_and_bytes_are_unchanged() {
         // type [0] 0, format class [1] 0, an empty value [2]. Update_Time is
         // a BACnetTimeStamp, the unspecified date and time framed as the
         // datetime [2] choice, the same bytes as the Access Point
-        // Access_Event_Time default (#1133). The format lists are
-        // BACnetLIST/BACnetARRAY rows the default array gate rejects an
-        // index on, so every index overflows to NOT_AN_ARRAY.
+        // Access_Event_Time default (#1133). The two format rows are empty
+        // BACnetARRAYs: index 0 is their size and index 1 is past the end
+        // (#1169).
         let unspec_time: &[u8] = &[
             0x2e, 0xa4, 0xff, 0xff, 0xff, 0xff, 0xb4, 0xff, 0xff, 0xff, 0xff, 0x2f,
         ];
@@ -569,26 +569,18 @@ fn rpm_credential_data_input_indexed_reads_and_bytes_are_unchanged() {
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
             (P::SUPPORTED_FORMATS, None, Ok(EMPTY)),
-            (
-                P::SUPPORTED_FORMATS,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
+            (P::SUPPORTED_FORMATS, Some(0), Ok(&[0x21, 0])),
             (
                 P::SUPPORTED_FORMATS,
                 Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+                Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (P::SUPPORTED_FORMAT_CLASSES, None, Ok(EMPTY)),
-            (
-                P::SUPPORTED_FORMAT_CLASSES,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
+            (P::SUPPORTED_FORMAT_CLASSES, Some(0), Ok(&[0x21, 0])),
             (
                 P::SUPPORTED_FORMAT_CLASSES,
                 Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+                Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (P::STATUS_FLAGS, None, Ok(status_flags_bytes(configured))),
             (

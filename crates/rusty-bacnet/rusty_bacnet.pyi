@@ -2422,6 +2422,7 @@ class EventNotificationCounters(TypedDict):
     confirmed_no_invoke_id: int
     confirmed_rejected: int
     confirmed_unanswered: int
+    unconfirmed_send_failed: int
 
 class DccOutcomeCounters(TypedDict):
     """Independent u64 lifetime totals, saturating at 2**64-1; not an audit log."""
@@ -2971,7 +2972,9 @@ class BACnetServer:
         recipient at a broadcast address. The confirmed fields count
         notifications to one recipient that found no free invoke ID, were
         answered with an Error, Reject or Abort, or drew no acknowledgment
-        after the last retry. Fields are sampled independently. Raises
+        after the last retry. unconfirmed_send_failed counts unconfirmed
+        notifications the transport refused to send, once per destination.
+        Fields are sampled independently. Raises
         RuntimeError before start and after stop.
         """
         ...

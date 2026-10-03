@@ -41,7 +41,7 @@ async fn keyed_drop(peers: &mut [Peer], branch: LocalBranch, source: &[u8]) {
 async fn each_branch_caps_a_flood_and_same_mac_on_another_port_has_its_own_quota() {
     for branch in BRANCHES {
         let (ports, mut peers) = fixture(2);
-        let (mut router, mut apdus) = BACnetRouter::start_with_admission(ports).await.unwrap();
+        let (mut router, mut apdus) = launch(ports, RouterOptions::new().track_admission()).await;
         let counters = apdus.counters();
         drain_announcements(&mut peers).await;
         for id in 0..256 {
@@ -111,7 +111,7 @@ async fn each_branch_caps_a_flood_and_same_mac_on_another_port_has_its_own_quota
 #[tokio::test(start_paused = true)]
 async fn recv_and_try_recv_replenish_only_the_exact_port_mac_key_one_for_one() {
     let (ports, mut peers) = fixture(2);
-    let (mut router, mut apdus) = BACnetRouter::start_with_admission(ports).await.unwrap();
+    let (mut router, mut apdus) = launch(ports, RouterOptions::new().track_admission()).await;
     let counters = apdus.counters();
     drain_announcements(&mut peers).await;
     for (port, peer) in peers.iter_mut().enumerate() {
@@ -198,7 +198,7 @@ async fn recv_and_try_recv_replenish_only_the_exact_port_mac_key_one_for_one() {
 async fn closed_precedes_fairness_which_precedes_full_in_all_local_branches() {
     for branch in BRANCHES {
         let (ports, mut peers) = fixture(2);
-        let (mut router, mut apdus) = BACnetRouter::start_with_admission(ports).await.unwrap();
+        let (mut router, mut apdus) = launch(ports, RouterOptions::new().track_admission()).await;
         let counters = apdus.counters();
         drain_announcements(&mut peers).await;
         let accepted_reply = fill(&mut peers).await;
@@ -238,7 +238,7 @@ async fn closed_precedes_fairness_which_precedes_full_in_all_local_branches() {
 async fn legacy_local_queue_accepts_256_from_one_port_mac_without_a_quota() {
     let (ports, mut peers) = fixture(2);
     let (mut router, mut apdus): (_, mpsc::Receiver<ReceivedApdu>) =
-        BACnetRouter::start(ports).await.unwrap();
+        launch(ports, RouterOptions::new()).await;
     drain_announcements(&mut peers).await;
     for id in 0..256 {
         peers[0]

@@ -162,7 +162,13 @@ async fn sc_to_sc_forwarding_preserves_data_attributes_as_data_options() {
         transport: ScTransport::new(ws_client_b, [0x02; 6]).with_device_uuid([1; 16]),
         network_number: 2000,
     };
-    let (mut router, _local_rx) = BACnetRouter::start(vec![port_a, port_b]).await.unwrap();
+    let StartedRouter {
+        mut router,
+        apdus: _local_rx,
+        ..
+    } = BACnetRouter::start(vec![port_a, port_b], RouterOptions::new())
+        .await
+        .unwrap();
     let ws_hub_a = accept_a.await.unwrap();
     let ws_hub_b = accept_b.await.unwrap();
 

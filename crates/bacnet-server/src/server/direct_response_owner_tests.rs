@@ -91,7 +91,7 @@ async fn direct_response_server_stop_cancels_held_request_and_keeps_listener_han
 
 #[tokio::test]
 async fn direct_response_router_local_delivery_preserves_matching_capability() {
-    use bacnet_network::router::{BACnetRouter, RouterPort};
+    use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
     let ca = TestCa::new();
     let mut f = Fixture::new(
         &ca,
@@ -102,12 +102,17 @@ async fn direct_response_router_local_delivery_preserves_matching_capability() {
     let mut a = f.peer(ca.tls("a")).await;
     let (tx, incoming) = mpsc::channel(8);
     let (responses, mut generic) = mpsc::unbounded_channel();
-    let (mut router, mut local) = BACnetRouter::start(vec![RouterPort {
+    let port = RouterPort {
         transport: queued_port(incoming, responses),
         network_number: 44,
-    }])
-    .await
-    .unwrap();
+    };
+    let StartedRouter {
+        mut router,
+        apdus: mut local,
+        ..
+    } = BACnetRouter::start(vec![port], RouterOptions::new())
+        .await
+        .unwrap();
     for (invoke, destination) in [
         (1, None),
         (

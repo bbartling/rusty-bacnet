@@ -230,16 +230,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
                 match result {
                     Ok(()) => complex_ack(ack_buf),
-                    Err(handlers::RpmFailure::Service(e)) => {
+                    Err(handlers::ReadFailure::Service(e)) => {
                         Self::error_apdu_from_error(invoke_id, service_choice, &e)
                     }
                     Err(failure) => Apdu::Abort(AbortPdu {
                         sent_by_server: true,
                         invoke_id,
                         abort_reason: match failure {
-                            handlers::RpmFailure::Work => AbortReason::OUT_OF_RESOURCES,
-                            handlers::RpmFailure::Bytes => AbortReason::BUFFER_OVERFLOW,
-                            handlers::RpmFailure::Service(_) => unreachable!(),
+                            handlers::ReadFailure::Work => AbortReason::OUT_OF_RESOURCES,
+                            handlers::ReadFailure::Bytes => AbortReason::BUFFER_OVERFLOW,
+                            handlers::ReadFailure::Service(_) => unreachable!(),
                         },
                     }),
                 }

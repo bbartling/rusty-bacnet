@@ -53,7 +53,7 @@ pub struct AccessDoorObject {
     state: DoorState,
     /// The device's own door state, put aside while Out_Of_Service is TRUE.
     device_state: Option<DoorState>,
-    door_members: Vec<ObjectIdentifier>,
+    door_members: Vec<BACnetDeviceObjectReference>,
     status_flags: StatusFlags,
     /// Event_State.
     event_state: EventState,
@@ -120,6 +120,18 @@ impl AccessDoorObject {
         self.relinquish_default = value;
         self.recalculate_present_value();
         Ok(())
+    }
+
+    /// Set Door_Members, the objects that make up the physical door: its
+    /// lock, contact, reader and anything else the application chooses
+    /// (Clause 12.26.15 leaves the choice to the device). A reference with no
+    /// Device identifier names an object in this device. The array is
+    /// read-only over the network.
+    pub fn set_door_members(
+        &mut self,
+        members: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
+    ) {
+        self.door_members = members.into_iter().map(Into::into).collect();
     }
 
     /// Set Door_Pulse_Time, in tenths of a second.
@@ -367,12 +379,9 @@ impl BACnetObject for AccessDoorObject {
             p if p == PropertyIdentifier::DOOR_ALARM_STATE => Ok(PropertyValue::Enumerated(
                 self.state.door_alarm_state.to_raw(),
             )),
-            p if p == PropertyIdentifier::DOOR_MEMBERS => Ok(PropertyValue::List(
-                self.door_members
-                    .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                    .collect(),
-            )),
+            p if p == PropertyIdentifier::DOOR_MEMBERS => {
+                common::read_array(device_object_references(&self.door_members), array_index)
+            }
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }

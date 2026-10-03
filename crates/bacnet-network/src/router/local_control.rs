@@ -4,29 +4,46 @@
 //! handles them inline. A Reject-Message-To-Network addressed to the router
 //! itself also answers something the router's own side sent, so besides
 //! updating the table it goes to the opt-in stream that
-//! [`BACnetRouter::start_with_network_control_receiver`] returns. Its records
-//! are the [`ReceivedNetworkControl`] a non-router
+//! [`RouterOptions::network_control_receiver`](super::RouterOptions::network_control_receiver)
+//! asks for. Its records are the [`ReceivedNetworkControl`] a non-router
 //! [`NetworkLayer`](crate::layer::NetworkLayer) hands its own consumer.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use bacnet_encoding::npdu::NpduAddress;
-use bacnet_transport::port::TransportPort;
-use bacnet_types::error::Error;
-use bacnet_types::MacAddr;
-use tokio::sync::mpsc;
 
-use super::{control_policy, BACnetRouter, IngressContext, RouterPort};
-use crate::layer::{
-    next_ingress_sequence, AdmissionReceiver, AdmissionSender, ReceivedApdu, ReceivedNetworkControl,
-};
+use super::{BACnetRouter, IngressContext};
+use crate::layer::{next_ingress_sequence, AdmissionSender, ReceivedNetworkControl};
+
+/// The router's own address on each port, by port index: the network the
+/// port is attached to, with the router's MAC on that link.
+#[derive(Debug, Default)]
+pub(super) struct OwnAddresses(Vec<NpduAddress>);
+
+impl OwnAddresses {
+    pub(super) fn new(addresses: Vec<NpduAddress>) -> Self {
+        Self(addresses)
+    }
+
+    /// Whether `address` is this router: the network of one of its ports,
+    /// paired with the router's own MAC on that port.
+    pub(super) fn contains(&self, address: &NpduAddress) -> bool {
+        self.0.contains(address)
+    }
+
+    /// The port attached to `network`, if that network is one of the
+    /// router's own.
+    pub(super) fn port_on(&self, network: u16) -> Option<usize> {
+        self.0.iter().position(|own| own.network == network)
+    }
+}
 
 /// Where network controls addressed to this router go.
 #[derive(Default)]
 pub(super) struct LocalControl {
-    /// Each port's network number and own MAC, by port index.
-    ports: Vec<(u16, MacAddr)>,
+    /// The router's own address on each port.
+    addresses: OwnAddresses,
     /// The opted-in consumer, if any.
     tx: Option<AdmissionSender<ReceivedNetworkControl>>,
     /// Source of [`ReceivedNetworkControl::ingress_sequence`].
@@ -35,23 +52,27 @@ pub(super) struct LocalControl {
 
 impl LocalControl {
     pub(super) fn new(
-        ports: Vec<(u16, MacAddr)>,
+        addresses: OwnAddresses,
         tx: Option<AdmissionSender<ReceivedNetworkControl>>,
         ingress_sequence: Arc<AtomicU64>,
     ) -> Self {
         Self {
-            ports,
+            addresses,
             tx,
             ingress_sequence,
         }
     }
 
+    /// The router's own address on each port, which also tells the reject
+    /// path which networks are directly connected.
+    pub(super) fn addresses(&self) -> &OwnAddresses {
+        &self.addresses
+    }
+
     /// Whether `dest` is this router: its network is one of the router's
     /// ports and its MAC is the router's own MAC on that port.
     pub(super) fn is_own_address(&self, dest: &NpduAddress) -> bool {
-        self.ports
-            .iter()
-            .any(|(network, mac)| *network == dest.network && *mac == dest.mac_address)
+        self.addresses.contains(dest)
     }
 
     /// Offer the control in `ctx` to the consumer. Like the router's local
@@ -73,45 +94,9 @@ impl LocalControl {
 }
 
 impl BACnetRouter {
-    /// Start like [`Self::start`], and also return the router's own
-    /// network-control receiver (#1175).
-    ///
-    /// The receiver gets each Reject-Message-To-Network addressed to the
-    /// router itself: one with no DNET, or whose DADR is the router's MAC on
-    /// the port attached to that DNET. Such a reject still updates the routing
-    /// table and is never relayed. Without this receiver, the table update is
-    /// all that happens. Every other network message is still handled inline.
-    ///
-    /// Records match what a non-router
-    /// [`NetworkLayer::enable_network_control_receiver`](crate::layer::NetworkLayer::enable_network_control_receiver)
-    /// delivers, numbered from [`Self::network_control_ingress_sequence`]. The
-    /// queue holds 256 controls, apart from the APDU queue. Admission never
-    /// waits: a full or closed receiver drops the arriving control, and
-    /// routing carries on.
-    pub async fn start_with_network_control_receiver<T: TransportPort + 'static>(
-        ports: Vec<RouterPort<T>>,
-    ) -> Result<
-        (
-            Self,
-            mpsc::Receiver<ReceivedApdu>,
-            mpsc::Receiver<ReceivedNetworkControl>,
-        ),
-        Error,
-    > {
-        let (control_tx, control_rx, _) = AdmissionReceiver::channel(false);
-        let (router, apdu_rx, _) = Self::start_dispatch_with_control(
-            ports,
-            false,
-            Arc::new(control_policy::ControlGate::permissive()),
-            Some(control_tx),
-        )
-        .await?;
-        Ok((router, apdu_rx, control_rx))
-    }
-
     /// Sequence assigned to the most recent control offered to the receiver
-    /// from [`Self::start_with_network_control_receiver`], including one the
-    /// receiver dropped. Saturates at `u64::MAX`.
+    /// from [`RouterOptions::network_control_receiver`](super::RouterOptions::network_control_receiver),
+    /// including one the receiver dropped. Saturates at `u64::MAX`.
     pub fn network_control_ingress_sequence(&self) -> u64 {
         self.network_control_ingress_sequence.load(Ordering::SeqCst)
     }

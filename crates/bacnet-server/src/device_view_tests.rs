@@ -33,7 +33,7 @@ fn every_read_query_has_a_forwarding_check() {
 #[test]
 fn the_view_forwards_every_read_query() {
     let db = ObjectDatabase::new();
-    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer, None);
+    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer);
     let log = CallLog::default();
     let probe = Probe::new(ObjectType::ANALOG_VALUE, log.clone());
     let view = context.object(&probe);
@@ -55,7 +55,7 @@ fn a_device_keeps_its_owned_answers_and_forwards_every_other_query() {
         "cov_snapshot_internal",
     ];
     let db = ObjectDatabase::new();
-    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer, None);
+    let context = DeviceReadContext::new(&db, DeviceExecution::FullServer);
     let log = CallLog::default();
     let probe = Probe::new(ObjectType::DEVICE, log.clone());
     let view = context.object(&probe);

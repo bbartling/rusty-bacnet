@@ -1,4 +1,5 @@
-use crate::handlers::rpm_budget::{handle_rpm_budgeted, handle_rpm_budgeted_observed, RpmFailure};
+use crate::handlers::rpm_budget::{handle_rpm_budgeted, handle_rpm_budgeted_observed};
+use crate::handlers::ReadFailure;
 use bacnet_objects::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyWriteCapability,
 };
@@ -256,7 +257,7 @@ fn rpm_result_index_presence_vendor_errors_order_budget_and_request_observations
             );
             assert!(matches!(
                 (work, result),
-                (true, Err(RpmFailure::Work)) | (false, Err(RpmFailure::Bytes))
+                (true, Err(ReadFailure::Work)) | (false, Err(ReadFailure::Bytes))
             ));
             assert_eq!(&prefix[..], b"prefix");
             if work {
