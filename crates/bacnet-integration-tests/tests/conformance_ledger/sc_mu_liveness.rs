@@ -71,7 +71,7 @@ fn mu_liveness_evidence_preserves_scope_and_blocked_write_limitation() {
     ] {
         assert!(normalized.contains(phrase), "{phrase}");
     }
-    assert!(read_repo_file("CHANGELOG.md").contains("#mu-rejection-liveness-accounting"));
+    assert!(read_published_doc("CHANGELOG.md").contains("#mu-rejection-liveness-accounting"));
     assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
 }
 
@@ -157,9 +157,8 @@ fn rejection_nak_budget_evidence_preserves_freshness_and_cancellation_limits() {
         // Remove emphasis solely for comparing words across Markdown markup.
         assert!(normalized.replace("**", "").contains(phrase), "{phrase}");
     }
-    assert!(
-        read_repo_file("CHANGELOG.md").contains("#rejection-nak-budget-and-fresh-only-recovery")
-    );
+    assert!(read_published_doc("CHANGELOG.md")
+        .contains("#rejection-nak-budget-and-fresh-only-recovery"));
     assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
 }
 
@@ -211,7 +210,7 @@ fn empty_npdu_evidence_preserves_zero_only_scope_and_existing_lifecycle_owners()
     }
     assert_eq!(count, 13);
     assert!(STANDARD_LEDGER.contains("## Empty Encapsulated-NPDU admission\n"));
-    assert!(read_repo_file("CHANGELOG.md").contains("#empty-encapsulated-npdu-admission"));
+    assert!(read_published_doc("CHANGELOG.md").contains("#empty-encapsulated-npdu-admission"));
     assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
 }
 
@@ -264,6 +263,6 @@ fn unknown_function_evidence_preserves_node_only_scope_and_fifth_budget_path() {
     }
     assert_eq!(count, 11);
     assert!(STANDARD_LEDGER.contains("## Node unknown-function admission\n"));
-    assert!(read_repo_file("CHANGELOG.md").contains("#node-unknown-function-admission"));
+    assert!(read_published_doc("CHANGELOG.md").contains("#node-unknown-function-admission"));
     assert_eq!(sc_identity_closeout().matches("\n| A").count(), 6);
 }

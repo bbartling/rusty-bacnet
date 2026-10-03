@@ -160,7 +160,7 @@ class MainTests(unittest.TestCase):
 
     def test_max_chars_needs_url(self):
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
-            self.run_main("--unreleased", "--max-chars", "100")
+            self.run_main("--version", "1.1.0", "--max-chars", "100")
 
 
 if __name__ == "__main__":
