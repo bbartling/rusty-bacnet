@@ -2,7 +2,8 @@ use super::*;
 
 use std::collections::BTreeMap;
 
-const STUB: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/rusty_bacnet.pyi"));
+pub(crate) const STUB: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/rusty_bacnet.pyi"));
 
 /// A literal naming every field, so a new `CovCounters` field stops this test
 /// compiling as well as the binding. Each value is distinct, so a field read
@@ -53,7 +54,7 @@ fn every_cov_counter_reaches_python_under_its_rust_name() {
 
 /// The `name: annotation` members of a top-level stub class, read up to the
 /// first line that is neither indented nor blank.
-fn stub_class_members(class_header: &str) -> BTreeMap<&'static str, &'static str> {
+pub(crate) fn stub_class_members(class_header: &str) -> BTreeMap<&'static str, &'static str> {
     let (_, body) = STUB
         .split_once(&format!("\n{class_header}\n"))
         .unwrap_or_else(|| panic!("`{class_header}` missing from rusty_bacnet.pyi"));

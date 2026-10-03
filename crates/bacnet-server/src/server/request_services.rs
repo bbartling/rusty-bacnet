@@ -19,6 +19,7 @@ pub(super) struct RequestServices<T: TransportPort + 'static> {
     pub(super) comm_state: Arc<AtomicU8>,
     pub(super) dcc_timer: Arc<Mutex<dcc_timer::TimerSlot>>,
     pub(super) dcc_outcomes: Arc<dcc_outcomes::DccOutcomes>,
+    pub(super) event_suppressions: Arc<super::event_suppression::EventSuppressions>,
     pub(super) mutation_decisions: Arc<crate::mutation::MutationDecisions>,
     pub(super) config: Arc<ServerConfig>,
 }
@@ -38,6 +39,7 @@ impl<T: TransportPort + 'static> Clone for RequestServices<T> {
             comm_state: Arc::clone(&self.comm_state),
             dcc_timer: Arc::clone(&self.dcc_timer),
             dcc_outcomes: Arc::clone(&self.dcc_outcomes),
+            event_suppressions: Arc::clone(&self.event_suppressions),
             mutation_decisions: Arc::clone(&self.mutation_decisions),
             config: Arc::clone(&self.config),
         }
@@ -105,6 +107,7 @@ impl<T: TransportPort + 'static> RequestServices<T> {
             learned_routers: &self.learned_routers,
             notification_transactions: &self.notification_transactions,
             device_bindings: &self.device_bindings,
+            suppressions: &self.event_suppressions,
             retry_timeout_ms: self.config.cov_retry_timeout_ms,
             local_apdu_capacity: self.config.max_apdu_length,
         }
@@ -129,6 +132,7 @@ impl<T: TransportPort + 'static> RequestServices<T> {
             comm_state: Arc::new(AtomicU8::new(0)),
             dcc_timer: Arc::new(Mutex::new(dcc_timer::TimerSlot::default())),
             dcc_outcomes: Arc::new(dcc_outcomes::DccOutcomes::default()),
+            event_suppressions: Arc::default(),
             mutation_decisions: Arc::new(crate::mutation::MutationDecisions::default()),
             config: Arc::new(config),
         }
@@ -187,6 +191,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             comm_state: Arc::clone(&self.comm_state),
             dcc_timer: Arc::clone(&self.dcc_timer),
             dcc_outcomes: Arc::clone(&self.dcc_outcomes),
+            event_suppressions: Arc::clone(&self.event_suppressions),
             mutation_decisions: Arc::clone(&self.mutation_decisions),
             config: Arc::new(self.config.clone()),
         }

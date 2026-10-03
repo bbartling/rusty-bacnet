@@ -83,6 +83,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let dcc_timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>> =
             Arc::new(Mutex::new(Default::default()));
         let dcc_outcomes = Arc::new(dcc_outcomes::DccOutcomes::default());
+        let event_suppressions = Arc::new(super::event_suppression::EventSuppressions::default());
         let mutation_decisions = Arc::new(crate::mutation::MutationDecisions::default());
 
         let target_audit = super::audit_recipient::TargetAudit::install(
@@ -137,6 +138,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 comm_state: Arc::clone(&comm_state),
                 dcc_timer: Arc::clone(&dcc_timer),
                 dcc_outcomes: Arc::clone(&dcc_outcomes),
+                event_suppressions: Arc::clone(&event_suppressions),
                 mutation_decisions: Arc::clone(&mutation_decisions),
                 config: Arc::clone(&config_dispatch),
             },
@@ -608,13 +610,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         // Background commits fan COV out like a network write (#889).
         let cov_fanout = super::cov_fanout::CovFanout::new(
-            &db,
-            &network,
-            &cov_table,
-            &cov_in_flight,
-            &notification_transactions,
-            &comm_state,
-            &config,
+            &super::cov_notify_context::CovNotifyContext {
+                db: &db,
+                network: &network,
+                cov_table: &cov_table,
+                cov_in_flight: &cov_in_flight,
+                notification_transactions: &notification_transactions,
+                comm_state: &comm_state,
+                config: &config,
+            },
+            &event_suppressions,
         );
 
         let fault_detection_task = if config.enable_fault_detection {
@@ -661,6 +666,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         learned_routers: Arc::clone(&learned_routers),
                         notification_transactions: Arc::clone(&notification_transactions),
                         device_bindings: Arc::clone(&device_bindings),
+                        suppressions: Arc::clone(&event_suppressions),
                         period: ee_period,
                         retry_ms: config.cov_retry_timeout_ms,
                         local_apdu_capacity: config.max_apdu_length,
@@ -757,6 +763,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             comm_state,
             dcc_timer,
             dcc_outcomes,
+            event_suppressions,
             mutation_decisions,
             dispatch_task: Some(dispatch_task),
             request_tasks,
