@@ -736,6 +736,10 @@ mod receipt_tests;
 #[path = "audit/persistence_receipt_tests.rs"]
 mod persistence_receipt_tests;
 
+#[cfg(test)]
+#[path = "audit/persistence_schema_tests.rs"]
+mod persistence_schema_tests;
+
 #[path = "audit/reporter_configuration.rs"]
 mod reporter_configuration;
 

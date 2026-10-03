@@ -3599,8 +3599,9 @@ both services. `RangeSpec::ByPosition::reference_index`,
 `ReadRangeAck::first_sequence_number` are `u64` for these logs (Clause 15.8).
 
 `AuditLogSnapshot::completed_receipts` is part of the public custom-persistence
-snapshot contract. `FileAuditLogPersistence` writes schema v2, reads schema v1
-as an empty receipt ledger, rejects unknown future versions, and retains the
+snapshot contract. `FileAuditLogPersistence` writes schema v3, reads schema v2
+and schema v1 (as an empty receipt ledger), rejects unknown future versions,
+and retains the
 existing two-slot generation/checksum recovery policy. When migrating a custom
 `AuditLogPersistence` implementation to 0.11.0, add `completed_receipts: Vec::new()`
 to newly constructed snapshots and when decoding an older format without
@@ -3608,10 +3609,18 @@ receipts. Thereafter, `commit` must durably store the supplied receipt ledger
 and records in the same atomic snapshot, and `load` must restore both. Dropping
 or separately committing the ledger loses confirmed-request duplicate
 protection after a reopen. The built-in file backend needs no separate v1
-conversion: it writes v2 on the next successful commit.
+conversion: it writes the current schema on the next successful commit.
 
-Back up both `.slot0` and `.slot1` files before the first v2 commit. A reader that
-supports only v1 cannot read v2 snapshots; rolling back to such an implementation
+Schema v1 and v2 files, which 0.11.0 and earlier wrote, store log-status
+records with their three bits reversed. The file backend restores each one
+when it loads such a file, so an old log-disabled record reads back as
+`LogStatus::LOG_DISABLED`, and the next commit saves the log as v3. A custom
+`AuditLogPersistence` that stored encoded records from those releases has to
+make the same correction: reverse the three bits of every log-status record
+it decodes.
+
+Back up both `.slot0` and `.slot1` files before the first commit under a newer schema. A reader that
+supports only an older schema cannot read newer snapshots; rolling back to such an implementation
 requires restoring a compatible backup and loses changes made after that backup.
 
 Unconfirmed receipt never emits a response and never writes the confirmed ledger.

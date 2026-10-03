@@ -1303,7 +1303,7 @@
     "A page encodes only the records it reaches, so a narrow window over a 10,000-record ring does not encode the rest. The server's ReadRangeBudget bounds items and bytes as for the other logs.",
     "Not covered: Buffer_Size writes, and a network route to purge the ring.",
     "The other logs (Trend Log Multiple, Trend Log, Event Log) refuse ReadProperty of Log_Buffer the same way, through the same helper (BACNET-15-READ-RANGE-LOG-BUFFER, #1237).",
-    "A log-status record shares the other logs' LogStatus codec: log-disabled is 05 80. Records an earlier release persisted in the old bit order read log-disabled back as log-interrupted."
+    "A log-status record shares the other logs' LogStatus codec: log-disabled is 05 80."
    ]
   },
   {
@@ -4380,6 +4380,9 @@
     "crates/bacnet-objects/src/audit/notification_tests.rs::completed_match_is_dropped_and_merge_preserves_record_identity",
     "crates/bacnet-objects/src/audit/notification_tests.rs::confirmed_completed_match_still_commits_receipt_without_record_change",
     "crates/bacnet-objects/src/audit/persistence_receipt_tests.rs::schema_v1_loads_with_empty_receipts_and_v2_round_trips_them",
+    "crates/bacnet-objects/src/audit/persistence_schema_tests.rs::schema_v2_log_status_records_convert_on_load_and_save_as_v3",
+    "crates/bacnet-objects/src/audit/persistence_schema_tests.rs::schema_v1_log_status_records_convert_on_load",
+    "crates/bacnet-objects/src/audit/persistence_schema_tests.rs::schema_v3_log_status_records_round_trip_unchanged",
     "crates/bacnet-objects/src/audit/receipt_tests.rs::retention_boundary_and_future_timestamp_fail_open",
     "crates/bacnet-objects/src/audit/receipt_tests.rs::full_ledger_evicts_oldest_completion_then_oldest_tie",
     "crates/bacnet-server/src/server/audit_notification_tests.rs::authorized_routed_request_preserves_provenance_and_duplicate_is_silent",
@@ -4530,7 +4533,8 @@
     "#1124: Audit_Notification_Recipient decodes as a configured recipient, so an address MAC longer than 18 octets (BACnetAddress::MAX_MAC_LEN) fails a write with PROPERTY / INVALID_DATA_ENCODING, and provision_audit_recipient refuses one with the same code.",
     "#1156: every BACnetAddress the audit codecs carry (the AuditLogQuery device-address filters, and an AuditNotification's two recipient fields [2] and [10]) holds to the same 18 octets in both directions: a longer one does not decode, and the encoders refuse it before writing, so an audit record that could not be reported is never stored.",
     "#1204: with several Devices the target Audit identity is the lowest (ObjectDatabase::local_device). It names this device in records and owns the recipient, and active membership refuses a new Device, so it stays the lowest.",
-    "#1204: notification receipt reads the lowest Device's APDU_Timeout. Forwarding skips a parent naming the lowest Device and forwards to any other, including a Device in the same database; with only a wildcard Device it forwards nothing."
+    "#1204: notification receipt reads the lowest Device's APDU_Timeout. Forwarding skips a parent naming the lowest Device and forwards to any other, including a Device in the same database; with only a wildcard Device it forwards nothing.",
+    "FileAuditLogPersistence writes snapshot schema v3. Loading a v1 or v2 snapshot reverses the three bits of each log-status record, which 0.11.0 stored reversed, so an old log-disabled record reads back as LOG_DISABLED; the next commit saves v3."
    ],
    "target_device_recipient": {
     "scope": "Target portion of #728; the completed bounded source endpoint migration is recorded separately in BACNET-19-SOURCE-READ-PROPERTY. Broader Audit conformance remains open. Corrected Device recipient requirement: Clause 12.11 with 135-2020 Errata Summary 2024-04-29 item 25 (PDF page 7), preserving base O and footnotes 19-20; NULL operation semantics in 15.9/15.10/19.2; record shape Table 19-4 and BACnetRecipient in Clause 21.",

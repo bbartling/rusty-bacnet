@@ -351,7 +351,7 @@ fn corrupted_header_falls_back_but_checksum_valid_incompatibility_is_fatal() {
 
     let original = std::fs::read(&newest).unwrap();
     let mut unknown_version = original.clone();
-    unknown_version[8..10].copy_from_slice(&3u16.to_be_bytes());
+    unknown_version[8..10].copy_from_slice(&4u16.to_be_bytes());
     std::fs::write(&newest, &unknown_version).unwrap();
     let recovered = AuditLogObject::new(1, "AL-1", 2, storage.clone()).unwrap();
     assert!(recovered.records().is_empty());
@@ -390,7 +390,7 @@ fn persistence_identity_version_capacity_and_length_validation_fail_closed() {
     assert!(AuditLogObject::new(1, "AL-1", 2, storage.clone()).is_err());
 
     let mut unknown_version = original.clone();
-    unknown_version[8..10].copy_from_slice(&3u16.to_be_bytes());
+    unknown_version[8..10].copy_from_slice(&4u16.to_be_bytes());
     std::fs::write(&active, &unknown_version).unwrap();
     assert!(AuditLogObject::new(1, "AL-1", 2, storage.clone()).is_err());
 
