@@ -355,15 +355,12 @@ fn rpm_pulse_converter_indexed_reads_and_bytes_are_unchanged() {
             object
                 .write_property(P::COV_INCREMENT, None, PropertyValue::Real(0.5), None)
                 .unwrap();
-            let target = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 1).unwrap();
+            // [0] accumulator 1, [1] present-value (#1312).
             object
                 .write_property(
                     P::INPUT_REFERENCE,
                     None,
-                    PropertyValue::List(vec![
-                        PropertyValue::ObjectIdentifier(target),
-                        PropertyValue::Enumerated(P::PRESENT_VALUE.to_raw()),
-                    ]),
+                    PropertyValue::ApplicationData(vec![0x0C, 0x05, 0xC0, 0x00, 0x01, 0x19, 0x55]),
                     None,
                 )
                 .unwrap();
@@ -374,13 +371,13 @@ fn rpm_pulse_converter_indexed_reads_and_bytes_are_unchanged() {
         // Independent application-value bytes pin the existing projection.
         // 12.5f32 encodes as 0x41480000, 2.5f32 as 0x40200000, 5.0f32 as
         // 0x40A00000, 0.5f32 as 0x3F000000. The Accumulator(23) instance-1
-        // reference encodes as 0xC4 0x05 0xC0 0x00 0x01 followed by
-        // enumerated 85 (0x91 0x55). With no Device clock the two
+        // reference is its Clause 21 members: [0] 0x0C 0x05 0xC0 0x00 0x01,
+        // then [1] present-value 0x19 0x55 (#1312). With no Device clock the two
         // BACnetDateTime rows are an all-unspecified Date (0xA4) then Time
         // (0xB4).
         const UNSPECIFIED: &[u8] = &[0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF];
         let input_reference: &[u8] = if configured {
-            &[0xC4, 0x05, 0xC0, 0x00, 0x01, 0x91, 0x55]
+            &[0x0C, 0x05, 0xC0, 0x00, 0x01, 0x19, 0x55]
         } else {
             &[0x00]
         };

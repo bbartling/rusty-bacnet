@@ -30,15 +30,6 @@ PV = PropertyIdentifier.PRESENT_VALUE
 NAME = PropertyIdentifier.OBJECT_NAME
 AI_1 = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
 GROUP_1 = ObjectIdentifier(ObjectType.GROUP, 1)
-# Group 1's Present_Value: one ReadAccessResult for AI 1 (object [0], results
-# [1]) holding Present_Value (property [2] 85, value [4] REAL 21.5) and
-# Object_Name (property [2] 77, value [4] "AI-1").
-GROUP_1_PRESENT_VALUE = (
-    b"\x0c\x00\x00\x00\x01" b"\x1e"
-    b"\x29\x55" b"\x4e\x44\x41\xac\x00\x00\x4f"
-    b"\x29\x4d" b"\x4e\x75\x05\x00AI-1\x4f"
-    b"\x1f"
-)
 
 
 def stub_add_group(class_name: str) -> ast.FunctionDef:
@@ -132,14 +123,26 @@ class ServerGroupWireTests(unittest.IsolatedAsyncioTestCase):
         try:
             address = await server.local_address()
             async with BACnetClient(interface="127.0.0.1", port=0, apdu_timeout_ms=2000) as client:
-                for instance, expected in (
-                    (1, PropertyValue.application_data(GROUP_1_PRESENT_VALUE)),
-                    (2, PropertyValue.list([])),
-                ):
-                    group = ObjectIdentifier(ObjectType.GROUP, instance)
-                    with self.subTest(group=instance):
-                        self.assertEqual(await client.read_property(address, group, PV), expected)
-                        self.assertEqual(await server.read_property(group, PV), expected)
+                # One result per member, as read_property_multiple of the
+                # members gives them (#1310); no members is an empty list.
+                group = ObjectIdentifier(ObjectType.GROUP, 1)
+                served = await client.read_property(address, group, PV)
+                self.assertEqual(served.value, [{
+                    "object_id": AI_1,
+                    "results": [
+                        {"property_id": PV, "array_index": None,
+                         "value": PropertyValue.real(21.5), "error": None},
+                        {"property_id": NAME, "array_index": None,
+                         "value": PropertyValue.character_string("AI-1"), "error": None},
+                    ],
+                }])
+                self.assertEqual(served.value, await client.read_property_multiple(
+                    address, [(AI_1, [(PV, None), (NAME, None)])]))
+                self.assertEqual(await server.read_property(group, PV), served)
+                empty = ObjectIdentifier(ObjectType.GROUP, 2)
+                self.assertEqual(await client.read_property(address, empty, PV),
+                                 PropertyValue.list([]))
+                self.assertEqual(await server.read_property(empty, PV), PropertyValue.list([]))
         finally:
             await server.stop()
 

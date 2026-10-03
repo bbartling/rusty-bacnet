@@ -269,6 +269,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// notifications. Skipped when DCC is active (comm_state >= 1). Re-reads
     /// `Notification_Class` / `Notify_Type` under a brief `db.write()` guard,
     /// then drops the lock before any network send.
+    ///
+    /// Every notification built here also goes to the device's Event Log
+    /// objects ([`ObjectDatabase::log_event_notification`]), under the build
+    /// guard and before the network send, with Process Identifier 0, the value
+    /// it has before a recipient's own is filled in. It is logged when the
+    /// Notification Class selects nobody, since Clause 13.2.5 keeps the
+    /// Recipient_List out of distribution to local objects, but not when the
+    /// recipient lookup fails closed: that transition is refused whole, and a
+    /// record would carry a priority and ack policy the class never gave.
+    /// Event_Enable and DCC, which stop the notification being built, keep it
+    /// out of the logs too, a local choice. Received notifications never come
+    /// here.
     pub(super) async fn build_and_send_event_notification_with_bindings(
         ctx: &EventDelivery<'_, T>,
         oid: &ObjectIdentifier,
@@ -411,10 +423,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 },
             };
 
+            db.log_event_notification(&base_notification);
             (base_notification, recipients)
         };
 
-        Self::deliver_local_notification(ctx, notification, &recipients).await;
+        if !recipients.is_empty() {
+            Self::deliver_local_notification(ctx, notification, &recipients).await;
+        }
     }
 
     /// Distribute a successfully accepted acknowledgment after its requester

@@ -409,7 +409,7 @@ impl BACnetServer {
             let value =
                 crate::types::decode_read_value(oid.object_type(), pid, array_index, &encoded)
                     .map_err(to_py_err)?;
-            Ok(PyPropertyValue::from_rust(value))
+            Ok(value)
         })
     }
 
