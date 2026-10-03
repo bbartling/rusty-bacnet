@@ -1571,8 +1571,10 @@ a constructed single value, a whole array or an indexed array element, returns
 `SERVICES/PROPERTY_IS_NOT_A_LIST` before any element is decoded. Unknown object,
 unknown property and array-index errors come first, and element datatype errors
 after. Only a BACnetLIST of BACnetDestination (Recipient_List) uses the
-destination codec, and only Schedule's List_Of_Object_Property_References the
-reference codec (#1121). A list the object holds framed with no element codec,
+destination codec, only Schedule's List_Of_Object_Property_References the
+reference codec (#1121), and only a Notification Forwarder's
+Subscribed_Recipients the subscription codec (#1049). A list the object holds
+framed with no element codec,
 such as the standalone Device's COV subscription lists, returns
 `PROPERTY/WRITE_ACCESS_DENIED`.
 
@@ -1580,6 +1582,10 @@ Elements compare whole (Clauses 15.1.2 and 15.2.2): two elements are the same
 when their encodings are, so a destination that differs in one field is a
 different destination. AddListElement leaves an element that is already present
 as it is, including a repeat within the request; that is not a failure.
+Subscribed_Recipients is the exception (Clause 12.51.9): an element names the
+entry with the same recipient and process identifier, so AddListElement renews
+that entry in place with the element's confirmation flag and Time Remaining,
+and RemoveListElement removes it whatever those two members say.
 RemoveListElement checks every element first and removes nothing if one is
 refused: an element that does not decode as the property's element, or whose
 datatype differs from the stored elements', returns
@@ -1607,8 +1613,9 @@ unknown property and array-index errors and before any By Sequence Number or By
 Time error. A list the object holds framed in one `PropertyValue::ApplicationData`
 is split into its elements first, so By Position counts destinations in
 Recipient_List, references in Schedule's List_Of_Object_Property_References,
-and subscriptions and COV-multiple contexts in the Device's
-Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions. A running
+entries in a Notification Forwarder's Subscribed_Recipients, and subscriptions
+and COV-multiple contexts in the Device's Active_COV_Subscriptions and
+Active_COV_Multiple_Subscriptions. A running
 server pages those two Device lists from the live COV table, through the same
 Device view as ReadProperty and from one snapshot per request, so a page's
 items joined in order are a run of the ReadProperty value. The standalone
@@ -1668,6 +1675,22 @@ framing, through the shared `bacnet-encoding` codecs.
   `RecipientLookupOutcome::RecipientListTooLong`, and the transition reaches
   none of its destinations. The codec is not a Notification Forwarder object,
   which is unsupported.
+- **Notification Forwarder `Subscribed_Recipients`** is a BACnetLIST of
+  BACnetEventNotificationSubscription (Clause 12.51.9): a recipient, a process
+  identifier, a confirmation flag and the minutes the entry has left, under
+  context tags 0 to 3 (`encode_event_notification_subscription`,
+  `decode_event_notification_subscription`). The stack bundles no forwarder
+  object (#188), but an application's own one can hold the list in
+  `bacnet_objects::subscribed_recipients::SubscribedRecipients` and route the
+  property's read and write and the `*_monotonic_*_internal` clock hooks to
+  it. Nothing forwards notifications to the entries. The store keeps at most
+  `MAX_SUBSCRIBED_RECIPIENTS` (32) entries and takes 1 to
+  `MAX_SUBSCRIPTION_MINUTES` (1,440) minutes, refusing anything else by
+  position, as a Recipient_List write does. It serves whole minutes left,
+  rounded up, and the server's monotonic operation task drops an entry at its
+  deadline. A rewrite keeps the deadline of each entry written exactly as it
+  reads. The server's list services and ReadRange edit and page the list of any
+  NOTIFICATION_FORWARDER object held this way.
 - **`Event_Parameters` and `Fault_Parameters`** (Clause 12.12) use the
   BACnetEventParameter and BACnetFaultParameter CHOICE framing. Modeled
   alternatives round-trip. An alternative the stack does not model is kept as
