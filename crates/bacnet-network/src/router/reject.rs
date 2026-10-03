@@ -17,20 +17,22 @@ use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
 use bacnet_types::MacAddr;
 use bytes::{BufMut, BytesMut};
 use tokio::sync::{mpsc, Mutex};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::forwarding::forward_unicast;
-use super::local_control::LocalControl;
+use super::local_control::{LocalControl, OwnAddresses};
 use super::{IngressContext, SendRequest};
 use crate::layer::count_address_length_drop;
 use crate::router_table::{ReachabilityStatus, RouterTable};
 
 /// What a reject needs to know about the NPDU it refuses.
 pub(super) struct Refused<'a> {
-    /// Send queue of the port the refused NPDU arrived on.
-    pub send_tx: &'a mpsc::Sender<SendRequest>,
-    /// Network number of the port the refused NPDU arrived on.
-    pub port_network: u16,
+    /// Every port's send queue, by port index.
+    pub send_txs: &'a [mpsc::Sender<SendRequest>],
+    /// The router's own address on each port.
+    pub own: &'a OwnAddresses,
+    /// Index of the port the refused NPDU arrived on.
+    pub port_idx: usize,
     /// Link-layer source of the refused NPDU: the node that handed it to us.
     pub sender_mac: &'a [u8],
     /// The refused NPDU's SNET/SADR, present when a router relayed it.
@@ -40,17 +42,18 @@ pub(super) struct Refused<'a> {
 }
 
 impl<'a> Refused<'a> {
-    /// A decoded NPDU refused on the port `send_tx` serves, which is attached
-    /// to `port_network`.
+    /// A decoded NPDU refused on port `port_idx`.
     pub(super) fn frame(
-        send_tx: &'a mpsc::Sender<SendRequest>,
-        port_network: u16,
+        send_txs: &'a [mpsc::Sender<SendRequest>],
+        own: &'a OwnAddresses,
+        port_idx: usize,
         received: &'a ReceivedNpdu,
         npdu: &'a Npdu,
     ) -> Self {
         Self {
-            send_tx,
-            port_network,
+            send_txs,
+            own,
+            port_idx,
             sender_mac: &received.source_mac,
             origin: npdu.source.as_ref(),
             data_attributes: &received.data_attributes,
@@ -60,15 +63,33 @@ impl<'a> Refused<'a> {
     /// A network message refused at the control admission point.
     pub(super) fn control(
         send_txs: &'a [mpsc::Sender<SendRequest>],
+        own: &'a OwnAddresses,
         ctx: &'a IngressContext,
     ) -> Self {
         Self {
-            send_tx: &send_txs[ctx.port_idx],
-            port_network: ctx.port_network,
+            send_txs,
+            own,
+            port_idx: ctx.port_idx,
             sender_mac: &ctx.source_mac,
             origin: ctx.npdu.source.as_ref(),
             data_attributes: &ctx.data_attributes,
         }
+    }
+
+    /// The port the reject leaves by, the DNET/DADR it carries and the MAC
+    /// it is unicast to, or `None` when the refused NPDU names this router
+    /// as its originator. See [`send_reject`].
+    fn reject_path(&self) -> Option<(usize, Option<NpduAddress>, &'a [u8])> {
+        let Some(origin) = self.origin else {
+            return Some((self.port_idx, None, self.sender_mac));
+        };
+        if self.own.contains(origin) {
+            return None;
+        }
+        Some(match self.own.port_on(origin.network) {
+            Some(port) => (port, None, &origin.mac_address[..]),
+            None => (self.port_idx, Some(origin.clone()), self.sender_mac),
+        })
     }
 }
 
@@ -87,20 +108,25 @@ pub(super) fn route_refusal(
 /// Queue the Reject-Message-To-Network that answers `refused`, naming
 /// `rejected_network`.
 ///
-/// A refused NPDU that carries SNET/SADR came through another router, and its
-/// originator sits on that remote network. The reject names the originator
-/// as its DNET/DADR, starts with a full hop count, and goes back out the
-/// arrival port to the link sender, the router that relayed the NPDU and so
-/// knows the way back. An NPDU without SNET/SADR came from the arrival link
-/// itself, and the reject is a plain local unicast to its sender.
+/// The reject is for whoever first sent the refused NPDU (Clause 6.4.4), and
+/// it travels the way this router would route anything to that node:
 ///
-/// An SNET equal to the arrival port's own network puts the originator on the
-/// arrival link too (#1174). A router reaches a node on a directly connected
-/// network by dropping DNET/DADR and sending to that node's MAC (Clause
-/// 6.5.4), so the reject is a local unicast to the SADR. Sent to the link
-/// sender with a DNET instead, it would be lost: a non-router discards an NPDU
-/// that names a remote DNET (Clause 6.5.2.1), and a router would have to send
-/// it back out the port it arrived on.
+/// - Without SNET/SADR, the NPDU came from the arrival link itself, and the
+///   reject is a plain local unicast back to its sender.
+/// - An SNET that is one of the router's own networks puts the originator on
+///   a directly connected link: the arrival one (#1174) or, when the NPDU
+///   looped back through another path, a different one (#1219). Clause 6.5.4
+///   has a router reach such a node by leaving out DNET/DADR and sending
+///   straight to its MAC, so the reject leaves by the port attached to SNET
+///   as a local unicast to the SADR. Given a DNET and sent to the link
+///   sender instead, it would be lost or sent round again: a non-router
+///   discards an NPDU that names a remote DNET (Clause 6.5.2.1).
+/// - If that SNET/SADR is the router's own address on the network, the NPDU
+///   came back to the router that sent it, and no reject goes out (#1219).
+/// - Any other SNET is remote, so the originator sits behind the router that
+///   relayed the NPDU. The reject names the originator as its DNET/DADR,
+///   starts with a full hop count, and goes back out the arrival port to the
+///   link sender, which knows the way back.
 ///
 /// Locally generated, but ingress-triggered: the caller's data attributes
 /// travel with the reject instead of being silently dropped (RB-03).
@@ -109,15 +135,18 @@ pub(super) fn send_reject(
     rejected_network: u16,
     reason: RejectMessageReason,
 ) {
+    let Some((port, destination, link_mac)) = refused.reject_path() else {
+        debug!(
+            network = rejected_network,
+            "Router refused an NPDU it originated itself; no reject sent"
+        );
+        return;
+    };
+
     let mut payload = BytesMut::with_capacity(3);
     payload.put_u8(reason.to_raw());
     payload.put_u16(rejected_network);
 
-    let (destination, link_mac) = match refused.origin {
-        Some(origin) if origin.network == refused.port_network => (None, &origin.mac_address[..]),
-        Some(origin) => (Some(origin.clone()), refused.sender_mac),
-        None => (None, refused.sender_mac),
-    };
     let reject = Npdu {
         is_network_message: true,
         message_type: Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()),
@@ -133,14 +162,11 @@ pub(super) fn send_reject(
         return;
     }
 
-    if let Err(e) = refused
-        .send_tx
-        .try_send(SendRequest::unicast_with_attributes(
-            buf.freeze(),
-            MacAddr::from_slice(link_mac),
-            refused.data_attributes,
-        ))
-    {
+    if let Err(e) = refused.send_txs[port].try_send(SendRequest::unicast_with_attributes(
+        buf.freeze(),
+        MacAddr::from_slice(link_mac),
+        refused.data_attributes,
+    )) {
         warn!(%e, "Router dropped reject message: output channel full");
     }
 }
@@ -159,9 +185,9 @@ pub(super) fn send_reject(
 /// like everywhere else in this router, draws no reject, and an NPDU without a
 /// DNET has none to report, so both are only dropped.
 pub(super) fn refuse_address_too_long(
-    send_tx: &mpsc::Sender<SendRequest>,
+    send_txs: &[mpsc::Sender<SendRequest>],
+    own: &OwnAddresses,
     port_idx: usize,
-    port_network: u16,
     received: &ReceivedNpdu,
     refused: &NpduDecodeError,
     drops: &AtomicU64,
@@ -173,8 +199,9 @@ pub(super) fn refuse_address_too_long(
     };
     if let Some(dnet) = dnet.filter(|&dnet| dnet != 0xFFFF) {
         let refused = Refused {
-            send_tx,
-            port_network,
+            send_txs,
+            own,
+            port_idx,
             sender_mac: &received.source_mac,
             origin: source.as_ref(),
             data_attributes: &received.data_attributes,

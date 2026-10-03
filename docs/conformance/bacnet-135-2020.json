@@ -824,13 +824,14 @@
    ],
    "positive_tests": [
     "crates/bacnet-network/src/address_bound_tests.rs::router_rejects_an_over_long_address_toward_a_dnet_with_reason_6",
-    "crates/bacnet-network/src/reject_route_tests.rs::{router_rejects_a_relayed_npdu_toward_its_snet_sadr,router_rejects_a_local_npdu_with_a_local_unicast,router_rejects_an_npdu_from_its_own_snet_with_a_local_unicast,router_relays_a_received_reject_to_the_node_its_dnet_names,router_hands_a_reject_addressed_to_itself_to_its_control_receiver,chained_routers_carry_a_reject_back_to_the_originating_device}",
-    "crates/bacnet-network/src/router/reject_tests.rs::{send_reject_addresses_the_originator_or_the_local_sender,send_reject_unicasts_an_originator_on_the_arrival_network_to_its_sadr,relay_routes_a_received_reject_by_its_dnet,a_reject_addressed_to_the_router_reaches_its_consumer_and_the_table}"
+    "crates/bacnet-network/src/reject_route_tests.rs::{router_rejects_a_relayed_npdu_toward_its_snet_sadr,router_rejects_a_local_npdu_with_a_local_unicast,router_rejects_an_npdu_from_its_own_snet_with_a_local_unicast,router_rejects_an_npdu_from_its_other_snet_out_that_port,router_relays_a_received_reject_to_the_node_its_dnet_names,router_hands_a_reject_addressed_to_itself_to_its_control_receiver,chained_routers_carry_a_reject_back_to_the_originating_device}",
+    "crates/bacnet-network/src/router/reject_tests.rs::{send_reject_addresses_the_originator_or_the_local_sender,send_reject_unicasts_an_originator_on_the_arrival_network_to_its_sadr,send_reject_sends_an_originator_on_another_direct_network_out_its_port,relay_routes_a_received_reject_by_its_dnet,a_reject_addressed_to_the_router_reaches_its_consumer_and_the_table}",
+    "crates/bacnet-network/src/router/options_tests.rs::{one_start_combines_admission_tracking_a_control_policy_and_the_control_receiver,plain_options_start_a_permissive_router_without_a_control_receiver}"
    ],
    "negative_tests": [
     "crates/bacnet-network/src/address_bound_tests.rs::{router_rejects_an_over_long_address_toward_a_dnet_with_reason_6,router_drops_an_over_long_broadcast_or_local_npdu_without_a_reject}",
-    "crates/bacnet-network/src/reject_route_tests.rs::router_falls_back_to_a_local_unicast_when_the_sadr_is_too_long",
-    "crates/bacnet-network/src/router/reject_tests.rs::{relay_drops_a_received_reject_it_cannot_route,a_reject_for_another_node_or_a_denied_one_skips_the_routers_consumer}"
+    "crates/bacnet-network/src/reject_route_tests.rs::{router_falls_back_to_a_local_unicast_when_the_sadr_is_too_long,router_sends_no_reject_when_the_snet_sadr_is_its_own_port}",
+    "crates/bacnet-network/src/router/reject_tests.rs::{relay_drops_a_received_reject_it_cannot_route,a_reject_for_another_node_or_a_denied_one_skips_the_routers_consumer,send_reject_sends_nothing_when_the_originator_is_the_router}"
    ],
    "benchmarks": [
     "benchmarks/src/bin/bacnet_router.rs"
@@ -839,7 +840,8 @@
     "docs/architecture.md#multi-network-routing router model",
     "docs/rust-api.md#bacnet-network over-long DADR/SADR handling (#1141)",
     "docs/rust-api.md#bacnet-network reject addressing and relay (#1158)",
-    "docs/rust-api.md#bacnet-network rejects addressed to the router and its control receiver (#1174, #1175)"
+    "docs/rust-api.md#bacnet-network rejects addressed to the router and its control receiver (#1174, #1175)",
+    "docs/rust-api.md#bacnet-network rejects for a looped NPDU (#1219) and RouterOptions start-up (#1220)"
    ],
    "notes": [
     "Needs in-memory or Docker multi-network conformance evidence.",
@@ -852,8 +854,11 @@
     "One with no DNET, the global DNET, the arrival network or an unrouted DNET stops at this router, and nothing answers a reject. Before #1158 the relay took the received reject's SNET/SADR for the originator.",
     "Loopback tests compare every reject byte for byte, relayed and local, for each call site that originates one, plus the reason-6 fallback, the relay, and a two-router chain that carries a reject from the far router back to the device.",
     "#1174: a refused NPDU whose SNET is the arrival port's own network gets its reject as a local unicast to the SADR, with no DNET (Clause 6.5.4). A non-router would discard it with a DNET (Clause 6.5.2.1).",
-    "#1175: a received reject with no DNET, or whose DADR is the router's own MAC on the port for its DNET, is addressed to the router. It updates the table, is not relayed, and reaches the receiver from BACnetRouter::start_with_network_control_receiver as a ReceivedNetworkControl.",
-    "No in-tree setup needs that receiver (#1175): a client or server attached through a LoopbackTransport port runs its own NetworkLayer, so rejects for its requests reach its own control receiver."
+    "#1175: a received reject with no DNET, or whose DADR is the router's own MAC on the port for its DNET, is addressed to the router. It updates the table, is not relayed, and reaches the receiver that RouterOptions::network_control_receiver adds as a ReceivedNetworkControl.",
+    "No in-tree setup needs that receiver (#1175): a client or server attached through a LoopbackTransport port runs its own NetworkLayer, so rejects for its requests reach its own control receiver.",
+    "#1219: a refused NPDU whose SNET is another of the router's directly connected networks gets its reject out the port attached to that network, as a local unicast to the SADR with no DNET (Clause 6.5.4).",
+    "#1219: a refused NPDU whose SNET/SADR is the router's own address on one of its networks draws no reject.",
+    "#1220: BACnetRouter::start takes RouterOptions, which turns on the tracked local APDU receiver, the RB-09 control policy and authorizer, and the network-control receiver in any combination. A loopback test starts a router with all three."
    ]
   },
   {

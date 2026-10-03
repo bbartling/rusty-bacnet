@@ -397,7 +397,13 @@ async fn apdu_unknown_solicits_rejects_then_forwards_after_answer() {
             network_number: 2000,
         },
     ];
-    let (mut router, _local) = BACnetRouter::start(ports).await.unwrap();
+    let StartedRouter {
+        mut router,
+        apdus: _local,
+        ..
+    } = BACnetRouter::start(ports, RouterOptions::new())
+        .await
+        .unwrap();
     for _ in [wire0.try_recv(), wire1.try_recv()] {}
     tx0.send(ingress(apdu_to(3000))).await.unwrap();
     // Unknown APDU: one Who-Is out the other port, one retryable reject back.
@@ -499,7 +505,13 @@ async fn stop_cancels_pending_discovery() {
             network_number: 2000,
         },
     ];
-    let (mut router, _local) = BACnetRouter::start(ports).await.unwrap();
+    let StartedRouter {
+        mut router,
+        apdus: _local,
+        ..
+    } = BACnetRouter::start(ports, RouterOptions::new())
+        .await
+        .unwrap();
     for _ in [wire0.try_recv()] {}
     tx0.send(ingress(apdu_to(4000))).await.unwrap();
     for _ in 0..10 {

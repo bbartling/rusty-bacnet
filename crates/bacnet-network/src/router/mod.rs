@@ -62,7 +62,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduDecodeError};
+use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress, NpduDecodeError};
 use bacnet_transport::port::{DataAttribute, TransportPort};
 use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
 use bacnet_types::error::Error;
@@ -81,6 +81,7 @@ mod control_messages;
 pub mod control_policy;
 mod forwarding;
 mod local_control;
+mod options;
 mod reject;
 
 use control_messages::handle_network_message;
@@ -88,7 +89,8 @@ pub use control_policy::{ControlAuthContext, ControlAuthorizer, ControlClass};
 pub use control_policy::{ControlDecisionCounters, ControlGate, ControlPolicy};
 pub use control_policy::{ControlServiceCounters, ControlTrust};
 use forwarding::{forward_broadcast, forward_unicast};
-use local_control::LocalControl;
+use local_control::{LocalControl, OwnAddresses};
+pub use options::{LocalApduReceiver, RouterOptions, StartedRouter};
 use reject::{refuse_address_too_long, route_refusal, send_reject, Refused};
 
 /// A send request to be forwarded on a port.
@@ -346,78 +348,36 @@ pub struct BACnetRouter {
 }
 
 impl BACnetRouter {
-    /// Create and start a router from a list of ports.
+    /// Create and start a router from a list of ports, set up as `options`
+    /// asks (#1220).
     ///
-    /// Returns the router and a receiver for APDUs destined to local
-    /// applications (messages without remote destination or where this
-    /// router is the final hop).
-    /// All ports share one 256-item local queue. Full/Closed admission drops the
-    /// arriving APDU with its payload, metadata and reply sender without sending
-    /// reply bytes or a wire rejection, never evicting an older item. Admission
-    /// never waits for the consumer or stops forwarding/inline control handling.
-    /// This raw receiver has no per-source quota, admission snapshot or
-    /// depth/high-water tracking. Full/Closed drops are counted internally, with
-    /// Closed > Full precedence.
+    /// Returns the router with its local APDU receiver, for messages without
+    /// a remote destination or for which this router is the final hop, plus
+    /// the network-control receiver when the options ask for it.
+    /// [`RouterOptions::new`] is the plain router; see [`RouterOptions`] for
+    /// the tracked APDU receiver, the wire-control policy and the
+    /// network-control receiver, which combine freely.
     ///
-    /// Closing retains queued items; dropping discards them. Both leave routing
-    /// active, and each later local admission attempt counts as Closed.
-    /// [`Self::stop`] also leaves queued items drainable. Use
-    /// [`Self::start_with_admission`] for snapshots and per-source fairness; see
-    /// the [receive-queue contract](crate::layer#receive-queue-admission) for the
-    /// raw/tracked matrix and ownership/lifecycle details.
-    pub async fn start<T: TransportPort + 'static>(
+    /// Fails if two ports share a network number or a transport fails to
+    /// start.
+    pub async fn start<T: TransportPort + 'static, A: LocalApduReceiver>(
         ports: Vec<RouterPort<T>>,
-    ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>), Error> {
-        Self::start_dispatch(ports, false)
-            .await
-            .map(|(router, rx, _)| (router, rx))
-    }
-
-    /// Start with a local APDU receiver exposing queue-admission snapshots.
-    ///
-    /// This is an alternative to [`Self::start`], with the same port and router
-    /// lifecycle. All ports share one 256-item queue and one accounting state;
-    /// [`AdmissionReceiver::counters`] returns cloneable count-only handles for
-    /// depth/high-water and admission-drop totals, readable after receiver or
-    /// router drop. Failed admission drops the arriving APDU, never an older one, and
-    /// releases its payload, metadata and reply sender without reply bytes or
-    /// wire rejections. Forwarding and inline control handling remain independent.
-    /// Closing the receiver retains queued items for draining and counts each
-    /// subsequent local arrival as a closed drop while forwarding continues.
-    /// [`Self::stop`] also leaves queued items drainable. Dropping the
-    /// receiver discards queued items and releases their reply channels without
-    /// sending reply bytes; discarding queued items is not an admission drop.
-    ///
-    /// Each ([ingress port network number](ReceivedApdu::ingress_network),
-    /// complete [`source_mac`](ReceivedApdu::source_mac) byte value) may hold at
-    /// most 16 queued local APDUs, never keyed by routed NPDU SNET/SADR.
-    /// Identical MAC bytes on different ports have separate quotas.
-    /// Dequeuing releases one slot, even if the consumer retains the APDU.
-    /// **Closed > fairness > Full** selects one drop reason; over-quota arrivals
-    /// increment [`fairness_drops`](crate::layer::QueueAdmissionSnapshot::fairness_drops)
-    /// even if the queue is also globally full, unless admission is closed.
-    /// The raw [`Self::start`] receiver does not enforce a quota. See the
-    /// [receive-queue contract](crate::layer#receive-queue-admission) for exact
-    /// keys, the raw/tracked matrix and complete ownership/lifecycle rules.
-    pub async fn start_with_admission<T: TransportPort + 'static>(
-        ports: Vec<RouterPort<T>>,
-    ) -> Result<(Self, AdmissionReceiver<ReceivedApdu>), Error> {
-        let (router, rx, counters) = Self::start_dispatch(ports, true).await?;
-        Ok((router, AdmissionReceiver::from_apdu_parts(rx, counters)))
-    }
-
-    /// RB-09 hardened opt-in: wire-control gate for state-changing routing
-    /// controls. Permissive default preserves behavior; hardened denies unknown
-    /// authority for protected controls (callback-only, silent drop).
-    pub async fn start_with_control<T: TransportPort + 'static>(
-        ports: Vec<RouterPort<T>>,
-        policy: control_policy::ControlPolicy,
-        authorizer: Option<control_policy::ControlAuthorizer>,
-    ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>), Error> {
-        let gate = Arc::new(control_policy::ControlGate::new(policy, authorizer));
-        Self::start_dispatch_with_control(ports, false, gate, None)
-            .await
-            .map(|(router, rx, _)| (router, rx))
+        options: RouterOptions<A>,
+    ) -> Result<StartedRouter<A>, Error> {
+        let (control_tx, network_control) = if options.wants_network_control() {
+            let (tx, rx, _) = AdmissionReceiver::channel(false);
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
+        let gate = Arc::new(options.control_gate());
+        let (router, rx, counters) =
+            Self::start_dispatch(ports, A::TRACKED, gate, control_tx).await?;
+        Ok(StartedRouter {
+            router,
+            apdus: A::from_queue(rx, counters),
+            network_control,
+        })
     }
 
     /// Count-only RB-09 decision totals (allow/deny/policy-deny per class).
@@ -439,19 +399,6 @@ impl BACnetRouter {
     }
 
     async fn start_dispatch<T: TransportPort + 'static>(
-        ports: Vec<RouterPort<T>>,
-        track_depth: bool,
-    ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>, QueueAdmissionCounters), Error> {
-        Self::start_dispatch_with_control(
-            ports,
-            track_depth,
-            Arc::new(control_policy::ControlGate::permissive()),
-            None,
-        )
-        .await
-    }
-
-    async fn start_dispatch_with_control<T: TransportPort + 'static>(
         mut ports: Vec<RouterPort<T>>,
         track_depth: bool,
         control: Arc<control_policy::ControlGate>,
@@ -576,11 +523,16 @@ impl BACnetRouter {
         let address_length_drops = Arc::new(AtomicU64::new(0));
         let network_control_ingress_sequence = Arc::new(AtomicU64::new(0));
         let local_control = Arc::new(LocalControl::new(
-            port_networks
-                .iter()
-                .copied()
-                .zip(port_local_macs.iter().cloned())
-                .collect(),
+            OwnAddresses::new(
+                port_networks
+                    .iter()
+                    .zip(&port_local_macs)
+                    .map(|(&network, mac)| NpduAddress {
+                        network,
+                        mac_address: mac.clone(),
+                    })
+                    .collect(),
+            ),
             network_control,
             Arc::clone(&network_control_ingress_sequence),
         ));
@@ -665,8 +617,9 @@ impl BACnetRouter {
                                     // Check reachability before forwarding (spec 6.6.3.6)
                                     if let Some(reason) = route_refusal(reachability) {
                                         let refused = Refused::frame(
-                                            &send_txs[port_idx],
-                                            port_network,
+                                            &send_txs,
+                                            local_control.addresses(),
+                                            port_idx,
                                             &received,
                                             &npdu,
                                         );
@@ -739,8 +692,9 @@ impl BACnetRouter {
                                     }
                                     send_reject(
                                         &Refused::frame(
-                                            &send_txs[port_idx],
-                                            port_network,
+                                            &send_txs,
+                                            local_control.addresses(),
+                                            port_idx,
                                             &received,
                                             &npdu,
                                         ),
@@ -761,9 +715,9 @@ impl BACnetRouter {
                         }
                         Err(e @ NpduDecodeError::AddressTooLong { .. }) => {
                             refuse_address_too_long(
-                                &send_txs[port_idx],
+                                &send_txs,
+                                local_control.addresses(),
                                 port_idx,
-                                port_network,
                                 &received,
                                 &e,
                                 &address_length_drops,
@@ -927,7 +881,8 @@ async fn dispatch_network_message(
 
     if let Some(route) = route {
         if let Some(reason) = route_refusal(reachability) {
-            send_reject(&Refused::control(send_txs, ctx), dest_net, reason);
+            let refused = Refused::control(send_txs, local.addresses(), ctx);
+            send_reject(&refused, dest_net, reason);
             return;
         }
         forward_unicast(
@@ -950,7 +905,7 @@ async fn dispatch_network_message(
             solicit_who_is(send_txs, ctx.port_idx, dest_net, &ctx.data_attributes);
         }
         send_reject(
-            &Refused::control(send_txs, ctx),
+            &Refused::control(send_txs, local.addresses(), ctx),
             dest_net,
             RejectMessageReason::NOT_DIRECTLY_CONNECTED,
         );

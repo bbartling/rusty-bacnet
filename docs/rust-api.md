@@ -1487,6 +1487,23 @@ use bacnet_network::layer::NetworkLayer;
 use bacnet_network::router::BACnetRouter;
 ```
 
+`BACnetRouter::start` takes the ports and a `RouterOptions` (#1220).
+`RouterOptions::new()` is the plain router: a raw `mpsc::Receiver` for local
+APDUs, the permissive wire-control policy and no network-control receiver.
+The builder methods turn options on, in any combination: `track_admission()`
+makes the local receiver an `AdmissionReceiver` with queue snapshots and a
+per-source quota, `control_policy()` and `control_authorizer()` set the RB-09
+gate for routing controls, and `network_control_receiver()` adds the receiver
+described below. The start returns a `StartedRouter` holding the router, the
+local APDU receiver and, when asked for, the network-control receiver.
+
+```rust
+use bacnet_network::router::{BACnetRouter, RouterOptions, StartedRouter};
+
+let StartedRouter { router, apdus, network_control } =
+    BACnetRouter::start(ports, RouterOptions::new().track_admission()).await?;
+```
+
 An inbound NPDU whose DLEN or SLEN is past `NpduAddress::MAX_MAC_LEN` is
 refused before anything else happens to it (#1141). `NetworkLayer` discards it
 and counts it in `address_length_drops()`; a non-router has no reject message
@@ -1501,17 +1518,22 @@ first sent the refused NPDU (Clause 6.4.4, #1158). An NPDU that arrived
 with SNET/SADR came through another router: the reject carries that SNET/SADR
 as its DNET/DADR, with a hop count of 255, and goes back out the arrival port
 to the router that relayed the NPDU. An NPDU without SNET/SADR draws a local
-unicast to its sender. An SNET equal to the arrival port's own network puts
-the originator on that link, so the reject is a local unicast to the SADR,
-with no DNET (Clause 6.5.4, #1174). A reason 6 reject for an over-long SADR
-has no originator to name, so it falls back to that local unicast. A received
-reject is relayed by its DNET/DADR like any routed NPDU (Clause 6.6.3.5).
+unicast to its sender. An SNET equal to one of the router's own networks puts
+the originator on a directly connected link, so the reject leaves by the port
+attached to that network as a local unicast to the SADR, with no DNET (Clause
+6.5.4). That is the arrival port when SNET is the arrival network (#1174), and
+another port when the NPDU looped back to the router through some other path
+(#1219). An SNET/SADR that is the router's own address on that network means
+the NPDU came back to the router that sent it, and no reject goes out
+(#1219). A reason 6 reject for an over-long SADR has no originator to name, so
+it falls back to that local unicast. A received reject is relayed by its
+DNET/DADR like any routed NPDU (Clause 6.6.3.5).
 
 A received reject with no DNET, or whose DADR is the router's own MAC on the
 port attached to its DNET, is addressed to the router itself (#1175). It
 updates the routing table and goes no further. Start the router with
-`BACnetRouter::start_with_network_control_receiver` to also get these rejects
-as `ReceivedNetworkControl` records, the same type a non-router
+`RouterOptions::network_control_receiver()` to also get these rejects as
+`ReceivedNetworkControl` records, the same type a non-router
 `NetworkLayer` control receiver yields. A client or server attached to a
 router through a `LoopbackTransport` port does not need this: it is an
 ordinary node on that port's network, and rejects for its requests reach its

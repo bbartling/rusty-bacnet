@@ -6,7 +6,7 @@
 
 use std::net::Ipv4Addr;
 
-use bacnet_network::router::{BACnetRouter, RouterPort};
+use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use bacnet_transport::bip::BipTransport;
 use clap::Parser;
 
@@ -72,7 +72,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         networks
     );
 
-    let (_router, mut local_rx) = BACnetRouter::start(router_ports).await?;
+    let StartedRouter {
+        router: _router,
+        apdus: mut local_rx,
+        ..
+    } = BACnetRouter::start(router_ports, RouterOptions::new()).await?;
 
     eprintln!("Router running");
 
