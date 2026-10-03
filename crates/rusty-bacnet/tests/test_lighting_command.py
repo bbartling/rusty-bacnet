@@ -2,13 +2,15 @@
 
 Lighting_Command reads as ``application_data`` holding the context-tagged
 BACnetLightingCommand, operation NONE until written. It takes writes in that
-encoding, locally and over the network. An ``octet_string``, the form it used
-to take, is refused with INVALID_DATA_TYPE, and a command its operation can't
-take with VALUE_OUT_OF_RANGE.
+encoding, locally, over the network and from a Channel. An ``octet_string``,
+the form it used to take, is refused with INVALID_DATA_TYPE, and a command its
+operation can't take with VALUE_OUT_OF_RANGE.
 """
 
 from __future__ import annotations
 
+import asyncio
+import time
 import unittest
 
 from rusty_bacnet import (
@@ -25,6 +27,9 @@ from rusty_bacnet import (
 
 LC = PropertyIdentifier.LIGHTING_COMMAND
 LO = ObjectIdentifier(ObjectType.LIGHTING_OUTPUT, 1)
+CH = ObjectIdentifier(ObjectType.CHANNEL, 1)
+# Write_Status SUCCESSFUL.
+SUCCESSFUL = 2
 # Operation [0] NONE.
 NONE = bytes([0x09, 0x00])
 # FADE_TO (1), target level [1] 50.0 % (REAL 0x42480000), priority [5] 8.
@@ -42,6 +47,8 @@ def make_server() -> BACnetServer:
         broadcast_address="127.0.0.1",
     )
     server.add_lighting_output(1, "LO-1")
+    # CH-1 passes its value on to LO-1's Lighting_Command.
+    server.add_channel(1, "CH-1", 11, members=[(LO, LC)])
     return server
 
 
@@ -114,6 +121,23 @@ class LightingCommandTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(
             await self.server.read_property(LO, LC), PropertyValue.application_data(NONE)
+        )
+
+    async def test_channel_passes_a_lighting_command_on(self) -> None:
+        # A channel value frames the command in context tag 0.
+        framed = b"\x0e" + FADE + b"\x0f"
+        await self.client.write_property(
+            self.address, CH, PropertyIdentifier.PRESENT_VALUE,
+            PropertyValue.application_data(framed),
+        )
+        deadline = time.monotonic() + 10.0
+        status = PropertyIdentifier.WRITE_STATUS
+        while (await self.server.read_property(CH, status)).value != SUCCESSFUL:
+            if time.monotonic() > deadline:
+                raise AssertionError("the distribution never succeeded")
+            await asyncio.sleep(0.01)
+        self.assertEqual(
+            await self.server.read_property(LO, LC), PropertyValue.application_data(FADE)
         )
 
 
