@@ -288,6 +288,12 @@ pub(crate) struct TestTransport {
     hooks: Hooks,
     state: Option<Arc<dyn Any + Send + Sync>>,
     shared: Arc<Shared>,
+    /// See [`TestTransportBuilder::number_controls`].
+    number_controls: bool,
+    /// See [`TestTransportBuilder::normal_bip`].
+    normal_bip: Option<SocketAddrV4>,
+    /// A registered Network Port's lease, held until the transport drops.
+    port_lease: Option<Arc<()>>,
 }
 
 impl TestTransport {
@@ -320,6 +326,9 @@ impl TestTransport {
                 hooks: Hooks::default(),
                 state: None,
                 shared: Arc::default(),
+                number_controls: false,
+                normal_bip: None,
+                port_lease: None,
             },
         }
     }
@@ -374,6 +383,24 @@ impl Drop for TestTransport {
 }
 
 impl TransportPort for TestTransport {
+    fn supports_local_nonrouter_number_controls(&self) -> bool {
+        self.number_controls
+    }
+
+    fn normal_bip_endpoint(&self) -> Option<SocketAddrV4> {
+        self.normal_bip
+    }
+
+    fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
+        match self.normal_bip {
+            Some(_) => {
+                self.port_lease = Some(lease);
+                Ok(())
+            }
+            None => Err(Error::Encoding("not a NORMAL B/IP test link".into())),
+        }
+    }
+
     fn bip_broadcast_endpoint(&self) -> Option<SocketAddrV4> {
         self.hooks
             .bip_broadcast_endpoint
@@ -430,7 +457,7 @@ impl TransportPort for TestTransport {
 
 /// Configures a [`TestTransport`]. Defaults: local MAC `[1]`, receive capacity
 /// 1476, [`StartMode::Closed`], [`SendMode::Record`] for both kinds, no
-/// broadcast MACs, no B/IP endpoint, no hooks.
+/// broadcast MACs, no B/IP endpoint, no Number controls, no hooks.
 pub(crate) struct TestTransportBuilder {
     transport: TestTransport,
 }
@@ -467,6 +494,20 @@ impl TestTransportBuilder {
 
     pub(crate) fn start(mut self, mode: StartMode) -> Self {
         self.transport.start = mode;
+        self
+    }
+
+    /// Opt in to the local Network Number controls, so a server spawns its
+    /// Number worker on this link.
+    pub(crate) fn number_controls(mut self) -> Self {
+        self.transport.number_controls = true;
+        self
+    }
+
+    /// Report `endpoint` as a NORMAL B/IP bind, so a server can register a
+    /// Network Port on this link; the transport then holds the port's lease.
+    pub(crate) fn normal_bip(mut self, endpoint: SocketAddrV4) -> Self {
+        self.transport.normal_bip = Some(endpoint);
         self
     }
 
