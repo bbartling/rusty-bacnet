@@ -18,10 +18,12 @@
 //! |---|---|---|---|
 //! | `setpoint-reference` | `[0]` | `BACnetObjectPropertyReference` | yes |
 //!
-//! Every member is context-tagged, so a property *write* carries a reference
-//! as primitive context tags \[0\]/\[1\] (plus optional \[2\]) concatenated on the
-//! wire; the `Setpoint_Reference` property nests those members in the
-//! opening/closing tag 0 frame of `BACnetSetpointReference`. Unlike
+//! Every member is context-tagged, so a property value carries a reference
+//! as primitive context tags \[0\]/\[1\] (plus optional \[2\]) concatenated on
+//! the wire; the `Setpoint_Reference` property nests those members in the
+//! opening/closing tag 0 frame of `BACnetSetpointReference`, and leaves the
+//! frame out entirely when it holds no reference (an absent optional member
+//! has no encoding, Clause 20.2.16). Unlike
 //! `BACnetDeviceObjectPropertyReference` there is NO device member in this
 //! production — these references name objects in the local device only — so
 //! a device-qualifying \[3\] element is rejected on decode rather than being
@@ -89,19 +91,21 @@ pub fn decode_object_property_reference(
 /// form: an opening/closing context tag 0 frame whose content is the bare
 /// reference, decoded with [`decode_object_property_reference`]'s strictness.
 ///
-/// The production's member is `OPTIONAL`: an empty frame (`0x0E 0x0F`) is a
-/// syntactically valid encoding of the ABSENT alternative (Clause 12.17,
-/// `Setpoint_Reference`: without a reference, the loop uses the fixed value
-/// in its Setpoint property) and yields `None` — not an encoding error.
+/// The production's one member is optional, and an absent member has no
+/// encoding (Clause 20.2.16), so an empty payload is the value without a
+/// reference and yields `None`: Clause 12.17.16 then takes the setpoint from
+/// the Loop's Setpoint property. A frame with nothing inside (`0x0E 0x0F`) is
+/// the member present but holding no object or property, which this refuses
+/// like any other incomplete reference.
 pub fn decode_setpoint_reference(
     data: &[u8],
 ) -> Result<Option<BACnetObjectPropertyReference>, Error> {
+    if data.is_empty() {
+        return Ok(None);
+    }
     let what = "BACnetSetpointReference";
     let (inner, after) = decode_ctx_constructed(data, 0, 0, what)?;
     expect_end(data, after, after, what)?;
-    if inner.is_empty() {
-        return Ok(None); // setpoint-reference [0] absent (OPTIONAL member)
-    }
     decode_object_property_reference(inner).map(Some)
 }
 

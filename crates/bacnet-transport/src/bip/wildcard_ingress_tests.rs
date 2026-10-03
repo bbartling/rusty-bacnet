@@ -53,7 +53,7 @@ async fn the_os_reports_a_listed_destination_for_unicast_to_a_wildcard_socket() 
         .unwrap();
     let mut buf = [0u8; 64];
     let accepts = |function, received: &crate::udp_metadata::ReceivedDatagram| {
-        original_destination_matches(
+        admitted_delivery(
             function,
             received.destination,
             Ipv4Addr::UNSPECIFIED,
@@ -62,6 +62,7 @@ async fn the_os_reports_a_listed_destination_for_unicast_to_a_wildcard_socket() 
             true,
             received.os_group_delivery,
         )
+        .is_some()
     };
 
     for target in reachable {

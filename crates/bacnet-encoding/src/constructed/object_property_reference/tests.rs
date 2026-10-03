@@ -75,11 +75,20 @@ fn setpoint_reference_golden_vector_indexed() {
 }
 
 #[test]
-fn setpoint_reference_empty_frame_is_the_absent_alternative() {
-    // 0x0E 0x0F: opening/closing tag 0 with no members — the production's
-    // OPTIONAL member is absent, selecting the fixed-setpoint case of
-    // Clause 12.17 rather than an encoding error.
-    assert_eq!(decode_setpoint_reference(&[0x0E, 0x0F]).unwrap(), None);
+fn setpoint_reference_empty_value_is_the_absent_alternative() {
+    // Without its optional member the sequence encodes as nothing at all
+    // (Clause 20.2.16): the value that holds no reference.
+    assert_eq!(decode_setpoint_reference(&[]).unwrap(), None);
+}
+
+#[test]
+fn setpoint_reference_empty_frame_is_refused() {
+    // 0x0E 0x0F: the [0] member is present but names no object or property,
+    // so it is an incomplete reference, not the absent member (#1312).
+    assert!(decode_setpoint_reference(&[0x0E, 0x0F]).is_err());
+    // A closing tag alone, or an opening tag with no close, frames nothing.
+    assert!(decode_setpoint_reference(&[0x0F]).is_err());
+    assert!(decode_setpoint_reference(&[0x0E]).is_err());
 }
 
 #[test]

@@ -9,6 +9,7 @@
 
 use bacnet_types::error::Error;
 
+use super::tagged::contents;
 use crate::primitives;
 use crate::tags::{self, TagClass};
 
@@ -16,25 +17,28 @@ use crate::tags::{self, TagClass};
 /// the operation field is number 0.
 const LIGHTING_LAST_FIELD: u8 = 5;
 
-/// Check the content octet count of lighting-command field `number`: the
-/// operation, fade-time and priority fields are ENUMERATED or Unsigned and take
-/// 1-4 octets here, the three level fields are REAL and take exactly 4. The
-/// priority field must hold 1 to 16.
+/// Whether lighting-command field `number` is one of the three level fields,
+/// each a REAL of exactly four content octets.
+fn is_level(number: u8) -> bool {
+    matches!(number, 1..=3)
+}
+
+/// The refusal of lighting-command field `number` holding `length` content
+/// octets, reported at the field's tag.
+fn field_length_error(number: u8, length: usize, offset: usize) -> Error {
+    Error::decoding(
+        offset,
+        format!("lighting command field {number} has {length} content octets"),
+    )
+}
+
+/// Check the contents of lighting-command field `number`; a level field's
+/// four octets were checked from its header. The operation, fade-time and
+/// priority fields are ENUMERATED or Unsigned and take 1-4 octets here, and
+/// the priority field must hold 1 to 16.
 fn check_lighting_field(number: u8, content: &[u8], offset: usize) -> Result<(), Error> {
-    let real = matches!(number, 1..=3);
-    let length_ok = if real {
-        content.len() == 4
-    } else {
-        (1..=4).contains(&content.len())
-    };
-    if !length_ok {
-        return Err(Error::decoding(
-            offset,
-            format!(
-                "lighting command field {number} has {} content octets",
-                content.len()
-            ),
-        ));
+    if !is_level(number) && !(1..=4).contains(&content.len()) {
+        return Err(field_length_error(number, content.len(), offset));
     }
     if number == 5 {
         let priority = primitives::decode_unsigned(content)?;
@@ -92,11 +96,13 @@ fn lighting_command_end(data: &[u8], mut offset: usize) -> Result<usize, Error> 
                 format!("lighting command field {} is not defined", tag.number),
             ));
         }
-        let end = pos
-            .checked_add(tag.length as usize)
-            .filter(|end| *end <= data.len())
-            .ok_or_else(|| Error::decoding(pos, "lighting command truncated"))?;
-        check_lighting_field(tag.number, &data[pos..end], offset)?;
+        // A level field is fixed-size, so a wrong length shows in its header
+        // and is refused before the contents are read, as tagged.rs does.
+        if is_level(tag.number) && tag.length != 4 {
+            return Err(field_length_error(tag.number, tag.length as usize, offset));
+        }
+        let (content, end) = contents(data, pos, tag.length)?;
+        check_lighting_field(tag.number, content, offset)?;
         next_number = tag.number + 1;
         offset = end;
     }
@@ -109,7 +115,10 @@ fn lighting_command_end(data: &[u8], mut offset: usize) -> Result<usize, Error> 
 /// set, or a constructed context-\[0\] BACnetLightingCommand. The lighting
 /// command is checked for structure (field order, tag class, content lengths)
 /// and for its priority range, but not for the REAL level ranges or the
-/// operation value.
+/// operation value. Contents that run past the end of `data` fail with
+/// [`Error::BufferTooShort`]; any other malformed value with
+/// [`Error::Decoding`], including a level field of the wrong length that the
+/// data also cuts short.
 pub fn channel_value_end(data: &[u8], offset: usize) -> Result<usize, Error> {
     if offset >= data.len() {
         return Err(Error::decoding(offset, "missing channel value"));

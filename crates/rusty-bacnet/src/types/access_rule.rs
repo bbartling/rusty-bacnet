@@ -14,7 +14,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool};
 
 use super::mapping::{mapping, optional_item, required_item, validate_keys};
-use super::property_reference::{check_device, device_object_property_reference};
+use super::property_reference::{check_device, property_reference};
 use super::PyObjectIdentifier;
 
 const RULE_REQUIRED: &[&str] = &["enable"];
@@ -46,7 +46,7 @@ fn access_rule(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetAccessRul
         )));
     }
     let time_range = optional_item(value, "time_range")?
-        .map(|item| device_object_property_reference(&item, &format!("{name}.time_range")))
+        .map(|item| property_reference(&item, &format!("{name}.time_range")))
         .transpose()?;
     let location = optional_item(value, "location")?
         .map(|item| location(&item, &format!("{name}.location")))

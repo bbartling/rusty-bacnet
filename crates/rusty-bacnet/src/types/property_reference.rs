@@ -1,13 +1,14 @@
-//! Python boundary for `BACnetDeviceObjectPropertyReference`: the mapping an
-//! Access Rights rule's `time_range` takes (#1316) and the member list of
-//! `add_channel` (#1262).
+//! Python boundary for `BACnetDeviceObjectPropertyReference` values: the
+//! members of a Channel (#1262) and of a Trend Log Multiple (#1235), and an
+//! access rule's time range (#1316).
 //!
-//! A reference is either a tuple naming a property in this device,
-//! `(object, property)` or `(object, property, array_index)`, or a mapping
-//! keyed like an `ActionCommand`'s reference fields, which can also carry a
-//! `device_identifier`. This layer checks shapes, Python types and the device
-//! member (a non-Device raises ValueError, as for `door_members`, #1285); the
-//! object's own setter decides the rest.
+//! A member list takes, per element, either a tuple naming a property in this
+//! device, `(object, property)` or `(object, property, array_index)`, or a
+//! `DeviceObjectPropertyReference` mapping, which can also carry a
+//! `device_identifier`. A time range is a mapping. This layer checks shapes,
+//! Python types and the device member (a non-Device raises ValueError, as for
+//! `door_members`, #1285); the object taking the references decides the
+//! rest, such as how many it holds.
 
 use bacnet_types::constructed::{device_identifier_is_device, BACnetDeviceObjectPropertyReference};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -23,19 +24,19 @@ use super::PyPropertyIdentifier;
 const REQUIRED: &[&str] = &["object_identifier", "property_identifier"];
 const OPTIONAL: &[&str] = &["property_array_index", "device_identifier"];
 
-/// Read `references`, a list whose elements are each a reference tuple or a
-/// reference mapping; `name` is the keyword the errors name.
+/// Read `value`, a list whose elements are each a reference tuple or a
+/// reference mapping, in order. `name` labels the errors.
 pub(crate) fn property_references_from_py(
-    references: &Bound<'_, PyAny>,
+    value: &Bound<'_, PyAny>,
     name: &str,
 ) -> PyResult<Vec<BACnetDeviceObjectPropertyReference>> {
-    let references: Vec<Bound<'_, PyAny>> = references
+    let items: Vec<Bound<'_, PyAny>> = value
         .extract()
         .map_err(|_| PyTypeError::new_err(format!("{name} must be a list")))?;
-    references
+    items
         .iter()
         .enumerate()
-        .map(|(index, reference)| tuple_or_mapping(reference, &format!("{name}[{index}]")))
+        .map(|(index, item)| tuple_or_mapping(item, &format!("{name}[{index}]")))
         .collect()
 }
 
@@ -47,7 +48,7 @@ fn tuple_or_mapping(
         return local_tuple(tuple, name);
     }
     if value.cast::<PyMapping>().is_ok() {
-        return device_object_property_reference(value, name);
+        return property_reference(value, name);
     }
     Err(PyTypeError::new_err(format!(
         "{name} must be an (object, property) or (object, property, array_index) tuple, \
@@ -87,38 +88,32 @@ fn local_tuple(
     Ok(reference.with_index(index))
 }
 
-/// A `BACnetDeviceObjectPropertyReference` mapping: `object_identifier` and
+/// Read one `DeviceObjectPropertyReference` mapping: `object_identifier` and
 /// `property_identifier`, with the optional `property_array_index` and
-/// `device_identifier`.
-pub(crate) fn device_object_property_reference(
+/// `device_identifier`. `name` labels the errors.
+pub(crate) fn property_reference(
     value: &Bound<'_, PyAny>,
     name: &str,
 ) -> PyResult<BACnetDeviceObjectPropertyReference> {
     let value = mapping(value, name)?;
     validate_keys(value, name, REQUIRED, OPTIONAL)?;
+    let field = |key: &str| format!("{name}.{key}");
     let property_identifier = property_identifier(
         &required_item(value, name, "property_identifier")?,
-        &format!("{name}.property_identifier"),
+        &field("property_identifier"),
     )?;
     let device_identifier = optional_item(value, "device_identifier")?
-        .map(|item| object_identifier(&item, &format!("{name}.device_identifier")))
+        .map(|item| object_identifier(&item, &field("device_identifier")))
         .transpose()?;
     check_device(device_identifier, name)?;
     Ok(BACnetDeviceObjectPropertyReference {
         object_identifier: object_identifier(
             &required_item(value, name, "object_identifier")?,
-            &format!("{name}.object_identifier"),
+            &field("object_identifier"),
         )?,
         property_identifier,
         property_array_index: optional_item(value, "property_array_index")?
-            .map(|item| {
-                ranged_integer(
-                    &item,
-                    &format!("{name}.property_array_index"),
-                    0,
-                    u32::MAX.into(),
-                )
-            })
+            .map(|item| ranged_integer(&item, &field("property_array_index"), 0, u32::MAX.into()))
             .transpose()?
             .map(|index| index as u32),
         device_identifier,

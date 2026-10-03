@@ -1073,9 +1073,11 @@ class BACnetTimeStamp:
 class ActionCommand(TypedDict):
     """One write in a Command object's action list (``BACnetActionCommand``).
 
-    Unknown keys raise ValueError and wrong types raise TypeError. The server
-    makes local writes only, so a ``device_identifier`` naming another Device
-    makes that command fail when the list runs.
+    Unknown keys raise ValueError and wrong types raise TypeError. A
+    ``device_identifier`` naming another Device sends that write there as a
+    confirmed WriteProperty when the server has a binding for the Device;
+    with none, the command fails when the list runs. A read of Action gives
+    each command in this form, with every key present.
     """
 
     object_identifier: ObjectIdentifier
@@ -1089,22 +1091,32 @@ class ActionCommand(TypedDict):
     # A failed write with this set stops the rest of the list. Default False.
     quit_on_failure: NotRequired[bool]
     device_identifier: NotRequired[ObjectIdentifier | None]
+    # A read of Action carries the flag a run sets. add_command accepts it so a
+    # read mapping can be given back, but ignores it: a command starts False.
+    write_successful: NotRequired[bool]
 
 
 class DeviceObjectPropertyReference(TypedDict):
-    """A property of an object, in this device or the one ``device_identifier``
-    names (``BACnetDeviceObjectPropertyReference``): an access rule's
-    ``time_range``, or a Channel member.
+    """A property (``BACnetDeviceObjectPropertyReference``), in this device or
+    the one ``device_identifier`` names: a Channel or Trend Log Multiple
+    member, or the property whose value decides when an access rule applies,
+    such as a Schedule's Present_Value.
 
-    Unknown or missing keys and a ``device_identifier`` that isn't a Device
-    raise ValueError, as does a ``property_array_index`` outside unsigned32;
-    wrong types raise TypeError.
+    Unknown or missing keys, a ``device_identifier`` that isn't a Device and a
+    ``property_array_index`` outside unsigned32 raise ValueError; wrong types
+    raise TypeError. The server reads only its own objects, so a Trend Log
+    Multiple member naming another Device logs a failure instead of a value.
     """
 
     object_identifier: ObjectIdentifier
     property_identifier: PropertyIdentifier
+    # 0..=4294967295; one element of an array property.
     property_array_index: NotRequired[int | None]
     device_identifier: NotRequired[ObjectIdentifier | None]
+
+
+# An access rule's time range is read as any other property reference.
+AccessRuleTimeRange = DeviceObjectPropertyReference
 
 
 class AccessRule(TypedDict):
@@ -1159,7 +1171,8 @@ class Destination(TypedDict):
     Unknown keys, out-of-range values and malformed time tuples raise
     ValueError; other wrong types raise TypeError. A key left out gives a
     destination active every day, all day, for every transition, with
-    unconfirmed notifications.
+    unconfirmed notifications. A read of Recipient_List gives each
+    destination in this form, with every key present.
     """
 
     recipient: AuditRecipientInput
@@ -1324,10 +1337,27 @@ class PropertyValue:
     ``CovNotification`` value and ``BACnetServer.read_property``) keeps every
     element of the value; only broken framing raises:
 
-    - Any context-tagged content (a Recipient_List, a Group's Present_Value,
-      a Port_Filter, a timestamp), or content this type has no form for (a
-      UCS-4, DBCS or JIS string, bad UTF-8, an ENUMERATED past 32 bits), is
-      ``application_data`` holding the octets exactly as served.
+    - A constructed collection the binding also writes as typed values reads
+      typed: a whole read is a ``list`` of its elements in the typed write's
+      form, and an indexed read one element, tagged with its production.
+      These are Recipient_List (``"destination"``: a ``Destination`` with
+      every key), Port_Filter (``"port_permission"``: ``(port_id,
+      enabled)``), a Group's List_Of_Group_Members
+      (``"read_access_specification"``: ``(object_id, [(property_id,
+      array_index), ...])``) and Present_Value (``"read_access_result"``: a
+      ``ReadAccessResult``), a Command's Action (``"action_list"``: a list of
+      ``ActionCommand`` with every key), Door_Members, Access_Doors and a
+      Staging's Target_References (``"device_object_reference"``: an
+      ``ObjectIdentifier``, or ``(device, object)``), Supported_Formats
+      (``"authentication_factor_format"``: the format type, or
+      ``(format_type, vendor_id, vendor_format)``) and Stages
+      (``"stage_limit_value"``: ``(limit, values, deadband)``). Each element
+      keeps its octets, so the value writes back unchanged. A value that
+      isn't those elements, to the last octet, follows the rules below.
+    - Other context-tagged content (a timestamp, Active_COV_Subscriptions),
+      or content this type has no form for (a UCS-4, DBCS or JIS string,
+      bad UTF-8, an ENUMERATED past 32 bits), is ``application_data``
+      holding the octets exactly as served.
     - A whole read (no ``array_index``) of a property the stack's
       classification table marks as an array or list on that object type
       (every BACnetARRAY and BACnetLIST of the 2020 object tables) is a
@@ -1335,7 +1365,11 @@ class PropertyValue:
     - Any other read is the bare value when it holds one element, and a
       ``list`` in wire order when it holds none or several (a date-time is
       a date and then a time). An indexed read is one element under these
-      rules: ``Stages[1]`` is a list, ``Port_Filter[2]`` application_data.
+      rules: ``Port_Filter[2]`` is a port_permission, ``Event_Time_Stamps[1]``
+      application_data.
+
+    Two values are equal when they carry the same octets and, for a typed
+    read, the same element production.
     """
 
     @staticmethod
@@ -1372,7 +1406,9 @@ class PropertyValue:
         ...
     @staticmethod
     def list(items: list[PropertyValue]) -> PropertyValue:
-        """Create a List (array) value from a list of PropertyValue items."""
+        """Create a List (array) value from a list of PropertyValue items.
+        Items that are all elements of one typed constructed collection (from
+        indexed reads) make that collection, equal to its whole read."""
         ...
     @staticmethod
     def application_data(bytes: bytes) -> PropertyValue:
@@ -1383,13 +1419,18 @@ class PropertyValue:
     def tag(self) -> str:
         """Type tag: 'null', 'boolean', 'unsigned', 'signed', 'real', 'double',
         'octet_string', 'character_string', 'bit_string', 'enumerated',
-        'date', 'time', 'object_identifier', 'list', 'application_data'."""
+        'date', 'time', 'object_identifier', 'list', 'application_data', or
+        one typed constructed element: 'destination', 'port_permission',
+        'read_access_specification', 'read_access_result', 'action_list',
+        'device_object_reference', 'authentication_factor_format',
+        'stage_limit_value'."""
         ...
 
     @property
     def value(self) -> Any:
         """The Python-native value (int, float, str, bytes, bool, dict, tuple,
-        ObjectIdentifier, list, or None); ``application_data`` is ``bytes``."""
+        ObjectIdentifier, list, or None); ``application_data`` is ``bytes``,
+        and a typed constructed element the form its typed write takes."""
         ...
 
     def __repr__(self) -> str: ...
@@ -2692,7 +2733,51 @@ class BACnetServer:
         ``(port_id, enabled)`` pairs; the server receives through Port_ID 0.
         Without it Port_Filter is absent."""
     def add_trend_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
-    def add_trend_log_multiple(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
+    def add_trend_log_multiple(
+        self,
+        instance: int,
+        name: str,
+        buffer_size: int = 100,
+        *,
+        members: list[DeviceObjectPropertyReference] | None = None,
+        log_interval: int | None = None,
+        logging_type: Literal["polled", "triggered"] | None = None,
+        start_time: tuple[tuple[int, int, int, int], tuple[int, int, int, int]] | None = None,
+        stop_time: tuple[tuple[int, int, int, int], tuple[int, int, int, int]] | None = None,
+        align_intervals: bool | None = None,
+        interval_offset: int | None = None,
+    ) -> None:
+        """Add a Trend Log Multiple (Clause 12.30) that the server polls or
+        triggers, logging one value per member in each record.
+
+        ``members`` fills Log_DeviceObjectProperty in order; more than 64
+        raises BacnetProtocolError (NO_SPACE_TO_WRITE_PROPERTY), and a
+        ``device_identifier`` that isn't a Device raises ValueError.
+        ``log_interval`` is in hundredths of a second. ``logging_type``
+        ``"polled"`` with no ``log_interval`` takes a one-minute interval;
+        ``"triggered"`` zeroes Log_Interval and makes it read-only, so a
+        ``log_interval`` with it raises BacnetProtocolError
+        (WRITE_ACCESS_DENIED). ``"cov"`` raises BacnetProtocolError
+        (VALUE_OUT_OF_RANGE), as a client's write of COV does; any other
+        string raises ValueError. With neither, Log_Interval stays 0 and
+        nothing is polled.
+
+        ``start_time`` and ``stop_time`` bound when records are kept, each a
+        ``((full_year, month, day, day_of_week), (hour, minute, second,
+        hundredths))`` pair: every field 255 leaves that side open, 255
+        seconds or hundredths count as zero, and anything else that isn't an
+        actual date and time raises BacnetProtocolError (VALUE_OUT_OF_RANGE). Records are kept from the
+        start up to, not including, the stop, and each opening and closing
+        is logged. ``align_intervals`` aligns a polled log's acquisitions to
+        the clock when Log_Interval divides a day, shifted by
+        ``interval_offset`` hundredths (modulo Log_Interval).
+
+        Peers can write each of these. To ask a triggered log for one
+        record, write Trigger TRUE, from a peer or with
+        ``write_property_local``; it reads TRUE until the poller acquires
+        the record. Read the records with ``read_range``.
+        """
+        ...
     def add_event_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
     def add_audit_log(self, instance: int, name: str, storage_path: str, buffer_size: int = 100) -> None: ...
     def add_device_binding(self, device_instance: int, address: str) -> None:
@@ -2957,7 +3042,7 @@ class BACnetServer:
         name: str,
         *,
         supported_formats: Optional[
-            list[tuple[int | tuple[int, int, int], int]]
+            list[tuple[int | tuple[int, int | None, int | None], int]]
         ] = None,
     ) -> None:
         """Add a Credential Data Input object to the server (before starting).
@@ -2966,8 +3051,9 @@ class BACnetServer:
         Supported_Format_Classes (read-only over the network) as
         ``(format, format_class)`` pairs. A format is a
         BACnetAuthenticationFactorType number, or a
-        ``(format_type, vendor_id, vendor_format)`` triple; a CUSTOM format
-        (2) needs the triple. A format outside the closed production, a CUSTOM
+        ``(format_type, vendor_id, vendor_format)`` triple whose vendor
+        members may each be None (absent), as a read gives them; a CUSTOM
+        format (2) needs both. A format outside the closed production, a CUSTOM
         format without its vendor members, a nonzero vendor member on another
         format or one above 65535 raises BacnetProtocolError with
         VALUE_OUT_OF_RANGE. While Out_Of_Service is TRUE a client's simulated

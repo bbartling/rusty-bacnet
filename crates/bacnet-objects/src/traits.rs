@@ -11,7 +11,7 @@ use std::time::Duration;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
-    BACnetLogMultipleRecord, BACnetLogRecord, BACnetObjectPropertyReference,
+    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, BACnetObjectPropertyReference,
 };
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier,
@@ -1245,5 +1245,33 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
         })
+    }
+
+    /// Submit an Event Log record to an object's log lifecycle.
+    ///
+    /// The server hands the event notifications this device builds to its
+    /// Event Logs through this hook
+    /// ([`ObjectDatabase::log_event_notification`](crate::database::ObjectDatabase::log_event_notification)).
+    /// The outcomes match [`add_trend_record`](Self::add_trend_record).
+    /// Objects without Event Log insertion return
+    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+    fn add_event_log_record(&mut self, _record: BACnetEventLogRecord) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
+
+    /// Look at a log's Start_Time / Stop_Time window against the bound
+    /// clock, recording the LOG_DISABLED change when it opened or closed
+    /// since the last look while Enable is TRUE.
+    ///
+    /// The trend poller calls this for every trend log on each pass, so a
+    /// window that moves while no record is acquired is still logged within
+    /// one pass. Returns whether a record was added. The default, for objects
+    /// without a window, does nothing and returns `false`.
+    #[doc(hidden)]
+    fn refresh_log_window_internal(&mut self) -> bool {
+        false
     }
 }

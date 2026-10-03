@@ -319,3 +319,38 @@ fn structured_bodies_are_formal_only_for_their_services() {
     wire.extend_from_slice(SCPM_SUBSCRIPTION);
     assert!(decode_apdu(Bytes::from(wire)).is_err());
 }
+
+#[test]
+fn formal_members_cut_short_are_a_short_buffer() {
+    // An element number, a vendor identifier and a service number that each
+    // say two octets and hold one; need and have count from the body.
+    for (service, body, need) in [
+        (
+            CREATE_OBJECT,
+            &[0x0E, 0x91, 2, 0x91, 40, 0x0F, 0x1A, 3][..],
+            9,
+        ),
+        (
+            ConfirmedServiceChoice::REMOVE_LIST_ELEMENT,
+            &[0x0E, 0x91, 5, 0x91, 81, 0x0F, 0x1A, 2],
+            9,
+        ),
+        (
+            PRIVATE_TRANSFER,
+            &[0x0E, 0x91, 5, 0x91, 45, 0x0F, 0x1A, 0x02],
+            9,
+        ),
+        (
+            PRIVATE_TRANSFER,
+            &[0x0E, 0x91, 5, 0x91, 45, 0x0F, 0x1A, 0x02, 0x2B, 0x2A, 7],
+            12,
+        ),
+    ] {
+        match decode_apdu(wire(service, body)) {
+            Err(Error::BufferTooShort { need: n, have }) => {
+                assert_eq!((n, have), (need, body.len()), "{service:?} {body:02X?}");
+            }
+            other => panic!("expected a short buffer for {service:?} {body:02X?}, got {other:?}"),
+        }
+    }
+}

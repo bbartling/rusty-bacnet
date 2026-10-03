@@ -30,17 +30,19 @@ pub fn encode_property_reference(buf: &mut BytesMut, reference: &PropertyReferen
 /// offset just past it. The array index is read only when the next tag is a
 /// primitive context tag `[1]`, so a reference may end the input or be
 /// followed by anything else.
+///
+/// A member whose contents run past the end of `data` fails with
+/// [`Error::BufferTooShort`]; any other malformed input with
+/// [`Error::Decoding`].
 pub fn decode_property_reference(
     data: &[u8],
     offset: usize,
 ) -> Result<(PropertyReference, usize), Error> {
     const PROPERTY: &str = "PropertyReference property-id";
     const INDEX: &str = "PropertyReference array-index";
-    let (property, next) = decode_ctx_unsigned::<u32>(data, offset, 0, PROPERTY)
-        .map_err(short_as_malformed(data, offset, PROPERTY))?;
+    let (property, next) = decode_ctx_unsigned::<u32>(data, offset, 0, PROPERTY)?;
     let (property_array_index, offset) =
-        decode_optional_ctx(data, next, 1, INDEX, decode_ctx_unsigned::<u32>)
-            .map_err(short_as_malformed(data, next, INDEX))?;
+        decode_optional_ctx(data, next, 1, INDEX, decode_ctx_unsigned::<u32>)?;
     Ok((
         PropertyReference {
             property_identifier: PropertyIdentifier::from_raw(property),
@@ -64,14 +66,14 @@ pub fn encode_read_access_specification(buf: &mut BytesMut, spec: &ReadAccessSpe
 
 /// Decode one `ReadAccessSpecification` at `offset`; returns it and the
 /// offset just past its closing `[1]` tag, so a sequence of them is walked
-/// by calling this at each element's start.
+/// by calling this at each element's start. Errors are as for
+/// [`decode_property_reference`].
 pub fn decode_read_access_specification(
     data: &[u8],
     offset: usize,
 ) -> Result<(ReadAccessSpecification, usize), Error> {
     const WHAT: &str = "ReadAccessSpecification";
-    let (object_identifier, end) = decode_ctx_object_id(data, offset, 0, WHAT)
-        .map_err(short_as_malformed(data, offset, WHAT))?;
+    let (object_identifier, end) = decode_ctx_object_id(data, offset, 0, WHAT)?;
     let mut offset = expect_opening(data, end, 1, WHAT)?;
     let mut list_of_property_references = Vec::new();
     loop {
@@ -103,23 +105,4 @@ pub fn decode_read_access_specification(
         },
         offset,
     ))
-}
-
-/// Map the member at `at` cut short by the end of the data to
-/// [`Error::Decoding`] at its first contents octet. These two decoders came
-/// from `bacnet-services` (#1134), whose decoders report truncation as
-/// malformed rather than as a short buffer, and their callers still see it
-/// that way.
-fn short_as_malformed<'a>(
-    data: &'a [u8],
-    at: usize,
-    what: &'a str,
-) -> impl FnOnce(Error) -> Error + 'a {
-    move |error| match error {
-        Error::BufferTooShort { need, have } => Error::decoding(
-            tags::decode_tag(data, at).map_or(at, |(_, contents)| contents),
-            format!("{what}: truncated, need {need} bytes, have {have}"),
-        ),
-        error => error,
-    }
 }

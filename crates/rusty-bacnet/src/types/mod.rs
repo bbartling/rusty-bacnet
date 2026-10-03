@@ -28,6 +28,7 @@ mod action_list;
 mod address;
 mod audit;
 mod audit_projection;
+mod constructed_read;
 mod cov;
 mod destination;
 mod device;
@@ -58,6 +59,7 @@ pub(crate) use rpm_wpm::{
     py_to_rpm_specs, py_to_wpm_specs, rpm_ack_to_py, PyDeviceWrite, PyPropertyWrite,
     PyReadAccessSpec, PyWriteAccessSpec,
 };
+pub(crate) use timestamp::date_time_tuple;
 pub use timestamp::PyBACnetTimeStamp;
 
 // Module registration

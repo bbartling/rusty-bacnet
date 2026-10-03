@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetLogRecord};
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
+    ErrorClass, ErrorCode, EventState, LoggingType, ObjectType, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
@@ -19,11 +19,13 @@ use crate::log_buffer::{
 use crate::log_lifecycle::LogLifecycle;
 use crate::traits::BACnetObject;
 
+mod acquisition;
 mod metadata;
 mod multiple;
 mod multiple_metadata;
 mod references;
 
+pub use acquisition::DEFAULT_LOG_INTERVAL;
 pub use multiple::TrendLogMultipleObject;
 pub use references::MAX_LOG_DEVICE_OBJECT_PROPERTIES;
 
@@ -42,7 +44,7 @@ pub struct TrendLogObject {
     log_buffer: LogRecordBuffer,
     reliability: Reliability,
     log_device_object_property: Option<BACnetDeviceObjectPropertyReference>,
-    logging_type: u32, // 0=polled, 1=cov, 2=triggered
+    logging_type: LoggingType,
     clock: Option<Arc<dyn ClockReader>>,
 }
 
@@ -61,7 +63,7 @@ impl TrendLogObject {
             log_buffer: LogRecordBuffer::new(buffer_size),
             reliability: Reliability::NO_FAULT_DETECTED,
             log_device_object_property: None,
-            logging_type: 0,
+            logging_type: LoggingType::POLLED,
             clock: None,
         })
     }
@@ -131,8 +133,9 @@ impl TrendLogObject {
         Ok(())
     }
 
-    /// Set the logging type (0=polled, 1=cov, 2=triggered).
-    pub fn set_logging_type(&mut self, logging_type: u32) {
+    /// Set Logging_Type. Only POLLED logs are polled; a Trend Log serves COV
+    /// and TRIGGERED but acquires nothing itself in either.
+    pub fn set_logging_type(&mut self, logging_type: LoggingType) {
         self.logging_type = logging_type;
     }
 
@@ -208,7 +211,7 @@ impl BACnetObject for TrendLogObject {
             // ReadRange pages it through `log_buffer_internal`.
             p if p == PropertyIdentifier::LOG_BUFFER => Err(log_buffer_read_denied()),
             p if p == PropertyIdentifier::LOGGING_TYPE => {
-                Ok(PropertyValue::Enumerated(self.logging_type))
+                Ok(PropertyValue::Enumerated(self.logging_type.to_raw()))
             }
             // The Clause 21 encoding; Null while no reference is set.
             p if p == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => {
@@ -325,6 +328,9 @@ impl BACnetObject for TrendLogObject {
 
 #[cfg(test)]
 mod log_record_tests;
+
+#[cfg(test)]
+mod multiple_options_tests;
 
 #[cfg(test)]
 mod reference_tests;

@@ -6,7 +6,10 @@ use tracing::{debug, warn};
 use super::super::event_suppression::{EventSuppression, EventSuppressions};
 
 /// Log a bounded lookup diagnostic, count an outcome that fails closed, and
-/// expose only successful selections.
+/// expose the selection. `None` means the lookup failed closed (the
+/// Notification Class is missing, or its Recipient_List can't be read, is
+/// invalid or is past the cap) and the transition is refused whole. A class
+/// that reads fine but selects nobody gives an empty selection.
 pub(super) fn matched_recipients_or_log(
     outcome: RecipientLookupOutcome,
     notification_class: u32,
@@ -59,7 +62,7 @@ pub(super) fn matched_recipients_or_log(
                 ?transition,
                 "Recipient list empty; no delivery"
             );
-            None
+            Some(Vec::new())
         }
         RecipientLookupOutcome::NoMatchingDestinations => {
             debug!(
@@ -67,7 +70,7 @@ pub(super) fn matched_recipients_or_log(
                 ?transition,
                 "No eligible recipient; no delivery"
             );
-            None
+            Some(Vec::new())
         }
         RecipientLookupOutcome::Matched(recipients) => Some(recipients),
     }

@@ -30,7 +30,7 @@ use bacnet_objects::traits::{
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
-    BACnetDeviceObjectReference, BACnetLogMultipleRecord, BACnetLogRecord,
+    BACnetDeviceObjectReference, BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord,
     BACnetObjectPropertyReference, BACnetObjectSelector,
 };
 use bacnet_types::enums::{
@@ -524,6 +524,14 @@ impl BACnetObject for SourceReporter {
 
     fn add_trend_multiple_record(&mut self, record: BACnetLogMultipleRecord) -> Result<(), Error> {
         self.wrapped.add_trend_multiple_record(record)
+    }
+
+    fn add_event_log_record(&mut self, record: BACnetEventLogRecord) -> Result<(), Error> {
+        self.wrapped.add_event_log_record(record)
+    }
+
+    fn refresh_log_window_internal(&mut self) -> bool {
+        self.wrapped.refresh_log_window_internal()
     }
 }
 

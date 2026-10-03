@@ -250,9 +250,8 @@ impl BACnetObject for AveragingObject {
             // dropping the device. The object can't tell which Device holds
             // it; the bundled server drops a Device member naming its own
             // Device before the value gets here (#1153). A Device member that
-            // isn't a Device identifier is VALUE_OUT_OF_RANGE (#1182). The flat
-            // form keeps its historical Unsigned members (both Unsigned and
-            // Enumerated are accepted there; see reference.rs).
+            // isn't a Device identifier is VALUE_OUT_OF_RANGE (#1182), and the
+            // flat application-tagged list is INVALID_DATA_TYPE.
             p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => {
                 let reference = crate::reference::decode_reference_write(
                     &value,
