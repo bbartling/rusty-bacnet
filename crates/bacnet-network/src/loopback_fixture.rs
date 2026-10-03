@@ -4,13 +4,14 @@
 //! Raw NPDU bytes go in through [`LoopbackTransport`] peers, and the frames
 //! the router sends come back out of them, so a test sees exactly what a
 //! neighbouring node would. [`FromRouter`] also says which MAC each unicast
-//! was sent to (#1243).
+//! was sent to (#1243), and [`RouterFixture`]'s links carry data attributes
+//! both ways (#1289).
 
 use bacnet_encoding::npdu::{
     decode_npdu, decode_reject_message_to_network, Npdu, NpduAddress, RejectMessageToNetwork,
 };
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort};
 use bacnet_types::enums::NetworkMessageType;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
@@ -143,6 +144,11 @@ impl RouterFixture {
     ) -> (Self, Option<mpsc::Receiver<ReceivedNetworkControl>>) {
         let (mut port_a, mut peer_a) = LoopbackTransport::pair(vec![0x01], vec![0x0A]);
         let (mut port_b, mut peer_b) = LoopbackTransport::pair(vec![0x02], vec![0x0B]);
+        // Frames sent without data attributes arrive without them, so only a
+        // test that sends some sees any.
+        for transport in [&mut port_a, &mut peer_a, &mut port_b, &mut peer_b] {
+            transport.carry_data_attributes();
+        }
         let from_router_a = FromRouter::start(&mut port_a, &mut peer_a).await;
         let from_router_b = FromRouter::start(&mut port_b, &mut peer_b).await;
         let ports = vec![
@@ -194,6 +200,14 @@ impl RouterFixture {
         self.peer_a.send_unicast(bytes, &[0x01]).await.unwrap();
     }
 
+    /// [`Self::send_from_a`], with `data_attributes` on the frame.
+    pub(crate) async fn send_from_a_with(&self, bytes: &[u8], data_attributes: &[DataAttribute]) {
+        self.peer_a
+            .send_unicast_with_data_attributes(bytes, &[0x01], data_attributes)
+            .await
+            .unwrap();
+    }
+
     pub(crate) async fn send_from_b(&self, bytes: &[u8]) {
         self.peer_b.send_unicast(bytes, &[0x02]).await.unwrap();
     }
@@ -206,16 +220,24 @@ impl RouterFixture {
 }
 
 /// The next frame a router sends to a peer, past its I-Am-Router-To-Network
-/// announcements, as raw bytes with the MAC it was unicast to, or `None` when
-/// it went out as a data-link broadcast.
-pub(crate) async fn next_frame_from_router(rx: &mut FromRouter) -> (Bytes, Option<MacAddr>) {
+/// announcements, with the MAC it was unicast to, or `None` when it went out
+/// as a data-link broadcast.
+pub(crate) async fn next_received_from_router(
+    rx: &mut FromRouter,
+) -> (ReceivedNpdu, Option<MacAddr>) {
     let i_am = Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK.to_raw());
     loop {
         let (frame, to) = rx.recv().await;
         if decode_npdu(frame.npdu.clone()).unwrap().message_type != i_am {
-            return (frame.npdu, to);
+            return (frame, to);
         }
     }
+}
+
+/// [`next_received_from_router`], as raw NPDU bytes.
+pub(crate) async fn next_frame_from_router(rx: &mut FromRouter) -> (Bytes, Option<MacAddr>) {
+    let (frame, to) = next_received_from_router(rx).await;
+    (frame.npdu, to)
 }
 
 /// [`next_frame_from_router`], decoded.

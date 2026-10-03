@@ -7,9 +7,11 @@
 //! Shares [`super::envelope_harness`] with the discovery module.
 
 use super::envelope_harness::*;
+use super::forwarding::forward_unicast;
 use super::*;
 use crate::router_table::ReachabilityStatus;
-use bacnet_encoding::npdu::NpduAddress;
+use bacnet_encoding::npdu::{decode_npdu, NpduAddress};
+use bacnet_types::enums::RejectMessageReason;
 
 // --- I-Am / Busy / Available complete-list validation ---
 
