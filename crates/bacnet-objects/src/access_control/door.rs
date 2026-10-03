@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::door_alarm::{alarm_state_in_range, DoorAlarmLists};
+use super::door_alarm::{listed_state_in_range, DoorAlarmLists};
 use super::door_out_of_service::DoorState;
 use super::*;
 use crate::event::state_reporting::ChangeOfStateReporting;
@@ -114,7 +114,7 @@ impl AccessDoorObject {
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             alarm_lists: DoorAlarmLists::default(),
-            reporting: ChangeOfStateReporting::new(alarm_state_in_range),
+            reporting: ChangeOfStateReporting::new(listed_state_in_range),
             priority_array: Default::default(),
             relinquish_default: DoorValue::LOCK,
             door_pulse_time: DEFAULT_DOOR_PULSE_TIME,
@@ -216,12 +216,12 @@ impl AccessDoorObject {
     }
 
     /// Set Alarm_Values, the Door_Alarm_State values the door reports as
-    /// offnormal (Clause 12.26.25). A value outside the BACnetDoorAlarmState
-    /// production, named or proprietary (256 to 65535), is refused with
-    /// VALUE_OUT_OF_RANGE and the values set before are kept. A
-    /// Door_Alarm_State the lists no longer admit drops to NORMAL. Clients
-    /// can write the list too, as they can the door's other event
-    /// configuration.
+    /// offnormal (Clause 12.26.25). NORMAL, or a value outside the
+    /// BACnetDoorAlarmState production, named or proprietary (256 to
+    /// 65535), is refused with VALUE_OUT_OF_RANGE and the values set before
+    /// are kept. A Door_Alarm_State the lists no longer admit drops to
+    /// NORMAL. Clients can write the list too, as they can the door's other
+    /// event configuration.
     pub fn set_alarm_values(
         &mut self,
         states: impl IntoIterator<Item = DoorAlarmState>,
@@ -245,8 +245,7 @@ impl AccessDoorObject {
 
     /// Set Masked_Alarm_Values, the states Door_Alarm_State is kept out of
     /// (Clause 12.26.21), checked as [`Self::set_alarm_values`] checks its
-    /// list; NORMAL can't be masked. A door in a state the list now masks
-    /// returns to NORMAL at once.
+    /// list. A door in a state the list now masks returns to NORMAL at once.
     pub fn set_masked_alarm_values(
         &mut self,
         states: impl IntoIterator<Item = DoorAlarmState>,

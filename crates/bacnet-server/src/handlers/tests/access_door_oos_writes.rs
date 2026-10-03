@@ -452,14 +452,27 @@ fn door_alarm_lists_take_door_alarm_states_over_the_wire() {
         handle_remove_list_element(&mut db, &list_request(oid, list, &[0x91, 4, 0x91, 6])).unwrap();
         assert_eq!(read_bytes(&db, oid, list), [0x91, 7], "{list:?}");
     }
-    // NORMAL can't be masked.
-    assert_eq!(
-        list_refusal(handle_add_list_element(
-            &mut db,
-            &list_request(oid, PropertyIdentifier::MASKED_ALARM_VALUES, &[0x91, 0])
-        )),
-        (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, 1)
-    );
+    // No list takes NORMAL, over WriteProperty or AddListElement.
+    for list in [
+        PropertyIdentifier::ALARM_VALUES,
+        PropertyIdentifier::FAULT_VALUES,
+        PropertyIdentifier::MASKED_ALARM_VALUES,
+    ] {
+        assert_eq!(
+            list_refusal(write_property(&mut db, oid, list, alarm_states(&[7, 0]))),
+            (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, 2),
+            "{list:?}"
+        );
+        assert_eq!(
+            list_refusal(handle_add_list_element(
+                &mut db,
+                &list_request(oid, list, &[0x91, 0])
+            )),
+            (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, 1),
+            "{list:?}"
+        );
+        assert_eq!(read_bytes(&db, oid, list), [0x91, 7], "{list:?}");
+    }
 }
 
 #[test]

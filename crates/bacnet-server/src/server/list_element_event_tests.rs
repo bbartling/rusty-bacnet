@@ -2,7 +2,9 @@
 //! as WriteProperty does (#1305 review). An Alarm_Values edit that puts the
 //! watched value in or out of alarm transitions at once with Time_Delay 0,
 //! not at the periodic task's second tick, and the transition's
-//! Status_Flags change still reaches a SubscribeCOV subscriber.
+//! Status_Flags change still reaches a SubscribeCOV subscriber. A list edit
+//! that moves a reported value with no transition at all, such as masking
+//! an Access Door's Door_Alarm_State, gets the COV fanout too (#1149).
 //!
 //! The clock is paused, so the periodic task ticks only when a test sleeps
 //! past a second; `settle` stays well inside the first one.
@@ -141,4 +143,73 @@ async fn masked_alarm_values_list_edit_returns_a_door_to_normal_at_once() {
     .await;
     h.settle().await;
     assert_eq!(event_state(&h, door1).await, EventState::NORMAL);
+}
+
+/// DOOR-1 in FORCED_OPEN (3), an alarm value behind a minute's Time_Delay,
+/// so no edit below proposes a transition, with a SubscribeCOV subscriber
+/// that has had its initial report.
+async fn subscribed_alarming_door() -> (Harness, ObjectIdentifier) {
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::enums::DoorAlarmState;
+    let door1 = ObjectIdentifier::new(ObjectType::ACCESS_DOOR, 1).unwrap();
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
+        door.set_alarm_values([DoorAlarmState::FORCED_OPEN])
+            .unwrap();
+        door.write_property(
+            PropertyIdentifier::TIME_DELAY,
+            None,
+            PropertyValue::Unsigned(60),
+            None,
+        )
+        .unwrap();
+        door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN)
+            .unwrap();
+        db.add(Box::new(door)).unwrap();
+    })
+    .await;
+    let mut body = BytesMut::new();
+    SubscribeCOVRequest {
+        subscriber_process_identifier: 890,
+        monitored_object_identifier: door1,
+        issue_confirmed_notifications: Some(false),
+        lifetime: Some(300),
+    }
+    .encode(&mut body)
+    .unwrap();
+    h.request(ConfirmedServiceChoice::SUBSCRIBE_COV, body).await;
+    assert_eq!(door_alarm_state(&h.cov_notification().await), [0x91, 3]);
+    (h, door1)
+}
+
+/// Door_Alarm_State as a COV report carries it.
+fn door_alarm_state(report: &bacnet_services::cov::COVNotificationRequest) -> Vec<u8> {
+    report
+        .list_of_values
+        .iter()
+        .find(|value| value.property_identifier == PropertyIdentifier::DOOR_ALARM_STATE)
+        .expect("Door_Alarm_State in the report")
+        .value
+        .clone()
+}
+
+#[tokio::test(start_paused = true)]
+async fn masked_alarm_values_add_list_element_reports_the_door_back_to_normal() {
+    let (mut h, door1) = subscribed_alarming_door().await;
+    h.request(
+        ADD,
+        list_body(door1, PropertyIdentifier::MASKED_ALARM_VALUES, &[0x91, 3]),
+    )
+    .await;
+    assert_eq!(door_alarm_state(&h.cov_notification().await), [0x91, 0]);
+    h.no_notification().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn alarm_values_remove_list_element_reports_the_door_back_to_normal() {
+    let (mut h, door1) = subscribed_alarming_door().await;
+    // FORCED_OPEN out of Alarm_Values is no alarm the door recognises.
+    h.request(REMOVE, alarm_values(door1, &[0x91, 3])).await;
+    assert_eq!(door_alarm_state(&h.cov_notification().await), [0x91, 0]);
+    h.no_notification().await;
 }

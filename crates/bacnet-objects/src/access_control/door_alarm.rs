@@ -30,8 +30,10 @@
 //! Each list takes WriteProperty, WritePropertyMultiple and the list services
 //! in the form the door's Alarm_Values does (`state_reporting::
 //! enumerated_list`): named states or proprietary ones from 256 to 65535,
-//! up to `MAX_ALARM_VALUES` of them. Masked_Alarm_Values refuses NORMAL with
-//! VALUE_OUT_OF_RANGE: masking the one state every alarm returns to would
+//! up to `MAX_ALARM_VALUES` of them. None of the three takes NORMAL, which
+//! is refused with VALUE_OUT_OF_RANGE naming the element: NORMAL is the
+//! state with no alarm or fault, so as an alarm value it would put a quiet
+//! door in alarm, as a fault value it would fault one, and masked it would
 //! leave Door_Alarm_State nothing to hold.
 
 use bacnet_types::enums::{DoorAlarmState, PropertyIdentifier, Reliability};
@@ -76,13 +78,13 @@ impl DoorAlarmLists {
 
     /// Replace Fault_Values, checked as a network write would be.
     pub(super) fn set_fault_values(&mut self, values: Vec<u32>) -> Result<(), Error> {
-        self.fault_values = checked_raw_list(values, alarm_state_in_range)?;
+        self.fault_values = checked_raw_list(values, listed_state_in_range)?;
         Ok(())
     }
 
     /// Replace Masked_Alarm_Values, checked as a network write would be.
     pub(super) fn set_masked_alarm_values(&mut self, values: Vec<u32>) -> Result<(), Error> {
-        self.masked_alarm_values = checked_raw_list(values, maskable)?;
+        self.masked_alarm_values = checked_raw_list(values, listed_state_in_range)?;
         Ok(())
     }
 
@@ -108,26 +110,20 @@ impl DoorAlarmLists {
         array_index: Option<u32>,
         value: &PropertyValue,
     ) -> Option<Result<(), Error>> {
-        let (list, in_range): (&mut Vec<u32>, fn(u32) -> bool) = match property {
-            p if p == PropertyIdentifier::FAULT_VALUES => {
-                (&mut self.fault_values, alarm_state_in_range)
-            }
-            p if p == PropertyIdentifier::MASKED_ALARM_VALUES => {
-                (&mut self.masked_alarm_values, maskable)
-            }
+        let list = match property {
+            p if p == PropertyIdentifier::FAULT_VALUES => &mut self.fault_values,
+            p if p == PropertyIdentifier::MASKED_ALARM_VALUES => &mut self.masked_alarm_values,
             _ => return None,
         };
-        Some(enumerated_list(array_index, value, in_range).map(|values| *list = values))
+        Some(
+            enumerated_list(array_index, value, listed_state_in_range).map(|values| *list = values),
+        )
     }
 }
 
-/// Whether `raw` is a BACnetDoorAlarmState, named or proprietary.
-pub(super) fn alarm_state_in_range(raw: u32) -> bool {
-    door_alarm_state_in_range(DoorAlarmState::from_raw(raw))
-}
-
-/// Whether Masked_Alarm_Values can hold `raw`: any BACnetDoorAlarmState but
-/// NORMAL.
-fn maskable(raw: u32) -> bool {
-    raw != DoorAlarmState::NORMAL.to_raw() && alarm_state_in_range(raw)
+/// Whether one of the three lists can hold `raw`: a BACnetDoorAlarmState,
+/// named or proprietary, other than NORMAL.
+pub(super) fn listed_state_in_range(raw: u32) -> bool {
+    raw != DoorAlarmState::NORMAL.to_raw()
+        && door_alarm_state_in_range(DoorAlarmState::from_raw(raw))
 }

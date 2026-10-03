@@ -2946,23 +2946,23 @@ tick.
 An Access Door reports intrinsically on Door_Alarm_State with the
 CHANGE_OF_STATE algorithm (Clause 12.26), serving the same event rows as the
 zone plus Fault_Values and Masked_Alarm_Values, all three lists of
-BACnetDoorAlarmState values (named, or proprietary from 256 to 65535) that
-clients can write and `set_alarm_values`, `set_fault_values` and
-`set_masked_alarm_values` set. Door_Alarm_State is NORMAL or a member of
+BACnetDoorAlarmState values other than NORMAL (named, or proprietary from 256
+to 65535) that clients can write and `set_alarm_values`, `set_fault_values`
+and `set_masked_alarm_values` set. Door_Alarm_State is NORMAL or a member of
 Alarm_Values or Fault_Values, never a masked state:
 `AccessDoorObject::set_door_alarm_state` (now returning `Result`) and a
 simulated write refuse any other state with VALUE_OUT_OF_RANGE, and a list
 change that leaves the current state outside them, masking it included,
-returns the door to NORMAL at once. Masked_Alarm_Values can't hold NORMAL. An
-alarm value makes Event_State OFFNORMAL after Time_Delay; a fault value makes
-Reliability MULTI_STATE_FAULT (the FAULT_STATE algorithm) and Event_State
-FAULT. The server sends the transitions to the door's Notification Class: a
-CHANGE_OF_STATE notification carries Door_Alarm_State as its
-`door-alarm-state` New_State, and a CHANGE_OF_RELIABILITY one lists
-Door_Alarm_State, then Present_Value (Table 13-5). The application decides
-when the door is in alarm, DOOR_OPEN_TOO_LONG included: the door serves
-Door_Open_Too_Long_Time but runs no timer, and a state the application sets
-directly on the object reaches the algorithm at the one-second tick.
+returns the door to NORMAL at once. An alarm value makes Event_State OFFNORMAL
+after Time_Delay; a fault value makes Reliability MULTI_STATE_FAULT (the
+FAULT_STATE algorithm) and Event_State FAULT. The server sends the transitions
+to the door's Notification Class: a CHANGE_OF_STATE notification carries
+Door_Alarm_State as its `door-alarm-state` New_State, and a
+CHANGE_OF_RELIABILITY one lists Door_Alarm_State, then Present_Value (Table
+13-5). The application decides when the door is in alarm, DOOR_OPEN_TOO_LONG
+included: the door serves Door_Open_Too_Long_Time but runs no timer, and a
+state the application sets directly on the object reaches the algorithm at the
+one-second tick.
 
 Over the network the Access Point event values stay read-only, but writing
 its Out_Of_Service records an event on each edge (Clause 12.31.8):
@@ -3007,26 +3007,29 @@ again. Neither stamps 0, the value of an update time with no update yet. A
 time the application passes to `set_access_event` or `set_present_value` is
 served as given.
 
-A door's Door_Status, Lock_Status and Door_Alarm_State, the rows
-footnote 1 of Table 12-30 marks, and its Reliability take WriteProperty and
+A door's Door_Status, Lock_Status and Door_Alarm_State, the rows footnote 1 of
+Table 12-30 marks, and its Reliability take WriteProperty and
 WritePropertyMultiple while Out_Of_Service is TRUE, so a client can simulate
-the door; in service they refuse writes with WRITE_ACCESS_DENIED. A simulated
-Reliability overrides the fault check until the return to service. A write must be an Enumerated in
-the property's production: a named BACnetDoorStatus or one from 1024 to 65535,
-a named BACnetLockStatus (no proprietary range), or a named
-BACnetDoorAlarmState or one from 256 to 65535. Entering out of service puts the
-door's own three values aside, a value the application sets meanwhile replaces
-the one put aside, and the return to service serves them again, dropping the
-simulation. A simulated Door_Alarm_State sends the COV report as a real change
-does. The pulse relock runs on its timer whatever the simulated values say.
+the door; in service they refuse writes with WRITE_ACCESS_DENIED. A write must
+be an Enumerated in the property's production: a named BACnetDoorStatus or one
+from 1024 to 65535, a named BACnetLockStatus (no proprietary range), a named
+BACnetDoorAlarmState or one from 256 to 65535 that the door's alarm lists
+admit, or a BACnetReliability value, its proprietary range included. A
+simulated Reliability overrides the fault check until the return to service.
+Entering out of service puts the door's own three values aside, a value the
+application sets meanwhile replaces the one put aside, and the return to
+service serves them again, dropping the simulation. A simulated
+Door_Alarm_State sends the COV report as a real change does. The pulse relock
+runs on its timer whatever the simulated values say.
 
 A door's Secured_Status isn't stored: each read works it out from what the
 door serves (Clause 12.26.14). It reads SECURED while the door is commanded
 LOCK, isn't IN_ALARM, masks no alarm state, and its Door_Status and
-Lock_Status show it shut and locked (or UNUSED). Any other input makes it UNSECURED, so an UNLOCK or a pulse
-reads UNSECURED until it ends. A Door_Status or Lock_Status of UNKNOWN or a
-fault makes it UNKNOWN, unless another input has already made it UNSECURED.
-Simulated values count the same as the device's.
+Lock_Status show it shut and locked (or UNUSED). Any other input makes it
+UNSECURED, so an UNLOCK or a pulse reads UNSECURED until it ends. A
+Door_Status or Lock_Status of UNKNOWN or a fault makes it UNKNOWN, unless
+another input has already made it UNSECURED. Simulated values count the same
+as the device's.
 
 #### Transportation (3)
 

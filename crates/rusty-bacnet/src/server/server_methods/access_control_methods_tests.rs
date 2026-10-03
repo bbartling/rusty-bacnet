@@ -350,7 +350,7 @@ fn python_door_alarm_lists_reach_the_door() {
         );
     }
 
-    // A reserved state, or NORMAL among the masked ones (#1149).
+    // A reserved state, or NORMAL in any list (#1149).
     let out_of_range = |error: &Error| {
         matches!(error, Error::Structured { class, code, .. }
             if *class == ErrorClass::PROPERTY.to_raw() as u32
@@ -363,6 +363,14 @@ fn python_door_alarm_lists_reach_the_door() {
         },
         DoorSettings {
             fault_values: Some(vec![65_536]),
+            ..DoorSettings::default()
+        },
+        DoorSettings {
+            alarm_values: Some(vec![0]),
+            ..DoorSettings::default()
+        },
+        DoorSettings {
+            fault_values: Some(vec![5, 0]),
             ..DoorSettings::default()
         },
         DoorSettings {

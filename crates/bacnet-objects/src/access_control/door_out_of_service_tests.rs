@@ -10,10 +10,10 @@ use super::*;
 /// The three rows footnote 1 marks.
 const SIMULATED: [P; 3] = [P::DOOR_STATUS, P::LOCK_STATUS, P::DOOR_ALARM_STATE];
 
-/// A door whose Alarm_Values hold every named BACnetDoorAlarmState and the
-/// proprietary ones these tests simulate, so only the enumeration's range
-/// and the in-service gate refuse a write here (`door_alarm_tests` has the
-/// list checks).
+/// A door whose Alarm_Values hold every named BACnetDoorAlarmState but
+/// NORMAL, which needs no listing, and the proprietary ones these tests
+/// simulate, so only the enumeration's range and the in-service gate refuse
+/// a write here (`door_alarm_tests` has the list checks).
 fn door() -> AccessDoorObject {
     let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
     let proprietary = [256, 65_535].map(DoorAlarmState::from_raw);
@@ -21,6 +21,7 @@ fn door() -> AccessDoorObject {
         DoorAlarmState::ALL_NAMED
             .iter()
             .map(|&(_, state)| state)
+            .filter(|&state| state != DoorAlarmState::NORMAL)
             .chain(proprietary),
     )
     .unwrap();

@@ -201,21 +201,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// sent here) and the one-second [`intrinsic_reporting_task`](Self::start)
     /// advances the countdown and sends the notification on expiry.
     ///
-    /// Returns whether the object proposed a transition. Like the periodic
-    /// task, a caller owes such an object a COV fanout, since a proposal can
-    /// commit (changing Status_Flags) even when its projection is refused.
+    /// A caller owes the object a COV fanout afterwards, as the periodic task
+    /// gives one, since a proposal can commit (changing Status_Flags) even
+    /// when its projection is refused.
     pub(super) async fn fire_event_notifications_with_bindings(
         ctx: &EventDelivery<'_, T>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         oid: &ObjectIdentifier,
-    ) -> bool {
+    ) {
         let db = ctx.db;
-        let (proposed, resolved) = {
+        let resolved = {
             let mut db = db.write().await;
             let outcome = db
                 .get_mut(oid)
                 .and_then(|object| object.evaluate_intrinsic_reporting());
-            let proposed = outcome.is_some();
             let resolved = outcome
                 .and_then(|outcome| Self::commit_intrinsic_transition(&mut db, oid, outcome));
             // A committed transition changes Status_Flags: capture it at its
@@ -224,7 +223,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let capture = cov_table.read().await.timed_capture(*oid);
                 capture.run(&db);
             }
-            (proposed, resolved)
+            resolved
         };
 
         // Local transition actions commit before Event_Enable or DCC can suppress
@@ -234,30 +233,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 Self::build_and_send_event_notification_with_bindings(ctx, oid, resolved).await;
             }
         }
-        proposed
     }
 
     /// Run the per-write evaluation on every object a confirmed service
-    /// wrote. WriteProperty and WritePropertyMultiple already owe each object
-    /// they wrote a COV fanout; AddListElement and RemoveListElement don't,
-    /// so an object whose list edit proposed a transition joins
-    /// `coarse_cov_oids`, which reports its Status_Flags change as the
-    /// periodic task would have. Life Safety objects run no intrinsic
-    /// reporting and keep their exact-change path.
+    /// wrote. Each such service (WriteProperty, WritePropertyMultiple,
+    /// AddListElement and RemoveListElement) has already put every object it
+    /// wrote, Life Safety objects aside, in the COV fanout that runs after
+    /// this, so a committed transition's Status_Flags change reaches
+    /// subscribers.
     pub(super) async fn fire_written_event_notifications(
         ctx: &EventDelivery<'_, T>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
         written_oids: &[ObjectIdentifier],
-        coarse_cov_oids: &mut Vec<ObjectIdentifier>,
     ) {
         for oid in written_oids {
-            let proposed = Self::fire_event_notifications_with_bindings(ctx, cov_table, oid).await;
-            if proposed
-                && !crate::life_safety_cov::is_life_safety_object(*oid)
-                && !coarse_cov_oids.contains(oid)
-            {
-                coarse_cov_oids.push(*oid);
-            }
+            Self::fire_event_notifications_with_bindings(ctx, cov_table, oid).await;
         }
     }
 

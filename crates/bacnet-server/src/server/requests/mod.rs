@@ -554,7 +554,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let MutationEffects {
             written_oids,
-            mut coarse_cov_oids,
+            coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
             command_runs,
@@ -655,7 +655,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     &services.event_delivery(),
                     cov_table,
                     &written_oids,
-                    &mut coarse_cov_oids,
                 )
                 .await;
                 Self::fire_post_write_cov_notifications(
@@ -717,7 +716,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &services.event_delivery(),
             cov_table,
             &written_oids,
-            &mut coarse_cov_oids,
         )
         .await;
 

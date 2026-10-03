@@ -106,9 +106,8 @@ impl BACnetServer {
     ///
     /// `alarm_values`, `fault_values` and `masked_alarm_values` set
     /// Alarm_Values, Fault_Values and Masked_Alarm_Values as
-    /// BACnetDoorAlarmState numbers (0 to 8, or 256 to 65535). Another
-    /// number, or NORMAL (0) among the masked values, raises
-    /// VALUE_OUT_OF_RANGE.
+    /// BACnetDoorAlarmState numbers other than NORMAL (1 to 8, or 256 to
+    /// 65535). Any other number raises VALUE_OUT_OF_RANGE.
     #[pyo3(signature = (
         instance,
         name,

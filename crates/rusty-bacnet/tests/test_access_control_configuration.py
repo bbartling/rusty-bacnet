@@ -198,8 +198,13 @@ class AccessControlConfigurationTests(unittest.TestCase):
             masked_alarm_values=[4],
         )
         server.add_access_door(2, "Side Entry")
-        # A reserved state, and NORMAL (0) among the masked ones.
-        for settings in ({"alarm_values": [9]}, {"masked_alarm_values": [0]}):
+        # A reserved state, and NORMAL (0) in any list.
+        for settings in (
+            {"alarm_values": [9]},
+            {"alarm_values": [0]},
+            {"fault_values": [5, 0]},
+            {"masked_alarm_values": [0]},
+        ):
             with self.assertRaises(BacnetProtocolError) as raised:
                 server.add_access_door(3, "Refused", **settings)
             self.assert_value_out_of_range(raised.exception)

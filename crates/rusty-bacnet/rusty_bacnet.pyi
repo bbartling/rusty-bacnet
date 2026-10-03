@@ -3014,15 +3014,14 @@ class BACnetServer:
 
         ``alarm_values``, ``fault_values`` and ``masked_alarm_values`` set the
         starting Alarm_Values, Fault_Values and Masked_Alarm_Values, as
-        BACnetDoorAlarmState numbers (0 to 8, or 256 to 65535); peers can
-        write all three. Door_Alarm_State stays NORMAL or a member of the
+        BACnetDoorAlarmState numbers other than NORMAL (1 to 8, or 256 to
+        65535); peers can write all three. Door_Alarm_State stays NORMAL or a member of the
         alarm or fault values, never a masked state: a simulated value
         outside them is refused, and masking the current state returns the
         door to NORMAL. An alarm value raises a CHANGE_OF_STATE alarm after
-        Time_Delay, and a fault value makes Reliability MULTI_STATE_FAULT. A
-        number outside the production, or NORMAL (0) among the masked values,
-        raises BacnetProtocolError with VALUE_OUT_OF_RANGE, and nothing is
-        registered.
+        Time_Delay, and a fault value makes Reliability MULTI_STATE_FAULT. Any
+        other number, NORMAL (0) included, raises BacnetProtocolError with
+        VALUE_OUT_OF_RANGE, and nothing is registered.
         """
         ...
     def add_access_credential(self, instance: int, name: str) -> None: ...

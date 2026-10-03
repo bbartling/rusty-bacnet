@@ -528,7 +528,11 @@ impl Request<'_> {
     /// removed one is relinquished (#1121). The edited object joins the
     /// per-write event evaluation, so an Alarm_Values edit that puts the
     /// watched value in or out of alarm starts its transition at once rather
-    /// than at the next periodic tick.
+    /// than at the next periodic tick. It also gets the COV fanout a
+    /// WriteProperty would give it, since an edit can move a reported value:
+    /// masking an Access Door's Door_Alarm_State returns it to NORMAL
+    /// (#1149). Life Safety objects keep their exact-change path, which a
+    /// list edit doesn't feed.
     pub(super) async fn list_element<T: TransportPort + 'static>(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
@@ -566,6 +570,12 @@ impl Request<'_> {
             };
             staged.release(&mut db);
             audit.lifecycle_completed(&mut db, &result);
+            // Lock order: database, then a short table read, as after a
+            // WriteProperty: timestamped references capture the edit now.
+            if let Some(oid) = written {
+                let capture = cov_table.read().await.timed_capture(oid);
+                capture.run(&db);
+            }
             let schedule_cov = match written {
                 Some(oid) => {
                     crate::schedule::reevaluate_written(database, &mut db, &[oid], cov_table).await
@@ -581,6 +591,9 @@ impl Request<'_> {
             &mut effects.command_runs,
         );
         effects.written_oids.extend(written);
+        effects
+            .coarse_cov_oids
+            .extend(written.filter(|oid| !crate::life_safety_cov::is_life_safety_object(*oid)));
         match result {
             Ok(()) => self.simple_ack(),
             Err(e) => self.error::<T>(&e),

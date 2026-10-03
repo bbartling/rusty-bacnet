@@ -197,28 +197,28 @@ fn access_door_alarm_lists_take_door_alarm_states_only() {
         write(&mut door, list, PropertyValue::List(vec![])).unwrap();
     }
 
-    // NORMAL can't be masked: it is the state every alarm returns to. The
-    // other two lists may name it.
-    crate::common::assert_list_element_refused(
-        write(
-            &mut door,
-            P::MASKED_ALARM_VALUES,
-            states(&[S::TAMPER, S::NORMAL]),
-        ),
-        ErrorClass::PROPERTY,
-        ErrorCode::VALUE_OUT_OF_RANGE,
-        2,
-        "masked NORMAL",
-    );
-    assert_eq!(read(&door, P::MASKED_ALARM_VALUES), states(&[]));
-    write(&mut door, P::FAULT_VALUES, states(&[S::NORMAL])).unwrap();
+    // No list takes NORMAL, the state with no alarm or fault: as an alarm
+    // or fault value it would put a quiet door in alarm or fault, and
+    // masked it would leave the door nothing to hold.
+    for list in LISTS {
+        crate::common::assert_list_element_refused(
+            write(&mut door, list, states(&[S::TAMPER, S::NORMAL])),
+            ErrorClass::PROPERTY,
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            2,
+            &format!("NORMAL in {list:?}"),
+        );
+        assert_eq!(read(&door, list), states(&[]), "{list:?}");
+    }
 
     // The setters check the same way and keep the list on a refusal.
     door.set_alarm_values([S::FORCED_OPEN]).unwrap();
     door.set_fault_values([S::DOOR_FAULT]).unwrap();
     door.set_masked_alarm_values([S::TAMPER]).unwrap();
     assert_out_of_range(door.set_alarm_values([S::from_raw(9)]));
+    assert_out_of_range(door.set_alarm_values([S::NORMAL]));
     assert_out_of_range(door.set_fault_values([S::ALARM, S::from_raw(255)]));
+    assert_out_of_range(door.set_fault_values([S::NORMAL]));
     assert_out_of_range(door.set_masked_alarm_values([S::NORMAL]));
     for (list, expected) in [
         (P::ALARM_VALUES, S::FORCED_OPEN),

@@ -2462,9 +2462,9 @@ with VALUE_OUT_OF_RANGE, and another datatype with INVALID_DATA_TYPE.
 
 `add_access_door` also takes `alarm_values`, `fault_values` and
 `masked_alarm_values`, the door's starting Alarm_Values, Fault_Values and
-Masked_Alarm_Values as BACnetDoorAlarmState numbers (0 to 8, or 256 to
-65535); peers can write all three. A number outside those, or NORMAL (0)
-among the masked values, raises VALUE_OUT_OF_RANGE. Door_Alarm_State stays
+Masked_Alarm_Values as BACnetDoorAlarmState numbers other than NORMAL (1 to
+8, or 256 to 65535); peers can write all three. Any other number, NORMAL (0)
+included, raises VALUE_OUT_OF_RANGE. Door_Alarm_State stays
 NORMAL or a member of the alarm or fault values and never takes a masked
 state, so a client's simulated value outside them is refused, and masking the
 state the door is in returns it to NORMAL. The door raises a CHANGE_OF_STATE
