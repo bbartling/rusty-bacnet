@@ -24,8 +24,15 @@ use std::sync::atomic::AtomicU64;
 /// recipient at a broadcast address. The warning logged with each skip names
 /// the finer reason.
 ///
-/// The last three count confirmed notifications to one recipient that were
+/// The next three count confirmed notifications to one recipient that were
 /// never acknowledged.
+///
+/// The last one counts unconfirmed notifications whose send failed at the
+/// transport, once per destination. The transition's other destinations are
+/// still served. There is no counter for a notification that fails to
+/// encode: the committed payload and message text are validated before the
+/// destinations are walked, so a well-formed transition always encodes, and
+/// the send loop only logs and skips if that invariant is ever broken.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EventNotificationCounters {
     /// No Notification Class object has the class number the event object
@@ -67,6 +74,11 @@ pub struct EventNotificationCounters {
     /// Confirmed notifications that drew no acknowledgment after the last
     /// retry, including attempts whose send failed locally.
     pub confirmed_unanswered: u64,
+    /// Unconfirmed notifications the transport refused to send, one per
+    /// destination: a unicast, a broadcast or a routed send that returned an
+    /// error. Nothing is retried. Confirmed sends that fail locally count in
+    /// `confirmed_unanswered` instead.
+    pub unconfirmed_send_failed: u64,
 }
 
 /// One undelivered event notification, as counted in
@@ -83,6 +95,7 @@ pub(crate) enum EventSuppression {
     ConfirmedNoInvokeId,
     ConfirmedRejected,
     ConfirmedUnanswered,
+    UnconfirmedSendFailed,
 }
 
 impl EventSuppression {
@@ -107,7 +120,7 @@ impl EventSuppression {
 
 /// The server's shared storage behind [`EventNotificationCounters`].
 #[derive(Debug, Default)]
-pub(crate) struct EventSuppressions([AtomicU64; 10]);
+pub(crate) struct EventSuppressions([AtomicU64; 11]);
 
 impl EventSuppressions {
     pub(crate) fn record(&self, suppression: EventSuppression) {
@@ -121,7 +134,7 @@ impl EventSuppressions {
     }
 
     pub(crate) fn snapshot(&self) -> EventNotificationCounters {
-        let [notification_class_missing, recipient_list_unavailable, recipient_list_invalid, recipient_list_too_long, device_recipient_unbound, recipient_unroutable, confirmed_broadcast_recipient, confirmed_no_invoke_id, confirmed_rejected, confirmed_unanswered] =
+        let [notification_class_missing, recipient_list_unavailable, recipient_list_invalid, recipient_list_too_long, device_recipient_unbound, recipient_unroutable, confirmed_broadcast_recipient, confirmed_no_invoke_id, confirmed_rejected, confirmed_unanswered, unconfirmed_send_failed] =
             self.0.each_ref().map(|n| n.load(Ordering::Relaxed));
         EventNotificationCounters {
             notification_class_missing,
@@ -134,6 +147,7 @@ impl EventSuppressions {
             confirmed_no_invoke_id,
             confirmed_rejected,
             confirmed_unanswered,
+            unconfirmed_send_failed,
         }
     }
 }
@@ -151,7 +165,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 mod tests {
     use super::*;
 
-    const ALL: [EventSuppression; 10] = [
+    const ALL: [EventSuppression; 11] = [
         EventSuppression::NotificationClassMissing,
         EventSuppression::RecipientListUnavailable,
         EventSuppression::RecipientListInvalid,
@@ -162,6 +176,7 @@ mod tests {
         EventSuppression::ConfirmedNoInvokeId,
         EventSuppression::ConfirmedRejected,
         EventSuppression::ConfirmedUnanswered,
+        EventSuppression::UnconfirmedSendFailed,
     ];
 
     #[test]
@@ -185,6 +200,7 @@ mod tests {
                 confirmed_no_invoke_id: 8,
                 confirmed_rejected: 9,
                 confirmed_unanswered: 10,
+                unconfirmed_send_failed: 11,
             }
         );
     }
