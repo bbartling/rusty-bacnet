@@ -31,7 +31,8 @@ class MergeSafety(unittest.TestCase):
         base_data = gen.load_ledger()
         # Service text routes the row into the BIBB draft as well as the summary.
         template = copy.deepcopy(base_data["rows"][0])
-        template["requirement_summary"] += " service"
+        template["summary"] = gen.ledger_schema.summary(template) + " service"
+        template.pop("requirement_summary", None)
         template["status"] = "unsupported-by-design"  # also routes into the PICS draft
 
         def synthetic(row_id: str) -> dict:
