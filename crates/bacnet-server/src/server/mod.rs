@@ -70,8 +70,9 @@ use device_bindings::{register_configured_binding, DeviceBindingTable};
 use learned_router_cache::LearnedRouterCache;
 use lso_replay::{LsoAdmission, PendingLsoReplay};
 use notification_transactions::{
-    canonical_direct_peer, canonical_routed_peer, run_notification_worker,
-    NotificationTransactions, NotificationWorkerResult,
+    canonical_direct_peer, canonical_routed_peer, run_notification_under_dcc,
+    run_notification_worker, InitiationRestricted, NotificationTransactions,
+    NotificationWorkerResult,
 };
 use request_services::{DispatchContext, RequestOrigin, RequestServices, UnconfirmedServices};
 use requests::confirmed_response::ResponseTarget;
@@ -772,6 +773,8 @@ mod log_reference_resize_tests;
 mod loop_controlled_variable_tests;
 #[cfg(test)]
 mod loop_cov_tests;
+#[cfg(test)]
+mod notification_dcc_tests;
 #[cfg(test)]
 mod notification_transactions_tests;
 #[cfg(test)]

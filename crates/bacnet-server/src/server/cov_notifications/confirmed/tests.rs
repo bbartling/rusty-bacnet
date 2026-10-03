@@ -444,3 +444,42 @@ async fn a_panicking_follow_up_batch_leaves_the_task_running() {
     task.abort();
     f.finish().await;
 }
+
+/// DCC taking effect after a report is admitted, and counted, but before its
+/// first attempt withdraws it unsent; its counts are taken back (#1327).
+#[tokio::test(start_paused = true)]
+async fn a_report_dcc_withdraws_before_its_first_attempt_is_not_counted() {
+    let f = Fixture::new(ServerConfig::default());
+    let sub = f
+        .admit(proposal(
+            CovNotificationKind::Single,
+            PropertyIdentifier::PRESENT_VALUE,
+        ))
+        .await;
+    let mut budget = EventBudget::new(&f.config.cov_policy);
+    f.send(&sub, &mut budget).await;
+    let admitted = f.table.read().await.counters().snapshot();
+    assert_eq!(
+        (
+            admitted.notifications_sent,
+            admitted.notifications_confirmed
+        ),
+        (1, 1)
+    );
+    f.comm.store(2, Ordering::Release); // DISABLE_INITIATION
+    let joined = f.transactions.join_next().await;
+    assert!(matches!(joined, Some(Ok(()))), "{joined:?}");
+    assert!(f.sent.is_empty());
+    assert_eq!(f.transactions.active_count(), 0);
+    let counters = f.table.read().await.counters().snapshot();
+    assert_eq!(
+        (
+            counters.notifications_sent,
+            counters.notifications_confirmed,
+            counters.notification_bytes_sent
+        ),
+        (0, 0, 0)
+    );
+    assert!(f.table.read().await.confirmed_idle(&sub), "no hold-off");
+    f.finish().await;
+}
