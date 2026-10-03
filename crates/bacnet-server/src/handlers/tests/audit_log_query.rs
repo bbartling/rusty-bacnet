@@ -258,6 +258,15 @@ impl AuditLogStorage for SpyAuditStorage {
             no_more_items: true,
         }
     }
+
+    fn retained_records(
+        &self,
+    ) -> &std::collections::VecDeque<bacnet_types::constructed::BACnetAuditLogRecordResult> {
+        static EMPTY: std::collections::VecDeque<
+            bacnet_types::constructed::BACnetAuditLogRecordResult,
+        > = std::collections::VecDeque::new();
+        &EMPTY
+    }
 }
 
 struct SpyAuditObject {

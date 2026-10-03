@@ -113,7 +113,10 @@ where
             break;
         }
         let mut item = BytesMut::new();
-        encode_item(&mut item, &selected.items[index]).map_err(ReadRangeFailure::Service)?;
+        selected
+            .items
+            .encode_with(index, &mut item, &mut encode_item)
+            .map_err(ReadRangeFailure::Service)?;
         let Some(bytes) = accepted_bytes.checked_add(item.len()) else {
             break;
         };

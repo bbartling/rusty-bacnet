@@ -38,7 +38,7 @@ fn page(
 fn directional_pages_preserve_sparse_wrapped_resident_identity() {
     let items = unsigned_items(&[10, 20, 30, 40, 50]);
     let ids = vec![
-        identity(u32::MAX, 1),
+        identity(u64::from(u32::MAX), 1),
         identity(1, 2),
         identity(255, 3),
         identity(65536, 4),
@@ -65,7 +65,8 @@ fn directional_pages_preserve_sparse_wrapped_resident_identity() {
                 };
                 let n = cap.min(4);
                 let expected = if backwards { 4 - n..4 } else { 1..1 + n };
-                let first = (kind != 0).then(|| [u32::MAX, 1, 255, 65536, 9][expected.start]);
+                let first =
+                    (kind != 0).then(|| [u64::from(u32::MAX), 1, 255, 65536, 9][expected.start]);
                 let ack = page(&db, oid, Some(range), cap, 16384).unwrap();
                 assert_ack(
                     &ack,
@@ -345,7 +346,7 @@ async fn read_range_client_pages_all_matches_forward_and_backward() {
                 .await
                 .unwrap();
             assert!(ack.item_count > 0 && ack.item_count <= 2);
-            remaining -= ack.item_count;
+            remaining -= u64::from(ack.item_count);
             assert_eq!(ack.result_flags.2, remaining > 0);
             pieces.push(ack.item_data);
         }

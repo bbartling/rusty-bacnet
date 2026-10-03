@@ -32,12 +32,13 @@ fn decode_application<'a>(
     Ok((&data[pos..end], end))
 }
 
-fn decode_application_u32(data: &[u8], offset: usize, field: &str) -> Result<(u32, usize), Error> {
+fn decode_application_unsigned(
+    data: &[u8],
+    offset: usize,
+    field: &str,
+) -> Result<(u64, usize), Error> {
     let (content, end) = decode_application(data, offset, tags::app_tag::UNSIGNED, field)?;
-    let value = primitives::decode_unsigned(content)?;
-    let value = u32::try_from(value)
-        .map_err(|_| Error::decoding(offset, format!("{field} exceeds u32")))?;
-    Ok((value, end))
+    Ok((primitives::decode_unsigned(content)?, end))
 }
 
 fn decode_count(data: &[u8], offset: usize, field: &str) -> Result<(i32, usize), Error> {
@@ -81,16 +82,19 @@ pub struct ReadRangeRequest {
 pub enum RangeSpec {
     /// By position: reference_index, count.
     ByPosition {
-        /// One-based list index (first item is 1) of the item that anchors the range.
-        reference_index: u32,
+        /// One-based list index (first item is 1) of the item that anchors the range. Unsigned64
+        /// because this stack hosts Audit Log, whose Total_Record_Count is Unsigned64
+        /// (Clause 15.8.1.1.4.1.1).
+        reference_index: u64,
         /// Signed INTEGER16 item count, never zero. Positive reads forward from the reference
         /// and negative reads backward, ending at the reference.
         count: i32,
     },
     /// By sequence number: reference_seq, count.
     BySequenceNumber {
-        /// Sequence number of the item that anchors the range.
-        reference_seq: u32,
+        /// Sequence number of the item that anchors the range. Unsigned64 for the same reason as
+        /// `reference_index` (Clause 15.8.1.1.4.2.1).
+        reference_seq: u64,
         /// Signed INTEGER16 item count, never zero. Positive reads forward from the reference
         /// and negative reads backward, ending at the reference.
         count: i32,
@@ -167,7 +171,7 @@ impl ReadRangeRequest {
                     count,
                 } => {
                     tags::encode_opening_tag(buf, 3);
-                    primitives::encode_app_unsigned(buf, *reference_index as u64);
+                    primitives::encode_app_unsigned(buf, *reference_index);
                     primitives::encode_app_signed(buf, *count);
                     tags::encode_closing_tag(buf, 3);
                 }
@@ -176,7 +180,7 @@ impl ReadRangeRequest {
                     count,
                 } => {
                     tags::encode_opening_tag(buf, 6);
-                    primitives::encode_app_unsigned(buf, *reference_seq as u64);
+                    primitives::encode_app_unsigned(buf, *reference_seq);
                     primitives::encode_app_signed(buf, *count);
                     tags::encode_closing_tag(buf, 6);
                 }
@@ -244,8 +248,11 @@ impl ReadRangeRequest {
             if tag.is_opening_tag(3) {
                 // byPosition
                 let (content, new_offset) = tags::extract_context_value(data, tag_end, 3)?;
-                let (reference_index, inner_offset) =
-                    decode_application_u32(content, 0, "ReadRange byPosition reference-index")?;
+                let (reference_index, inner_offset) = decode_application_unsigned(
+                    content,
+                    0,
+                    "ReadRange byPosition reference-index",
+                )?;
                 let (count, inner_offset) =
                     decode_count(content, inner_offset, "ReadRange byPosition count")?;
                 if inner_offset != content.len() {
@@ -262,8 +269,11 @@ impl ReadRangeRequest {
             } else if tag.is_opening_tag(6) {
                 // bySequenceNumber
                 let (content, new_offset) = tags::extract_context_value(data, tag_end, 6)?;
-                let (reference_seq, inner_offset) =
-                    decode_application_u32(content, 0, "ReadRange bySequenceNumber reference-seq")?;
+                let (reference_seq, inner_offset) = decode_application_unsigned(
+                    content,
+                    0,
+                    "ReadRange bySequenceNumber reference-seq",
+                )?;
                 let (count, inner_offset) =
                     decode_count(content, inner_offset, "ReadRange bySequenceNumber count")?;
                 if inner_offset != content.len() {
@@ -347,8 +357,9 @@ pub struct ReadRangeAck {
     pub item_count: u32,
     /// Raw item data (application-layer interprets content).
     pub item_data: Vec<u8>,
-    /// Optional first sequence number (context tag \[6\]).
-    pub first_sequence_number: Option<u32>,
+    /// Optional first sequence number (context tag \[6\]). Unsigned64, since a device holding
+    /// an Audit Log must accept and report its 64-bit sequence numbers (Clause 15.8.1.2.7).
+    pub first_sequence_number: Option<u64>,
 }
 
 impl ReadRangeAck {
@@ -382,7 +393,7 @@ impl ReadRangeAck {
         tags::encode_closing_tag(buf, 5);
         // [6] firstSequenceNumber (optional)
         if let Some(seq) = self.first_sequence_number {
-            primitives::encode_ctx_unsigned(buf, 6, seq as u64);
+            primitives::encode_ctx_unsigned(buf, 6, seq);
         }
     }
 
@@ -465,9 +476,9 @@ impl ReadRangeAck {
                     "ReadRange ACK first-sequence-number requires a nonzero item-count",
                 ));
             }
-            let (sequence_number, end) =
-                decode_context_u32(data, offset, 6, "ReadRange ACK first-sequence-number")?;
-            first_sequence_number = Some(sequence_number);
+            let (content, end) =
+                decode_context(data, offset, 6, "ReadRange ACK first-sequence-number")?;
+            first_sequence_number = Some(primitives::decode_unsigned(content)?);
             offset = end;
         }
         if offset != data.len() {

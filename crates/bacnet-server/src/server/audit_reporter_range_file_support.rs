@@ -38,7 +38,7 @@ impl Kind {
                 PropertyIdentifier::LOG_BUFFER,
                 None,
                 Some(RangeSpec::ByPosition {
-                    reference_index: start as u32,
+                    reference_index: u64::try_from(start).unwrap(),
                     count: count as i32,
                 }),
             )
