@@ -7,8 +7,8 @@
 //! The BACnetLIST concatenates elements with no wrapper, so the decoder reads
 //! one element at `offset` and returns the offset just past it.
 //!
-//! A subscription's recipient decodes through [`decode_recipient`](super::decode_recipient)
-//! and encodes through the same bound: an address MAC is at most
+//! A subscription's recipient decodes through [`decode_recipient`] and
+//! encodes through the same bound: an address MAC is at most
 //! `BACnetAddress::MAX_MAC_LEN` octets (#1124, #1156).
 
 use bacnet_types::constructed::BACnetEventNotificationSubscription;
