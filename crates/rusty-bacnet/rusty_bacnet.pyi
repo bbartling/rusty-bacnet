@@ -1120,6 +1120,28 @@ class AuditRecipientAddress(TypedDict):
 AuditRecipientInput = AuditRecipientDevice | AuditRecipientAddress
 
 
+class Destination(TypedDict):
+    """One Recipient_List destination (``BACnetDestination``) for
+    ``add_notification_forwarder(recipients=...)``.
+
+    Unknown keys, out-of-range values and malformed time tuples raise
+    ValueError; other wrong types raise TypeError. A key left out gives a
+    destination active every day, all day, for every transition, with
+    unconfirmed notifications.
+    """
+
+    recipient: AuditRecipientInput
+    process_identifier: int
+    # Bit n is BACnetDaysOfWeek bit n: 1 << 0 is Monday, 1 << 6 Sunday. Default 0x7F.
+    valid_days: NotRequired[int]
+    # (hour, minute, second, hundredths); defaults (0, 0, 0, 0) and (23, 59, 59, 99).
+    from_time: NotRequired[tuple[int, int, int, int]]
+    to_time: NotRequired[tuple[int, int, int, int]]
+    issue_confirmed_notifications: NotRequired[bool]
+    # Bit 0 to-offnormal, bit 1 to-fault, bit 2 to-normal. Default 0x07.
+    transitions: NotRequired[int]
+
+
 class AuditPropertyReference(TypedDict):
     property_identifier: PropertyIdentifier
     property_array_index: NotRequired[int | None]
@@ -2411,6 +2433,21 @@ class CovPolicy(TypedDict, total=False):
     max_notification_bytes_per_event: int
     max_confirmed_in_flight_per_peer: int
 
+class TimeSyncPolicy(TypedDict, total=False):
+    """BACnetServer(time_sync_policy=...) inbound clock limits, checked at construction; omitted keys keep their defaults."""
+    enabled: bool
+    source_restriction: list[tuple[int | None, bytes]] | None
+    max_step_ms: int | None
+    per_source_rate: tuple[float, int] | None
+    global_rate: tuple[float, int] | None
+    coalesce_window_ms: int
+    global_coalesce_window_ms: int
+    max_sources: int
+
+class ForwarderSaveCounters(TypedDict):
+    """One Notification Forwarder's Subscribed_Recipients save totals, saturating at 2**64-1."""
+    failed_saves: int
+
 class EventNotificationCounters(TypedDict):
     """Undelivered event notifications, zero at each start; independent u64 totals, saturating at 2**64-1."""
     notification_class_missing: int
@@ -2536,6 +2573,7 @@ class BACnetServer:
         sc_device_uuid: Optional[bytes | bytearray] = None,
         registered_network_port: Optional[int] = None,
         cov_policy: CovPolicy | None = None,
+        time_sync_policy: TimeSyncPolicy | None = None,
     ) -> None: ...
 
     # --- Analog objects ---
@@ -2576,12 +2614,21 @@ class BACnetServer:
         process_identifier_filter: Optional[int] = None,
         local_forwarding_only: bool = False,
         storage_path: Optional[str] = None,
+        *,
+        recipients: list[Destination] | None = None,
+        port_filter: list[tuple[int, bool]] | None = None,
     ) -> None:
         """Add a Notification Forwarder (Clause 12.51) that sends the event
         notifications this server receives on to its Recipient_List and
         Subscribed_Recipients. ``process_identifier_filter=None`` forwards every
         process identifier. With ``storage_path``, Subscribed_Recipients is kept
-        in that file across restarts."""
+        in that file across restarts.
+
+        ``recipients`` seeds Recipient_List in order; more than 32 destinations,
+        or an address MAC past 18 octets, raises BacnetProtocolError, as a
+        client's write would be refused. ``port_filter`` serves Port_Filter as
+        ``(port_id, enabled)`` pairs; the server receives through Port_ID 0.
+        Without it Port_Filter is absent."""
     def add_trend_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
     def add_trend_log_multiple(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
     def add_event_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
@@ -2708,7 +2755,23 @@ class BACnetServer:
     def add_life_safety_zone(self, instance: int, name: str) -> None: ...
 
     # --- Grouping/organization ---
-    def add_group(self, instance: int, name: str) -> None: ...
+    def add_group(
+        self,
+        instance: int,
+        name: str,
+        members: Optional[
+            list[tuple[ObjectIdentifier, list[tuple[PropertyIdentifier, Optional[int]]]]]
+        ] = None,
+    ) -> None:
+        """Group whose Present_Value is rebuilt from ``members`` on each read.
+
+        ``members`` has the ``read_property_multiple`` spec shape and the
+        endpoint ``add_group`` checks: a member with no properties, a property
+        identifier above 4194303, or one reporting a group's Present_Value
+        raises ValueError naming its position and the rule. Indexes outside
+        unsigned32 raise OverflowError.
+        """
+        ...
     def add_global_group(self, instance: int, name: str) -> None: ...
     def add_structured_view(self, instance: int, name: str) -> None: ...
 
@@ -3049,6 +3112,15 @@ class BACnetServer:
         because they exceed the local APDU size, and received_not_forwarded
         counts received event notifications no Notification Forwarder took.
         Fields are sampled independently. Raises
+        RuntimeError before start and after stop.
+        """
+        ...
+
+    def forwarder_save_counters(self) -> Awaitable[dict[int, ForwarderSaveCounters]]:
+        """Sample each Notification Forwarder's save counters, keyed by instance.
+
+        The totals belong to the objects: they count from registration, and
+        a forwarder without ``storage_path`` stays at zero. Raises
         RuntimeError before start and after stop.
         """
         ...

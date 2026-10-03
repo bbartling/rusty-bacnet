@@ -17,7 +17,7 @@ These documents describe the **current development checkout**, including unrelea
 
 ## Policy and resource contracts
 
-- [Mutation authorization](mutation-policy.md) and [Device Communication Control](dcc-policy.md).
+- [Mutation authorization](mutation-policy.md), [Device Communication Control](dcc-policy.md) and [time synchronization](time-sync-policy.md).
 - [Request admission](request-admission.md), [ReadPropertyMultiple budgets](rpm-budget.md), [ReadRange budgets](read-range-budget.md).
 - [AtomicReadFile](atomic-read-file-budget.md), [AtomicWriteFile](atomic-write-file-budget.md), [alarm summary](alarm-summary-budget.md), [enrollment summary](enrollment-summary-budget.md) and [event information](event-information-budget.md) response budgets.
 - [Target Audit Reporters](target-audit-reporters.md), [Device Audit recipient](device-audit-recipient.md), [delayed target Audit](delayed-target-audit.md) and [Audit Log forwarding](audit-log-forwarding.md).

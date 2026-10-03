@@ -3985,7 +3985,7 @@ The server automatically dispatches:
 **Unconfirmed:**
 - WhoIs / IAm
 - WhoHas / IHave
-- TimeSynchronization, UTCTimeSynchronization
+- TimeSynchronization, UTCTimeSynchronization (opt-in source, step and rate limits: [time synchronization policy](time-sync-policy.md))
 - UnconfirmedTextMessage
 - UnconfirmedEventNotification (offered to the Notification Forwarder objects)
 - UnconfirmedAuditNotification (explicit sink and distinct fail-closed authorizer; no response or duplicate tracking)

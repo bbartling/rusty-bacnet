@@ -1,13 +1,17 @@
 //! The constructor's keyword-only `cov_policy` dict, read into the Rust
 //! `CovPolicy` the server starts with (#1100).
 
-use pyo3::exceptions::{PyOverflowError, PyTypeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_server::cov::{CovPolicy, CovRecipient};
 use bacnet_types::MacAddr;
+
+use super::policy_dict::{entries, unexpected_key};
+
+const POLICY: &str = "cov_policy";
 
 /// Read `cov_policy` into a validated `CovPolicy`.
 ///
@@ -35,10 +39,7 @@ pub(super) fn cov_policy(dict: Option<&Bound<'_, PyDict>>) -> PyResult<CovPolicy
         mut max_notification_bytes_per_event,
         mut max_confirmed_in_flight_per_peer,
     } = CovPolicy::default();
-    for (key, value) in dict.into_iter().flat_map(|dict| dict.iter()) {
-        let key: String = key
-            .extract()
-            .map_err(|_| PyTypeError::new_err("cov_policy keys must be str"))?;
+    for (key, value) in entries(POLICY, dict)? {
         match key.as_str() {
             "max_subscriptions_global" => max_subscriptions_global = field(&key, &value)?,
             "max_subscriptions_per_peer" => max_subscriptions_per_peer = field(&key, &value)?,
@@ -66,11 +67,7 @@ pub(super) fn cov_policy(dict: Option<&Bound<'_, PyDict>>) -> PyResult<CovPolicy
             "max_confirmed_in_flight_per_peer" => {
                 max_confirmed_in_flight_per_peer = field(&key, &value)?;
             }
-            _ => {
-                return Err(PyTypeError::new_err(format!(
-                    "cov_policy got an unexpected key '{key}'"
-                )))
-            }
+            _ => return Err(unexpected_key(POLICY, &key)),
         }
     }
     let policy = CovPolicy {
@@ -104,21 +101,9 @@ fn recipient(network: Option<u16>, mac: &[u8]) -> CovRecipient {
     }
 }
 
-/// Extract one value, naming its key in a TypeError or OverflowError while
-/// keeping the exception type.
+/// Extract one `cov_policy` value; see [`super::policy_dict::field`].
 fn field<'py, T: FromPyObjectOwned<'py>>(key: &str, value: &Bound<'py, PyAny>) -> PyResult<T> {
-    value.extract::<T>().map_err(|error| {
-        let py = value.py();
-        let error: PyErr = error.into();
-        let message = format!("cov_policy['{key}']: {}", error.value(py));
-        if error.is_instance_of::<PyOverflowError>(py) {
-            PyOverflowError::new_err(message)
-        } else if error.is_instance_of::<PyTypeError>(py) {
-            PyTypeError::new_err(message)
-        } else {
-            error
-        }
-    })
+    super::policy_dict::field(POLICY, key, value)
 }
 
 #[cfg(test)]

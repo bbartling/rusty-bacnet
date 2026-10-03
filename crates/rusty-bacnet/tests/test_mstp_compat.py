@@ -77,7 +77,7 @@ SERVER_KEYWORD_ONLY = ["mutation_policy", "dcc_policy", "dcc_source_restriction"
     "read_range_max_returned_items", "read_range_max_service_ack_bytes",
     "event_information_max_objects", "event_information_max_returned_summaries",
     "event_information_max_service_ack_bytes",
-    "sc_device_uuid", "registered_network_port", "cov_policy",
+    "sc_device_uuid", "registered_network_port", "cov_policy", "time_sync_policy",
 ]
 SUPPORTED_BAUD_RATES = (9_600, 19_200, 38_400, 57_600, 76_800, 115_200)
 SUPPORTED_BAUD_ERROR = (

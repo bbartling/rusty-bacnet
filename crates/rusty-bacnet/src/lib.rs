@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 mod client;
 mod endpoint;
 mod errors;
+mod group_members;
 mod hub;
 mod hub_bindings;
 mod mstp_py;

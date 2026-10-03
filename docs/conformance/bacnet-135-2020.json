@@ -536,7 +536,8 @@
     "crates/bacnet-server/src/server/dcc_timer.rs::replace",
     "crates/bacnet-server/src/cov/policy.rs::CovPolicy::validate",
     "crates/bacnet-server/src/cov/policy.rs::CovPolicy::is_peer_reserved",
-    "crates/bacnet-server/src/cov/identity.rs::CovRecipient::from_endpoint"
+    "crates/bacnet-server/src/cov/identity.rs::CovRecipient::from_endpoint",
+    "crates/rusty-bacnet/src/server/server_methods/time_sync_policy.rs::time_sync_policy"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_defaults_and_all_builders_validate_before_start_or_dial",
@@ -548,7 +549,10 @@
     "crates/bacnet-server/src/server/requests/dcc_tests.rs::dcc_source_exact_full_bytes_and_fail_closed_wire",
     "crates/bacnet-server/src/cov/policy_tests.rs::cov_policy_validate_accepts_defaults_zero_reservations_and_clamped_relations",
     "crates/bacnet-server/src/cov/policy_tests.rs::cov_policy_reserved_macs_hold_to_the_bacnet_address_bound",
-    "crates/bacnet-server/src/cov/tests.rs::is_peer_reserved_checks_canonical_peer_identity"
+    "crates/bacnet-server/src/cov/tests.rs::is_peer_reserved_checks_canonical_peer_identity",
+    "crates/rusty-bacnet/src/server/server_methods/time_sync_policy_tests.rs::every_time_sync_policy_key_reaches_its_field",
+    "crates/rusty-bacnet/tests/test_time_sync_policy.py::TimeSyncPolicyWireTests::test_an_allowlist_takes_only_its_listed_sources",
+    "crates/rusty-bacnet/tests/test_time_sync_policy.py::TimeSyncPolicyWireTests::test_without_a_policy_every_valid_request_sets_the_clock"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/time_sync_policy_tests.rs::exact_sources_and_configured_empty_do_not_fall_back_to_router",
@@ -562,12 +566,17 @@
     "crates/bacnet-server/src/server/dcc_policy_tests.rs::dcc_source_denied_enable_still_occupies_recovery",
     "crates/bacnet-server/src/cov/policy_tests.rs::cov_policy_validate_rejects_zero_limits_and_unmatchable_reservations",
     "crates/bacnet-server/src/cov/policy_tests.rs::cov_policy_reserved_macs_hold_to_the_bacnet_address_bound",
-    "crates/bacnet-server/src/cov/policy_tests.rs::invalid_cov_policy_fails_start_before_transport"
+    "crates/bacnet-server/src/cov/policy_tests.rs::invalid_cov_policy_fails_start_before_transport",
+    "crates/rusty-bacnet/src/server/server_methods/time_sync_policy_tests.rs::invalid_time_sync_policy_raises_the_constructor_exception_types",
+    "crates/rusty-bacnet/tests/test_time_sync_policy.py::TimeSyncPolicyConstructorTests::test_the_rust_limits_are_checked_at_construction",
+    "crates/rusty-bacnet/tests/test_time_sync_policy.py::TimeSyncPolicyWireTests::test_a_step_past_the_cap_is_refused"
    ],
    "benchmarks": [],
    "public_claims": [
     "docs/dcc-policy.md#optional-exact-source-restriction",
-    "docs/python-api.md#cov-policy"
+    "docs/python-api.md#cov-policy",
+    "docs/time-sync-policy.md#what-is-checked-in-order",
+    "docs/python-api.md#time-synchronization-policy"
    ],
    "notes": [
     "Inbound TimeSynchronization and UTCTimeSynchronization are decoded, then checked against `TimeSyncPolicy`. The default sets the clock on every valid request; a refused one leaves the clock and the `on_time_sync` observer untouched.",
@@ -576,10 +585,7 @@
     "Entries in `TimeSyncSourceRestriction`, `DccSourceRestriction` and the `CovPolicy` reserved lists hold 1 to `BACnetAddress::MAX_MAC_LEN` (18) octets and routed networks 1 to 65534; others fail with `Error::Encoding` before startup.",
     "A routed source matches only a routed entry, by network and full address, never by the router's MAC; a direct entry matches only unrouted traffic. An empty time-sync or DCC list denies all; the DCC list needs `DccPolicy::RequirePassword`."
    ],
-   "gaps": [
-    "#1292: Python servers cannot set `TimeSyncPolicy` and run the default",
-    "#1292: No user guide section documents `TimeSyncPolicy`; only its rustdoc does"
-   ]
+   "gaps": []
   },
   {
    "id": "BACNET-15-ENDPOINT-DEVICE-WRITE",
@@ -2274,7 +2280,9 @@
     "crates/bacnet-server/src/handlers/read_property.rs::PropertyPlan",
     "crates/bacnet-endpoint/src/session.rs::SessionConfig",
     "crates/rusty-bacnet/src/endpoint/common.rs::parse_read_work_limit",
-    "crates/rusty-bacnet/src/endpoint/common.rs::pending_group"
+    "crates/rusty-bacnet/src/endpoint/common.rs::pending_group",
+    "crates/rusty-bacnet/src/group_members.rs::members",
+    "crates/rusty-bacnet/src/group_members.rs::group"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{property_references_encode_and_decode_with_and_without_an_index,read_access_specifications_decode_one_element_at_an_offset}",
@@ -2284,7 +2292,8 @@
     "crates/bacnet-server/src/handlers/tests/read_rpm/group.rs::rpm_group_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/server/group_present_value_wire_tests.rs::group_present_value_bip_wire_rebuilds_from_members",
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::{group_members_read_the_live_device_cov_lists_through_rp_readrange_and_local_reads,group_members_read_the_live_device_cov_lists_through_rpm}",
-    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/snapshot_plan.rs::{reads_whose_plan_names_no_device_cov_list_take_no_snapshot,a_read_whose_plan_names_a_device_cov_list_takes_one_snapshot}"
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/snapshot_plan.rs::{reads_whose_plan_names_no_device_cov_list_take_no_snapshot,a_read_whose_plan_names_a_device_cov_list_takes_one_snapshot}",
+    "crates/rusty-bacnet/tests/test_server_group_members.py::ServerGroupWireTests::test_present_value_is_served_one_result_per_member"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{malformed_property_references_are_refused,malformed_read_access_specifications_are_refused}",
@@ -2298,7 +2307,9 @@
     "crates/rusty-bacnet/tests/test_endpoint_read_work_limit.py::ReadWorkLimitWireTests::test_group_read_over_the_limit_aborts_out_of_resources",
     "crates/rusty-bacnet/tests/test_endpoint_read_work_limit.py::ReadWorkLimitConstructorTests::test_default_keyword_only_stub_and_range",
     "crates/rusty-bacnet/tests/test_endpoint_read_work_limit.py::EndpointGroupRegistrationTests::test_members_are_validated_when_added",
-    "crates/rusty-bacnet/tests/test_endpoint.py::ScEndpointHubTests::test_sc_endpoint_applies_its_read_work_limit"
+    "crates/rusty-bacnet/tests/test_endpoint.py::ScEndpointHubTests::test_sc_endpoint_applies_its_read_work_limit",
+    "crates/rusty-bacnet/tests/test_server_group_members.py::ServerGroupRegistrationTests::test_members_are_validated_when_added",
+    "crates/rusty-bacnet/tests/test_server_group_members.py::ServerGroupWireTests::test_rpm_max_result_elements_limits_a_group_read"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2309,7 +2320,8 @@
     "CHANGELOG.md Unreleased Added entry for #1250 (Python endpoint read work limit and Groups), from changelog.d/1250-python-read-work-limit.md",
     "CHANGELOG.md Unreleased Changed entry for #1250 (GroupObject::add_member refusal reasons), from changelog.d/1250-group-member-refusal.md",
     "docs/python-api.md#endpoint-groups-and-the-read-work-limit Python endpoint add_group and read_work_limit",
-    "docs/rust-api.md#constructed-property-framing Group List_Of_Group_Members and Present_Value"
+    "docs/rust-api.md#constructed-property-framing Group List_Of_Group_Members and Present_Value",
+    "docs/python-api.md#groups--views Python BACnetServer add_group members"
    ],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1134, found in #1107). Breaking pre-1.0 wire and Rust API changes. Table 12-17, Clause 12.14 and the Clause 21 productions were read as page images. Before, List_Of_Group_Members went out as bare application-tagged object identifiers with no properties, and Present_Value as whatever values the application had stored, which named no member and could not report a failed read.",
@@ -2324,7 +2336,8 @@
     "The shared endpoint has no ReadPropertyMultiple budget: its ReadProperty charges a Group's Present_Value to SessionConfig::read_work_limit (default 256, zero refused), also set with the endpoint builders' read_work_limit, and aborts with OUT_OF_RESOURCES past it (#1215).",
     "Python BipEndpoint, ScEndpoint and MstpEndpoint take a keyword-only read_work_limit (default 256; zero raises ValueError) and register Groups with add_group, whose members use the read_property_multiple spec shape and pass through GroupObject::add_member (#1250).",
     "GroupObject::add_member also refuses a property identifier above 4194303, and returns a GroupMemberRefusal naming the broken rule, which converts to PROPERTY / VALUE_OUT_OF_RANGE; Python add_group puts that rule and the member's position in its ValueError.",
-    "PropertyReference and ReadAccessSpecification moved from bacnet-services into bacnet_types::constructed, with their codecs as free functions in bacnet_encoding::constructed, so the Group stores them the way other objects store their Clause 21 types; the ReadPropertyMultiple, COV and Audit codecs call the same functions. Not covered: writable List_Of_Group_Members; the Audit_Level, Auditable_Operations, Tags and profile rows."
+    "PropertyReference and ReadAccessSpecification moved from bacnet-services into bacnet_types::constructed, with their codecs as free functions in bacnet_encoding::constructed, so the Group stores them the way other objects store their Clause 21 types; the ReadPropertyMultiple, COV and Audit codecs call the same functions. Not covered: writable List_Of_Group_Members; the Audit_Level, Auditable_Operations, Tags and profile rows.",
+    "Python BACnetServer.add_group takes the endpoint owners' members through the same group_members conversion and checks, and rpm_max_result_elements limits a read of the Group's Present_Value."
    ]
   },
   {
@@ -3182,7 +3195,8 @@
     "crates/bacnet-server/src/handlers/read_range_items.rs::FramedElement",
     "crates/bacnet-objects/src/notification_forwarder/persistence.rs::SubscribedRecipientsPersistence",
     "crates/bacnet-objects/src/notification_forwarder/persistence.rs::FileSubscribedRecipientsPersistence",
-    "crates/bacnet-objects/src/notification_forwarder/mod.rs::NotificationForwarderObject::with_persistence"
+    "crates/bacnet-objects/src/notification_forwarder/mod.rs::NotificationForwarderObject::with_persistence",
+    "crates/rusty-bacnet/src/server/server_methods/notification_forwarder.rs::forwarder_save_counters"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/event_notification_subscription.rs::event_notification_subscription_round_trips_golden_elements",
@@ -3232,13 +3246,15 @@
     "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::subscribed_recipients_write_that_cannot_be_saved_is_refused",
     "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::subscribed_recipients_saved_out_of_range_refuses_the_forwarder",
     "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::file_persistence_round_trips_and_refuses_another_objects_file",
-    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::a_failed_save_is_counted_and_retried_a_minute_later"
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::a_failed_save_is_counted_and_retried_a_minute_later",
+    "crates/rusty-bacnet/tests/test_notification_forwarder.py::NotificationForwarderServerTests::test_a_failed_save_is_counted"
    ],
    "benchmarks": [],
    "public_claims": [
     "docs/rust-api.md#constructed-property-framing",
     "docs/rust-api.md#bacnetobject-trait BACnetObject Trait list services",
-    "CHANGELOG.md #1049"
+    "CHANGELOG.md #1049",
+    "docs/python-api.md#forwarder_save_counters---dictint-forwardersavecounters"
    ],
    "notes": [
     "The bundled NotificationForwarderObject keeps the list in bacnet_objects::subscribed_recipients::SubscribedRecipients. An application's own type-51 object can hold one too, and the server's list services and ReadRange edit and page the list of any such object that serves it as framed ApplicationData.",
@@ -3256,7 +3272,8 @@
     "Binding a monotonic clock keeps the time each entry has left, so a list restored before the object joins a database lapses on time.",
     "An entry written with the same recipient, process and confirmation flag, and with the minutes it reads now or one more, keeps its deadline; the one more covers a minute boundary between the handler's read and its write. Any other Time Remaining restarts the lifetime.",
     "Between writes the operation task, which calls the object each second, saves the list when an entry lapses and at most once a minute while the served minutes differ from the saved copy. A saved entry so carries at most about a minute more than it had left, and repeated restarts still run it out.",
-    "A failed save logs a warning, counts in ForwarderSaveCounters::failed_saves (a handle shared with the object, from save_counters) and is retried a minute later."
+    "A failed save logs a warning, counts in ForwarderSaveCounters::failed_saves (a handle shared with the object, from save_counters) and is retried a minute later.",
+    "Python BACnetServer.forwarder_save_counters() returns each forwarder's failed_saves by instance while the server runs; the totals count from registration."
    ]
   },
   {
@@ -3274,7 +3291,9 @@
     "crates/bacnet-server/src/server/requests/unconfirmed.rs",
     "crates/bacnet-services/src/alarm_event/event_forwarding.rs::ForwardedEventNotification",
     "crates/bacnet-encoding/src/constructed/port_permission.rs",
-    "crates/bacnet-network/src/layer.rs::ReceivedApdu"
+    "crates/bacnet-network/src/layer.rs::ReceivedApdu",
+    "crates/rusty-bacnet/src/server/server_methods/notification_forwarder.rs::add_notification_forwarder",
+    "crates/rusty-bacnet/src/types/destination.rs::destination"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::forwarder_sends_to_its_recipient_list_and_its_subscriptions",
@@ -3295,7 +3314,10 @@
     "crates/bacnet-integration-tests/tests/server/notification_forwarder.rs::forwarder_relays_a_notification_between_clients_over_the_wire",
     "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_destination_two_chained_forwarders_name_gets_one_copy",
     "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_bound_device_on_the_receiving_network_gets_no_copy_of_a_broadcast",
-    "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_broadcast_notification_goes_confirmed_only_off_the_receiving_network"
+    "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_broadcast_notification_goes_confirmed_only_off_the_receiving_network",
+    "crates/rusty-bacnet/tests/test_notification_forwarder.py::NotificationForwarderServerTests::test_seeded_recipient_list_and_port_filter_read_back",
+    "crates/rusty-bacnet/src/types/destination_tests.rs::required_keys_alone_give_an_always_active_destination",
+    "crates/rusty-bacnet/src/types/destination_tests.rs::every_key_reaches_its_member"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::out_of_service_forwarder_takes_nothing",
@@ -3310,7 +3332,9 @@
     "crates/bacnet-encoding/src/constructed/tests/port_permission.rs::port_permission_refuses_malformed_elements",
     "crates/bacnet-server/src/server/event_forwarding_tests.rs::a_forwarded_copy_whose_send_fails_is_counted_once",
     "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_received_notification_no_forwarder_takes_is_counted",
-    "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_copy_longer_than_the_local_apdu_capacity_is_dropped_and_counted"
+    "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_copy_longer_than_the_local_apdu_capacity_is_dropped_and_counted",
+    "crates/rusty-bacnet/tests/test_notification_forwarder.py::NotificationForwarderRegistrationTests::test_refused_seeds_leave_nothing_pending",
+    "crates/rusty-bacnet/src/types/destination_tests.rs::malformed_destinations_raise_value_or_type_errors"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3330,7 +3354,6 @@
     "#1257: a ConfirmedEventNotification is treated as unicast, since confirmed requests carry no broadcast addressing.",
     "#1258: a recipient address that names the local network by its number is treated as remote by the loop rules.",
     "#1259: fan-out across several forwarders, and repeats of a confirmed notification, are bounded only by each list's cap.",
-    "#1260: Python cannot set Recipient_List or Port_Filter locally.",
     "#1270: Subscribed_Recipients saves run while the ObjectDatabase write lock is held."
    ]
   },

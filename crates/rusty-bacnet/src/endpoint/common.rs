@@ -11,7 +11,6 @@ use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::audit::ObjectAuditPolicy;
 use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::group::GroupObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::ReadAccessSpecification;
 use bacnet_types::enums::{ErrorClass, ErrorCode, Segmentation, ServiceSupported};
@@ -19,7 +18,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::{PyErr, PyResult};
 
 use crate::errors::to_py_err;
-use crate::types::{py_to_rpm_specs, PyReadAccessSpec, PySegmentation};
+use crate::group_members;
+use crate::types::{PyReadAccessSpec, PySegmentation};
 
 /// Parse an IPv4 string at construction time (ValueError before bind).
 pub(crate) fn parse_ipv4(value: &str, field: &str) -> PyResult<Ipv4Addr> {
@@ -234,7 +234,7 @@ impl PendingObject {
                 instance,
                 name,
                 members,
-            } => make_group(*instance, name, members),
+            } => Ok(Box::new(group_members::group(*instance, name, members)?)),
         }
     }
 }
@@ -327,37 +327,19 @@ pub(crate) fn make_binary_value(
 
 /// Validate an `add_group` call and keep its params for the pending set.
 ///
-/// `members` takes the `read_property_multiple` spec shape, so the binding
-/// reuses that conversion; `None` is a Group with no members.
+/// `members` takes the `read_property_multiple` spec shape; the shared
+/// [`crate::group_members`] conversion checks it the way `BACnetServer`'s
+/// `add_group` does.
 pub(crate) fn pending_group(
     instance: u32,
     name: &str,
     members: Option<Vec<PyReadAccessSpec>>,
 ) -> PyResult<PendingObject> {
-    let members = py_to_rpm_specs(members.unwrap_or_default());
-    make_group(instance, name, &members)?;
+    let members = group_members::members(members);
+    group_members::group(instance, name, &members)?;
     Ok(PendingObject::Group {
         instance,
         name: name.to_string(),
         members,
     })
-}
-
-/// Create a pending Group object with its List_Of_Group_Members in order.
-///
-/// Each member goes through `GroupObject::add_member`. A refused member is a
-/// ValueError naming its position and the rule it breaks: no properties, a
-/// property identifier past 22 bits, or another group's Present_Value.
-fn make_group(
-    instance: u32,
-    name: &str,
-    members: &[ReadAccessSpecification],
-) -> PyResult<Box<dyn BACnetObject>> {
-    let mut object = GroupObject::new(instance, name).map_err(to_py_err)?;
-    for (position, member) in members.iter().enumerate() {
-        object.add_member(member.clone()).map_err(|refusal| {
-            PyValueError::new_err(format!("group member {position}: {refusal}"))
-        })?;
-    }
-    Ok(Box::new(object))
 }
