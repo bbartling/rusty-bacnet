@@ -111,11 +111,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// # Cancellation
     ///
     /// Dropping the future once the write has committed keeps the write but
-    /// skips the COV and event work not yet done. A Command list or Channel
+    /// skips the COV and event work not yet done, and a Staging plan the
+    /// write queued is never carried out (#1367). A Command list or Channel
     /// distribution the write started and hadn't yet handed to its task ends
     /// as if none of its writes were made (#1324): In_Process FALSE with each
     /// command unsuccessful, or Write_Status FAILED. It ends at once, or as
-    /// soon as the database is free, without `stop()`.
+    /// soon as the database is free, without `stop()`. A future dropped
+    /// outside a Tokio runtime while the database is busy can't wait for it:
+    /// a warning is logged and the object stays busy.
     ///
     /// [`WriteProperty`]: bacnet_services::write_property::WritePropertyRequest
     pub async fn write_local(

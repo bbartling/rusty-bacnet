@@ -113,8 +113,11 @@ impl RunHost for Unattached<'_> {
         };
         super::admit(self, run, runs, |runs| {
             runs.hand_over(|run| {
-                // The receiver lives as long as this host.
-                let _ = self.started.send(run);
+                // The receiver lives as long as this host, but a run it
+                // refuses still ends rather than going unowned.
+                if let Err(refused) = self.started.send(run) {
+                    end_when_free(self.db, Unfinished::start(&refused.0));
+                }
             });
         })
         .await

@@ -123,12 +123,14 @@ impl TakenRuns {
 
 impl Drop for TakenRuns {
     fn drop(&mut self) {
+        let Some(database) = self.database.take() else {
+            // Runs only arrive through `take`, which brings their database.
+            debug_assert!(self.runs.is_empty(), "taken runs without a database");
+            return;
+        };
         if self.runs.is_empty() {
             return;
         }
-        let Some(database) = self.database.take() else {
-            return;
-        };
         let left: Vec<_> = self
             .runs
             .drain(..)

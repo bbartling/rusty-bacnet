@@ -2482,7 +2482,8 @@ write stays made, and the run, which hadn't reached its task yet, ends as if
 none of its writes were made: In_Process FALSE with every command
 unsuccessful, or a Channel's Write_Status FAILED with Reliability
 PROCESS_ERROR. It ends at once, or as soon as a database the application holds
-is free. The COV and event work the dropped call hadn't done yet is skipped.
+is free. The COV and event work the dropped call hadn't done yet is skipped
+(#1367).
 
 Whatever commits a Present_Value write owns the run it starts and finishes it,
 so no path leaves a Command in process (#1178). Without a server,

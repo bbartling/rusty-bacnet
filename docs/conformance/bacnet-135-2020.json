@@ -2562,7 +2562,7 @@
     "crates/bacnet-server/src/server/command_run_stop_tests.rs::{stop_during_a_post_delay_ends_the_run_with_what_it_made,stop_while_the_database_is_busy_ends_the_run_where_it_stood,run_no_task_starts_ends_at_once_as_unsuccessful,stop_during_a_channel_member_delay_ends_the_distribution_failed,stop_while_the_database_is_busy_ends_a_channel_distribution_failed,channel_run_no_task_starts_ends_at_once_failed,stop_ends_a_run_nothing_took,run_whose_write_panics_ends_with_its_unmade_commands_unsuccessful,stop_during_the_last_post_delay_ends_the_run_successful,run_whose_write_panics_while_the_database_is_busy_ends_where_it_stood}",
     "crates/bacnet-server/src/server/remote_write_answer_tests.rs::{remote_write_ignores_answers_from_another_peer_or_for_another_service,remote_write_error_reject_or_abort_ends_it_at_once_saying_why,remote_write_blocked_by_dcc_at_a_retry_ends_there_as_disabled}",
     "crates/bacnet-server/src/server/command_run_cancel_tests.rs::{write_local_dropped_after_its_commit_ends_the_command_run_unsuccessful,write_local_dropped_while_the_database_is_busy_ends_the_run_once_it_is_free}",
-    "crates/bacnet-server/src/command_lists/taken_tests.rs::{taken_runs_dropped_unstarted_end_at_once_as_if_nothing_was_written,taken_runs_dropped_while_the_database_is_busy_end_once_it_is_free,taken_runs_handed_over_belong_to_their_new_owner,a_dropped_run_ends_once_and_never_ends_its_objects_next_run}"
+    "crates/bacnet-server/src/command_lists/taken_tests.rs::{taken_runs_dropped_unstarted_end_at_once_as_if_nothing_was_written,taken_runs_dropped_while_the_database_is_busy_end_once_it_is_free,taken_runs_handed_over_belong_to_their_new_owner,an_owner_that_panics_part_way_leaves_the_runs_not_yet_handed_to_the_drop,a_dropped_run_ends_once_and_never_ends_its_objects_next_run}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2594,11 +2594,10 @@
     "A command naming another Device goes out as a confirmed WriteProperty, addressed from the device bindings only (a configured DeviceBinding or an I-Am under ten minutes old). No Who-Is is sent; an unbound device fails unsent.",
     "Remote write bounds: each attempt waits cov_retry_timeout_ms, silence earns up to three retries under one invoke ID, and an Error (BUSY included), Reject or Abort is final. Nothing is sent while DCC restricts initiation, a retry included.",
     "A remote write leases its invoke ID from the pool confirmed notifications use, and the lease names the peer and WriteProperty. No database guard is held while it is outstanding. tick_schedules, which has no network, fails remote commands.",
-    "stop() ends a cancelled run where it stood: In_Process FALSE, unmade commands FALSE, All_Writes_Successful TRUE only if every write was made and succeeded. Runs let go of while the database was busy, then ownerless ones, end once it is free.",
+    "stop() ends a cancelled run where it stood: In_Process FALSE, unmade commands FALSE, All_Writes_Successful TRUE only if every write was made and succeeded. Runs let go of while the database was busy, then ownerless ones, end once it is free. A write_local dropped after its commit ends the run it took but hadn't started as if no command was made, without stop().",
     "A run whose write panics ends the same way, its unmade commands FALSE, and its property subscribers hear of the end.",
     "A remote write's refusal reaches the run host with what the device said: the Error class and code, or the Reject or Abort reason. A Command keeps only pass or fail; a Channel member in another device goes through the same remote write path.",
-    "Python reads Action as lists of ActionCommand mappings with every key, Write_Successful included; add_command takes those mappings back and ignores write_successful, so a command starts FALSE.",
-    "A run is held from its take until its task or queue takes it up; a writer dropped in between, such as a write_local or WriteGroup cancelled after its commit, ends it as if none of its writes were made, without stop()."
+    "Python reads Action as lists of ActionCommand mappings with every key, Write_Successful included; add_command takes those mappings back and ignores write_successful, so a command starts FALSE."
    ],
    "gaps": [
     "#1322: a remote target with no fresh binding fails unsent; no targeted Who-Is is sent on a binding-cache miss"

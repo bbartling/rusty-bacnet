@@ -165,6 +165,26 @@ async fn taken_runs_handed_over_belong_to_their_new_owner() {
 }
 
 #[tokio::test]
+async fn an_owner_that_panics_part_way_leaves_the_runs_not_yet_handed_to_the_drop() {
+    let database = database();
+    let runs = write_and_take(&database).await;
+    let mut owned = Vec::new();
+    // The owner keeps CMD-1's run, then panics before CH-1's is handed over.
+    let handing = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runs.hand_over(|run| {
+            owned.push(run);
+            panic!("the owner fails after taking its first run");
+        })
+    }));
+    assert!(handing.is_err());
+    let db = database.try_read().unwrap();
+    assert_eq!(owned.len(), 1);
+    assert_eq!(owned[0].source, cmd1());
+    assert!(in_process(&db));
+    assert_eq!(write_status(&db), WriteStatus::FAILED);
+}
+
+#[tokio::test]
 async fn a_dropped_run_ends_once_and_never_ends_its_objects_next_run() {
     let database = database();
     let runs = write_and_take(&database).await;
