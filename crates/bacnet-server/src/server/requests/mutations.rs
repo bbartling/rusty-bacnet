@@ -133,6 +133,12 @@ impl Request<'_> {
         }) {
             return self.error::<T>(&error);
         }
+        // A write the object saves first saves here, without the guard.
+        let staged = durable_writes::stage(
+            db,
+            durable_writes::DurableTarget::write_property(&self.req.service_request),
+        )
+        .await;
         let (result, exact_changes, plans, schedule_cov) = {
             let mut db = db.write().await;
             let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_write_property(
@@ -147,6 +153,7 @@ impl Request<'_> {
                 Some(&source),
                 self.command_origin,
             );
+            staged.release(&mut db);
             let changes = result
                 .as_ref()
                 .map(|oid| snapshots.changes(&db, std::slice::from_ref(oid)))
@@ -216,6 +223,18 @@ impl Request<'_> {
             command_runs,
             timed_revisits,
         } = effects;
+        // Attempts the objects save first save here, without the guard. That
+        // needs each attempt allowed before the handler reaches it, which only
+        // a permissive policy with no authorizer promises; otherwise those
+        // attempts save in place.
+        let targets = if self.config.mutation_policy == MutationPolicy::Permissive
+            && self.config.mutation_authorizer.is_none()
+        {
+            durable_writes::DurableTarget::write_property_multiple(&self.req.service_request)
+        } else {
+            Vec::new()
+        };
+        let staged = durable_writes::stage(db, targets).await;
         let (outcome, exact_changes, plans, schedule_cov) = {
             let mut db = db.write().await;
             // Lock order: database, then a short table read. Each attempt is
@@ -236,6 +255,7 @@ impl Request<'_> {
                 Some(&source),
                 self.command_origin,
             );
+            staged.release(&mut db);
             let committed_oids = match &outcome {
                 handlers::WritePropertyMultipleOutcome::Success { committed_oids }
                 | handlers::WritePropertyMultipleOutcome::Error { committed_oids, .. } => {
@@ -508,6 +528,12 @@ impl Request<'_> {
         }) {
             return self.error::<T>(&error);
         }
+        // A list the object saves first saves here, without the guard.
+        let staged = durable_writes::stage(
+            db,
+            durable_writes::DurableTarget::list_element(&self.req.service_request, remove),
+        )
+        .await;
         let (result, schedule_cov) = {
             let mut db = db.write().await;
             let (result, written) = match handlers::handle_list_element_observed(
@@ -519,6 +545,7 @@ impl Request<'_> {
                 Ok(oid) => (Ok(()), Some(oid)),
                 Err(error) => (Err(error), None),
             };
+            staged.release(&mut db);
             audit.lifecycle_completed(&mut db, &result);
             let schedule_cov = match written {
                 Some(oid) => crate::schedule::reevaluate_written(&mut db, &[oid], cov_table).await,

@@ -579,6 +579,7 @@ pub use discovery::iam_request_for as discovery_iam_for_test;
 pub use discovery::{DiscoveryCounters, DiscoveryPolicy};
 pub(crate) use discovery::{DiscoveryLimiter, PreCheckDecision, WhoHasTarget};
 mod dispatch;
+mod durable_writes;
 mod event_delivery;
 mod event_enrollment_lifecycle;
 mod event_forwarding;

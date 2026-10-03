@@ -1,4 +1,5 @@
-//! Explicit, synchronous persistence for one AuditLog object.
+//! Explicit persistence for one AuditLog object. The object calls it from its
+//! writer thread, never under the database guard ([`crate::durable`]).
 
 use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
@@ -53,6 +54,8 @@ pub struct AuditLogSnapshot {
 }
 
 /// Application-owned persistence port for one AuditLog object.
+///
+/// The object calls it from its writer thread, one call at a time.
 pub trait AuditLogPersistence: Send + Sync {
     /// Load the newest valid compatible snapshot, or `None` if neither slot exists.
     fn load(&self, expected_object: ObjectIdentifier) -> Result<Option<AuditLogSnapshot>, Error>;
@@ -63,9 +66,11 @@ pub trait AuditLogPersistence: Send + Sync {
 
 /// Two-slot, versioned and checksummed file snapshot backend.
 ///
-/// Each commit fully writes and synchronizes one slot. This protects the
-/// previous valid slot from a failed commit, but does not provide multi-process
-/// coordination or stronger portable power-loss guarantees than `sync_all`.
+/// Each commit fully writes and synchronizes one slot, and the first commit to
+/// a slot also synchronizes its directory (on Unix; see
+/// [`durable`](crate::durable)). This protects the previous valid slot from a
+/// failed commit, but does not provide multi-process coordination or stronger
+/// portable power-loss guarantees than `sync_all`.
 #[derive(Clone, Debug)]
 pub struct FileAuditLogPersistence {
     slot_paths: [PathBuf; 2],
@@ -127,11 +132,12 @@ impl AuditLogPersistence for FileAuditLogPersistence {
             std::fs::create_dir_all(parent)?;
         }
 
-        let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                OpenOptions::new().write(true).truncate(true).open(path)?
-            }
+        let (mut file, created) = match OpenOptions::new().write(true).create_new(true).open(path) {
+            Ok(file) => (file, true),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => (
+                OpenOptions::new().write(true).truncate(true).open(path)?,
+                false,
+            ),
             Err(error) => return Err(error.into()),
         };
         if let Err(error) = file.write_all(&bytes) {
@@ -141,6 +147,11 @@ impl AuditLogPersistence for FileAuditLogPersistence {
         if let Err(error) = file.sync_all() {
             invalidate_failed_slot(&file);
             return Err(error.into());
+        }
+        // A slot this commit created exists only once its directory entry is
+        // durable too.
+        if created {
+            crate::durable::sync_parent_dir(path)?;
         }
         Ok(())
     }
