@@ -14,6 +14,7 @@ mod multiple_route;
 mod priority_array_writes;
 mod read_range;
 mod recipient_route;
+mod snapshot_plan;
 mod support;
 
 // Shares this suite's wire harness; Multiple contexts are a separate property.

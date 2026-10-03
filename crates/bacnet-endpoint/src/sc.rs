@@ -105,6 +105,15 @@ impl ScEndpointBuilder {
         self
     }
 
+    /// Sets the server role's read work limit (default 256): the result rows
+    /// one ReadProperty may expand, a Group's member rows included. See
+    /// [`SessionConfig::read_work_limit`]; zero fails the
+    /// session builds via [`EndpointSession::new`].
+    pub fn read_work_limit(mut self, limit: usize) -> Self {
+        self.session.read_work_limit = limit;
+        self
+    }
+
     /// Attaches the object database for the server responder.
     ///
     /// Build it from the same identity passed to

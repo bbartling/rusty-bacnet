@@ -199,7 +199,7 @@ fn request(oid: ObjectIdentifier, references: &[(P, Option<u32>)]) -> BytesMut {
 }
 
 fn assert_budget_parity(db: &ObjectDatabase, request: &[u8], legacy: &[u8], count: usize) {
-    use crate::handlers::rpm_budget::{handle_rpm_budgeted, RpmFailure};
+    use crate::handlers::{rpm_budget::handle_rpm_budgeted, ReadFailure};
     use crate::server::ReadPropertyMultipleBudget;
     let budget = ReadPropertyMultipleBudget {
         max_result_elements: count,
@@ -219,7 +219,7 @@ fn assert_budget_parity(db: &ObjectDatabase, request: &[u8], legacy: &[u8], coun
                 ..budget
             }
         ),
-        Err(RpmFailure::Work)
+        Err(ReadFailure::Work)
     ));
     assert_eq!(&prefix[..], b"prefix");
     assert!(matches!(
@@ -232,7 +232,7 @@ fn assert_budget_parity(db: &ObjectDatabase, request: &[u8], legacy: &[u8], coun
                 ..budget
             }
         ),
-        Err(RpmFailure::Bytes)
+        Err(ReadFailure::Bytes)
     ));
     assert_eq!(&prefix[..], b"prefix");
 }

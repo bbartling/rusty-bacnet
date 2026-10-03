@@ -2131,9 +2131,11 @@
     "crates/bacnet-server/src/handlers/group_present_value.rs",
     "crates/bacnet-server/src/handlers/rpm_budget.rs::plan",
     "crates/bacnet-server/src/handlers/rpm_budget.rs::plan_specs",
-    "crates/bacnet-server/src/handlers/rpm_budget.rs::Work",
-    "crates/bacnet-server/src/handlers/read_property.rs::active_cov_device",
-    "crates/bacnet-server/src/handlers/read_property.rs::active_cov_device_for_rpm"
+    "crates/bacnet-server/src/handlers/read_budget.rs::Work",
+    "crates/bacnet-server/src/handlers/rpm_budget.rs::RpmPlan",
+    "crates/bacnet-server/src/handlers/rpm_budget.rs::live_cov_selection",
+    "crates/bacnet-server/src/handlers/read_property.rs::PropertyPlan",
+    "crates/bacnet-endpoint/src/session.rs::SessionConfig"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{property_references_encode_and_decode_with_and_without_an_index,read_access_specifications_decode_one_element_at_an_offset}",
@@ -2142,20 +2144,24 @@
     "crates/bacnet-server/src/handlers/tests/read_rpm/group_present_value.rs::{group_present_value_holds_one_read_access_result_per_member,each_member_reads_as_read_property_multiple_reads_its_specification,group_present_value_is_rebuilt_on_each_read,read_range_pages_the_rebuilt_present_value}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/group.rs::rpm_group_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/server/group_present_value_wire_tests.rs::group_present_value_bip_wire_rebuilds_from_members",
-    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::{group_members_read_the_live_device_cov_lists_through_rp_readrange_and_local_reads,group_members_read_the_live_device_cov_lists_through_rpm}"
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::{group_members_read_the_live_device_cov_lists_through_rp_readrange_and_local_reads,group_members_read_the_live_device_cov_lists_through_rpm}",
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/snapshot_plan.rs::{reads_whose_plan_names_no_device_cov_list_take_no_snapshot,a_read_whose_plan_names_a_device_cov_list_takes_one_snapshot}"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{malformed_property_references_are_refused,malformed_read_access_specifications_are_refused}",
     "crates/bacnet-objects/src/group/group_members_tests.rs::{add_member_refuses_a_member_that_reports_a_group_present_value,add_member_refuses_a_member_without_properties,group_lists_refuse_an_array_index}",
     "crates/bacnet-objects/src/group/metadata.rs::tests::property_metadata_group_trio_write_capabilities_match_dispatch",
     "crates/bacnet-server/src/handlers/tests/read_rpm/group_present_value.rs::member_rows_are_charged_to_the_rpm_work_budget_and_shared_between_groups",
-    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::group_present_value_past_the_work_limit_aborts_as_any_rpm_does"
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::group_present_value_past_the_work_limit_aborts_as_any_rpm_does",
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/snapshot_plan.rs::a_read_past_its_work_limit_aborts_before_sampling_the_cov_table",
+    "crates/bacnet-endpoint/src/read_work_limit_tests.rs::{endpoint_group_read_past_the_read_work_limit_aborts_out_of_resources,endpoint_read_work_limit_defaults_to_256_and_refuses_zero}"
    ],
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Fixed entry for #1134 (Group List_Of_Group_Members and Present_Value), from changelog.d/1134-group-datatypes.md",
     "CHANGELOG.md Unreleased Fixed entry for #1171 (Group members read the live Device COV lists), from changelog.d/1171-group-member-cov-lists.md",
     "CHANGELOG.md Unreleased Changed entry for #1172 (Group Present_Value charged to the request's work limit), from changelog.d/1172-group-present-value-work-limit.md",
+    "CHANGELOG.md Unreleased Added entry for #1215 (endpoint read work limit), from changelog.d/1215-endpoint-read-work-limit.md",
     "docs/rust-api.md#constructed-property-framing Group List_Of_Group_Members and Present_Value"
    ],
    "notes": [
@@ -2166,7 +2172,9 @@
     "Member rows use each object's own reader, so a custom Group object that lists a group's Present_Value gets that object's own answer instead of a recursive rebuild, and a custom Group whose List_Of_Group_Members doesn't decode as ReadAccessSpecifications fails the Present_Value read with PROPERTY / OTHER.",
     "Work policy (#1172): a Group may list any number of members, and the request that reads its Present_Value pays for them. Each member row, after ALL, REQUIRED and OPTIONAL expand, counts against the ReadPropertyMultiple work limit (ReadPropertyMultipleBudget::max_result_elements) together with the request's own rows, and is charged before any member is read.",
     "Several Groups in one ReadPropertyMultiple share that limit, and an RPM that would pass it is aborted with OUT_OF_RESOURCES before reading anything, as any RPM over its work limit is. ReadProperty and ReadRange have no work limit of their own, so a read of a Group's Present_Value through either gets the limit of an RPM that names only that property, its own row plus the member rows, and draws the same abort; BACnetServer::read_local uses the same limit and fails with Error::Abort (OUT_OF_RESOURCES).",
-    "The low-level handlers with no executor view have no limit. The rebuilt octets still count toward the RPM byte budget. The request pre-scan looks through the members of every Group whose Present_Value a request may read, by name or through ALL, REQUIRED or OPTIONAL on the Group, so a member naming the Device's Active_COV_Subscriptions or Active_COV_Multiple_Subscriptions, directly or through ALL on the Device or the Device wildcard, reads the request's one live snapshot, taken under the database guard and before the COV table guard (#1171).",
+    "The low-level handlers with no executor view have no limit. The rebuilt octets still count toward the RPM byte budget.",
+    "Every read plans its rows, a Group's member rows included and ALL, REQUIRED and OPTIONAL expanded, before it reads a value. A request samples the COV table once, under the database guard and before the COV table guard, only when a planned row names the Device's Active_COV_Subscriptions or Active_COV_Multiple_Subscriptions, directly or through the Device wildcard; a request past its work limit samples nothing (#1171, #1213).",
+    "The shared endpoint has no ReadPropertyMultiple budget: its ReadProperty charges a Group's Present_Value to SessionConfig::read_work_limit (default 256, zero refused), also set with the endpoint builders' read_work_limit, and aborts with OUT_OF_RESOURCES past it (#1215).",
     "PropertyReference and ReadAccessSpecification moved from bacnet-services into bacnet_types::constructed, with their codecs as free functions in bacnet_encoding::constructed, so the Group stores them the way other objects store their Clause 21 types; the ReadPropertyMultiple, COV and Audit codecs call the same functions. Not covered: writable List_Of_Group_Members; the Audit_Level, Auditable_Operations, Tags and profile rows."
    ]
   },
@@ -2577,7 +2585,7 @@
     "crates/bacnet-server/src/cov/prepare.rs::effective_increment",
     "crates/bacnet-server/src/server/requests/confirmed_response.rs::active_cov_snapshot",
     "crates/bacnet-server/src/handlers/read_property.rs::read_property_value",
-    "crates/bacnet-server/src/handlers/rpm_budget.rs::rpm_budgeted_request_observed",
+    "crates/bacnet-server/src/handlers/rpm_budget.rs::RpmPlan::read_observed",
     "crates/bacnet-server/src/server/requests/read_range.rs::response",
     "crates/bacnet-server/src/server/handles.rs::BACnetServer::read_local",
     "crates/bacnet-server/src/local_device.rs::selected_device",
@@ -2684,7 +2692,7 @@
      "crates/bacnet-server/src/cov/active/multiple.rs::ActiveCovMultipleSubscriptions::project",
      "crates/bacnet-server/src/cov/active.rs::LiveDeviceCov::resolve",
      "crates/bacnet-server/src/server/requests/confirmed_response.rs::active_cov_snapshot",
-     "crates/bacnet-server/src/handlers/read_property.rs::active_cov_device_for_rpm",
+     "crates/bacnet-server/src/handlers/rpm_budget.rs::live_cov_selection",
      "crates/bacnet-server/src/server/requests/read_range.rs::response",
      "crates/bacnet-server/src/handlers/cov.rs::handle_subscribe_cov_property_multiple_request_endpoint",
      "crates/bacnet-server/src/server/handles.rs::BACnetServer::read_local",
@@ -4368,7 +4376,7 @@
    "code_anchors": [
     "crates/bacnet-server/src/handlers/read_property.rs::handle_read_property_multiple",
     "crates/bacnet-server/src/handlers/read_property.rs::resolve_device_wildcard",
-    "crates/bacnet-server/src/handlers/rpm_budget.rs::rpm_budgeted_request_observed"
+    "crates/bacnet-server/src/handlers/rpm_budget.rs::RpmPlan::read_observed"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/rpm_wire_tests.rs::rpm_device_wildcard_bip_wire_returns_concrete_wrapper_and_value",

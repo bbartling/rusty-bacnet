@@ -27,6 +27,7 @@ fn session_config() -> SessionConfig {
         apdu_timeout_ms: 200,
         apdu_retries: 0,
         max_apdu_length: 480,
+        ..SessionConfig::default()
     }
 }
 

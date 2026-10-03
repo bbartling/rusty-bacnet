@@ -179,12 +179,23 @@ impl CovSubscriptionTable {
         selection: LiveCovSelection,
         now: Instant,
     ) -> LiveCovEntries {
+        #[cfg(test)]
+        self.live_samples
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         LiveCovEntries {
             active: selection.active.then(|| self.active_cov_entries(now)),
             multiple: selection
                 .multiple
                 .then(|| self.active_cov_multiple_entries(now)),
         }
+    }
+}
+
+#[cfg(test)]
+impl CovSubscriptionTable {
+    /// How many times a read request has sampled the live lists.
+    pub(crate) fn live_samples(&self) -> usize {
+        self.live_samples.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 

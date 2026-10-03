@@ -82,7 +82,7 @@ pub(super) fn assert_cases(
             }
         }
     }
-    use crate::handlers::rpm_budget::{handle_rpm_budgeted, RpmFailure};
+    use crate::handlers::{rpm_budget::handle_rpm_budgeted, ReadFailure};
     let members = group_member_rows(db, oid, cases.iter().map(|&(p, i, _)| (p, i)));
     let budget = crate::server::ReadPropertyMultipleBudget {
         max_result_elements: cases.len() + members,
@@ -102,7 +102,7 @@ pub(super) fn assert_cases(
                 ..budget
             }
         ),
-        Err(RpmFailure::Work)
+        Err(ReadFailure::Work)
     ));
     assert_eq!(&prefix[..], b"prefix");
     assert!(matches!(
@@ -115,7 +115,7 @@ pub(super) fn assert_cases(
                 ..budget
             }
         ),
-        Err(RpmFailure::Bytes)
+        Err(ReadFailure::Bytes)
     ));
     assert_eq!(&prefix[..], b"prefix");
 }

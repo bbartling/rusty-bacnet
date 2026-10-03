@@ -3,11 +3,12 @@ use crate::device_view::{DeviceExecution, DeviceReadContext};
 use bacnet_services::read_range::ReadRangeRequest;
 
 /// ReadRange under one database read guard, through the same executor Device
-/// view as ReadProperty (#1046). A request for the selected Device's
-/// `Active_COV_Subscriptions` or `Active_COV_Multiple_Subscriptions`, or for
-/// a Group's Present_Value whose members name them (#1171), samples the COV
-/// table once, after the database guard (the server lock order), so every
-/// item, flag and count of the page comes from one instant. The page follows
+/// view as ReadProperty (#1046). A request whose plan reads the selected
+/// Device's `Active_COV_Subscriptions` or `Active_COV_Multiple_Subscriptions`,
+/// by name or through the planned members of a Group's Present_Value (#1171,
+/// #1213), samples the COV table once, after the database guard (the server
+/// lock order), so every item, flag and count of the page comes from one
+/// instant. The page follows
 /// the configured ReadRange budget, and a Group's Present_Value counts
 /// against the ReadPropertyMultiple work limit as in ReadProperty (#1172).
 pub(super) async fn response(
@@ -39,26 +40,32 @@ pub(super) async fn response(
     let db = db.read().await;
     let result = match ReadRangeRequest::decode(&request.service_request) {
         Ok(decoded) => {
-            let live = match handlers::active_cov_device(
-                &db,
-                decoded.object_identifier,
-                decoded.property_identifier,
-            ) {
-                Some(selection) => {
-                    Some(confirmed_response::active_cov_snapshot(&db, cov_table, selection).await)
-                }
-                None => None,
-            };
-            let view = DeviceReadContext::new(&db, DeviceExecution::FullServer, live.as_ref())
+            let view = DeviceReadContext::new(&db, DeviceExecution::FullServer)
                 .with_work_limit(config.read_property_multiple_budget.max_result_elements);
-            handlers::read_range_request_observed(
-                &db,
-                Some(&view),
-                decoded,
-                &mut service_ack,
-                budget,
-                |target, property, index, result| completed(&db, target, property, index, result),
-            )
+            match handlers::plan_read_range(&db, Some(&view), &decoded) {
+                Ok(plan) => {
+                    let live = match plan.live_cov(&db) {
+                        Some(selection) => Some(
+                            confirmed_response::active_cov_snapshot(&db, cov_table, selection)
+                                .await,
+                        ),
+                        None => None,
+                    };
+                    let view = view.with_live(live.as_ref());
+                    handlers::read_range_request_observed(
+                        &db,
+                        Some(&view),
+                        decoded,
+                        plan,
+                        &mut service_ack,
+                        budget,
+                        |target, property, index, result| {
+                            completed(&db, target, property, index, result)
+                        },
+                    )
+                }
+                Err(failure) => Err(failure),
+            }
         }
         Err(error) => Err(handlers::ReadRangeFailure::Service(error)),
     };
