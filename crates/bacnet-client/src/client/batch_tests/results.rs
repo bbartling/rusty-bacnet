@@ -40,10 +40,10 @@ async fn outcomes(
                 vec![
                     DeviceRpmRequest {
                         device_instance: 10,
-                        specs: vec![bacnet_services::rpm::ReadAccessSpecification {
+                        specs: vec![bacnet_types::constructed::ReadAccessSpecification {
                             object_identifier: oid,
                             list_of_property_references: vec![
-                                bacnet_services::common::PropertyReference {
+                                bacnet_types::constructed::PropertyReference {
                                     property_identifier: pid,
                                     property_array_index: None,
                                 }

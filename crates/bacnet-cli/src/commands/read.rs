@@ -2,9 +2,8 @@
 
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::primitives::decode_application_value;
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
 use bacnet_transport::port::TransportPort;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 

@@ -1,11 +1,11 @@
 use super::*;
 use bacnet_objects::{audit::AuditReporterObject, traits::BACnetObject};
 use bacnet_services::{
-    common::PropertyReference,
     read_property::{ReadPropertyACK, ReadPropertyRequest},
-    rpm::{ReadAccessSpecification, ReadPropertyMultipleACK, ReadPropertyMultipleRequest},
+    rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest},
 };
 use bacnet_types::constructed::BACnetObjectSelector as Selector;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use std::{borrow::Cow, sync::atomic::AtomicUsize};
 
 #[path = "audit_reporter_read_boundary_tests.rs"]

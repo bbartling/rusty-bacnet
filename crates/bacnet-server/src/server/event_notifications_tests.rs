@@ -77,6 +77,7 @@ async fn dcc_suppresses_periodic_event_send() {
             device_bindings: &Arc::new(RwLock::new(
                 crate::server::device_bindings::DeviceBindingTable::new(),
             )),
+            suppressions: &Default::default(),
             retry_timeout_ms: 1000,
             local_apdu_capacity: 1476,
         },
@@ -295,6 +296,7 @@ async fn event_notification_missing_class_distributes_nothing() {
             device_bindings: &Arc::new(RwLock::new(
                 crate::server::device_bindings::DeviceBindingTable::new(),
             )),
+            suppressions: &Default::default(),
             retry_timeout_ms: 1000,
             local_apdu_capacity: 1476,
         },
@@ -348,6 +350,7 @@ async fn event_notification_event_notify_type_honors_class_ack_required() {
             device_bindings: &Arc::new(RwLock::new(
                 crate::server::device_bindings::DeviceBindingTable::new(),
             )),
+            suppressions: &Default::default(),
             retry_timeout_ms: 1000,
             local_apdu_capacity: 1476,
         },
@@ -446,6 +449,7 @@ pub(super) async fn broadcasts_from_per_write_path(
             device_bindings: &Arc::new(RwLock::new(
                 crate::server::device_bindings::DeviceBindingTable::new(),
             )),
+            suppressions: &Default::default(),
             retry_timeout_ms: 1000,
             local_apdu_capacity: 1476,
         },

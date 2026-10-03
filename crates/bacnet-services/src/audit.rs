@@ -18,8 +18,6 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::PropertyReference;
-
 #[path = "audit/notification_codec.rs"]
 mod notification_codec;
 #[path = "audit/query_ack_codec.rs"]
@@ -46,40 +44,6 @@ pub struct AuditLogQueryAck {
     pub records: Vec<BACnetAuditLogRecordResult>,
     /// `true` when no records remain beyond those returned; the codec does not verify it.
     pub no_more_items: bool,
-}
-
-/// Audit-local wire-equivalent of `BACnetPropertyReference`.
-///
-/// The shared service [`PropertyReference`] predates these codecs and narrows
-/// the optional array index to `u32`. Clause 21 defines it as unconstrained
-/// Unsigned, so Audit preserves every value supported by the primitive layer.
-impl From<PropertyReference> for AuditPropertyReference {
-    fn from(value: PropertyReference) -> Self {
-        Self {
-            property_identifier: value.property_identifier,
-            property_array_index: value.property_array_index.map(u64::from),
-        }
-    }
-}
-
-impl TryFrom<AuditPropertyReference> for PropertyReference {
-    type Error = Error;
-
-    fn try_from(value: AuditPropertyReference) -> Result<Self, Self::Error> {
-        Ok(Self {
-            property_identifier: value.property_identifier,
-            property_array_index: value
-                .property_array_index
-                .map(u32::try_from)
-                .transpose()
-                .map_err(|_| {
-                    Error::OutOfRange(
-                        "Audit property-array-index exceeds shared PropertyReference u32 limit"
-                            .into(),
-                    )
-                })?,
-        })
-    }
 }
 
 /// AuditLogQuery-Request service parameters.

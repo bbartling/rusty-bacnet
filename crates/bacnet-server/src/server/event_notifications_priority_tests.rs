@@ -26,6 +26,7 @@ async fn event_notification_projects_offnormal_priority_from_class() {
             device_bindings: &Arc::new(RwLock::new(
                 crate::server::device_bindings::DeviceBindingTable::new(),
             )),
+            suppressions: &Default::default(),
             retry_timeout_ms: 1000,
             local_apdu_capacity: 1476,
         },
@@ -66,6 +67,7 @@ async fn event_notification_projects_fault_priority_from_class() {
             device_bindings: &Arc::new(RwLock::new(
                 crate::server::device_bindings::DeviceBindingTable::new(),
             )),
+            suppressions: &Default::default(),
             retry_timeout_ms: 1000,
             local_apdu_capacity: 1476,
         },
@@ -122,6 +124,7 @@ async fn event_notification_from_fault_is_change_of_reliability() {
             device_bindings: &Arc::new(RwLock::new(
                 crate::server::device_bindings::DeviceBindingTable::new(),
             )),
+            suppressions: &Default::default(),
             retry_timeout_ms: 1000,
             local_apdu_capacity: 1476,
         },
@@ -164,6 +167,7 @@ async fn event_notification_projects_normal_priority_from_class() {
             device_bindings: &Arc::new(RwLock::new(
                 crate::server::device_bindings::DeviceBindingTable::new(),
             )),
+            suppressions: &Default::default(),
             retry_timeout_ms: 1000,
             local_apdu_capacity: 1476,
         },

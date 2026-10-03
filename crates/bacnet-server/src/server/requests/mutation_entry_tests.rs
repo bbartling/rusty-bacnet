@@ -25,9 +25,10 @@ use bacnet_services::enrollment_summary::GetEnrollmentSummaryRequest;
 use bacnet_services::file::{AtomicReadFileRequest, FileAccessMethod};
 use bacnet_services::read_property::ReadPropertyRequest;
 use bacnet_services::read_range::ReadRangeRequest;
-use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleRequest};
+use bacnet_services::rpm::ReadPropertyMultipleRequest;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportProvenance;
+use bacnet_types::constructed::ReadAccessSpecification;
 use bacnet_types::enums::{AcknowledgmentFilter, EnableDisable};
 use std::sync::atomic::AtomicUsize;
 #[cfg(feature = "sc-tls")]
@@ -372,7 +373,7 @@ async fn read_only_controls_unaffected_under_deny_all() {
     ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
             object_identifier: oid(ObjectType::BINARY_VALUE, 1),
-            list_of_property_references: vec![bacnet_services::common::PropertyReference {
+            list_of_property_references: vec![bacnet_types::constructed::PropertyReference {
                 property_identifier: PropertyIdentifier::PRESENT_VALUE,
                 property_array_index: None,
             }],

@@ -1,7 +1,7 @@
 use super::*;
 use crate::cov::MultipleRefusal;
-use bacnet_services::common::PropertyReference;
 use bacnet_services::cov_multiple::{COVReference, COVSubscriptionSpecification};
+use bacnet_types::constructed::PropertyReference;
 
 fn encode_unchecked(
     specs: &[COVSubscriptionSpecification],
@@ -27,7 +27,10 @@ fn encode_unchecked(
         bacnet_encoding::tags::encode_opening_tag(&mut buf, 1);
         for cov_ref in &spec.list_of_cov_references {
             bacnet_encoding::tags::encode_opening_tag(&mut buf, 0);
-            cov_ref.monitored_property.encode(&mut buf);
+            bacnet_encoding::constructed::encode_property_reference(
+                &mut buf,
+                &cov_ref.monitored_property,
+            );
             bacnet_encoding::tags::encode_closing_tag(&mut buf, 0);
             if let Some(increment) = cov_ref.cov_increment {
                 bacnet_encoding::primitives::encode_ctx_real(&mut buf, 1, increment);

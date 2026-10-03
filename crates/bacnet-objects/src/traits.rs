@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::calendar::SpecificDate;
-use bacnet_types::constructed::BACnetLogRecord;
+use bacnet_types::constructed::{BACnetLogRecord, BACnetObjectPropertyReference};
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier, Reliability,
 };
@@ -978,14 +978,16 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         })
     }
 
-    /// Record one sample the local application took for an Averaging object.
+    /// Record one sample for an Averaging object.
     ///
-    /// Only the built-in Averaging object opts in. The server doesn't read
-    /// Object_Property_Reference itself, so the application samples the
-    /// referenced property and passes each value here, or `None` when the
-    /// attempt produced no value, and the object updates its sample window,
-    /// statistics and counts together. The default fails closed with the same
-    /// error as [`set_present_value_internal`](Self::set_present_value_internal).
+    /// Only the built-in Averaging object opts in. The value is the reading
+    /// of the referenced property, or `None` when the attempt produced no
+    /// value, and the object updates its sample window, statistics and counts
+    /// together. The application calls it for the samples it takes, and the
+    /// database for the ones the object's own schedule asks for (see
+    /// [`take_due_averaging_sample_internal`](Self::take_due_averaging_sample_internal)).
+    /// The default fails closed with the same error as
+    /// [`set_present_value_internal`](Self::set_present_value_internal).
     fn add_averaging_sample_internal(
         &mut self,
         _sample: Option<PropertyValue>,
@@ -994,6 +996,26 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
             class: ErrorClass::OBJECT.to_raw() as u32,
             code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
         })
+    }
+
+    /// Claim the Averaging sample the object's schedule has due at the
+    /// process-local monotonic instant `now`.
+    ///
+    /// When one is due the object steps its schedule past it and returns the
+    /// property to read; the caller reads it while it still holds exclusive
+    /// access and records the outcome with
+    /// [`add_averaging_sample_internal`](Self::add_averaging_sample_internal).
+    /// An object that answers here reports the due time through
+    /// [`next_monotonic_deadline_internal`](Self::next_monotonic_deadline_internal),
+    /// so the server's monotonic task wakes for it. The built-in Averaging
+    /// object opts in while it holds an Object_Property_Reference and a
+    /// monotonic clock is bound; the default has nothing to sample.
+    #[doc(hidden)]
+    fn take_due_averaging_sample_internal(
+        &mut self,
+        _now: Duration,
+    ) -> Option<BACnetObjectPropertyReference> {
+        None
     }
 
     /// Borrow this object's Audit Log query storage, if it has any.

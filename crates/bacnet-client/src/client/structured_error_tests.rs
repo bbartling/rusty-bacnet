@@ -6,7 +6,7 @@
 //! failing to decode it and timing out.
 
 use super::*;
-use bacnet_services::common::{BACnetPropertyValue, PropertyReference};
+use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
@@ -16,7 +16,7 @@ use bacnet_services::virtual_terminal::VTCloseRequest;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::ReceivedNpdu;
-use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::constructed::{BACnetObjectPropertyReference, PropertyReference};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::ErrorDetail;
 use bacnet_types::primitives::ObjectIdentifier;

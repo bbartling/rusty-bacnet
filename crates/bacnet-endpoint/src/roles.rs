@@ -309,7 +309,7 @@ impl ClientRoleHandle {
     pub async fn read_property_multiple(
         &self,
         destination_mac: &[u8],
-        specs: Vec<bacnet_services::rpm::ReadAccessSpecification>,
+        specs: Vec<bacnet_types::constructed::ReadAccessSpecification>,
     ) -> Result<bacnet_services::rpm::ReadPropertyMultipleACK, Error> {
         self.read_property_multiple_with_destination(
             EndpointApduDestination::Direct {
@@ -327,7 +327,7 @@ impl ClientRoleHandle {
         &self,
         destination: EndpointApduDestination,
         data_attributes: Vec<DataAttribute>,
-        specs: Vec<bacnet_services::rpm::ReadAccessSpecification>,
+        specs: Vec<bacnet_types::constructed::ReadAccessSpecification>,
     ) -> Result<bacnet_services::rpm::ReadPropertyMultipleACK, Error> {
         self.check_open()?;
         let request = bacnet_client::EndpointReadRequest::Multiple(

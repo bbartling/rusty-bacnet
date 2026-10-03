@@ -5,12 +5,12 @@ use bacnet_objects::{
     database::ObjectDatabase,
 };
 use bacnet_services::{
-    common::PropertyReference,
     cov::SubscribeCOVPropertyRequest,
     cov_multiple::{
         COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
     },
 };
+use bacnet_types::constructed::PropertyReference;
 use bacnet_types::{
     constructed::{BACnetPrescale, BACnetScale},
     primitives::ObjectIdentifier,

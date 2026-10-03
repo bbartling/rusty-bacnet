@@ -1,9 +1,9 @@
 use super::*;
-use bacnet_services::common::PropertyReference;
 use bacnet_services::cov::SubscribeCOVPropertyRequest;
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
+use bacnet_types::constructed::PropertyReference;
 
 fn single(cancel: bool) -> Bytes {
     let request = SubscribeCOVPropertyRequest {

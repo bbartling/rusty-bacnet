@@ -3,9 +3,9 @@ use bacnet_objects::{
     elevator::{ElevatorGroupObject, EscalatorObject},
     traits::BACnetObject,
 };
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
-use bacnet_types::constructed::{BACnetLandingCallStatus, LandingCallCommand};
+use bacnet_types::constructed::{
+    BACnetLandingCallStatus, LandingCallCommand, PropertyReference, ReadAccessSpecification,
+};
 use bacnet_types::enums::LiftCarDirection;
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;

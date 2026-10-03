@@ -7,10 +7,10 @@ use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::life_safety::LifeSafetyPointObject;
-use bacnet_services::common::PropertyReference;
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
+use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::ObjectType;
 
 fn test_db_with_ao() -> (Arc<RwLock<ObjectDatabase>>, ObjectIdentifier) {

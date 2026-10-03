@@ -210,10 +210,10 @@ async fn audit_forwarding_terminal_failures_and_late_success_cannot_hide_new_fai
         settle().await;
         let req = f.requests().pop().unwrap();
         let terminal = if abort {
-            // Preserve the existing Notification coordinator direction policy.
+            // The recipient serves the notification, so its Abort is server-flagged.
             Apdu::Abort(AbortPdu {
                 invoke_id: req.invoke_id,
-                sent_by_server: false,
+                sent_by_server: true,
                 abort_reason: AbortReason::OTHER,
             })
         } else {

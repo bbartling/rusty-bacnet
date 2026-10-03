@@ -379,10 +379,8 @@ async fn registered_port_capacity_1476_valid_wp_and_rp_through_both_owners() {
 
 #[tokio::test]
 async fn registered_port_rpm_mixed_targets_and_missing_registration() {
-    use bacnet_services::{
-        common::PropertyReference,
-        rpm::{ReadAccessSpecification, ReadPropertyMultipleACK, ReadPropertyMultipleRequest},
-    };
+    use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
     for registered in [true, false] {
         let mut owner = Owner::start(true, registered).await;
         let address = owner.address();
@@ -478,11 +476,8 @@ async fn registered_port_shared_database_does_not_register_other_ingress() {
 #[tokio::test]
 async fn registered_port_successful_audit_uses_concrete_targets_per_property() {
     use bacnet_objects::audit::AuditReporterObject;
-    use bacnet_services::{
-        audit::AuditNotificationRequest,
-        common::PropertyReference,
-        rpm::{ReadAccessSpecification, ReadPropertyMultipleRequest},
-    };
+    use bacnet_services::{audit::AuditNotificationRequest, rpm::ReadPropertyMultipleRequest};
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
     use bacnet_types::{
         bitstring::AuditOperationFlags,
         constructed::{BACnetAddress, BACnetRecipient},

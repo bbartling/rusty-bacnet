@@ -9,7 +9,6 @@ use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::traits::BACnetObject;
-use bacnet_services::common::PropertyReference;
 use bacnet_services::cov::{
     COVNotificationRequest, SubscribeCOVPropertyRequest, SubscribeCOVRequest,
 };
@@ -19,6 +18,7 @@ use bacnet_services::cov_multiple::{
 };
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
+use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::{Date, Time};
 use std::sync::atomic::AtomicBool;
@@ -619,7 +619,7 @@ impl Harness {
     }
 
     /// Deliver an answer from the subscriber.
-    async fn respond(&self, answer: Apdu) {
+    pub(super) async fn respond(&self, answer: Apdu) {
         let mut payload = BytesMut::new();
         encode_apdu(&mut payload, &answer).unwrap();
         let mut npdu = BytesMut::new();
