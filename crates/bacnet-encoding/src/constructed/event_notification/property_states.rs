@@ -1,6 +1,5 @@
 use super::*;
-use crate::common::{decode_context, decode_context_u32};
-use bacnet_encoding::constructed::{decode_property_state, encode_property_state};
+use crate::constructed::{decode_property_state, encode_property_state};
 
 /// Encode a BACnetPropertyStates value.
 pub(super) fn encode_property_states(

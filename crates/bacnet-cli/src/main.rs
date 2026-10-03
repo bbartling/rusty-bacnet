@@ -314,7 +314,7 @@ async fn execute_command<T: TransportPort + 'static>(
             let mac = resolve_target_mac(client, target).await?;
             let (object_type, instance) = parse::parse_object_specifier(object)?;
             let (prop, index) = parse::parse_property(property)?;
-            commands::read::read_range_cmd(
+            commands::read_range::read_range_cmd(
                 client,
                 &mac,
                 object_type,

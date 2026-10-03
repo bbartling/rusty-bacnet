@@ -24,7 +24,7 @@ fn raw_change_of_life_safety(
 }
 
 fn decode_params(data: &[u8]) -> Result<NotificationParameters, Error> {
-    NotificationParameters::decode(data, 0)
+    decode_notification_parameters(data, 0)
 }
 
 fn encoded_event_notification() -> (BytesMut, usize) {
@@ -44,16 +44,18 @@ fn encoded_event_notification() -> (BytesMut, usize) {
         event_values: None,
     };
     let mut buf = BytesMut::new();
-    request.encode(&mut buf).unwrap();
+    encode_event_notification(&request, &mut buf).unwrap();
     let event_values_offset = buf.len();
     tags::encode_opening_tag(&mut buf, 12);
-    NotificationParameters::ChangeOfLifeSafety {
-        new_state: LifeSafetyState::PRE_ALARM,
-        new_mode: LifeSafetyMode::ON,
-        status_flags: StatusFlags::IN_ALARM,
-        operation_expected: LifeSafetyOperation::SILENCE,
-    }
-    .encode(&mut buf)
+    encode_notification_parameters(
+        &NotificationParameters::ChangeOfLifeSafety {
+            new_state: LifeSafetyState::PRE_ALARM,
+            new_mode: LifeSafetyMode::ON,
+            status_flags: StatusFlags::IN_ALARM,
+            operation_expected: LifeSafetyOperation::SILENCE,
+        },
+        &mut buf,
+    )
     .unwrap();
     tags::encode_closing_tag(&mut buf, 12);
     (buf, event_values_offset)
@@ -177,32 +179,32 @@ fn change_of_life_safety_rejects_every_truncated_prefix() {
 #[test]
 fn event_notification_requires_event_values_outer_framing() {
     let (encoded, event_values_offset) = encoded_event_notification();
-    assert!(EventNotificationRequest::decode(&encoded).is_ok());
+    assert!(decode_event_notification(&encoded).is_ok());
 
     let mut missing_opening = encoded.to_vec();
     missing_opening.remove(event_values_offset);
-    assert!(EventNotificationRequest::decode(&missing_opening).is_err());
+    assert!(decode_event_notification(&missing_opening).is_err());
 
     let mut wrong_opening = encoded.clone();
     let mut tag = BytesMut::new();
     tags::encode_opening_tag(&mut tag, 11);
     wrong_opening[event_values_offset] = tag[0];
-    assert!(EventNotificationRequest::decode(&wrong_opening).is_err());
+    assert!(decode_event_notification(&wrong_opening).is_err());
 
     let mut missing_closing = encoded.clone();
     missing_closing.truncate(missing_closing.len() - 1);
-    assert!(EventNotificationRequest::decode(&missing_closing).is_err());
+    assert!(decode_event_notification(&missing_closing).is_err());
 
     let mut wrong_closing = missing_closing.clone();
     tags::encode_closing_tag(&mut wrong_closing, 9);
-    assert!(EventNotificationRequest::decode(&wrong_closing).is_err());
+    assert!(decode_event_notification(&wrong_closing).is_err());
 
     let mut extra_sibling = missing_closing;
     raw_context_value(&mut extra_sibling, 4, &[1]);
     tags::encode_closing_tag(&mut extra_sibling, 12);
-    assert!(EventNotificationRequest::decode(&extra_sibling).is_err());
+    assert!(decode_event_notification(&extra_sibling).is_err());
 
     let mut trailing_data = encoded;
     raw_context_value(&mut trailing_data, 13, &[1]);
-    assert!(EventNotificationRequest::decode(&trailing_data).is_err());
+    assert!(decode_event_notification(&trailing_data).is_err());
 }

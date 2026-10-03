@@ -122,7 +122,7 @@ fn raw_change_of_timer(values: [&[u8]; 3], field_tags: [u8; 3], flags: &[u8]) ->
 }
 
 fn decode_variant(data: &[u8]) -> Result<NotificationParameters, Error> {
-    NotificationParameters::decode(data, 0)
+    decode_notification_parameters(data, 0)
 }
 
 fn event_request(event_values: NotificationParameters) -> EventNotificationRequest {
@@ -145,7 +145,7 @@ fn event_request(event_values: NotificationParameters) -> EventNotificationReque
 
 fn encode_event(event_values: NotificationParameters) -> BytesMut {
     let mut encoded = BytesMut::new();
-    event_request(event_values).encode(&mut encoded).unwrap();
+    encode_event_notification(&event_request(event_values), &mut encoded).unwrap();
     encoded
 }
 
@@ -335,7 +335,7 @@ fn event_notification_preserves_trailing_opaque_payload_bytes() {
 
     for expected in variants {
         let encoded = encode_event(expected.clone());
-        let decoded = EventNotificationRequest::decode(&encoded).unwrap();
+        let decoded = decode_event_notification(&encoded).unwrap();
         assert_eq!(decoded.event_values, Some(expected));
     }
 }
@@ -372,26 +372,26 @@ fn event_notification_requires_exact_event_values_suffix() {
 
         let mut missing_outer = encoded.clone();
         missing_outer.truncate(missing_outer.len() - 1);
-        assert!(EventNotificationRequest::decode(&missing_outer).is_err());
+        assert!(decode_event_notification(&missing_outer).is_err());
 
         let mut wrong_outer = encoded.clone();
         *wrong_outer.last_mut().unwrap() = 0xbf;
-        assert!(EventNotificationRequest::decode(&wrong_outer).is_err());
+        assert!(decode_event_notification(&wrong_outer).is_err());
 
         let mut trailing = encoded.clone();
         primitives::encode_ctx_unsigned(&mut trailing, 13, 1);
-        assert!(EventNotificationRequest::decode(&trailing).is_err());
+        assert!(decode_event_notification(&trailing).is_err());
 
         let mut sibling = encoded.clone();
         sibling.truncate(sibling.len() - 1);
         primitives::encode_ctx_unsigned(&mut sibling, 13, 1);
         tags::encode_closing_tag(&mut sibling, 12);
-        assert!(EventNotificationRequest::decode(&sibling).is_err());
+        assert!(decode_event_notification(&sibling).is_err());
 
         let mut fake_final_outer = encoded.clone();
         primitives::encode_ctx_unsigned(&mut fake_final_outer, 13, 1);
         tags::encode_closing_tag(&mut fake_final_outer, 12);
-        assert!(EventNotificationRequest::decode(&fake_final_outer).is_err());
+        assert!(decode_event_notification(&fake_final_outer).is_err());
 
         let mut wrong_variant_close = encoded;
         let close_number_index = wrong_variant_close.len() - 2;
@@ -400,7 +400,7 @@ fn event_notification_requires_exact_event_values_suffix() {
         } else {
             wrong_variant_close[close_number_index] = 0x7f;
         }
-        assert!(EventNotificationRequest::decode(&wrong_variant_close).is_err());
+        assert!(decode_event_notification(&wrong_variant_close).is_err());
     }
 }
 
@@ -417,16 +417,16 @@ fn notification_parameters_require_exact_variant_consumption() {
 
     let mut same_tag_sibling = encode_event(buffer_ready.clone());
     same_tag_sibling.truncate(same_tag_sibling.len() - 1);
-    buffer_ready.encode(&mut same_tag_sibling).unwrap();
+    encode_notification_parameters(&buffer_ready, &mut same_tag_sibling).unwrap();
     tags::encode_closing_tag(&mut same_tag_sibling, 12);
-    assert!(EventNotificationRequest::decode(&same_tag_sibling).is_err());
+    assert!(decode_event_notification(&same_tag_sibling).is_err());
 
     let mut extra_inner_field = encode_event(buffer_ready);
     extra_inner_field.truncate(extra_inner_field.len() - 2);
     primitives::encode_ctx_unsigned(&mut extra_inner_field, 13, 1);
     tags::encode_closing_tag(&mut extra_inner_field, 10);
     tags::encode_closing_tag(&mut extra_inner_field, 12);
-    assert!(EventNotificationRequest::decode(&extra_inner_field).is_err());
+    assert!(decode_event_notification(&extra_inner_field).is_err());
 
     let mut close_in_field_content = raw_buffer_ready([&[1], &[2], &[3], &[0, 0xaf]], [1, 2, 1, 2]);
     close_in_field_content.truncate(close_in_field_content.len() - 1);
@@ -448,7 +448,7 @@ fn public_notification_parameter_decode_preserves_opaque_delimiters() {
         parameters: encoded_octet_string(&[0x2f, 0x9f, 0xcf]),
     };
     let mut encoded = BytesMut::new();
-    expected.encode(&mut encoded).unwrap();
+    encode_notification_parameters(&expected, &mut encoded).unwrap();
     assert_eq!(decode_variant(&encoded).unwrap(), expected);
 }
 
@@ -477,9 +477,9 @@ fn raw_fields_reject_same_tag_siblings_and_truncated_close_aliases() {
     for variant in variants {
         let mut siblings = encode_event(variant.clone());
         siblings.truncate(siblings.len() - 1);
-        variant.encode(&mut siblings).unwrap();
+        encode_notification_parameters(&variant, &mut siblings).unwrap();
         tags::encode_closing_tag(&mut siblings, 12);
-        assert!(EventNotificationRequest::decode(&siblings).is_err());
+        assert!(decode_event_notification(&siblings).is_err());
     }
 
     let mut truncated = encode_event(NotificationParameters::Extended {
@@ -488,7 +488,7 @@ fn raw_fields_reject_same_tag_siblings_and_truncated_close_aliases() {
         parameters: encoded_octet_string(&[0x2f, 0x9f, 0xcf]),
     });
     truncated.truncate(truncated.len() - 3);
-    assert!(EventNotificationRequest::decode(&truncated).is_err());
+    assert!(decode_event_notification(&truncated).is_err());
 }
 
 #[test]
@@ -511,7 +511,7 @@ fn non_trailing_raw_fields_preserve_delimiters_inside_values() {
     ];
 
     for expected in variants {
-        let decoded = EventNotificationRequest::decode(&encode_event(expected.clone())).unwrap();
+        let decoded = decode_event_notification(&encode_event(expected.clone())).unwrap();
         assert_eq!(decoded.event_values, Some(expected));
     }
 }
@@ -525,10 +525,10 @@ fn public_notification_parameter_decode_accepts_event_values_close() {
     };
     let mut wrapped = BytesMut::new();
     tags::encode_opening_tag(&mut wrapped, 12);
-    expected.encode(&mut wrapped).unwrap();
+    encode_notification_parameters(&expected, &mut wrapped).unwrap();
     tags::encode_closing_tag(&mut wrapped, 12);
     assert_eq!(
-        NotificationParameters::decode(&wrapped, 1).unwrap(),
+        decode_notification_parameters(&wrapped, 1).unwrap(),
         expected
     );
 }
@@ -541,7 +541,7 @@ fn raw_fields_require_encoded_bacnet_values() {
         parameters: vec![0x9f],
     };
     let mut untouched = BytesMut::from(&[0xaa][..]);
-    assert!(invalid.encode(&mut untouched).is_err());
+    assert!(encode_notification_parameters(&invalid, &mut untouched).is_err());
     assert_eq!(untouched.as_ref(), &[0xaa]);
 
     let mut raw = BytesMut::new();
@@ -578,10 +578,10 @@ fn abstract_syntax_values_preserve_empty_aggregates_and_optional_presence() {
         },
     ] {
         let mut encoded = BytesMut::new();
-        expected.encode(&mut encoded).unwrap();
+        encode_notification_parameters(&expected, &mut encoded).unwrap();
         assert_eq!(decode_variant(&encoded).unwrap(), expected);
         assert_eq!(
-            EventNotificationRequest::decode(&encode_event(expected.clone()))
+            decode_event_notification(&encode_event(expected.clone()))
                 .unwrap()
                 .event_values,
             Some(expected)
@@ -606,27 +606,28 @@ fn event_notification_enforces_total_nesting_on_encode_and_decode() {
 
     let accepted = event_request(change_of_state(tags::MAX_CONTEXT_NESTING_DEPTH - 4));
     let mut encoded = BytesMut::new();
-    accepted.encode(&mut encoded).unwrap();
-    assert!(EventNotificationRequest::decode(&encoded).is_ok());
+    encode_event_notification(&accepted, &mut encoded).unwrap();
+    assert!(decode_event_notification(&encoded).is_ok());
 
     let too_deep_parameters = change_of_state(tags::MAX_CONTEXT_NESTING_DEPTH - 3);
     let mut parameters = BytesMut::new();
-    too_deep_parameters.encode(&mut parameters).unwrap();
+    encode_notification_parameters(&too_deep_parameters, &mut parameters).unwrap();
 
     let mut untouched = BytesMut::from(&[0xaa][..]);
-    assert!(event_request(too_deep_parameters.clone())
-        .encode(&mut untouched)
-        .is_err());
+    assert!(
+        encode_event_notification(&event_request(too_deep_parameters.clone()), &mut untouched)
+            .is_err()
+    );
     assert_eq!(untouched.as_ref(), &[0xaa]);
 
     let mut without_values = event_request(too_deep_parameters);
     without_values.event_values = None;
     let mut raw = BytesMut::new();
-    without_values.encode(&mut raw).unwrap();
+    encode_event_notification(&without_values, &mut raw).unwrap();
     tags::encode_opening_tag(&mut raw, 12);
     raw.extend_from_slice(&parameters);
     tags::encode_closing_tag(&mut raw, 12);
-    assert!(EventNotificationRequest::decode(&raw).is_err());
+    assert!(decode_event_notification(&raw).is_err());
 }
 
 #[test]
@@ -713,7 +714,7 @@ fn primitive_notification_fields_require_their_context_tags() {
 
     for (variant, field_count) in variants {
         let mut encoded = BytesMut::new();
-        variant.encode(&mut encoded).unwrap();
+        encode_notification_parameters(&variant, &mut encoded).unwrap();
         let (_, mut field_start) = tags::decode_tag(&encoded, 0).unwrap();
         for expected_tag in 0..field_count {
             let (field, content_start) = tags::decode_tag(&encoded, field_start).unwrap();

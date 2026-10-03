@@ -1,6 +1,6 @@
 use super::*;
 use crate::common::{decode_context, decode_context_bool, decode_context_enum, decode_context_u32};
-use bacnet_encoding::constructed::validate_tlv_sequence;
+use bacnet_encoding::constructed::{encode_event_notification, validate_tlv_sequence};
 use bytes::Bytes;
 
 // ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ impl ForwardedEventNotification {
     /// The forwarding view of a notification this device built itself.
     pub fn from_request(request: &EventNotificationRequest) -> Result<Self, Error> {
         let mut buf = BytesMut::new();
-        request.encode(&mut buf)?;
+        encode_event_notification(request, &mut buf)?;
         Self::decode(&buf)
     }
 

@@ -10,6 +10,7 @@ use super::event_forwarding_tests::{
 use super::event_recipient_routing_tests::{address_recipient, distribute_counted};
 use super::*;
 use bacnet_encoding::apdu::decode_apdu;
+use bacnet_encoding::constructed::decode_event_notification;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::notification_forwarder::NotificationForwarderObject;
@@ -169,7 +170,7 @@ fn local_copies(broadcasts: Vec<Bytes>, unicasts: Vec<(Vec<u8>, Bytes)>) -> Vec<
         let Apdu::UnconfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
             panic!("expected an unconfirmed notification");
         };
-        let notification = EventNotificationRequest::decode(&request.service_request).unwrap();
+        let notification = decode_event_notification(&request.service_request).unwrap();
         (npdu.destination, notification.process_identifier)
     };
     let mut sent: Vec<Copy> = unicasts

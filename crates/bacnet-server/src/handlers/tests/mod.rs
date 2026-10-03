@@ -98,6 +98,7 @@ fn list_refusal(result: Result<(), Error>) -> (ErrorClass, ErrorCode, u32) {
 
 mod access_control_arrays;
 mod access_door_oos_writes;
+mod access_point_authorization_writes;
 mod access_required_rows;
 mod access_typed_values;
 mod access_zone_oos_writes;

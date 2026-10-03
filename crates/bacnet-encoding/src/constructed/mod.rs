@@ -44,6 +44,7 @@ pub mod calendar;
 mod channel_value;
 pub mod cov_subscription;
 mod event_log_record;
+mod event_notification;
 pub mod event_notification_subscription;
 pub mod event_parameter;
 pub mod fault_parameter;
@@ -58,6 +59,7 @@ mod members;
 pub mod object_property_reference;
 pub mod port_permission;
 mod property_access_result;
+mod property_value;
 mod read_access;
 pub mod recipient;
 pub mod schedule;
@@ -78,8 +80,8 @@ pub use action_list::{
 pub use assigned_landing_calls::{decode_assigned_landing_calls, encode_assigned_landing_calls};
 pub use audit_notification::{decode_audit_notification_at, encode_audit_notification};
 pub use audit_record::{
-    decode_audit_log_record, decode_audit_log_record_result_at, encode_audit_log_record,
-    encode_audit_log_record_result,
+    decode_audit_log_record, decode_audit_log_record_at, decode_audit_log_record_result_at,
+    encode_audit_log_record, encode_audit_log_record_result,
 };
 pub use calendar::{
     decode_calendar_entry, decode_calendar_entry_list, decode_date_range, encode_calendar_entry,
@@ -91,6 +93,10 @@ pub use cov_subscription::{
     encode_cov_multiple_subscription_list, encode_cov_subscription, encode_cov_subscription_list,
 };
 pub use event_log_record::{decode_event_log_record, encode_event_log_record};
+pub use event_notification::{
+    decode_event_notification, decode_event_notification_tolerant, decode_notification_parameters,
+    encode_event_notification, encode_notification_parameters,
+};
 pub use event_notification_subscription::{
     decode_event_notification_subscription, encode_event_notification_subscription,
     encode_event_notification_subscription_list,
@@ -111,6 +117,12 @@ pub use object_property_reference::{
 };
 pub use port_permission::{decode_port_permission, encode_port_permission};
 pub use property_access_result::{decode_property_access_result, encode_property_access_result};
+pub use property_value::{
+    decode_bacnet_property_value, decode_bacnet_property_value_in_list,
+    decode_bacnet_property_value_in_list_detailed, encode_bacnet_property_value,
+    extract_property_value, PropertyValueBoundary, PropertyValueDecodeError,
+    PropertyValueDecodeFailure, PropertyValueDecodeStage,
+};
 pub use read_access::{
     decode_property_reference, decode_read_access_specification, encode_property_reference,
     encode_read_access_specification,

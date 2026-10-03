@@ -142,7 +142,7 @@ fn network_port_delete_object_is_denied() {
         object_identifier: oid,
     }
     .encode(&mut request);
-    let result = handle_delete_object(&mut db, &request);
+    let result = handle_delete_object(&mut db, &request).map(|_removed| ());
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
             if class == ErrorClass::OBJECT.to_raw() as u32

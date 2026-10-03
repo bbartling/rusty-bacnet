@@ -26,17 +26,30 @@
 //!
 //! # Restarts
 //!
-//! Clause 12.51.9 asks for Subscribed_Recipients to survive a restart. A
+//! Clauses 12.51.8 and 12.51.9 ask for both lists to survive a restart. A
 //! forwarder built with [`NotificationForwarderObject::with_persistence`]
-//! saves the list, each entry with the minutes it has left, when a write
-//! changes it, when an entry lapses, and at most once a minute while the
-//! minutes the entries serve fall; it restores the list when built again. A
-//! restored entry counts down from its saved minutes: no fewer than it had
-//! left when the device stopped, about a minute more at most, and never more
-//! than its last subscription gave it, so restarts do not keep an entry
-//! alive. A failed save is logged and counted ([`ForwarderSaveCounters`]),
-//! and retried a minute later. A forwarder built with
-//! [`NotificationForwarderObject::new`] keeps the list in memory only.
+//! saves Recipient_List and Subscribed_Recipients together, each
+//! subscription with the minutes it has left, when a write changes either
+//! list, when an entry lapses, and at most once a minute while the minutes
+//! the entries serve fall; it restores both when built again. A restored
+//! entry counts down from its saved minutes: no fewer than it had left when
+//! the device stopped, about a minute more at most, and never more than its
+//! last subscription gave it, so restarts do not keep an entry alive.
+//!
+//! Saves run on the forwarder's own writer thread, never while the database
+//! guard is held ([`crate::durable`]), and a list write that cannot be saved
+//! is refused with DEVICE / OPERATIONAL_PROBLEM, leaving the old list. A
+//! failed save is logged and counted ([`ForwarderSaveCounters`]); one the
+//! operation task made is retried a minute later.
+//!
+//! A written Recipient_List wins over the one the application configures:
+//! once a write has set the list and it was saved, a rebuilt forwarder
+//! serves the saved list and ignores [`add_destination`] calls. Until then
+//! the configured destinations apply at every start; they are not saved. A
+//! forwarder built with [`NotificationForwarderObject::new`] keeps both lists
+//! in memory only.
+//!
+//! [`add_destination`]: NotificationForwarderObject::add_destination
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -51,6 +64,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 
 use crate::common::{self, read_common_properties};
+use crate::durable::{DurableWrites, SaveWait, StageStep};
 use crate::notification_class::recipient_list;
 use crate::subscribed_recipients::SubscribedRecipients;
 use crate::traits::{BACnetObject, MonotonicClock};
@@ -62,7 +76,9 @@ mod saving;
 mod selection;
 
 pub use crate::notification_class::MAX_RECIPIENT_LIST_DESTINATIONS;
-pub use persistence::{FileSubscribedRecipientsPersistence, SubscribedRecipientsPersistence};
+pub use persistence::{
+    FileNotificationForwarderPersistence, ForwarderSnapshot, NotificationForwarderPersistence,
+};
 pub use saving::ForwarderSaveCounters;
 pub use selection::{forwarding_targets, ForwardingInput, ForwardingTargets};
 
@@ -80,13 +96,19 @@ pub struct NotificationForwarderObject {
     process_identifier_filter: Option<u32>,
     local_forwarding_only: bool,
     port_filter: Option<Vec<BACnetPortPermission>>,
-    saved_copy: Option<saving::SavedCopy>,
+    storage: Option<saving::Storage>,
+    /// Writes either list has taken, so a staged write can tell whether
+    /// another came between.
+    list_writes: u64,
+    /// A write set Recipient_List, now or before a restart, so storage keeps
+    /// it and configured destinations no longer apply.
+    recipient_list_written: bool,
     save_counters: ForwarderSaveCounters,
 }
 
 impl NotificationForwarderObject {
     /// A forwarder with empty lists that forwards every process identifier
-    /// for any device. Its Subscribed_Recipients is kept in memory only.
+    /// for any device. Its lists are kept in memory only.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         Ok(Self {
             oid: ObjectIdentifier::new(ObjectType::NOTIFICATION_FORWARDER, instance)?,
@@ -100,30 +122,48 @@ impl NotificationForwarderObject {
             process_identifier_filter: None,
             local_forwarding_only: false,
             port_filter: None,
-            saved_copy: None,
+            storage: None,
+            list_writes: 0,
+            recipient_list_written: false,
             save_counters: ForwarderSaveCounters::default(),
         })
     }
 
-    /// A forwarder that keeps its Subscribed_Recipients in `persistence`,
-    /// starting from the list saved there for this object, if any.
+    /// A forwarder that keeps its Recipient_List and Subscribed_Recipients
+    /// in `persistence`, starting from the lists saved there for this object,
+    /// if any.
     ///
-    /// Fails when the saved list cannot be loaded, or holds an entry the
-    /// list would refuse (a Time Remaining of 0 or past a day, or more
-    /// entries than the cap).
+    /// Fails when the saved lists cannot be loaded, or hold an entry a write
+    /// would refuse: a destination a framed write could not carry, a
+    /// subscription with a Time Remaining of 0 or past a day, or more entries
+    /// than a list's cap.
     pub fn with_persistence(
         instance: u32,
         name: impl Into<String>,
-        persistence: Arc<dyn SubscribedRecipientsPersistence>,
+        persistence: Arc<dyn NotificationForwarderPersistence>,
     ) -> Result<Self, Error> {
         let mut forwarder = Self::new(instance, name)?;
-        let saved = persistence.load(forwarder.oid)?.unwrap_or_default();
-        if !saved.is_empty() {
-            forwarder.subscribed_recipients.write(framed(&saved)?)?;
+        if let Some(saved) = persistence.load(forwarder.oid)? {
+            if let Some(list) = saved.recipient_list {
+                if list.len() > MAX_RECIPIENT_LIST_DESTINATIONS {
+                    return Err(recipient_list::no_space_error());
+                }
+                for destination in &list {
+                    recipient_list::check_added(destination)?;
+                }
+                forwarder.recipient_list = list;
+                forwarder.recipient_list_written = true;
+            }
+            if !saved.subscribed_recipients.is_empty() {
+                forwarder
+                    .subscribed_recipients
+                    .write(framed(&saved.subscribed_recipients)?)?;
+            }
         }
-        forwarder.saved_copy = Some(saving::SavedCopy::new(
+        forwarder.storage = Some(saving::Storage::new(
+            forwarder.oid,
             persistence,
-            forwarder.subscribed_recipients.subscriptions(),
+            forwarder.snapshot(None),
             forwarder.save_counters.clone(),
         ));
         Ok(forwarder)
@@ -166,8 +206,21 @@ impl NotificationForwarderObject {
     /// Add a destination to Recipient_List, with the checks and cap of a
     /// Notification Class's
     /// [`add_destination`](crate::notification_class::NotificationClass::add_destination).
+    ///
+    /// This configures the list the application starts with; it is not
+    /// saved. On a forwarder [`with_persistence`](Self::with_persistence)
+    /// whose storage holds a written Recipient_List
+    /// ([`recipient_list_saved`](Self::recipient_list_saved)), the saved list
+    /// wins: the destination is checked but not added.
     pub fn add_destination(&mut self, destination: BACnetDestination) -> Result<(), Error> {
         recipient_list::check_added(&destination)?;
+        if self.recipient_list_saved() {
+            tracing::debug!(
+                forwarder = %self.oid,
+                "Saved Recipient_List kept over a configured destination"
+            );
+            return Ok(());
+        }
         if self.recipient_list.len() >= MAX_RECIPIENT_LIST_DESTINATIONS {
             return Err(recipient_list::no_space_error());
         }
@@ -198,30 +251,152 @@ impl NotificationForwarderObject {
         self.port_filter.as_deref()
     }
 
-    /// Replace Subscribed_Recipients with a written list, saving it before
-    /// the forwarder serves it. A list that cannot be saved is refused with
-    /// DEVICE / OPERATIONAL_PROBLEM and the old list stays.
-    fn write_subscribed_recipients(&mut self, value: PropertyValue) -> Result<(), Error> {
+    /// Whether storage holds a Recipient_List a write set, now or before a
+    /// restart. [`add_destination`](Self::add_destination) then leaves the
+    /// list alone. Always false without persistence.
+    pub fn recipient_list_saved(&self) -> bool {
+        self.storage.is_some() && self.recipient_list_written
+    }
+
+    /// Block until the saves queued so far have run. Dropping the forwarder
+    /// waits for them too.
+    pub fn wait_for_saves(&self) {
+        if let Some(storage) = &self.storage {
+            storage.wait_idle();
+        }
+    }
+
+    /// What storage would hold with `next` in place of the list it replaces.
+    fn snapshot(&self, next: Option<&saving::NextList>) -> ForwarderSnapshot {
+        ForwarderSnapshot {
+            recipient_list: match next {
+                Some(saving::NextList::RecipientList(list)) => Some(list.clone()),
+                _ => self
+                    .recipient_list_written
+                    .then(|| self.recipient_list.clone()),
+            },
+            subscribed_recipients: match next {
+                Some(saving::NextList::SubscribedRecipients(store)) => store.subscriptions(),
+                _ => self.subscribed_recipients.subscriptions(),
+            },
+        }
+    }
+
+    /// The list a write of `value` to `property` would leave, or the write's
+    /// refusal.
+    fn next_list(
+        &self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<saving::NextList, Error> {
+        if property == PropertyIdentifier::RECIPIENT_LIST {
+            return recipient_list::decode_write(value).map(saving::NextList::RecipientList);
+        }
         let mut next = self.subscribed_recipients.clone();
         next.write(value)?;
-        if let Some(saved_copy) = &mut self.saved_copy {
-            saved_copy.save_written(self.oid, &next).map_err(|_| {
-                common::protocol_error(
-                    bacnet_types::enums::ErrorClass::DEVICE,
-                    bacnet_types::enums::ErrorCode::OPERATIONAL_PROBLEM,
-                )
-            })?;
+        Ok(saving::NextList::SubscribedRecipients(next))
+    }
+
+    fn install(&mut self, next: saving::NextList) {
+        match next {
+            saving::NextList::RecipientList(list) => {
+                self.recipient_list = list;
+                self.recipient_list_written = true;
+            }
+            saving::NextList::SubscribedRecipients(store) => self.subscribed_recipients = store,
         }
-        self.subscribed_recipients = next;
+        self.list_writes = self.list_writes.wrapping_add(1);
+    }
+
+    /// Replace Recipient_List or Subscribed_Recipients with a written list,
+    /// saving both lists before the forwarder serves it. A staged write takes
+    /// the lists already saved; any other saves now. A list that cannot be
+    /// saved is refused with DEVICE / OPERATIONAL_PROBLEM and the old list
+    /// stays.
+    fn write_list(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        let refused = |_| {
+            common::protocol_error(
+                bacnet_types::enums::ErrorClass::DEVICE,
+                bacnet_types::enums::ErrorCode::OPERATIONAL_PROBLEM,
+            )
+        };
+        let base = self.list_writes;
+        if let Some(claimed) = self
+            .with_storage(|storage, _| storage.claim(property, &value, base))
+            .flatten()
+        {
+            self.install(claimed.map_err(refused)?);
+            return Ok(());
+        }
+        let next = self.next_list(property, value)?;
+        let snapshot = self.storage.is_some().then(|| self.snapshot(Some(&next)));
+        if let (Some(storage), Some(snapshot)) = (self.storage.as_mut(), snapshot) {
+            storage.save_now(snapshot).map_err(refused)?;
+        }
+        self.install(next);
         Ok(())
     }
 
-    /// After time passes, keep the saved copy current (see the module docs).
+    /// After time passes, keep storage current (see the module docs).
     fn after_time_passed(&mut self, lapsed: bool) -> bool {
-        if let Some(saved_copy) = &mut self.saved_copy {
-            saved_copy.keep_current(self.oid, &self.subscribed_recipients, lapsed);
-        }
+        let now = self.subscribed_recipients.current_time();
+        self.with_storage(|storage, served| storage.keep_current(now, lapsed, served));
         lapsed
+    }
+
+    /// Run `f` on storage, handing it the lists the forwarder serves; then,
+    /// if `f` dropped a staged write, queue the save that puts storage back
+    /// to the served lists. `None` without persistence.
+    fn with_storage<R>(
+        &mut self,
+        f: impl FnOnce(&mut saving::Storage, &dyn Fn() -> ForwarderSnapshot) -> R,
+    ) -> Option<R> {
+        let mut storage = self.storage.take()?;
+        let served = || self.snapshot(None);
+        let result = f(&mut storage, &served);
+        storage.correct(served);
+        self.storage = Some(storage);
+        Some(result)
+    }
+}
+
+impl DurableWrites for NotificationForwarderObject {
+    fn stage_write(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: &PropertyValue,
+    ) -> StageStep {
+        let listed = matches!(
+            property,
+            PropertyIdentifier::RECIPIENT_LIST | PropertyIdentifier::SUBSCRIBED_RECIPIENTS
+        );
+        if !listed || array_index.is_some() || self.storage.is_none() {
+            return StageStep::Skip;
+        }
+        if let Some(wait) = self.with_storage(|storage, _| storage.busy()).flatten() {
+            return StageStep::Busy(wait);
+        }
+        let Ok(next) = self.next_list(property, value.clone()) else {
+            return StageStep::Skip;
+        };
+        let snapshot = self.snapshot(Some(&next));
+        let base = self.list_writes;
+        self.storage.as_mut().expect("checked above").stage(
+            property,
+            value.clone(),
+            base,
+            next,
+            snapshot,
+        )
+    }
+
+    fn release_staged_write(&mut self, staged: &SaveWait) {
+        self.with_storage(|storage, _| storage.release(staged));
     }
 }
 
@@ -303,12 +478,8 @@ impl BACnetObject for NotificationForwarderObject {
             return Err(common::property_is_not_an_array_error());
         }
         match property {
-            PropertyIdentifier::RECIPIENT_LIST => {
-                self.recipient_list = recipient_list::decode_write(value)?;
-                return Ok(());
-            }
-            PropertyIdentifier::SUBSCRIBED_RECIPIENTS => {
-                return self.write_subscribed_recipients(value);
+            PropertyIdentifier::RECIPIENT_LIST | PropertyIdentifier::SUBSCRIBED_RECIPIENTS => {
+                return self.write_list(property, value);
             }
             PropertyIdentifier::PROCESS_IDENTIFIER_FILTER if array_index.is_none() => {
                 self.process_identifier_filter = match value {
@@ -364,9 +535,7 @@ impl BACnetObject for NotificationForwarderObject {
 
     fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
         self.subscribed_recipients.bind_monotonic_clock(clock);
-        if let Some(saved_copy) = &mut self.saved_copy {
-            saved_copy.clock_changed();
-        }
+        self.with_storage(|storage, _| storage.clock_changed());
     }
 
     fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
@@ -376,6 +545,10 @@ impl BACnetObject for NotificationForwarderObject {
 
     fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
         self.subscribed_recipients.next_deadline()
+    }
+
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn DurableWrites> {
+        Some(self)
     }
 }
 

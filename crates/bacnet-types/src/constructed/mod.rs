@@ -26,6 +26,10 @@ pub use audit::{
     BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification,
     BACnetObjectSelector,
 };
+mod event_notification;
+pub use event_notification::{
+    ChangeOfValueChoice, EventNotificationRequest, NotificationParameters,
+};
 mod lift;
 pub use lift::{
     AssignedLandingCall, BACnetAssignedLandingCalls, BACnetLandingCallStatus,
@@ -38,6 +42,8 @@ pub use log::{
 };
 mod property_access;
 pub use property_access::{AccessResult, BACnetPropertyAccessResult};
+mod property_value;
+pub use property_value::BACnetPropertyValue;
 mod read_access;
 pub use read_access::{PropertyReference, ReadAccessSpecification};
 mod staging;

@@ -28,8 +28,8 @@ fn notification_params_out_of_range_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::OutOfRange {
@@ -55,8 +55,8 @@ fn notification_params_change_of_state_boolean_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::ChangeOfState {
@@ -78,8 +78,8 @@ fn notification_params_change_of_state_enumerated_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::ChangeOfState {
@@ -101,8 +101,8 @@ fn notification_params_change_of_value_real_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::ChangeOfValue {
@@ -129,8 +129,8 @@ fn notification_params_buffer_ready_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::BufferReady {
@@ -155,8 +155,8 @@ fn notification_params_unsigned_range_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::UnsignedRange {
@@ -177,58 +177,11 @@ fn event_notification_no_event_values_backward_compatible() {
     // Verify that event_values=None still round-trips correctly
     let req = make_event_req(None);
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     assert!(decoded.event_values.is_none());
     assert_eq!(decoded.process_identifier, 1);
     assert_eq!(decoded.to_state, EventState::HIGH_LIMIT);
-}
-
-#[test]
-fn get_event_information_ack_round_trip() {
-    let ack = GetEventInformationAck {
-        list_of_event_summaries: vec![EventSummary {
-            object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
-            event_state: EventState::HIGH_LIMIT,
-            acknowledged_transitions: EventTransitionBits::TO_OFFNORMAL
-                | EventTransitionBits::TO_NORMAL,
-            event_timestamps: [
-                BACnetTimeStamp::SequenceNumber(42),
-                BACnetTimeStamp::SequenceNumber(0),
-                BACnetTimeStamp::SequenceNumber(100),
-            ],
-            notify_type: NotifyType::ALARM,
-            event_enable: EventTransitionBits::all(),
-            event_priorities: [3, 3, 3],
-        }],
-        more_events: true,
-    };
-    let mut buf = BytesMut::new();
-    ack.encode(&mut buf).unwrap();
-    // Wire-byte check, not just a round trip: internal 0b101 must appear as
-    // its MSB-first octet 0xA0 (a symmetric encode/decode inversion would
-    // still round-trip, so the raw byte is the only witness — Clause 20.2.10).
-    assert!(
-        buf.contains(&0xA0),
-        "encoded ACK should contain the MSB-first acknowledged-transitions octet 0xA0"
-    );
-    let decoded = GetEventInformationAck::decode(&buf).unwrap();
-    assert_eq!(decoded.list_of_event_summaries.len(), 1);
-    assert!(decoded.more_events);
-    let s = &decoded.list_of_event_summaries[0];
-    assert_eq!(
-        s.object_identifier,
-        ack.list_of_event_summaries[0].object_identifier
-    );
-    assert_eq!(s.event_state, EventState::HIGH_LIMIT);
-    assert_eq!(
-        s.acknowledged_transitions,
-        EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL
-    );
-    assert_eq!(s.event_timestamps[0], BACnetTimeStamp::SequenceNumber(42));
-    assert_eq!(s.notify_type, NotifyType::ALARM);
-    assert_eq!(s.event_enable, EventTransitionBits::all());
-    assert_eq!(s.event_priorities, [3, 3, 3]);
 }
 
 #[test]
@@ -239,8 +192,8 @@ fn notification_params_change_of_bitstring_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::ChangeOfBitstring {
@@ -263,8 +216,8 @@ fn notification_params_command_failure_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::CommandFailure {
@@ -290,8 +243,8 @@ fn notification_params_floating_limit_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::FloatingLimit {
@@ -319,8 +272,8 @@ fn notification_params_change_of_life_safety_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::ChangeOfLifeSafety {
@@ -347,8 +300,8 @@ fn notification_params_extended_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::Extended {
@@ -395,8 +348,8 @@ fn notification_params_access_event_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::AccessEvent {
@@ -432,8 +385,8 @@ fn notification_params_double_out_of_range_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::DoubleOutOfRange {
@@ -461,8 +414,8 @@ fn notification_params_signed_out_of_range_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::SignedOutOfRange {
@@ -490,8 +443,8 @@ fn notification_params_unsigned_out_of_range_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::UnsignedOutOfRange {
@@ -518,8 +471,8 @@ fn notification_params_change_of_characterstring_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::ChangeOfCharacterstring {
@@ -543,8 +496,8 @@ fn notification_params_change_of_status_flags_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::ChangeOfStatusFlags {
@@ -570,8 +523,8 @@ fn notification_params_change_of_reliability_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::ChangeOfReliability {
@@ -595,8 +548,8 @@ fn notification_params_change_of_discrete_value_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::ChangeOfDiscreteValue {
@@ -650,8 +603,8 @@ fn notification_params_change_of_timer_round_trip() {
     };
     let req = make_event_req(Some(params));
     let mut buf = BytesMut::new();
-    req.encode(&mut buf).unwrap();
-    let decoded = EventNotificationRequest::decode(&buf).unwrap();
+    encode_event_notification(&req, &mut buf).unwrap();
+    let decoded = decode_event_notification(&buf).unwrap();
     let ev = decoded.event_values.unwrap();
     match ev {
         NotificationParameters::ChangeOfTimer {
@@ -674,17 +627,4 @@ fn notification_params_change_of_timer_round_trip() {
         }
         other => panic!("expected ChangeOfTimer, got {:?}", other),
     }
-}
-
-#[test]
-fn get_event_information_ack_empty_list() {
-    let ack = GetEventInformationAck {
-        list_of_event_summaries: vec![],
-        more_events: false,
-    };
-    let mut buf = BytesMut::new();
-    ack.encode(&mut buf).unwrap();
-    let decoded = GetEventInformationAck::decode(&buf).unwrap();
-    assert!(decoded.list_of_event_summaries.is_empty());
-    assert!(!decoded.more_events);
 }

@@ -17,6 +17,7 @@ use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::command::{CommandRun, RunPlan};
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::device::{DeviceAuthority, DeviceConfig, DeviceObject};
+use bacnet_objects::durable::DurableWrites;
 use bacnet_objects::event::{
     EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
     EventTransitionCommitError, TransitionOutcome,
@@ -653,6 +654,10 @@ impl BACnetObject for Probe {
     ) -> Option<&mut dyn AuditLogNotificationSink> {
         self.called("audit_log_notification_sink_internal", ());
         self.audit_log.audit_log_notification_sink_internal()
+    }
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn DurableWrites> {
+        self.called("durable_writes_internal", ());
+        self.audit_log.durable_writes_internal()
     }
     fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {
         self.called("file_configuration_internal", ());
