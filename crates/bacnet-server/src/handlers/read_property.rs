@@ -39,7 +39,8 @@ pub(crate) fn read_property_request_observed(
 
 /// Evaluate one property read with ReadProperty error precedence: unknown
 /// object, then non-array index using the effective property definition, then
-/// the executor view or raw object's reader.
+/// the executor view or raw object's reader, except that a Group's
+/// Present_Value is rebuilt from its members.
 pub(crate) fn read_property_value(
     db: &ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
@@ -68,7 +69,7 @@ pub(crate) fn read_property_value(
         });
     }
 
-    object.read_property(property, array_index)
+    group_present_value::read_served_property(db, view, object, property, array_index)
 }
 
 fn read_property_decoded(
@@ -180,7 +181,7 @@ pub(crate) fn active_cov_device_for_rpm(
     db: &ObjectDatabase,
     request: &ReadPropertyMultipleRequest,
 ) -> Option<LiveCovSelection> {
-    let spec_lists = |spec: &bacnet_services::rpm::ReadAccessSpecification| {
+    let spec_lists = |spec: &bacnet_types::constructed::ReadAccessSpecification| {
         spec.list_of_property_references
             .iter()
             .map(|reference| live_cov_lists(reference.property_identifier))
@@ -322,7 +323,13 @@ pub fn handle_read_property_multiple(
                             });
                             continue;
                         }
-                        match object.read_property(prop_id, array_index) {
+                        match group_present_value::read_served_property(
+                            db,
+                            None,
+                            object,
+                            prop_id,
+                            array_index,
+                        ) {
                             Ok(value) => {
                                 let mut value_buf = BytesMut::new();
                                 match encode_property_value(&mut value_buf, &value) {

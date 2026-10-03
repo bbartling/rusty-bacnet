@@ -25,49 +25,6 @@ fn group_object_type() {
 }
 
 #[test]
-fn group_add_members() {
-    let mut g = GroupObject::new(1, "G").unwrap();
-    let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    let ai2 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap();
-    g.add_member(ai1);
-    g.add_member(ai2);
-
-    let val = g
-        .read_property(PropertyIdentifier::LIST_OF_GROUP_MEMBERS, None)
-        .unwrap();
-    if let PropertyValue::List(items) = val {
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0], PropertyValue::ObjectIdentifier(ai1));
-        assert_eq!(items[1], PropertyValue::ObjectIdentifier(ai2));
-    } else {
-        panic!("Expected List");
-    }
-}
-
-#[test]
-fn group_clear_members() {
-    let mut g = GroupObject::new(1, "G").unwrap();
-    let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    g.add_member(ai1);
-    assert_eq!(g.list_of_group_members.len(), 1);
-    g.clear_members();
-    assert!(g.list_of_group_members.is_empty());
-}
-
-#[test]
-fn group_present_value_empty() {
-    let g = GroupObject::new(1, "G").unwrap();
-    let val = g
-        .read_property(PropertyIdentifier::PRESENT_VALUE, None)
-        .unwrap();
-    if let PropertyValue::List(items) = val {
-        assert!(items.is_empty());
-    } else {
-        panic!("Expected List");
-    }
-}
-
-#[test]
 fn group_property_list() {
     let g = GroupObject::new(1, "G").unwrap();
     let props = g.property_list();

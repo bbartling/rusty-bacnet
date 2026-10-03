@@ -1,8 +1,8 @@
 use super::*;
 use bacnet_objects::{command::CommandObject, traits::BACnetObject};
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
-use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
+use bacnet_types::constructed::{
+    BACnetActionCommand, BACnetActionList, PropertyReference, ReadAccessSpecification,
+};
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 

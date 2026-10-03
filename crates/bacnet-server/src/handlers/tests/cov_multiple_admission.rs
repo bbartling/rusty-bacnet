@@ -6,10 +6,10 @@ use super::*;
 
 #[test]
 fn subscribe_cov_property_multiple_invalid_property_keeps_the_earlier_reference() {
-    use bacnet_services::common::PropertyReference;
     use bacnet_services::cov_multiple::{
         COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
     };
+    use bacnet_types::constructed::PropertyReference;
 
     let db = make_db_with_ai();
     let mut table = CovSubscriptionTable::new();
@@ -84,10 +84,10 @@ fn subscribe_cov_property_multiple_invalid_property_keeps_the_earlier_reference(
 
 #[test]
 fn subscribe_cov_property_multiple_capacity_names_the_overflowing_reference() {
-    use bacnet_services::common::PropertyReference;
     use bacnet_services::cov_multiple::{
         COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
     };
+    use bacnet_types::constructed::PropertyReference;
 
     let db = make_db_with_ai();
     let mut table = CovSubscriptionTable::with_policy(

@@ -1,10 +1,8 @@
 use super::*;
 use bacnet_objects::{schedule::ScheduleObject, traits::BACnetObject};
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
 use bacnet_types::constructed::{
     BACnetCalendarEntry, BACnetObjectPropertyReference, BACnetSpecialEvent, BACnetTimeValue,
-    SpecialEventPeriod,
+    PropertyReference, ReadAccessSpecification, SpecialEventPeriod,
 };
 use bacnet_types::primitives::{Date, PropertyValue, Time};
 use PropertyIdentifier as P;

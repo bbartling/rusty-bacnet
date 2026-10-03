@@ -3,11 +3,11 @@
 use super::*;
 use crate::server::test_transport::TestTransport;
 use bacnet_services::{
-    common::PropertyReference,
     read_property::{ReadPropertyACK, ReadPropertyRequest},
-    rpm::{ReadAccessSpecification, ReadPropertyMultipleACK, ReadPropertyMultipleRequest},
+    rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest},
 };
 use bacnet_types::constructed::BACnetObjectSelector as Selector;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
 async fn read_wire(
     server: &BACnetServer<TestTransport>,

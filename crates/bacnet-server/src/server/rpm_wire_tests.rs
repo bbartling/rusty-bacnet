@@ -1,9 +1,7 @@
 use super::*;
-use bacnet_services::{
-    common::PropertyReference,
-    rpm::{ReadAccessSpecification, ReadPropertyMultipleRequest},
-};
+use bacnet_services::rpm::ReadPropertyMultipleRequest;
 use bacnet_transport::port::TransportProvenance;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
 #[tokio::test]
 async fn rpm_device_wildcard_bip_wire_returns_concrete_wrapper_and_value() {

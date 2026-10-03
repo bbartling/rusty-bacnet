@@ -1,7 +1,6 @@
 use super::*;
 use bacnet_objects::{averaging::AveragingObject, traits::BACnetObject};
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 

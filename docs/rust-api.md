@@ -323,9 +323,10 @@ requested index independently. See the
 [scoped conformance evidence](conformance/support-summary.md).
 
 ```rust
-use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleACK, ReadAccessResult};
+use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadAccessResult};
 use bacnet_services::wpm::WriteAccessSpecification;
-use bacnet_services::common::{PropertyReference, BACnetPropertyValue};
+use bacnet_services::common::BACnetPropertyValue;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
 let spec = ReadAccessSpecification {
     object_identifier: oid,
@@ -1672,6 +1673,19 @@ framing, through the shared `bacnet-encoding` codecs.
   `AccessResult` values, by member position, and a member without one reads
   PROPERTY / VALUE_NOT_INITIALIZED. Index 0 reads the array size and each
   index from 1 one element.
+- **Group `List_Of_Group_Members` and `Present_Value`** (Clause 12.14) are
+  lists, so an array index is refused. A member is a
+  `bacnet_types::constructed::ReadAccessSpecification`: an object in this device
+  and the properties the group reports, encoded by
+  `bacnet_encoding::constructed::encode_read_access_specification`.
+  `GroupObject::add_member` refuses one
+  with no properties, and one that would report a Group's or Global Group's
+  Present_Value. The object stores no Present_Value: the server rebuilds it on
+  every ReadProperty, ReadPropertyMultiple and ReadRange as one
+  ReadAccessResult per member, reading each member as ReadPropertyMultiple
+  would, so a failed read carries its error and an object that isn't in the
+  database reads OBJECT / UNKNOWN_OBJECT. Read directly from the object alone,
+  Present_Value is an empty list.
 - **Structured View `Subordinate_List` and Command `Action`** (Clauses 12.29
   and 12.10) are arrays too, with the same per-index reads, as is
   `Subordinate_Annotations`. A Subordinate_List element is a
@@ -2158,6 +2172,14 @@ door's own three values aside, a value the application sets meanwhile replaces
 the one put aside, and the return to service serves them again, dropping the
 simulation. A simulated Door_Alarm_State sends the COV report as a real change
 does. The pulse relock runs on its timer whatever the simulated values say.
+
+A door's Secured_Status isn't stored: each read works it out from what the
+door serves (Clause 12.26.14). It reads SECURED while the door is commanded
+LOCK, isn't IN_ALARM, and its Door_Status and Lock_Status show it shut and
+locked (or UNUSED). Any other input makes it UNSECURED, so an UNLOCK or a pulse
+reads UNSECURED until it ends. A Door_Status or Lock_Status of UNKNOWN or a
+fault makes it UNKNOWN, unless another input has already made it UNSECURED.
+Simulated values count the same as the device's.
 
 #### Transportation (3)
 

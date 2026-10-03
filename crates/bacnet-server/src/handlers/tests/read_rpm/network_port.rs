@@ -1,7 +1,6 @@
 use super::*;
 use bacnet_objects::{network_port::NetworkPortObject, traits::BACnetObject};
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use PropertyIdentifier as P;
 
 #[test]

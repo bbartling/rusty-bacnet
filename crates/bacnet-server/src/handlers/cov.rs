@@ -14,7 +14,7 @@ fn cov_property_error(code: ErrorCode) -> Error {
 fn subscription_error(
     error: Error,
     monitored: ObjectIdentifier,
-    reference: &bacnet_services::common::PropertyReference,
+    reference: &bacnet_types::constructed::PropertyReference,
 ) -> Error {
     match error {
         Error::Protocol { class, code } | Error::Structured { class, code, .. } => Error::protocol(

@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_encoding::constructed::encode_property_reference;
 use bacnet_types::enums::ObjectType;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
@@ -59,11 +60,13 @@ fn raw_subscription(property_identifier: PropertyIdentifier) -> BytesMut {
     primitives::encode_ctx_object_id(&mut encoded, 0, &oid(ObjectType::ANALOG_INPUT, 1));
     tags::encode_opening_tag(&mut encoded, 1);
     tags::encode_opening_tag(&mut encoded, 0);
-    PropertyReference {
-        property_identifier,
-        property_array_index: None,
-    }
-    .encode(&mut encoded);
+    encode_property_reference(
+        &mut encoded,
+        &PropertyReference {
+            property_identifier,
+            property_array_index: None,
+        },
+    );
     tags::encode_closing_tag(&mut encoded, 0);
     primitives::encode_ctx_boolean(&mut encoded, 2, false);
     tags::encode_closing_tag(&mut encoded, 1);
@@ -408,11 +411,13 @@ fn encoder_validation_is_atomic_and_caps_total_nested_items() {
     );
     let mut extra_reference = BytesMut::new();
     tags::encode_opening_tag(&mut extra_reference, 0);
-    PropertyReference {
-        property_identifier: PropertyIdentifier::PRESENT_VALUE,
-        property_array_index: None,
-    }
-    .encode(&mut extra_reference);
+    encode_property_reference(
+        &mut extra_reference,
+        &PropertyReference {
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+        },
+    );
     tags::encode_closing_tag(&mut extra_reference, 0);
     primitives::encode_ctx_boolean(&mut extra_reference, 2, false);
     let mut over_cap = encoded.to_vec();

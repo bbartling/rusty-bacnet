@@ -3,8 +3,7 @@ use bacnet_objects::{
     access_control::{AccessDoorObject, AccessPointObject, AccessZoneObject},
     traits::BACnetObject,
 };
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
@@ -201,7 +200,12 @@ fn rpm_access_door_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::SECURED_STATUS, None, Ok(&[0x91, 0])),
+            // Derived: the UNLOCK command leaves the door UNSECURED (#1148).
+            (
+                P::SECURED_STATUS,
+                None,
+                Ok(if configured { &[0x91, 1] } else { &[0x91, 0] }),
+            ),
             (
                 P::SECURED_STATUS,
                 Some(0),

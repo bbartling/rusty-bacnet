@@ -1,10 +1,10 @@
 use super::*;
-use bacnet_services::common::{BACnetPropertyValue, PropertyReference};
+use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
 use bacnet_services::object_mgmt::ObjectSpecifier;
-use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::constructed::{BACnetObjectPropertyReference, PropertyReference};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, ErrorDetail};
 

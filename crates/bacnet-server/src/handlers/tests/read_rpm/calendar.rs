@@ -1,8 +1,9 @@
 use super::*;
 use bacnet_objects::{schedule::CalendarObject, traits::BACnetObject};
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
-use bacnet_types::constructed::{BACnetCalendarEntry, BACnetDateRange, BACnetWeekNDay};
+use bacnet_types::constructed::{
+    BACnetCalendarEntry, BACnetDateRange, BACnetWeekNDay, PropertyReference,
+    ReadAccessSpecification,
+};
 use bacnet_types::primitives::Date;
 use PropertyIdentifier as P;
 

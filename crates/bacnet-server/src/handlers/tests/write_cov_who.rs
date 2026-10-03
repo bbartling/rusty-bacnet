@@ -163,10 +163,10 @@ fn subscribe_cov_update_existing_entry_allowed_at_capacity() {
 
 #[test]
 fn subscribe_cov_property_multiple_handler_returns_initial_subscriptions() {
-    use bacnet_services::common::PropertyReference;
     use bacnet_services::cov_multiple::{
         COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
     };
+    use bacnet_types::constructed::PropertyReference;
 
     let db = make_db_with_ai();
     let mut table = CovSubscriptionTable::new();
@@ -223,10 +223,10 @@ fn subscribe_cov_property_multiple_handler_returns_initial_subscriptions() {
 
 #[test]
 fn subscribe_cov_property_multiple_deduplicates_initial_subscriptions() {
-    use bacnet_services::common::PropertyReference;
     use bacnet_services::cov_multiple::{
         COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
     };
+    use bacnet_types::constructed::PropertyReference;
 
     let db = make_db_with_device_and_ai();
     let mut table = CovSubscriptionTable::new();
@@ -270,10 +270,10 @@ fn subscribe_cov_property_multiple_deduplicates_initial_subscriptions() {
 
 #[test]
 fn subscribe_cov_property_multiple_cancellation_removes_context_or_specs() {
-    use bacnet_services::common::PropertyReference;
     use bacnet_services::cov_multiple::{
         COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
     };
+    use bacnet_types::constructed::PropertyReference;
 
     let db = make_db_with_ai();
     let mut table = CovSubscriptionTable::new();

@@ -1,10 +1,10 @@
 use super::*;
 
-use bacnet_services::common::PropertyReference;
 use bacnet_services::cov::SubscribeCOVPropertyRequest;
 use bacnet_services::cov_multiple::{
     COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
 };
+use bacnet_types::constructed::PropertyReference;
 
 #[tokio::test]
 async fn subscribe_initial_and_resub_ack_precede_notification_and_cancel_is_quiet() {
