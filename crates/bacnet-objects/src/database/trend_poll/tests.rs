@@ -326,17 +326,11 @@ fn full_reference_and_logging_mode_changes_retire_previous_selection() {
         db.poll_trend_logs();
         assert_eq!(count(&db, oid), number as u64 + 2);
     }
-    // Missing target/read failure stays Null; indexed/remote execution is not added.
-    let PropertyValue::List(records) = db
-        .get(&oid)
-        .unwrap()
-        .read_property(P::LOG_BUFFER, None)
-        .unwrap()
-    else {
-        panic!()
-    };
-    assert!(
-        matches!(records.last(), Some(PropertyValue::List(fields)) if fields[2] == PropertyValue::Null)
+    // A missing target logs the failure a read of it reports (#1183); indexed
+    // execution is not added.
+    assert_eq!(
+        last_datum(&db, oid),
+        failure(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT)
     );
     for disabled_mode in [1, 2] {
         mode.store(disabled_mode, Ordering::SeqCst);
@@ -416,4 +410,138 @@ fn idle_reconciliation_and_max_interval_failure_backoff_are_bounded() {
     db.remove(&oid).unwrap();
     assert!(db.trend_poll.0.is_empty());
     assert_eq!(db.poll_trend_logs(), RECONCILE);
+}
+
+/// The datum of `oid`'s newest Log_Buffer record, as a read projects it.
+fn last_datum(db: &ObjectDatabase, oid: ObjectIdentifier) -> PropertyValue {
+    let PropertyValue::List(records) = db
+        .get(&oid)
+        .unwrap()
+        .read_property(P::LOG_BUFFER, None)
+        .unwrap()
+    else {
+        panic!("Log_Buffer is a list")
+    };
+    let Some(PropertyValue::List(fields)) = records.last() else {
+        panic!("a record was logged")
+    };
+    fields[2].clone()
+}
+
+/// A failure datum, as a Log_Buffer read projects it.
+fn failure(class: ErrorClass, code: ErrorCode) -> PropertyValue {
+    PropertyValue::List(vec![
+        PropertyValue::Unsigned(class.to_raw().into()),
+        PropertyValue::Unsigned(code.to_raw().into()),
+    ])
+}
+
+/// The fixture with AV-1 at 42.5, `local_devices` added, and the Trend Log's
+/// reference to AV-1 qualified by `device`.
+fn qualified_fixture(
+    local_devices: &[u32],
+    device: Option<u32>,
+) -> (ObjectDatabase, ObjectIdentifier) {
+    let (mut db, oid, _, _) = fixture(u32::MAX);
+    let mut av = AnalogValueObject::new(1, "AV", 95).unwrap();
+    av.set_relinquish_default(42.5).unwrap();
+    db.remove(&target()).unwrap();
+    db.add(Box::new(av)).unwrap();
+    for &instance in local_devices {
+        db.add(Box::new(
+            crate::device::DeviceObject::new(crate::device::DeviceConfig {
+                instance,
+                name: format!("Device-{instance}"),
+                ..Default::default()
+            })
+            .unwrap(),
+        ))
+        .unwrap();
+    }
+    let mut object = trend(u32::MAX, 16);
+    object.set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
+        object_identifier: target(),
+        property_identifier: P::PRESENT_VALUE.to_raw(),
+        property_array_index: None,
+        device_identifier: device
+            .map(|instance| ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap()),
+    }));
+    db.add(Box::new(object)).unwrap();
+    (db, oid)
+}
+
+#[test]
+fn a_reference_naming_another_device_logs_a_failure_never_the_local_object() {
+    let unsupported = failure(
+        ErrorClass::PROPERTY,
+        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+    );
+    // Device 200 is not this device, though AV-1 exists here. With no Device
+    // at all nothing names this device, and with two the lower one is it.
+    for (local_devices, named) in [(&[100][..], 200), (&[], 100), (&[100, 200], 200)] {
+        let (mut db, oid) = qualified_fixture(local_devices, Some(named));
+        db.poll_trend_logs();
+        assert_eq!(count(&db, oid), 1);
+        assert_eq!(last_datum(&db, oid), unsupported, "{local_devices:?}");
+        // The failure is logged at the configured interval, not retried.
+        assert!(db.trend_poll.0[&oid].last_success.is_some());
+        assert_eq!(db.trend_poll.0[&oid].retry_completed, None);
+    }
+}
+
+#[test]
+fn a_reference_naming_this_device_logs_the_local_value() {
+    for local_devices in [&[100][..], &[100, 200]] {
+        let (mut db, oid) = qualified_fixture(local_devices, Some(100));
+        db.poll_trend_logs();
+        assert_eq!(last_datum(&db, oid), PropertyValue::Real(42.5));
+    }
+}
+
+#[test]
+fn a_reference_without_a_device_logs_the_local_value() {
+    for local_devices in [&[][..], &[100]] {
+        let (mut db, oid) = qualified_fixture(local_devices, None);
+        db.poll_trend_logs();
+        assert_eq!(last_datum(&db, oid), PropertyValue::Real(42.5));
+    }
+}
+
+#[test]
+fn a_failed_local_read_logs_the_read_error() {
+    let (mut db, oid, _, _) = fixture(u32::MAX);
+    let mut object = trend(u32::MAX, 16);
+    object.set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
+        object_identifier: target(),
+        property_identifier: P::LOG_BUFFER.to_raw(),
+        property_array_index: None,
+        device_identifier: None,
+    }));
+    db.add(Box::new(object)).unwrap();
+    db.poll_trend_logs();
+    assert_eq!(
+        last_datum(&db, oid),
+        failure(ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)
+    );
+}
+
+#[test]
+fn a_device_member_that_is_not_an_identifier_is_not_polled() {
+    use std::sync::atomic::AtomicU32;
+    let (mut db, oid, _, _) = fixture(u32::MAX);
+    let inner = db.remove(&oid).unwrap().unwrap();
+    db.add(Box::new(ConfigurableTrend {
+        inner,
+        reference: Arc::new(Mutex::new(PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(target()),
+            PropertyValue::Unsigned(P::PRESENT_VALUE.to_raw().into()),
+            PropertyValue::Null,
+            PropertyValue::Unsigned(100),
+        ]))),
+        mode: Arc::new(AtomicU32::new(0)),
+    }))
+    .unwrap();
+    db.poll_trend_logs();
+    assert_eq!(count(&db, oid), 0);
+    assert!(!db.trend_poll.0.contains_key(&oid));
 }
