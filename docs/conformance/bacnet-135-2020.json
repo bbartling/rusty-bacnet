@@ -2322,7 +2322,7 @@
     "crates/bacnet-server/src/handlers/tests/read_rpm/load_control.rs::rpm_load_control_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_identity.rs::rpm_credential_data_input_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_point_indexed_reads_and_bytes_are_unchanged",
-    "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::{access_point_cov_leads_with_access_event_and_triggers_on_its_tag_and_time,credential_data_input_cov_reports_and_triggers_on_update_time,load_control_cov_reports_and_triggers_on_its_shed_rows}"
+    "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::{access_point_cov_leads_with_access_event_and_triggers_on_its_time,credential_data_input_cov_reports_and_triggers_on_update_time,load_control_cov_reports_and_triggers_on_its_shed_rows}"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/shed_level.rs::shed_level_rejects_other_tags_and_malformed_contents",
@@ -2357,7 +2357,7 @@
     "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-objects/src/access_control/credential_data_input_out_of_service_tests.rs::{credential_data_input_takes_simulated_rows_out_of_service,credential_data_input_simulated_present_value_without_a_clock_stamps_unspecified,credential_data_input_return_to_service_serves_the_reader_again,credential_data_input_null_out_of_service_write_keeps_the_simulation}",
+    "crates/bacnet-objects/src/access_control/credential_data_input_out_of_service_tests.rs::{credential_data_input_takes_simulated_rows_out_of_service,credential_data_input_without_a_clock_stamps_update_time_with_a_sequence_number,sequence_numbers_climb_to_the_top_of_the_range_and_skip_zero,credential_data_input_return_to_service_serves_the_reader_again,credential_data_input_null_out_of_service_write_keeps_the_simulation}",
     "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::{property_metadata_access_identity_write_capabilities_match_dispatch,property_metadata_access_identity_writes_store_verbatim_and_deny}",
     "crates/bacnet-objects/src/reliability_writability_tests.rs::credential_data_input_reliability_requires_out_of_service",
     "crates/bacnet-server/src/handlers/tests/credential_data_input_oos_writes.rs::{write_property_takes_reader_rows_only_out_of_service,write_property_multiple_takes_reader_rows_only_out_of_service}",
@@ -2382,13 +2382,14 @@
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1168, found in #1133). Breaking pre-1.0 wire change. Table 12-43 was read as a page image; footnote 1 marks Present_Value and Reliability.",
     "Local policies, recorded in access_control/credential_data_input_out_of_service.rs: a malformed factor is INVALID_DATA_TYPE, as for the Load Control shed levels; UNDEFINED and ERROR need no declared format; the value octets are not checked against Annex P.",
-    "A simulated Present_Value stamps Update_Time from the Device clock, with every field unspecified when there is none, as the Pulse Converter stamps Count; a Reliability write leaves Update_Time alone.",
+    "A simulated Present_Value stamps Update_Time from the Device clock, as the Pulse Converter stamps Count; a Reliability write leaves Update_Time alone.",
     "set_present_value updates the values set aside while out of service. The new set_reliability_internal is refused with WRITE_ACCESS_DENIED while out of service, as on the other Reliability carriers (BACNET-12-OOS-RELIABILITY-WRITABILITY).",
     "The server treats Present_Value as a COV trigger on this object as on every type but Access Point, so a simulated Present_Value reports even when Update_Time does not move.",
     "Not covered: intrinsic and fault reporting.",
     "`CredentialDataInputObject::set_present_value` returns `Result` and refuses an undeclared factor with VALUE_OUT_OF_RANGE.",
     "Local policy, recorded in access_control/credential_data_input_formats.rs: a factor whose format stays declared under another class is dropped too, since a write couldn't set that pair.",
-    "Python declares formats through add_credential_data_input(supported_formats=...), as (format, class) pairs."
+    "Python declares formats through add_credential_data_input(supported_formats=...), as (format, class) pairs.",
+    "With no usable Device clock a simulated Present_Value and a format reset stamp Update_Time in the sequence-number form of BACnetTimeStamp (Clauses 12.36.11 and 21.6), taking the object's next number from 1 to 65535, then 1 again."
    ]
   },
   {
@@ -2442,7 +2443,7 @@
     "crates/bacnet-objects/src/common.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-objects/src/access_control/point_out_of_service_tests.rs::{access_point_entering_out_of_service_records_out_of_service,access_point_return_to_service_records_out_of_service_relinquished,access_point_out_of_service_event_without_a_clock_stamps_unspecified,access_point_out_of_service_event_tag_wraps_at_the_top_of_its_range}",
+    "crates/bacnet-objects/src/access_control/point_out_of_service_tests.rs::{access_point_entering_out_of_service_records_out_of_service,access_point_return_to_service_records_out_of_service_relinquished,access_point_out_of_service_event_without_a_clock_stamps_the_tag_as_a_sequence_number,access_point_sequence_number_folds_a_tag_past_its_range,access_point_out_of_service_event_tag_wraps_at_the_top_of_its_range}",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_point_out_of_service_edges_record_events_and_report",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_point_out_of_service_round_trip_reports_without_a_clock",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_point_indexed_reads_and_bytes_are_unchanged"
@@ -2457,7 +2458,7 @@
    ],
    "notes": [
     "The Clause 12.31 introduction counts an operator action as a transaction and 12.31.27.1 moves the tag when one starts, so each edge moves Access_Event_Tag on by one, wrapping. A write that keeps the value records nothing.",
-    "Access_Event_Time takes the Device clock's date and time, every field unspecified without one. Access_Event_Tag is a COV trigger beside the time, so an edge reports even when the time can't move.",
+    "With no usable Device clock Access_Event_Time takes the sequence-number form of BACnetTimeStamp (Clauses 12.31.29 and 21.6) holding the new tag, folded into 1 to 65535, so each edge still moves the Table 13-1 trigger.",
     "Access_Event_Credential and Access_Event_Authentication_Factor are not served, so an edge sets neither. The point runs no intrinsic reporting, so an edge raises no event notification.",
     "`set_access_event` still takes the application's events while out of service; reporting none then is left to the application.",
     "Reliability stays read-only: nothing moves it off NO_FAULT_DETECTED, the condition Clause 12.31.8 sets for a writable Reliability."
@@ -5428,7 +5429,7 @@
    "id": "BACNET-13-COV-OBJECT-CRITERIA",
    "standard_anchor": "Clause 13.1 and Table 13-1 (the Access Door, Access Point with footnote 1, Credential Data Input, Load Control, Loop, Pulse Converter and Staging rows, and SubscribeCOV admission for every listed type; no Averaging row) with Table 13-1a; Clause 12.17 and Table 12-20 (Loop Controlled_Variable_Value, COV_Increment footnote 4); Clause 12.62 and Table 12-80 (Staging COV_Increment footnote 3); Clauses 13.14 and 13.15; Clause 12.5 and Table 12-5 (Averaging samples and the datatypes they may have)",
    "priority": "P1",
-   "requirement_summary": "A SubscribeCOV notification for a Loop carries Present_Value, Status_Flags, Setpoint and Controlled_Variable_Value, in that order, and is sent when Present_Value moves by at least COV_Increment or Status_Flags changes. For a Staging object it carries Present_Value, Status_Flags and Present_Stage and is sent on such a Present_Value move, a Status_Flags change (including a target-plan completion that changes Reliability) or any Present_Stage change. Both objects serve a writable COV_Increment REAL that refuses negative or non-finite values with PROPERTY / VALUE_OUT_OF_RANGE. Loop serves the required read-only Controlled_Variable_Value. A running server's application feeds it with BACnetServer::set_controlled_variable_value_local (Python: set_controlled_variable_value_local), a finite REAL refused on other objects with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED and accepted while Out_Of_Service is TRUE; a SubscribeCOVProperty on it is notified of the change, and a SubscribeCOV report carries the new value the next time it fires. SubscribeCOVProperty reports the selected property with Status_Flags; Present_Value inherits COV_Increment. An Averaging object, which Table 13-1 doesn't list, refuses SubscribeCOV with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED and admits SubscribeCOVProperty and SubscribeCOVPropertyMultiple; a numeric property is reported when it moves by the subscription's COV increment, or on any change without one, with no Status_Flags. A running server's application feeds it samples with BACnetServer::add_averaging_sample_local (Python: add_averaging_sample_local): a BOOLEAN (0 or 1), Signed, Unsigned, Enumerated or finite REAL converted to REAL, other datatypes refused with PROPERTY / INVALID_DATA_TYPE, non-finite REALs with PROPERTY / VALUE_OUT_OF_RANGE and other objects with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Minimum_Value, Maximum_Value, Average_Value, Attempted_Samples and Valid_Samples change together, and a property subscription on one of them is notified. None in place of a value records a missed attempt (Attempted_Samples moves, Valid_Samples doesn't), refused on the same targets. The positive infinity, negative infinity and NaN an empty sample window reads are compared by their bits, so a move to or from one is always reported, whatever the subscription's increment, and staying at one never is. #1061: every object type Table 13-1 lists that the stack builds takes SubscribeCOV, including Access Point, Credential Data Input and Load Control, which refused it before. An Access Door report carries Present_Value, Status_Flags and Door_Alarm_State, and a Door_Alarm_State change sends one. An Access Point report leads with Access_Event instead of Present_Value, then Status_Flags, Access_Event_Tag and Access_Event_Time, and only an Access_Event_Tag, Access_Event_Time or Status_Flags change sends one. A Credential Data Input report carries Present_Value, Status_Flags and Update_Time, and an Update_Time change sends one. A Load Control report carries Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and Shed_Duration, and a change of any of them sends one. A Pulse Converter report carries Update_Time, whose change alone sends none.",
+   "requirement_summary": "A SubscribeCOV notification for a Loop carries Present_Value, Status_Flags, Setpoint and Controlled_Variable_Value, in that order, and is sent when Present_Value moves by at least COV_Increment or Status_Flags changes. For a Staging object it carries Present_Value, Status_Flags and Present_Stage and is sent on such a Present_Value move, a Status_Flags change (including a target-plan completion that changes Reliability) or any Present_Stage change. Both objects serve a writable COV_Increment REAL that refuses negative or non-finite values with PROPERTY / VALUE_OUT_OF_RANGE. Loop serves the required read-only Controlled_Variable_Value. A running server's application feeds it with BACnetServer::set_controlled_variable_value_local (Python: set_controlled_variable_value_local), a finite REAL refused on other objects with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED and accepted while Out_Of_Service is TRUE; a SubscribeCOVProperty on it is notified of the change, and a SubscribeCOV report carries the new value the next time it fires. SubscribeCOVProperty reports the selected property with Status_Flags; Present_Value inherits COV_Increment. An Averaging object, which Table 13-1 doesn't list, refuses SubscribeCOV with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED and admits SubscribeCOVProperty and SubscribeCOVPropertyMultiple; a numeric property is reported when it moves by the subscription's COV increment, or on any change without one, with no Status_Flags. A running server's application feeds it samples with BACnetServer::add_averaging_sample_local (Python: add_averaging_sample_local): a BOOLEAN (0 or 1), Signed, Unsigned, Enumerated or finite REAL converted to REAL, other datatypes refused with PROPERTY / INVALID_DATA_TYPE, non-finite REALs with PROPERTY / VALUE_OUT_OF_RANGE and other objects with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Minimum_Value, Maximum_Value, Average_Value, Attempted_Samples and Valid_Samples change together, and a property subscription on one of them is notified. None in place of a value records a missed attempt (Attempted_Samples moves, Valid_Samples doesn't), refused on the same targets. The positive infinity, negative infinity and NaN an empty sample window reads are compared by their bits, so a move to or from one is always reported, whatever the subscription's increment, and staying at one never is. #1061: every object type Table 13-1 lists that the stack builds takes SubscribeCOV, including Access Point, Credential Data Input and Load Control, which refused it before. An Access Door report carries Present_Value, Status_Flags and Door_Alarm_State, and a Door_Alarm_State change sends one. An Access Point report leads with Access_Event instead of Present_Value, then Status_Flags, Access_Event_Tag and Access_Event_Time, and only an Access_Event_Time or Status_Flags change sends one. A Credential Data Input report carries Present_Value, Status_Flags and Update_Time, and an Update_Time change sends one. A Load Control report carries Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and Shed_Duration, and a change of any of them sends one. A Pulse Converter report carries Update_Time, whose change alone sends none.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/traits.rs",
@@ -5475,14 +5476,13 @@
     "crates/bacnet-objects/src/averaging/sample_tests.rs::averaging_missed_samples_count_as_attempted_but_not_valid",
     "crates/bacnet-server/src/server/averaging_sampling_tests.rs::averaging_server_samples_notify_property_subscribers",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_door_cov_reports_and_triggers_on_door_alarm_state",
-    "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_point_cov_leads_with_access_event_and_triggers_on_its_tag_and_time",
+    "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_point_cov_leads_with_access_event_and_triggers_on_its_time",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::credential_data_input_cov_reports_and_triggers_on_update_time",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::load_control_cov_reports_and_triggers_on_its_shed_rows",
     "crates/bacnet-server/src/server/pulse_converter_cov_tests.rs::pulse_converter_cov_notification_reports_update_time",
     "crates/bacnet-objects/src/cov_criteria_tests.rs::every_table_13_1_object_type_takes_subscribe_cov",
     "crates/bacnet-objects/src/cov_criteria_tests.rs::table_13_1_extra_values_follow_each_row",
-    "crates/bacnet-server/src/cov/active.rs::active_cov_access_point_whole_object_names_access_event",
-    "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_point_out_of_service_round_trip_reports_without_a_clock"
+    "crates/bacnet-server/src/cov/active.rs::active_cov_access_point_whole_object_names_access_event"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_cov_increment_is_writable_validated_and_drives_cov",
@@ -5519,8 +5519,7 @@
     "Loop's other required rows are BACNET-12-LOOP-PROPERTY-SET (#1062). #1083 gave the Averaging object an application route through the BACnetObject::add_averaging_sample_internal hook and the same local-write path.",
     "Since #1144 the server also samples Object_Property_Reference itself (BACNET-12-AVERAGING-WINDOW), and those samples fan out to property subscribers as a background commit. Local reading of Clause 13.1: Averaging has no Present_Value and no Table 13-1 row, so it has no whole-object COV criteria and SubscribeCOV stays refused, while Table 13-1a covers its properties.",
     "BACnetObject::supports_subscribe_cov_property (default supports_cov) admits the property forms, and the default supports_cov_property follows it. AveragingObject::add_sample now refuses NaN and infinities. The sliding window, its empty-window INF / NaN / -INF values (#1092) and the server's own sampling (#1144) are BACNET-12-AVERAGING-WINDOW. Not claimed: Variance_Value and the timestamps.",
-    "A Credential Data Input simulated Present_Value (#1168) stamps Update_Time from the Device clock, so it moves both values; with the clock unchanged the Present_Value trigger still reports.",
-    "Access_Event_Tag triggers an Access Point report beside Access_Event_Time: a new transaction moves both together (Clause 12.31.27.1), so the tag adds a report only when the time can't move, as with no usable Device clock."
+    "A Credential Data Input simulated Present_Value (#1168) stamps Update_Time from the Device clock, so it moves both values; with the clock unchanged the Present_Value trigger still reports."
    ]
   },
   {

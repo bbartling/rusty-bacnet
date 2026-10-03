@@ -8,8 +8,8 @@ use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetAuthentication
 use bacnet_types::enums::{AuthenticationFactorType as F, ErrorCode, PropertyIdentifier as P};
 
 use super::credential_data_input_out_of_service_tests::{
-    assert_property_error, card, data, factor, read, reader, set_out_of_service, stamp, stamped,
-    unspecified, write, FixedClock,
+    assert_property_error, card, data, factor, read, reader, sequence, set_out_of_service, stamp,
+    stamped, write, FixedClock,
 };
 use super::*;
 
@@ -139,11 +139,12 @@ fn credential_data_input_moving_the_read_format_to_another_class_resets_present_
         .unwrap();
     assert_eq!(served(&moved), [undefined(), stamped(11)]);
 
-    // Without a Device clock the reset is stamped unspecified.
+    // Without a Device clock the reset takes the object's first sequence
+    // number.
     let mut unclocked = reader();
     unclocked.bind_clock_internal(None);
     unclocked.set_supported_formats([vendor_260(3)]).unwrap();
-    assert_eq!(served(&unclocked), [undefined(), unspecified()]);
+    assert_eq!(served(&unclocked), [undefined(), sequence(1)]);
 }
 
 #[test]

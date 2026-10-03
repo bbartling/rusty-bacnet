@@ -344,7 +344,7 @@ fn point(event: AccessEvent, tag: u64, second: u8) -> Box<dyn BACnetObject> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn access_point_cov_leads_with_access_event_and_triggers_on_its_tag_and_time() {
+async fn access_point_cov_leads_with_access_event_and_triggers_on_its_time() {
     let oid = ObjectIdentifier::new(ObjectType::ACCESS_POINT, 1).unwrap();
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
         db.add(point(AccessEvent::GRANTED, 1, 7)).unwrap();
@@ -365,19 +365,9 @@ async fn access_point_cov_leads_with_access_event_and_triggers_on_its_tag_and_ti
         report(AccessEvent::GRANTED, 1, 7)
     );
 
-    // Access_Event only rides along: a second event of the same transaction
-    // whose time didn't move sends nothing.
-    h.replace_and_fan_out(point(AccessEvent::DENIED_DENY_ALL, 1, 7))
-        .await;
-    h.no_notification().await;
-
-    // A new Access_Event_Tag sends a report even when the time stays.
+    // Access_Event and Access_Event_Tag only ride along.
     h.replace_and_fan_out(point(AccessEvent::DENIED_DENY_ALL, 2, 7))
         .await;
-    assert_eq!(
-        values(&h.cov_notification().await, oid),
-        report(AccessEvent::DENIED_DENY_ALL, 2, 7)
-    );
     h.no_notification().await;
 
     // A new Access_Event_Time sends a report with the current values.
@@ -465,26 +455,30 @@ async fn access_point_out_of_service_round_trip_reports_without_a_clock() {
             .unwrap();
     })
     .await;
-    // Without a usable Device clock every edge stamps the unspecified date
-    // and time, the value Access_Event_Time holds before any event.
+    // Without a usable Device clock an edge stamps its new tag as a sequence
+    // number [1]. Before any event the time is the unspecified date and time.
     h.server.database().write().await.set_clock_reader(None);
     let unspecified = vec![
         0x2E, 0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF, 0x2F,
     ];
-    let report = |event: AccessEvent, tag: u64| {
+    let report = |event: AccessEvent, tag: u64, time: Vec<u8>| {
         vec![
             (PropertyIdentifier::ACCESS_EVENT, enumerated(event.to_raw())),
             (SF, normal()),
             (PropertyIdentifier::ACCESS_EVENT_TAG, unsigned(tag)),
-            (PropertyIdentifier::ACCESS_EVENT_TIME, unspecified.clone()),
+            (PropertyIdentifier::ACCESS_EVENT_TIME, time),
         ]
     };
-    assert_eq!(subscribed(&mut h, oid).await, report(AccessEvent::NONE, 0));
+    assert_eq!(
+        subscribed(&mut h, oid).await,
+        report(AccessEvent::NONE, 0, unspecified)
+    );
 
     // One WritePropertyMultiple takes the point out of service and back. Both
     // edges are recorded, so the tag moves on by two and Access_Event ends at
-    // OUT_OF_SERVICE_RELINQUISHED. Status_Flags ends where it started and the
-    // time can't move, so the new tag is what sends the report.
+    // OUT_OF_SERVICE_RELINQUISHED. Status_Flags ends where it started, but
+    // Access_Event_Time, the Table 13-1 trigger, moved to sequence number 2,
+    // so the report goes out.
     write_multiple(
         &mut h,
         oid,
@@ -496,7 +490,29 @@ async fn access_point_out_of_service_round_trip_reports_without_a_clock() {
     .await;
     assert_eq!(
         values(&h.cov_notification().await, oid),
-        report(AccessEvent::OUT_OF_SERVICE_RELINQUISHED, 2)
+        report(
+            AccessEvent::OUT_OF_SERVICE_RELINQUISHED,
+            2,
+            vec![0x19, 0x02]
+        )
+    );
+    // The round trip back out of service and in again moves on to 4.
+    write_multiple(
+        &mut h,
+        oid,
+        vec![
+            (OUT_OF_SERVICE, encode(PropertyValue::Boolean(true))),
+            (OUT_OF_SERVICE, encode(PropertyValue::Boolean(false))),
+        ],
+    )
+    .await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(
+            AccessEvent::OUT_OF_SERVICE_RELINQUISHED,
+            4,
+            vec![0x19, 0x04]
+        )
     );
     h.no_notification().await;
     h.server.stop().await.unwrap();

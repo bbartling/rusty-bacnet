@@ -10,7 +10,6 @@ use super::credential_data_input_formats::{
 };
 use super::credential_data_input_out_of_service::Reading;
 use super::*;
-use crate::clock::ClockReader;
 
 // CredentialDataInputObject (type 37)
 // ---------------------------------------------------------------------------
@@ -46,7 +45,8 @@ pub struct CredentialDataInputObject {
     device_reading: Option<Reading>,
     supported_formats: Vec<SupportedFormat>,
     out_of_service: bool,
-    clock: Option<Arc<dyn ClockReader>>,
+    /// The Device clock, and the sequence numbers that stand in for it.
+    clock: UpdateClock,
 }
 
 impl CredentialDataInputObject {
@@ -70,7 +70,7 @@ impl CredentialDataInputObject {
             device_reading: None,
             supported_formats: Vec::new(),
             out_of_service: false,
-            clock: None,
+            clock: UpdateClock::default(),
         })
     }
 
@@ -114,7 +114,8 @@ impl CredentialDataInputObject {
     ///
     /// A Present_Value whose format and class the new list doesn't declare
     /// goes back to the UNDEFINED factor, with Update_Time stamped from the
-    /// Device clock (Clause 12.36.4). Out of service that covers both the
+    /// Device clock, or the object's next sequence number when there is no
+    /// usable clock (Clause 12.36.4). Out of service that covers both the
     /// simulated factor served and the reader's factor put aside.
     pub fn set_supported_formats(
         &mut self,
@@ -125,10 +126,9 @@ impl CredentialDataInputObject {
             return Err(common::value_out_of_range_error());
         }
         self.supported_formats = formats;
-        let clock = self.clock.as_deref();
-        drop_undeclared(&mut self.reading, &self.supported_formats, clock);
+        drop_undeclared(&mut self.reading, &self.supported_formats, &mut self.clock);
         if let Some(device) = &mut self.device_reading {
-            drop_undeclared(device, &self.supported_formats, clock);
+            drop_undeclared(device, &self.supported_formats, &mut self.clock);
         }
         Ok(())
     }
@@ -228,7 +228,7 @@ impl BACnetObject for CredentialDataInputObject {
         if let Some(result) = self.reading.write(
             self.out_of_service,
             &self.supported_formats,
-            self.clock.as_deref(),
+            &mut self.clock,
             property,
             &value,
         ) {
@@ -255,7 +255,7 @@ impl BACnetObject for CredentialDataInputObject {
     }
 
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.clock = clock;
+        self.clock.clock = clock;
     }
 
     /// The application's Reliability for the reader. Like the other

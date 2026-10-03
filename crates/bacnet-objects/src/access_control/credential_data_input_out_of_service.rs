@@ -32,9 +32,10 @@
 //! Update_Time moves with each Present_Value update (Clause 12.36.11), and
 //! Clause 12.36.8 asks the rest of the device to treat a simulated value as a
 //! real read. So an accepted Present_Value write stamps Update_Time from the
-//! Device clock, every field unspecified when there is none, as the Pulse
-//! Converter stamps a new Count. Writing the same factor again stamps it again.
-//! A Reliability write leaves Update_Time alone.
+//! Device clock, as the Pulse Converter stamps a new Count. With no usable
+//! clock it takes the object's next sequence number instead (`UpdateClock`),
+//! so each simulated read still moves it. Writing the same factor again
+//! stamps it again. A Reliability write leaves Update_Time alone.
 //!
 //! Out of service the three values stop following the reader, so the object
 //! keeps the reader's own values to one side:
@@ -61,8 +62,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
 use super::credential_data_input_formats::{is_declared, SupportedFormat};
-use super::simulated_reliability;
-use crate::clock::{stamp_datetime, ClockReader};
+use super::{simulated_reliability, UpdateClock};
 use crate::common;
 
 /// The values a client can simulate while Out_Of_Service is TRUE, plus the
@@ -81,7 +81,7 @@ impl Reading {
         &mut self,
         out_of_service: bool,
         formats: &[SupportedFormat],
-        clock: Option<&dyn ClockReader>,
+        clock: &mut UpdateClock,
         property: PropertyIdentifier,
         value: &PropertyValue,
     ) -> Option<Result<(), Error>> {
@@ -90,9 +90,8 @@ impl Reading {
                 return Some(Err(common::write_access_denied_error()));
             }
             return Some(checked_factor(value, formats).map(|factor| {
-                let (date, time) = stamp_datetime(clock);
                 self.present_value = factor;
-                self.update_time = BACnetTimeStamp::DateTime { date, time };
+                self.update_time = clock.stamp();
             }));
         }
         if property == PropertyIdentifier::RELIABILITY {

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::clock::{stamp_datetime, ClockReader};
+use crate::clock::ClockReader;
 
 // AccessPointObject (type 33)
 // ---------------------------------------------------------------------------
@@ -20,19 +20,23 @@ use crate::clock::{stamp_datetime, ClockReader};
 /// current date and time. The introduction to Clause 12.31 counts an
 /// operator action as an access transaction, so each change of
 /// Out_Of_Service starts a new one: the tag moves on by one (wrapping at the
-/// top of the Unsigned range), and the time comes from the Device clock,
-/// every field unspecified when there is none. A write that leaves
-/// Out_Of_Service as it was, NULL included, records nothing. The point
-/// serves neither Access_Event_Credential nor
+/// top of the Unsigned range), and the time comes from the Device clock. A
+/// write that leaves Out_Of_Service as it was, NULL included, records
+/// nothing. The point serves neither Access_Event_Credential nor
 /// Access_Event_Authentication_Factor, so neither is touched.
 ///
-/// The new tag and time are both Access Point COV triggers, so each edge
-/// sends the SubscribeCOV report, which also carries the changed
+/// With no usable Device clock the time takes the BACnetTimeStamp
+/// sequence-number form (Clauses 12.31.29 and 21.6) and holds the new tag:
+/// the tag itself while it fits the form's 1 to 65535, and past that the tag
+/// folded back into that range, so successive edges still differ and none
+/// reads 0, the value of an update time with no update yet.
+///
+/// Access_Event_Time is the Table 13-1 trigger, and each edge moves it, so
+/// each edge sends the SubscribeCOV report, which also carries the changed
 /// OUT_OF_SERVICE flag. That holds for a round trip in one
-/// WritePropertyMultiple with no usable clock too: Status_Flags ends where
-/// it started and the time can't move, but the tag has. The point runs no
-/// intrinsic reporting (no ACCESS_EVENT algorithm; Event_State stays
-/// NORMAL), so an edge raises no event notification.
+/// WritePropertyMultiple too, where Status_Flags ends where it started. The
+/// point runs no intrinsic reporting (no ACCESS_EVENT algorithm;
+/// Event_State stays NORMAL), so an edge raises no event notification.
 pub struct AccessPointObject {
     oid: ObjectIdentifier,
     name: String,
@@ -72,9 +76,9 @@ impl AccessPointObject {
     /// and Access_Event_Time, which the application's access logic produces.
     ///
     /// Access_Event_Time is a `BACnetTimeStamp` (Clause 12.31.29) and goes
-    /// out in its Clause 21 CHOICE form. A change of it or of the tag
-    /// triggers a SubscribeCOV notification; the event only rides along
-    /// (Table 13-1). Over the network all three stay read-only.
+    /// out in its Clause 21 CHOICE form. A change of it triggers a SubscribeCOV
+    /// notification; the event and its tag only ride along (Table 13-1). Over
+    /// the network all three stay read-only.
     ///
     /// While Out_Of_Service is TRUE the point performs no authentication or
     /// authorization (Clause 12.31.8), so its access logic has nothing to
@@ -110,13 +114,23 @@ impl AccessPointObject {
     }
 
     /// Record the access event an Out_Of_Service edge raises: a new
-    /// transaction, stamped from the Device clock.
+    /// transaction, stamped from the Device clock, or with the new tag as a
+    /// sequence number when there is no usable clock.
     fn record_out_of_service_event(&mut self, event: AccessEvent) {
-        let (date, time) = stamp_datetime(self.clock.as_deref());
+        let tag = self.access_event_tag.wrapping_add(1);
         self.access_event = event;
-        self.access_event_tag = self.access_event_tag.wrapping_add(1);
-        self.access_event_time = BACnetTimeStamp::DateTime { date, time };
+        self.access_event_tag = tag;
+        self.access_event_time = update_stamp(self.clock.as_deref(), || tag_sequence(tag));
     }
+}
+
+/// `tag` as a sequence number in 1..=65535: the tag itself up to 65535, and
+/// past that folded back into the range, so consecutive tags, the wrap from
+/// the top of the Unsigned range to 0 included, give different numbers.
+fn tag_sequence(tag: u64) -> u16 {
+    const RANGE: u64 = u16::MAX as u64;
+    // In 0..RANGE, so the cast keeps every bit and the sum stays in range.
+    (tag.wrapping_sub(1) % RANGE) as u16 + 1
 }
 
 impl BACnetObject for AccessPointObject {

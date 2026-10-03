@@ -13,8 +13,7 @@ use bytes::BytesMut;
 /// property. Present_Value, a trigger filtered by the object's COV_Increment,
 /// for every type but Access Point: its Table 13-1 row starts with
 /// Access_Event, and footnote 1 has the subscription list name it, but only
-/// Access_Event_Tag, Access_Event_Time and Status_Flags changes send its
-/// notification.
+/// Access_Event_Time and Status_Flags changes send its notification.
 pub(crate) fn lead(object_type: ObjectType) -> CovReportedProperty {
     if object_type == ObjectType::ACCESS_POINT {
         CovReportedProperty::Value(PropertyIdentifier::ACCESS_EVENT)

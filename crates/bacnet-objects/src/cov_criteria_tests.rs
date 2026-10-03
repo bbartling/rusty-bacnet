@@ -75,7 +75,7 @@ fn table_13_1_extra_values_follow_each_row() {
         (
             ObjectType::ACCESS_POINT,
             &[
-                Trigger(P::ACCESS_EVENT_TAG),
+                Value(P::ACCESS_EVENT_TAG),
                 Trigger(P::ACCESS_EVENT_TIME),
                 Value(P::ACCESS_EVENT_CREDENTIAL),
                 Value(P::ACCESS_EVENT_AUTHENTICATION_FACTOR),

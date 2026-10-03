@@ -16,7 +16,8 @@
 //! - `set_supported_formats` drops a factor the new list no longer covers:
 //!   Present_Value goes back to the UNDEFINED factor, and Update_Time, which
 //!   moves with every Present_Value update (Clause 12.36.11), takes the time
-//!   from the Device clock, every field unspecified when there is none. Out of
+//!   from the Device clock, or the object's next sequence number when there
+//!   is no usable clock (`UpdateClock`). Out of
 //!   service this applies both to the simulated factor served and to the
 //!   reader's factor put aside, so the return to service, which serves the
 //!   factor put aside again, can't bring back a format the reader dropped.
@@ -28,10 +29,9 @@
 
 use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat};
 use bacnet_types::enums::AuthenticationFactorType;
-use bacnet_types::primitives::BACnetTimeStamp;
 
 use super::credential_data_input_out_of_service::Reading;
-use crate::clock::{stamp_datetime, ClockReader};
+use super::UpdateClock;
 
 /// A supported format with the format class a factor read in it carries:
 /// one Supported_Formats element and the Supported_Format_Classes element at
@@ -84,17 +84,16 @@ pub(super) fn is_declared(
     }) || (factor.format_type == AuthenticationFactorType::ERROR && factor.format_class == 0)
 }
 
-/// Put `reading` back to the UNDEFINED factor, stamped from `clock`, when
+/// Put `reading` back to the UNDEFINED factor, stamped by `clock`, when
 /// `formats` no longer covers its factor; leave it alone otherwise.
 pub(super) fn drop_undeclared(
     reading: &mut Reading,
     formats: &[SupportedFormat],
-    clock: Option<&dyn ClockReader>,
+    clock: &mut UpdateClock,
 ) {
     if is_declared(&reading.present_value, formats) {
         return;
     }
-    let (date, time) = stamp_datetime(clock);
     reading.present_value = undefined_factor();
-    reading.update_time = BACnetTimeStamp::DateTime { date, time };
+    reading.update_time = clock.stamp();
 }

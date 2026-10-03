@@ -6,7 +6,7 @@ use std::sync::Arc;
 use bacnet_types::enums::{ErrorCode, PropertyIdentifier as P};
 
 use super::credential_data_input_out_of_service_tests::{
-    assert_property_error, stamp, stamped, unspecified, FixedClock,
+    assert_property_error, sequence, stamp, stamped, FixedClock,
 };
 use super::*;
 
@@ -118,13 +118,53 @@ fn access_point_writes_that_keep_out_of_service_record_nothing() {
 }
 
 #[test]
-fn access_point_out_of_service_event_without_a_clock_stamps_unspecified() {
+fn access_point_out_of_service_event_without_a_clock_stamps_the_tag_as_a_sequence_number() {
     let mut point = point();
     point.bind_clock_internal(None);
     write_out_of_service(&mut point, PropertyValue::Boolean(true)).unwrap();
     assert_eq!(
         served(&point),
-        event(AccessEvent::OUT_OF_SERVICE, 8, unspecified(), true)
+        event(AccessEvent::OUT_OF_SERVICE, 8, sequence(8), true)
+    );
+    write_out_of_service(&mut point, PropertyValue::Boolean(false)).unwrap();
+    assert_eq!(
+        served(&point),
+        event(
+            AccessEvent::OUT_OF_SERVICE_RELINQUISHED,
+            9,
+            sequence(9),
+            false
+        )
+    );
+}
+
+#[test]
+fn access_point_sequence_number_folds_a_tag_past_its_range() {
+    let mut point = point();
+    point.bind_clock_internal(None);
+    // A tag up to 65535 is its own sequence number; 65536 folds back to 1.
+    point.set_access_event(AccessEvent::GRANTED, 65_534, stamp(9));
+    write_out_of_service(&mut point, PropertyValue::Boolean(true)).unwrap();
+    assert_eq!(
+        served(&point),
+        event(AccessEvent::OUT_OF_SERVICE, 65_535, sequence(65_535), true)
+    );
+    write_out_of_service(&mut point, PropertyValue::Boolean(false)).unwrap();
+    assert_eq!(
+        served(&point),
+        event(
+            AccessEvent::OUT_OF_SERVICE_RELINQUISHED,
+            65_536,
+            sequence(1),
+            false
+        )
+    );
+    // The tag's own wrap to 0 gives 1 too, never the 0 of no update yet.
+    point.set_access_event(AccessEvent::GRANTED, u64::MAX, stamp(9));
+    write_out_of_service(&mut point, PropertyValue::Boolean(true)).unwrap();
+    assert_eq!(
+        served(&point),
+        event(AccessEvent::OUT_OF_SERVICE, 0, sequence(1), true)
     );
 }
 

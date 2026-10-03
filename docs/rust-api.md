@@ -2379,9 +2379,8 @@ Access Door, Access Point and Credential Data Input support COV (Table 13-1).
 A door's SubscribeCOV report carries Present_Value, Status_Flags and
 Door_Alarm_State; a Door_Alarm_State change sends one. An Access Point has no
 Present_Value, so its report starts with Access_Event, then Status_Flags,
-Access_Event_Tag and Access_Event_Time, and only an Access_Event_Tag,
-Access_Event_Time or Status_Flags change sends one (the tag stands in for a
-time that can't move, as with no usable Device clock). A Credential Data Input report carries
+Access_Event_Tag and Access_Event_Time, and only an Access_Event_Time or
+Status_Flags change sends one. A Credential Data Input report carries
 Update_Time, whose change sends one. The application sets these values before
 adding the object with `AccessDoorObject::set_door_alarm_state`,
 `AccessPointObject::set_access_event` (its time a `BACnetTimeStamp`) and
@@ -2415,7 +2414,22 @@ Reliability write must be a BACnetReliability value. Entering out of service
 puts the reader's Present_Value, Update_Time and Reliability aside,
 `set_present_value` updates the values put aside, `set_reliability_internal`
 is refused until the return to service, and the return to service serves the
-reader's values again. A door's Door_Status, Lock_Status and Door_Alarm_State, the rows
+reader's values again.
+
+Without a usable Device clock a date-and-time stamp would be the unspecified
+one every time, so Access_Event_Time and Update_Time, the Table 13-1
+triggers of these two objects, would never move. Both are BACnetTimeStamp
+values (Clause 21.6), and Clauses 12.31.29 and 12.36.11 allow an update time
+in the sequence-number form, so with no usable clock the objects stamp that
+form instead. An Access Point's Out_Of_Service edge stamps its new
+Access_Event_Tag: the tag itself up to 65535, and past that the tag folded
+back into 1 to 65535. A Credential Data Input's simulated Present_Value and
+format reset take the object's own next number, from 1 to 65535 and then 1
+again. Neither stamps 0, the value of an update time with no update yet. A
+time the application passes to `set_access_event` or `set_present_value` is
+served as given.
+
+A door's Door_Status, Lock_Status and Door_Alarm_State, the rows
 footnote 1 of Table 12-30 marks, take WriteProperty and WritePropertyMultiple
 while Out_Of_Service is TRUE, so a client can simulate the door; in service
 they refuse writes with WRITE_ACCESS_DENIED. A write must be an Enumerated in

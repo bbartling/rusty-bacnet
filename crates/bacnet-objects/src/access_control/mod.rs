@@ -22,7 +22,9 @@ use bacnet_types::primitives::{
 };
 use bytes::BytesMut;
 use std::borrow::Cow;
+use std::sync::Arc;
 
+use crate::clock::{current_datetime, ClockReader};
 use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
 
@@ -65,6 +67,58 @@ fn device_object_references(references: &[BACnetDeviceObjectReference]) -> Vec<P
             PropertyValue::ApplicationData(buf.to_vec())
         })
         .collect()
+}
+
+/// The BACnetTimeStamp (Clause 21.6) for an update recorded now: the Device
+/// clock's date and time, or `sequence()` in the sequence-number form when
+/// there is no usable clock.
+///
+/// Without a clock every date-and-time stamp would be the unspecified one,
+/// so successive updates would carry the same time and a subscriber watching
+/// that time (Table 13-1) would hear none of them. A sequence number moves on
+/// with each update instead; Clauses 12.31.29 and 12.36.11 both allow an
+/// update time in that form.
+fn update_stamp(
+    clock: Option<&dyn ClockReader>,
+    sequence: impl FnOnce() -> u16,
+) -> BACnetTimeStamp {
+    match current_datetime(clock) {
+        Some((date, time)) => BACnetTimeStamp::DateTime { date, time },
+        None => BACnetTimeStamp::SequenceNumber(sequence()),
+    }
+}
+
+/// The sequence number after `previous`: it climbs from 1 to 65535, the top
+/// of the production's range, and starts again at 1. It never takes 0,
+/// which marks an update time with no update yet (Clauses 12.31.29 and
+/// 12.36.11).
+fn next_sequence(previous: u16) -> u16 {
+    if previous == u16::MAX {
+        1
+    } else {
+        previous + 1
+    }
+}
+
+/// The Device clock an object stamps its update times from, and the
+/// sequence numbers it hands out, in order, while that clock gives no usable
+/// reading (`update_stamp`).
+#[derive(Default)]
+struct UpdateClock {
+    clock: Option<Arc<dyn ClockReader>>,
+    /// The last sequence number handed out; 0 before the first.
+    sequence: u16,
+}
+
+impl UpdateClock {
+    /// Stamp an update made now.
+    fn stamp(&mut self) -> BACnetTimeStamp {
+        let sequence = &mut self.sequence;
+        update_stamp(self.clock.as_deref(), || {
+            *sequence = next_sequence(*sequence);
+            *sequence
+        })
+    }
 }
 
 /// A client's simulated Reliability, written while Out_Of_Service is TRUE:

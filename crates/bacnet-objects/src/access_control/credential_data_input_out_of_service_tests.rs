@@ -40,11 +40,14 @@ pub(super) fn stamped(hour: u8) -> PropertyValue {
     PropertyValue::ApplicationData(vec![0x2E, 0xA4, 126, 10, 2, 5, 0xB4, hour, 30, 0, 0, 0x2F])
 }
 
-/// The unspecified date and time in the datetime choice.
-pub(super) fn unspecified() -> PropertyValue {
-    PropertyValue::ApplicationData(vec![
-        0x2E, 0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF, 0x2F,
-    ])
+/// An update time in the sequence-number choice, context tag [1].
+pub(super) fn sequence(number: u16) -> PropertyValue {
+    let [high, low] = number.to_be_bytes();
+    PropertyValue::ApplicationData(if high == 0 {
+        vec![0x19, low]
+    } else {
+        vec![0x1A, high, low]
+    })
 }
 
 /// A reader of Wiegand 26 cards (class 0) and of vendor 260's format 7
@@ -253,12 +256,52 @@ fn credential_data_input_takes_simulated_rows_out_of_service() {
 }
 
 #[test]
-fn credential_data_input_simulated_present_value_without_a_clock_stamps_unspecified() {
+fn credential_data_input_without_a_clock_stamps_update_time_with_a_sequence_number() {
     let mut reader = reader();
     reader.bind_clock_internal(None);
     set_out_of_service(&mut reader, true);
-    write(&mut reader, P::PRESENT_VALUE, data(factor(8, 0, &[0x77]))).unwrap();
-    assert_eq!(read(&reader, P::UPDATE_TIME), unspecified());
+    // Each simulated read takes the object's next number, from 1, so Update_Time
+    // moves even for the same factor; a Reliability write takes none.
+    for number in 1..=2 {
+        write(&mut reader, P::PRESENT_VALUE, data(factor(8, 0, &[0x77]))).unwrap();
+        assert_eq!(read(&reader, P::UPDATE_TIME), sequence(number));
+    }
+    write(
+        &mut reader,
+        P::RELIABILITY,
+        PropertyValue::Enumerated(Reliability::UNRELIABLE_OTHER.to_raw()),
+    )
+    .unwrap();
+    assert_eq!(read(&reader, P::UPDATE_TIME), sequence(2));
+
+    // Dropping Wiegand 26 resets the factor served and then the reader's
+    // factor set aside, each an update with the next number.
+    reader
+        .set_supported_formats([(BACnetAuthenticationFactorFormat::custom(260, 7), 3)])
+        .unwrap();
+    assert_eq!(read(&reader, P::UPDATE_TIME), sequence(3));
+    set_out_of_service(&mut reader, false);
+    assert_eq!(
+        [
+            read(&reader, P::PRESENT_VALUE),
+            read(&reader, P::UPDATE_TIME)
+        ],
+        [data(factor(0, 0, &[])), sequence(4)]
+    );
+
+    // With a clock again, updates take its date and time.
+    reader.bind_clock_internal(Some(Arc::new(FixedClock(12))));
+    set_out_of_service(&mut reader, true);
+    write(&mut reader, P::PRESENT_VALUE, data(factor(2, 3, &[0x01]))).unwrap();
+    assert_eq!(read(&reader, P::UPDATE_TIME), stamped(12));
+}
+
+#[test]
+fn sequence_numbers_climb_to_the_top_of_the_range_and_skip_zero() {
+    assert_eq!(super::next_sequence(0), 1);
+    assert_eq!(super::next_sequence(1), 2);
+    assert_eq!(super::next_sequence(u16::MAX - 1), u16::MAX);
+    assert_eq!(super::next_sequence(u16::MAX), 1);
 }
 
 #[test]
