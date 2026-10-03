@@ -2600,10 +2600,12 @@ there are (1 by default; zero, or a count below the policy in effect, is
 VALUE_OUT_OF_RANGE), and a client picks the policy in effect by writing
 Active_Authentication_Policy, an Unsigned from 1 to that count.
 Authorization_Mode starts at AUTHORIZE and takes a write of any mode in the
-set `set_supported_authorization_modes` gives: the six standard modes by
-default, always with AUTHORIZE and the mode in effect, and proprietary modes
-from 64 to 65535 if the application adds them. Any other value is
-VALUE_OUT_OF_RANGE, and another datatype INVALID_DATA_TYPE.
+set `set_supported_authorization_modes` gives. The point enforces no mode
+itself, so a new point supports AUTHORIZE alone: an application that acts on
+the mode declares the other standard modes it carries out, and proprietary
+ones from 64 to 65535, in a set that keeps AUTHORIZE and the mode in effect.
+Any other value is VALUE_OUT_OF_RANGE, and another datatype
+INVALID_DATA_TYPE.
 `set_priority_for_writing` sets the priority the application commands the
 Access_Doors at (16 by default, 1 to 16 accepted). The policy count and the
 priority are read-only over the network; the point stores and checks these

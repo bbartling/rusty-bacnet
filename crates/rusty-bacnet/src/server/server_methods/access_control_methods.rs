@@ -116,11 +116,12 @@ impl BACnetServer {
     ///
     /// `number_of_authentication_policies` sets the policy count (1 when
     /// omitted, never 0), `supported_authorization_modes` the
-    /// BACnetAuthorizationMode numbers a write of Authorization_Mode can
-    /// take (the six standard ones when omitted; AUTHORIZE must be among
-    /// them, and a proprietary mode runs from 64 to 65535), and
-    /// `priority_for_writing` the door command priority (16 when omitted,
-    /// else 1 to 16). A value outside those raises VALUE_OUT_OF_RANGE.
+    /// BACnetAuthorizationMode numbers the application carries out, which a
+    /// write of Authorization_Mode can take (AUTHORIZE alone when omitted;
+    /// AUTHORIZE must be among them, and a proprietary mode runs from 64 to
+    /// 65535), and `priority_for_writing` the door command priority (16 when
+    /// omitted, else 1 to 16). A value outside those raises
+    /// VALUE_OUT_OF_RANGE.
     #[pyo3(signature = (
         instance,
         name,

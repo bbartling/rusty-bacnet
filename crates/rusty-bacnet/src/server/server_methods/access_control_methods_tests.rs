@@ -197,8 +197,9 @@ fn python_point_settings_reach_the_access_point_rows() {
         assert_eq!(result.is_ok(), accepted, "{mode}: {result:?}");
     }
 
-    // Omitted arguments keep the defaults: one policy and priority 16.
-    let bare = access_point(2, "AP-2", PointSettings::default()).unwrap();
+    // Omitted arguments keep the defaults: one policy, priority 16 and
+    // AUTHORIZE as the only supported mode, so DENY_ALL (2) is refused.
+    let mut bare = access_point(2, "AP-2", PointSettings::default()).unwrap();
     assert_eq!(
         read(&bare, PropertyIdentifier::NUMBER_OF_AUTHENTICATION_POLICIES),
         PropertyValue::Unsigned(1)
@@ -207,6 +208,15 @@ fn python_point_settings_reach_the_access_point_rows() {
         read(&bare, PropertyIdentifier::PRIORITY_FOR_WRITING),
         PropertyValue::Unsigned(16)
     );
+    let refused = bare
+        .write_property(
+            PropertyIdentifier::AUTHORIZATION_MODE,
+            None,
+            PropertyValue::Enumerated(2),
+            None,
+        )
+        .unwrap_err();
+    assert!(is_value_out_of_range(&refused), "{refused:?}");
 
     // Zero policies, a set without AUTHORIZE, a reserved mode, and
     // priorities outside 1..=16, one of them too wide for u8.

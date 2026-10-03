@@ -208,10 +208,12 @@ impl AccessPointObject {
 
     /// Set the authorization modes the application carries out, the values
     /// a write of Authorization_Mode can take (Clause 12.31.14). A new point
-    /// takes the six standard modes. The set must hold AUTHORIZE and the
-    /// mode in effect, and each mode must be a standard one or a proprietary
-    /// one from 64 to 65535; otherwise it is refused with VALUE_OUT_OF_RANGE
-    /// and the set before is kept. A repeated mode counts once.
+    /// takes AUTHORIZE alone, since the point enforces no mode itself: an
+    /// application that acts on Authorization_Mode declares the other modes
+    /// it carries out here. The set must hold AUTHORIZE and the mode in
+    /// effect, and each mode must be a standard one or a proprietary one from
+    /// 64 to 65535; otherwise it is refused with VALUE_OUT_OF_RANGE and the
+    /// set before is kept. A repeated mode counts once.
     pub fn set_supported_authorization_modes(
         &mut self,
         modes: impl IntoIterator<Item = AuthorizationMode>,

@@ -2837,15 +2837,17 @@ class BACnetServer:
         reference to anything but an Access Door raises BacnetProtocolError
         with VALUE_OUT_OF_RANGE; either way nothing is registered.
 
-        The other keyword arguments set rows that are also read-only over the
-        network: Number_Of_Authentication_Policies (1 when omitted, never 0),
-        the BACnetAuthorizationMode numbers a write of Authorization_Mode can
-        take (the six standard ones when omitted; AUTHORIZE (0) must be among
-        them, and proprietary modes run from 64 to 65535) and
-        Priority_For_Writing (16 when omitted, else 1 to 16). A value outside
-        those raises BacnetProtocolError with VALUE_OUT_OF_RANGE. Peers write
+        ``number_of_authentication_policies`` (1 when omitted, never 0) and
+        ``priority_for_writing`` (16 when omitted, else 1 to 16) set
+        Number_Of_Authentication_Policies and Priority_For_Writing, which are
+        read-only over the network. ``supported_authorization_modes`` lists
+        the BACnetAuthorizationMode numbers the application carries out, the
+        values a write of Authorization_Mode can take: AUTHORIZE (0) alone
+        when omitted, and AUTHORIZE must be in any list given; proprietary
+        modes run from 64 to 65535. A value outside those raises
+        BacnetProtocolError with VALUE_OUT_OF_RANGE. Peers write
         Active_Authentication_Policy (1 to the policy count) and
-        Authorization_Mode.
+        Authorization_Mode (one of the supported modes).
         """
         ...
     def add_access_rights(self, instance: int, name: str) -> None: ...

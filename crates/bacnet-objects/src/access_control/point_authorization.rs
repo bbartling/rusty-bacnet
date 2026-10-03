@@ -22,8 +22,11 @@
 //! access-control workstation (DS-ACM-A) changes in daily use. Clause
 //! 12.31.14 lets a point carry out fewer than all the modes but never leave
 //! out AUTHORIZE, so the point keeps the set of modes its application
-//! supports: the six standard ones until the application gives another set,
-//! which may add proprietary ones from 64. A written mode outside the set is
+//! supports. The point enforces no mode itself, so a new point accepts
+//! AUTHORIZE alone, the minimum, and an operator's DENY_ALL can't be taken
+//! and then ignored by an application that never reads the mode. The
+//! application declares the other modes it carries out, standard ones or
+//! proprietary ones from 64. A written mode outside the set is
 //! VALUE_OUT_OF_RANGE. AUTHORIZE is the mode a new point starts in.
 //!
 //! Priority_For_Writing is the priority the Access_Doors are commanded at
@@ -38,16 +41,6 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
 use crate::common;
-
-/// The standard BACnetAuthorizationMode values, the set a new point accepts.
-const STANDARD_MODES: [AuthorizationMode; 6] = [
-    AuthorizationMode::AUTHORIZE,
-    AuthorizationMode::GRANT_ACTIVE,
-    AuthorizationMode::DENY_ALL,
-    AuthorizationMode::VERIFICATION_REQUIRED,
-    AuthorizationMode::AUTHORIZATION_DELAYED,
-    AuthorizationMode::NONE,
-];
 
 /// The first proprietary BACnetAuthorizationMode value; 6 to 63 are kept
 /// for the standard (Clause 21).
@@ -70,14 +63,14 @@ pub(super) struct Authorization {
 }
 
 impl Authorization {
-    /// One policy, in effect; AUTHORIZE out of every standard mode; and the
+    /// One policy, in effect; AUTHORIZE as the only supported mode; and the
     /// lowest command priority.
     pub(super) fn new() -> Self {
         Self {
             policies: 1,
             active_policy: 1,
             mode: AuthorizationMode::AUTHORIZE,
-            supported_modes: STANDARD_MODES.to_vec(),
+            supported_modes: vec![AuthorizationMode::AUTHORIZE],
             priority_for_writing: 16,
         }
     }

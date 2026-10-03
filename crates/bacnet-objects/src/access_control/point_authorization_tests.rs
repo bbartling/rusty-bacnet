@@ -24,6 +24,16 @@ fn mode(mode: AuthorizationMode) -> PropertyValue {
     PropertyValue::Enumerated(mode.to_raw())
 }
 
+/// Every standard BACnetAuthorizationMode, AUTHORIZE (0) to NONE (5).
+const STANDARD_MODES: [AuthorizationMode; 6] = [
+    AuthorizationMode::AUTHORIZE,
+    AuthorizationMode::GRANT_ACTIVE,
+    AuthorizationMode::DENY_ALL,
+    AuthorizationMode::VERIFICATION_REQUIRED,
+    AuthorizationMode::AUTHORIZATION_DELAYED,
+    AuthorizationMode::NONE,
+];
+
 fn assert_error(result: Result<(), Error>, expected: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
@@ -101,8 +111,11 @@ fn access_point_active_policy_refuses_writes_outside_the_policies() {
 }
 
 #[test]
-fn access_point_authorization_mode_write_takes_each_standard_mode() {
+fn access_point_authorization_mode_write_takes_each_declared_standard_mode() {
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
+    point
+        .set_supported_authorization_modes(STANDARD_MODES)
+        .unwrap();
     // GRANT_ACTIVE (1) to NONE (5), then back to AUTHORIZE (0).
     for raw in [1, 2, 3, 4, 5, 0] {
         write(&mut point, MODE, PropertyValue::Enumerated(raw)).unwrap();
@@ -113,10 +126,12 @@ fn access_point_authorization_mode_write_takes_each_standard_mode() {
 #[test]
 fn access_point_authorization_mode_refuses_other_values() {
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
-    write(&mut point, MODE, mode(AuthorizationMode::DENY_ALL)).unwrap();
-    // Reserved values, proprietary ones the application didn't declare and
-    // values past the Unsigned16 range.
-    for raw in [6, 63, 64, 65_535, 65_536, u32::MAX] {
+    // A new point supports AUTHORIZE alone: it enforces no mode, so the
+    // other standard modes wait for the application to declare them.
+    write(&mut point, MODE, mode(AuthorizationMode::AUTHORIZE)).unwrap();
+    // Undeclared standard modes, reserved values, an undeclared proprietary
+    // mode and values past the Unsigned16 range.
+    for raw in [1, 2, 3, 4, 5, 6, 63, 64, 65_535, 65_536, u32::MAX] {
         assert_error(
             write(&mut point, MODE, PropertyValue::Enumerated(raw)),
             ErrorCode::VALUE_OUT_OF_RANGE,
@@ -129,7 +144,7 @@ fn access_point_authorization_mode_refuses_other_values() {
         point.write_property(MODE, Some(0), PropertyValue::Enumerated(0), None),
         ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
     );
-    assert_eq!(read(&point, MODE), mode(AuthorizationMode::DENY_ALL));
+    assert_eq!(read(&point, MODE), mode(AuthorizationMode::AUTHORIZE));
 }
 
 #[test]
@@ -160,6 +175,9 @@ fn access_point_authorization_mode_follows_the_supported_modes() {
 fn access_point_supported_modes_refuse_sets_without_authorize_or_the_mode_in_effect() {
     use AuthorizationMode as M;
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
+    point
+        .set_supported_authorization_modes([M::AUTHORIZE, M::GRANT_ACTIVE, M::DENY_ALL])
+        .unwrap();
     write(&mut point, MODE, mode(M::DENY_ALL)).unwrap();
     for modes in [
         // AUTHORIZE is the mode every point carries out (Clause 12.31.14).
@@ -176,9 +194,14 @@ fn access_point_supported_modes_refuse_sets_without_authorize_or_the_mode_in_eff
             ErrorCode::VALUE_OUT_OF_RANGE,
         );
     }
-    // The six standard modes are still the set.
+    // The set declared before is kept: GRANT_ACTIVE is still taken, NONE
+    // still refused.
     write(&mut point, MODE, mode(M::GRANT_ACTIVE)).unwrap();
     assert_eq!(read(&point, MODE), mode(M::GRANT_ACTIVE));
+    assert_error(
+        write(&mut point, MODE, mode(M::NONE)),
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
 }
 
 #[test]

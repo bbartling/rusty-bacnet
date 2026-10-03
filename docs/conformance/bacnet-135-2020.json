@@ -2712,7 +2712,7 @@
     "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs::access_point"
    ],
    "positive_tests": [
-    "crates/bacnet-objects/src/access_control/point_authorization_tests.rs::{access_point_serves_policy_mode_and_priority_defaults,access_point_active_policy_write_names_one_of_the_policies,access_point_authorization_mode_write_takes_each_standard_mode,access_point_authorization_mode_follows_the_supported_modes}",
+    "crates/bacnet-objects/src/access_control/point_authorization_tests.rs::{access_point_serves_policy_mode_and_priority_defaults,access_point_active_policy_write_names_one_of_the_policies,access_point_authorization_mode_write_takes_each_declared_standard_mode,access_point_authorization_mode_follows_the_supported_modes}",
     "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_point_exact_sets_readable_rows_and_indexed_list,property_metadata_access_trio_write_capabilities_match_dispatch}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_point_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/handlers/tests/access_point_authorization_writes.rs::write_property_sets_the_access_point_policy_and_mode",
@@ -2723,7 +2723,7 @@
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/access_control/point_authorization_tests.rs::{access_point_active_policy_refuses_writes_outside_the_policies,access_point_authorization_mode_refuses_other_values,access_point_supported_modes_refuse_sets_without_authorize_or_the_mode_in_effect,access_point_policy_count_refuses_zero_and_a_count_below_the_active_policy,access_point_count_and_priority_come_from_the_application}",
-    "crates/bacnet-server/src/handlers/tests/access_point_authorization_writes.rs::write_property_refuses_other_policy_mode_and_read_only_writes"
+    "crates/bacnet-server/src/handlers/tests/access_point_authorization_writes.rs::{write_property_refuses_other_policy_mode_and_read_only_writes,write_property_multiple_refuses_other_policy_mode_values}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2733,12 +2733,12 @@
    "notes": [
     "Active_Authentication_Policy and Number_Of_Authentication_Policies start at 1. A policy write is an Unsigned from 1 to the count; zero or a value past the count is VALUE_OUT_OF_RANGE, another datatype INVALID_DATA_TYPE.",
     "`set_number_of_authentication_policies` refuses zero and a count below the policy in effect, so the active policy never drops to zero and Reliability never reads CONFIGURATION_ERROR on that account.",
-    "Authorization_Mode starts at AUTHORIZE and takes a write of a supported mode: the six standard ones until `set_supported_authorization_modes` gives a set, which keeps AUTHORIZE and the mode in effect.",
+    "Authorization_Mode starts at AUTHORIZE, the only supported mode until `set_supported_authorization_modes` declares more; a set keeps AUTHORIZE and the mode in effect. A write outside the set is VALUE_OUT_OF_RANGE.",
     "The policy and the mode are writable because Table K-10 lists them for DS-ACM-A. The policy count and Priority_For_Writing (16 until set, 1 to 16) come from the application only.",
     "The point stores and checks these values; the application carries out the policy and the mode, and commands the doors at Priority_For_Writing."
    ],
    "gaps": [
-    "Authentication_Policy_List and Authentication_Policy_Names, optional Table 12-36 rows, are not served (no issue)"
+    "#1325: Authentication_Policy_List and Authentication_Policy_Names, optional Table 12-36 rows, are not served"
    ]
   },
   {

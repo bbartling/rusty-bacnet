@@ -4,6 +4,7 @@ use bacnet_objects::{
     traits::BACnetObject,
 };
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
+use bacnet_types::enums::AuthorizationMode;
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 
@@ -360,7 +361,14 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
         let mut object = AccessPointObject::new(7, "AP-7").unwrap();
         write_common(&mut object, configured);
         if configured {
-            // A client's DENY_ALL (2) (#1307).
+            // A client's DENY_ALL (2), once the application declares it
+            // (#1307).
+            object
+                .set_supported_authorization_modes([
+                    AuthorizationMode::AUTHORIZE,
+                    AuthorizationMode::DENY_ALL,
+                ])
+                .unwrap();
             object
                 .write_property(
                     P::AUTHORIZATION_MODE,

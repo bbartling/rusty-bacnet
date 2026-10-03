@@ -224,6 +224,14 @@ class AccessControlConfigurationTests(unittest.TestCase):
             async def write(property: PropertyIdentifier, value: PropertyValue) -> None:
                 await server.write_property_local(lobby, property, value, source_object=None)
 
+            # A point registered without supported modes takes AUTHORIZE
+            # alone, so DENY_ALL (2) is refused there.
+            with self.assertRaises(BacnetProtocolError) as raised:
+                await server.write_property_local(
+                    side, mode, PropertyValue.enumerated(2), source_object=None
+                )
+            self.assert_value_out_of_range(raised.exception)
+
             await write(policy, PropertyValue.unsigned(3))
             await write(mode, PropertyValue.enumerated(300))
             self.assertEqual(await value(lobby, policy), 3)
@@ -236,6 +244,12 @@ class AccessControlConfigurationTests(unittest.TestCase):
                 with self.assertRaises(BacnetProtocolError) as raised:
                     await write(property, refused)
                 self.assert_value_out_of_range(raised.exception)
+            # Another datatype.
+            with self.assertRaises(BacnetProtocolError) as raised:
+                await write(mode, PropertyValue.unsigned(2))
+            self.assertEqual(
+                raised.exception.error_code, ErrorCode.INVALID_DATA_TYPE.to_raw()
+            )
             for property in (policies, priority):
                 with self.assertRaises(BacnetProtocolError) as raised:
                     await write(property, PropertyValue.unsigned(2))

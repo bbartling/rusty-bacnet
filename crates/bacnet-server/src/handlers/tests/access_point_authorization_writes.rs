@@ -7,10 +7,27 @@ use super::*;
 use bacnet_objects::access_control::AccessPointObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
+use bacnet_types::enums::AuthorizationMode;
 use PropertyIdentifier as P;
 
-fn point_db() -> (ObjectDatabase, ObjectIdentifier) {
-    let point = AccessPointObject::new(1, "AP-1").unwrap();
+/// One write: the property, its array index, the value and the priority.
+type Write = (P, Option<u32>, PropertyValue, Option<u8>);
+
+/// A new point, or with `configured` one defining three policies and
+/// declaring GRANT_ACTIVE, DENY_ALL and NONE beside AUTHORIZE.
+fn point_db(configured: bool) -> (ObjectDatabase, ObjectIdentifier) {
+    let mut point = AccessPointObject::new(1, "AP-1").unwrap();
+    if configured {
+        point.set_number_of_authentication_policies(3).unwrap();
+        point
+            .set_supported_authorization_modes([
+                AuthorizationMode::AUTHORIZE,
+                AuthorizationMode::GRANT_ACTIVE,
+                AuthorizationMode::DENY_ALL,
+                AuthorizationMode::NONE,
+            ])
+            .unwrap();
+    }
     let oid = point.object_identifier();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(point)).unwrap();
@@ -26,17 +43,16 @@ fn encode(value: &PropertyValue) -> Vec<u8> {
 fn write_property(
     db: &mut ObjectDatabase,
     oid: ObjectIdentifier,
-    property: P,
-    index: Option<u32>,
-    value: &PropertyValue,
+    write: Write,
 ) -> Result<(), Error> {
+    let (property, index, value, priority) = write;
     let mut request = BytesMut::new();
     WritePropertyRequest {
         object_identifier: oid,
         property_identifier: property,
         property_array_index: index,
-        property_value: encode(value),
-        priority: None,
+        property_value: encode(&value),
+        priority,
     }
     .encode(&mut request)
     .unwrap();
@@ -46,19 +62,19 @@ fn write_property(
 fn write_property_multiple(
     db: &mut ObjectDatabase,
     oid: ObjectIdentifier,
-    writes: &[(P, PropertyValue)],
+    writes: Vec<Write>,
 ) -> Result<(), Error> {
     let mut request = BytesMut::new();
     WritePropertyMultipleRequest {
         list_of_write_access_specs: vec![WriteAccessSpecification {
             object_identifier: oid,
             list_of_properties: writes
-                .iter()
-                .map(|(property, value)| BACnetPropertyValue {
-                    property_identifier: *property,
-                    property_array_index: None,
-                    value: encode(value),
-                    priority: None,
+                .into_iter()
+                .map(|(property, index, value, priority)| BACnetPropertyValue {
+                    property_identifier: property,
+                    property_array_index: index,
+                    value: encode(&value),
+                    priority,
                 })
                 .collect(),
         }],
@@ -66,6 +82,25 @@ fn write_property_multiple(
     .encode(&mut request)
     .unwrap();
     handle_write_property_multiple(db, &request).map(|_| ())
+}
+
+/// A write with no index and no priority.
+fn plain(property: P, value: PropertyValue) -> Write {
+    (property, None, value, None)
+}
+
+fn policy(policy: u64) -> Write {
+    plain(
+        P::ACTIVE_AUTHENTICATION_POLICY,
+        PropertyValue::Unsigned(policy),
+    )
+}
+
+fn mode(mode: AuthorizationMode) -> Write {
+    plain(
+        P::AUTHORIZATION_MODE,
+        PropertyValue::Enumerated(mode.to_raw()),
+    )
 }
 
 /// The ReadProperty-ACK value bytes of one property.
@@ -105,140 +140,200 @@ fn assert_property_error(result: Result<(), Error>, expected: ErrorCode) {
 
 #[test]
 fn write_property_sets_the_access_point_policy_and_mode() {
-    let (mut db, oid) = point_db();
+    let (db, oid) = point_db(false);
     // One policy in effect, AUTHORIZE (0) and priority 16.
     assert_eq!(
         served(&db, oid),
         [vec![0x21, 1], vec![0x21, 1], vec![0x91, 0], vec![0x21, 16]]
     );
-    write_property(
-        &mut db,
-        oid,
-        P::ACTIVE_AUTHENTICATION_POLICY,
-        None,
-        &PropertyValue::Unsigned(1),
-    )
-    .unwrap();
+
+    let (mut db, oid) = point_db(true);
+    write_property(&mut db, oid, policy(3)).unwrap();
     // DENY_ALL (2), then NONE (5).
-    for (mode, wire) in [(2, 0x02), (5, 0x05)] {
-        write_property(
-            &mut db,
-            oid,
-            P::AUTHORIZATION_MODE,
-            None,
-            &PropertyValue::Enumerated(mode),
-        )
-        .unwrap();
+    for (written, wire) in [
+        (AuthorizationMode::DENY_ALL, 2),
+        (AuthorizationMode::NONE, 5),
+    ] {
+        write_property(&mut db, oid, mode(written)).unwrap();
         assert_eq!(
             read_bytes(&db, oid, P::AUTHORIZATION_MODE),
             vec![0x91, wire]
         );
     }
-    // Both in one WritePropertyMultiple: GRANT_ACTIVE (1).
+    // Neither row is commandable, so a priority is taken and ignored: a
+    // later write at a lower priority still replaces the value.
+    for (written, priority) in [
+        (AuthorizationMode::DENY_ALL, 8),
+        (AuthorizationMode::AUTHORIZE, 16),
+    ] {
+        let (property, index, value, _) = mode(written);
+        write_property(&mut db, oid, (property, index, value, Some(priority))).unwrap();
+    }
+    let (property, index, value, _) = policy(2);
+    write_property(&mut db, oid, (property, index, value, Some(8))).unwrap();
+    assert_eq!(
+        served(&db, oid),
+        [vec![0x21, 2], vec![0x21, 3], vec![0x91, 0], vec![0x21, 16]]
+    );
+    // Both in one WritePropertyMultiple, the mode with a priority:
+    // policy 1 and GRANT_ACTIVE (1).
+    let (property, index, value, _) = mode(AuthorizationMode::GRANT_ACTIVE);
     write_property_multiple(
         &mut db,
         oid,
-        &[
-            (P::ACTIVE_AUTHENTICATION_POLICY, PropertyValue::Unsigned(1)),
-            (P::AUTHORIZATION_MODE, PropertyValue::Enumerated(1)),
-        ],
+        vec![policy(1), (property, index, value, Some(8))],
     )
     .unwrap();
     assert_eq!(
         served(&db, oid),
-        [vec![0x21, 1], vec![0x21, 1], vec![0x91, 1], vec![0x21, 16]]
+        [vec![0x21, 1], vec![0x21, 3], vec![0x91, 1], vec![0x21, 16]]
     );
 }
 
 #[test]
 fn write_property_refuses_other_policy_mode_and_read_only_writes() {
-    let (mut db, oid) = point_db();
+    let (mut db, oid) = point_db(false);
     let unchanged = served(&db, oid);
+    let null = || PropertyValue::Null;
     let refusals = [
-        // Zero and 2 name no policy of the one the point defines.
+        // Zero and 2 name no policy of the one a new point defines.
+        (policy(0), ErrorCode::VALUE_OUT_OF_RANGE),
+        (policy(2), ErrorCode::VALUE_OUT_OF_RANGE),
         (
-            P::ACTIVE_AUTHENTICATION_POLICY,
-            None,
-            PropertyValue::Unsigned(0),
-            ErrorCode::VALUE_OUT_OF_RANGE,
-        ),
-        (
-            P::ACTIVE_AUTHENTICATION_POLICY,
-            None,
-            PropertyValue::Unsigned(2),
-            ErrorCode::VALUE_OUT_OF_RANGE,
-        ),
-        (
-            P::ACTIVE_AUTHENTICATION_POLICY,
-            None,
-            PropertyValue::Enumerated(1),
+            plain(
+                P::ACTIVE_AUTHENTICATION_POLICY,
+                PropertyValue::Enumerated(1),
+            ),
             ErrorCode::INVALID_DATA_TYPE,
         ),
-        // A reserved mode and an undeclared proprietary one.
+        // Neither row is commandable, so NULL is no relinquish, with or
+        // without a priority.
         (
-            P::AUTHORIZATION_MODE,
-            None,
-            PropertyValue::Enumerated(6),
-            ErrorCode::VALUE_OUT_OF_RANGE,
-        ),
-        (
-            P::AUTHORIZATION_MODE,
-            None,
-            PropertyValue::Enumerated(64),
-            ErrorCode::VALUE_OUT_OF_RANGE,
-        ),
-        (
-            P::AUTHORIZATION_MODE,
-            None,
-            PropertyValue::Unsigned(2),
+            plain(P::ACTIVE_AUTHENTICATION_POLICY, null()),
             ErrorCode::INVALID_DATA_TYPE,
         ),
         (
-            P::AUTHORIZATION_MODE,
-            Some(1),
-            PropertyValue::Enumerated(2),
+            (P::ACTIVE_AUTHENTICATION_POLICY, None, null(), Some(8)),
+            ErrorCode::INVALID_DATA_TYPE,
+        ),
+        (
+            (
+                P::ACTIVE_AUTHENTICATION_POLICY,
+                Some(0),
+                PropertyValue::Unsigned(1),
+                None,
+            ),
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+        ),
+        // A new point supports AUTHORIZE alone, so DENY_ALL is refused like
+        // a reserved mode or an undeclared proprietary one.
+        (
+            mode(AuthorizationMode::DENY_ALL),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+        (
+            mode(AuthorizationMode::from_raw(6)),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+        (
+            mode(AuthorizationMode::from_raw(64)),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+        (
+            plain(P::AUTHORIZATION_MODE, PropertyValue::Unsigned(0)),
+            ErrorCode::INVALID_DATA_TYPE,
+        ),
+        (
+            plain(P::AUTHORIZATION_MODE, null()),
+            ErrorCode::INVALID_DATA_TYPE,
+        ),
+        (
+            (
+                P::AUTHORIZATION_MODE,
+                Some(1),
+                PropertyValue::Enumerated(0),
+                None,
+            ),
             ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
         ),
         // The application's rows.
         (
-            P::NUMBER_OF_AUTHENTICATION_POLICIES,
-            None,
-            PropertyValue::Unsigned(2),
+            plain(
+                P::NUMBER_OF_AUTHENTICATION_POLICIES,
+                PropertyValue::Unsigned(2),
+            ),
             ErrorCode::WRITE_ACCESS_DENIED,
         ),
         (
-            P::PRIORITY_FOR_WRITING,
-            None,
-            PropertyValue::Unsigned(8),
+            plain(P::PRIORITY_FOR_WRITING, PropertyValue::Unsigned(8)),
             ErrorCode::WRITE_ACCESS_DENIED,
         ),
     ];
-    for (property, index, value, expected) in refusals {
-        assert_property_error(
-            write_property(&mut db, oid, property, index, &value),
-            expected,
-        );
+    for (write, expected) in refusals {
+        let property = write.0;
+        assert_property_error(write_property(&mut db, oid, write), expected);
         assert_eq!(served(&db, oid), unchanged, "{property:?}");
     }
+}
 
-    // WritePropertyMultiple stops at the refused mode; the mode written
-    // before it stands.
-    write_property_multiple(
-        &mut db,
-        oid,
-        &[(P::AUTHORIZATION_MODE, PropertyValue::Enumerated(2))],
-    )
-    .unwrap();
-    assert_property_error(
-        write_property_multiple(
-            &mut db,
-            oid,
-            &[
-                (P::AUTHORIZATION_MODE, PropertyValue::Enumerated(0)),
-                (P::AUTHORIZATION_MODE, PropertyValue::Enumerated(65_536)),
-            ],
+#[test]
+fn write_property_multiple_refuses_other_policy_mode_values() {
+    let (mut db, oid) = point_db(true);
+    write_property_multiple(&mut db, oid, vec![mode(AuthorizationMode::DENY_ALL)]).unwrap();
+    let mode_bytes = |db: &ObjectDatabase| read_bytes(db, oid, P::AUTHORIZATION_MODE);
+    // Each request stops at its refused write; the writes before it stand.
+    let refusals = [
+        // Another datatype, and NULL.
+        (
+            plain(P::AUTHORIZATION_MODE, PropertyValue::Unsigned(1)),
+            ErrorCode::INVALID_DATA_TYPE,
         ),
-        ErrorCode::VALUE_OUT_OF_RANGE,
+        (
+            plain(P::ACTIVE_AUTHENTICATION_POLICY, PropertyValue::Null),
+            ErrorCode::INVALID_DATA_TYPE,
+        ),
+        // An array index on either row.
+        (
+            (
+                P::AUTHORIZATION_MODE,
+                Some(0),
+                PropertyValue::Enumerated(0),
+                None,
+            ),
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+        ),
+        (
+            (
+                P::ACTIVE_AUTHENTICATION_POLICY,
+                Some(1),
+                PropertyValue::Unsigned(1),
+                None,
+            ),
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+        ),
+        // Past the policy count, and a mode the point didn't declare.
+        (policy(4), ErrorCode::VALUE_OUT_OF_RANGE),
+        (
+            mode(AuthorizationMode::VERIFICATION_REQUIRED),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+        // The application's rows.
+        (
+            plain(P::PRIORITY_FOR_WRITING, PropertyValue::Unsigned(8)),
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ),
+    ];
+    for (refused, expected) in refusals {
+        let property = refused.0;
+        write_property_multiple(&mut db, oid, vec![mode(AuthorizationMode::DENY_ALL)]).unwrap();
+        assert_property_error(
+            write_property_multiple(&mut db, oid, vec![mode(AuthorizationMode::NONE), refused]),
+            expected,
+        );
+        assert_eq!(mode_bytes(&db), vec![0x91, 5], "{property:?}");
+    }
+    assert_eq!(
+        served(&db, oid),
+        [vec![0x21, 1], vec![0x21, 3], vec![0x91, 5], vec![0x21, 16]]
     );
-    assert_eq!(read_bytes(&db, oid, P::AUTHORIZATION_MODE), vec![0x91, 0]);
 }

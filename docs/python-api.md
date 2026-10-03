@@ -2196,14 +2196,15 @@ pairs, a format being a BACnetAuthenticationFactorType number or a
 needs; an ill-formed format raises VALUE_OUT_OF_RANGE.
 
 `add_access_point` also takes `number_of_authentication_policies` (1 when
-omitted, never 0), `supported_authorization_modes` (BACnetAuthorizationMode
-numbers; the six standard ones when omitted, AUTHORIZE (0) always among
-them, proprietary ones from 64 to 65535) and `priority_for_writing` (16 when
-omitted, else 1 to 16), all read-only over the network; a value outside
-those raises VALUE_OUT_OF_RANGE. Peers pick the policy in effect by writing
+omitted, never 0) and `priority_for_writing` (16 when omitted, else 1 to
+16), which set rows that are read-only over the network, and
+`supported_authorization_modes`: the BACnetAuthorizationMode numbers the
+application carries out, AUTHORIZE (0) alone when omitted, AUTHORIZE always
+among them, proprietary ones from 64 to 65535. A value outside those raises
+VALUE_OUT_OF_RANGE. Peers pick the policy in effect by writing
 Active_Authentication_Policy (1 to the policy count) and the mode by writing
-Authorization_Mode (one of the supported modes); anything else is refused
-with VALUE_OUT_OF_RANGE.
+Authorization_Mode (one of the supported modes). Another value is refused
+with VALUE_OUT_OF_RANGE, and another datatype with INVALID_DATA_TYPE.
 
 Access Door, Access Point, Credential Data Input and Load Control take
 SubscribeCOV, and each report carries the values their Table 13-1 rows name:
