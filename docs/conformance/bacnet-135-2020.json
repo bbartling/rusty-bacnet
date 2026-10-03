@@ -2820,6 +2820,8 @@
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_bound_clock_drives_reads_and_expiry",
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::entries_naming_the_same_recipient_and_process_are_one_entry",
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_rewrite_keeps_the_deadline_of_each_entry_it_leaves_alone",
+    "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_rewrite_restarts_an_entry_written_two_minutes_or_more_off",
+    "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_rewrite_keeps_a_deadline_when_a_minute_boundary_falls_between_read_and_write",
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_rewrite_with_other_members_restarts_the_lifetime",
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_full_list_of_the_longest_entries_reads_in_1184_octets",
     "crates/bacnet-server/src/handlers/tests/list_element_subscriptions.rs::add_list_element_appends_new_entries_and_renews_named_ones",
@@ -2859,7 +2861,8 @@
     "Deadlines sit on the database's monotonic clock. Reads serve the whole minutes left, rounded up, and skip a lapsed entry. The server's monotonic operation task drops each entry at its deadline through advance_monotonic_time_internal.",
     "A whole-list write restarts each entry's lifetime from its Time Remaining, except an entry written exactly as it reads, which keeps its deadline. The list services write the whole list back, so an edit leaves the other entries' deadlines alone.",
     "The handler keys entries by the encoding of recipient and process identifier. A later element naming the same entry wins, and a refusal the store names on a renewed entry maps back to the request element that renewed it.",
-    "Recipients decode with decode_configured_recipient, so an address MAC over 18 octets is a malformed element (PROPERTY / INVALID_DATA_TYPE)."
+    "Recipients decode with decode_configured_recipient, so an address MAC over 18 octets is a malformed element (PROPERTY / INVALID_DATA_TYPE).",
+    "An entry written with the same recipient, process and confirmation flag, and with the minutes it reads now or one more, keeps its deadline; the one more covers a minute boundary between the handler's read and its write. Any other Time Remaining restarts the lifetime."
    ]
   },
   {
