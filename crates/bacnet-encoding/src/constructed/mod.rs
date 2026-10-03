@@ -57,8 +57,9 @@ mod value_source;
 
 pub use access_credential::{
     decode_assigned_access_rights, decode_authentication_factor,
-    decode_credential_authentication_factor, encode_assigned_access_rights,
-    encode_authentication_factor, encode_credential_authentication_factor,
+    decode_authentication_factor_format, decode_credential_authentication_factor,
+    encode_assigned_access_rights, encode_authentication_factor,
+    encode_authentication_factor_format, encode_credential_authentication_factor,
 };
 pub use action_list::{
     decode_action_command, decode_action_list, encode_action_command, encode_action_list,

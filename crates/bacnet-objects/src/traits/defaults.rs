@@ -50,9 +50,11 @@ pub(super) fn cov_reported_properties_default(
 ///   SUBORDINATE_LIST / SUBORDINATE_ANNOTATIONS (Table 12-34),
 ///   GROUP_MEMBERS / GROUP_MEMBER_NAMES (Table 12-57; Elevator/Lift also type
 ///   GROUP_MEMBERS BACnetARRAY), STAGES / STAGE_NAMES / TARGET_REFERENCES
-///   (Table 12-80), MONITORED_OBJECTS (Table 12-82), and
+///   (Table 12-80), MONITORED_OBJECTS (Table 12-82),
 ///   AUTHENTICATION_FACTORS / ASSIGNED_ACCESS_RIGHTS (Table 12-40, the only
-///   table carrying either).
+///   table carrying either), DOOR_MEMBERS (Table 12-30), ACCESS_DOORS
+///   (Table 12-36), and SUPPORTED_FORMATS / SUPPORTED_FORMAT_CLASSES
+///   (Table 12-43); each of those four appears in that one table only.
 /// - **Type-dependent** identifiers classify by `object_type`: ACTION is
 ///   BACnetARRAY\[N\] on Command (Table 12-12) but a single BACnetAction on Loop
 ///   (Table 12-20), and ACTION_TEXT, its parallel array of descriptions, is
@@ -104,7 +106,11 @@ pub(super) fn array_property_default(
         | PropertyIdentifier::MONITORED_OBJECTS
         | PropertyIdentifier::TARGET_REFERENCES
         | PropertyIdentifier::AUTHENTICATION_FACTORS
-        | PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS => true,
+        | PropertyIdentifier::ASSIGNED_ACCESS_RIGHTS
+        | PropertyIdentifier::DOOR_MEMBERS
+        | PropertyIdentifier::ACCESS_DOORS
+        | PropertyIdentifier::SUPPORTED_FORMATS
+        | PropertyIdentifier::SUPPORTED_FORMAT_CLASSES => true,
         PropertyIdentifier::ACTION | PropertyIdentifier::ACTION_TEXT => {
             object_type == ObjectType::COMMAND
         }

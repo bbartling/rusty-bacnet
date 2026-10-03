@@ -8,7 +8,7 @@ use bacnet_types::enums::PropertyIdentifier as P;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
-    PropertyWriteCapability::{Always, ReadOnly},
+    PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
 // Canonical effective rows for the Access Identity quartet (ASHRAE 135-2020; PDF = printed + 2):
@@ -26,10 +26,10 @@ use crate::property_metadata::{
 // Optional/Always, Out_Of_Service RequiredRead/Always on Credential Data
 // Input only (Tables 12-38, 12-39 and 12-40 have none; #1064 removed the rows
 // the 0.1.0 import carried), Status_Flags/Reliability RequiredRead/ReadOnly
-// (table R on all four quartet tables), Always-never-WhenOutOfService
-// writability mirroring dispatch, presence None, not createable but
-// deleteable with no overrides, and Property_List as the only array-gated row
-// apart from the credential's two arrays.
+// (table R on all four quartet tables) except the Credential Data Input
+// Reliability below, writability mirroring dispatch, presence None, not
+// createable but deleteable with no overrides, and Property_List plus the
+// BACnetARRAY rows (the credential's two, the reader's two) array-gated.
 // Table 12-40 has no Present_Value row, so the credential serves none (#979
 // removed the implementation-extra row the 0.1.0 import carried).
 // Credential_Status/Assigned_Access_Rights/Authentication_Factors carry the
@@ -48,13 +48,12 @@ use crate::property_metadata::{
 // RequiredRead/ReadOnly. Rights Global_Identifier carries the table W code
 // with the routed Unsigned arm, so RequiredWrite/Always; the ±rules rows
 // carry the table R code with no arm (counts only), so
-// RequiredRead/ReadOnly. CDI Present_Value carries the table R code with
-// footnote 1 (writable when Out_Of_Service) but dispatch denies every
-// non-Description/Out_Of_Service write, so the metadata mirrors dispatch as
-// RequiredRead/ReadOnly with no behavior change. Update_Time and
-// Supported_Formats carry the table R code with no arm, so
+// RequiredRead/ReadOnly. CDI Present_Value and Reliability carry the table R
+// code with footnote 1, and dispatch takes their writes only while
+// Out_Of_Service is TRUE (#1168), so RequiredRead/WhenOutOfService.
+// Update_Time and Supported_Formats carry the table R code with no arm, so
 // RequiredRead/ReadOnly; Supported_Format_Classes carries the table O code,
-// so Optional/ReadOnly.
+// so Optional/ReadOnly. Both format rows are BACnetARRAYs (#1169).
 const ACCESS_CREDENTIAL_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -103,13 +102,13 @@ const CREDENTIAL_DATA_INPUT_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::PRESENT_VALUE, RequiredRead, None, WhenOutOfService),
     PropertyMetadata::new(P::UPDATE_TIME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::SUPPORTED_FORMATS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::SUPPORTED_FORMAT_CLASSES, Optional, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, WhenOutOfService),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -440,18 +439,17 @@ mod tests {
                 .unwrap(),
             PropertyValue::List(vec![])
         );
-        // Supported_Formats is BACnetARRAY per Table 12-43 but the default
-        // array gate keeps Property_List as the only indexed row on this
-        // family, so an index is rejected at the service gate.
-        assert!(!object.is_array_property(P::SUPPORTED_FORMATS));
-        assert!(!object.is_array_property(P::SUPPORTED_FORMAT_CLASSES));
+        // Table 12-43 types both format rows as BACnetARRAY[N] (#1169).
+        assert!(object.is_array_property(P::SUPPORTED_FORMATS));
+        assert!(object.is_array_property(P::SUPPORTED_FORMAT_CLASSES));
         assert!(!object.is_array_property(P::UPDATE_TIME));
     }
 
     #[test]
     fn property_metadata_access_identity_write_capabilities_match_dispatch() {
-        // Constructor paired with the properties it must accept writes for.
-        type WriteCase = (fn() -> Box<dyn BACnetObject>, &'static [P]);
+        // Constructor paired with the properties it must always accept writes
+        // for, and those it must accept only while Out_Of_Service is TRUE.
+        type WriteCase = (fn() -> Box<dyn BACnetObject>, &'static [P], &'static [P]);
         let cases: [WriteCase; 4] = [
             (
                 || Box::new(AccessCredentialObject::new(1, "CRED-1").unwrap()),
@@ -462,21 +460,26 @@ mod tests {
                     P::EXPIRATION_TIME,
                     P::CREDENTIAL_DISABLE,
                 ],
+                &[],
             ),
             (
                 || Box::new(AccessUserObject::new(1, "USER-1").unwrap()),
                 &[P::DESCRIPTION, P::USER_TYPE],
+                &[],
             ),
             (
                 || Box::new(AccessRightsObject::new(1, "AR-1").unwrap()),
                 &[P::DESCRIPTION, P::GLOBAL_IDENTIFIER],
+                &[],
             ),
             (
                 || Box::new(CredentialDataInputObject::new(1, "CDI-1").unwrap()),
                 &[P::DESCRIPTION, P::OUT_OF_SERVICE],
+                // Table 12-43 footnote 1 (#1168).
+                &[P::PRESENT_VALUE, P::RELIABILITY],
             ),
         ];
-        for (make, writable) in cases {
+        for (make, writable, when_out_of_service) in cases {
             for out_of_service in [false, true] {
                 let mut object = make();
                 // Of the four, only Credential Data Input has Out_Of_Service
@@ -496,6 +499,8 @@ mod tests {
                     let p = row.property_identifier;
                     let capability = if writable.contains(&p) {
                         PropertyWriteCapability::Always
+                    } else if when_out_of_service.contains(&p) {
+                        PropertyWriteCapability::WhenOutOfService
                     } else {
                         PropertyWriteCapability::ReadOnly
                     };
@@ -507,7 +512,10 @@ mod tests {
                     );
                     let value = object.read_property(p, None).unwrap();
                     let result = object.write_property(p, None, value, None);
-                    if capability.is_writable() {
+                    if capability == PropertyWriteCapability::Always
+                        || (capability == PropertyWriteCapability::WhenOutOfService
+                            && out_of_service)
+                    {
                         result.unwrap();
                     } else {
                         assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
@@ -635,9 +643,10 @@ mod tests {
                 );
                 assert!(!rights.is_writable_property(p));
             }
-            // CDI Present_Value carries the table R1 footnote but dispatch
-            // denies every non-Description/Out_Of_Service write, so the
-            // metadata stays ReadOnly and the denial holds while OOS too.
+            // CDI Present_Value and Reliability take writes only while
+            // Out_Of_Service is TRUE (#1168): in service an Enumerated
+            // Present_Value is refused before its datatype is looked at, and
+            // out of service it is the wrong datatype.
             let mut cdi = CredentialDataInputObject::new(1, "CDI-1").unwrap();
             cdi.write_property(
                 P::OUT_OF_SERVICE,
@@ -646,11 +655,15 @@ mod tests {
                 None,
             )
             .unwrap();
-            assert!(!cdi.is_writable_property(P::PRESENT_VALUE));
+            assert!(cdi.is_writable_property(P::PRESENT_VALUE));
             assert_error(
                 cdi.write_property(P::PRESENT_VALUE, None, PropertyValue::Enumerated(1), None)
                     .unwrap_err(),
-                ErrorCode::WRITE_ACCESS_DENIED,
+                if out_of_service {
+                    ErrorCode::INVALID_DATA_TYPE
+                } else {
+                    ErrorCode::WRITE_ACCESS_DENIED
+                },
             );
             assert_eq!(
                 cdi.read_property(P::PRESENT_VALUE, None).unwrap(),
@@ -661,7 +674,6 @@ mod tests {
                 P::SUPPORTED_FORMATS,
                 P::SUPPORTED_FORMAT_CLASSES,
                 P::STATUS_FLAGS,
-                P::RELIABILITY,
             ] {
                 let value = cdi.read_property(p, None).unwrap();
                 assert_error(

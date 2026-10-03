@@ -1,3 +1,4 @@
+use crate::access_control::CredentialDataInputObject;
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
@@ -312,6 +313,10 @@ macro_rules! reliability_gate_test {
     };
 }
 
+reliability_gate_test!(
+    credential_data_input_reliability_requires_out_of_service,
+    CredentialDataInputObject::new(1, "CDI-1").unwrap()
+);
 reliability_gate_test!(
     analog_input_reliability_requires_out_of_service,
     AnalogInputObject::new(1, "AI-1", 62).unwrap()

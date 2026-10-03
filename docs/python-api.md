@@ -2024,7 +2024,12 @@ on a Load Control. While a door's Out_Of_Service is TRUE, clients can write
 its Door_Status, Lock_Status and Door_Alarm_State to simulate it (Table 12-30
 footnote 1); returning it to service brings back the door's own values. A
 door's Secured_Status follows its command, Door_Status and Lock_Status,
-simulated or not (Clause 12.26.14).
+simulated or not (Clause 12.26.14). A Credential Data Input's Present_Value
+and Reliability take writes the same way (Table 12-43 footnote 1); a
+simulated Present_Value must name a format the reader declares, and the Python
+API declares none yet, so only the UNDEFINED and ERROR factors are accepted.
+Supported_Formats, Supported_Format_Classes, Door_Members and Access_Doors
+read as arrays (index 0 is the size).
 
 #### Transportation
 

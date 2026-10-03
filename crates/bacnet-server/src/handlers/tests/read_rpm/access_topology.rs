@@ -218,15 +218,11 @@ fn rpm_access_door_indexed_reads_and_bytes_are_unchanged() {
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
             (P::DOOR_MEMBERS, None, Ok(EMPTY)),
-            (
-                P::DOOR_MEMBERS,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
+            (P::DOOR_MEMBERS, Some(0), Ok(&[0x21, 0])),
             (
                 P::DOOR_MEMBERS,
                 Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+                Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (P::EVENT_STATE, None, Ok(&[0x91, 0])),
             (
@@ -403,15 +399,11 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
             (P::ACCESS_DOORS, None, Ok(EMPTY)),
-            (
-                P::ACCESS_DOORS,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
+            (P::ACCESS_DOORS, Some(0), Ok(&[0x21, 0])),
             (
                 P::ACCESS_DOORS,
                 Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+                Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (P::EVENT_STATE, None, Ok(&[0x91, 0])),
             (
@@ -535,17 +527,12 @@ fn rpm_access_zone_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
+            // Access_Doors is an array identifier wherever it appears, so an
+            // index passes the gate and the zone, which lacks the row,
+            // answers UNKNOWN_PROPERTY (#1169).
             (P::ACCESS_DOORS, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-            (
-                P::ACCESS_DOORS,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (
-                P::ACCESS_DOORS,
-                Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
+            (P::ACCESS_DOORS, Some(0), Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (P::ACCESS_DOORS, Some(1), Err(ErrorCode::UNKNOWN_PROPERTY)),
             (P::ENTRY_POINTS, None, Ok(EMPTY)),
             (
                 P::ENTRY_POINTS,
