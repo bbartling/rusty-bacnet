@@ -8,29 +8,9 @@
 - Scope: RB-01 baseline reconciliation (R0 working order) at dev b4c845c: the corrected-2020 target is ANSI/ASHRAE 135-2020 plus the 2024-04-29 Errata Summary for the supported subset. Owner-approved decisions recorded here: (1) corrected 2020 baseline (135-2020 + 2024-04-29 errata for the supported subset; optional later addenda and external qualification remain separate); (2) no CP authenticated-origin expansion — baseline keeps unknown-origin plus hardened denial; (3) MS/TP is non-routing standard-frame only (MAX_STANDARD_MPDU_DATA 501, crates/bacnet-transport/src/mstp_frame.rs:22, enforced crates/bacnet-transport/src/mstp/mod.rs:420-427 and 690-697); extended-frame/COBS routing is not claimed. The Audit query corrected contract (filter BOOLEAN to BACnetSuccessFilter, cursor Unsigned32 to Unsigned64) is recorded in BACNET-13-AUDIT-WIRE-MODELS; the RB-02 codec migration and the RB-20 runtime/Python migration are done, and #345 stays open for reporting/forwarding (RB-21/22). Per-feature status stays separate from any whole-product Protocol_Revision claim; no Protocol_Revision or workspace version change (workspace stays 0.11.0). Preserved prior owner decisions: #431 transport-neutral composition above sibling roles (not the older B/IP-only facade); #195 publish bacnet-cli in the next release (bacnet-cli is publishable but still omitted from CI publish-crates — delivery gap remains open). No protocol code changes in this tranche.
 - Addenda/errata: ASHRAE 135-2020 Errata Summary 2024-04-29 (v1) reviewed for the supported subset. Item 7 (Clause 21.6, p. 886): successful-actions-only corrected from BOOLEAN (struck through, removed) to BACnetSuccessFilter (italic, added), tags [7] (by-target) and [4] (by-source). Item 8 (Clause 21.2.3, p. 865): start-at-sequence-number corrected from Unsigned32 (struck through, removed) to Unsigned64 (italic, added), tag [2] OPTIONAL. Both items visually verified from the rendered errata p. 3 under the p. 1 convention (strikeout = removed, italics = added); not inferred from concatenated text extraction. This visual verification closes the RB-02 wire-type hold noted in the release plan. The implementation encodes the corrected filter/u64 contract, so BACNET-13-AUDIT-WIRE-MODELS keeps implementation-present-needs-source-review after the RB-02 codec migration and the RB-20 runtime/Python migration pending broader Audit review. Optional later addenda and external qualification remain separate; no whole-product Protocol_Revision claim.
 
-## Counts
-
-| Dimension | Value | Count |
-|---|---|---|
-| Priority | P0 | 20 |
-| Priority | P1 | 97 |
-| Priority | P2 | 5 |
-| Priority | P3 | 4 |
-| Status | deferred-pending-owner-decision | 2 |
-| Status | implementation-present-needs-conformance-tests | 14 |
-| Status | implementation-present-needs-negative-tests | 6 |
-| Status | implementation-present-needs-platform-tests | 1 |
-| Status | implementation-present-needs-security-tests | 1 |
-| Status | implementation-present-needs-source-review | 3 |
-| Status | implementation-present-needs-state-machine-audit | 4 |
-| Status | implementation-present-needs-timeout-tests | 1 |
-| Status | implementation-present-needs-window-tests | 1 |
-| Status | in-progress | 17 |
-| Status | supported-with-clause-evidence | 69 |
-| Status | unknown-pending-source-review | 4 |
-| Status | unsupported-by-design | 3 |
-
 ## Ledger Rows
+
+Row counts by priority and status are not committed, so concurrent ledger PRs merge cleanly. Print them with `python3 scripts/generate-conformance-docs.py --counts`.
 
 | ID | Anchor | Priority | Status | Public Claims |
 |---|---|---|---|---|
