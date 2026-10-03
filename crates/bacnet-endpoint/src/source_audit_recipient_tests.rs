@@ -117,7 +117,7 @@ async fn recipient_preserves_all_source_preflight_failures_and_retry() {
     for case in [
         "no database",
         "no device",
-        "two devices",
+        "lower device",
         "identity mismatch",
         "wrong selection type",
         "missing reporter",
@@ -132,16 +132,18 @@ async fn recipient_preserves_all_source_preflight_failures_and_retry() {
             "no database" => "attached local database",
             "no device" => {
                 db.remove(&oid(ObjectType::DEVICE, 123)).unwrap();
-                "exactly one"
+                "concrete local Device"
             }
-            "two devices" => {
-                let mut other = crate::identity::DeviceIdentity::new(456, 42)
+            // A lower Device is the local Device (#1204), so identity 123 is
+            // a mismatch.
+            "lower device" => {
+                let lower = oid(ObjectType::DEVICE, 50);
+                let mut other = crate::identity::DeviceIdentity::new(50, 42)
                     .unwrap()
                     .build_database()
                     .unwrap();
-                db.add(other.remove(&destination()).unwrap().unwrap())
-                    .unwrap();
-                "exactly one"
+                db.add(other.remove(&lower).unwrap().unwrap()).unwrap();
+                "does not match session identity"
             }
             "identity mismatch" => "does not match session identity",
             "wrong selection type" => "must be an Audit Reporter",
