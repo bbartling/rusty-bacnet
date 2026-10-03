@@ -2306,8 +2306,8 @@ server = BACnetServer(
 | `max_subscriptions_global` | 1024 | subscriptions | Positive. Subscriptions held across all peers | `subscriptions_rejected_capacity` |
 | `max_subscriptions_per_peer` | 64 | subscriptions | Positive. Subscriptions one peer may hold | `subscriptions_rejected_quota` |
 | `reserved_capacity` | 64 | subscriptions | Slots of the global cap kept for reserved peers, clamped to it. Has no effect while both reserved lists are empty; 0 keeps none | `subscriptions_rejected_capacity` |
-| `reserved_peers` | `[]` | MAC `bytes` | Directly attached peers that may use the reserved slots; each MAC is 1 to 255 octets | |
-| `reserved_recipients` | `[]` | `(network, bytes)` | As `dcc_source_restriction`: `None` for a local peer, otherwise its routed source network (1 to 65534) and MAC (1 to 255 octets) | |
+| `reserved_peers` | `[]` | MAC `bytes` | Directly attached peers that may use the reserved slots; each MAC is 1 to 18 octets, the longest source the network layer delivers | |
+| `reserved_recipients` | `[]` | `(network, bytes)` | As `dcc_source_restriction`: `None` for a local peer, otherwise its routed source network (1 to 65534), and a MAC of 1 to 18 octets | |
 | `allow_indefinite_subscriptions` | `True` | `bool` | Whether a subscription without a lifetime is admitted | `subscriptions_rejected_indefinite` |
 | `max_indefinite_per_peer` | 16 | subscriptions | Indefinite subscriptions one peer may hold, clamped to its per-peer cap; 0 admits none | `subscriptions_rejected_indefinite` |
 | `max_notifications_per_event` | 64 | notifications | Positive. Notifications one change of a monitored object may send | `notifications_throttled_fanout` |

@@ -832,7 +832,8 @@
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/npdu/address_bound_tests.rs::{over_long_address_length_is_refused_for_either_field,over_long_length_is_refused_before_the_address_is_read,source_refusal_reports_the_npdu_dnet,destination_refusal_carries_the_source_behind_it,address_too_long_reads_as_out_of_range,encoder_refuses_an_address_past_the_bound_for_either_field}",
-    "crates/bacnet-network/src/address_bound_tests.rs::non_router_drops_and_counts_an_over_long_address_in_either_field"
+    "crates/bacnet-network/src/address_bound_tests.rs::non_router_drops_and_counts_an_over_long_address_in_either_field",
+    "crates/bacnet-network/src/link_source_bound_tests.rs::non_router_drops_and_counts_a_frame_from_an_over_long_source_mac"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -845,7 +846,8 @@
     "Reserved-bit negative tests remain required: reserved control bits still only log a warning. #1141 covers malformed address lengths. The NPDU codec holds DLEN and SLEN to NpduAddress::MAX_MAC_LEN, 18 octets, the same bound as BACnetAddress::MAX_MAC_LEN (#1124).",
     "Table 6-2 (Clause 6.2.2.2) needs at most 7 octets for any standard data link, and the longest MAC this stack serves is the 18-octet B/IPv6 form. decode_npdu refuses a longer length with NpduDecodeError::AddressTooLong before reading the address octets, whether or not they are present, and reports the NPDU's DNET when it has one.",
     "For an over-long DADR it also reports the SNET/SADR behind it, read past the DLEN octets the frame announces, when a complete and valid one is there (#1158), so the router can address its reject; encode_npdu refuses a longer address with Error::Encoding (the limit was 255).",
-    "The non-router NetworkLayer drops such an NPDU before APDU or control admission and counts it in address_length_drops(); a non-router sends no reject. The router side is under BACNET-6-ROUTER-MESSAGES. Tests feed hand-built wire bytes for each address field: 19 and 255 are refused, 1, 6 and 18 decode and re-encode unchanged."
+    "The non-router NetworkLayer drops such an NPDU before APDU or control admission and counts it in address_length_drops(); a non-router sends no reject. The router side is under BACNET-6-ROUTER-MESSAGES. Tests feed hand-built wire bytes for each address field: 19 and 255 are refused, 1, 6 and 18 decode and re-encode unchanged.",
+    "#1198: NetworkLayer drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN before decoding it and counts it in address_length_drops(). No built-in transport reports one (B/IP, BACnet/SC and Ethernet use 6 octets, MS/TP 1, B/IPv6 18), so only a custom TransportPort can, and every address learned off the network fits a BACnetAddress."
    ]
   },
   {
@@ -867,7 +869,8 @@
    "negative_tests": [
     "crates/bacnet-network/src/address_bound_tests.rs::{router_rejects_an_over_long_address_toward_a_dnet_with_reason_6,router_drops_an_over_long_broadcast_or_local_npdu_without_a_reject}",
     "crates/bacnet-network/src/reject_route_tests.rs::{router_falls_back_to_a_local_unicast_when_the_sadr_is_too_long,router_sends_no_reject_when_the_snet_sadr_is_its_own_port}",
-    "crates/bacnet-network/src/router/reject_tests.rs::{relay_drops_a_received_reject_it_cannot_route,a_reject_for_another_node_or_a_denied_one_skips_the_routers_consumer,send_reject_sends_nothing_when_the_originator_is_the_router}"
+    "crates/bacnet-network/src/router/reject_tests.rs::{relay_drops_a_received_reject_it_cannot_route,a_reject_for_another_node_or_a_denied_one_skips_the_routers_consumer,send_reject_sends_nothing_when_the_originator_is_the_router}",
+    "crates/bacnet-network/src/link_source_bound_tests.rs::router_drops_and_counts_a_frame_from_an_over_long_source_mac"
    ],
    "benchmarks": [
     "benchmarks/src/bin/bacnet_router.rs"
@@ -894,7 +897,8 @@
     "No in-tree setup needs that receiver (#1175): a client or server attached through a LoopbackTransport port runs its own NetworkLayer, so rejects for its requests reach its own control receiver.",
     "#1219: a refused NPDU whose SNET is another of the router's directly connected networks gets its reject out the port attached to that network, as a local unicast to the SADR with no DNET (Clause 6.5.4).",
     "#1219: a refused NPDU whose SNET/SADR is the router's own address on one of its networks draws no reject.",
-    "#1220: BACnetRouter::start takes RouterOptions, which turns on the tracked local APDU receiver, the RB-09 control policy and authorizer, and the network-control receiver in any combination. A loopback test starts a router with all three."
+    "#1220: BACnetRouter::start takes RouterOptions, which turns on the tracked local APDU receiver, the RB-09 control policy and authorizer, and the network-control receiver in any combination. A loopback test starts a router with all three.",
+    "#1198: the router drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN on any port before decoding it, counts it in address_length_drops() and sends nothing back. Such a frame is not delivered or forwarded and teaches no route; a test shows a route announced from a 19-octet MAC is not learned."
    ]
   },
   {
@@ -5014,8 +5018,12 @@
     "crates/bacnet-encoding/src/apdu.rs",
     "crates/bacnet-services/src"
    ],
-   "positive_tests": [],
-   "negative_tests": [],
+   "positive_tests": [
+    "crates/bacnet-services/src/who_am_i_tests.rs::you_are_mac_address_holds_to_the_bacnet_address_bound"
+   ],
+   "negative_tests": [
+    "crates/bacnet-services/src/who_am_i_tests.rs::you_are_mac_address_holds_to_the_bacnet_address_bound"
+   ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
    ],
@@ -5024,7 +5032,8 @@
     "docs/python-api.md#bacnetclient service APIs"
    ],
    "notes": [
-    "Needs service-by-service fixture coverage in later PRs."
+    "Needs service-by-service fixture coverage in later PRs.",
+    "#1200: the You-Are device MAC is the MAC the matching device takes on the port the request arrived on (Clauses 16.11.3.1.5, 16.11.4 and 19.7.2), so YouAreRequest holds it to BACnetAddress::MAX_MAC_LEN: decode refuses a longer one and encode returns Error::Encoding with the buffer unchanged."
    ]
   },
   {

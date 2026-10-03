@@ -72,6 +72,29 @@ fn every_cov_policy_key_reaches_its_field() {
     );
 }
 
+/// An 18-octet reserved MAC, the longest source the network layer delivers,
+/// reads in every form (#1199); one octet more raises ValueError, as
+/// `invalid_cov_policy_raises_the_constructor_exception_types` shows.
+#[test]
+fn eighteen_octet_reserved_macs_are_accepted() {
+    let policy = read(
+        c"{'reserved_peers': [bytes(18)], 'reserved_recipients': [(None, bytes(18)), (65534, bytes(18))]}",
+    )
+    .unwrap();
+    let mac = MacAddr::from_slice(&[0; 18]);
+    assert_eq!(policy.reserved_peers, vec![mac.clone()]);
+    assert_eq!(
+        policy.reserved_recipients,
+        vec![
+            CovRecipient::Direct(mac.clone()),
+            CovRecipient::Routed(NpduAddress {
+                network: 65534,
+                mac_address: mac,
+            }),
+        ]
+    );
+}
+
 #[test]
 fn omitted_or_empty_cov_policy_keeps_the_rust_defaults() {
     assert_eq!(cov_policy(None).unwrap(), CovPolicy::default());
@@ -135,7 +158,19 @@ fn invalid_cov_policy_raises_the_constructor_exception_types() {
         ),
         (
             c"{'reserved_peers': [b'']}",
-            "ValueError: encoding error: COV policy reserved_peers entries need a MAC of 1..=255 octets",
+            "ValueError: encoding error: COV policy reserved_peers entries need a MAC of 1..=18 octets",
+        ),
+        (
+            c"{'reserved_peers': [bytes(19)]}",
+            "ValueError: encoding error: COV policy reserved_peers entries need a MAC of 1..=18 octets",
+        ),
+        (
+            c"{'reserved_recipients': [(None, bytes(19))]}",
+            "ValueError: encoding error: COV policy reserved_recipients entries need a MAC of 1..=18 octets",
+        ),
+        (
+            c"{'reserved_recipients': [(65534, bytes(19))]}",
+            "ValueError: encoding error: COV policy reserved_recipients entries need a MAC of 1..=18 octets",
         ),
         (
             cr"{'reserved_recipients': [(65535, b'\x01')]}",

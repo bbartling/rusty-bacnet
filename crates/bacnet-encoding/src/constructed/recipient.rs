@@ -30,7 +30,8 @@
 //! `BACnetAddress` (ValueSource, the AuditLogQuery filters) shares
 //! [`check_decoded_mac_len`] and [`check_encoded_mac_len`], so the bound has
 //! one definition. The source addresses the stack learns off the network fit
-//! it too: the NPDU codec bounds SADR the same way (#1141).
+//! it too: the NPDU codec bounds SADR the same way (#1141), and the network
+//! layer drops a frame from a longer link-layer source MAC (#1198).
 
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
@@ -56,18 +57,19 @@ fn mac_len_excess(what: &str, length: usize) -> Option<String> {
 }
 
 /// Refuse, as a decode error at `offset`, a `BACnetAddress` mac-address whose
-/// OCTET STRING holds more than [`BACnetAddress::MAX_MAC_LEN`] octets (#1156).
-/// Decoders call it on the tag's length, before copying any octet.
+/// OCTET STRING holds more than [`BACnetAddress::MAX_MAC_LEN`] octets (#1156),
+/// or any other OCTET STRING that names a MAC on a data link, such as the
+/// You-Are device MAC (#1200). Decoders call it on the tag's length, before
+/// copying any octet.
 pub fn check_decoded_mac_len(length: usize, offset: usize, what: &str) -> Result<(), Error> {
     mac_len_excess(what, length).map_or(Ok(()), |message| Err(Error::decoding(offset, message)))
 }
 
-/// Refuse to encode a `BACnetAddress` whose MAC is longer than
-/// [`BACnetAddress::MAX_MAC_LEN`] octets, which [`check_decoded_mac_len`]
-/// would refuse on the way back in (#1156).
-pub fn check_encoded_mac_len(address: &BACnetAddress, what: &str) -> Result<(), Error> {
-    mac_len_excess(what, address.mac_address.len())
-        .map_or(Ok(()), |message| Err(Error::Encoding(message)))
+/// Refuse to encode a MAC longer than [`BACnetAddress::MAX_MAC_LEN`] octets,
+/// which [`check_decoded_mac_len`] would refuse on the way back in: a
+/// `BACnetAddress` mac-address (#1156) or the You-Are device MAC (#1200).
+pub fn check_encoded_mac_len(mac: &[u8], what: &str) -> Result<(), Error> {
+    mac_len_excess(what, mac.len()).map_or(Ok(()), |message| Err(Error::Encoding(message)))
 }
 
 /// [`check_encoded_mac_len`] for the address form of a recipient; the device
@@ -75,7 +77,9 @@ pub fn check_encoded_mac_len(address: &BACnetAddress, what: &str) -> Result<(), 
 pub(super) fn check_encoded_recipient(recipient: &BACnetRecipient) -> Result<(), Error> {
     match recipient {
         BACnetRecipient::Device(_) => Ok(()),
-        BACnetRecipient::Address(address) => check_encoded_mac_len(address, "BACnetRecipient"),
+        BACnetRecipient::Address(address) => {
+            check_encoded_mac_len(&address.mac_address, "BACnetRecipient")
+        }
     }
 }
 
