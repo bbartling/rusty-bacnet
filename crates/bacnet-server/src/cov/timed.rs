@@ -55,33 +55,45 @@
 //! that context ([`envelope_len`], #1197). The envelope is sized from the
 //! context itself: its confirmed or unconfirmed header, its process
 //! identifier, and the lifetime it had left when last admitted, which later
-//! notifications report as less, never in more octets. The estimate counts
-//! each change's values, item framing as if every change started its own
-//! item, and a fixed [`CHANGE_OVERHEAD`] per change for its bookkeeping, so
-//! many tiny changes cannot outgrow it in memory. It keeps a reserve, per
-//! context and at most one notification's worth, for the room the context's
-//! untimestamped values took in its reports since it was last admitted or
-//! lost a reference; they travel with the last notification. Peers therefore
-//! cannot grow this state without limit. Only on overflow, the last resort,
-//! is a change dropped: the oldest of the same reference first, then the
-//! oldest in the context. Two changes of a reference are never evicted:
+//! notifications report as less, never in more octets. This room for items
+//! counts each change's values and item framing, as if every change started
+//! its own item. It keeps a reserve, per context and at most one
+//! notification's worth, for the room the context's untimestamped values took
+//! in its reports since it was last admitted or lost a reference; they travel
+//! with the last notification.
+//!
+//! Memory has a ceiling of its own (#1287). Counting each change's item and a
+//! fixed [`CHANGE_OVERHEAD`] for the bookkeeping it holds besides its values,
+//! a context holds no more than the room [`HISTORY_NOTIFICATIONS`]
+//! notifications of the local maximum APDU have, whatever its subscriber's
+//! size, so many tiny changes cannot outgrow it; near the local maximum, the
+//! ceiling binds before the room does. The overhead takes no octets in a
+//! notification, so the room for items leaves it out: charged there, it would
+//! let a 50-octet subscriber keep one REAL Present_Value change where four
+//! notifications carry four. With the subscription caps limiting how many
+//! contexts there are, peers cannot grow this state without limit.
+//!
+//! Only on overflow of either limit, the last resort, is a change dropped:
+//! the oldest of the same reference first, then the oldest in the context.
+//! Two changes of a reference are never evicted:
 //! - its newest, so the bound never hides the reference's current state;
 //! - its change in delivery (#1163): one sent value by value of which a part
 //!   was delivered, or went out as a confirmed report's first part with the
 //!   rest deferred, kept until its last value is delivered.
 //!
-//! The second is for small subscribers. At a 50-octet maximum APDU the
-//! estimate comes to 68 to 100 octets, by the envelope's size, about one
-//! Present_Value and Status_Flags change, so a value held back by a failed
-//! send or a deferral would be evicted by the next change, and the
-//! value-by-value delivery of #1090 could never finish. Counting the bound in
-//! values instead would still need an octet limit, as nothing limits a value's
-//! size when it is captured, and would change eviction for every change of
-//! such a context; exempting only the change already partly sent leaves every
-//! other eviction as it was. Each reference marks one change in delivery, the
-//! one a part last went out ahead of, so the memory ceiling stays fixed: after
-//! eviction a context holds at most its bound or, beyond it, only changes
-//! eviction may not take, two per reference at most.
+//! The second is for small subscribers. At a 50-octet maximum APDU the room
+//! comes to 68 to 100 octets of items, by the envelope's size: two or three
+//! Present_Value and Status_Flags changes of 33 octets, so a value held back
+//! by a failed send or a deferral would be evicted after a few newer changes,
+//! and the value-by-value delivery of #1090 might never finish. Counting the
+//! bound in values instead would still need an octet limit, as nothing limits
+//! a value's size when it is captured, and would change eviction for every
+//! change of such a context; exempting only the change already partly sent
+//! leaves every other eviction as it was. Each reference marks one change in
+//! delivery, the one a part last went out ahead of, so what a context holds
+//! stays bounded: after eviction, no more than its room and its ceiling allow
+//! or, beyond them, only changes eviction may not take, two per reference at
+//! most.
 //!
 //! Each discarded change is counted in
 //! [`AtomicCovCounters::timed_changes_dropped`]; the log gets one warning per
@@ -104,8 +116,9 @@ pub(crate) const HISTORY_NOTIFICATIONS: usize = 4;
 /// Octets of one item's framing: its context-tagged object identifier (5) and
 /// the opening and closing tags of its value list (2).
 pub(crate) const ITEM_FRAMING: usize = 7;
-/// Octets each pending change counts beyond its encoding, for the memory it
-/// holds besides its values.
+/// Octets each pending change counts against its context's memory ceiling
+/// beyond its item, for the memory it holds besides its values. The room for
+/// notification items does not count it (#1287).
 pub(crate) const CHANGE_OVERHEAD: usize = 32;
 /// Earliest the deadline backstop acts after a change, and the least spacing
 /// between its attempts on one blocked context.
@@ -121,9 +134,10 @@ pub(crate) struct TimedChange {
     captured_at: Instant,
     values: Vec<COVNotificationValue>,
     observation: CovObservation,
-    /// Octets the change counts against its context's bound: its encoding,
-    /// one item's framing and [`CHANGE_OVERHEAD`].
-    cost: usize,
+    /// Octets the change counts against its context's room for items: its
+    /// encoding and one item's framing. The memory ceiling adds
+    /// [`CHANGE_OVERHEAD`].
+    octets: usize,
     /// Position of each of `values`, in the same order, among those the change
     /// was captured with: `0..n` at capture. A part of a change sent one value
     /// per notification keeps its value's position, so parts that come back in
@@ -156,9 +170,10 @@ pub(crate) fn value_len(value: &COVNotificationValue) -> usize {
         + if value.time_of_change.is_some() { 5 } else { 0 }
 }
 
-/// Octets a change of `values` counts against its context's bound.
-fn change_cost(values: &[COVNotificationValue]) -> usize {
-    ITEM_FRAMING + CHANGE_OVERHEAD + values.iter().map(value_len).sum::<usize>()
+/// Octets an item carrying `values` takes in a notification: their encoding
+/// and the item's framing.
+fn item_octets(values: &[COVNotificationValue]) -> usize {
+    ITEM_FRAMING + values.iter().map(value_len).sum::<usize>()
 }
 
 impl TimedChange {
@@ -176,7 +191,7 @@ impl TimedChange {
             seq: 0,
             frame,
             captured_at: Instant::now(),
-            cost: change_cost(&values),
+            octets: item_octets(&values),
             positions: (0..values.len()).collect(),
             values,
             observation,
@@ -195,7 +210,7 @@ impl TimedChange {
                 seq: self.seq,
                 frame: self.frame,
                 captured_at: self.captured_at,
-                cost: change_cost(std::slice::from_ref(&value)),
+                octets: item_octets(std::slice::from_ref(&value)),
                 values: vec![value],
                 observation: self.observation.clone(),
                 positions: vec![position],
@@ -205,7 +220,7 @@ impl TimedChange {
 
     /// Take back `other`, another part of this change, and order the values
     /// by their captured positions again, whichever parts came back before.
-    /// Returns the octets this adds to the context's bound.
+    /// Returns the octets this adds to the context's room for items.
     fn rejoin(&mut self, other: TimedChange) -> usize {
         let mut merged: Vec<_> = std::mem::take(&mut self.positions)
             .into_iter()
@@ -214,9 +229,9 @@ impl TimedChange {
             .collect();
         merged.sort_by_key(|(position, _)| *position);
         (self.positions, self.values) = merged.into_iter().unzip();
-        let before = self.cost;
-        self.cost = change_cost(&self.values);
-        self.cost - before
+        let before = self.octets;
+        self.octets = item_octets(&self.values);
+        self.octets - before
     }
 
     /// Capture sequence of the change: its place in capture order across the
@@ -311,9 +326,24 @@ impl ContextTerms {
         self.apdu.saturating_sub(self.envelope)
     }
 
-    /// Octets of pending changes the context may hold.
-    fn capacity(self) -> usize {
+    /// Octets of items the context's pending changes may take: what
+    /// [`HISTORY_NOTIFICATIONS`] notifications carry, less the reserve.
+    fn room(self) -> usize {
         (HISTORY_NOTIFICATIONS * self.notification()).saturating_sub(self.reserve)
+    }
+
+    /// Octets the context's pending changes may take in memory, as
+    /// [`Held::memory`] counts them: the room [`HISTORY_NOTIFICATIONS`]
+    /// notifications of the local maximum APDU `local` have, whatever the
+    /// subscriber's.
+    fn ceiling(self, local: usize) -> usize {
+        HISTORY_NOTIFICATIONS * local.saturating_sub(self.envelope)
+    }
+
+    /// Whether the context may hold `held`: within both its room and its
+    /// memory ceiling.
+    fn holds(self, held: Held, local: usize) -> bool {
+        held.octets <= self.room() && held.memory() <= self.ceiling(local)
     }
 }
 
@@ -355,7 +385,8 @@ pub(crate) struct TimedHistories {
     /// Unconfirmed contexts with a report going out, and whether another
     /// fanout stood back meanwhile and is owed a follow-up.
     sending: HashMap<MultipleContextKey, bool>,
-    context_bytes: HashMap<MultipleContextKey, usize>,
+    /// Pending changes of every context with any, as its bound counts them.
+    context_held: HashMap<MultipleContextKey, Held>,
     /// Earliest the deadline backstop may hand a context out again. Only a
     /// context with a timestamped history has an entry.
     not_before: HashMap<MultipleContextKey, Instant>,
@@ -375,7 +406,7 @@ impl TimedHistories {
             untimed: HashMap::new(),
             terms: HashMap::new(),
             sending: HashMap::new(),
-            context_bytes: HashMap::new(),
+            context_held: HashMap::new(),
             not_before: HashMap::new(),
             wake: Arc::default(),
             next_seq: 1,
@@ -614,8 +645,7 @@ impl TimedHistories {
     pub(super) fn remove(&mut self, key: &CovSubscriptionKey) {
         self.untimed.remove(key);
         if let Some(history) = self.histories.remove(key) {
-            let bytes: usize = history.entries.iter().map(|e| e.cost).sum();
-            self.release_bytes(key, bytes);
+            self.release(key, Held::of(&history.entries));
         }
         if let Some(context) = key.multiple_context() {
             if self
@@ -636,15 +666,17 @@ impl TimedHistories {
         }
     }
 
-    /// Timestamped histories (or context terms, should any outlive them)
-    /// plus untimestamped references, and backstop waits held, for leak
-    /// tests.
+    /// Timestamped histories (or context terms or bound counts, should any
+    /// outlive them) plus untimestamped references, and backstop waits held,
+    /// for leak tests.
     #[cfg(test)]
     pub(crate) fn held(&self) -> (usize, usize) {
-        (
-            self.histories.len().max(self.terms.len()) + self.untimed.len(),
-            self.not_before.len(),
-        )
+        let timed = self
+            .histories
+            .len()
+            .max(self.terms.len())
+            .max(self.context_held.len());
+        (timed + self.untimed.len(), self.not_before.len())
     }
 
     /// Latest captured or conveyed observation of a live generation.
@@ -784,8 +816,7 @@ impl TimedHistories {
             return (incarnation, Vec::new());
         }
         let drained: Vec<_> = history.entries.drain(..).collect();
-        let bytes = drained.iter().map(|e| e.cost).sum();
-        self.release_bytes(key, bytes);
+        self.release(key, Held::of(&drained));
         (incarnation, drained)
     }
 
@@ -802,8 +833,7 @@ impl TimedHistories {
             .partition_point(|change| change.seq < committed);
         let removed: Vec<_> = history.entries.drain(..stale).collect();
         if !removed.is_empty() {
-            let bytes = removed.iter().map(|change| change.cost).sum();
-            self.release_bytes(key, bytes);
+            self.release(key, Held::of(&removed));
             self.dropped(key, removed.len(), DropReason::Superseded);
         }
     }
@@ -843,7 +873,7 @@ impl TimedHistories {
         let Some(history) = self.history_mut(key, generation) else {
             return;
         };
-        let mut added = 0;
+        let mut added = Held::default();
         // A new oldest pending change can bring its context's deadline forward.
         let mut new_front = false;
         for mut change in changes {
@@ -852,16 +882,20 @@ impl TimedHistories {
             match history.entries.get_mut(at).filter(|e| e.seq == change.seq) {
                 // A change sent one value per notification comes back in
                 // parts, which rejoin as one change (#1090).
-                Some(entry) => added += entry.rejoin(change),
+                Some(entry) => added.octets += entry.rejoin(change),
                 None => {
-                    added += change.cost;
+                    added.octets += change.octets;
+                    added.changes += 1;
                     new_front |= at == 0;
                     history.entries.insert(at, change);
                 }
             }
         }
-        if let Some(context) = key.multiple_context() {
-            *self.context_bytes.entry(context.clone()).or_default() += added;
+        if let Some(context) = key.multiple_context().filter(|_| added != Held::default()) {
+            self.context_held
+                .entry(context.clone())
+                .or_default()
+                .grow(added);
         }
         if evict {
             self.enforce_bound(key);
@@ -961,6 +995,7 @@ mod bound;
 mod claim;
 mod drops;
 mod owed;
+use bound::Held;
 pub(crate) use bound::{envelope_len, request_header};
 pub(crate) use claim::{SendTurn, TimedClaim, ValueFit};
 #[cfg(test)]

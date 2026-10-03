@@ -3503,16 +3503,24 @@ size less the octets the encoder puts around them for the context: the request
 header, confirmed or not, the process identifier and the lifetime left at the
 context's last admission in their fewest octets, the device identifier, the
 timestamp and the list's tags, 25 to 33 octets in all (#1197). Each change counts
-its encoding, one item's framing and a fixed overhead of 32 octets for the memory
-it holds besides its values, so many tiny changes cannot outgrow the estimate. The
+its encoding and one item's framing, as if it started an item of its own. The
 context also keeps room, at most one notification's worth, for the most its
 untimestamped values have taken in one report since it was last admitted or lost
-a reference. Only on overflow, the last resort, is a change dropped: the oldest
-of the same reference first, then the oldest in the context, never a reference's
-latest. Nor is a reference's change in delivery dropped: once a change sent one
-value per notification has a part delivered, or sent as a confirmed report's
-first part, the rest of it stays queued until its last value is delivered,
-however small the subscriber's maximum APDU (#1163). Beyond the bound, a context
+a reference. Memory has a ceiling of its own (#1287): counting each change with a
+fixed 32 octets more for the memory it holds besides its values, one context
+never holds more than four notifications of the server's own maximum APDU,
+whatever its subscriber's size, so many tiny changes cannot outgrow it. The
+overhead takes no room in a notification, so with the shortest envelope a
+50-octet subscriber keeps four REAL Present_Value changes, one per notification,
+on a server whose own maximum APDU is 78 octets or more. Near the local maximum
+the ceiling binds first, and the subscription caps (`CovPolicy`) limit how many
+contexts there are, so the history as a whole stays bounded. Only on overflow
+of either limit, the last resort, is a change dropped: the oldest of the same
+reference first, then the oldest in the context, never a reference's latest.
+Nor is a reference's change in delivery dropped: once a change sent one value
+per notification has a part delivered, or sent as a confirmed report's first
+part, the rest of it stays queued until its last value is delivered, however
+small the subscriber's maximum APDU (#1163). Beyond the bound, a context
 therefore holds at most two changes per reference. Parts a confirmed report
 defers return to the queue without that check, so the bound never drops what the
 report just planned to send. Changes returned by a failed notification wait
@@ -4453,6 +4461,27 @@ only ask whether the request was taken; a Channel member in another device
 uses the payload to tell a NULL refused as the wrong datatype, which counts as
 written, from other refusals.
 
+A recipient on the local network by number is sent to as a local recipient,
+for Notification Class delivery and forwarded copies alike (#1299). Once the
+server knows its network's number (see
+[Local Network Number controls](#local-network-number-controls)), an Address
+recipient naming that number gets its notification with no DNET: a unicast to
+its MAC, or a local broadcast when the MAC is empty or the link's broadcast
+MAC. A Device binding routed to that network is sent straight to its final
+MAC rather than through its router, and a confirmed notification then waits
+for the answer from that MAC directly. Such a binding whose final MAC is the
+link's broadcast MAC names no single device here, so it is skipped and counts
+in `recipient_unroutable`, as a local binding at a broadcast MAC does, so no
+forwarded copy goes to it either. Clause 6.5.1 sends traffic for the local
+network without a DNET, and a non-routing node drops an NPDU whose DNET names
+a network (Clause 6.5.2.1), so the routed form might never arrive. The
+number is read once per notification from `NetworkLayer::local_network_number`,
+without the database lock, and a confirmed notification keeps the route it
+was first sent on for its retries. While the number is unknown, an address
+naming any network is sent routed, as it is written. The server has one port,
+so the local network is that port's; a multi-port device would need the
+network attached to each port (#863).
+
 ### Confirmed notifications under DeviceCommunicationControl
 
 While DeviceCommunicationControl restricts initiation the server sends no COV
@@ -4519,12 +4548,13 @@ not broadcast back onto the local network, and one received by broadcast goes
 to no node on the local network. The server ignores every confirmed request
 that arrives by broadcast or multicast (`ReceivedApdu::is_group`), whatever
 its service, with no answer (Clause 5.4.5.1), so a ConfirmedEventNotification
-it answers was addressed to it alone. When the registered Network Port
-(`ServerBuilder::registered_network_port`) knows the local network's number,
-configured or learned, a recipient address naming that number is local to
-these rules; a copy they let through still goes as the address is written.
-With no registered port, or while its number is unknown, such an address is
-taken as remote. These skips are configured behaviour and move no counter.
+it answers was addressed to it alone. Once the server knows the local
+network's number, configured on the registered Network Port
+(`ServerBuilder::registered_network_port`) or learned from Network-Number-Is
+with or without one (#1298), a recipient naming that number is on the local
+network to these rules, and a copy they let through goes to it as a local
+recipient, with no DNET. While the number is unknown, such an address is taken
+as remote. These skips are configured behaviour and move no counter.
 DeviceCommunicationControl's DISABLE_INITIATION stops every copy.
 A destination naming the server's own Device object hands the copy to the
 forwarders that have not yet taken it, and across such a chain each
@@ -4910,6 +4940,8 @@ Three owners consume the two local nonrouter controls automatically, one per tra
 A valid local-broadcast announcement with flag zero updates an unknown/learned owner to `LEARNED`. Flag one sets `LEARNED_CONFIGURED` and takes precedence over all subsequent flag-zero announcements. Further flag-one announcements may replace that learned value, including conflicts; an equal value still upgrades its quality. Both learned qualities transmit flag zero in their own responses. Selected-object `Network_Number` and `Network_Number_Quality` reads use the same database-owned state. Configuration remains immutable, so a new registration resets the pair from configured provenance; a new unregistered runtime starts unknown. There is no persistence of learned state across constructing a new runtime. After stop, the object retains the last observed pair until reconstruction or a new registration.
 
 Routed controls, malformed payloads and unicast Network-Number-Is are ignored. A BBMD Forwarded-NPDU is a logical broadcast even when its UDP hop is unicast and remains eligible. Ignoring number zero, 65535 and flags outside zero/one is this implementation's validation policy, rather than an additional quoted Standard mandate. Conflicting announcements against a locally configured number produce a debug diagnostic without changing configuration.
+
+The full server publishes the number its owner holds on `NetworkLayer::local_network_number` (a `bacnet_network::network_number::LocalNetworkNumber` handle), where event routing reads it without the database lock (#1298). With a registered Network Port the port stays the one authority: startup copies the port's number there once the bind is published, and the worker copies the port's state after each control under the same database write lock that changed it, so the handle never holds a number the port does not. Without a registered port, the handle holds the number the worker learned. A later announcement that replaces the number takes effect for the next notification sent. Nothing withdraws a known number, since no announcement can, so it stays until a new runtime starts again from the configured number or unknown. The standalone client publishes its learned number on its own layer the same way, though nothing in the client reads it yet; neither exposes its layer. The shared endpoint exposes no layer and does not publish.
 
 Standalone clients start UNKNOWN on transports that opt into local nonrouter Number controls. They learn and reply using the same validation and precedence rules, without a Device object, registered Network Port, configured-number setter or persistence. One 256-entry serial worker owns this state; full or closed admission drops only Number controls. A held Number send leaves routed reason-4 Reject correlation and independent APDU dispatch available. Stop aborts and joins both the Number worker and dispatch before transport cleanup, retaining their joins across a canceled stop waiter. Drop aborts both. Already transmitted bytes cannot be retracted. Controlled-client tests qualify the shared intake/lifecycle behavior; Linux NORMAL-B/IP loopback and Ethernet virtual-link tests independently observe actual reply frames. Constrained-TLS SC tests observe Hub broadcast VMAC and exact Number bytes, including replies to direct-peer queries, while ordinary confirmed client requests complete. SC stop/drop retires client connections; the external DirectListener must separately be stopped and joined before its bind is released. Pending-send/queue cancellation remains covered by the generic controlled-client tests, rather than inferred from wire silence. Rust standalone-client B/IPv6 tests independently capture normal selected-link OriginalBroadcast and configured-foreign DBTN with exact source, destination, interface and Number bytes. Positive reply fences cover UNKNOWN, precedence and invalid/admission refusal; stop and eventual Drop release the socket, and reconstruction starts UNKNOWN. These external ignored Linux tests require the integration `ipv6` feature and isolated observer; ordinary hosted CI does not execute them. They add no Python foreign-device API, configured-client authority or physical-LAN claim. Separate isolated Linux standalone-client BBMD/foreign tests capture own Original-Broadcast versus forwarding traffic and exact DBTN to the configured BBMD. Positive Number fences cover UNKNOWN, BDT/FDT admission/refusal, alternate-sender compatibility, precedence and representative invalid/routed controls; registration NAKs retain DBTN attempts and the timer retries registration. An ordinary client ReadProperty completes during live Number controls, and awaited stop permits exclusive socket rebind before client Drop. No configured client number, new registration policy or complete Annex J claim is added. MS/TP LoopbackSerial tests also cover the standalone client in both execution modes, with the same frame decoding and fences as the full server and shared endpoint below; its own ReadProperty to the peer completes while a Number send is held.
 

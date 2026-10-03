@@ -3754,7 +3754,9 @@
     "crates/bacnet-server/src/server/event_forwarding_repeats.rs::ConfirmedEventRepeats",
     "crates/bacnet-server/src/server/lifecycle.rs",
     "crates/bacnet-objects/src/notification_forwarder/persistence.rs::ForwarderSnapshot",
-    "crates/bacnet-objects/src/notification_forwarder/mod.rs::NotificationForwarderObject::add_destination"
+    "crates/bacnet-objects/src/notification_forwarder/mod.rs::NotificationForwarderObject::add_destination",
+    "crates/bacnet-server/src/server/event_recipient_route.rs::RecipientRoute::localize",
+    "crates/bacnet-network/src/network_number.rs::LocalNetworkNumber"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::forwarder_sends_to_its_recipient_list_and_its_subscriptions",
@@ -3782,6 +3784,9 @@
     "crates/rusty-bacnet/tests/test_read_value_shapes.py::ClientReadShapeTests::test_recipient_lists_keep_every_destination",
     "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_recipient_naming_this_network_by_number_is_local_to_the_loop_rules",
     "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_network_number_is_remote_while_this_network_has_none",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::a_number_learned_without_a_network_port_makes_this_network_local",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::a_registered_port_and_the_routes_share_one_network_number",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::notification_class_and_forwarded_copies_to_this_network_go_without_a_dnet",
     "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::a_repeat_is_matched_by_source_invoke_id_and_octets",
     "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::a_written_recipient_list_reads_back_after_a_rebuild",
     "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::saved_recipient_list_wins_over_configured_destinations",
@@ -3829,11 +3834,12 @@
    "notes": [
     "Every received event notification, and each local one whose Notification Class names this device's Device object, goes to every NOTIFICATION_FORWARDER object, bundled or custom, read through its properties.",
     "A copy keeps the received request octet for octet after the process identifier, so text in any character set and event values the stack does not model pass through.",
-    "The server is a single-port node: a notification arrives through Port_ID 0, Port_Filter is absent unless set, and an address naming the registered Network Port's known Network_Number is local to the loop rules.",
+    "The server is a single-port node: a notification arrives through Port_ID 0, Port_Filter is absent unless set, and a recipient naming the local network's known number, configured or learned, is local to the loop rules.",
     "A well-formed ConfirmedEventNotification sent to this device alone is acknowledged before any copy goes, taken or not; a repeat within 60 s with the same source, invoke ID and octets is acknowledged, not forwarded.",
     "Within one device a forwarder takes a notification once, a destination gets one copy, and at most 64 copies that would be sent go out across all forwarders, local or received; forwarding_cap_dropped counts the rest."
    ],
    "gaps": [
+    "#863: the local network is the server's one port's; a multi-port device would take it per port, the one attached to the recipient's network."
    ]
   },
   {
@@ -4007,6 +4013,9 @@
     "crates/bacnet-server/src/server/event_confirmed_routing_tests/learned_router_cache.rs::admitted_routes_stop_at_64_but_existing_network_updates_at_capacity",
     "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::every_deliverable_route_moves_no_counter",
     "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_recipient_list_takes_framed_writes_up_to_the_cap",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::notification_class_and_forwarded_copies_to_this_network_go_without_a_dnet",
+    "crates/bacnet-server/src/server/local_network_number_tests/localize.rs::localize_takes_only_routes_naming_this_network_as_local",
+    "crates/bacnet-server/src/server/local_network_number_tests/localize.rs::a_confirmed_notification_to_this_network_is_completed_by_the_direct_ack",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_recipient_lists_read_as_the_destinations_written",
     "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{recipient_lists_read_as_the_destinations_written,equality_and_repr_follow_the_element_production}"
    ],
@@ -4032,7 +4041,9 @@
     "crates/bacnet-encoding/src/constructed/tests/recipient.rs::recipient_mac_bound_holds_in_both_directions",
     "crates/bacnet-services/src/enrollment_summary_width_tests.rs::enrollment_filter_recipient_mac_holds_to_the_bacnet_address_bound",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::FallbackTests::test_a_value_that_is_not_the_expected_production_keeps_its_octets",
-    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{a_value_that_is_not_the_expected_production_falls_back,empty_values_and_other_properties_keep_the_generic_shape}"
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::{a_value_that_is_not_the_expected_production_falls_back,empty_values_and_other_properties_keep_the_generic_shape}",
+    "crates/bacnet-server/src/server/local_network_number_tests/localize.rs::localize_leaves_every_route_alone_while_the_number_is_unknown",
+    "crates/bacnet-server/src/server/local_network_number_tests/localize.rs::a_device_bound_at_the_broadcast_mac_on_this_network_is_unroutable"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -4055,6 +4066,8 @@
      "#1156: decode_recipient itself holds to the bound, so the separate decode_configured_recipient is gone. COV subscription lists, audit notifications and records, and the GetEnrollmentSummary enrollment filter decode through it, and every recipient encoder (encode_recipient, encode_destination and its list form, the COV subscription encoders, the audit notification encoder) refuses a longer MAC before writing anything.",
      "The ValueSource and AuditLogQuery address codecs share the same check (check_decoded_mac_len, check_encoded_mac_len). Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, and COV admission and remote command origins refuse a longer direct MAC, so nothing the stack stores fails to encode.",
      "A Notification Forwarder's Recipient_List takes the same framed writes and cap.",
+     "A recipient naming the local network's known number, as an address or a routed Device binding, is sent with no DNET: a unicast to its MAC, or a local broadcast for an empty or link broadcast MAC.",
+     "A Device binding routed to the local network's known number at the link broadcast MAC is skipped and counts in recipient_unroutable, as a local binding at that MAC does.",
      "Python reads either object's Recipient_List as a list of Destination mappings with every key, the form add_notification_forwarder takes; a value that doesn't decode as destinations stays application_data octets."
     ]
   },
@@ -4774,7 +4787,8 @@
     "crates/bacnet-server/src/server/cov_multiple_admission_tests.rs::a_partly_admitted_request_warns_afresh_about_dropped_changes",
     "crates/bacnet-server/src/cov/multiple_admission_tests.rs::cov_multiple_admission_stops_at_the_first_proposal_past_the_quota",
     "crates/bacnet-server/src/server/cov_quota_tests.rs::subscribe_cov_property_multiple_quota_names_the_overflowing_reference",
-    "crates/bacnet-server/src/cov/timed/bound.rs::tests::{the_envelope_is_what_the_encoder_lays_around_the_items,at_a_50_octet_subscriber_a_change_that_fits_the_wire_fits_the_bound,admission_sizes_the_envelope_from_the_lifetime_left}"
+    "crates/bacnet-server/src/cov/timed/bound.rs::tests::{the_envelope_is_what_the_encoder_lays_around_the_items,at_a_50_octet_subscriber_a_change_that_fits_the_wire_fits_the_bound,admission_sizes_the_envelope_from_the_lifetime_left}",
+    "crates/bacnet-server/src/cov/timed/bound.rs::tests::{at_a_50_octet_subscriber_the_bound_keeps_four_notifications_of_changes,the_bound_keeps_what_fits_both_its_notifications_and_its_memory_ceiling,the_memory_ceiling_caps_every_context_under_many_subscribers}"
    ],
    "negative_tests": [
         "crates/bacnet-server/src/server/cov_identity_completion_tests/completion_order.rs::cov_order_newer_failure_or_cancellation_does_not_block_older_success",
@@ -4894,7 +4908,8 @@
    "public_claims": [
     "docs/rust-api.md#cov-subscriptions",
     "docs/python-api.md#cov-subscriptions",
-    "CHANGELOG.md Unreleased Changed entry for #1197 (COV-multiple history bound sized from the real envelope), from changelog.d/1197-cov-multiple-envelope.md"
+    "CHANGELOG.md Unreleased Changed entry for #1197 (COV-multiple history bound sized from the real envelope), from changelog.d/1197-cov-multiple-envelope.md",
+    "CHANGELOG.md Unreleased Changed entry for #1287 (COV-multiple history memory overhead counted against its own ceiling), from changelog.d/1287-cov-history-overhead.md"
    ],
    "notes": [
     "Issue #826 adds local latest-successful preparation ordering for whole unconfirmed observations, not a Standard-mandated concurrency tie-break. A checked table-owner counter is reserved after coherent eligible capture and before later awaits; each live reference atomically commits a newer successful marker and complete baseline.",
@@ -4951,7 +4966,7 @@
     "Untimestamped values have no queue, so a report that began going out owes the untimestamped references of the parts it did not deliver: an unconfirmed report those of the parts left after a stop, a confirmed one those of its deferred parts once it holds the context.",
     "The backstop treats an owed reference as a pending change of its context from when it was first owed (deadline, hold-off, re-enabled communication); the report that next evaluates it takes the mark and reads its value afresh, so a newer change goes in place of the value first prepared, and puts it ahead of newer changes so a split confirmed report cannot defer it for good.",
     "A reference stays owed until a part carrying it is delivered or a report finds nothing left to send for it. A report none of whose parts went out owes nothing new: as before, the next fanout or the failed report's hold-off reports it, though a split confirmed report whose first part fails is brought back at the hold-off's end by the owed references of its deferred parts.",
-    "Local bound: one context holds an estimated four notifications of pending history, counting each change's encoding, item framing and a fixed 32-octet overhead, and a per-context reserve, at most one notification's worth, for the most its untimestamped values have taken since it was last admitted or lost a reference; only on overflow is the oldest change dropped, never a reference's latest.",
+    "Local bound: one context holds an estimated four notifications of pending history, counting each change's encoding and item framing, and a per-context reserve, at most one notification's worth, for the most its untimestamped values have taken since it was last admitted or lost a reference; only on overflow is the oldest change dropped, never a reference's latest.",
     "Changes returned by a failed notification wait for an in-flight newer change and are dropped once it is delivered. Those drops are counted in timed_changes_dropped, as is each change that loses a value too large for any notification; each cause (bound overflow, a value too large for any notification, superseded) logs one warning per context until a timestamped reference of it is admitted again or an admission changes its notification size, so the counter is the running signal (#1039).",
     "Changes are reported as soon as they happen; Max_Notification_Delay bounds how long changes left queued by a failed send, an unacknowledged confirmed report, DISABLE_INITIATION or an exhausted budget wait: once the context's delay has passed since its earliest queued change, the context is fanned out again (§13.1, §13.16.1.1.4).",
     "The delay is an upper bound, so overdue changes go out once nothing blocks them: re-enabling communication (DCC request or timer) or admitting a shorter delay retries at once, a confirmed hold-off moves the retry to its end, and an outstanding report's Ack sends what it held back.",
@@ -4974,8 +4989,9 @@
     "Neither error table has a row for it: Clause 18.5 defines that code for service parameters that would need functionality the device lacks, and Clause 16.1.1.3 pairs it with a device without a clock. The general row for a context that cannot be created never fires and stays documented only (#1102 item 2): a context exists only while it holds references and has no storage or limit of its own, so a new context whose first reference finds no room gets the per-reference RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT error.",
     "It ties to the empty-spec context materialization gap below; revisit it if contexts get their own storage or limit. A cancellation validates nothing and removes every listed reference. CovSubscriptionTable::subscribe_multiple returns Err(MultipleRefusal) with the error, the refused position and the kept snapshots.",
     "Issue #1163 keeps a change in delivery out of the local bound's eviction. A change sent one value per notification (#1090) is in delivery from when a part of it is delivered, or sent as a confirmed report's first part with the rest deferred, until its last value is delivered; each reference marks only the change a part last went out ahead of.",
-    "Eviction takes neither that change nor a reference's newest, so at a 50-octet subscriber, where the bound holds about one Present_Value and Status_Flags change, a value held back by a failed send or a deferral still goes out after a newer change, and timed_changes_dropped moves only on a real overflow, for a change not yet begun. Beyond the bound a context holds at most two changes per reference. The bound and this exemption are local policy.",
-    "The bound sizes each notification as the smaller maximum APDU less the octets the encoder puts around its items for that context: the confirmed or unconfirmed header, the process identifier, the lifetime left at the last admission, the device identifier, the timestamp and the list tags, 25 to 33 octets (#1197)."
+    "Eviction takes neither that change nor a reference's newest, so at a 50-octet subscriber, where the bound holds two or three Present_Value and Status_Flags changes, a value held back by a failed send or a deferral still goes out after a newer change, and timed_changes_dropped moves only on a real overflow, for a change not yet begun. Beyond the bound a context holds at most two changes per reference. The bound and this exemption are local policy.",
+    "The bound sizes each notification as the smaller maximum APDU less the octets the encoder puts around its items for that context: the confirmed or unconfirmed header, the process identifier, the lifetime left at the last admission, the device identifier, the timestamp and the list tags, 25 to 33 octets (#1197).",
+    "A memory ceiling counts held changes plus 32 octets each, up to four notifications at this device's own maximum APDU; the room omits that overhead, so a 50-octet subscriber keeps four REAL Present_Value changes if that APDU is 78+ (#1287)."
    ]
   },
   {
@@ -8589,7 +8605,8 @@
     "crates/bacnet-transport/src/bip6/port.rs",
     "crates/bacnet-transport/src/mstp/port.rs",
     "crates/bacnet-transport/src/bip/mod.rs",
-    "crates/bacnet-transport/src/bip/io.rs"
+    "crates/bacnet-transport/src/bip/io.rs",
+    "crates/bacnet-network/src/network_number.rs::LocalNetworkNumber"
    ],
    "positive_tests": [
     "crates/bacnet-integration-tests/tests/ethernet_network_numbers.rs",
@@ -8630,7 +8647,11 @@
     "crates/bacnet-endpoint/tests/sc_client_network_numbers.rs",
     "crates/bacnet-endpoint/tests/sc_client_network_numbers/support.rs",
     "crates/bacnet-integration-tests/tests/client_ipv6_network_numbers.rs",
-    "crates/bacnet-integration-tests/tests/client_bip_network_numbers.rs"
+    "crates/bacnet-integration-tests/tests/client_bip_network_numbers.rs",
+    "crates/bacnet-network/src/network_number/tests.rs::local_network_number_shares_the_last_published_state",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::a_number_learned_without_a_network_port_makes_this_network_local",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::a_registered_port_and_the_routes_share_one_network_number",
+    "crates/bacnet-client/src/client/number_tests/lifecycle.rs::client_number_worker_queue_is_bounded_and_closes_on_abort"
    ],
    "negative_tests": [
     "crates/bacnet-endpoint/tests/mstp_network_numbers.rs::mstp_number_server_tokio_wire",
@@ -8702,7 +8723,8 @@
     "No new API/dependency/configured authority, Python foreign API, IPv6 endpoint builder, physical LAN, Windows runtime or full Annex U qualification. Separate isolated Linux standalone-client BBMD/foreign tests capture own Original-Broadcast versus forwarding traffic and exact DBTN to the configured BBMD.",
     "Positive Number fences cover UNKNOWN, BDT/FDT admission/refusal, alternate-sender compatibility, precedence and representative invalid/routed controls; registration NAKs retain DBTN attempts and the timer retries registration.",
     "An ordinary client ReadProperty completes during live Number controls, and awaited stop permits exclusive socket rebind before client Drop. No configured client number, new registration policy or complete Annex J claim is added.",
-    "Standalone-client MS/TP LoopbackSerial tests in Tokio and DedicatedThread modes reuse the full-server/endpoint fixture: they decode complete broadcast DNER NNI frames behind the same positive FIFO fences, complete the client's own ReadProperty to the peer while a post-enqueue Number producer is held, and release the producer and serial owner on canceled stop and bare drop. Simulator evidence only, with no RS-485 timing or hardware claim."
+    "Standalone-client MS/TP LoopbackSerial tests in Tokio and DedicatedThread modes reuse the full-server/endpoint fixture: they decode complete broadcast DNER NNI frames behind the same positive FIFO fences, complete the client's own ReadProperty to the peer while a post-enqueue Number producer is held, and release the producer and serial owner on canceled stop and bare drop. Simulator evidence only, with no RS-485 timing or hardware claim.",
+    "The full server publishes the number it holds on NetworkLayer::local_network_number, where its event routing reads it without a lock; with a registered port the copy is taken from the port's state under the database write lock that changed it, so the two never disagree. The standalone client publishes its learned number on its own layer, which nothing in the client reads."
    ]
   },
   {

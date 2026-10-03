@@ -2,7 +2,7 @@
 //! maximum APDU (#986), owed untimestamped references (#1038), and changes
 //! sent one value per notification (#1090).
 use super::tests::{
-    apdu_for, change, change_len, context, dropped, frame, histories, key, seconds, store,
+    change, context, dropped, frame, histories, item_len, key, seconds, store, subscriber_for,
     timed_reference, LIFETIME,
 };
 use super::*;
@@ -115,9 +115,8 @@ fn the_bound_spans_several_notifications_of_the_smaller_apdu_less_a_reserve() {
     assert_eq!(dropped(&counters), 0, "eight changes fit the local bound");
     h.drain(&k, 1);
 
-    // A subscriber with a smaller APDU shrinks the bound to two changes.
-    let small = u16::try_from(apdu_for(2, 4)).unwrap();
-    h.set_sizing(&context(1), Some(small), LIFETIME);
+    // A subscriber with a smaller APDU shrinks the room to two changes.
+    h.set_sizing(&context(1), Some(subscriber_for(2, 4)), LIFETIME);
     for second in 11..=13 {
         h.push(&k, 1, change(second, 4));
     }
@@ -135,22 +134,32 @@ fn the_bound_spans_several_notifications_of_the_smaller_apdu_less_a_reserve() {
     assert_eq!(dropped(&counters), 3);
 
     // Room the untimestamped values took is kept for them.
-    h.note_reserve(&context(1), change_len(4));
+    h.set_sizing(&context(1), Some(subscriber_for(8, 4)), LIFETIME);
+    h.note_reserve(&context(1), item_len(4));
     for second in 31..=38 {
         h.push(&k, 1, change(second, 4));
     }
     assert_eq!(seconds(&h.drain(&k, 1).1), [32, 33, 34, 35, 36, 37, 38]);
     assert_eq!(dropped(&counters), 4);
     // At most one notification's worth: two changes here.
-    h.note_reserve(&context(1), 10 * change_len(4));
+    h.note_reserve(&context(1), 10 * item_len(4));
     for second in 41..=47 {
         h.push(&k, 1, change(second, 4));
     }
     assert_eq!(h.drain(&k, 1).1.len(), 6);
     assert_eq!(dropped(&counters), 5);
     // An admission starts the reserve over.
-    h.set_sizing(&context(1), None, LIFETIME);
+    h.set_sizing(&context(1), Some(subscriber_for(8, 4)), LIFETIME);
     for second in 51..=58 {
+        h.push(&k, 1, change(second, 4));
+    }
+    assert_eq!(h.drain(&k, 1).1.len(), 8);
+    assert_eq!(dropped(&counters), 5);
+    // The reserve keeps room in notifications, not memory: at the local
+    // maximum, where the memory ceiling binds, it changes nothing (#1287).
+    h.set_sizing(&context(1), None, LIFETIME);
+    h.note_reserve(&context(1), item_len(4));
+    for second in 61..=68 {
         h.push(&k, 1, change(second, 4));
     }
     assert_eq!(h.drain(&k, 1).1.len(), 8);
@@ -162,7 +171,8 @@ fn the_reserve_belongs_to_the_context_and_starts_over_when_it_loses_a_reference(
     let (mut h, counters) = histories(8, 4);
     let (a, b) = (key(1, 1), key(1, 2));
     h.reset(&a, 1, 0);
-    h.note_reserve(&context(1), change_len(4));
+    h.set_sizing(&context(1), Some(subscriber_for(8, 4)), LIFETIME);
+    h.note_reserve(&context(1), item_len(4));
     h.reset(&b, 1, 0); // a later reference shares the context's reserve
     for second in 1..=8 {
         h.push(&b, 1, change(second, 4));
@@ -404,7 +414,7 @@ fn value_parts_keep_capture_order_and_rejoin_whatever_order_they_return_in() {
     }
     store.lock().push(&a, 1, change_of(1, &[4, 5, 6]));
     store.lock().push(&b, 1, change_of(2, &[7]));
-    let queued = store.lock().context_bytes.get(&context(1)).copied();
+    let queued = store.lock().context_held.get(&context(1)).copied();
     let mut claim = claim_all(&store, &a);
     let (incarnation, drained) = store.lock().drain(&b, 1);
     claim.add(b.clone(), incarnation, drained);
@@ -440,12 +450,12 @@ fn value_parts_keep_capture_order_and_rejoin_whatever_order_they_return_in() {
     for part in parts.into_iter().rev() {
         drop(part);
     }
-    assert_eq!(store.lock().context_bytes.get(&context(1)).copied(), queued);
+    assert_eq!(store.lock().context_held.get(&context(1)).copied(), queued);
     // Returned oldest first, they rejoin the same way.
     for part in claim_all(&store, &a).split_values(|_, _| ValueFit::Fits) {
         drop(part);
     }
-    assert_eq!(store.lock().context_bytes.get(&context(1)).copied(), queued);
+    assert_eq!(store.lock().context_held.get(&context(1)).copied(), queued);
     assert_eq!(payloads(&store.lock().drain(&a, 1).1), [vec![4, 5, 6]]);
     assert_eq!(payloads(&store.lock().drain(&b, 1).1), [vec![7]]);
     assert_eq!(dropped(&counters), 0, "nothing was lost");
@@ -457,7 +467,8 @@ fn value_parts_rejoin_in_captured_order_from_any_return_order() {
     let k = key(1, 1);
     store.lock().reset(&k, 1, 0);
     let whole = change_of(1, &[4, 5, 6]);
-    let bytes = |store: &TimedStore| store.lock().context_bytes.get(&context(1)).copied();
+    let held = |store: &TimedStore| store.lock().context_held.get(&context(1)).copied();
+    let one = |change: &TimedChange| Held::of([change]);
     // Every order three parts can come back in, the middle part last
     // included: each time they rejoin as the change, in captured order, and
     // count against the bound exactly what the change counted.
@@ -478,11 +489,11 @@ fn value_parts_rejoin_in_captured_order_from_any_return_order() {
         for at in order {
             drop(parts[at].take());
         }
-        assert_eq!(bytes(&store), Some(whole.cost), "{order:?}");
+        assert_eq!(held(&store), Some(one(&whole)), "{order:?}");
         let rejoined = store.lock().drain(&k, 1).1;
         assert_eq!(payloads(&rejoined), [vec![4, 5, 6]], "{order:?}");
-        assert_eq!(rejoined[0].cost, whole.cost, "{order:?}");
-        assert_eq!(bytes(&store), None, "{order:?}");
+        assert_eq!(rejoined[0].octets, whole.octets, "{order:?}");
+        assert_eq!(held(&store), None, "{order:?}");
     }
     // After the first value went out, the other two coming back last first
     // still rejoin in order, counting only what is left.
@@ -498,11 +509,11 @@ fn value_parts_rejoin_in_captured_order_from_any_return_order() {
     first.commit();
     drop(third);
     drop(second);
-    let rest_cost = bytes(&store).expect("the rest is queued");
+    let rest_held = held(&store).expect("the rest is queued");
     let rest = store.lock().drain(&k, 1).1;
     assert_eq!(payloads(&rest), [vec![5, 6]]);
-    assert_eq!(rest[0].cost, rest_cost);
-    assert_eq!(rest_cost, change_cost(rest[0].values()));
+    assert_eq!(one(&rest[0]), rest_held);
+    assert_eq!(rest_held.octets, item_octets(rest[0].values()));
     assert_eq!(dropped(&counters), 0, "nothing was lost");
 }
 

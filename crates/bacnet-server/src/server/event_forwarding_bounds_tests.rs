@@ -1,8 +1,9 @@
 //! Bounds on what one received notification makes the forwarders send
-//! (#1258, #1259): a recipient naming this device's own network by number
-//! is local to the loop rules, the destinations per notification are capped
-//! across all forwarders, and a retransmitted confirmed notification is
-//! acknowledged without being forwarded again.
+//! (#1258, #1259, #1299): a recipient naming this device's own network by
+//! number is local to the loop rules and is sent to with no DNET, the
+//! destinations per notification are capped across all forwarders, and a
+//! retransmitted confirmed notification is acknowledged without being
+//! forwarded again.
 
 use super::confirmed_request_tracker::ConfirmedRequestTracker;
 use super::event_forwarding::Reception;
@@ -14,44 +15,21 @@ use super::event_forwarding_tests::{
 use super::event_recipient_routing_tests::address_recipient;
 use super::test_transport::{SendLog, TestTransport};
 use super::*;
-use bacnet_objects::network_port::{BipPortConfig, NetworkPortObject};
 use bacnet_objects::notification_forwarder::NotificationForwarderObject;
-use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetRecipient;
 
-/// The network number the registered Network Port gives this device.
+/// The number of the network this device is attached to.
 const THIS_NETWORK: u16 = 7;
 const REMOTE_MAC: [u8; 2] = [0x0E, 0x0F];
-const PORT_IP: [u8; 4] = [127, 0, 0, 1];
 
 const BROADCAST: Reception = Reception {
     group: true,
     global: false,
 };
 
-/// Register a B/IP Network Port numbered `network` in `db`, as the server
-/// does at startup. The returned lease keeps the registration live.
-fn register_port(db: &mut ObjectDatabase, network: u16) -> Arc<()> {
-    let port = NetworkPortObject::new_bip(
-        1,
-        "Port",
-        BipPortConfig {
-            network_number: network,
-            ip_address: PORT_IP,
-            ..BipPortConfig::default()
-        },
-    )
-    .unwrap();
-    let oid = port.object_identifier();
-    db.add(Box::new(port)).unwrap();
-    let (_, lease) = db.reserve_bip_port_internal(oid, PORT_IP, 47808).unwrap();
-    db.publish_bip_port_internal(oid, PORT_IP, 47808, 1476)
-        .unwrap();
-    lease
-}
-
 /// A forwarder sending to the broadcast on this network and to a node on
-/// it, both named by number, and to a node on another network.
+/// it, both named by number, and to a node on another network, processes 1
+/// to 3.
 fn numbered_recipients() -> NotificationForwarderObject {
     let mut nf = NotificationForwarderObject::new(1, "NF").unwrap();
     for (process, recipient) in [
@@ -67,18 +45,17 @@ fn numbered_recipients() -> NotificationForwarderObject {
 
 #[tokio::test]
 async fn a_recipient_naming_this_network_by_number_is_local_to_the_loop_rules() {
-    let mut db = database(vec![numbered_recipients()]);
-    let _lease = register_port(&mut db, THIS_NETWORK);
-    let forwarding = Forwarding::new(db);
-    // Addressed to this device alone: the node on this network still gets
-    // its copy, sent as its address is written, but nothing is broadcast
-    // back onto this network.
+    let forwarding = Forwarding::new(database(vec![numbered_recipients()]));
+    forwarding.set_local_network(THIS_NETWORK);
+    // Addressed to this device alone: the node on this network gets its
+    // copy as a local unicast, with no DNET, but nothing is broadcast back
+    // onto this network.
     assert_eq!(
         forwarding
             .receive(&notification(9), Reception::UNICAST)
             .await,
         [
-            unconfirmed(To::Remote(THIS_NETWORK, PEER_A.to_vec()), 2),
+            unconfirmed(To::Local(PEER_A.to_vec()), 2),
             unconfirmed(To::Remote(5, REMOTE_MAC.to_vec()), 3),
         ]
     );
@@ -92,21 +69,17 @@ async fn a_recipient_naming_this_network_by_number_is_local_to_the_loop_rules() 
 
 #[tokio::test]
 async fn a_network_number_is_remote_while_this_network_has_none() {
-    // A registered port with an unknown number, and no registered port at
-    // all: either way a numbered recipient is taken as remote.
-    let mut unknown = database(vec![numbered_recipients()]);
-    let _lease = register_port(&mut unknown, 0);
-    for db in [unknown, database(vec![numbered_recipients()])] {
-        let forwarding = Forwarding::new(db);
-        assert_eq!(
-            forwarding.receive(&notification(9), BROADCAST).await,
-            [
-                unconfirmed(To::RemoteBroadcast(THIS_NETWORK), 1),
-                unconfirmed(To::Remote(THIS_NETWORK, PEER_A.to_vec()), 2),
-                unconfirmed(To::Remote(5, REMOTE_MAC.to_vec()), 3),
-            ]
-        );
-    }
+    // Nothing published the local network's number: a numbered recipient
+    // is taken as remote and sent its routed copy.
+    let forwarding = Forwarding::new(database(vec![numbered_recipients()]));
+    assert_eq!(
+        forwarding.receive(&notification(9), BROADCAST).await,
+        [
+            unconfirmed(To::RemoteBroadcast(THIS_NETWORK), 1),
+            unconfirmed(To::Remote(THIS_NETWORK, PEER_A.to_vec()), 2),
+            unconfirmed(To::Remote(5, REMOTE_MAC.to_vec()), 3),
+        ]
+    );
 }
 
 /// A node on this network, one per `index`.
