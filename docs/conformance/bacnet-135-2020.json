@@ -773,7 +773,9 @@
     "crates/bacnet-server/src/server/confirmed_segmented_lifetime_tests.rs",
     "crates/bacnet-server/src/server/confirmed_broadcast_tests.rs::a_confirmed_request_sent_by_broadcast_is_neither_executed_nor_answered",
     "crates/bacnet-server/src/server/confirmed_broadcast_tests.rs::a_segment_sent_by_broadcast_draws_no_segment_ack_or_abort",
-    "crates/bacnet-integration-tests/tests/server/bip6_group_confirmed.rs::a_confirmed_request_forwarded_to_a_bip6_foreign_device_is_ignored"
+    "crates/bacnet-integration-tests/tests/server/bip6_group_confirmed.rs::a_confirmed_request_forwarded_to_a_bip6_foreign_device_is_ignored",
+    "crates/bacnet-integration-tests/tests/server/bip_group_confirmed.rs::an_original_unicast_sent_to_the_broadcast_address_is_not_answered",
+    "crates/bacnet-integration-tests/tests/server/bip6_group_unicast.rs::an_original_unicast_sent_to_the_multicast_group_is_not_answered"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -788,7 +790,8 @@
     "Byte-identical Invoke ID reuse then executes again. Segmented ownership moves to the child through final ACK or terminal outcome; generated terminal Abort retires at local issuance even while its send is held.",
     "Cancellation, errors and rejected spawn drop ownership. Request-task and segmented-send permits remain independent. LSO completed replay and Audit receipts are separate unchanged policies; direct leaf/incarnation keys remain in generic and LSO stores.",
     "Deterministic full-server direct/routed controls and virtual-clock child tests are local operation evidence, not physical emission/peer receipt or #524 response affinity/control confinement. See standard-135-2020-ledger.md#ordinary-confirmed-transaction-lifetimes.",
-    "A ConfirmedRequest whose network destination is a broadcast or multicast (ReceivedApdu::is_group) is dropped before reassembly or dispatch, with no answer, whatever the service."
+    "A ConfirmedRequest whose network destination is a broadcast or multicast (ReceivedApdu::is_group) is dropped before reassembly or dispatch, with no answer, whatever the service.",
+    "A confirmed request in an Original-Unicast-NPDU sent to a B/IP broadcast address or a B/IPv6 multicast group is never answered: the port drops it, and its link_layer_group follows that address."
    ]
   },
   {
@@ -927,7 +930,8 @@
    "negative_tests": [
     "crates/bacnet-encoding/src/npdu/address_bound_tests.rs::{over_long_address_length_is_refused_for_either_field,over_long_length_is_refused_before_the_address_is_read,source_refusal_reports_the_npdu_dnet,destination_refusal_carries_the_source_behind_it,address_too_long_reads_as_out_of_range,encoder_refuses_an_address_past_the_bound_for_either_field}",
     "crates/bacnet-network/src/address_bound_tests.rs::non_router_drops_and_counts_an_over_long_address_in_either_field",
-    "crates/bacnet-network/src/link_source_bound_tests.rs::non_router_drops_and_counts_a_frame_from_an_over_long_source_mac"
+    "crates/bacnet-network/src/link_source_bound_tests.rs::non_router_drops_and_counts_a_frame_from_an_over_long_source_mac",
+    "crates/bacnet-network/src/layer_delivery_tests.rs::sends_naming_network_zero_are_refused_before_any_frame"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -941,7 +945,8 @@
     "Table 6-2 (Clause 6.2.2.2) needs at most 7 octets for any standard data link, and the longest MAC this stack serves is the 18-octet B/IPv6 form. decode_npdu refuses a longer length with NpduDecodeError::AddressTooLong before reading the address octets, whether or not they are present, and reports the NPDU's DNET when it has one.",
     "For an over-long DADR it also reports the SNET/SADR behind it, read past the DLEN octets the frame announces, when a complete and valid one is there (#1158), so the router can address its reject; encode_npdu refuses a longer address with Error::Encoding (the limit was 255).",
     "The non-router NetworkLayer drops such an NPDU before APDU or control admission and counts it in address_length_drops(); a non-router sends no reject. The router side is under BACNET-6-ROUTER-MESSAGES. Tests feed hand-built wire bytes for each address field: 19 and 255 are refused, 1, 6 and 18 decode and re-encode unchanged.",
-    "#1198: NetworkLayer drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN before decoding it and counts it in address_length_drops(). No built-in transport reports one (B/IP, BACnet/SC and Ethernet use 6 octets, MS/TP 1, B/IPv6 18), so only a custom TransportPort can, and every address learned off the network fits a BACnetAddress."
+    "#1198: NetworkLayer drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN before decoding it and counts it in address_length_drops(). No built-in transport reports one (B/IP, BACnet/SC and Ethernet use 6 octets, MS/TP 1, B/IPv6 18), so only a custom TransportPort can, and every address learned off the network fits a BACnetAddress.",
+    "NetworkLayer refuses destination network 0 in broadcast_to_network, send_apdu_routed, send_apdu_routed_via_local_broadcast and send_apdu_on_issuance with a named Error::Encoding before encoding or sending (Clause 6.2.2.1)."
    ]
   },
   {
@@ -6632,7 +6637,11 @@
    ],
    "negative_tests": [
     "crates/bacnet-transport/src/bvll.rs::decode_slices_payload_to_declared_length",
-    "crates/bacnet-transport/src/bip/original_tests.rs::original_unicast_npdu_uses_udp_sender_source_mac_and_ignores_self"
+    "crates/bacnet-transport/src/bip/original_tests.rs::original_unicast_npdu_uses_udp_sender_source_mac_and_ignores_self",
+    "crates/bacnet-transport/src/bip/group_delivery_tests.rs::original_unicast_sent_to_a_broadcast_address_is_dropped",
+    "crates/bacnet-transport/src/bip/group_delivery_tests.rs::original_unicast_takes_its_group_flag_from_the_delivery",
+    "crates/bacnet-transport/src/bip/group_delivery_tests.rs::the_function_decides_where_the_broadcast_address_is_the_local_one",
+    "crates/bacnet-transport/src/bip/group_delivery_tests.rs::a_broadcast_address_that_is_a_host_address_is_flagged_unless_loopback"
    ],
    "benchmarks": [
     "benchmarks/benches/bip_latency.rs",
@@ -6644,7 +6653,10 @@
     "README.md#transports BACnet/IP row"
    ],
    "notes": [
-    "Generic BVLL envelope coverage exists. J-04 Original-NPDU evidence covers UDP sender B/IP MAC delivery to the upper layer and self-originated frame suppression. Directed reply-path integration remains open."
+    "Generic BVLL envelope coverage exists. J-04 Original-NPDU evidence covers UDP sender B/IP MAC delivery to the upper layer and self-originated frame suppression. Directed reply-path integration remains open.",
+    "An Original-Unicast-NPDU sent to the configured or limited broadcast address, or flagged as a group delivery by Windows, is dropped before the network layer with no BVLC-Result (J.2.11, J.3). Its link_layer_group comes from the same delivery check.",
+    "Where the configured broadcast address is also the local address, as in loopback tests, the BVLC function decides: Original-Unicast reads as unicast and Original-Broadcast as broadcast.",
+    "A B/IP port logs a warning at start when its broadcast address is one of the host's own non-loopback addresses, since broadcasts sent there reach no other node."
    ]
   },
   {
@@ -7023,7 +7035,10 @@
    "negative_tests": [
     "crates/bacnet-transport/src/udp_metadata_ipv6_tests.rs",
     "crates/bacnet-transport/src/bip6/socket.rs::tests",
-    "crates/bacnet-transport/tests/ipv6_selected_link_multi.rs (explicit external two-link fixture)"
+    "crates/bacnet-transport/tests/ipv6_selected_link_multi.rs (explicit external two-link fixture)",
+    "crates/bacnet-transport/src/bip6/group_delivery_tests.rs::original_unicast_sent_to_a_multicast_group_is_dropped",
+    "crates/bacnet-transport/src/bip6/group_delivery_tests.rs::original_unicast_takes_its_group_flag_from_the_destination",
+    "crates/bacnet-transport/src/bip6/group_delivery_tests.rs::original_unicast_for_another_vmac_is_dropped"
    ],
    "benchmarks": [
     "benchmarks/benches/bip6_latency.rs",
@@ -7035,7 +7050,8 @@
    ],
    "notes": [
     "Selected-link source/index and receive authority are qualified with isolated Linux ULA wire controls, foreign BBMD source/trust, collision/lifecycle and fresh installed Python discovery. macOS loopback qualifies multicast intake and unicast/control source, not independent multicast-egress capture.",
-    "Windows compilation and synthetic unique-link-local selection are not runtime wire evidence. External fixtures are intentionally opt-in; deployment topology and full Annex U conformance remain unqualified."
+    "Windows compilation and synthetic unique-link-local selection are not runtime wire evidence. External fixtures are intentionally opt-in; deployment topology and full Annex U conformance remain unqualified.",
+    "An Original-Unicast-NPDU sent to a BACnet multicast group, or flagged as a group delivery by Windows, is dropped before the network layer with no BVLC-Result (U.2.2, U.3). Its link_layer_group is set when either the function or the destination is a group."
    ]
   },
   {
