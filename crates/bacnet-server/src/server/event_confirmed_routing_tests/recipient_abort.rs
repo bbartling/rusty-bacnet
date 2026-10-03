@@ -3,6 +3,7 @@
 //! ends the notification at once; one with the flag clear is refused (#1155).
 
 use super::*;
+use crate::server::EventNotificationCounters;
 use bacnet_encoding::apdu::AbortPdu;
 use bacnet_types::enums::AbortReason;
 
@@ -62,4 +63,13 @@ async fn recipient_abort_ends_a_confirmed_event_notification_without_retries() {
         "no retry after the Abort"
     );
     assert!(harness.broadcast_frames().is_empty());
+    // The refused Abort counts nothing; the recipient's counts as a
+    // rejection, not as an unanswered notification (#1142).
+    assert_eq!(
+        harness.suppressions.snapshot(),
+        EventNotificationCounters {
+            confirmed_rejected: 1,
+            ..EventNotificationCounters::default()
+        }
+    );
 }
