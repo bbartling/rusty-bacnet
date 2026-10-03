@@ -6414,7 +6414,10 @@
     "crates/bacnet-types/src/primitives.rs::object_identifier_checked_instance_boundaries",
     "crates/rusty-bacnet/tests/test_object_identifier_invariant.py",
     "crates/bacnet-encoding/src/constructed/tests/tagged.rs::{contents_past_the_end_are_a_short_buffer,fixed_size_primitives_refuse_any_other_length,application_enumerated_items_narrow_and_canonical_ones_refuse_padding}",
-    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::read_property_multiple_cut_short_draws_services_other"
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::read_property_multiple_cut_short_draws_services_other",
+    "crates/bacnet-encoding/src/constructed/tests/tagged.rs::{application_primitives_read_any_type_and_name_the_expected_one,application_unsigned_values_narrow_to_their_width,an_application_boolean_has_no_contents_to_read,fixed_size_contents_check_their_length_first}",
+    "crates/bacnet-services/src/truncated_member_tests.rs::{members_cut_short_are_a_short_buffer,fixed_size_members_of_the_wrong_length_stay_malformed_when_cut_short,confirmed_cov_notification_rejects_keep_their_reasons,reals_and_times_check_their_length_before_their_contents}",
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{service_parameters_cut_short_draw_services_other,subscribe_cov_property_multiple_process_cut_short_draws_the_general_error,malformed_and_cut_short_requests_draw_the_same_reply}"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -6429,7 +6432,9 @@
     "In the shared tagged-field helpers and the codecs and formal Error bodies read with them, contents that run past the end of the data are Error::BufferTooShort; a cut-short or malformed tag header is Error::Decoding.",
     "A fixed-size context member (object identifier, REAL, BOOLEAN, a lighting-command level) has its length checked before its contents, so a wrong length is Error::Decoding even when the data also stops early.",
     "A member cut short inside a constructed frame is caught when the frame is extracted (tags::extract_context_value), which reports Error::Decoding.",
-    "The server answers a ReadPropertyMultiple, SubscribeCOVProperty or ConfirmedAuditNotification cut short with SERVICES / OTHER, and a SubscribeCOVPropertyMultiple with its general error, whichever kind the decoder reports."
+    "The server answers a ReadPropertyMultiple, SubscribeCOVProperty or ConfirmedAuditNotification cut short with SERVICES / OTHER, and a SubscribeCOVPropertyMultiple with its general error, whichever kind the decoder reports.",
+    "A service parameter member that bacnet-services reads through the same public helpers (constructed::tagged) is Error::BufferTooShort when cut short; members it still reads inline report Error::Decoding.",
+    "A ReadProperty, WriteProperty, ReadRange, SubscribeCOV, SubscribeCOVProperty, AcknowledgeAlarm, GetEventInformation, LifeSafetyOperation or AuditLogQuery cut short draws SERVICES / OTHER from the server."
    ]
   },
   {

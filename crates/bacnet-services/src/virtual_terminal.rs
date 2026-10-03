@@ -10,30 +10,14 @@ use bacnet_types::enums::VTClass;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-use crate::common::{decode_application, MAX_DECODED_ITEMS};
+use crate::common::MAX_DECODED_ITEMS;
+use bacnet_encoding::constructed::tagged::{
+    decode_app_enumerated, decode_app_primitive, decode_app_unsigned, expect_end,
+};
 
 #[path = "virtual_terminal_error.rs"]
 mod error;
 pub use error::VTCloseError;
-
-/// Decode an application-tagged Unsigned that must fit in eight bits (Unsigned8).
-fn decode_app_u8(data: &[u8], offset: usize, what: &str) -> Result<(u8, usize), Error> {
-    let (content, end) = decode_application(data, offset, tags::app_tag::UNSIGNED, what)?;
-    let raw = primitives::decode_unsigned(content)?;
-    let value = u8::try_from(raw)
-        .map_err(|_| Error::decoding(offset, format!("{what} {raw} exceeds u8")))?;
-    Ok((value, end))
-}
-
-fn reject_trailing(data: &[u8], offset: usize, what: &str) -> Result<(), Error> {
-    if offset != data.len() {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: trailing data after the last field"),
-        ));
-    }
-    Ok(())
-}
 
 // ---------------------------------------------------------------------------
 // VTOpenRequest / VTOpenAck
@@ -63,16 +47,11 @@ impl VTOpenRequest {
     /// Decode the request from service-request octets; fails on missing, malformed or
     /// truncated fields and on trailing data.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (content, offset) =
-            decode_application(data, 0, tags::app_tag::ENUMERATED, "VTOpen vt-class")?;
-        let raw = primitives::decode_unsigned(content)?;
-        let vt_class = VTClass::from_raw(
-            u32::try_from(raw)
-                .map_err(|_| Error::decoding(0, format!("VTOpen vt-class {raw} exceeds u32")))?,
-        );
+        let (vt_class, offset) = decode_app_enumerated::<u32>(data, 0, "VTOpen vt-class")?;
+        let vt_class = VTClass::from_raw(vt_class);
         let (local_vt_session_identifier, offset) =
-            decode_app_u8(data, offset, "VTOpen local-vt-session-identifier")?;
-        reject_trailing(data, offset, "VTOpen")?;
+            decode_app_unsigned::<u8>(data, offset, "VTOpen local-vt-session-identifier")?;
+        expect_end(data, offset, offset, "VTOpen")?;
         Ok(Self {
             vt_class,
             local_vt_session_identifier,
@@ -99,8 +78,8 @@ impl VTOpenAck {
     /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
     /// input and on trailing data.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (id, offset) = decode_app_u8(data, 0, "VTOpenAck session-identifier")?;
-        reject_trailing(data, offset, "VTOpenAck")?;
+        let (id, offset) = decode_app_unsigned::<u8>(data, 0, "VTOpenAck session-identifier")?;
+        expect_end(data, offset, offset, "VTOpenAck")?;
         Ok(Self {
             remote_vt_session_identifier: id,
         })
@@ -144,7 +123,7 @@ impl VTCloseRequest {
             if ids.len() >= MAX_DECODED_ITEMS {
                 return Err(Error::decoding(offset, "VTClose too many session IDs"));
             }
-            let (id, next) = decode_app_u8(data, offset, "VTClose session-identifier")?;
+            let (id, next) = decode_app_unsigned::<u8>(data, offset, "VTClose session-identifier")?;
             ids.push(id);
             offset = next;
         }
@@ -191,14 +170,14 @@ impl VTDataRequest {
     /// Decode the request from service-request octets; fails on malformed or truncated input,
     /// a flag other than 0 or 1, and trailing data.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (vt_session_identifier, offset) = decode_app_u8(data, 0, "VTData session-identifier")?;
+        let (vt_session_identifier, offset) =
+            decode_app_unsigned::<u8>(data, 0, "VTData session-identifier")?;
         let (octets, offset) =
-            decode_application(data, offset, tags::app_tag::OCTET_STRING, "VTData new-data")?;
+            decode_app_primitive(data, offset, tags::app_tag::OCTET_STRING, "VTData new-data")?;
         let vt_new_data = octets.to_vec();
         let flag_offset = offset;
-        let (flag, offset) =
-            decode_application(data, offset, tags::app_tag::UNSIGNED, "VTData data-flag")?;
-        let vt_data_flag = match primitives::decode_unsigned(flag)? {
+        let (flag, offset) = decode_app_unsigned::<u64>(data, offset, "VTData data-flag")?;
+        let vt_data_flag = match flag {
             0 => false,
             1 => true,
             other => {
@@ -208,7 +187,7 @@ impl VTDataRequest {
                 ))
             }
         };
-        reject_trailing(data, offset, "VTData")?;
+        expect_end(data, offset, offset, "VTData")?;
         Ok(Self {
             vt_session_identifier,
             vt_new_data,
@@ -301,7 +280,7 @@ impl VTDataAck {
                 ))
             }
         };
-        reject_trailing(data, offset, "VTDataAck")?;
+        expect_end(data, offset, offset, "VTDataAck")?;
         Ok(ack)
     }
 }
