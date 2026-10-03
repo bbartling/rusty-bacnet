@@ -32,7 +32,7 @@ use bacnet_objects::loop_obj::LoopObject;
 use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
-use bacnet_objects::notification_class::NotificationClass;
+use bacnet_objects::notification_class::{FileNotificationClassPersistence, NotificationClass};
 use bacnet_objects::program::ProgramObject;
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
 use bacnet_objects::staging::{StagingConfig, StagingObject};
@@ -49,7 +49,9 @@ use bacnet_server::server;
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
-use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference, BACnetStageLimitValue,
+};
 use bacnet_types::enums::EventType;
 use bacnet_types::primitives::PropertyValue;
 
@@ -172,12 +174,30 @@ impl BACnetServer {
         guard.push(obj);
         Ok(())
     }
+
+    /// Read a member list given to an `add_*` method, a reference tuple or
+    /// mapping per element. A member naming this server's own Device is
+    /// stored in its local form, as the server stores the same member written
+    /// over the network.
+    fn members_from_py(
+        &self,
+        members: &Bound<'_, PyAny>,
+        name: &str,
+    ) -> PyResult<Vec<BACnetDeviceObjectPropertyReference>> {
+        let mut members = crate::types::property_references_from_py(members, name)?;
+        crate::types::localize(
+            &mut members,
+            crate::types::local_device(self.device_instance),
+        );
+        Ok(members)
+    }
 }
 
 mod server_methods {
     mod access_control_methods;
     mod access_rights_methods;
     mod averaging_methods;
+    mod channel_methods;
     mod constructor_budgets;
     mod cov_counters;
     mod cov_policy;

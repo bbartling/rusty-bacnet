@@ -265,6 +265,26 @@ fn a_forgotten_staged_write_frees_the_forwarder() {
 }
 
 #[test]
+fn an_operation_task_call_drops_a_forgotten_staged_write_on_the_store_clock() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let (clock, set) = manual_clock();
+    let mut nf = persistent(&storage);
+    nf.bind_monotonic_clock_internal(Some(clock));
+    let served = [subscription(device(7), 1, 10)];
+    write(&mut nf, &served).unwrap();
+    let _forgotten = stage_saved(&mut nf, &[subscription(device(9), 1, 10)]);
+    // Its request never comes back. The first call that finds the save
+    // finished starts the count on the store's clock, and the call a
+    // lifetime later drops it and saves the served lists.
+    nf.advance_monotonic_time_internal(Duration::ZERO);
+    set(STAGED_WRITE_LIFETIME);
+    nf.advance_monotonic_time_internal(STAGED_WRITE_LIFETIME);
+    nf.wait_for_saves();
+    assert_eq!(storage.saved(), served);
+    assert_eq!(nf.subscriptions(), served);
+}
+
+#[test]
 fn staging_skips_writes_the_forwarder_does_not_save_or_will_refuse() {
     let storage = Arc::new(MemoryPersistence::default());
     let mut nf = persistent(&storage);
