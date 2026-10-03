@@ -84,6 +84,7 @@
 //! not atomic across queues, and exposes counts only, not payloads, per-source
 //! identities or per-source totals. Its three drop totals saturate at `u64::MAX`.
 
+use crate::network_number::LocalNetworkNumber;
 use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
 use bacnet_transport::port::{DataAttribute, TransportPort, TransportProvenance};
 use bacnet_types::enums::NetworkPriority;
@@ -286,6 +287,7 @@ pub struct NetworkLayer<T: TransportPort> {
     network_control_tx: Option<AdmissionSender<ReceivedNetworkControl>>,
     network_control_ingress_sequence: Arc<AtomicU64>,
     address_length_drops: Arc<AtomicU64>,
+    local_network_number: LocalNetworkNumber,
 }
 
 impl<T: TransportPort + 'static> NetworkLayer<T> {
@@ -298,6 +300,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             network_control_tx: None,
             network_control_ingress_sequence: Arc::new(AtomicU64::new(0)),
             address_length_drops: Arc::new(AtomicU64::new(0)),
+            local_network_number: LocalNetworkNumber::default(),
         }
     }
 
@@ -589,6 +592,14 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// Get the transport's local MAC address.
     pub fn local_mac(&self) -> &[u8] {
         self.transport.local_mac()
+    }
+
+    /// The number of the network this layer's one port is attached to, as
+    /// the owner of its Number controls last published it, and unknown until
+    /// then. The full server and the standalone client publish here; clone
+    /// the handle to publish from another task.
+    pub fn local_network_number(&self) -> &LocalNetworkNumber {
+        &self.local_network_number
     }
 
     /// Sequence assigned to the most recent opted-in control admission attempt.

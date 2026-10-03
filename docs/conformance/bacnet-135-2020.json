@@ -3606,7 +3606,9 @@
     "crates/bacnet-server/src/server/event_forwarding_repeats.rs::ConfirmedEventRepeats",
     "crates/bacnet-server/src/server/lifecycle.rs",
     "crates/bacnet-objects/src/notification_forwarder/persistence.rs::ForwarderSnapshot",
-    "crates/bacnet-objects/src/notification_forwarder/mod.rs::NotificationForwarderObject::add_destination"
+    "crates/bacnet-objects/src/notification_forwarder/mod.rs::NotificationForwarderObject::add_destination",
+    "crates/bacnet-server/src/server/event_recipient_route.rs::RecipientRoute::localize",
+    "crates/bacnet-network/src/network_number.rs::LocalNetworkNumber"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::forwarder_sends_to_its_recipient_list_and_its_subscriptions",
@@ -3634,6 +3636,9 @@
     "crates/rusty-bacnet/tests/test_read_value_shapes.py::ClientReadShapeTests::test_recipient_lists_keep_every_destination",
     "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_recipient_naming_this_network_by_number_is_local_to_the_loop_rules",
     "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_network_number_is_remote_while_this_network_has_none",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::a_number_learned_without_a_network_port_makes_this_network_local",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::a_registered_port_and_the_routes_share_one_network_number",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::notification_class_and_forwarded_copies_to_this_network_go_without_a_dnet",
     "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::a_repeat_is_matched_by_source_invoke_id_and_octets",
     "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::a_written_recipient_list_reads_back_after_a_rebuild",
     "crates/bacnet-objects/src/notification_forwarder/tests/recipient_list_restart_tests.rs::saved_recipient_list_wins_over_configured_destinations",
@@ -3678,11 +3683,12 @@
    "notes": [
     "Every received event notification, and each local one whose Notification Class names this device's Device object, goes to every NOTIFICATION_FORWARDER object, bundled or custom, read through its properties.",
     "A copy keeps the received request octet for octet after the process identifier, so text in any character set and event values the stack does not model pass through.",
-    "The server is a single-port node: a notification arrives through Port_ID 0, Port_Filter is absent unless set, and an address naming the registered Network Port's known Network_Number is local to the loop rules.",
+    "The server is a single-port node: a notification arrives through Port_ID 0, Port_Filter is absent unless set, and a recipient naming the local network's known number, configured or learned, is local to the loop rules.",
     "A well-formed ConfirmedEventNotification sent to this device alone is acknowledged before any copy goes, taken or not; a repeat within 60 s with the same source, invoke ID and octets is acknowledged, not forwarded.",
     "Within one device a forwarder takes a notification once, a destination gets one copy, and at most 64 copies that would be sent go out across all forwarders, local or received; forwarding_cap_dropped counts the rest."
    ],
    "gaps": [
+    "#863: the local network is the server's one port's; a multi-port device would take it per port, the one attached to the recipient's network."
    ]
   },
   {
@@ -3853,7 +3859,8 @@
     "crates/bacnet-server/src/server/event_recipient_routing_tests.rs::custom_class_at_the_cap_reaches_every_destination",
     "crates/bacnet-server/src/server/event_confirmed_routing_tests/learned_router_cache.rs::admitted_routes_stop_at_64_but_existing_network_updates_at_capacity",
     "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::every_deliverable_route_moves_no_counter",
-    "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_recipient_list_takes_framed_writes_up_to_the_cap"
+    "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_recipient_list_takes_framed_writes_up_to_the_cap",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::notification_class_and_forwarded_copies_to_this_network_go_without_a_dnet"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/recipient.rs",
@@ -3895,7 +3902,8 @@
      "A destination is then at most 47 octets and a full list at most 1,504. Routing applies MAX_RECIPIENT_LIST_DESTINATIONS to every class: a custom NOTIFICATION_CLASS object serving a longer list yields RecipientListTooLong, the server logs a warning, counts the transition in EventNotificationCounters::recipient_list_too_long (#1142) and sends nothing for that transition (never a prefix), and decoding stops at the first destination past the cap. GetEnrollmentSummary membership still reads the list as configured.",
      "#1156: decode_recipient itself holds to the bound, so the separate decode_configured_recipient is gone. COV subscription lists, audit notifications and records, and the GetEnrollmentSummary enrollment filter decode through it, and every recipient encoder (encode_recipient, encode_destination and its list form, the COV subscription encoders, the audit notification encoder) refuses a longer MAC before writing anything.",
      "The ValueSource and AuditLogQuery address codecs share the same check (check_decoded_mac_len, check_encoded_mac_len). Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, and COV admission and remote command origins refuse a longer direct MAC, so nothing the stack stores fails to encode.",
-     "A Notification Forwarder's Recipient_List takes the same framed writes and cap."
+     "A Notification Forwarder's Recipient_List takes the same framed writes and cap.",
+     "A recipient naming the local network's known number, as an address or a routed Device binding, is sent with no DNET: a unicast to its MAC, or a local broadcast for an empty or link broadcast MAC."
     ]
   },
   {
@@ -8392,7 +8400,8 @@
     "crates/bacnet-transport/src/bip6/port.rs",
     "crates/bacnet-transport/src/mstp/port.rs",
     "crates/bacnet-transport/src/bip/mod.rs",
-    "crates/bacnet-transport/src/bip/io.rs"
+    "crates/bacnet-transport/src/bip/io.rs",
+    "crates/bacnet-network/src/network_number.rs::LocalNetworkNumber"
    ],
    "positive_tests": [
     "crates/bacnet-integration-tests/tests/ethernet_network_numbers.rs",
@@ -8433,7 +8442,11 @@
     "crates/bacnet-endpoint/tests/sc_client_network_numbers.rs",
     "crates/bacnet-endpoint/tests/sc_client_network_numbers/support.rs",
     "crates/bacnet-integration-tests/tests/client_ipv6_network_numbers.rs",
-    "crates/bacnet-integration-tests/tests/client_bip_network_numbers.rs"
+    "crates/bacnet-integration-tests/tests/client_bip_network_numbers.rs",
+    "crates/bacnet-network/src/network_number/tests.rs::local_network_number_shares_the_last_published_state",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::a_number_learned_without_a_network_port_makes_this_network_local",
+    "crates/bacnet-server/src/server/local_network_number_tests.rs::a_registered_port_and_the_routes_share_one_network_number",
+    "crates/bacnet-client/src/client/number_tests/lifecycle.rs::client_number_worker_queue_is_bounded_and_closes_on_abort"
    ],
    "negative_tests": [
     "crates/bacnet-endpoint/tests/mstp_network_numbers.rs::mstp_number_server_tokio_wire",
@@ -8505,7 +8518,8 @@
     "No new API/dependency/configured authority, Python foreign API, IPv6 endpoint builder, physical LAN, Windows runtime or full Annex U qualification. Separate isolated Linux standalone-client BBMD/foreign tests capture own Original-Broadcast versus forwarding traffic and exact DBTN to the configured BBMD.",
     "Positive Number fences cover UNKNOWN, BDT/FDT admission/refusal, alternate-sender compatibility, precedence and representative invalid/routed controls; registration NAKs retain DBTN attempts and the timer retries registration.",
     "An ordinary client ReadProperty completes during live Number controls, and awaited stop permits exclusive socket rebind before client Drop. No configured client number, new registration policy or complete Annex J claim is added.",
-    "Standalone-client MS/TP LoopbackSerial tests in Tokio and DedicatedThread modes reuse the full-server/endpoint fixture: they decode complete broadcast DNER NNI frames behind the same positive FIFO fences, complete the client's own ReadProperty to the peer while a post-enqueue Number producer is held, and release the producer and serial owner on canceled stop and bare drop. Simulator evidence only, with no RS-485 timing or hardware claim."
+    "Standalone-client MS/TP LoopbackSerial tests in Tokio and DedicatedThread modes reuse the full-server/endpoint fixture: they decode complete broadcast DNER NNI frames behind the same positive FIFO fences, complete the client's own ReadProperty to the peer while a post-enqueue Number producer is held, and release the producer and serial owner on canceled stop and bare drop. Simulator evidence only, with no RS-485 timing or hardware claim.",
+    "The full server and standalone client publish the number they hold on NetworkLayer::local_network_number for event routing to read without a lock; with a registered port the copy is taken from the port's state under the database write lock that changed it, so the two never disagree."
    ]
   },
   {
