@@ -355,13 +355,17 @@ pub(crate) fn decode_write_property_value(
     // The Schedule decodes its list of references itself, an empty list
     // included (#1088), once the handler has put members naming this device
     // in their local form (#1122). So does a Channel, whose references are an
-    // array: index 0, the array size, stays an Unsigned (#1151).
+    // array: index 0, the array size, stays an Unsigned (#1151). A Lighting
+    // Output decodes its Lighting_Command whole too, so a command keeps its
+    // fields together and any other datatype is the object's to refuse
+    // (#1263).
     if matches!(
         property,
         PropertyIdentifier::RECIPIENT_LIST
             | PropertyIdentifier::SUBSCRIBED_RECIPIENTS
             | PropertyIdentifier::VALUE_SOURCE
             | PropertyIdentifier::EFFECTIVE_PERIOD
+            | PropertyIdentifier::LIGHTING_COMMAND
     ) || (property == PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
         && array_index != Some(0))
     {

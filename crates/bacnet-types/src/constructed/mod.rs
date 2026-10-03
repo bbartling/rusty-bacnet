@@ -35,6 +35,8 @@ pub use lift::{
     AssignedLandingCall, BACnetAssignedLandingCalls, BACnetLandingCallStatus,
     BACnetLandingDoorStatus, BACnetLiftCarCallList, LandingCallCommand, LandingDoor,
 };
+mod lighting;
+pub use lighting::BACnetLightingCommand;
 mod log;
 pub use log::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
@@ -489,31 +491,6 @@ pub enum BACnetShedLevel {
     Level(u64),
     /// Kilowatts to take off the baseline (REAL).
     Amount(f32),
-}
-
-// ---------------------------------------------------------------------------
-// BACnetLightingCommand (Clause 21 -- used by LightingOutput)
-// ---------------------------------------------------------------------------
-
-/// BACnet Lighting Command -- controls lighting operations.
-///
-/// Per ASHRAE 135-2020 Clause 21, this type is used by the LightingOutput
-/// object's LIGHTING_COMMAND property to specify a lighting operation
-/// (e.g., fade, ramp, step) with optional parameters.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BACnetLightingCommand {
-    /// The lighting operation (LightingOperation enum raw value).
-    pub operation: u32,
-    /// Optional target brightness level (0.0 to 100.0 percent).
-    pub target_level: Option<f32>,
-    /// Optional ramp rate (percent per second).
-    pub ramp_rate: Option<f32>,
-    /// Optional step increment (percent).
-    pub step_increment: Option<f32>,
-    /// Optional fade time (milliseconds).
-    pub fade_time: Option<u32>,
-    /// Optional priority (1-16).
-    pub priority: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------

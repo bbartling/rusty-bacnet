@@ -2920,7 +2920,17 @@ class BACnetServer:
     def add_program(self, instance: int, name: str) -> None: ...
 
     # --- Lighting ---
-    def add_lighting_output(self, instance: int, name: str) -> None: ...
+    def add_lighting_output(self, instance: int, name: str) -> None:
+        """Add a Lighting Output object.
+
+        Its Lighting_Command reads and writes as ``application_data`` holding
+        the context-tagged BACnetLightingCommand, operation NONE
+        (``b"\\x09\\x00"``) until written. An ``octet_string`` or any other
+        datatype is refused with INVALID_DATA_TYPE, and a command its operation
+        can't take with VALUE_OUT_OF_RANGE. The object stores a command
+        without carrying it out.
+        """
+        ...
     def add_binary_lighting_output(self, instance: int, name: str) -> None: ...
     def add_channel(
         self,

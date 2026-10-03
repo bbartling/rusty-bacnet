@@ -162,18 +162,11 @@ async fn channel_lighting_command_reaches_its_member_without_the_context_0_frami
     let (property, value) = &log[0];
     assert_eq!(*property, PropertyIdentifier::LIGHTING_COMMAND);
     // The member gets what a WriteProperty carrying the SEQUENCE alone
-    // decodes to: one chunk per context-tagged field.
-    let PropertyValue::List(fields) = value else {
-        panic!("Lighting_Command got {value:?}");
-    };
-    let octets: Vec<u8> = fields
-        .iter()
-        .flat_map(|field| match field {
-            PropertyValue::ApplicationData(octets) => octets.clone(),
-            other => panic!("Lighting_Command field {other:?}"),
-        })
-        .collect();
-    assert_eq!(octets, framed[1..8]);
+    // decodes to: the SEQUENCE's octets in one piece.
+    assert_eq!(
+        *value,
+        PropertyValue::ApplicationData(framed[1..8].to_vec())
+    );
 }
 
 #[tokio::test(start_paused = true)]
