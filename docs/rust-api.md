@@ -3591,13 +3591,16 @@ still readable after `stop()`. Fields are sampled independently.
 
 ```rust
 let counters = server.event_notification_counters();
-counters.notification_class_missing; // no Notification Class with that number
-counters.recipient_list_unavailable; // its Recipient_List could not be read
-counters.recipient_list_invalid;     // the list did not decode as a whole
-counters.recipient_list_too_long;    // a custom class served more than 32 destinations
-counters.confirmed_no_invoke_id;     // no invoke ID free for a confirmed notification
-counters.confirmed_rejected;         // the recipient answered Error, Reject or Abort
-counters.confirmed_unanswered;       // no acknowledgment after the last retry
+counters.notification_class_missing;    // no Notification Class with that number
+counters.recipient_list_unavailable;    // its Recipient_List could not be read
+counters.recipient_list_invalid;        // the list did not decode as a whole
+counters.recipient_list_too_long;       // a custom class served more than 32 destinations
+counters.device_recipient_unbound;      // a Device recipient with no current binding
+counters.recipient_unroutable;          // a recipient no binding or retry can route
+counters.confirmed_broadcast_recipient; // confirmed requested at a broadcast address
+counters.confirmed_no_invoke_id;        // no invoke ID free for a confirmed notification
+counters.confirmed_rejected;            // the recipient answered Error, Reject or Abort
+counters.confirmed_unanswered;          // no acknowledgment after the last retry
 ```
 
 The four recipient-list fields count transitions, event and acknowledgment
@@ -3608,6 +3611,22 @@ configured behaviour and are not counted, nor are notifications held back by
 DCC or Event_Enable. The three confirmed fields count notifications to one
 recipient; a reservation refused because the server is stopping is not
 counted.
+
+The three route fields (#1160) count destinations that matched the transition
+but were skipped while their route was resolved, once per destination; the
+transition's other destinations are still served. They are grouped by what
+fixes them, and the warning logged with each skip gives the finer reason:
+
+- `device_recipient_unbound`: no Device binding was configured or observed, or
+  the observed one expired. Observing the device's I-Am again, or configuring a
+  binding, clears it.
+- `recipient_unroutable`: the entry can't be routed as written. Its Device
+  identifier names an object that isn't a Device (or its binding is unusable on
+  this link), or its address puts a MAC on network 65535.
+- `confirmed_broadcast_recipient`: the entry asks for confirmed notifications at
+  a local, remote or global broadcast address. Clause 6.3 allows only
+  unconfirmed requests there, and sending one unconfirmed would lose the
+  acknowledgment, so the entry is skipped before any invoke ID is reserved.
 
 ### Concurrency
 

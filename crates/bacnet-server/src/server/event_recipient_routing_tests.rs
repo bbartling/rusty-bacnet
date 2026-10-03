@@ -21,6 +21,7 @@ use bacnet_types::enums::{EventState, EventType};
 use bytes::Bytes;
 use std::borrow::Cow;
 
+mod route_skip_counters;
 mod suppression_counters;
 
 /// One recorded unicast send: destination MAC and NPDU bytes.
@@ -114,7 +115,7 @@ pub(super) async fn distribute_from_database_with_bindings(
 
 /// [`distribute_from_database_with_bindings`] under the given DCC state, also
 /// returning the undelivered-notification counters the transition moved.
-async fn distribute_counted(
+pub(super) async fn distribute_counted(
     mut db: ObjectDatabase,
     device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
     comm_state: u8,
