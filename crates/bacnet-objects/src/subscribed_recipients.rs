@@ -31,10 +31,10 @@
 //!
 //! Clause 12.51.9 asks for the list to survive a restart. The store itself
 //! lives in memory; the forwarder object saves it through a
-//! [`SubscribedRecipientsPersistence`] and restores it with
+//! [`NotificationForwarderPersistence`] and restores it with
 //! [`write`](SubscribedRecipients::write).
 //!
-//! [`SubscribedRecipientsPersistence`]: crate::notification_forwarder::SubscribedRecipientsPersistence
+//! [`NotificationForwarderPersistence`]: crate::notification_forwarder::NotificationForwarderPersistence
 
 use std::fmt;
 use std::sync::Arc;

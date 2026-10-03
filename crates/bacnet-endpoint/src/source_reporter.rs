@@ -10,6 +10,7 @@ use bacnet_objects::audit::{
 };
 use bacnet_objects::clock::ClockReader;
 use bacnet_objects::command::CommandRun;
+use bacnet_objects::durable::DurableWrites;
 use bacnet_objects::event::{
     EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
     EventTransitionCommitError, TransitionOutcome,
@@ -483,6 +484,10 @@ impl BACnetObject for SourceReporter {
         &mut self,
     ) -> Option<&mut dyn AuditLogNotificationSink> {
         self.wrapped.audit_log_notification_sink_internal()
+    }
+
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn DurableWrites> {
+        self.wrapped.durable_writes_internal()
     }
 
     fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {

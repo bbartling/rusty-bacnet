@@ -22,6 +22,7 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue,
 
 use crate::audit::{AuditLogNotificationSink, AuditLogStorage};
 use crate::clock::ClockReader;
+use crate::durable::DurableWrites;
 use crate::event::{
     EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
     EventTransitionCommitError, TransitionOutcome,
@@ -1125,6 +1126,17 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     fn audit_log_notification_sink_internal(
         &mut self,
     ) -> Option<&mut dyn AuditLogNotificationSink> {
+        None
+    }
+
+    /// Mutably borrow this object's staged-write capability (#1270).
+    ///
+    /// An object that saves a written state before serving it opts in, so the
+    /// server can stage the write and run the save without the database
+    /// guard. The default opts out: the object's writes run as they always
+    /// do. See [`crate::durable`].
+    #[doc(hidden)]
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn DurableWrites> {
         None
     }
 

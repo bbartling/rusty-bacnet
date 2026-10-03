@@ -1,5 +1,5 @@
 //! Clause 21 values of the access-control enumerations the Access Credential's
-//! arrays carry (#1073).
+//! arrays (#1073) and the Access Rights rules (#1316) carry.
 
 use super::*;
 
@@ -60,4 +60,15 @@ fn authentication_factor_type_values_match_clause_21() {
         assert_eq!((named, value.to_raw()), (*name, raw as u32));
         assert_eq!(format!("{value}"), *name);
     }
+}
+
+/// 135-2020 Clause 21: the two specifiers of a BACnetAccessRule, each a
+/// closed pair numbered 0 and 1 (#1316).
+#[test]
+fn access_rule_specifier_values_match_clause_21() {
+    assert_production_values!(
+        AccessRuleTimeRangeSpecifier,
+        [("SPECIFIED", 0), ("ALWAYS", 1)]
+    );
+    assert_production_values!(AccessRuleLocationSpecifier, [("SPECIFIED", 0), ("ALL", 1)]);
 }

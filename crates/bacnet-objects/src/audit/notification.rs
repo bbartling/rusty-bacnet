@@ -63,6 +63,53 @@ pub trait AuditLogNotificationSink: Send + Sync {
         self.store_notifications(notifications, apdu_timeout_ms)?;
         Ok(ConfirmedAuditNotificationOutcome::Stored)
     }
+
+    /// Stage a batch whose commit the caller awaits without the database
+    /// guard (#1270): with `receipt` as
+    /// [`store_confirmed_notifications_with_change`](Self::store_confirmed_notifications_with_change)
+    /// stores it, without as
+    /// [`store_notifications_with_change`](Self::store_notifications_with_change)
+    /// does. Nothing changes in memory until
+    /// [`finish_notification_batch`](Self::finish_notification_batch) takes
+    /// the committed batch.
+    ///
+    /// The default stores the batch at once and returns
+    /// [`AuditBatchStage::Done`], so a sink that does not stage keeps its
+    /// commit where it was.
+    fn stage_notification_batch(
+        &mut self,
+        notifications: &[BACnetAuditNotification],
+        apdu_timeout_ms: u32,
+        receipt: Option<CompletedAuditReceipt>,
+    ) -> Result<AuditBatchStage, Error> {
+        match receipt {
+            Some(receipt) => self
+                .store_confirmed_notifications_with_change(notifications, apdu_timeout_ms, receipt)
+                .map(|(outcome, changed)| AuditBatchStage::Done(outcome, changed)),
+            None => self
+                .store_notifications_with_change(notifications, apdu_timeout_ms)
+                .map(|changed| {
+                    AuditBatchStage::Done(ConfirmedAuditNotificationOutcome::Stored, changed)
+                }),
+        }
+    }
+
+    /// Take a batch [`stage_notification_batch`](Self::stage_notification_batch)
+    /// staged, once its commit has run: the batch's outcome and whether its
+    /// retained records changed, or the commit's error with memory unchanged.
+    ///
+    /// The default fails with DEVICE / OPERATIONAL_PROBLEM, since the default
+    /// stage never stages.
+    fn finish_notification_batch(
+        &mut self,
+        staged: StagedAuditBatch,
+    ) -> Result<(ConfirmedAuditNotificationOutcome, bool), Error> {
+        let _ = staged;
+        Err(Error::Protocol {
+            class: ErrorClass::DEVICE.to_raw() as u32,
+            code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
+        })
+    }
 }
 
 impl AuditLogObject {
@@ -128,7 +175,7 @@ impl AuditLogObject {
         Ok((outcome, changed && self.buffer_size != 0))
     }
 
-    fn apply_notification_batch(
+    pub(super) fn apply_notification_batch(
         &self,
         prospective: &mut AuditLogSnapshot,
         notifications: &[BACnetAuditNotification],
@@ -214,6 +261,22 @@ impl AuditLogNotificationSink for AuditLogObject {
     ) -> Result<ConfirmedAuditNotificationOutcome, Error> {
         self.store_confirmed_notification_batch(notifications, apdu_timeout_ms, receipt)
             .map(|(outcome, _)| outcome)
+    }
+
+    fn stage_notification_batch(
+        &mut self,
+        notifications: &[BACnetAuditNotification],
+        apdu_timeout_ms: u32,
+        receipt: Option<CompletedAuditReceipt>,
+    ) -> Result<AuditBatchStage, Error> {
+        AuditLogObject::stage_notification_batch(self, notifications, apdu_timeout_ms, receipt)
+    }
+
+    fn finish_notification_batch(
+        &mut self,
+        staged: StagedAuditBatch,
+    ) -> Result<(ConfirmedAuditNotificationOutcome, bool), Error> {
+        AuditLogObject::finish_notification_batch(self, staged)
     }
 }
 

@@ -53,16 +53,61 @@ pub(super) async fn receive_confirmed_audit_notification(
         return Err(request_denied());
     }
 
-    let mut db = db.write().await;
     let receipt = bacnet_objects::audit::CompletedAuditReceipt::new(
         receipt_identity.key().to_vec(),
         current_unix_millis()?,
     )?;
-    let (outcome, changed) = handlers::handle_confirmed_audit_notification_with_receipt(
-        &mut db, sink, &request, receipt,
-    )?;
-    let forward = ForwardBatch::after_commit(&db, sink, changed, confirmed.service_request.clone());
-    Ok((outcome, forward))
+    store_staged(
+        db,
+        sink,
+        &request,
+        Some(receipt),
+        &confirmed.service_request,
+    )
+    .await
+}
+
+/// Store an authorized batch in `sink` with its commit staged, so the commit
+/// runs while the database guard is dropped (#1270). The batch reaches
+/// memory, and a confirmed one's acknowledgment goes out, only once the
+/// commit is durable. Returns the outcome and the post-commit forwarding.
+async fn store_staged(
+    db: &Arc<RwLock<ObjectDatabase>>,
+    sink: ObjectIdentifier,
+    request: &bacnet_services::audit::AuditNotificationRequest,
+    receipt: Option<bacnet_objects::audit::CompletedAuditReceipt>,
+    payload: &Bytes,
+) -> Result<
+    (
+        bacnet_objects::audit::ConfirmedAuditNotificationOutcome,
+        Option<ForwardBatch>,
+    ),
+    Error,
+> {
+    use bacnet_objects::audit::AuditBatchStage;
+    loop {
+        let staged = {
+            let mut db = db.write().await;
+            match handlers::stage_audit_notification(&mut db, sink, request, receipt.clone())? {
+                AuditBatchStage::Done(outcome, changed) => {
+                    let forward = ForwardBatch::after_commit(&db, sink, changed, payload.clone());
+                    return Ok((outcome, forward));
+                }
+                AuditBatchStage::Busy(wait) => {
+                    drop(db);
+                    let _ = tokio::time::timeout(super::super::durable_writes::BUSY_RECHECK, wait)
+                        .await;
+                    continue;
+                }
+                AuditBatchStage::Staged(staged) => staged,
+            }
+        };
+        super::super::durable_writes::saved(staged.saved()).await;
+        let mut db = db.write().await;
+        let (outcome, changed) = handlers::finish_audit_notification(&mut db, sink, staged)?;
+        let forward = ForwardBatch::after_commit(&db, sink, changed, payload.clone());
+        return Ok((outcome, forward));
+    }
 }
 
 /// Decode, authorize, and durably store one unconfirmed Audit request.
@@ -125,14 +170,8 @@ where
         return Err(request_denied());
     }
 
-    let mut db = db.write().await;
-    let changed = handlers::handle_audit_notification_with_change(&mut db, sink, &request)?;
-    Ok(ForwardBatch::after_commit(
-        &db,
-        sink,
-        changed,
-        service_request.clone(),
-    ))
+    let (_, forward) = store_staged(db, sink, &request, None, service_request).await?;
+    Ok(forward)
 }
 
 fn decode_request(

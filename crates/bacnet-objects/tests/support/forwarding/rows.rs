@@ -441,6 +441,12 @@ pub const COMMANDS: &[(&str, Command)] = &[
                 .map(|sink| address(sink))
         )
     }),
+    ("durable_writes_internal", |o| {
+        format!(
+            "{:?}",
+            o.durable_writes_internal().map(|writes| address(writes))
+        )
+    }),
     ("file_configuration_internal_mut", |o| {
         format!(
             "{:?}",
