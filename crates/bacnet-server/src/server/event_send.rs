@@ -45,7 +45,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// asks. A recipient whose route cannot carry the notification is
     /// skipped and counted in [`EventNotificationCounters`]; the rest are
     /// still served. Nothing is sent while DeviceCommunicationControl
-    /// restricts initiation.
+    /// restricts initiation, a confirmed notification's retries included.
     pub(super) async fn send_event_notification(
         ctx: &EventDelivery<'_, T>,
         outbound: &OutboundNotification<'_>,
@@ -195,16 +195,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 encode_apdu(&mut buf, &pdu).expect("valid APDU encoding");
 
                 let network = Arc::clone(network);
+                let comm_state = Arc::clone(comm_state);
                 let learned_routers = Arc::clone(learned_routers);
                 let suppressions = Arc::clone(suppressions);
                 let timeout = Duration::from_millis(retry_timeout_ms);
                 let apdu_retries = DEFAULT_APDU_RETRIES;
                 notification_transactions.spawn(async move {
-                    let result = run_notification_worker(
+                    let result = run_notification_under_dcc(
                         operation,
                         result_rx,
                         timeout,
                         apdu_retries,
+                        &comm_state,
                         |attempt| {
                             let network = Arc::clone(&network);
                             let learned_routers = Arc::clone(&learned_routers);
@@ -283,21 +285,28 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     )
                     .await;
                     match result {
-                        NotificationWorkerResult::Ack => {
+                        Ok(NotificationWorkerResult::Ack) => {
                             debug!(invoke_id = id, "EventNotification acknowledged");
                         }
-                        NotificationWorkerResult::Error(_) => {
+                        Ok(NotificationWorkerResult::Error(_)) => {
                             suppressions.record(EventSuppression::ConfirmedRejected);
                             warn!(invoke_id = id, "EventNotification rejected by recipient");
                         }
-                        NotificationWorkerResult::Exhausted => {
+                        Ok(NotificationWorkerResult::Exhausted) => {
                             suppressions.record(EventSuppression::ConfirmedUnanswered);
                             warn!(
                                 invoke_id = id,
                                 "EventNotification failed after {} retries", apdu_retries
                             );
                         }
-                        NotificationWorkerResult::Closed => {}
+                        Ok(NotificationWorkerResult::Closed) => {}
+                        // Held back by DCC, as a notification it stops before
+                        // the first send is: not counted, and not sent again
+                        // once initiation is enabled.
+                        Err(InitiationRestricted) => debug!(
+                            invoke_id = id,
+                            "EventNotification withdrawn: DCC restricts initiation"
+                        ),
                     }
                 });
             } else {

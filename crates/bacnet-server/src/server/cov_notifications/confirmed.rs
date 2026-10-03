@@ -147,6 +147,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let id = operation.invoke_id();
         let network = Arc::clone(ctx.network);
+        let comm_state = Arc::clone(ctx.comm_state);
         let cov_table = Arc::clone(ctx.cov_table);
         let apdu_timeout = Duration::from_millis(ctx.config.cov_retry_timeout_ms);
         let apdu_retries = DEFAULT_APDU_RETRIES;
@@ -162,11 +163,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 claim,
                 ..
             } = report;
-            let delivery = run_notification_worker(
+            let delivery = run_notification_under_dcc(
                 operation,
                 result_rx,
                 apdu_timeout,
                 apdu_retries,
+                &comm_state,
                 |attempt| {
                     let network = Arc::clone(&network);
                     let buf = buf.clone();
@@ -196,7 +198,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             };
             let revisit = match result {
-                NotificationWorkerResult::Ack => {
+                Ok(NotificationWorkerResult::Ack) => {
                     debug!(invoke_id = id, "{label} acknowledged");
                     let mut table = cov_table.write().await;
                     if let Some(claim) = claim {
@@ -221,8 +223,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         None => completed,
                     }
                 }
-                NotificationWorkerResult::Error(_) | NotificationWorkerResult::Exhausted => {
-                    if matches!(result, NotificationWorkerResult::Error(_)) {
+                Ok(NotificationWorkerResult::Error(_) | NotificationWorkerResult::Exhausted) => {
+                    if matches!(result, Ok(NotificationWorkerResult::Error(_))) {
                         warn!(invoke_id = id, "{label} rejected by subscriber");
                     } else {
                         warn!(
@@ -241,7 +243,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                     Vec::new()
                 }
-                NotificationWorkerResult::Closed => {
+                Ok(NotificationWorkerResult::Closed) => {
+                    drop(claim);
+                    drop(flight);
+                    Vec::new()
+                }
+                // DCC ended the report at an attempt. The subscriber did not
+                // fail, so there is no hold-off: the report is owed as one DCC
+                // held back before its first send. Its history returns to the
+                // queue before the mark clears, the backstop sends it once
+                // initiation is enabled again, and the next fanout reports
+                // untimestamped values still away from their baselines.
+                Err(InitiationRestricted) => {
+                    debug!(
+                        invoke_id = id,
+                        "{label} withdrawn: DCC restricts initiation"
+                    );
                     drop(claim);
                     drop(flight);
                     Vec::new()

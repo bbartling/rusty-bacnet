@@ -289,6 +289,51 @@ async fn confirmed_follow_up_under_dcc_is_dropped_not_deferred() {
     }
 }
 
+/// DISABLE_INITIATION taking effect while a report is outstanding ends it at
+/// its first retry, which is not sent, and frees its invoke ID there (Clause
+/// 16.1, #1327). The subscriber did not fail, so no hold-off follows: the
+/// change is owed as one DCC held back before its first send, and the first
+/// fanout once initiation is enabled again reports it.
+#[tokio::test(start_paused = true)]
+async fn confirmed_report_dcc_stops_at_a_retry_ends_there_without_a_hold_off() {
+    for family in FAMILIES {
+        let mut h = start(3000).await;
+        family.start(&mut h).await;
+        write(&h, ACTIVE).await;
+        assert_eq!(family.report(&h).await, enumerated(ACTIVE), "{family:?}");
+        let sent = tokio::time::Instant::now();
+        let (invoke_id, _) = h.take_confirmed();
+        h.server.comm_state.store(2, Ordering::Release);
+        h.workers_idle().await;
+        let ended = sent.elapsed();
+        assert!(
+            (Duration::from_millis(2_900)..Duration::from_millis(3_050)).contains(&ended),
+            "{family:?}: lease freed {ended:?} after the report"
+        );
+        assert!(
+            !h.frames.lock().unwrap().iter().any(
+                |apdu| matches!(apdu, Apdu::ConfirmedRequest(request) if request.invoke_id == invoke_id)
+            ),
+            "{family:?}: no retry"
+        );
+        assert_eq!(baseline(&h).await, Some(sample(INACTIVE)), "{family:?}");
+        assert!(idle(&h).await, "{family:?}: no hold-off");
+        // While initiation stays restricted a fanout sends nothing, and
+        // enabling it sends nothing by itself.
+        write(&h, ACTIVE).await;
+        h.no_notification().await;
+        h.server.comm_state.store(0, Ordering::Release);
+        h.no_notification().await;
+        // The next fanout reports the change at once.
+        write(&h, ACTIVE).await;
+        assert_eq!(family.report(&h).await, enumerated(ACTIVE), "{family:?}");
+        h.ack().await;
+        h.settle().await;
+        assert_eq!(baseline(&h).await, Some(sample(ACTIVE)), "{family:?}");
+        h.server.stop().await.unwrap();
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn confirmed_fanout_during_the_flight_sends_no_second_report() {
     for family in FAMILIES {

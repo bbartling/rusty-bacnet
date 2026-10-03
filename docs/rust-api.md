@@ -3273,8 +3273,11 @@ context to one follow-up, so changes held on every object go out together. Nothi
 re-sends by itself, so a subscriber that stopped answering, or keeps refusing,
 costs at most one delivery attempt per hold-off however often its objects change,
 and cannot keep the per-peer and global in-flight slots to itself. Shutdown and
-cancellation clear the mark without a hold-off. The retry timeout starts once each
-send has completed, and the transport bounds the send itself, so a report stays
+cancellation clear the mark without a hold-off, and so does DCC ending a report at
+a retry (see [Confirmed notifications under
+DeviceCommunicationControl](#confirmed-notifications-under-devicecommunicationcontrol)).
+The retry timeout starts once each send has completed, and the transport bounds
+the send itself, so a report stays
 outstanding for the transport's send bounds plus the retry cycle. The standard
 ends delivery with the confirmed-request retries (Clause 5.4.4); reporting again
 after a hold-off is local policy.
@@ -4378,6 +4381,39 @@ only ask whether the request was taken; a Channel member in another device
 uses the payload to tell a NULL refused as the wrong datatype, which counts as
 written, from other refusals.
 
+### Confirmed notifications under DeviceCommunicationControl
+
+While DeviceCommunicationControl restricts initiation the server sends no COV
+or event notification, and that holds for the retries of a confirmed one
+already outstanding (Clause 16.1, #1327). Every attempt, the first and each
+retry, reads the communication state before it sends. An attempt that DCC
+blocks is not sent: the notification ends there, its invoke ID freed at once
+instead of after the remaining timeouts. An answer that has already taken the
+lease still ends it as usual. The server refuses the deprecated DISABLE, so
+DISABLE_INITIATION is the state that does this. What happens next depends on
+the notification:
+
+- **COV.** The report ends with no hold-off, because the subscriber did not
+  fail, and its baselines stay where they were. Timestamped history goes back
+  to its queue, and the `Max_Notification_Delay` backstop sends it once
+  communication is enabled again, at once if its delay has run out by then.
+  Untimestamped values are reported by the reference's next fanout, as a
+  change DCC held back before its first send would be. A change partly sent
+  value by value stays in delivery, so the history bound keeps the rest of it.
+- **Events.** Nothing in `EventNotificationCounters` moves, and the
+  notification is not sent again once communication is enabled, the same as a
+  transition DCC stops before its first send. `Acked_Transitions` keeps what
+  the transition set; delivery never changes it.
+- **Audit.** Not withdrawn. Clause 16.1 exempts Confirmed- and
+  UnconfirmedAuditNotification from DISABLE_INITIATION, and an audit
+  notification makes a single attempt with no retries, so one already sent
+  waits for its answer, and the reporter's health and backlog are untouched.
+  The server still holds back audit notifications that are due to start while
+  initiation is disabled, a known gap against that exemption.
+
+A write a Command or Channel makes in another device follows the same rule
+(see [Building Control](#building-control-7)).
+
 ### Notification forwarding
 
 A `NotificationForwarderObject` (type 51, Clause 12.51) originates no events.
@@ -4526,7 +4562,8 @@ notifications alike, whose Notification Class lookup failed closed: one per
 `RecipientLookupOutcome` that suppresses delivery, alongside the warning each
 one logs. `NoConfiguredDestinations` and `NoMatchingDestinations` are
 configured behaviour and are not counted, nor are notifications held back by
-DCC or Event_Enable. The three confirmed fields count notifications to one
+DCC or Event_Enable, a confirmed one DCC ends at a retry included. The three
+confirmed fields count notifications to one
 recipient; a reservation refused because the server is stopping is not
 counted.
 
