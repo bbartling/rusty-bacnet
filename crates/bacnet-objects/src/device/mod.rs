@@ -64,6 +64,8 @@ pub const EXECUTED_SERVICES: &[ServiceSupported] = &[
     ServiceSupported::LIFE_SAFETY_OPERATION,
     ServiceSupported::SUBSCRIBE_COV_PROPERTY,
     ServiceSupported::GET_EVENT_INFORMATION,
+    // Applied to the local Channel objects (Clause 15.11).
+    ServiceSupported::WRITE_GROUP,
     ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
     ServiceSupported::CONFIRMED_AUDIT_NOTIFICATION,
     ServiceSupported::UNCONFIRMED_AUDIT_NOTIFICATION,

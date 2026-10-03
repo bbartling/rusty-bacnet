@@ -17,8 +17,11 @@
 //!
 //! Members are inside this device only: a reference naming another Device is
 //! refused when it's written (Clause 12.53.11 allows that restriction).
-//! WriteGroup, the service Channel_Number and Control_Groups exist for, isn't
-//! executed yet, so Allow_Group_Delay_Inhibit isn't served.
+//!
+//! Channel_Number and Control_Groups are what the bundled server's WriteGroup
+//! execution matches on (Clause 15.11). Allow_Group_Delay_Inhibit is served
+//! for it too: the object only stores the flag, and the server reads it to
+//! decide whether a WriteGroup asking for no delays gets them.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -88,6 +91,7 @@ pub struct ChannelObject {
     execution_delay: Vec<u32>,
     channel_number: u16,
     control_groups: Vec<u32>,
+    allow_group_delay_inhibit: bool,
     /// A fresh `next_generation` value at every Present_Value write that
     /// starts a distribution, unique across the process.
     generation: u64,
@@ -96,7 +100,8 @@ pub struct ChannelObject {
 
 impl ChannelObject {
     /// Create a Channel with no members, in control group 0 alone (no
-    /// assignment), Present_Value NULL and Write_Status IDLE.
+    /// assignment), Present_Value NULL, Write_Status IDLE and
+    /// Allow_Group_Delay_Inhibit FALSE.
     pub fn new(instance: u32, name: impl Into<String>, channel_number: u16) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::CHANNEL, instance)?;
         Ok(Self {
@@ -111,6 +116,7 @@ impl ChannelObject {
             execution_delay: Vec::new(),
             channel_number,
             control_groups: vec![0],
+            allow_group_delay_inhibit: false,
             generation: next_generation(),
             pending_run: None,
         })
@@ -164,6 +170,14 @@ impl ChannelObject {
         arrays::check_group_count(groups.len())?;
         self.control_groups = groups;
         Ok(())
+    }
+
+    /// Set Allow_Group_Delay_Inhibit: whether a WriteGroup that asks for no
+    /// execution delays skips this Channel's Execution_Delay (Clause
+    /// 12.53.13). WriteProperty and WritePropertyMultiple keep the delays
+    /// either way.
+    pub fn set_allow_group_delay_inhibit(&mut self, allow: bool) {
+        self.allow_group_delay_inhibit = allow;
     }
 
     /// Take a Present_Value write (Clauses 12.53.5 to 12.53.7).
@@ -294,6 +308,9 @@ impl BACnetObject for ChannelObject {
                     .collect(),
                 array_index,
             ),
+            PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT => {
+                Ok(PropertyValue::Boolean(self.allow_group_delay_inhibit))
+            }
             PropertyIdentifier::CHANNEL_NUMBER => {
                 Ok(PropertyValue::Unsigned(self.channel_number.into()))
             }
@@ -337,6 +354,13 @@ impl BACnetObject for ChannelObject {
                 self.write_members(array_index, value)
             }
             PropertyIdentifier::EXECUTION_DELAY => self.write_execution_delay(array_index, value),
+            PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT => {
+                let PropertyValue::Boolean(allow) = value else {
+                    return Err(common::invalid_data_type_error());
+                };
+                self.allow_group_delay_inhibit = allow;
+                Ok(())
+            }
             PropertyIdentifier::CHANNEL_NUMBER => {
                 let PropertyValue::Unsigned(raw) = value else {
                     return Err(common::invalid_data_type_error());

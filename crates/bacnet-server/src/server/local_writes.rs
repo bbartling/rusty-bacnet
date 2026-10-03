@@ -35,6 +35,11 @@ pub(super) enum LocalWrite {
     ApplicationAveragingMiss,
     /// The application supplying a Life Safety object's `Tracking_Value`.
     ApplicationTrackingValue,
+    /// One value of an inbound WriteGroup for a Channel's `Present_Value`, at
+    /// the priority the request gave it (Clause 15.11). It comes from the
+    /// network, so it carries no local command source and makes no Audit
+    /// record.
+    WriteGroup { priority: u8 },
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -562,7 +567,8 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 | LocalWrite::ApplicationControlledVariableValue
                 | LocalWrite::ApplicationAveragingSample
                 | LocalWrite::ApplicationAveragingMiss
-                | LocalWrite::ApplicationTrackingValue => None,
+                | LocalWrite::ApplicationTrackingValue
+                | LocalWrite::WriteGroup { .. } => None,
             };
             let value = match write {
                 LocalWrite::Property { property, .. } => {
@@ -595,7 +601,8 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 | LocalWrite::ApplicationControlledVariableValue
                 | LocalWrite::ApplicationAveragingSample
                 | LocalWrite::ApplicationAveragingMiss
-                | LocalWrite::ApplicationTrackingValue => None,
+                | LocalWrite::ApplicationTrackingValue
+                | LocalWrite::WriteGroup { .. } => None,
             };
             let command_origin =
                 source.and_then(|source| crate::command_source::resolve_local(&db, source).ok());
@@ -630,6 +637,12 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                     LocalWrite::ApplicationTrackingValue => {
                         object.set_tracking_value_internal(value)
                     }
+                    LocalWrite::WriteGroup { priority } => object.write_property(
+                        PropertyIdentifier::PRESENT_VALUE,
+                        None,
+                        value,
+                        Some(priority),
+                    ),
                 }
             });
             if let Err(error) = result {

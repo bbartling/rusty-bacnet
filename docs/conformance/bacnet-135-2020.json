@@ -3539,7 +3539,7 @@
     "crates/bacnet-objects/src/device/tests.rs::read_protocol_object_types_supported",
     "crates/bacnet-encoding/src/constructed/tests/channel_value.rs::{primitives_and_a_lighting_command_are_channel_values,malformed_lighting_commands_are_refused}",
     "crates/bacnet-objects/src/channel/array_tests.rs::{channel_member_writes_keep_execution_delay_the_same_size,channel_number_and_control_groups_writes}",
-    "crates/bacnet-objects/src/channel/tests.rs::channel_replacement_never_shares_a_run_generation",
+    "crates/bacnet-objects/src/channel/tests.rs::{channel_replacement_never_shares_a_run_generation,channel_allow_group_delay_inhibit_starts_false_and_takes_boolean_writes}",
     "crates/bacnet-server/src/server/channel_run_tests.rs::{channel_lighting_command_reaches_its_member_without_the_context_0_framing,channel_members_with_equal_delays_go_in_list_order}",
     "crates/bacnet-server/src/schedule_channel_tests.rs::tick_schedules_runs_the_channel_distributions_its_writes_start"
    ],
@@ -3572,35 +3572,59 @@
     "A run that would start its own object again, or with more than eight runs above it, ends failed and its writer gets OBJECT / BUSY. `tick_schedules` runs a distribution; the bare handlers end it FAILED."
    ],
    "gaps": [
-    "#1151: inbound WriteGroup and `Allow_Group_Delay_Inhibit`; Clause 12.53 expects a device with Channels to execute WriteGroup",
     "Reliability, intrinsic reporting and members in other devices aren't served (no issue)",
     "Python configuration of a Channel's members, delays and groups (no issue)",
     "A Lighting Output keeps `Lighting_Command` as opaque octets, so a lighting-command value sent to it is refused (no issue)"
    ]
   },
   {
-   "id": "BACNET-15-WRITEGROUP-SERVER-WITHDRAWAL",
-   "standard_anchor": "Clause 15.11 (pp. 757-758); Clause 19.2.1.6 (p. 809)",
+   "id": "BACNET-15-WRITEGROUP",
+   "standard_anchor": "Clauses 15.11, 12.53.13 to 12.53.15, 16.1.2 and 21; Annex F.3.11",
    "priority": "P1",
-   "requirement_summary": "The inbound WriteGroup service is not advertised or executed until matching Channel objects apply eligible change-list values with the supplied priority and applicable delay behavior.",
-   "status": "unsupported-by-design",
+   "summary": "The server applies an inbound WriteGroup to each local Channel in its group with a matching Channel_Number, and the client sends WriteGroup to one device or as a broadcast.",
+   "status": "supported-with-clause-evidence",
    "code_anchors": [
-    "crates/bacnet-objects/src/device/mod.rs::EXECUTED_SERVICES",
+    "crates/bacnet-services/src/write_group.rs::WriteGroupRequest",
+    "crates/bacnet-server/src/server/write_group.rs",
+    "crates/bacnet-server/src/server/local_writes.rs::LocalWrite",
     "crates/bacnet-server/src/server/requests/unconfirmed.rs::EXECUTED_UNCONFIRMED",
-    "crates/bacnet-server/src/pics/tests.rs",
-    "crates/bacnet-services/src/write_group.rs"
+    "crates/bacnet-objects/src/device/mod.rs::EXECUTED_SERVICES",
+    "crates/bacnet-objects/src/channel.rs::ChannelObject::set_allow_group_delay_inhibit",
+    "crates/bacnet-client/src/client/write_group.rs::WriteGroupDestination",
+    "crates/rusty-bacnet/src/client/client_methods/enrollment_alarm_covmulti_who_writegroup.rs"
    ],
-   "positive_tests": [],
-   "negative_tests": [
+   "positive_tests": [
+    "crates/bacnet-server/src/server/write_group_tests.rs::{write_group_plan_matches_group_and_number_per_channel_in_instance_order,write_group_writes_the_channels_in_the_group_with_each_number_at_the_entry_priority,write_group_inhibit_delay_skips_delays_only_where_the_channel_allows_it}",
+    "crates/bacnet-services/src/write_group_tests.rs::{vector_annex_f_examples,vector_override_priority_inhibit_and_multiple_entries,vector_lighting_command_value}",
+    "crates/bacnet-client/src/client/write_group_tests.rs::write_group_sends_the_request_to_a_device_or_a_broadcast",
+    "crates/bacnet-objects/src/channel/tests.rs::channel_allow_group_delay_inhibit_starts_false_and_takes_boolean_writes",
     "crates/bacnet-objects/src/device/tests.rs::read_protocol_services_supported",
-    "crates/bacnet-server/src/pics/tests.rs::executed_services_match_dispatch_table",
-    "crates/bacnet-server/src/pics/tests.rs::services_match_implementation"
+    "crates/bacnet-server/src/pics/tests.rs::{executed_services_match_dispatch_table,services_match_implementation}",
+    "crates/rusty-bacnet/tests/test_write_group_who_am_i.py::WriteGroupTests::{test_exact_wire_bytes,test_broadcasts_are_sent}"
+   ],
+   "negative_tests": [
+    "crates/bacnet-server/src/server/write_group_tests.rs::{write_group_is_dropped_under_dcc_disable_and_runs_under_disable_initiation,write_group_is_dropped_when_local_policy_restricts_network_writes,write_group_malformed_requests_are_dropped_without_an_answer}",
+    "crates/bacnet-server/src/server/requests/endpoint_responder_tests.rs::responder_ignores_write_group_and_leaves_its_channels_alone",
+    "crates/bacnet-client/src/client/write_group_tests.rs::write_group_refuses_a_bad_request_or_network_before_sending",
+    "crates/bacnet-services/src/write_group_tests.rs::{decode_rejects_group_zero_as_decoding_error,decode_rejects_trailing_data,decode_rejects_every_truncation}",
+    "crates/rusty-bacnet/tests/test_write_group_who_am_i.py::WriteGroupTests::{test_destination_arguments,test_invalid_arguments_raise_before_address_and_start}"
    ],
    "benchmarks": [],
-   "public_claims": [],
+   "public_claims": [
+    "docs/rust-api.md#write-group",
+    "docs/rust-api.md#write-group-and-who-am-i",
+    "docs/python-api.md#write-group"
+   ],
    "notes": [
-    "Bundled Device Protocol_Services_Supported values omit bit 40, and the server has no inbound WriteGroup dispatch arm or handler. ServiceSupported::WRITE_GROUP, UnconfirmedServiceChoice::WRITE_GROUP, the codec, and Rust/Python client initiation remain protocol vocabulary. Reintroduction requires matching and group-zero behavior plus priority, supported Inhibit Delay behavior, and state-mutation integration evidence.",
-    "The Channel object exists (BACNET-12-CHANNEL-OBJECT), and Clause 12.53 expects a device with Channels to execute WriteGroup; that is #1151 part 2."
+    "Group membership is each Channel's own `Control_Groups`: a Channel outside the group keeps its value even when another Channel in the device is in it.",
+    "Each value is a Present_Value write through the local write path at the entry's priority, else the request's, so BUSY, coercion, delays, `Write_Status` and the run chain act as for WriteProperty.",
+    "Inhibit Delay zeroes a distribution's delays only on a Channel whose `Allow_Group_Delay_Inhibit` is TRUE. A refused value doesn't stop the rest of the change list.",
+    "Nothing is answered. A malformed request is dropped, and so is every WriteGroup under `MutationPolicy::DenyAll` or an installed mutation authorizer. DISABLE_INITIATION leaves it running.",
+    "The endpoint responder ignores WriteGroup and its profile refuses to declare it. Python's `write_group` broadcasts with `address=None`, on a remote network with the `network` keyword."
+   ],
+   "gaps": [
+    "#1318: The Channel writes a WriteGroup makes produce no Audit records",
+    "#1319: The mutation authorizer can't decide a WriteGroup, so an installed one drops them all"
    ]
   },
   {

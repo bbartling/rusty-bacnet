@@ -264,6 +264,11 @@ impl BACnetClient {
 
     /// Send a WriteGroup request (unconfirmed).
     ///
+    /// With an `address` the request goes to that one device. With
+    /// `address=None` it is broadcast: on the local network, or with `network`
+    /// on that remote network (1..65534), or on every network when `network`
+    /// is 65535. Give `network` only with `address=None`.
+    ///
     /// `group_number` is 1..4294967295 (group 0 is reserved) and `write_priority` is 1..16.
     /// `change_list` is a non-empty list of `(channel, override_priority_or_none, value_bytes)`
     /// tuples: `channel` is a channel number 0..65535, `override_priority_or_none` is 1..16 or
@@ -271,15 +276,16 @@ impl BACnetClient {
     /// primitive, or a context-0 lighting command) with no extra wrapper tag. Raises
     /// `ValueError`, or `OverflowError` for integers that don't fit, for an argument outside
     /// those rules.
-    #[pyo3(signature = (address, group_number, write_priority, change_list, inhibit_delay=None))]
+    #[pyo3(signature = (address, group_number, write_priority, change_list, inhibit_delay=None, *, network=None))]
     fn write_group<'py>(
         &self,
         py: Python<'py>,
-        address: String,
+        address: Option<String>,
         group_number: u32,
         write_priority: u8,
         change_list: Vec<(u16, Option<u8>, Vec<u8>)>,
         inhibit_delay: Option<bool>,
+        network: Option<u16>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let group_number = std::num::NonZeroU32::new(group_number).ok_or_else(|| {
             PyValueError::new_err("group_number must be 1-4294967295 (group 0 is reserved)")
@@ -297,22 +303,39 @@ impl BACnetClient {
                 .collect(),
             inhibit_delay,
         };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf)
+        req.encode(&mut BytesMut::new())
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let broadcast = match (&address, network) {
+            (Some(_), Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "give an address or a network, not both",
+                ))
+            }
+            (Some(_), None) => None,
+            (None, None) => Some(WriteGroupDestination::LocalBroadcast),
+            (None, Some(0)) => {
+                return Err(PyValueError::new_err("network must be 1-65535"));
+            }
+            (None, Some(u16::MAX)) => Some(WriteGroupDestination::GlobalBroadcast),
+            (None, Some(network)) => Some(WriteGroupDestination::RemoteBroadcast(network)),
+        };
 
         let inner = self.inner.clone();
         let future = async move {
-            let mac = parse_address(&address)?;
+            let destination = match (broadcast, address) {
+                (Some(broadcast), _) => broadcast,
+                (None, Some(address)) => WriteGroupDestination::Device(
+                    bacnet_types::MacAddr::from_slice(&parse_address(&address)?),
+                ),
+                (None, None) => unreachable!("no address means a broadcast"),
+            };
             let c = {
                 let guard = inner.lock().await;
                 Arc::clone(guard.as_ref().ok_or_else(|| {
                     PyRuntimeError::new_err("client not started — use 'async with'")
                 })?)
             };
-            c.unconfirmed_request(&mac, UnconfirmedServiceChoice::WRITE_GROUP, &buf)
-                .await
-                .map_err(to_py_err)?;
+            c.write_group(&destination, &req).await.map_err(to_py_err)?;
             Ok(())
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))

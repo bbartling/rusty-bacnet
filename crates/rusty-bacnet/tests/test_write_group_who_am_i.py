@@ -1,4 +1,5 @@
-"""Installed WriteGroup and Who-Am-I argument validation and exact WriteGroup wire bytes."""
+"""Installed WriteGroup and Who-Am-I argument validation, WriteGroup destinations and exact
+WriteGroup wire bytes."""
 import asyncio
 import socket
 import unittest
@@ -44,6 +45,38 @@ class WriteGroupTests(unittest.IsolatedAsyncioTestCase):
         oid = ObjectIdentifier(ObjectType.CHANNEL, 5)
         with self.assertRaises(TypeError):
             client.write_group("invalid-address", 1, 8, [(oid, None, REAL_72)])
+
+    async def test_destination_arguments(self):
+        client = BACnetClient(interface="127.0.0.1", port=0)
+        entry = [(5, None, REAL_72)]
+        # An address and a network together, or network 0, are refused at once.
+        with self.assertRaises(ValueError):
+            client.write_group("127.0.0.1:47808", 1, 8, entry, network=5)
+        with self.assertRaises(ValueError):
+            client.write_group(None, 1, 8, entry, network=0)
+        for network in (-1, 65536):
+            with self.assertRaises(OverflowError):
+                client.write_group(None, 1, 8, entry, network=network)
+        # The network is keyword-only.
+        with self.assertRaises(TypeError):
+            client.write_group(None, 1, 8, entry, None, 5)
+        # Valid broadcasts get as far as the client, which isn't started.
+        for network in (None, 5, 65534, 65535):
+            with self.subTest(network=network):
+                with self.assertRaises(RuntimeError):
+                    await client.write_group(None, 1, 8, entry, network=network)
+
+    async def test_broadcasts_are_sent(self):
+        # The broadcast address is the client's own, so each broadcast loops
+        # back to it; the call returns once the request is on the link.
+        async with BACnetClient(
+            interface="127.0.0.1", port=0, broadcast_address="127.0.0.1"
+        ) as client:
+            for network in (None, 5, 65535):
+                with self.subTest(network=network):
+                    await client.write_group(
+                        None, 1, 8, [(5, None, REAL_72)], True, network=network
+                    )
 
     async def test_exact_wire_bytes(self):
         loop = asyncio.get_running_loop()
