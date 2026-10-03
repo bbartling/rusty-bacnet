@@ -712,6 +712,7 @@ async fn mstp_responder_denial_releases_reply() {
             source_network: None,
             link_layer_group: false,
             is_group: false,
+            global_broadcast: false,
             data_attributes: Vec::new(),
             provenance: TransportProvenance::unverified(),
             reply_tx: Some(reply_tx),

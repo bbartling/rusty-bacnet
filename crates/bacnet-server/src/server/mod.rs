@@ -581,10 +581,12 @@ pub(crate) use discovery::{DiscoveryLimiter, PreCheckDecision, WhoHasTarget};
 mod dispatch;
 mod event_delivery;
 mod event_enrollment_lifecycle;
+mod event_forwarding;
 mod event_message_policy;
 pub(crate) mod event_notification_payload;
 mod event_notifications;
 mod event_recipient_route;
+mod event_send;
 mod event_suppression;
 pub use event_suppression::EventNotificationCounters;
 pub(crate) mod event_timestamp;
@@ -722,6 +724,12 @@ mod event_confirmed_routing_tests;
 mod event_enable_distribution_tests;
 #[cfg(test)]
 mod event_enrollment_task_tests;
+#[cfg(test)]
+mod event_forwarding_origin_tests;
+#[cfg(test)]
+mod event_forwarding_rule_tests;
+#[cfg(test)]
+mod event_forwarding_tests;
 #[cfg(test)]
 mod event_network_priority_tests;
 #[cfg(test)]

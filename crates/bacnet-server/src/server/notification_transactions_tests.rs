@@ -372,6 +372,7 @@ async fn dispatch_keeps_segment_and_complex_acks_out_of_notification_completion(
                 source_network: None,
                 link_layer_group: false,
                 is_group: false,
+                global_broadcast: false,
                 data_attributes: Vec::new(),
                 provenance: TransportProvenance::unverified(),
                 reply_tx: None,

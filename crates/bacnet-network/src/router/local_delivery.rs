@@ -8,6 +8,7 @@ pub(super) fn application(
     port_network: u16,
     is_group: bool,
 ) -> ReceivedApdu {
+    let global_broadcast = crate::layer::is_global_broadcast(npdu.destination.as_ref());
     ReceivedApdu {
         apdu: npdu.payload,
         source_mac: received.source_mac,
@@ -15,6 +16,7 @@ pub(super) fn application(
         source_network: npdu.source,
         link_layer_group: received.link_layer_group,
         is_group,
+        global_broadcast,
         data_attributes: received.data_attributes,
         provenance: received.provenance,
         direct_response: received.direct_response,

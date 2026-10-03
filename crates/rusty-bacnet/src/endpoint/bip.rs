@@ -21,12 +21,13 @@ use pyo3::types::PyDict;
 use crate::endpoint::common::{
     build_database, build_identity, build_pending_boxes, lifecycle_error, make_analog_input,
     make_analog_value, make_binary_input, make_binary_value, parse_device_uuid, parse_ipv4,
-    parse_segmentation, parse_services, with_bip_port, PendingObject,
+    parse_read_work_limit, parse_segmentation, parse_services, pending_group, with_bip_port,
+    PendingObject,
 };
 use crate::endpoint::lifecycle::Lifecycle;
 use crate::endpoint::roles::{PyEndpointClient, PyEndpointServer};
 use crate::errors::to_py_err;
-use crate::types::PySegmentation;
+use crate::types::{PyReadAccessSpec, PySegmentation};
 
 /// Owned, validated B/IP endpoint startup configuration.
 ///
@@ -39,6 +40,7 @@ struct BipEndpointConfig {
     broadcast: Ipv4Addr,
     identity: DeviceIdentity,
     queue_capacity: usize,
+    read_work_limit: usize,
     apdu_timeout_ms: u64,
     apdu_retries: u8,
     registered_network_port: Option<u32>,
@@ -71,6 +73,7 @@ impl BipEndpointConfig {
         let mut builder = BipEndpointBuilder::new(config.interface, config.port, config.broadcast)
             .role(SessionRole::Both)
             .queue_capacity(config.queue_capacity)
+            .read_work_limit(config.read_work_limit)
             .client_timers(config.apdu_timeout_ms, config.apdu_retries)
             .database(db)
             .identity(config.identity.clone());
@@ -149,6 +152,10 @@ impl PyBipEndpoint {
     ///         stored into DEVICE_UUID, single identity source).
     ///     queue_capacity: Bounded queue capacity (must be >0).
     ///     apdu_timeout_ms / apdu_retries: Client timers.
+    ///     read_work_limit: Keyword-only. Result rows one ReadProperty served
+    ///         by the server role may expand (must be >0, default 256): its
+    ///         own row plus, for a Group's Present_Value, one per member
+    ///         property. A read past it is aborted with OUT_OF_RESOURCES.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -166,7 +173,9 @@ impl PyBipEndpoint {
         queue_capacity=16,
         apdu_timeout_ms=6000,
         apdu_retries=0,
-        registered_network_port=None
+        registered_network_port=None,
+        *,
+        read_work_limit=256
     ))]
     fn new(
         device_instance: u32,
@@ -185,12 +194,14 @@ impl PyBipEndpoint {
         apdu_timeout_ms: u64,
         apdu_retries: u8,
         registered_network_port: Option<u32>,
+        read_work_limit: usize,
     ) -> PyResult<Self> {
         if queue_capacity == 0 {
             return Err(PyValueError::new_err(
                 "queue_capacity must be greater than zero",
             ));
         }
+        let read_work_limit = parse_read_work_limit(read_work_limit)?;
         let interface_ip = parse_ipv4(interface, "interface")?;
         let broadcast = parse_ipv4(broadcast_address, "broadcast_address")?;
         if let Some(selected) = registered_network_port {
@@ -231,6 +242,7 @@ impl PyBipEndpoint {
                 broadcast,
                 identity,
                 queue_capacity,
+                read_work_limit,
                 apdu_timeout_ms,
                 apdu_retries,
                 registered_network_port,
@@ -320,6 +332,23 @@ impl PyBipEndpoint {
             audit_policy,
             name: name.to_string(),
         })
+    }
+
+    /// Add a Group object (before start); its Present_Value is rebuilt from
+    /// `members` on each read, one result per member, in order.
+    ///
+    /// `members` takes the `read_property_multiple` spec shape,
+    /// `(object_id, [(property_id, array_index), ...])`. A member listing no
+    /// properties, a property identifier past 22 bits, or a group's
+    /// Present_Value is a ValueError naming its position and the rule.
+    #[pyo3(signature = (instance, name, members=None))]
+    fn add_group(
+        &self,
+        instance: u32,
+        name: &str,
+        members: Option<Vec<PyReadAccessSpec>>,
+    ) -> PyResult<()> {
+        self.push_pending(pending_group(instance, name, members)?)
     }
 
     /// Start after lifecycle admission. A second explicit start fails.

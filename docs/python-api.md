@@ -1483,6 +1483,13 @@ from rusty_bacnet import EventType
 server.add_calendar(instance=1, name="Holiday Calendar")
 server.add_schedule(instance=1, name="Occupancy Schedule")
 server.add_notification_class(instance=1, name="Critical Alarms", notification_class=1)
+server.add_notification_forwarder(
+    instance=1,
+    name="Forwarder",
+    process_identifier_filter=None,  # None forwards every process identifier
+    local_forwarding_only=False,
+    storage_path="/application/state/forwarder-1",  # optional
+)
 server.add_alert_enrollment(
     instance=1,
     name="Alert",
@@ -1494,6 +1501,16 @@ server.add_event_enrollment(
     event_type=EventType.OUT_OF_RANGE,  # default: EventType.CHANGE_OF_BITSTRING
 )
 ```
+
+The Notification Forwarder sends each event notification the server
+receives, and each one its own objects address to its Device, on to the
+destinations its Recipient_List and Subscribed_Recipients name. Clients
+configure both lists over the network. `storage_path` keeps
+Subscribed_Recipients in one file, replaced whole when the list changes and
+at most once a minute while its entries count down, so the list and each
+entry's remaining minutes survive a restart; without it the list lives in
+memory only. Every well-formed ConfirmedEventNotification is acknowledged,
+whether or not a forwarder takes it.
 
 `initial_source` is required and becomes the Alert Enrollment object's
 read-only `Present_Value`. This is an intentional breaking correction; there
@@ -2403,6 +2420,8 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `confirmed_rejected` | Confirmed notifications the recipient answered with an Error, Reject or Abort |
 | `confirmed_unanswered` | Confirmed notifications with no acknowledgment after the last retry |
 | `unconfirmed_send_failed` | Unconfirmed notifications the transport refused to send, once per destination; the other destinations are still served |
+| `apdu_too_large` | Notifications not sent to one destination because they exceed the local APDU size (notifications are never segmented); usually a forwarded copy of one that arrived segmented |
+| `received_not_forwarded` | Received event notifications that decoded but that no Notification Forwarder took; a confirmed one is still acknowledged |
 
 The first four count event and acknowledgment notifications alike, once per
 transition. A class whose list is empty, or whose destinations all filter the
@@ -2637,6 +2656,37 @@ Failed startup, or cancellation observed before successful publication, restores
 the exact pending registrations after owned resources have been released. The
 registration gate reopens after terminal cleanup. Role access and status share the
 lifecycle lock, so they cannot observe a half-published session.
+
+### Endpoint Groups and the read work limit
+
+`add_group(instance, name, members=None)` registers a Group before start.
+`members` uses the `read_property_multiple` spec shape,
+`[(object_id, [(property_id, array_index), ...]), ...]`, and the server role
+rebuilds Present_Value from it on every read, one result per member. A member
+with an empty property list, a property identifier above 4194303 (the 22-bit
+field's last value), or one that reports a Group or Global Group's
+Present_Value raises `ValueError` when it is added; the message names the
+member's position and the rule it breaks. As for `read_property_multiple` specs,
+an array index outside unsigned32 raises `OverflowError` during conversion.
+
+Each owner takes a keyword-only `read_work_limit=256`: the result rows one
+ReadProperty served by the server role may expand. A read counts its own row,
+and a Group's Present_Value adds a row for every member property after ALL,
+REQUIRED and OPTIONAL expand. A read over the limit is answered with an Abort
+carrying OUT_OF_RESOURCES (a peer `BACnetClient` raises `BacnetAbortError` with
+`reason == 9`) before any member is read. Zero raises `ValueError`, negative or
+native-overflow values raise `OverflowError`, all in the constructor. It is the
+endpoint counterpart of `BACnetServer`'s `rpm_max_result_elements`; see
+[RPM budgets](rpm-budget.md).
+
+```python
+endpoint = BipEndpoint(device_instance=1001, port=0, read_work_limit=2)
+endpoint.add_analog_input(instance=1, name="Zone Temp")
+ai = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
+# Present_Value and Object_Name of AI 1: three rows, over the limit of 2.
+endpoint.add_group(1, "Zone", [(ai, [(PropertyIdentifier.PRESENT_VALUE, None),
+                                     (PropertyIdentifier.OBJECT_NAME, None)])])
+```
 
 ### Endpoint ReadPropertyMultiple
 

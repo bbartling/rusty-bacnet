@@ -29,6 +29,7 @@ pub mod loop_obj;
 pub mod multistate;
 pub mod network_port;
 pub mod notification_class;
+pub mod notification_forwarder;
 pub mod present_value_access;
 pub mod program;
 pub mod property_metadata;

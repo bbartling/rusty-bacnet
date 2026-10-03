@@ -1,9 +1,9 @@
 //! What [`BACnetRouter::start`] sets up, and what it hands back (#1220).
 //!
 //! A router can be started with a tracked local APDU receiver, a wire-control
-//! policy and authorizer, and its own network-control receiver, in any
-//! combination. [`RouterOptions`] picks them and [`StartedRouter`] carries the
-//! receivers that were asked for.
+//! policy and authorizer, and its own network-control receiver, raw or tracked
+//! (#1242), in any combination. [`RouterOptions`] picks them and
+//! [`StartedRouter`] carries the receivers that were asked for.
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -24,7 +24,9 @@ use crate::layer::{
 ///
 /// `A` is the local APDU receiver type the start returns, a raw
 /// [`mpsc::Receiver`] unless [`Self::track_admission`] switches it to an
-/// [`AdmissionReceiver`].
+/// [`AdmissionReceiver`]. `C` is the network-control receiver type in the same
+/// way: raw, unless [`Self::network_control_receiver_with_admission`] asks for
+/// the tracked one.
 ///
 /// ```no_run
 /// # use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
@@ -41,11 +43,14 @@ use crate::layer::{
 /// # Ok(())
 /// # }
 /// ```
-pub struct RouterOptions<A = mpsc::Receiver<ReceivedApdu>> {
+pub struct RouterOptions<
+    A = mpsc::Receiver<ReceivedApdu>,
+    C = mpsc::Receiver<ReceivedNetworkControl>,
+> {
     policy: ControlPolicy,
     authorizer: Option<ControlAuthorizer>,
     network_control: bool,
-    apdus: PhantomData<fn() -> A>,
+    receivers: PhantomData<fn() -> (A, C)>,
 }
 
 impl RouterOptions {
@@ -71,7 +76,7 @@ impl RouterOptions {
             policy: ControlPolicy::default(),
             authorizer: None,
             network_control: false,
-            apdus: PhantomData,
+            receivers: PhantomData,
         }
     }
 }
@@ -82,7 +87,7 @@ impl Default for RouterOptions {
     }
 }
 
-impl<A> RouterOptions<A> {
+impl<A, C> RouterOptions<A, C> {
     /// Return the local APDU receiver as an [`AdmissionReceiver`], which
     /// exposes queue-admission snapshots and enforces a per-source quota.
     ///
@@ -113,13 +118,8 @@ impl<A> RouterOptions<A> {
     /// See the [receive-queue contract](crate::layer#receive-queue-admission)
     /// for exact keys, the raw/tracked matrix and complete ownership/lifecycle
     /// rules.
-    pub fn track_admission(self) -> RouterOptions<AdmissionReceiver<ReceivedApdu>> {
-        RouterOptions {
-            policy: self.policy,
-            authorizer: self.authorizer,
-            network_control: self.network_control,
-            apdus: PhantomData,
-        }
+    pub fn track_admission(self) -> RouterOptions<AdmissionReceiver<ReceivedApdu>, C> {
+        self.receivers()
     }
 
     /// RB-09: the wire-control policy for state-changing routing controls.
@@ -155,10 +155,33 @@ impl<A> RouterOptions<A> {
     /// delivers, numbered from [`BACnetRouter::network_control_ingress_sequence`].
     /// The queue holds 256 controls, apart from the APDU queue. Admission never
     /// waits: a full or closed receiver drops the arriving control, and
-    /// routing carries on.
-    pub fn network_control_receiver(mut self) -> Self {
+    /// routing carries on. This receiver is a raw [`mpsc::Receiver`], which
+    /// counts its drops internally only; use
+    /// [`Self::network_control_receiver_with_admission`] to read them. The two
+    /// are alternatives, and the later call decides the receiver type.
+    pub fn network_control_receiver(
+        mut self,
+    ) -> RouterOptions<A, mpsc::Receiver<ReceivedNetworkControl>> {
         self.network_control = true;
-        self
+        self.receivers()
+    }
+
+    /// [`Self::network_control_receiver`], with the receiver as an
+    /// [`AdmissionReceiver`] that reports on its queue (#1242), as
+    /// [`NetworkLayer::enable_network_control_receiver_with_admission`](crate::layer::NetworkLayer::enable_network_control_receiver_with_admission)
+    /// does for a non-router.
+    ///
+    /// [`AdmissionReceiver::counters`] reads the queue's depth, its high-water
+    /// mark and its full and closed drop totals. Controls have no per-source
+    /// quota, so the fairness total stays zero. The records, the 256-control
+    /// queue and the drop-arriving admission are those of the raw receiver;
+    /// see the [receive-queue contract](crate::layer#receive-queue-admission)
+    /// for what closing, dropping and stopping do to the counts.
+    pub fn network_control_receiver_with_admission(
+        mut self,
+    ) -> RouterOptions<A, AdmissionReceiver<ReceivedNetworkControl>> {
+        self.network_control = true;
+        self.receivers()
     }
 
     /// The wire-control gate these options select.
@@ -166,13 +189,23 @@ impl<A> RouterOptions<A> {
         ControlGate::new(self.policy, self.authorizer.clone())
     }
 
-    /// Whether [`Self::network_control_receiver`] was asked for.
+    /// Whether a network-control receiver was asked for.
     pub(super) fn wants_network_control(&self) -> bool {
         self.network_control
     }
+
+    /// These options, returning other receiver types.
+    fn receivers<A2, C2>(self) -> RouterOptions<A2, C2> {
+        RouterOptions {
+            policy: self.policy,
+            authorizer: self.authorizer,
+            network_control: self.network_control,
+            receivers: PhantomData,
+        }
+    }
 }
 
-impl<A> fmt::Debug for RouterOptions<A> {
+impl<A, C> fmt::Debug for RouterOptions<A, C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RouterOptions")
             .field("policy", &self.policy)
@@ -182,55 +215,81 @@ impl<A> fmt::Debug for RouterOptions<A> {
             )
             .field("network_control", &self.network_control)
             .field("apdus", &std::any::type_name::<A>())
+            .field("controls", &std::any::type_name::<C>())
             .finish()
     }
 }
 
 /// A running router and the receivers its [`RouterOptions`] asked for.
-pub struct StartedRouter<A = mpsc::Receiver<ReceivedApdu>> {
+pub struct StartedRouter<
+    A = mpsc::Receiver<ReceivedApdu>,
+    C = mpsc::Receiver<ReceivedNetworkControl>,
+> {
     /// The router.
     pub router: BACnetRouter,
     /// APDUs for local applications: those without a remote destination, or
     /// for which this router is the final hop.
     pub apdus: A,
     /// The router's own network-control receiver, when
-    /// [`RouterOptions::network_control_receiver`] asked for it.
-    pub network_control: Option<mpsc::Receiver<ReceivedNetworkControl>>,
+    /// [`RouterOptions::network_control_receiver`] or
+    /// [`RouterOptions::network_control_receiver_with_admission`] asked for it.
+    pub network_control: Option<C>,
 }
 
 /// A local APDU receiver type [`BACnetRouter::start`] can return: the raw
 /// [`mpsc::Receiver`] or, after [`RouterOptions::track_admission`], an
 /// [`AdmissionReceiver`]. Sealed.
-pub trait LocalApduReceiver: sealed::Sealed {}
+pub trait LocalApduReceiver: sealed::Sealed<ReceivedApdu> {}
 
 impl LocalApduReceiver for mpsc::Receiver<ReceivedApdu> {}
 impl LocalApduReceiver for AdmissionReceiver<ReceivedApdu> {}
 
+/// A network-control receiver type [`BACnetRouter::start`] can return: the
+/// raw [`mpsc::Receiver`] from [`RouterOptions::network_control_receiver`] or
+/// the [`AdmissionReceiver`] from
+/// [`RouterOptions::network_control_receiver_with_admission`]. Sealed.
+pub trait NetworkControlReceiver: sealed::Sealed<ReceivedNetworkControl> {}
+
+impl NetworkControlReceiver for mpsc::Receiver<ReceivedNetworkControl> {}
+impl NetworkControlReceiver for AdmissionReceiver<ReceivedNetworkControl> {}
+
 pub(super) mod sealed {
     use super::*;
 
-    /// How the start builds each receiver type from the shared local queue.
-    pub trait Sealed: Sized {
-        /// Whether the queue keeps depth and per-source accounting.
+    /// How the start builds each receiver type from its queue of `T`.
+    pub trait Sealed<T>: Sized {
+        /// Whether the queue keeps depth accounting (and, for APDUs,
+        /// per-source accounting).
         const TRACKED: bool;
 
         /// Wrap the queue's receiving end.
-        fn from_queue(rx: mpsc::Receiver<ReceivedApdu>, counters: QueueAdmissionCounters) -> Self;
+        fn from_queue(rx: mpsc::Receiver<T>, counters: QueueAdmissionCounters) -> Self;
     }
 
-    impl Sealed for mpsc::Receiver<ReceivedApdu> {
+    impl<T> Sealed<T> for mpsc::Receiver<T> {
         const TRACKED: bool = false;
 
-        fn from_queue(rx: mpsc::Receiver<ReceivedApdu>, _: QueueAdmissionCounters) -> Self {
+        fn from_queue(rx: mpsc::Receiver<T>, _: QueueAdmissionCounters) -> Self {
             rx
         }
     }
 
-    impl Sealed for AdmissionReceiver<ReceivedApdu> {
+    impl Sealed<ReceivedApdu> for AdmissionReceiver<ReceivedApdu> {
         const TRACKED: bool = true;
 
         fn from_queue(rx: mpsc::Receiver<ReceivedApdu>, counters: QueueAdmissionCounters) -> Self {
             AdmissionReceiver::from_apdu_parts(rx, counters)
+        }
+    }
+
+    impl Sealed<ReceivedNetworkControl> for AdmissionReceiver<ReceivedNetworkControl> {
+        const TRACKED: bool = true;
+
+        fn from_queue(
+            rx: mpsc::Receiver<ReceivedNetworkControl>,
+            counters: QueueAdmissionCounters,
+        ) -> Self {
+            AdmissionReceiver::from_parts(rx, counters)
         }
     }
 }

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from rusty_bacnet import (
+    BacnetAbortError,
     BacnetError,
     BacnetProtocolError,
     BipEndpoint,
@@ -965,6 +966,55 @@ class ScEndpointHubTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(await asyncio.wait_for(first.__aexit__(None, None, None), 5))
                 self.assertIsNone(await first.close())
                 await asyncio.wait_for(second.close(), 5)
+        finally:
+            await asyncio.wait_for(hub.stop(), 5)
+
+    async def test_sc_endpoint_applies_its_read_work_limit(self):
+        """The SC owner passes read_work_limit to its session (#1250)."""
+        hub = ScHub(
+            listen="127.0.0.1:0",
+            cert=self.path("hub.pem"),
+            key=self.path("hub.key"),
+            vmac=HUB_VMAC,
+            ca_cert=self.path("site.pem"),
+            device_uuid=HUB_UUID,
+        )
+        await asyncio.wait_for(hub.start(), 10)
+        try:
+            self.hub_url = await hub.url()
+            server = self.make_endpoint(
+                SC_A_VMAC, SC_A_UUID, 9011, cert="a.pem", key="a.key", read_work_limit=2
+            )
+            server.add_analog_input(instance=1, name="SC-AI")
+            ai = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
+            pv = PropertyIdentifier.PRESENT_VALUE
+            # Three rows, then two, against a limit of two.
+            server.add_group(1, "Three", [(ai, [(pv, None), (PropertyIdentifier.OBJECT_NAME, None)])])
+            server.add_group(2, "Two", [(ai, [(pv, None)])])
+            reader = self.make_endpoint(
+                SC_B_VMAC, SC_B_UUID, 9012, cert="b.pem", key="b.key"
+            )
+            await asyncio.wait_for(server.start(), 15)
+            await asyncio.wait_for(reader.start(), 15)
+            try:
+                client = await reader.client()
+                with self.assertRaises(BacnetAbortError) as aborted:
+                    await asyncio.wait_for(
+                        client.read_property(
+                            vmac_hex(SC_A_VMAC), ObjectIdentifier(ObjectType.GROUP, 1), pv
+                        ),
+                        15,
+                    )
+                self.assertEqual(aborted.exception.reason, 9)  # OUT_OF_RESOURCES
+                await asyncio.wait_for(
+                    client.read_property(
+                        vmac_hex(SC_A_VMAC), ObjectIdentifier(ObjectType.GROUP, 2), pv
+                    ),
+                    15,
+                )
+            finally:
+                await asyncio.wait_for(reader.close(), 5)
+                await asyncio.wait_for(server.close(), 5)
         finally:
             await asyncio.wait_for(hub.stop(), 5)
 

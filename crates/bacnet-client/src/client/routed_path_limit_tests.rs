@@ -720,3 +720,6 @@ mod segment_capacity;
 
 #[path = "routed_path_mac_bound_tests.rs"]
 mod mac_bound;
+
+#[path = "routed_path_dnet_bound_tests.rs"]
+mod dnet_bound;

@@ -14,13 +14,13 @@ use pyo3::types::PyDict;
 
 use crate::endpoint::common::{
     build_database, build_identity, build_pending_boxes, lifecycle_error, make_analog_input,
-    make_analog_value, make_binary_input, make_binary_value, parse_device_uuid, parse_segmentation,
-    parse_services, PendingObject,
+    make_analog_value, make_binary_input, make_binary_value, parse_device_uuid,
+    parse_read_work_limit, parse_segmentation, parse_services, pending_group, PendingObject,
 };
 use crate::endpoint::lifecycle::Lifecycle;
 use crate::endpoint::roles::{PyEndpointClient, PyEndpointServer};
 use crate::errors::to_py_err;
-use crate::types::PySegmentation;
+use crate::types::{PyReadAccessSpec, PySegmentation};
 
 /// MS/TP APDU bound enforced at composition (standard-frame transport).
 const MSTP_MAX_APDU: u16 = 480;
@@ -37,6 +37,7 @@ struct MstpEndpointConfig {
     max_info_frames: u8,
     identity: DeviceIdentity,
     queue_capacity: usize,
+    read_work_limit: usize,
     apdu_timeout_ms: u64,
     apdu_retries: u8,
 }
@@ -76,6 +77,7 @@ impl MstpEndpointConfig {
             .baud_rate(config.baud)
             .role(SessionRole::Both)
             .queue_capacity(config.queue_capacity)
+            .read_work_limit(config.read_work_limit)
             .client_timers(config.apdu_timeout_ms, config.apdu_retries)
             .database(db)
             .identity(config.identity.clone())
@@ -122,6 +124,10 @@ impl PyMstpEndpoint {
     ///     segmentation / services / device_uuid: Identity knobs (UUID zeros
     ///         allowed; stored into DEVICE_UUID).
     ///     queue_capacity / apdu_timeout_ms / apdu_retries: Session tuning.
+    ///     read_work_limit: Keyword-only. Result rows one ReadProperty served
+    ///         by the server role may expand (must be >0, default 256): its
+    ///         own row plus, for a Group's Present_Value, one per member
+    ///         property. A read past it is aborted with OUT_OF_RESOURCES.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -138,7 +144,9 @@ impl PyMstpEndpoint {
         device_uuid=None,
         queue_capacity=16,
         apdu_timeout_ms=6000,
-        apdu_retries=0
+        apdu_retries=0,
+        *,
+        read_work_limit=256
     ))]
     fn new(
         device_instance: u32,
@@ -156,12 +164,14 @@ impl PyMstpEndpoint {
         queue_capacity: usize,
         apdu_timeout_ms: u64,
         apdu_retries: u8,
+        read_work_limit: usize,
     ) -> PyResult<Self> {
         if queue_capacity == 0 {
             return Err(PyValueError::new_err(
                 "queue_capacity must be greater than zero",
             ));
         }
+        let read_work_limit = parse_read_work_limit(read_work_limit)?;
         // Early addressing/baud validation without opening (ValueError).
         crate::mstp_py::validate_mstp_config(
             Some(serial_port),
@@ -199,6 +209,7 @@ impl PyMstpEndpoint {
                 max_info_frames: mstp_max_info_frames,
                 identity,
                 queue_capacity,
+                read_work_limit,
                 apdu_timeout_ms,
                 apdu_retries,
             },
@@ -286,6 +297,23 @@ impl PyMstpEndpoint {
             audit_policy,
             name: name.to_string(),
         })
+    }
+
+    /// Add a Group object (before start); its Present_Value is rebuilt from
+    /// `members` on each read, one result per member, in order.
+    ///
+    /// `members` takes the `read_property_multiple` spec shape,
+    /// `(object_id, [(property_id, array_index), ...])`. A member listing no
+    /// properties, a property identifier past 22 bits, or a group's
+    /// Present_Value is a ValueError naming its position and the rule.
+    #[pyo3(signature = (instance, name, members=None))]
+    fn add_group(
+        &self,
+        instance: u32,
+        name: &str,
+        members: Option<Vec<PyReadAccessSpec>>,
+    ) -> PyResult<()> {
+        self.push_pending(pending_group(instance, name, members)?)
     }
 
     /// Start after lifecycle admission. A second explicit start fails.

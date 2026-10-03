@@ -11,10 +11,6 @@
 //!
 //! Deliberately out of scope (kept, not removed):
 //! - The fallback defaults themselves stay for downstream custom objects.
-//! - `NOTIFICATION_FORWARDER` (51) is unsupported by design: no
-//!   `impl BACnetObject` exists, the Device support bit stays clear
-//!   (`device/tests.rs` pins bit 51 clear), and the conformance ledger
-//!   records it as unsupported-by-design.
 //! - `NETWORK_SECURITY` (38) is deprecated (Clause 24 deleted) with no impl.
 //! - `WRITE_GROUP` is a service family, not an object type, so it is not an
 //!   `ObjectType` member at all.
@@ -72,6 +68,7 @@ use crate::loop_obj::LoopObject;
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::network_port::NetworkPortObject;
 use crate::notification_class::NotificationClass;
+use crate::notification_forwarder::NotificationForwarderObject;
 use crate::program::ProgramObject;
 use crate::property_metadata::{
     required_properties_from_metadata, PropertyConformance, PropertyPresenceCondition,
@@ -139,10 +136,9 @@ fn staging_config() -> StagingConfig {
     }
 }
 
-/// One representative per supported `ObjectType`: 63 total.
+/// One representative per supported `ObjectType`: 64 total.
 ///
-/// Excluded by design (see module docs): 51 NOTIFICATION_FORWARDER and
-/// 38 NETWORK_SECURITY.
+/// Excluded by design (see module docs): 38 NETWORK_SECURITY.
 fn supported_representatives() -> Vec<Box<dyn BACnetObject>> {
     let alert_source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     vec![
@@ -197,7 +193,7 @@ fn supported_representatives() -> Vec<Box<dyn BACnetObject>> {
         Box::new(PositiveIntegerValueObject::new(1, "PIV-1").unwrap()),
         Box::new(TimePatternValueObject::new(1, "TPV-1").unwrap()),
         Box::new(TimeValueObject::new(1, "TV-1").unwrap()),
-        // 51 NOTIFICATION_FORWARDER: unsupported by design — excluded.
+        Box::new(NotificationForwarderObject::new(1, "NF-1").unwrap()),
         Box::new(AlertEnrollmentObject::new(1, "AE-1", alert_source).unwrap()),
         Box::new(ChannelObject::new(1, "CH-1", 1).unwrap()),
         Box::new(LightingOutputObject::new(1, "LO-1").unwrap()),
@@ -233,17 +229,17 @@ fn audit_object_type_coverage(objects: &[Box<dyn BACnetObject>]) {
         .map(|object| object.object_identifier().object_type().to_raw())
         .collect();
     raws.sort_unstable();
-    let expected: Vec<u32> = (0..=64).filter(|raw| ![38, 51].contains(raw)).collect();
+    let expected: Vec<u32> = (0..=64).filter(|raw| *raw != 38).collect();
     assert_eq!(
         raws, expected,
-        "audit must cover exactly the 63 supported types"
+        "audit must cover exactly the 64 supported types"
     );
 }
 
 #[test]
 fn audit_every_supported_type_derives_from_canonical_metadata() {
     let mut objects = supported_representatives();
-    assert_eq!(objects.len(), 63, "one representative per supported type");
+    assert_eq!(objects.len(), 64, "one representative per supported type");
     audit_object_type_coverage(&objects);
 
     // Staging starts with Present_Stage uninitialized (reads

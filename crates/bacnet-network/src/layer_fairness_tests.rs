@@ -488,6 +488,7 @@ fn router_apdu(ingress_network: u16, source: &[u8], id: u16) -> ReceivedApdu {
         source_network: None,
         link_layer_group: false,
         is_group: false,
+        global_broadcast: false,
         data_attributes: Vec::new(),
         provenance: TransportProvenance::unverified(),
         reply_tx: None,

@@ -126,6 +126,12 @@ impl RoutedPathLimits {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// How many path entries exist, in use or idle.
+    #[cfg(test)]
+    pub(super) fn entry_count(&self) -> usize {
+        self.state().entries.len()
+    }
+
     /// Reserve and lock the path through `router_mac` to `dnet`. A router MAC
     /// outside [`routed_mac_fits`] is refused before any entry is reserved.
     pub(super) async fn acquire(
@@ -490,19 +496,14 @@ pub(super) fn routed_path_quarantine_horizon(config: &ClientConfig) -> Duration 
 }
 
 /// The NPCI a router adds when it forwards a request to the DADR: the fixed
-/// fields plus DADR and the SADR it fills with the local source MAC. A DADR
-/// past [`NpduAddress::MAX_MAC_LEN`] or a source MAC outside
-/// [`routed_mac_fits`] is refused (#1267).
+/// fields plus DADR and the SADR it fills with the local source MAC. A DADR or
+/// source MAC outside [`routed_mac_fits`] is refused (#1267): an empty DADR
+/// would have the remote router broadcast the request (#1278).
 pub(super) fn forwarded_npci_len(
     dadr_len: usize,
     local_source_mac_len: usize,
 ) -> Result<u16, Error> {
-    if dadr_len > NpduAddress::MAX_MAC_LEN {
-        return Err(Error::Encoding(format!(
-            "routed destination MAC address must contain 0..={} octets",
-            NpduAddress::MAX_MAC_LEN
-        )));
-    }
+    check_routed_dadr(dadr_len)?;
     if !routed_mac_fits(local_source_mac_len) {
         return Err(Error::Encoding(format!(
             "local source MAC address for routed forwarding must contain 1..={} octets",
@@ -527,7 +528,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         dnet: u16,
         max_npdu: u16,
     ) -> Result<(), Error> {
-        check_public_dnet(dnet)?;
+        check_remote_dnet(dnet)?;
         let lease = self.routed_path_limits.acquire(router_mac, dnet).await?;
         lease.configure(max_npdu);
         Ok(())
@@ -541,22 +542,45 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// router MAC and DNET are checked as in
     /// [`configure_routed_path_max_npdu`](Self::configure_routed_path_max_npdu).
     pub async fn clear_routed_path_limit(&self, router_mac: &[u8], dnet: u16) -> Result<(), Error> {
-        check_public_dnet(dnet)?;
+        check_remote_dnet(dnet)?;
         let lease = self.routed_path_limits.acquire(router_mac, dnet).await?;
         lease.clear();
         Ok(())
     }
 }
 
-/// The path APIs name one remote network; [`RoutedPathLimits::acquire`] checks
-/// the router MAC.
-fn check_public_dnet(dnet: u16) -> Result<(), Error> {
-    if dnet == 0 || dnet == 0xffff {
-        return Err(Error::Encoding(
-            "routed path DNET must be in 1..=65534".into(),
-        ));
+/// Whether `dnet` names one remote network: 1..=65534. DNET 0 names no
+/// network and 65535 is the global broadcast, so neither can key a routed path
+/// or address a confirmed request (Clauses 6.2.2.1 and 6.3, #1278). The path
+/// APIs and every routed confirmed request share this check;
+/// [`RoutedPathLimits::acquire`] checks the router MAC.
+pub(super) fn check_remote_dnet(dnet: u16) -> Result<(), Error> {
+    if dnet == 0 || dnet == u16::MAX {
+        return Err(Error::Encoding("routed DNET must be in 1..=65534".into()));
     }
     Ok(())
+}
+
+/// A DADR that names one station: 1 to [`NpduAddress::MAX_MAC_LEN`] octets.
+/// With no DADR the router on DNET broadcasts the NPDU, and a broadcast
+/// network address carries only unconfirmed requests (Clause 6.3).
+fn check_routed_dadr(dadr_len: usize) -> Result<(), Error> {
+    if !routed_mac_fits(dadr_len) {
+        return Err(Error::Encoding(format!(
+            "routed destination MAC address must contain 1..={} octets",
+            NpduAddress::MAX_MAC_LEN
+        )));
+    }
+    Ok(())
+}
+
+/// Refuse a routed confirmed destination that does not name exactly one
+/// device: a DNET [`check_remote_dnet`] refuses or a DADR outside
+/// [`routed_mac_fits`]. For senders that measure no forwarded NPCI; the
+/// client's own request path gets the DADR check from [`forwarded_npci_len`].
+pub(crate) fn check_routed_unicast(dnet: u16, dadr_len: usize) -> Result<(), Error> {
+    check_remote_dnet(dnet)?;
+    check_routed_dadr(dadr_len)
 }
 
 #[cfg(test)]

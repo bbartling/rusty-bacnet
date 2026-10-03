@@ -846,8 +846,10 @@ mod segmented_request;
 mod transaction_cleanup;
 mod transaction_peer;
 mod transport_access;
+pub(crate) use routed_path_limits::check_routed_unicast;
 use routed_path_limits::{
-    forwarded_npci_len, routed_path_quarantine_horizon, RoutedPathLease, RoutedPathLimits,
+    check_remote_dnet, forwarded_npci_len, routed_path_quarantine_horizon, RoutedPathLease,
+    RoutedPathLimits,
 };
 use transaction_peer::response_transaction_peer;
 

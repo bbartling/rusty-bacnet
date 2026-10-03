@@ -180,7 +180,12 @@ impl CovSubscriptionTable {
         {
             let mut timed = self.timed.lock();
             timed.set_delay(context, max_notification_delay);
-            timed.set_apdu(context, subscriber_max_apdu);
+            // Lifetime left now, rounded up as notifications report it; an
+            // expired one, which no notification reports, sizes as the longest.
+            let time_remaining = CovTimeRemaining::at(Some(expires_at), Instant::now())
+                .wire_seconds()
+                .unwrap_or(u32::MAX);
+            timed.set_sizing(context, subscriber_max_apdu, time_remaining);
         }
         if let Some(replaced) = replaced {
             self.fence_context_flight(context, &replaced, &keys);

@@ -131,7 +131,8 @@ impl QueueAdmissionCounters {
 ///
 /// Created by [`NetworkLayer::start_with_admission`] or
 /// [`NetworkLayer::enable_network_control_receiver_with_admission`], or by
-/// [`RouterOptions::track_admission`](crate::router::RouterOptions::track_admission). The queue
+/// [`RouterOptions::track_admission`](crate::router::RouterOptions::track_admission) or
+/// [`RouterOptions::network_control_receiver_with_admission`](crate::router::RouterOptions::network_control_receiver_with_admission). The queue
 /// holds 256 items; tracked APDUs additionally have a quota of 16 queued items per
 /// source MAC (NetworkLayer) or (ingress port network number, source MAC) (router).
 /// Controls have no per-source quota. **Closed > fairness > Full** determines
@@ -585,6 +586,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                         let source_network = npdu.source.clone();
                         let is_group =
                             is_group_delivery(received.link_layer_group, npdu.destination.as_ref());
+                        let global_broadcast = is_global_broadcast(npdu.destination.as_ref());
                         let apdu = ReceivedApdu {
                             direct_response: received.direct_response.clone(),
                             apdu: npdu.payload,
@@ -593,6 +595,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                             source_network,
                             link_layer_group: received.link_layer_group,
                             is_group,
+                            global_broadcast,
                             data_attributes: received.data_attributes,
                             provenance: received.provenance,
                             reply_tx: received.reply_tx,

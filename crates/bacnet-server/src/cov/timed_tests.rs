@@ -68,12 +68,17 @@ pub(super) fn change_len(payload: usize) -> usize {
     change(0, payload).cost
 }
 
+/// Lifetime these tests' contexts are sized with: the longest, so their
+/// envelope is the one a context has before its admission sizes it.
+pub(super) const LIFETIME: u32 = u32::MAX;
+
 /// A maximum APDU whose context bound holds exactly `n` changes of `payload`
-/// octets, with no reserve.
+/// octets, with no reserve, for the contexts of [`context`] sized with
+/// [`LIFETIME`] (every process identifier here takes the same octets).
 pub(super) fn apdu_for(n: usize, payload: usize) -> usize {
     let octets = n * change_len(payload);
     assert_eq!(octets % HISTORY_NOTIFICATIONS, 0, "an exact bound");
-    ENVELOPE_RESERVE + octets / HISTORY_NOTIFICATIONS
+    envelope_len(&context(1), LIFETIME) + octets / HISTORY_NOTIFICATIONS
 }
 
 /// Capacity for exactly `n` changes of `payload` octets in one context.

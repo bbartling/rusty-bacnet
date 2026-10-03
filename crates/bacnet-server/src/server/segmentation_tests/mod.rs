@@ -205,6 +205,7 @@ async fn dispatch_test_apdu_from_network(
             source_network,
             link_layer_group: false,
             is_group: false,
+            global_broadcast: false,
             data_attributes: Vec::new(),
             provenance: TransportProvenance::unverified(),
             reply_tx: None,

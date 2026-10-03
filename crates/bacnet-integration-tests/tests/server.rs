@@ -104,6 +104,8 @@ mod forwarder_subscriptions;
 mod list_elements;
 #[path = "server/local_write_cov.rs"]
 mod local_write_cov;
+#[path = "server/notification_forwarder.rs"]
+mod notification_forwarder;
 #[path = "server/routing_alarm.rs"]
 mod routing_alarm;
 #[path = "server/segmentation_rx.rs"]

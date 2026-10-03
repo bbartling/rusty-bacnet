@@ -37,15 +37,11 @@ use tracing::warn;
 use super::cov_clock::cov_multiple_datetime;
 use super::multiple_items::{build_items, Coordinate, History, Latest, Retained, Stamp};
 use crate::cov::multiple_reads::MultipleReads;
-use crate::cov::timed::{value_len, TimedChange, TimedClaim, ValueFit, ITEM_FRAMING};
+use crate::cov::timed::{
+    request_header, value_len, TimedChange, TimedClaim, ValueFit, ITEM_FRAMING,
+};
 use crate::cov::CovSubscriptionKey;
 use crate::cov::CovSubscriptionSnapshot;
-
-/// Octets of an unsegmented confirmed request header: type and flags, maximum
-/// segments and APDU, invoke ID and service choice.
-const CONFIRMED_HEADER: usize = 4;
-/// Octets of an unconfirmed request header: type and service choice.
-const UNCONFIRMED_HEADER: usize = 2;
 
 /// Envelope fields every notification of one report shares.
 pub(super) struct Envelope {
@@ -86,12 +82,7 @@ pub(super) struct Part {
 pub(super) fn request_limit(local: u32, subscriber: Option<u16>, confirmed: bool) -> usize {
     let local = usize::try_from(local).unwrap_or(usize::MAX);
     let apdu = subscriber.map_or(local, |subscriber| local.min(usize::from(subscriber)));
-    let header = if confirmed {
-        CONFIRMED_HEADER
-    } else {
-        UNCONFIRMED_HEADER
-    };
-    apdu.saturating_sub(header)
+    apdu.saturating_sub(request_header(confirmed))
 }
 
 /// Octets the untimestamped values among `retained` take, with one item's

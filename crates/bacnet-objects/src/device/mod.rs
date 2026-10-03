@@ -33,6 +33,9 @@ pub use audit_recipient::{AuditRecipientChangeSink, AuditWriteSource, DeviceAuth
 /// [`DeviceObject::set_services_supported`].
 pub const EXECUTED_SERVICES: &[ServiceSupported] = &[
     ServiceSupported::ACKNOWLEDGE_ALARM,
+    // Received notifications go to the Notification Forwarder objects
+    // (Clause 12.51); the server acknowledges each confirmed one.
+    ServiceSupported::CONFIRMED_EVENT_NOTIFICATION,
     ServiceSupported::GET_ALARM_SUMMARY,
     ServiceSupported::GET_ENROLLMENT_SUMMARY,
     ServiceSupported::SUBSCRIBE_COV,
@@ -49,6 +52,7 @@ pub const EXECUTED_SERVICES: &[ServiceSupported] = &[
     ServiceSupported::DEVICE_COMMUNICATION_CONTROL,
     ServiceSupported::CONFIRMED_TEXT_MESSAGE,
     ServiceSupported::REINITIALIZE_DEVICE,
+    ServiceSupported::UNCONFIRMED_EVENT_NOTIFICATION,
     ServiceSupported::UNCONFIRMED_TEXT_MESSAGE,
     ServiceSupported::TIME_SYNCHRONIZATION,
     ServiceSupported::WHO_HAS,
@@ -320,6 +324,7 @@ impl DeviceObject {
             ObjectType::POSITIVE_INTEGER_VALUE.to_raw(),
             ObjectType::TIMEPATTERN_VALUE.to_raw(),
             ObjectType::TIME_VALUE.to_raw(),
+            ObjectType::NOTIFICATION_FORWARDER.to_raw(),
             ObjectType::ALERT_ENROLLMENT.to_raw(),
             ObjectType::CHANNEL.to_raw(),
             ObjectType::LIGHTING_OUTPUT.to_raw(),

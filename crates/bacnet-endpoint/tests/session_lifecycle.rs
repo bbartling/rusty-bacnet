@@ -218,6 +218,7 @@ async fn reply_sender_is_single_consumer_one_use() {
         source_network: None,
         link_layer_group: false,
         is_group: false,
+        global_broadcast: false,
         data_attributes: Vec::new(),
         provenance: TransportProvenance::unverified(),
         reply_tx: Some(reply_tx),
@@ -247,6 +248,7 @@ async fn reply_sender_is_single_consumer_one_use() {
         }),
         link_layer_group: true,
         is_group: false,
+        global_broadcast: false,
         data_attributes: vec![bacnet_transport::port::DataAttribute {
             option_type: 1,
             must_understand: false,

@@ -294,8 +294,8 @@ fn read_protocol_object_types_supported() {
             assert_eq!(unused_bits, 7);
             assert_eq!(
                 data,
-                vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFD, 0xFF, 0xEF, 0xFF, 0x80],
-                "type 51 must stay clear while types 50, 52, 53 (Channel), 54, and 64 remain set"
+                vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFD, 0xFF, 0xFF, 0xFF, 0x80],
+                "type 38 must stay clear while types 50 to 54 (51 Notification Forwarder, 53 Channel) and 64 remain set"
             );
         }
         _ => panic!("Expected BitString"),
@@ -338,8 +338,11 @@ fn read_protocol_services_supported() {
             // …and initiate-only services are not declared as executed.
             assert!(!ss.contains(ServiceSupported::I_AM));
             assert!(!ss.contains(ServiceSupported::I_HAVE));
-            assert!(!ss.contains(ServiceSupported::CONFIRMED_EVENT_NOTIFICATION));
             assert!(!ss.contains(ServiceSupported::UNCONFIRMED_COV_NOTIFICATION));
+            // Event notifications are executed for the Notification
+            // Forwarder objects (#1225).
+            assert!(ss.contains(ServiceSupported::CONFIRMED_EVENT_NOTIFICATION));
+            assert!(ss.contains(ServiceSupported::UNCONFIRMED_EVENT_NOTIFICATION));
         }
         _ => panic!("Expected BitString"),
     }
