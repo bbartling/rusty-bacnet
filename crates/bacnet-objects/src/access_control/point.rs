@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+use bacnet_types::enums::AuthorizationMode;
+
+use super::point_authorization::Authorization;
 use super::*;
 use crate::clock::ClockReader;
 
@@ -44,6 +47,13 @@ use crate::clock::ClockReader;
 /// WritePropertyMultiple too, where Status_Flags ends where it started. The
 /// point runs no intrinsic reporting (no ACCESS_EVENT algorithm;
 /// Event_State stays NORMAL), so an edge raises no event notification.
+///
+/// Active_Authentication_Policy, Number_Of_Authentication_Policies,
+/// Authorization_Mode and Priority_For_Writing hold the settings the
+/// application's authentication and authorization work from (#1307). A
+/// client picks the policy in effect and the authorization mode; the
+/// application sets the policy count, the modes it carries out and the
+/// door command priority. The module `point_authorization` has the rules.
 pub struct AccessPointObject {
     oid: ObjectIdentifier,
     name: String,
@@ -56,6 +66,8 @@ pub struct AccessPointObject {
     /// Out_Of_Service is TRUE.
     authentication_status: AuthenticationStatus,
     access_doors: Vec<BACnetDeviceObjectReference>,
+    /// The policy, authorization mode and door command priority settings.
+    authorization: Authorization,
     event_state: EventState,
     status_flags: StatusFlags,
     out_of_service: bool,
@@ -77,6 +89,7 @@ impl AccessPointObject {
             access_event_credential: no_credential(),
             authentication_status: AuthenticationStatus::READY,
             access_doors: Vec::new(),
+            authorization: Authorization::new(),
             event_state: EventState::NORMAL,
             status_flags: StatusFlags::empty(),
             out_of_service: false,
@@ -183,6 +196,37 @@ impl AccessPointObject {
         Ok(())
     }
 
+    /// Set Number_Of_Authentication_Policies, how many authentication
+    /// policies the application defines (Clause 12.31.11), 1 until set. It
+    /// is read-only over the network. Zero is refused with
+    /// VALUE_OUT_OF_RANGE, and so is a count below
+    /// Active_Authentication_Policy: lower the active policy first, with a
+    /// write of that property.
+    pub fn set_number_of_authentication_policies(&mut self, count: u32) -> Result<(), Error> {
+        self.authorization.set_policies(count)
+    }
+
+    /// Set the authorization modes the application carries out, the values
+    /// a write of Authorization_Mode can take (Clause 12.31.14). A new point
+    /// takes the six standard modes. The set must hold AUTHORIZE and the
+    /// mode in effect, and each mode must be a standard one or a proprietary
+    /// one from 64 to 65535; otherwise it is refused with VALUE_OUT_OF_RANGE
+    /// and the set before is kept. A repeated mode counts once.
+    pub fn set_supported_authorization_modes(
+        &mut self,
+        modes: impl IntoIterator<Item = AuthorizationMode>,
+    ) -> Result<(), Error> {
+        self.authorization.set_supported_modes(modes)
+    }
+
+    /// Set Priority_For_Writing, the priority at which the application
+    /// commands the Access_Doors after a grant (Clauses 12.31.32.1 and
+    /// 12.31.33), 16 until set. It is read-only over the network. A
+    /// priority outside 1..=16 is refused with VALUE_OUT_OF_RANGE.
+    pub fn set_priority_for_writing(&mut self, priority: u8) -> Result<(), Error> {
+        self.authorization.set_priority_for_writing(priority)
+    }
+
     /// Record the access event an Out_Of_Service edge raises: a new
     /// transaction, stamped from the Device clock, or with the new tag as a
     /// sequence number when there is no usable clock, and with no credential.
@@ -233,6 +277,9 @@ impl BACnetObject for AccessPointObject {
         if let Some(result) = read_common_properties!(self, property, array_index) {
             return result;
         }
+        if let Some(value) = self.authorization.read(property) {
+            return Ok(value);
+        }
         match property {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::ACCESS_POINT.to_raw()))
@@ -267,7 +314,7 @@ impl BACnetObject for AccessPointObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
@@ -287,10 +334,13 @@ impl BACnetObject for AccessPointObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
+        if let Some(result) = self.authorization.write(property, array_index, &value) {
+            return result;
+        }
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            _array_index,
+            array_index,
         ))
     }
 

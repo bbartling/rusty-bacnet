@@ -359,6 +359,17 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
     for configured in [false, true] {
         let mut object = AccessPointObject::new(7, "AP-7").unwrap();
         write_common(&mut object, configured);
+        if configured {
+            // A client's DENY_ALL (2) (#1307).
+            object
+                .write_property(
+                    P::AUTHORIZATION_MODE,
+                    None,
+                    PropertyValue::Enumerated(2),
+                    None,
+                )
+                .unwrap();
+        }
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
@@ -453,10 +464,11 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
                 None,
                 Ok(&[
                     0x91, 28, 0x91, 247, 0x92, 0x01, 0x42, 0x91, 250, 0x91, 246, 0x91, 36, 0x91,
-                    111, 0x91, 81, 0x91, 103, 0x92, 0x01, 0x04, 0x91, 249,
+                    111, 0x91, 81, 0x91, 103, 0x92, 0x01, 0x04, 0x91, 249, 0x91, 255, 0x92, 0x01,
+                    0x21, 0x92, 0x01, 0x05, 0x91, 88,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 11])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 15])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 247])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x42])),
@@ -468,9 +480,10 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 103])),
             (P::PROPERTY_LIST, Some(10), Ok(&[0x92, 0x01, 0x04])),
             (P::PROPERTY_LIST, Some(11), Ok(&[0x91, 249])),
+            (P::PROPERTY_LIST, Some(15), Ok(&[0x91, 88])),
             (
                 P::PROPERTY_LIST,
-                Some(12),
+                Some(16),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -497,6 +510,36 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
             ),
             (
                 P::ACCESS_EVENT_CREDENTIAL,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            // The Table 12-36 required rows #1307 added: one policy, in
+            // effect; AUTHORIZE until written; priority 16 until set.
+            (P::ACTIVE_AUTHENTICATION_POLICY, None, Ok(&[0x21, 1])),
+            (P::NUMBER_OF_AUTHENTICATION_POLICIES, None, Ok(&[0x21, 1])),
+            (
+                P::AUTHORIZATION_MODE,
+                None,
+                Ok(if configured { &[0x91, 2] } else { &[0x91, 0] }),
+            ),
+            (P::PRIORITY_FOR_WRITING, None, Ok(&[0x21, 16])),
+            (
+                P::ACTIVE_AUTHENTICATION_POLICY,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (
+                P::NUMBER_OF_AUTHENTICATION_POLICIES,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (
+                P::AUTHORIZATION_MODE,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (
+                P::PRIORITY_FOR_WRITING,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
