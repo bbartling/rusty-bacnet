@@ -745,6 +745,8 @@ mod event_forwarding_rule_tests;
 #[cfg(test)]
 mod event_forwarding_tests;
 #[cfg(test)]
+mod event_log_notification_tests;
+#[cfg(test)]
 mod event_network_priority_tests;
 #[cfg(test)]
 mod event_notifications_tests;

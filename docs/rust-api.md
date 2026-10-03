@@ -2228,6 +2228,42 @@ ACK_NOTIFICATION without its ack-required, from-state and event values, so
 ReadRange serves such a record without them. A Trend Log record stays a `BACnetLogRecord`; its optional
 `status_flags` is a `StatusFlags`.
 
+A running server records its own event notifications in every Event Log. Each
+notification it builds for an event or acknowledgment transition, intrinsic or
+from an Event Enrollment, goes through `ObjectDatabase::log_event_notification`,
+which adds a notification record stamped with the Device clock's local date and
+time to each Event Log through `BACnetObject::add_event_log_record` (the
+built-in `EventLogObject` takes it like `add_record`; the trait default refuses
+with `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`). The rules:
+
+- The record holds the notification as recipients get it, with Process
+  Identifier 0 in place of a recipient's own.
+- It is logged when the Notification Class reads fine but selects nobody (an
+  empty Recipient_List, or no destination open for that day, time or
+  transition): the Recipient_List picks network recipients, not local objects
+  (Clause 13.2.5).
+- It is not logged when the recipient lookup fails closed: the Notification
+  Class is missing, or its Recipient_List can't be read, is invalid or is past
+  the cap. The server refuses that transition whole, and a record would carry a
+  priority and ack policy the class never gave.
+- A transition whose Event_Enable bit is off, or one made while
+  DeviceCommunicationControl stops initiation, builds no notification and
+  leaves no record. Both are local choices: the logs hold what the device's
+  notification distribution produced.
+- Notifications the server receives are not logged.
+- No log takes a notification about an Event Log: one whose event object is an
+  Event Log, or one from an Event Enrollment of this device monitoring a
+  property of an Event Log. Logging such a report anywhere would add a record
+  that changes what it watches, so reports could prompt each other without end,
+  directly or crosswise between two logs.
+- Each log applies its own Enable, Buffer_Size and Stop_When_Full handling.
+  Event Log has no Start_Time or Stop_Time, so Enable alone switches logging.
+- Without a valid Device clock nothing is logged, since a record needs a
+  timestamp.
+
+The record is added under the database write guard that built the
+notification, before the network send.
+
 Every record kind, the Audit Log's included, carries a log status as the
 typed `bacnet_types::bitstring::LogStatus` flags (`LOG_DISABLED`,
 `BUFFER_PURGED`, `LOG_INTERRUPTED`). The codecs send bit 0 first, as for

@@ -1166,7 +1166,8 @@
      "Trend Log Multiple holds BACnetLogMultipleRecord values: one LogValue per Log_DeviceObjectProperty member, a log status, or a time change. Its LOG_BUFFER serves each record framed as the Clause 21 production, with no status flags (#1203).",
      "LogRecordIdentity holds a u64 sequence number. These three families still count in Unsigned32 and wrap at u32::MAX; an Audit Log's identities come from its record store and wrap at u64::MAX (BACNET-12-AUDIT-LOG-BUFFER, #1092).",
      "Each family stores its own Clause 21 record: Trend Log a BACnetLogRecord with optional StatusFlags, Event Log a BACnetEventLogRecord, Trend Log Multiple a BACnetLogMultipleRecord. BACnetObject::log_buffer_internal lends the buffer to ReadRange, which encodes each record as a page reaches it (#1233).",
-     "An Event Log notification record holds a typed EventNotificationRequest (bacnet-types), which bacnet-encoding's event notification codec writes and reads inside the record. The server does not log notifications into an Event Log by itself; the application adds records.",
+     "An Event Log notification record holds a typed EventNotificationRequest (bacnet-types), which bacnet-encoding's event notification codec writes and reads inside the record.",
+     "A running server logs its own event notifications into every Event Log (BACNET-12-EVENT-LOG-NOTIFICATIONS).",
      "Log statuses are the typed LogStatus flags, sent bit 0 first: log-disabled 05 80, buffer-purged 05 40, log-interrupted 05 20. Trend Log status flags are a StatusFlags value.",
      "add_record and the trend hooks refuse a record that would not encode before any change, so LogBufferRecords::encode_record cannot fail and every stored record can be served."
     ]
@@ -1244,7 +1245,7 @@
      "Refs #748/#753: database-owned schedules compare the complete selection configuration, retire on structural access, and use exact hundredths under one exclusive selection/acquisition/append guard. The former external TrendLogState and mutable Box getter are removed.",
      "Successful next intervals start at actual completion without catch-up; configuration reconciliation and failed-attempt retries use a local 100 ms bound, and slow passes yield 1 ms when another entry is already due.",
      "Poller insertion failures preserve last success and retry after clock repair; SourceReporter forwards results. Constructors, records() and raw clear() retain their behavior. ReadRange By Sequence and By Time can select the resident purge status identity under BACNET-15-READ-RANGE-LOG-BUFFER.",
-     "Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, formal EventLog notification records, persistence/restart, and complete log conformance remain deferred.",
+     "Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, persistence/restart, and complete log conformance remain deferred.",
      "#1183: the poller reads only its own database. A Log_DeviceObjectProperty whose Device member names another device (ObjectDatabase::local_device, the rule the server's Event Enrollment evaluation shares) logs a failure record, PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, at the configured interval and is never read from a same-numbered local object; one naming this device reads locally, as one without a Device does.",
      "A failed local read now logs a failure record carrying its error (OBJECT / UNKNOWN_OBJECT for a missing object, the read's own class and code otherwise, SERVICES / OTHER for an error without one) instead of a null value, the failure choice of the Clause 12.25 Log_Buffer datum.",
      "A Device member that is not an object identifier leaves the log unpolled.",
@@ -1256,6 +1257,46 @@
      "An any-value holds at most ANY_VALUE_MAX_OCTETS (256) octets; a longer value logs PROPERTY / VALUE_TOO_LONG and one no record could carry logs SERVICES / OTHER, so the log never refuses a polled record.",
      "A client's change to Log_DeviceObjectProperty purges the log and records BUFFER_PURGED, as a zero Record_Count write does; the poller then samples the references written."
     ]
+  },
+  {
+   "id": "BACNET-12-EVENT-LOG-NOTIFICATIONS",
+   "standard_anchor": "Clauses 12.27, 12.27.8, 12.27.11 and 12.27.13; Clause 13.2.5; Annex K.2.21 and K.2.22",
+   "priority": "P1",
+   "summary": "A running server records every event notification it generates in each Event Log, under that log's Enable, Buffer_Size and Stop_When_Full handling, for ReadRange to serve.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-objects/src/database/event_log.rs::ObjectDatabase::log_event_notification",
+    "crates/bacnet-objects/src/traits.rs::BACnetObject::add_event_log_record",
+    "crates/bacnet-objects/src/event_log.rs::EventLogObject",
+    "crates/bacnet-server/src/server/event_notifications.rs::build_and_send_event_notification_with_bindings",
+    "crates/bacnet-endpoint/src/source_reporter.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_local_alarm_and_its_return_to_normal_are_logged_and_read_back,an_acknowledgment_notification_is_logged,a_notification_no_recipient_takes_is_still_logged,stop_when_full_stops_logging_before_the_buffer_fills}",
+    "crates/bacnet-objects/src/database/event_log_tests.rs::{every_event_log_records_the_notification_at_the_device_clock_time,stop_when_full_stops_the_log_before_it_fills}"
+   ],
+   "negative_tests": [
+    "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_disabled_log_takes_no_notification,a_transition_whose_notification_class_is_missing_is_not_logged,a_transition_event_enable_suppresses_is_not_logged,a_transition_while_dcc_disables_initiation_is_not_logged,a_received_notification_is_not_logged}",
+    "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_report_on_an_event_log_is_logged_nowhere,enrollments_watching_each_others_logs_do_not_feed_each_other}",
+    "crates/bacnet-objects/src/database/event_log_tests.rs::{a_notification_about_an_event_log_goes_in_no_log,an_enrollment_notification_about_any_local_event_log_goes_in_no_log,nothing_is_logged_without_a_valid_device_clock,a_disabled_log_ignores_the_notification,a_log_that_refuses_the_record_leaves_the_others_logging}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#logging--trending-5",
+    "docs/python-api.md#logging--trending"
+   ],
+   "notes": [
+    "Each intrinsic, Event Enrollment or acknowledgment notification is logged with Process Identifier 0, also when the Notification Class selects nobody: the Recipient_List picks network recipients, not local objects.",
+    "No record, as a local choice, for a transition that Event_Enable suppresses or that DCC stops, nor for one whose recipient lookup fails closed: a missing Notification Class, or an unreadable, invalid or over-cap Recipient_List.",
+    "Received notifications are not logged. The logs hold this device's own events, the narrower of the choices Clause 12.27 leaves to the device.",
+    "No log takes a notification about an Event Log: its event object is one, or it comes from an Event Enrollment here monitoring one. So reports can't prompt each other through a log, directly or crosswise.",
+    "The record goes in under the guard that built the notification, before the send. Without a valid Device clock nothing is logged."
+   ],
+   "gaps": [
+    "Start_Time and Stop_Time are not modeled on Event Log, so Enable alone switches logging (no issue)",
+    "#1346: logging received notifications, the AE-EL-E-B collection of Annex K.2.22, is not offered",
+    "#1347: Event Log intrinsic reporting (BUFFER_READY, Notification_Threshold) is not modeled"
+   ]
   },
   {
    "id": "BACNET-15-READ-RANGE-LOG-BUFFER",
@@ -8049,7 +8090,8 @@
    "public_claims": [],
    "notes": [
     "Qualified delivery evidence only. NotificationParameters.event_values remains None and exact algorithm/reliability payload projection is deferred to PR-0404, so this row does not claim complete EventNotification payload conformance.",
-    "Neither intrinsic nor Event Enrollment production delivery calls EventLogObject::add_record; tests pin an unchanged Event Log record count and shared Event Log integration remains a later cross-cutting slice. Event_Algorithm_Inhibit is not modeled for Event Enrollment and is not approximated here; Event_Detection_Enable is tested separately. Recipient resolution and priority policy are unchanged."
+    "Event_Algorithm_Inhibit is not modeled for Event Enrollment and is not approximated here; Event_Detection_Enable is tested separately. Recipient resolution and priority policy are unchanged.",
+    "The shared sender logs each notification it builds into the device's Event Logs (BACNET-12-EVENT-LOG-NOTIFICATIONS); a clockless server logs none."
    ]
   },
   {
