@@ -230,13 +230,40 @@ impl TimedClaim {
 
     /// The notification carrying these changes and values was delivered:
     /// retire them. A part whose change continues in a later notification
-    /// delivers nothing of that change by itself (#1090).
+    /// delivers nothing of that change by itself (#1090); the change is in
+    /// delivery from then on (#1163).
     pub(crate) fn commit(mut self) {
         self.untimed.clear();
         let mut store = self.store.lock();
         for (key, incarnation, changes) in self.changes.drain(..) {
-            if let Some(last) = changes.iter().rev().find(|change| !change.continues) {
-                store.commit(&key, incarnation, last.seq);
+            match changes.iter().rev().find(|change| !change.continues) {
+                Some(last) => store.commit(&key, incarnation, last.seq),
+                None => {
+                    if let Some(part) = changes.last() {
+                        store.deliver_by_value(&key, incarnation, part.seq);
+                    }
+                }
+            }
+        }
+    }
+
+    /// This part goes out as a confirmed report's first, and the report's
+    /// later parts wait in the queue for its Ack. A change of which it
+    /// carries only some values is in delivery from now on, so that the bound
+    /// keeps the rest of it (#1163).
+    pub(crate) fn going_out(&self) {
+        let mut ahead = self
+            .changes
+            .iter()
+            .filter_map(|(key, incarnation, changes)| {
+                let part = changes.last().filter(|part| part.continues)?;
+                Some((key, *incarnation, part.seq))
+            })
+            .peekable();
+        if ahead.peek().is_some() {
+            let mut store = self.store.lock();
+            for (key, incarnation, seq) in ahead {
+                store.deliver_by_value(key, incarnation, seq);
             }
         }
     }

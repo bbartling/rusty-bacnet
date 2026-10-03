@@ -71,7 +71,7 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
                         capture.run(&database);
                     }
                 }
-                let sampled = sampled.finish(&database, &fanout.cov_table).await;
+                let sampled = sampled.finish(&mut database, &fanout.cov_table).await;
                 (changed, sampled)
             };
 

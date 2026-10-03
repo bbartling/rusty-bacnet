@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::database::{LocalDevice, ObjectDatabase};
 use bacnet_objects::event::EventTransition;
 use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
 use bacnet_objects::traits::BACnetObject;
@@ -23,11 +23,15 @@ pub(super) enum SetpointRead {
     Transient,
 }
 
+/// Read a FLOATING_LIMIT setpoint. The reference resolves as the monitored
+/// one does: unqualified or naming this device reads `db`, and one naming
+/// another device is unavailable here, like an unreachable local object.
 pub(super) fn read_setpoint(
     db: &ObjectDatabase,
+    local_device: LocalDevice,
     reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
 ) -> SetpointRead {
-    if reference.device_identifier.is_some() {
+    if !local_device.is_local(reference.device_identifier) {
         return SetpointRead::Transient;
     }
     let Some(object) = db.get(&reference.object_identifier) else {

@@ -16,6 +16,7 @@ pub(super) async fn read_property_response(
         None,
         DeviceExecution::Endpoint { writes },
         registered_port,
+        crate::server::ReadPropertyMultipleBudget::default().max_result_elements,
         request,
         |_, _, _, _| {},
     )
@@ -41,7 +42,8 @@ pub(in crate::server) async fn active_cov_snapshot(
 }
 
 /// Budgeted ReadPropertyMultiple under one database read guard. A single
-/// request-local Device projection serves every explicit and expanded row.
+/// request-local Device projection serves every explicit and expanded row,
+/// a Group's member rows included (#1171).
 pub(super) async fn read_property_multiple_observed(
     db: &RwLock<ObjectDatabase>,
     cov_table: &RwLock<CovSubscriptionTable>,
@@ -76,11 +78,15 @@ pub(super) async fn read_property_multiple_observed(
     )
 }
 
+/// ReadProperty under one database read guard. A Group's Present_Value counts
+/// against `work_limit` as a ReadPropertyMultiple naming only it would, and a
+/// read past it is aborted as that request would be.
 pub(super) async fn read_property_response_observed(
     db: &RwLock<ObjectDatabase>,
     cov_table: Option<&RwLock<CovSubscriptionTable>>,
     execution: DeviceExecution,
     registered_port: Option<ObjectIdentifier>,
+    work_limit: usize,
     request: &ConfirmedRequestPdu,
     mut completed: impl FnMut(
         &ObjectDatabase,
@@ -105,7 +111,8 @@ pub(super) async fn read_property_response_observed(
                 _ => None,
             };
             let view = DeviceReadContext::new(&db, execution, live.as_ref())
-                .with_registered_port(registered_port);
+                .with_registered_port(registered_port)
+                .with_work_limit(work_limit);
             handlers::read_property_request_observed(
                 &db,
                 Some(&view),
@@ -114,7 +121,7 @@ pub(super) async fn read_property_response_observed(
                 |oid, request, result| completed(&db, oid, request, result),
             )
         }
-        Err(error) => Err(error),
+        Err(error) => Err(handlers::RpmFailure::Service(error)),
     };
     match result {
         Ok(()) => Apdu::ComplexAck(ComplexAck {
@@ -126,7 +133,16 @@ pub(super) async fn read_property_response_observed(
             service_choice: request.service_choice,
             service_ack: service_ack.freeze(),
         }),
-        Err(error) => error_apdu_from_error(request.invoke_id, request.service_choice, &error),
+        Err(handlers::RpmFailure::Service(error)) => {
+            error_apdu_from_error(request.invoke_id, request.service_choice, &error)
+        }
+        // A Group's Present_Value past the work limit draws the abort an RPM
+        // over its work budget does; ReadProperty has no byte budget.
+        Err(handlers::RpmFailure::Work | handlers::RpmFailure::Bytes) => Apdu::Abort(AbortPdu {
+            sent_by_server: true,
+            invoke_id: request.invoke_id,
+            abort_reason: AbortReason::OUT_OF_RESOURCES,
+        }),
     }
 }
 

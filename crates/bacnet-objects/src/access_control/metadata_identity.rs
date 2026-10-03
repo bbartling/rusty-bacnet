@@ -420,14 +420,16 @@ mod tests {
         ];
         assert_exact_sets(&object, &all, &required);
         assert_indexed_property_list(&object, &all);
+        // The UNDEFINED factor and the unspecified date and time, in their
+        // Clause 21 forms (#1133).
         assert_eq!(
             object.read_property(P::PRESENT_VALUE, None).unwrap(),
-            PropertyValue::Enumerated(0)
+            PropertyValue::ApplicationData(vec![0x09, 0x00, 0x19, 0x00, 0x28])
         );
-        match object.read_property(P::UPDATE_TIME, None).unwrap() {
-            PropertyValue::List(items) => assert_eq!(items.len(), 2),
-            other => panic!("expected List, got {other:?}"),
-        }
+        assert!(matches!(
+            object.read_property(P::UPDATE_TIME, None).unwrap(),
+            PropertyValue::ApplicationData(bytes) if bytes.first() == Some(&0x2E)
+        ));
         assert_eq!(
             object.read_property(P::SUPPORTED_FORMATS, None).unwrap(),
             PropertyValue::List(vec![])
@@ -652,7 +654,7 @@ mod tests {
             );
             assert_eq!(
                 cdi.read_property(P::PRESENT_VALUE, None).unwrap(),
-                PropertyValue::Enumerated(0)
+                PropertyValue::ApplicationData(vec![0x09, 0x00, 0x19, 0x00, 0x28])
             );
             for p in [
                 P::UPDATE_TIME,

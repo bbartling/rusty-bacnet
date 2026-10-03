@@ -31,6 +31,21 @@ pub(super) struct Harness {
     pub(super) txs: Vec<mpsc::Sender<SendRequest>>,
     pub(super) rxs: Vec<mpsc::Receiver<SendRequest>>,
     pub(super) gate: Arc<super::control_policy::ControlGate>,
+    /// The router's own network-control consumer, absent until
+    /// [`Self::network_control`] installs one.
+    pub(super) local: LocalControl,
+}
+
+/// The harness router's own MAC on each port: [1] on 1000, [2] on 2000.
+pub(super) const PORT_MACS: [u8; 2] = [0x01, 0x02];
+
+fn local_control(tx: Option<AdmissionSender<ReceivedNetworkControl>>) -> LocalControl {
+    let ports = [1000, 2000]
+        .into_iter()
+        .zip(PORT_MACS)
+        .map(|(network, mac)| (network, MacAddr::from_slice(&[mac])))
+        .collect();
+    LocalControl::new(ports, tx, Arc::default())
 }
 
 impl Harness {
@@ -60,7 +75,15 @@ impl Harness {
             txs: vec![tx0, tx1],
             rxs: vec![rx0, rx1],
             gate,
+            local: local_control(None),
         }
+    }
+
+    /// Give the router a network-control consumer and return its receiver.
+    pub(super) fn network_control(&mut self) -> mpsc::Receiver<ReceivedNetworkControl> {
+        let (tx, rx, _) = AdmissionReceiver::channel(false);
+        self.local = local_control(Some(tx));
+        rx
     }
 
     /// RB-04 multi-peer fixture: direct 1000/0 + 2000/1, plus learned routes
@@ -103,11 +126,19 @@ impl Harness {
     }
 
     pub(super) async fn handle(&mut self, ctx: IngressContext) {
-        handle_network_message(&self.table, &self.txs, &ctx, &self.gate).await;
+        handle_network_message(&self.table, &self.txs, &ctx, &self.gate, &self.local).await;
     }
 
     pub(super) async fn dispatch(&mut self, ctx: IngressContext) {
-        dispatch_network_message(&self.table, &self.discovery, &self.txs, &ctx, &self.gate).await;
+        dispatch_network_message(
+            &self.table,
+            &self.discovery,
+            &self.txs,
+            &ctx,
+            &self.gate,
+            &self.local,
+        )
+        .await;
     }
 
     pub(super) fn drain(&mut self, port: usize) -> Vec<SendRequest> {

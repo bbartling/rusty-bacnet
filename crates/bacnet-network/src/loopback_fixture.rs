@@ -15,7 +15,7 @@ use bytes::Bytes;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 
-use crate::layer::ReceivedApdu;
+use crate::layer::{ReceivedApdu, ReceivedNetworkControl};
 use crate::router::{BACnetRouter, RouterPort};
 
 pub(crate) const APDU: [u8; 2] = [0x10, 0x08];
@@ -85,11 +85,24 @@ pub(crate) struct RouterFixture {
 
 impl RouterFixture {
     pub(crate) async fn start() -> Self {
+        Self::launch(false).await.0
+    }
+
+    /// [`Self::start`], with the router's network-control receiver (#1175).
+    pub(crate) async fn start_with_network_control(
+    ) -> (Self, mpsc::Receiver<ReceivedNetworkControl>) {
+        let (fixture, controls) = Self::launch(true).await;
+        (fixture, controls.expect("opted in"))
+    }
+
+    async fn launch(
+        network_control: bool,
+    ) -> (Self, Option<mpsc::Receiver<ReceivedNetworkControl>>) {
         let (port_a, mut peer_a) = LoopbackTransport::pair(vec![0x01], vec![0x0A]);
         let (port_b, mut peer_b) = LoopbackTransport::pair(vec![0x02], vec![0x0B]);
         let from_router_a = peer_a.start().await.unwrap();
         let from_router_b = peer_b.start().await.unwrap();
-        let (router, local) = BACnetRouter::start(vec![
+        let ports = vec![
             RouterPort {
                 transport: port_a,
                 network_number: 1000,
@@ -98,9 +111,17 @@ impl RouterFixture {
                 transport: port_b,
                 network_number: 2000,
             },
-        ])
-        .await
-        .unwrap();
+        ];
+        let (router, local, controls) = if network_control {
+            let (router, local, controls) =
+                BACnetRouter::start_with_network_control_receiver(ports)
+                    .await
+                    .unwrap();
+            (router, local, Some(controls))
+        } else {
+            let (router, local) = BACnetRouter::start(ports).await.unwrap();
+            (router, local, None)
+        };
         let mut fixture = Self {
             router,
             local,
@@ -124,7 +145,7 @@ impl RouterFixture {
                 break;
             }
         }
-        fixture
+        (fixture, controls)
     }
 
     pub(crate) async fn send_from_a(&self, bytes: &[u8]) {

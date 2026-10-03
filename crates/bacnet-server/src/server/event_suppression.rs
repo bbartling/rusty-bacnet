@@ -16,6 +16,14 @@ use std::sync::atomic::AtomicU64;
 /// not counted. Neither are notifications held back by DeviceCommunicationControl
 /// or Event_Enable.
 ///
+/// The next three count destinations that matched the transition but were
+/// skipped while their route was resolved, once per destination: the rest of
+/// the transition's destinations are still served. They are grouped by what
+/// fixes them: a Device recipient the server holds no current address for,
+/// a recipient that can never be routed as written, and a confirmed
+/// recipient at a broadcast address. The warning logged with each skip names
+/// the finer reason.
+///
 /// The last three count confirmed notifications to one recipient that were
 /// never acknowledged.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -32,6 +40,23 @@ pub struct EventNotificationCounters {
     /// [`MAX_RECIPIENT_LIST_DESTINATIONS`](bacnet_objects::notification_class::MAX_RECIPIENT_LIST_DESTINATIONS)
     /// destinations, which only a custom Notification Class object can do.
     pub recipient_list_too_long: u64,
+    /// Device recipients skipped because the server has no current binding
+    /// for them: none was configured or observed, or the observed one has
+    /// expired. Both clear once the device's I-Am is observed again or a
+    /// binding is configured.
+    pub device_recipient_unbound: u64,
+    /// Recipients that cannot be routed as configured, so no binding or
+    /// retry delivers them: a Device recipient whose identifier is not a
+    /// Device object, or whose binding is unusable on this link, and an
+    /// address that puts a MAC on the global broadcast network (65535),
+    /// which names neither a broadcast nor one device.
+    pub recipient_unroutable: u64,
+    /// Recipients configured for confirmed notifications at a broadcast
+    /// address (local, remote or global, the link's own broadcast MAC
+    /// included). Clause 6.3 lets only unconfirmed requests be broadcast,
+    /// and sending one unconfirmed would drop the acknowledgment the
+    /// destination asks for. No invoke ID is reserved for them.
+    pub confirmed_broadcast_recipient: u64,
     /// Confirmed notifications not sent because no confirmed transaction
     /// could be reserved, normally because every invoke ID was in use.
     /// Reservations refused while the server stops are not counted.
@@ -52,6 +77,9 @@ pub(crate) enum EventSuppression {
     RecipientListUnavailable,
     RecipientListInvalid,
     RecipientListTooLong,
+    DeviceRecipientUnbound,
+    RecipientUnroutable,
+    ConfirmedBroadcastRecipient,
     ConfirmedNoInvokeId,
     ConfirmedRejected,
     ConfirmedUnanswered,
@@ -79,7 +107,7 @@ impl EventSuppression {
 
 /// The server's shared storage behind [`EventNotificationCounters`].
 #[derive(Debug, Default)]
-pub(crate) struct EventSuppressions([AtomicU64; 7]);
+pub(crate) struct EventSuppressions([AtomicU64; 10]);
 
 impl EventSuppressions {
     pub(crate) fn record(&self, suppression: EventSuppression) {
@@ -93,13 +121,16 @@ impl EventSuppressions {
     }
 
     pub(crate) fn snapshot(&self) -> EventNotificationCounters {
-        let [notification_class_missing, recipient_list_unavailable, recipient_list_invalid, recipient_list_too_long, confirmed_no_invoke_id, confirmed_rejected, confirmed_unanswered] =
+        let [notification_class_missing, recipient_list_unavailable, recipient_list_invalid, recipient_list_too_long, device_recipient_unbound, recipient_unroutable, confirmed_broadcast_recipient, confirmed_no_invoke_id, confirmed_rejected, confirmed_unanswered] =
             self.0.each_ref().map(|n| n.load(Ordering::Relaxed));
         EventNotificationCounters {
             notification_class_missing,
             recipient_list_unavailable,
             recipient_list_invalid,
             recipient_list_too_long,
+            device_recipient_unbound,
+            recipient_unroutable,
+            confirmed_broadcast_recipient,
             confirmed_no_invoke_id,
             confirmed_rejected,
             confirmed_unanswered,
@@ -120,11 +151,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 mod tests {
     use super::*;
 
-    const ALL: [EventSuppression; 7] = [
+    const ALL: [EventSuppression; 10] = [
         EventSuppression::NotificationClassMissing,
         EventSuppression::RecipientListUnavailable,
         EventSuppression::RecipientListInvalid,
         EventSuppression::RecipientListTooLong,
+        EventSuppression::DeviceRecipientUnbound,
+        EventSuppression::RecipientUnroutable,
+        EventSuppression::ConfirmedBroadcastRecipient,
         EventSuppression::ConfirmedNoInvokeId,
         EventSuppression::ConfirmedRejected,
         EventSuppression::ConfirmedUnanswered,
@@ -145,9 +179,12 @@ mod tests {
                 recipient_list_unavailable: 2,
                 recipient_list_invalid: 3,
                 recipient_list_too_long: 4,
-                confirmed_no_invoke_id: 5,
-                confirmed_rejected: 6,
-                confirmed_unanswered: 7,
+                device_recipient_unbound: 5,
+                recipient_unroutable: 6,
+                confirmed_broadcast_recipient: 7,
+                confirmed_no_invoke_id: 8,
+                confirmed_rejected: 9,
+                confirmed_unanswered: 10,
             }
         );
     }

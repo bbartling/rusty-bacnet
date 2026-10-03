@@ -3,20 +3,25 @@
 //! Per Clause 6.4.4, a reject is meant for whoever first sent the refused NPDU.
 //! A relayed NPDU names that node in its SNET/SADR, so the reject carries it
 //! as DNET/DADR and goes back to the router that relayed the NPDU; an NPDU
-//! from the arrival link draws a plain local unicast. A received reject is
-//! relayed by its DNET/DADR (Clause 6.6.3.5), which is what carries a reject
-//! back across a chain of routers to the device. Every reject is compared
-//! byte for byte.
+//! from the arrival link draws a plain local unicast, and so does one whose
+//! SNET is the arrival network (#1174). A received reject is relayed by its
+//! DNET/DADR (Clause 6.6.3.5), which is what carries a reject back across a
+//! chain of routers to the device, unless it is addressed to the router
+//! itself, when it reaches the router's control receiver instead (#1175).
+//! Every reject is compared byte for byte.
 
+use bacnet_encoding::npdu::decode_npdu;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::NetworkMessageType;
 use bacnet_types::MacAddr;
+use bytes::Bytes;
 
 use crate::loopback_fixture::{
-    next_frame_from_router, wire, RouterFixture, ORIGIN, REMOTE, TOO_LONG,
+    next_frame_from_router, recv, wire, RouterFixture, ORIGIN, REMOTE, TOO_LONG,
 };
 use crate::router::{BACnetRouter, RouterPort};
+use crate::router_table::ReachabilityStatus;
 
 /// A network the fixture router has no route to.
 const UNKNOWN: u16 = 5000;
@@ -121,6 +126,19 @@ async fn router_rejects_a_local_npdu_with_a_local_unicast() {
 }
 
 #[tokio::test]
+async fn router_rejects_an_npdu_from_its_own_snet_with_a_local_unicast() {
+    // SNET 1000 is the network peer A's port is on (#1174), so the
+    // originator, SADR 50, is on that link: no DNET, and the frame is the
+    // same local unicast an NPDU without SNET/SADR draws.
+    for refusal in refusals() {
+        let mut expected = vec![0x01, 0x80, 0x03];
+        expected.extend_from_slice(&refusal.reject);
+        let answer = first_answer(refusal.busy, &(refusal.frame)(Some((1000, 1)))).await;
+        assert_eq!(answer, expected, "{}", refusal.what);
+    }
+}
+
+#[tokio::test]
 async fn router_falls_back_to_a_local_unicast_when_the_sadr_is_too_long() {
     // The over-long SADR names no node, so the link sender gets the reason 6
     // reject, still naming the refused DNET.
@@ -155,6 +173,63 @@ async fn router_relays_a_received_reject_to_the_node_its_dnet_names() {
         [0x01, 0x88, 0x07, 0xD0, 0x01, 0x0B, 0x03, 0x01, 0x13, 0x88]
     );
     fixture.stop().await;
+}
+
+#[tokio::test]
+async fn router_hands_a_reject_addressed_to_itself_to_its_control_receiver() {
+    // The router is 01 on 1000 and 02 on 2000. Peer B sends each reject,
+    // reason 2 for 3000, the network that lies behind peer B.
+    let cases: [(&str, &[u8]); 3] = [
+        ("no DNET", &[0x01, 0x80, 0x03, 0x02, 0x0B, 0xB8]),
+        (
+            "DNET 2000, DADR 02: the arrival port",
+            &[
+                0x01, 0xA0, 0x07, 0xD0, 0x01, 0x02, 0xFF, 0x03, 0x02, 0x0B, 0xB8,
+            ],
+        ),
+        (
+            "DNET 1000, DADR 01: the other port",
+            &[
+                0x01, 0xA0, 0x03, 0xE8, 0x01, 0x01, 0xFF, 0x03, 0x02, 0x0B, 0xB8,
+            ],
+        ),
+    ];
+    for (case, reject) in cases {
+        let (mut fixture, mut controls) = RouterFixture::start_with_network_control().await;
+        fixture.send_from_b(reject).await;
+
+        let control = recv(&mut controls).await;
+        let sent = decode_npdu(Bytes::copy_from_slice(reject)).unwrap();
+        assert_eq!(control.npdu, sent, "{case}");
+        assert_eq!(control.source_mac.as_slice(), [0x0B], "{case}");
+        assert_eq!(control.ingress_sequence, 1, "{case}");
+        assert_eq!(fixture.router.network_control_ingress_sequence(), 1);
+        assert_eq!(
+            fixture
+                .router
+                .table()
+                .lock()
+                .await
+                .effective_reachability(REMOTE),
+            Some(ReachabilityStatus::Busy),
+            "{case}: the table still learns from it"
+        );
+        // A reject for device 0C on 1000 is the next frame on port A, so
+        // nothing was relayed there before it.
+        fixture
+            .send_from_b(&[
+                0x01, 0xA0, 0x03, 0xE8, 0x01, 0x0C, 0xFF, 0x03, 0x01, 0x13, 0x88,
+            ])
+            .await;
+        let (relayed, _) = next_frame_from_router(&mut fixture.from_router_a).await;
+        assert_eq!(
+            relayed[..],
+            [0x01, 0x88, 0x07, 0xD0, 0x01, 0x0B, 0x03, 0x01, 0x13, 0x88],
+            "{case}"
+        );
+        assert!(controls.try_recv().is_err(), "{case}");
+        fixture.stop().await;
+    }
 }
 
 #[tokio::test]

@@ -34,6 +34,45 @@ fn make_db_with_device_and_ai() -> ObjectDatabase {
     db
 }
 
+/// The member rows that reading Group `oid` with `references` charges to a
+/// ReadPropertyMultiple work budget besides the references' own rows (#1172):
+/// every member reference once per whole Present_Value selected. Counts only
+/// members that name their properties, which the budget tests use.
+fn group_member_rows(
+    db: &ObjectDatabase,
+    oid: ObjectIdentifier,
+    references: impl IntoIterator<Item = (PropertyIdentifier, Option<u32>)>,
+) -> usize {
+    if oid.object_type() != ObjectType::GROUP {
+        return 0;
+    }
+    let Ok(PropertyValue::List(members)) = db
+        .get(&oid)
+        .unwrap()
+        .read_property(PropertyIdentifier::LIST_OF_GROUP_MEMBERS, None)
+    else {
+        panic!("List_Of_Group_Members is a list");
+    };
+    let per_read: usize = members
+        .iter()
+        .map(|member| {
+            let PropertyValue::ApplicationData(bytes) = member else {
+                panic!("{member:?}");
+            };
+            let (spec, _) =
+                bacnet_encoding::constructed::decode_read_access_specification(bytes, 0).unwrap();
+            spec.list_of_property_references.len()
+        })
+        .sum();
+    let reads = references
+        .into_iter()
+        .filter(|&(property, index)| {
+            property == PropertyIdentifier::PRESENT_VALUE && index.is_none()
+        })
+        .count();
+    reads * per_read
+}
+
 /// The class, code and First Failed Element Number an AddListElement,
 /// RemoveListElement or CreateObject refusal goes out with: zero unless the
 /// handler named an element of the request.

@@ -183,6 +183,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Some(cov_table.as_ref()),
                     crate::device_view::DeviceExecution::FullServer,
                     config.registered_network_port,
+                    config.read_property_multiple_budget.max_result_elements,
                     &req,
                     |db, oid, req, result| {
                         let result = match result {
@@ -300,7 +301,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     db,
                     cov_table,
                     &req,
-                    config.read_range_budget,
+                    config,
                     effective_max_apdu,
                     segmented_response_available,
                     |db, target, property, index, result| {
@@ -511,6 +512,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
+            command_runs,
             timed_revisits,
         } = effects;
 
@@ -542,6 +544,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             config,
         };
         Self::execute_staging_plans(&services.event_delivery(), &cov_ctx, staging_plans).await;
+        // Command lists run beside this request, so its response never waits
+        // on their writes or post delays (#1150).
+        if !command_runs.is_empty() {
+            super::command_runs::CommandRunner::new(services, request_tasks).start(command_runs);
+        }
 
         if let Apdu::ComplexAck(ref ack) = response {
             let mut full_buf = BytesMut::new();

@@ -370,6 +370,7 @@ async fn queue_full_keeps_marks_bounded_and_local() {
         &[tx0, tx1],
         &ctx,
         &control_policy::ControlGate::permissive(),
+        &LocalControl::default(),
     )
     .await;
 
