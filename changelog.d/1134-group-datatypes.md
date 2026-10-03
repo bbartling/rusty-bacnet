@@ -16,8 +16,8 @@ section: Fixed
     builds it under the request's database guard for ReadProperty,
     ReadPropertyMultiple (RPM ALL included) and ReadRange. It used to serve
     whatever values the application had stored.
-  - `GroupObject::add_member` takes a
-    `bacnet_services::rpm::ReadAccessSpecification` and returns `Result`,
+  - `GroupObject::add_member` takes a `ReadAccessSpecification` and returns
+    `Result`,
     refusing with PROPERTY / VALUE_OUT_OF_RANGE a member with no property
     references and one that names a Group or Global Group and selects its
     Present_Value, directly or through ALL or REQUIRED. The public
@@ -25,8 +25,16 @@ section: Fixed
     reads the list, and a direct read of the object alone returns an empty
     Present_Value. An array index on either list fails with PROPERTY /
     PROPERTY_IS_NOT_AN_ARRAY in the object as in the services.
-  - New: `ReadAccessSpecification::encode` and `decode` and
-    `ReadAccessResult::encode` in `bacnet_services::rpm`, which the
-    ReadPropertyMultiple codecs now use. `bacnet-objects` depends on
-    `bacnet-services`. The Python `add_group` builds an empty Group and is
-    unchanged.
+  - **Moved (Rust API):** `PropertyReference` (from
+    `bacnet_services::common`) and `ReadAccessSpecification` (from
+    `bacnet_services::rpm`) now live in `bacnet_types::constructed`, like the
+    other Clause 21 types an object stores. Their `encode`/`decode` methods
+    are replaced by `encode_property_reference`, `decode_property_reference`,
+    `encode_read_access_specification` and `decode_read_access_specification`
+    in `bacnet_encoding::constructed`, which the ReadPropertyMultiple, COV and
+    Audit codecs use. There is no re-export from the old paths, so update
+    imports. The `PropertyReference` and `AuditPropertyReference` conversions
+    move with it.
+  - New: `ReadAccessResult::encode` in `bacnet_services::rpm`, which the
+    ReadPropertyMultiple-ACK encoder now uses. The Python `add_group` builds
+    an empty Group and is unchanged.

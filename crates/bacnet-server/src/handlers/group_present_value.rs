@@ -6,8 +6,9 @@
 //! request already holds.
 use super::rpm_budget;
 use super::*;
+use bacnet_encoding::constructed::decode_read_access_specification;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::constructed::ReadAccessSpecification;
 
 /// Read `property` of a found object the way the read services serve it.
 /// A Group's whole Present_Value is rebuilt from its members; every other
@@ -94,7 +95,7 @@ fn members(group: &dyn BACnetObject) -> Result<Vec<ReadAccessSpecification>, Err
         .iter()
         .map(|element| match element {
             PropertyValue::ApplicationData(bytes) => {
-                match ReadAccessSpecification::decode(bytes, 0) {
+                match decode_read_access_specification(bytes, 0) {
                     Ok((member, end)) if end == bytes.len() => Ok(member),
                     _ => Err(other()),
                 }

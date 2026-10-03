@@ -18,8 +18,7 @@ use bacnet_objects::file::FileObject;
 use bacnet_objects::group::{GroupObject, StructuredViewObject};
 use bacnet_objects::load_control::LoadControlObject;
 use bacnet_objects::notification_class::NotificationClass;
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use PropertyIdentifier as P;
 
 const STATUS_ROWS: &[P] = &[P::STATUS_FLAGS, P::RELIABILITY, P::OUT_OF_SERVICE];

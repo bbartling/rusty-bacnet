@@ -2,7 +2,7 @@
 use super::*;
 use crate::server::ReadPropertyMultipleBudget;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_services::common::PropertyReference;
+use bacnet_types::constructed::PropertyReference;
 
 #[derive(Debug)]
 pub(crate) enum RpmFailure {

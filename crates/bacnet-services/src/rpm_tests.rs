@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::ObjectType;
 
 fn ack_with_property_fields(property: &[u8], array_index: Option<&[u8]>) -> BytesMut {
@@ -415,9 +416,9 @@ fn request_empty_outer_rejects_and_explicit_zero_index_matches_wire_vector() {
 }
 
 #[test]
-fn read_access_specification_codec_handles_one_element_at_an_offset() {
-    // One specification alone, as a Group's List_Of_Group_Members element
-    // carries it: AV-2 Present_Value, then Priority_Array[16].
+fn request_codec_is_the_shared_specification_codec_back_to_back() {
+    // AV-2 Present_Value, then Priority_Array[16]: the octets of one
+    // specification, as a Group's List_Of_Group_Members element carries it.
     let spec = ReadAccessSpecification {
         object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap(),
         list_of_property_references: vec![
@@ -431,29 +432,22 @@ fn read_access_specification_codec_handles_one_element_at_an_offset() {
             },
         ],
     };
-    let octets = [
-        0x0C, 0, 0x80, 0, 2, 0x1E, 0x09, 85, 0x09, 87, 0x19, 16, 0x1F,
-    ];
-    let mut buf = BytesMut::from(&b"xy"[..]);
-    spec.encode(&mut buf);
-    assert_eq!(&buf[2..], &octets);
-    buf.extend_from_slice(&[0xAA]);
+    let mut octets = BytesMut::new();
+    encode_read_access_specification(&mut octets, &spec);
     assert_eq!(
-        ReadAccessSpecification::decode(&buf, 2).unwrap(),
-        (spec.clone(), 2 + octets.len())
+        &octets[..],
+        &[0x0C, 0, 0x80, 0, 2, 0x1E, 0x09, 85, 0x09, 87, 0x19, 16, 0x1F]
     );
-    // The request codec is the same specification codec, back to back.
-    let mut request = BytesMut::new();
-    ReadPropertyMultipleRequest {
+    let request = ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![spec.clone(), spec],
-    }
-    .encode(&mut request)
-    .unwrap();
-    assert_eq!(&request[..], &[&octets[..], &octets[..]].concat()[..]);
-    // A truncated specification is refused.
-    for end in [4, 5, 9, octets.len() - 1] {
-        assert!(ReadAccessSpecification::decode(&octets[..end], 0).is_err());
-    }
+    };
+    let mut encoded = BytesMut::new();
+    request.encode(&mut encoded).unwrap();
+    assert_eq!(&encoded[..], &[&octets[..], &octets[..]].concat()[..]);
+    assert_eq!(
+        ReadPropertyMultipleRequest::decode(&encoded).unwrap(),
+        request
+    );
 }
 
 #[test]

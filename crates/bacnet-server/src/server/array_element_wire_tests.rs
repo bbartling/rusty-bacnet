@@ -12,12 +12,10 @@ use bacnet_encoding::primitives::decode_application_value;
 use bacnet_objects::command::CommandObject;
 use bacnet_objects::group::StructuredViewObject;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_services::{
-    common::PropertyReference,
-    rpm::{ReadAccessSpecification, ReadPropertyMultipleACK, ReadPropertyMultipleRequest},
-};
+use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
 use bacnet_types::constructed::{
-    BACnetActionCommand, BACnetActionList, BACnetDeviceObjectReference,
+    BACnetActionCommand, BACnetActionList, BACnetDeviceObjectReference, PropertyReference,
+    ReadAccessSpecification,
 };
 use std::net::Ipv4Addr;
 

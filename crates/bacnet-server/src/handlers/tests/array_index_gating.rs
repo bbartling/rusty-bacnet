@@ -267,8 +267,7 @@ fn list_properties_reject_indexed_read_property() {
 
 #[test]
 fn list_properties_reject_indexed_read_property_multiple_inline() {
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let db = gating_db();
     for &(object_type, property) in LIST_TARGETS {

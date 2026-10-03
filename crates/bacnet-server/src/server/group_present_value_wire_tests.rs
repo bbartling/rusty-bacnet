@@ -12,10 +12,8 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::DeviceConfig;
 use bacnet_objects::group::GroupObject;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_services::{
-    common::PropertyReference,
-    rpm::{ReadAccessSpecification, ReadPropertyMultipleACK, ReadPropertyMultipleRequest},
-};
+use bacnet_services::rpm::{ReadPropertyMultipleACK, ReadPropertyMultipleRequest};
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use std::net::Ipv4Addr;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {

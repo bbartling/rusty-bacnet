@@ -189,59 +189,6 @@ pub(crate) fn extract_property_value<'a>(
 }
 
 // ---------------------------------------------------------------------------
-// PropertyReference
-// ---------------------------------------------------------------------------
-
-/// BACnetPropertyReference (Clause 21.6).
-///
-/// The property identifier in context tag `[0]`, optionally followed by an Unsigned array index
-/// in `[1]`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PropertyReference {
-    /// Property being referred to.
-    pub property_identifier: PropertyIdentifier,
-    /// Array element index; `None` refers to the whole property.
-    pub property_array_index: Option<u32>,
-}
-
-impl PropertyReference {
-    /// Append the ASN.1 encoding of the reference to `buf`.
-    pub fn encode(&self, buf: &mut BytesMut) {
-        primitives::encode_ctx_unsigned(buf, 0, self.property_identifier.to_raw() as u64);
-        if let Some(idx) = self.property_array_index {
-            primitives::encode_ctx_unsigned(buf, 1, idx as u64);
-        }
-    }
-
-    /// Decode a reference at `offset` in `data`; returns the value and the offset just past it.
-    pub fn decode(data: &[u8], offset: usize) -> Result<(Self, usize), Error> {
-        // [0] propertyIdentifier
-        let (prop_id, mut offset) =
-            decode_context_u32(data, offset, 0, "PropertyReference property-id")?;
-
-        // [1] propertyArrayIndex (optional)
-        let mut array_index = None;
-        if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(1) {
-                let (value, end) =
-                    decode_context_u32(data, offset, 1, "PropertyReference array-index")?;
-                array_index = Some(value);
-                offset = end;
-            }
-        }
-
-        Ok((
-            Self {
-                property_identifier: PropertyIdentifier::from_raw(prop_id),
-                property_array_index: array_index,
-            },
-            offset,
-        ))
-    }
-}
-
-// ---------------------------------------------------------------------------
 // BACnetPropertyValue
 // ---------------------------------------------------------------------------
 
@@ -288,6 +235,7 @@ impl BACnetPropertyValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_encoding::constructed::decode_property_reference;
     use bacnet_encoding::tags::TagClass;
 
     fn encode_context_bytes(buf: &mut BytesMut, tag: u8, value: &[u8]) {
@@ -304,30 +252,6 @@ mod tests {
         tags::encode_opening_tag(buf, 2);
         primitives::encode_app_null(buf);
         tags::encode_closing_tag(buf, 2);
-    }
-
-    #[test]
-    fn property_reference_round_trip() {
-        let pr = PropertyReference {
-            property_identifier: PropertyIdentifier::PRESENT_VALUE,
-            property_array_index: None,
-        };
-        let mut buf = BytesMut::new();
-        pr.encode(&mut buf);
-        let (decoded, _) = PropertyReference::decode(&buf, 0).unwrap();
-        assert_eq!(pr, decoded);
-    }
-
-    #[test]
-    fn property_reference_with_index_round_trip() {
-        let pr = PropertyReference {
-            property_identifier: PropertyIdentifier::PRIORITY_ARRAY,
-            property_array_index: Some(8),
-        };
-        let mut buf = BytesMut::new();
-        pr.encode(&mut buf);
-        let (decoded, _) = PropertyReference::decode(&buf, 0).unwrap();
-        assert_eq!(pr, decoded);
     }
 
     #[test]
@@ -454,7 +378,7 @@ mod tests {
         let mut reference = BytesMut::new();
         encode_context_bytes(&mut reference, 0, &max_with_leading_zero);
         encode_context_bytes(&mut reference, 1, &max_with_leading_zero);
-        let (decoded, consumed) = PropertyReference::decode(&reference, 0).unwrap();
+        let (decoded, consumed) = decode_property_reference(&reference, 0).unwrap();
         assert_eq!(decoded.property_identifier.to_raw(), u32::MAX);
         assert_eq!(decoded.property_array_index, Some(u32::MAX));
         assert_eq!(consumed, reference.len());
@@ -471,12 +395,12 @@ mod tests {
         for overflow in [u32::MAX as u64 + 1, u64::MAX] {
             let mut reference_property = BytesMut::new();
             primitives::encode_ctx_unsigned(&mut reference_property, 0, overflow);
-            assert!(PropertyReference::decode(&reference_property, 0).is_err());
+            assert!(decode_property_reference(&reference_property, 0).is_err());
 
             let mut reference_index = BytesMut::new();
             primitives::encode_ctx_unsigned(&mut reference_index, 0, 1);
             primitives::encode_ctx_unsigned(&mut reference_index, 1, overflow);
-            assert!(PropertyReference::decode(&reference_index, 0).is_err());
+            assert!(decode_property_reference(&reference_index, 0).is_err());
 
             let mut value_property = BytesMut::new();
             primitives::encode_ctx_unsigned(&mut value_property, 0, overflow);
@@ -497,34 +421,13 @@ mod tests {
         primitives::encode_ctx_unsigned(&mut wrong_tag, 1, 85);
         append_null_value(&mut wrong_tag);
 
-        assert!(PropertyReference::decode(&wrong_tag, 0).is_err());
+        assert!(decode_property_reference(&wrong_tag, 0).is_err());
         assert!(BACnetPropertyValue::decode(&wrong_tag, 0).is_err());
     }
 
     // -----------------------------------------------------------------------
     // Malformed-input decode error tests
     // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_decode_property_reference_empty_input() {
-        assert!(PropertyReference::decode(&[], 0).is_err());
-    }
-
-    #[test]
-    fn test_decode_property_reference_truncated_1_byte() {
-        let pr = PropertyReference {
-            property_identifier: PropertyIdentifier::PRESENT_VALUE,
-            property_array_index: Some(8),
-        };
-        let mut buf = BytesMut::new();
-        pr.encode(&mut buf);
-        assert!(PropertyReference::decode(&buf[..1], 0).is_err());
-    }
-
-    #[test]
-    fn test_decode_property_reference_invalid_tag() {
-        assert!(PropertyReference::decode(&[0xFF, 0xFF, 0xFF], 0).is_err());
-    }
 
     #[test]
     fn test_decode_bacnet_property_value_empty_input() {

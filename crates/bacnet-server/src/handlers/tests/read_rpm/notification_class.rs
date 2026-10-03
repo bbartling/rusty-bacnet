@@ -1,9 +1,9 @@
 use super::*;
 use bacnet_objects::{notification_class::NotificationClass, traits::BACnetObject};
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
-use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
+use bacnet_types::constructed::{
+    BACnetDestination, BACnetRecipient, PropertyReference, ReadAccessSpecification,
+};
 use bacnet_types::primitives::Time;
 use PropertyIdentifier as P;
 

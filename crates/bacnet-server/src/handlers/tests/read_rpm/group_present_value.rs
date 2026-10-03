@@ -7,9 +7,8 @@ use super::*;
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::group::GroupObject;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_services::common::PropertyReference;
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
-use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::primitives::PropertyValue;
 use PropertyIdentifier as P;
 

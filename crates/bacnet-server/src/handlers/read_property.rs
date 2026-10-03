@@ -181,7 +181,7 @@ pub(crate) fn active_cov_device_for_rpm(
     db: &ObjectDatabase,
     request: &ReadPropertyMultipleRequest,
 ) -> Option<LiveCovSelection> {
-    let spec_lists = |spec: &bacnet_services::rpm::ReadAccessSpecification| {
+    let spec_lists = |spec: &bacnet_types::constructed::ReadAccessSpecification| {
         spec.list_of_property_references
             .iter()
             .map(|reference| live_cov_lists(reference.property_identifier))

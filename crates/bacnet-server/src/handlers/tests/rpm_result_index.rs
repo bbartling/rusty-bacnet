@@ -14,8 +14,7 @@ use super::*;
 use crate::server::ReadPropertyMultipleBudget;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::traits::BACnetObject;
-use bacnet_services::common::PropertyReference;
-use bacnet_services::rpm::ReadAccessSpecification;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
 fn request(oid: ObjectIdentifier, references: &[(PropertyIdentifier, Option<u32>)]) -> BytesMut {
     let mut data = BytesMut::new();

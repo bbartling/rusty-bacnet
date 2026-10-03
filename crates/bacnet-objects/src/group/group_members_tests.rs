@@ -1,7 +1,7 @@
 //! Group (type 11) List_Of_Group_Members and Present_Value (#1134).
 
 use super::*;
-use bacnet_services::common::PropertyReference;
+use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {

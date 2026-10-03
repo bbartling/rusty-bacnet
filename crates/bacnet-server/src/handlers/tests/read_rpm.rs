@@ -54,8 +54,8 @@ fn read_property_handler_success() {
 #[test]
 fn active_cov_subscriptions_low_level_handlers_read_standalone_empty_list() {
     use bacnet_objects::device::{DeviceConfig, DeviceObject};
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleRequest};
+    use bacnet_services::rpm::ReadPropertyMultipleRequest;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let oid = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
     let mut db = ObjectDatabase::new();
@@ -220,8 +220,7 @@ fn rpm_handler_success() {
     let db = make_db_with_ai();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
@@ -269,8 +268,7 @@ fn rpm_handler_unknown_property_returns_inline_error() {
     let db = make_db_with_ai();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
@@ -305,8 +303,7 @@ fn rpm_handler_unknown_object_returns_inline_error() {
     let db = make_db_with_ai();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 99).unwrap();
 
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
@@ -334,8 +331,7 @@ fn rpm_handler_all_properties_expanded() {
     let db = make_db_with_ai();
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
@@ -385,8 +381,7 @@ fn rpm_handler_all_properties_expanded() {
 fn rpm_all_includes_multistate_event_history() {
     let db = make_db_with_msi();
     let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
@@ -444,8 +439,7 @@ fn rpm_all_includes_multistate_event_history() {
 fn rpm_explicit_index_returns_one_multistate_event_message() {
     let db = make_db_with_msi();
     let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::ReadAccessSpecification;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
     let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
@@ -577,8 +571,8 @@ fn read_property_serves_derived_services_supported() {
 
 #[test]
 fn rpm_multistate_indexed_state_text_and_list_gating_preserve_bytes() {
-    use bacnet_services::common::PropertyReference;
-    use bacnet_services::rpm::{ReadAccessSpecification, ReadPropertyMultipleACK};
+    use bacnet_services::rpm::ReadPropertyMultipleACK;
+    use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
     use bacnet_types::primitives::PropertyValue;
     use PropertyIdentifier as P;
 

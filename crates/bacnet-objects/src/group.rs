@@ -6,13 +6,12 @@
 
 use bacnet_encoding::constructed::{
     encode_device_object_property_reference, encode_device_object_reference,
-    encode_property_access_result,
+    encode_property_access_result, encode_read_access_specification,
 };
-use bacnet_services::rpm::ReadAccessSpecification;
 use bacnet_types::bitstring::status_flags_from_bacnet;
 use bacnet_types::constructed::{
     AccessResult, BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
-    BACnetPropertyAccessResult,
+    BACnetPropertyAccessResult, ReadAccessSpecification,
 };
 use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
@@ -134,7 +133,7 @@ impl BACnetObject for GroupObject {
                     .iter()
                     .map(|member| {
                         let mut encoded = BytesMut::new();
-                        member.encode(&mut encoded);
+                        encode_read_access_specification(&mut encoded, member);
                         PropertyValue::ApplicationData(encoded.to_vec())
                     })
                     .collect(),

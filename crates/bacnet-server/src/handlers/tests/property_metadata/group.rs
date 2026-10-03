@@ -16,12 +16,14 @@ fn group_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
         let ai2 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap();
         for object_identifier in [ai1, ai2] {
             group
-                .add_member(bacnet_services::rpm::ReadAccessSpecification {
+                .add_member(bacnet_types::constructed::ReadAccessSpecification {
                     object_identifier,
-                    list_of_property_references: vec![bacnet_services::common::PropertyReference {
-                        property_identifier: P::PRESENT_VALUE,
-                        property_array_index: None,
-                    }],
+                    list_of_property_references: vec![
+                        bacnet_types::constructed::PropertyReference {
+                            property_identifier: P::PRESENT_VALUE,
+                            property_array_index: None,
+                        },
+                    ],
                 })
                 .unwrap();
         }
