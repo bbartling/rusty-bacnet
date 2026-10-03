@@ -4,6 +4,7 @@
 use super::probe::{
     address, clock, day, monotonic, noon, oid, schedule_write, CUSTOM, CUSTOM_LIST,
 };
+use bacnet_objects::command::WriteFailure;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
 use bacnet_objects::event_enrollment::{
@@ -293,7 +294,8 @@ pub const COMMANDS: &[(&str, Command)] = &[
         o.record_command_write_internal(11, 2, false).to_string()
     }),
     ("complete_command_run_internal", |o| {
-        o.complete_command_run_internal(11, false).to_string()
+        o.complete_command_run_internal(11, Err(WriteFailure::Communication))
+            .to_string()
     }),
     ("set_overridden", |o| {
         format!("{:?}", o.set_overridden(true))
