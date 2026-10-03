@@ -140,6 +140,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 dcc_timer: Arc::clone(&dcc_timer),
                 dcc_outcomes: Arc::clone(&dcc_outcomes),
                 event_suppressions: Arc::clone(&event_suppressions),
+                confirmed_event_repeats: Arc::default(),
                 mutation_decisions: Arc::clone(&mutation_decisions),
                 config: Arc::clone(&config_dispatch),
             },
@@ -198,6 +199,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             ) {
                                 continue;
                             }
+                        }
+                        // A confirmed request may only be addressed to one
+                        // device (Clause 6.3). One that arrives by local,
+                        // remote or global broadcast, or by multicast, leaves
+                        // the server TSM idle (Clause 5.4.5.1): it is neither
+                        // executed nor answered, whatever the service, and
+                        // no reassembly starts for it.
+                        if received.is_group && matches!(decoded, Apdu::ConfirmedRequest(_)) {
+                            debug!("Ignoring a ConfirmedRequest addressed to a group");
+                            continue;
                         }
                         let source_mac = received.source_mac.clone();
                         let source_network = received.source_network.clone();

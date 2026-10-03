@@ -2,6 +2,7 @@
 //! originates, and each copy its Notification Forwarders send on, reaches
 //! its recipients through [`BACnetServer::send_event_notification`].
 
+use super::event_forwarding::ForwardingBudget;
 use super::event_recipient_route::{
     network_priority_for_event, ConfirmedRecipientRoute, RecipientRoute,
 };
@@ -34,6 +35,9 @@ pub(super) struct OutboundNotification<'a> {
     /// Routes the notification may take. A refused route is skipped and not
     /// counted; the server's own notifications admit every route.
     pub(super) admits: AdmitsRoute<'a>,
+    /// The forwarding cap a forwarded copy draws on, once it has passed
+    /// every other check; `None` for the server's own notifications.
+    pub(super) budget: Option<&'a ForwardingBudget>,
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -129,6 +133,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     capacity,
                     "EventNotification is longer than the local APDU capacity; not sent"
                 );
+                continue;
+            }
+            // A forwarded copy that would go out draws on its notification's
+            // cap (#1259); one past the cap is dropped and counted.
+            if outbound.budget.is_some_and(|budget| !budget.take()) {
+                suppressions.record(EventSuppression::ForwardingCapDropped);
                 continue;
             }
 

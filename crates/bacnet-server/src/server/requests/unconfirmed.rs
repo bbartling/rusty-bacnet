@@ -314,7 +314,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 Ok(notification) => {
                     Self::forward_event_notification(
                         &services.event_delivery(),
-                        notification,
+                        vec![notification],
                         ForwardOrigin::Received(Reception::of(received)),
                     )
                     .await;

@@ -19,7 +19,7 @@ fn this_device() -> BACnetRecipient {
     BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, LOCAL_DEVICE).unwrap())
 }
 
-fn confirmed_services(
+pub(super) fn confirmed_services(
     db: ObjectDatabase,
     transport: crate::server::test_transport::TestTransport,
 ) -> RequestServices<crate::server::test_transport::TestTransport> {
@@ -62,11 +62,11 @@ async fn dispatch(
     .await;
 }
 
-fn reply_apdu(npdu: Bytes) -> Apdu {
+pub(super) fn reply_apdu(npdu: Bytes) -> Apdu {
     decode_apdu(decode_npdu(npdu).unwrap().payload).unwrap()
 }
 
-fn is_simple_ack(apdu: &Apdu) -> bool {
+pub(super) fn is_simple_ack(apdu: &Apdu) -> bool {
     matches!(
         apdu,
         Apdu::SimpleAck(SimpleAck {
