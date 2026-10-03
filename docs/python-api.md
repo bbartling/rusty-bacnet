@@ -2191,6 +2191,17 @@ value. The server doesn't follow Controlled_Variable_Reference itself.
 65535 or a priority outside 1 to 16 raise VALUE_OUT_OF_RANGE. Peers can write
 the Loop's Action (DIRECT until written).
 
+The Loop's Controlled_Variable_Reference and Manipulated_Variable_Reference,
+and a Pulse Converter's Input_Reference, read as `application_data` holding
+the context-tagged BACnetObjectPropertyReference, or null while unset. The
+Loop's Setpoint_Reference reads as the BACnetSetpointReference, the same
+octets inside opening and closing tag 0, or an empty `list` while unset (#1312).
+Peers and `write_property_local` write them in those encodings, so a value
+read writes back unchanged. Null clears the first three and the empty value
+clears Setpoint_Reference. The flat list of object identifier and enumerated
+property these used to read as is refused with INVALID_DATA_TYPE, as is null
+on Setpoint_Reference, and malformed octets with INVALID_DATA_ENCODING.
+
 A running server samples an Averaging object's Object_Property_Reference
 itself, every Window_Interval / Window_Samples seconds but never more often
 than every 100 ms, starting one spacing after `start()` and over again after

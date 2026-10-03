@@ -1,9 +1,9 @@
 use super::*;
 use crate::property_metadata::PropertyWriteCapability;
 use crate::traits::BACnetObject;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::PropertyValue;
 use std::collections::HashSet;
 
 fn assert_error(error: Error, expected: ErrorCode) {
@@ -343,13 +343,10 @@ fn property_metadata_pulse_converter_writes_store_verbatim_with_range_gates() {
             object.read_property(P::SCALE_FACTOR, None).unwrap(),
             PropertyValue::Real(2.5)
         );
-        // Input_Reference stores a local reference verbatim and Null clears it.
-        let oid = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 1).unwrap();
-        let prop_raw = P::PRESENT_VALUE.to_raw();
-        let reference = PropertyValue::List(vec![
-            PropertyValue::ObjectIdentifier(oid),
-            PropertyValue::Enumerated(prop_raw),
-        ]);
+        // Input_Reference stores a local reference, its Clause 21 members
+        // ([0] accumulator 1, [1] present-value), and Null clears it.
+        let reference =
+            PropertyValue::ApplicationData(vec![0x0C, 0x05, 0xC0, 0x00, 0x01, 0x19, 0x55]);
         object
             .write_property(P::INPUT_REFERENCE, None, reference.clone(), None)
             .unwrap();

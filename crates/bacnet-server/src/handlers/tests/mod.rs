@@ -156,6 +156,7 @@ mod list_element_subscriptions;
 mod list_element_targets;
 mod log_reference_writes;
 mod loop_properties;
+mod loop_reference_follow;
 mod multi_element_writes;
 mod passwords;
 mod property_metadata;

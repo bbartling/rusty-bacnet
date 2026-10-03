@@ -7,7 +7,7 @@ fn original_function_must_match_actual_ipv4_destination() {
     let local = Ipv4Addr::new(192, 0, 2, 10);
     let broadcast = Ipv4Addr::new(192, 0, 2, 255);
 
-    assert!(original_destination_matches(
+    assert!(admitted_delivery(
         BvlcFunction::ORIGINAL_UNICAST_NPDU,
         local.into(),
         local,
@@ -15,8 +15,9 @@ fn original_function_must_match_actual_ipv4_destination() {
         &[local],
         false,
         None,
-    ));
-    assert!(!original_destination_matches(
+    )
+    .is_some());
+    assert!(admitted_delivery(
         BvlcFunction::ORIGINAL_UNICAST_NPDU,
         broadcast.into(),
         local,
@@ -24,8 +25,9 @@ fn original_function_must_match_actual_ipv4_destination() {
         &[local],
         false,
         None,
-    ));
-    assert!(!original_destination_matches(
+    )
+    .is_none());
+    assert!(admitted_delivery(
         BvlcFunction::ORIGINAL_BROADCAST_NPDU,
         local.into(),
         local,
@@ -33,8 +35,9 @@ fn original_function_must_match_actual_ipv4_destination() {
         &[local],
         false,
         None,
-    ));
-    assert!(original_destination_matches(
+    )
+    .is_none());
+    assert!(admitted_delivery(
         BvlcFunction::ORIGINAL_BROADCAST_NPDU,
         broadcast.into(),
         local,
@@ -42,9 +45,10 @@ fn original_function_must_match_actual_ipv4_destination() {
         &[local],
         false,
         None,
-    ));
+    )
+    .is_some());
 
-    assert!(original_destination_matches(
+    assert!(admitted_delivery(
         BvlcFunction::ORIGINAL_UNICAST_NPDU,
         Ipv4Addr::new(192, 0, 2, 11).into(),
         local,
@@ -52,8 +56,9 @@ fn original_function_must_match_actual_ipv4_destination() {
         &[local, Ipv4Addr::new(192, 0, 2, 11)],
         true,
         None,
-    ));
-    assert!(!original_destination_matches(
+    )
+    .is_some());
+    assert!(admitted_delivery(
         BvlcFunction::ORIGINAL_UNICAST_NPDU,
         broadcast.into(),
         local,
@@ -61,13 +66,14 @@ fn original_function_must_match_actual_ipv4_destination() {
         &[local],
         true,
         Some(true),
-    ));
+    )
+    .is_none());
     // A wildcard bind takes unicast only to a listed address, on every OS
     // (#952). Windows flagging the datagram as unicast delivery is not
     // enough on its own any more.
     for (destination, accepted) in [(local, true), (Ipv4Addr::new(192, 0, 2, 12), false)] {
         assert_eq!(
-            original_destination_matches(
+            admitted_delivery(
                 BvlcFunction::ORIGINAL_UNICAST_NPDU,
                 destination.into(),
                 local,
@@ -75,7 +81,8 @@ fn original_function_must_match_actual_ipv4_destination() {
                 &[local],
                 true,
                 Some(false),
-            ),
+            )
+            .is_some(),
             accepted,
             "{destination}"
         );
@@ -92,7 +99,7 @@ fn original_function_must_match_actual_ipv4_destination() {
         BvlcFunction::DELETE_FOREIGN_DEVICE_TABLE_ENTRY,
         BvlcFunction::DISTRIBUTE_BROADCAST_TO_NETWORK,
     ] {
-        assert!(original_destination_matches(
+        assert!(admitted_delivery(
             function,
             local.into(),
             local,
@@ -100,8 +107,9 @@ fn original_function_must_match_actual_ipv4_destination() {
             &[local],
             false,
             None,
-        ));
-        assert!(!original_destination_matches(
+        )
+        .is_some());
+        assert!(admitted_delivery(
             function,
             broadcast.into(),
             local,
@@ -109,10 +117,11 @@ fn original_function_must_match_actual_ipv4_destination() {
             &[local],
             false,
             Some(true),
-        ));
+        )
+        .is_none());
     }
 
-    assert!(original_destination_matches(
+    assert!(admitted_delivery(
         BvlcFunction::FORWARDED_NPDU,
         local.into(),
         local,
@@ -120,8 +129,9 @@ fn original_function_must_match_actual_ipv4_destination() {
         &[local],
         false,
         None,
-    ));
-    assert!(original_destination_matches(
+    )
+    .is_some());
+    assert!(admitted_delivery(
         BvlcFunction::FORWARDED_NPDU,
         broadcast.into(),
         local,
@@ -129,7 +139,8 @@ fn original_function_must_match_actual_ipv4_destination() {
         &[local],
         false,
         Some(true),
-    ));
+    )
+    .is_some());
 }
 
 async fn recv_bvll(socket: &UdpSocket) -> BvllMessage {

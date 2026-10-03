@@ -1,14 +1,13 @@
 use super::recipient::{check_encoded_recipient, write_recipient};
 use super::tagged::{
-    decode_canonical_unsigned, decode_ctx_canonical_unsigned, decode_ctx_character_string,
-    decode_ctx_constructed, decode_ctx_primitive, decode_optional_ctx, expect_end, next_is_opening,
+    decode_app_canonical_enumerated, decode_ctx_canonical_unsigned, decode_ctx_character_string,
+    decode_ctx_constructed, decode_ctx_object_id, decode_optional_ctx, expect_end, next_is_opening,
 };
 use super::{decode_recipient, validate_tlv_sequence};
 use crate::{primitives, tags};
 use bacnet_types::constructed::{AuditPropertyReference, BACnetAuditNotification};
 use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 /// Encode one bare `BACnetAuditNotification` field sequence.
@@ -146,7 +145,7 @@ pub fn decode_audit_notification_at(
         offset,
         3,
         "AuditNotification source-object",
-        decode_object,
+        decode_ctx_object_id,
     )?;
     offset = next;
 
@@ -208,7 +207,7 @@ pub fn decode_audit_notification_at(
         offset,
         11,
         "AuditNotification target-object",
-        decode_object,
+        decode_ctx_object_id,
     )?;
     offset = next;
     let target_property = if next_is_opening(data, offset, 12)? {
@@ -324,19 +323,6 @@ fn decode_property_reference(data: &[u8]) -> Result<(AuditPropertyReference, usi
     ))
 }
 
-/// An object identifier under primitive context tag `tag`. Truncated
-/// contents fail before the length is checked, so a cut-short field of any
-/// length is a short buffer.
-fn decode_object(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    what: &str,
-) -> Result<(ObjectIdentifier, usize), Error> {
-    let (contents, next) = decode_ctx_primitive(data, offset, tag, what)?;
-    Ok((ObjectIdentifier::decode(contents)?, next))
-}
-
 fn decode_wrapped_recipient(
     data: &[u8],
     offset: usize,
@@ -390,40 +376,12 @@ fn decode_error(data: &[u8], offset: usize) -> Result<((ErrorClass, ErrorCode), 
     const WHAT: &str = "AuditNotification result";
     let (body, next) = decode_ctx_constructed(data, offset, 16, WHAT)?;
     let (class, body_offset) =
-        decode_app_enumerated_u16(body, 0, "AuditNotification result error-class")?;
+        decode_app_canonical_enumerated(body, 0, "AuditNotification result error-class")?;
     let (code, body_end) =
-        decode_app_enumerated_u16(body, body_offset, "AuditNotification result error-code")?;
+        decode_app_canonical_enumerated(body, body_offset, "AuditNotification result error-code")?;
     expect_end(body, body_end, offset, WHAT)?;
     Ok((
         (ErrorClass::from_raw(class), ErrorCode::from_raw(code)),
         next,
     ))
-}
-
-/// An application-tagged ENUMERATED in its shortest encoding that fits a
-/// u16. Contents cut short by the end of the data are malformed here, not a
-/// short buffer.
-fn decode_app_enumerated_u16(
-    data: &[u8],
-    offset: usize,
-    what: &str,
-) -> Result<(u16, usize), Error> {
-    let (tag, contents_start) = tags::decode_tag(data, offset)?;
-    if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
-        return Err(Error::decoding(
-            offset,
-            format!("{what} expected application Enumerated"),
-        ));
-    }
-    let end = contents_start.saturating_add(tag.length as usize);
-    if end > data.len() {
-        return Err(Error::decoding(
-            contents_start,
-            format!("{what} is truncated"),
-        ));
-    }
-    let raw = decode_canonical_unsigned(&data[contents_start..end], offset, what)?;
-    let value =
-        u16::try_from(raw).map_err(|_| Error::decoding(offset, format!("{what} exceeds u16")))?;
-    Ok((value, end))
 }

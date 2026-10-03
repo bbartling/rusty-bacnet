@@ -2389,6 +2389,24 @@ are read-only over the network; set them before adding the Loop with
 output for the application's algorithm: it neither computes Present_Value nor
 writes it to the Manipulated_Variable_Reference target.
 
+Controlled_Variable_Reference and Manipulated_Variable_Reference read as the
+context-tagged `BACnetObjectPropertyReference` in one
+`PropertyValue::ApplicationData`, Null while unset. Setpoint_Reference reads
+as the `BACnetSetpointReference`: the same members inside opening and closing
+tag 0, or an empty `ApplicationData` while unset, since the sequence's only
+member is optional (#1312). All three take writes in those encodings over
+WriteProperty, WritePropertyMultiple and `write_local`, so a value read writes
+back unchanged; Null clears a variable reference and the empty value clears
+Setpoint_Reference. Another datatype is INVALID_DATA_TYPE: the flat
+`[ObjectIdentifier, Enumerated, Unsigned?]` list these used to read as, Null
+on Setpoint_Reference, or the setpoint frame on a variable reference.
+Malformed octets, such as a Device member `[3]` the production lacks or an
+empty frame `0E 0F`, are INVALID_DATA_ENCODING. The `set_*_reference` setters
+still take a `BACnetObjectPropertyReference`. An application that follows the
+references decodes what it reads with
+`bacnet_encoding::constructed::decode_object_property_reference`, or
+`decode_setpoint_reference`, which gives `None` for the empty value.
+
 While the application runs the algorithm, it also feeds Controlled_Variable_Value,
 the measurement the algorithm compares with Setpoint. The server doesn't follow
 Controlled_Variable_Reference. In a running server the application calls
@@ -2527,8 +2545,9 @@ Object_Property_Reference reads as the context-tagged
 `BACnetDeviceObjectPropertyReference`, a `PropertyValue::ApplicationData` with
 no Device member (Null while unset), and a write takes that encoding back
 (#1182). The flat application-tagged list reads used to serve is now
-INVALID_DATA_TYPE, and a Device member that isn't a Device identifier
-VALUE_OUT_OF_RANGE.
+INVALID_DATA_TYPE, as are octets that don't open with the object
+identifier's context tag 0 (#1312), and a Device member that isn't a Device
+identifier VALUE_OUT_OF_RANGE.
 
 Staging uses an explicit atomic configuration; the former stage-count-only
 constructor is intentionally removed because it could not create a valid
@@ -2892,6 +2911,12 @@ Simulated values count the same as the device's.
 |------|-------------|
 | `AccumulatorObject` | `::new(instance, name, units)` |
 | `PulseConverterObject` | `::new(instance, name, units)` |
+
+A Pulse Converter's Input_Reference, set with `set_input_reference`, reads and
+takes writes like the Loop's variable references: the context-tagged
+`BACnetObjectPropertyReference` in a `PropertyValue::ApplicationData`, Null
+while unset, with the flat list refused as INVALID_DATA_TYPE (#1312). The
+object doesn't follow it; the application feeds Count with `add_pulses`.
 
 #### System (3)
 
