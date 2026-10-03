@@ -15,6 +15,7 @@ fn pics_channel_property_metadata_is_exact() {
         (P::LAST_PRIORITY, false, false),
         (P::WRITE_STATUS, false, false),
         (P::STATUS_FLAGS, false, false),
+        (P::RELIABILITY, true, true),
         (P::OUT_OF_SERVICE, false, true),
         (P::LIST_OF_OBJECT_PROPERTY_REFERENCES, false, true),
         (P::EXECUTION_DELAY, true, true),

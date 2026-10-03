@@ -1,68 +1,79 @@
 //! Passing a Channel object's Present_Value on to its members (Clause 12.53,
-//! #1151).
+//! #1151, #1264).
 //!
 //! Each member's Execution_Delay is measured from the moment the
 //! distribution starts, so the delays overlap rather than add up
 //! (Clause 12.53.12): the members go in order of delay, list order among
-//! equal delays, each as soon as its time is reached.
+//! equal delays, each as soon as its time is reached. They go one at a time,
+//! so a member whose time comes while a write in another device waits for its
+//! answer is written once that write ends: its delay is the least it waits.
 //!
-//! For each member the runner looks up the datatype of the property's current
-//! value, coerces the channel value to it (Table 12-63) and writes the result
-//! through the host's write path at the priority the Present_Value write
-//! carried, or none if it carried none. A coercion failure means that member
-//! isn't written. A refused write counts as a failure too, with one
-//! exception: a NULL refused as an invalid datatype, so one channel can
-//! relinquish its commandable members while its other members ignore the
-//! NULL (Clause 12.53.7). One failure doesn't stop the rest
-//! (Clause 12.53.5.8); once every member has been tried, the Channel's
-//! Write_Status becomes SUCCESSFUL or FAILED.
+//! For a member in this device the runner looks up the datatype of the
+//! property's current value, coerces the channel value to it (Table 12-63)
+//! and writes the result through the host's local write path at the priority
+//! the Present_Value write carried, or none if it carried none. A member
+//! naming another Device goes out as a confirmed WriteProperty through
+//! [`RunHost::write_remote`] (Clause 12.53.11 leaves the method open). Its
+//! datatype is unknown here, so the value goes as written, except that a
+//! lighting command still goes only to Lighting_Command; the device itself
+//! refuses a datatype its property doesn't take.
+//!
+//! A coercion failure means that member isn't written, and counts as a
+//! configuration failure: the member's datatype doesn't fit the value. A
+//! refused or unanswered write counts as a failure too (sorted in `target`),
+//! with one exception: a NULL refused as an invalid datatype, by an Error or
+//! a Reject, so one channel can relinquish its commandable members while its
+//! other members ignore the NULL (Clause 12.53.7). One failure doesn't stop
+//! the rest (Clause 12.53.5.8); once every member has been tried, the
+//! Channel's Write_Status becomes SUCCESSFUL or FAILED and its Reliability
+//! takes the first failure's kind (Clause 12.53.9).
 
 use bacnet_objects::channel::{
     coerce_channel_value, ChannelDistribution, ChannelMember, MemberDatatype,
 };
-use bacnet_objects::command::CommandRun;
+use bacnet_objects::command::{CommandRun, WriteFailure};
 use bacnet_types::constructed::BACnetActionCommand;
-use bacnet_types::enums::{ErrorCode, PropertyIdentifier};
-use bacnet_types::error::Error;
+use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::PropertyValue;
 use tracing::debug;
 
+use super::target::{self, Failed};
 use super::{Owner, RunHost};
 
-/// Write each member once its delay is up: whether all succeeded, or `None`
-/// once the run is stale.
+/// Write each member once its delay is up: `Ok` if all succeeded, otherwise
+/// the first failure, or `None` once the run is stale.
 pub(super) async fn distribute<H: RunHost>(
     host: &H,
     run: &CommandRun,
     distribution: &ChannelDistribution,
     owner: &mut Owner<'_, H>,
-) -> Option<bool> {
+) -> Option<Result<(), WriteFailure>> {
     let start = tokio::time::Instant::now();
     let mut members: Vec<&ChannelMember> = distribution.members.iter().collect();
     members.sort_by_key(|member| member.delay_ms);
-    let mut all_succeeded = true;
+    let mut outcome = Ok(());
     for (written, member) in members.into_iter().enumerate() {
         if member.delay_ms > 0 {
             let due = start + std::time::Duration::from_millis(member.delay_ms.into());
             tokio::time::sleep_until(due).await;
         }
-        all_succeeded &= write_member(host, run, distribution, member).await?;
-        owner.progress(written + 1, all_succeeded);
+        outcome = outcome.and(write_member(host, run, distribution, member).await?);
+        owner.progress(written + 1, outcome);
     }
-    Some(all_succeeded)
+    Some(outcome)
 }
 
-/// Write one member; whether that counts as a success. `None` once the run
-/// is stale.
+/// Write one member: `Ok` if that counts as a success, otherwise how it
+/// failed. `None` once the run is stale.
 async fn write_member<H: RunHost>(
     host: &H,
     run: &CommandRun,
     distribution: &ChannelDistribution,
     member: &ChannelMember,
-) -> Option<bool> {
+) -> Option<Result<(), WriteFailure>> {
     let reference = &member.reference;
     let property = PropertyIdentifier::from_raw(reference.property_identifier);
-    let datatype = {
+    let (device, datatype) = {
         let db = host.database().read().await;
         if db
             .get(&run.source)
@@ -71,25 +82,34 @@ async fn write_member<H: RunHost>(
         {
             return None;
         }
-        let current = db.get(&reference.object_identifier).and_then(|object| {
-            object
-                .read_property(property, reference.property_array_index)
-                .ok()
-        });
-        MemberDatatype::of(property, current.as_ref())
+        // A member naming this Device is local, as one naming none is.
+        if db.local_device().is_local(reference.device_identifier) {
+            let current = db.get(&reference.object_identifier).and_then(|object| {
+                object
+                    .read_property(property, reference.property_array_index)
+                    .ok()
+            });
+            (None, MemberDatatype::of(property, current.as_ref()))
+        } else {
+            (
+                reference.device_identifier,
+                MemberDatatype::of(property, None),
+            )
+        }
     };
     let Ok(value) = coerce_channel_value(&distribution.value, datatype) else {
         debug!(
             channel = %run.source,
+            device = ?device,
             target = %reference.object_identifier,
             ?property,
             ?datatype,
             "Channel value can't be coerced to the member's datatype"
         );
-        return Some(false);
+        return Some(Err(WriteFailure::Configuration));
     };
     let command = BACnetActionCommand {
-        device_identifier: None,
+        device_identifier: device,
         object_identifier: reference.object_identifier,
         property_identifier: property,
         property_array_index: reference.property_array_index,
@@ -99,31 +119,16 @@ async fn write_member<H: RunHost>(
         quit_on_failure: false,
         write_successful: false,
     };
-    match host.write(run, &command).await {
-        Ok(()) => Some(true),
-        Err(error)
-            if command.property_value == PropertyValue::Null && is_invalid_datatype(&error) =>
+    Some(match target::write(host, run, device, &command).await {
+        Ok(()) => Ok(()),
+        Err(Failed {
+            answer: Some(answer),
+            ..
+        }) if command.property_value == PropertyValue::Null
+            && target::refuses_datatype(&answer) =>
         {
-            Some(true)
+            Ok(())
         }
-        Err(error) => {
-            debug!(
-                channel = %run.source,
-                target = %reference.object_identifier,
-                ?property,
-                %error,
-                "Channel member write failed"
-            );
-            Some(false)
-        }
-    }
-}
-
-/// Whether a refused write named the value's datatype as the reason.
-fn is_invalid_datatype(error: &Error) -> bool {
-    let invalid = ErrorCode::INVALID_DATA_TYPE.to_raw() as u32;
-    matches!(
-        error,
-        Error::Protocol { code, .. } | Error::Structured { code, .. } if *code == invalid
-    )
+        Err(failed) => Err(failed.failure),
+    })
 }

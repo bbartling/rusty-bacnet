@@ -149,3 +149,55 @@ async fn refused_command_run_marks_every_command_unsuccessful() {
         [false, false]
     );
 }
+
+#[tokio::test]
+async fn unattached_channel_member_in_another_device_fails_unsent() {
+    // No network here: the member in Device 9 fails as a process error, and
+    // the local one is still written.
+    let ch1 = oid(ObjectType::CHANNEL, 1);
+    let ao1 = oid(ObjectType::ANALOG_VALUE, 1);
+    let local = BACnetDeviceObjectPropertyReference::new_local(
+        ao1,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    );
+    let remote = BACnetDeviceObjectPropertyReference {
+        device_identifier: Some(oid(ObjectType::DEVICE, 9)),
+        ..local.clone()
+    };
+    let mut channel = ChannelObject::new(1, "CH-1", 7).unwrap();
+    channel.set_members(vec![remote, local]).unwrap();
+    let mut objects = ObjectDatabase::new();
+    let device = bacnet_objects::device::DeviceConfig::default();
+    objects
+        .add(Box::new(
+            bacnet_objects::device::DeviceObject::new(device).unwrap(),
+        ))
+        .unwrap();
+    objects.add(Box::new(channel)).unwrap();
+    objects
+        .add(Box::new(
+            bacnet_objects::analog::AnalogValueObject::new(1, "AV-1", 62).unwrap(),
+        ))
+        .unwrap();
+    write_pv(&mut objects, ch1, PropertyValue::Real(4.0));
+    let run = objects
+        .get_mut(&ch1)
+        .unwrap()
+        .take_command_run_internal()
+        .unwrap();
+    let db = Arc::new(RwLock::new(objects));
+    run_unattached(&db, vec![run]).await;
+    let objects = db.read().await;
+    assert_eq!(
+        read(&objects, ch1, PropertyIdentifier::WRITE_STATUS),
+        PropertyValue::Enumerated(WriteStatus::FAILED.to_raw())
+    );
+    assert_eq!(
+        read(&objects, ch1, PropertyIdentifier::RELIABILITY),
+        PropertyValue::Enumerated(bacnet_types::enums::Reliability::PROCESS_ERROR.to_raw())
+    );
+    assert_eq!(
+        read(&objects, ao1, PropertyIdentifier::PRESENT_VALUE),
+        PropertyValue::Real(4.0)
+    );
+}
