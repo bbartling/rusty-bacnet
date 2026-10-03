@@ -305,20 +305,8 @@ impl BACnetClient {
         };
         req.encode(&mut BytesMut::new())
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        let broadcast = match (&address, network) {
-            (Some(_), Some(_)) => {
-                return Err(PyValueError::new_err(
-                    "give an address or a network, not both",
-                ))
-            }
-            (Some(_), None) => None,
-            (None, None) => Some(WriteGroupDestination::LocalBroadcast),
-            (None, Some(0)) => {
-                return Err(PyValueError::new_err("network must be 1-65535"));
-            }
-            (None, Some(u16::MAX)) => Some(WriteGroupDestination::GlobalBroadcast),
-            (None, Some(network)) => Some(WriteGroupDestination::RemoteBroadcast(network)),
-        };
+        let broadcast =
+            write_group_broadcast(address.is_some(), network).map_err(PyValueError::new_err)?;
 
         let inner = self.inner.clone();
         let future = async move {
@@ -339,5 +327,49 @@ impl BACnetClient {
             Ok(())
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
+    }
+}
+
+/// The broadcast `write_group`'s arguments ask for, or `None` for the one
+/// device at the given address. Python's `address=None` is `has_address`
+/// false; `network` 65535 means every network.
+fn write_group_broadcast(
+    has_address: bool,
+    network: Option<u16>,
+) -> Result<Option<WriteGroupDestination>, &'static str> {
+    match (has_address, network) {
+        (true, Some(_)) => Err("give an address or a network, not both"),
+        (true, None) => Ok(None),
+        (false, None) => Ok(Some(WriteGroupDestination::LocalBroadcast)),
+        (false, Some(0)) => Err("network must be 1-65535"),
+        (false, Some(u16::MAX)) => Ok(Some(WriteGroupDestination::GlobalBroadcast)),
+        (false, Some(network)) => Ok(Some(WriteGroupDestination::RemoteBroadcast(network))),
+    }
+}
+
+#[cfg(test)]
+mod write_group_destination_tests {
+    use super::*;
+
+    /// Python's broadcast tests can't read what a broadcast puts on the link,
+    /// so this pins which destination each argument form picks; the
+    /// bacnet-client WriteGroup tests pin each destination's NPDU.
+    #[test]
+    fn write_group_address_and_network_pick_the_destination() {
+        use WriteGroupDestination::{GlobalBroadcast, LocalBroadcast, RemoteBroadcast};
+        assert_eq!(write_group_broadcast(true, None), Ok(None));
+        assert_eq!(write_group_broadcast(false, None), Ok(Some(LocalBroadcast)));
+        for network in [1, 5, 65534] {
+            assert_eq!(
+                write_group_broadcast(false, Some(network)),
+                Ok(Some(RemoteBroadcast(network)))
+            );
+        }
+        assert_eq!(
+            write_group_broadcast(false, Some(65535)),
+            Ok(Some(GlobalBroadcast))
+        );
+        assert!(write_group_broadcast(false, Some(0)).is_err());
+        assert!(write_group_broadcast(true, Some(5)).is_err());
     }
 }

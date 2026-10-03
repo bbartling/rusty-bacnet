@@ -36,10 +36,19 @@ pub(super) enum LocalWrite {
     /// The application supplying a Life Safety object's `Tracking_Value`.
     ApplicationTrackingValue,
     /// One value of an inbound WriteGroup for a Channel's `Present_Value`, at
-    /// the priority the request gave it (Clause 15.11). It comes from the
-    /// network, so it carries no local command source and makes no Audit
-    /// record.
-    WriteGroup { priority: u8 },
+    /// the priority the request gave it (Clause 15.11). Under the write guard
+    /// the Channel takes it only while its Control_Groups still holds `group`
+    /// and its Channel_Number is still `number`; otherwise the write is
+    /// skipped and queues nothing. With `inhibit_delay`, the run it queues
+    /// loses its delays when Allow_Group_Delay_Inhibit is TRUE at that moment.
+    /// It comes from the network, so it carries no local command source and
+    /// makes no Audit record.
+    WriteGroup {
+        group: u32,
+        number: u16,
+        priority: u8,
+        inhibit_delay: bool,
+    },
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -524,6 +533,29 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                     db.check_name_available(oid, new_name)?;
                 }
             }
+            // A WriteGroup was planned under an earlier guard; the Channel
+            // may have left the group or changed number since.
+            let mut group_skips_delays = false;
+            if let LocalWrite::WriteGroup {
+                group,
+                number,
+                inhibit_delay,
+                ..
+            } = write
+            {
+                let object = db.get(oid).expect("existence checked above");
+                if !super::write_group::qualifies(object, group, number) {
+                    debug!(
+                        channel = %oid,
+                        group,
+                        number,
+                        "WriteGroup skips a Channel no longer in the group with that number"
+                    );
+                    return Ok(Vec::new());
+                }
+                group_skips_delays =
+                    inhibit_delay && super::write_group::allows_delay_inhibit(object);
+            }
             let mut audit = match write {
                 LocalWrite::Property {
                     property,
@@ -637,7 +669,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                     LocalWrite::ApplicationTrackingValue => {
                         object.set_tracking_value_internal(value)
                     }
-                    LocalWrite::WriteGroup { priority } => object.write_property(
+                    LocalWrite::WriteGroup { priority, .. } => object.write_property(
                         PropertyIdentifier::PRESENT_VALUE,
                         None,
                         value,
@@ -659,7 +691,11 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             }
             let staging_plans =
                 BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(oid));
-            let command_runs = crate::command_lists::take_runs(&mut db, std::slice::from_ref(oid));
+            let mut command_runs =
+                crate::command_lists::take_runs(&mut db, std::slice::from_ref(oid));
+            if group_skips_delays {
+                super::write_group::skip_delays(&mut command_runs, *oid);
+            }
             let changes = snapshots.changes(&db, std::slice::from_ref(oid));
             let capture = {
                 let table = self.cov_table.read().await;

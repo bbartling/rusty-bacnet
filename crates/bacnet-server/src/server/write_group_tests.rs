@@ -168,49 +168,38 @@ async fn assert_untouched(h: &Harness) {
 fn write_group_plan_matches_group_and_number_per_channel_in_instance_order() {
     let mut db = ObjectDatabase::new();
     objects(&mut db);
-    let mut inhibited = request(
-        27,
-        8,
-        vec![
-            entry(13, Some(3), real(1.0)),
-            entry(11, None, real(2.0)),
-            entry(11, None, real(3.0)),
-            entry(12, None, real(4.0)),
-        ],
-    );
-    inhibited.inhibit_delay = Some(true);
-    let planned = |request: &WriteGroupRequest| -> Vec<(u32, u8, bool, Vec<u8>)> {
+    let planned = |request: &WriteGroupRequest| -> Vec<(u32, u16, u8, Vec<u8>)> {
         plan(&db, request)
             .into_iter()
             .map(|write| {
                 let instance = write.channel.instance_number();
-                (
-                    instance,
-                    write.priority,
-                    write.skip_delays,
-                    write.value.to_vec(),
-                )
+                (instance, write.number, write.priority, write.value.to_vec())
             })
             .collect()
     };
-    // CH-2 shares channel 11 but not the group; only CH-4 may skip delays.
+    // CH-2 shares channel 11 but not the group.
     assert_eq!(
-        planned(&inhibited),
+        planned(&request(
+            27,
+            8,
+            vec![
+                entry(13, Some(3), real(1.0)),
+                entry(11, None, real(2.0)),
+                entry(11, None, real(3.0)),
+                entry(12, None, real(4.0)),
+            ],
+        )),
         [
-            (4, 3, true, real(1.0)),
-            (5, 3, false, real(1.0)),
-            (1, 8, false, real(2.0)),
-            (1, 8, false, real(3.0)),
-            (3, 8, false, real(4.0)),
+            (4, 13, 3, real(1.0)),
+            (5, 13, 3, real(1.0)),
+            (1, 11, 8, real(2.0)),
+            (1, 11, 8, real(3.0)),
+            (3, 12, 8, real(4.0)),
         ]
     );
-    for inhibit in [None, Some(false)] {
-        inhibited.inhibit_delay = inhibit;
-        assert!(planned(&inhibited).iter().all(|(.., skip, _)| !skip));
-    }
     assert_eq!(
         planned(&request(14, 16, vec![entry(11, None, real(5.0))])),
-        [(2, 16, false, real(5.0))]
+        [(2, 11, 16, real(5.0))]
     );
     // No Channel lists group 6, and group 5 has no channel 11.
     assert!(planned(&request(6, 8, vec![entry(11, None, real(5.0))])).is_empty());
@@ -359,5 +348,75 @@ async fn write_group_malformed_requests_are_dropped_without_an_answer() {
     assert_untouched(&h).await;
     send_raw(&h, &good).await;
     assert_eq!(slot(&h, ao(1), 8).await, PropertyValue::Real(5.0));
+    assert_silent(&h);
+}
+
+/// Plan `request` on the server's database, let `change` edit that database,
+/// then make the planned writes, as when a write lands between the plan and
+/// a Channel's own write guard.
+async fn plan_change_apply(
+    h: &Harness,
+    request: &WriteGroupRequest,
+    change: impl FnOnce(&mut ObjectDatabase),
+) {
+    let writes = plan(&*h.server.database().read().await, request);
+    assert!(!writes.is_empty(), "nothing planned");
+    change(&mut *h.server.database().write().await);
+    apply(&CommandRunner::for_server(&h.server), request, &writes).await;
+    h.settle().await;
+}
+
+fn write_channel_property(
+    db: &mut ObjectDatabase,
+    instance: u32,
+    property: PropertyIdentifier,
+    value: PropertyValue,
+) {
+    db.get_mut(&ch(instance))
+        .unwrap()
+        .write_property(property, None, value, None)
+        .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn write_group_skips_a_channel_that_left_the_group_after_the_plan() {
+    let h = start(ServerConfig::default()).await;
+    let write = request(
+        27,
+        8,
+        vec![entry(11, None, real(5.0)), entry(12, None, real(6.0))],
+    );
+    // The plan picks CH-1 (channel 11) and CH-3 (channel 12). Before their
+    // writes CH-1 moves to group 14 and CH-3 to channel 13.
+    plan_change_apply(&h, &write, |db| {
+        let groups = PropertyValue::List(vec![PropertyValue::Unsigned(14)]);
+        write_channel_property(db, 1, PropertyIdentifier::CONTROL_GROUPS, groups);
+        let number = PropertyValue::Unsigned(13);
+        write_channel_property(db, 3, PropertyIdentifier::CHANNEL_NUMBER, number);
+    })
+    .await;
+    assert_untouched(&h).await;
+    assert_silent(&h);
+}
+
+#[tokio::test(start_paused = true)]
+async fn write_group_reads_allow_group_delay_inhibit_at_the_write() {
+    let h = start(ServerConfig::default()).await;
+    let mut inhibited = request(27, 8, vec![entry(13, None, real(3.0))]);
+    inhibited.inhibit_delay = Some(true);
+    // CH-4 allowed the inhibit when planned and stops before its write, so
+    // AO-4 waits its 500 ms.
+    plan_change_apply(&h, &inhibited, |db| {
+        let allow = PropertyValue::Boolean(false);
+        write_channel_property(db, 4, PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT, allow);
+    })
+    .await;
+    assert_eq!(present_value(&h, 4).await, PropertyValue::Real(3.0));
+    assert_eq!(slot(&h, ao(4), 8).await, PropertyValue::Null);
+    assert_eq!(status(&h, 4).await, WriteStatus::IN_PROGRESS);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    h.settle().await;
+    assert_eq!(slot(&h, ao(4), 8).await, PropertyValue::Real(3.0));
+    assert_eq!(status(&h, 4).await, WriteStatus::SUCCESSFUL);
     assert_silent(&h);
 }

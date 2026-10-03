@@ -2547,13 +2547,20 @@ device is in it. When the request sets Inhibit Delay, a Channel whose
 Allow_Group_Delay_Inhibit is TRUE (`set_allow_group_delay_inhibit`, or a
 network write) writes all its members at once; the others keep their delays.
 A Channel that refuses its value, as a busy one does, doesn't stop the rest.
+A channel number listed twice in one change list reaches the same Channels
+twice: the later value is refused as busy while the distribution the earlier
+one queued is still running, and taken once it has finished, so which value
+stays depends on timing. Each Channel is checked again when its own write
+runs: one that has left the group or changed its number by then is skipped,
+and one whose Allow_Group_Delay_Inhibit is FALSE by then keeps its delays.
 Nothing is answered and a malformed request is dropped. DCC's
 DISABLE_INITIATION leaves WriteGroup running, as it only stops what the device
 starts; the deprecated DISABLE state, which the server never accepts over the
 network, would drop it. Every WriteGroup is dropped while the server's
 `mutation_policy` is `DenyAll` or a `mutation_authorizer` is installed, because
-the authorizer only decides confirmed services. The Channel writes make no
-Audit records, and the endpoint responder ignores WriteGroup.
+the authorizer only decides confirmed services (#1319); those drops aren't
+counted in `mutation_decision_counters()`. The Channel writes make no Audit
+records (#1318), and the endpoint responder ignores WriteGroup.
 
 Channel runs are owned as Command runs are (#1178). Without a server,
 `tick_schedules` runs a distribution its Schedule writes start before it
@@ -4004,7 +4011,11 @@ each element in order and retains an authorized prefix on later denial or
 malformed input; other covered services authorize once after service decoding.
 Callbacks must be fast, nonblocking, and side-effect-free. Context addresses and
 process IDs are claimed, not authenticated identities. DCC/Reinit, Audit/LifeSafety,
-reads, discovery, unconfirmed services, and trusted local writes are unchanged.
+reads, discovery, trusted local writes and unconfirmed services other than WriteGroup
+are unchanged. The callback can't decide an inbound WriteGroup, so an installed
+authorizer, even one that allows everything, drops every inbound WriteGroup without
+being called, and so does `MutationPolicy::DenyAll` (#1319 tracks letting the
+authorizer decide). Those drops aren't counted in `mutation_decision_counters()`.
 
 Each decision context also carries the reassembled ingress snapshot
 (`provenance: TransportProvenance`) and the derived channel/relay scope

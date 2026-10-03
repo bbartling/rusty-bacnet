@@ -19,6 +19,17 @@
 //! debug and the rest still go (Clause 15.11.2). The service is unconfirmed:
 //! nothing goes back, and a request the codec refuses is dropped.
 //!
+//! The plan is made under a read guard and each write takes the write guard
+//! afterwards, so another write can change a Channel in between.
+//! [`LocalWriter`] checks the Channel again under its write guard: one that
+//! has left the group or taken another Channel_Number since the plan is
+//! skipped, logged at debug, and Allow_Group_Delay_Inhibit is read there too.
+//!
+//! A channel number listed twice in one change list reaches the same
+//! Channels twice, in list order. The later value is refused as BUSY while
+//! the distribution the earlier one queued is still running and taken once
+//! it has finished, so which value stays depends on timing.
+//!
 //! The Inhibit Delay flag zeroes the delays of a Channel's distribution only
 //! when that Channel's Allow_Group_Delay_Inhibit is TRUE (Clause 12.53.13);
 //! otherwise each member waits its Execution_Delay as usual.
@@ -26,8 +37,10 @@
 //! WriteGroup carries no invoke ID and isn't one of the confirmed services
 //! the mutation authorizer decides, so a server that restricts network
 //! writes, with [`MutationPolicy::DenyAll`] or an installed authorizer, drops
-//! every WriteGroup rather than let one past its policy. The writes make no
-//! Audit records, and DCC's DISABLE drops the request before it gets here.
+//! every WriteGroup rather than let one past its policy (#1319 tracks letting
+//! the authorizer decide). These drops aren't counted in the mutation
+//! decision counters. The writes make no Audit records (#1318), and DCC's
+//! DISABLE drops the request before it gets here.
 
 use super::command_runs::CommandRunner;
 use super::local_writes::{LocalWrite, LocalWriter};
@@ -42,11 +55,12 @@ use bacnet_services::write_group::WriteGroupRequest;
 #[derive(Debug, Clone, PartialEq)]
 struct GroupWrite<'r> {
     channel: ObjectIdentifier,
+    /// The change-list entry's channel number, the Channel's Channel_Number
+    /// when planned.
+    number: u16,
     /// The entry's BACnetChannelValue, as the codec checked it.
     value: &'r [u8],
     priority: u8,
-    /// The request asked for no delays and this Channel allows that.
-    skip_delays: bool,
 }
 
 /// Whether local policy lets an inbound WriteGroup change anything.
@@ -72,20 +86,37 @@ fn in_group(object: &dyn BACnetObject, group: u32) -> bool {
     }
 }
 
+/// Whether `object` still takes a WriteGroup value for `group` and channel
+/// `number`: its Control_Groups holds the group and its Channel_Number is the
+/// number.
+pub(super) fn qualifies(object: &dyn BACnetObject, group: u32, number: u16) -> bool {
+    in_group(object, group) && channel_number(object) == Some(number)
+}
+
 /// Whether `object`'s Allow_Group_Delay_Inhibit is present and TRUE.
-fn allows_delay_inhibit(object: &dyn BACnetObject) -> bool {
+pub(super) fn allows_delay_inhibit(object: &dyn BACnetObject) -> bool {
     matches!(
         object.read_property(PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT, None),
         Ok(PropertyValue::Boolean(true))
     )
 }
 
+/// Zero the member delays of the distribution `channel` queued in `runs`.
+pub(super) fn skip_delays(runs: &mut [CommandRun], channel: ObjectIdentifier) {
+    for run in runs.iter_mut().filter(|run| run.source == channel) {
+        if let RunPlan::Channel(distribution) = &mut run.plan {
+            for member in &mut distribution.members {
+                member.delay_ms = 0;
+            }
+        }
+    }
+}
+
 /// The writes `request` asks of `db`'s Channels: change-list order, and
 /// Channels by instance within one entry.
 fn plan<'r>(db: &ObjectDatabase, request: &'r WriteGroupRequest) -> Vec<GroupWrite<'r>> {
     let group = request.group_number.get();
-    let inhibit = request.inhibit_delay == Some(true);
-    let mut members: Vec<(ObjectIdentifier, u16, bool)> = db
+    let mut members: Vec<(ObjectIdentifier, u16)> = db
         .find_by_type(ObjectType::CHANNEL)
         .into_iter()
         .filter_map(|oid| {
@@ -93,11 +124,10 @@ fn plan<'r>(db: &ObjectDatabase, request: &'r WriteGroupRequest) -> Vec<GroupWri
             if !in_group(object, group) {
                 return None;
             }
-            let skip_delays = inhibit && allows_delay_inhibit(object);
-            Some((oid, channel_number(object)?, skip_delays))
+            Some((oid, channel_number(object)?))
         })
         .collect();
-    members.sort_by_key(|(oid, ..)| oid.instance_number());
+    members.sort_by_key(|(oid, _)| oid.instance_number());
     request
         .change_list
         .iter()
@@ -105,21 +135,22 @@ fn plan<'r>(db: &ObjectDatabase, request: &'r WriteGroupRequest) -> Vec<GroupWri
             let priority = entry.override_priority.unwrap_or(request.write_priority);
             members
                 .iter()
-                .filter(move |(_, number, _)| *number == entry.channel)
-                .map(move |&(channel, _, skip_delays)| GroupWrite {
+                .filter(move |(_, number)| *number == entry.channel)
+                .map(move |&(channel, number)| GroupWrite {
                     channel,
+                    number,
                     value: &entry.value,
                     priority,
-                    skip_delays,
                 })
         })
         .collect()
 }
 
-/// Write one value to its Channel; the runs that queued, delays zeroed where
-/// the inhibit applies.
+/// Write one value to its Channel; the runs that queued. [`LocalWriter`]
+/// checks the Channel again and applies the inhibit under its write guard.
 async fn write_channel<T: TransportPort + 'static>(
     writer: &LocalWriter<'_, T>,
+    request: &WriteGroupRequest,
     write: &GroupWrite<'_>,
 ) -> Result<Vec<CommandRun>, Error> {
     let value = handlers::decode_write_property_value(
@@ -127,26 +158,13 @@ async fn write_channel<T: TransportPort + 'static>(
         None,
         write.value,
     )?;
-    let mut runs = writer
-        .write(
-            &write.channel,
-            LocalWrite::WriteGroup {
-                priority: write.priority,
-            },
-            value,
-            None,
-        )
-        .await?;
-    if write.skip_delays {
-        for run in runs.iter_mut().filter(|run| run.source == write.channel) {
-            if let RunPlan::Channel(distribution) = &mut run.plan {
-                for member in &mut distribution.members {
-                    member.delay_ms = 0;
-                }
-            }
-        }
-    }
-    Ok(runs)
+    let write_group = LocalWrite::WriteGroup {
+        group: request.group_number.get(),
+        number: write.number,
+        priority: write.priority,
+        inhibit_delay: request.inhibit_delay == Some(true),
+    };
+    writer.write(&write.channel, write_group, value, None).await
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -173,18 +191,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if writes.is_empty() {
             return;
         }
-        let runner = CommandRunner::for_unconfirmed(services);
-        let writer = runner.writer();
-        for write in &writes {
-            match write_channel(&writer, write).await {
-                Ok(runs) => runner.start(runs),
-                Err(error) => debug!(
-                    channel = %write.channel,
-                    priority = write.priority,
-                    %error,
-                    "WriteGroup value refused by its Channel"
-                ),
-            }
+        apply(&CommandRunner::for_unconfirmed(services), &request, &writes).await;
+    }
+}
+
+/// Make `writes` in order and start the runs they queue. A refused write is
+/// logged and the rest still go.
+async fn apply<T: TransportPort + 'static>(
+    runner: &CommandRunner<T>,
+    request: &WriteGroupRequest,
+    writes: &[GroupWrite<'_>],
+) {
+    let writer = runner.writer();
+    for write in writes {
+        match write_channel(&writer, request, write).await {
+            Ok(runs) => runner.start(runs),
+            Err(error) => debug!(
+                channel = %write.channel,
+                priority = write.priority,
+                %error,
+                "WriteGroup value refused by its Channel"
+            ),
         }
     }
 }

@@ -67,8 +67,13 @@ class WriteGroupTests(unittest.IsolatedAsyncioTestCase):
                     await client.write_group(None, 1, 8, entry, network=network)
 
     async def test_broadcasts_are_sent(self):
-        # The broadcast address is the client's own, so each broadcast loops
-        # back to it; the call returns once the request is on the link.
+        # Argument handling on a started client: each broadcast form gets
+        # through to the link without an error. The broadcast address is the
+        # client's own, so each one loops back to it and its bytes can't be
+        # read here. The Rust test write_group_address_and_network_pick_the_destination
+        # pins which destination each form picks, and the bacnet-client
+        # WriteGroup tests pin each destination's NPDU. test_exact_wire_bytes
+        # below pins the unicast bytes.
         async with BACnetClient(
             interface="127.0.0.1", port=0, broadcast_address="127.0.0.1"
         ) as client:

@@ -521,7 +521,8 @@
    "notes": [
     "Refs #768. Keyword-only mutation_policy accepts permissive (native default) or deny_all and stores the native enum. Invalid strings/type fail synchronously before transport preparation or startup drain.",
     "The generic builder owns one gate across transports; installed B/IP tests cover exact denial and unchanged property/object/list/file state, denied COV, default/explicit permissive writes, remote reads and trusted local writes.",
-    "Native tests retain exhaustive ten-service policy/authorizer/counter coverage. No Python callbacks, duplicate gate, certificate principal or broader clause qualification. DCC, ReinitializeDevice, LifeSafety, Audit and endpoint Device-write authorization remain separate; #524 remains open. Global evidence pins and existing row statuses are unchanged."
+    "Native tests retain exhaustive ten-service policy/authorizer/counter coverage. No Python callbacks, duplicate gate, certificate principal or broader clause qualification. DCC, ReinitializeDevice, LifeSafety, Audit and endpoint Device-write authorization remain separate; #524 remains open. Global evidence pins and existing row statuses are unchanged.",
+    "Inbound WriteGroup is outside the ten services: `DenyAll` or any installed authorizer drops every WriteGroup without calling the callback or counting a decision."
    ]
   },
   {
@@ -3600,11 +3601,13 @@
     "crates/bacnet-objects/src/channel/tests.rs::channel_allow_group_delay_inhibit_starts_false_and_takes_boolean_writes",
     "crates/bacnet-objects/src/device/tests.rs::read_protocol_services_supported",
     "crates/bacnet-server/src/pics/tests.rs::{executed_services_match_dispatch_table,services_match_implementation}",
-    "crates/rusty-bacnet/tests/test_write_group_who_am_i.py::WriteGroupTests::{test_exact_wire_bytes,test_broadcasts_are_sent}"
+    "crates/rusty-bacnet/tests/test_write_group_who_am_i.py::WriteGroupTests::{test_exact_wire_bytes,test_broadcasts_are_sent}",
+    "crates/rusty-bacnet/src/client/client_methods/enrollment_alarm_covmulti_who_writegroup.rs::write_group_address_and_network_pick_the_destination"
    ],
    "negative_tests": [
-    "crates/bacnet-server/src/server/write_group_tests.rs::{write_group_is_dropped_under_dcc_disable_and_runs_under_disable_initiation,write_group_is_dropped_when_local_policy_restricts_network_writes,write_group_malformed_requests_are_dropped_without_an_answer}",
+    "crates/bacnet-server/src/server/write_group_tests.rs::{write_group_is_dropped_under_dcc_disable_and_runs_under_disable_initiation,write_group_is_dropped_when_local_policy_restricts_network_writes,write_group_malformed_requests_are_dropped_without_an_answer,write_group_skips_a_channel_that_left_the_group_after_the_plan,write_group_reads_allow_group_delay_inhibit_at_the_write}",
     "crates/bacnet-server/src/server/requests/endpoint_responder_tests.rs::responder_ignores_write_group_and_leaves_its_channels_alone",
+    "crates/bacnet-endpoint/src/device_execution_tests.rs::endpoint_execution_profile_refusals_precede_ingress_and_allow_repair",
     "crates/bacnet-client/src/client/write_group_tests.rs::write_group_refuses_a_bad_request_or_network_before_sending",
     "crates/bacnet-services/src/write_group_tests.rs::{decode_rejects_group_zero_as_decoding_error,decode_rejects_trailing_data,decode_rejects_every_truncation}",
     "crates/rusty-bacnet/tests/test_write_group_who_am_i.py::WriteGroupTests::{test_destination_arguments,test_invalid_arguments_raise_before_address_and_start}"
@@ -3616,11 +3619,11 @@
     "docs/python-api.md#write-group"
    ],
    "notes": [
-    "Group membership is each Channel's own `Control_Groups`: a Channel outside the group keeps its value even when another Channel in the device is in it.",
+    "Group membership is each Channel's own `Control_Groups`: a Channel outside the group keeps its value even when another Channel in the device is in it. Group and number are checked again under each write's guard.",
     "Each value is a Present_Value write through the local write path at the entry's priority, else the request's, so BUSY, coercion, delays, `Write_Status` and the run chain act as for WriteProperty.",
     "Inhibit Delay zeroes a distribution's delays only on a Channel whose `Allow_Group_Delay_Inhibit` is TRUE. A refused value doesn't stop the rest of the change list.",
     "Nothing is answered. A malformed request is dropped, and so is every WriteGroup under `MutationPolicy::DenyAll` or an installed mutation authorizer. DISABLE_INITIATION leaves it running.",
-    "The endpoint responder ignores WriteGroup and its profile refuses to declare it. Python's `write_group` broadcasts with `address=None`, on a remote network with the `network` keyword."
+    "The endpoint responder neither answers nor executes WriteGroup, and the endpoint refuses an identity that declares it. Python's `write_group` broadcasts with `address=None`, on a remote network with the `network` keyword."
    ],
    "gaps": [
     "#1318: The Channel writes a WriteGroup makes produce no Audit records",
