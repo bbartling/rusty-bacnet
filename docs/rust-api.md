@@ -1361,6 +1361,8 @@ let (side_a, side_b) = LoopbackTransport::pair(
 
 In-process channel-based transport for composing a client and server without real network sockets (e.g. inside an HTTP gateway). `LoopbackTransport::pair()` creates two connected transports backed by `tokio::sync::mpsc` channels — sending on one delivers to the other. Available as `AnyTransport::Loopback` for use with the enum dispatch wrapper.
 
+The peer receives every frame, whatever MAC a unicast was sent to. For tests that need to know, `record_unicast_destinations()` returns a receiver of those MACs, in the order the peer receives the unicast frames (#1243). Call it before handing the transport to a router or network layer; dropping the receiver stops the record.
+
 ### AnyTransport (enum dispatch)
 
 ```rust
@@ -1499,7 +1501,8 @@ The builder methods turn options on, in any combination: `track_admission()`
 makes the local receiver an `AdmissionReceiver` with queue snapshots and a
 per-source quota, `control_policy()` and `control_authorizer()` set the RB-09
 gate for routing controls, and `network_control_receiver()` adds the receiver
-described below. The start returns a `StartedRouter` holding the router, the
+described below (`network_control_receiver_with_admission()` for a tracked
+one). The start returns a `StartedRouter` holding the router, the
 local APDU receiver and, when asked for, the network-control receiver.
 
 ```rust
@@ -1547,10 +1550,27 @@ port attached to its DNET, is addressed to the router itself (#1175). It
 updates the routing table and goes no further. Start the router with
 `RouterOptions::network_control_receiver()` to also get these rejects as
 `ReceivedNetworkControl` records, the same type a non-router
-`NetworkLayer` control receiver yields. A client or server attached to a
-router through a `LoopbackTransport` port does not need this: it is an
-ordinary node on that port's network, and rejects for its requests reach its
-own `NetworkLayer`.
+`NetworkLayer` control receiver yields. That receiver is a raw
+`mpsc::Receiver`. `RouterOptions::network_control_receiver_with_admission()`
+returns the same stream as an `AdmissionReceiver` instead, as
+`NetworkLayer::enable_network_control_receiver_with_admission()` does
+(#1242): its `counters()` give the queue's depth, high-water mark and full and
+closed drop totals. The two options are alternatives, and the later call
+decides the receiver type.
+
+```rust
+let StartedRouter { network_control, .. } = BACnetRouter::start(
+    ports,
+    RouterOptions::new().network_control_receiver_with_admission(),
+)
+.await?;
+let controls = network_control.expect("asked for");
+let snapshot = controls.counters().snapshot();
+```
+
+A client or server attached to a router through a `LoopbackTransport` port
+does not need either receiver: it is an ordinary node on that port's network,
+and rejects for its requests reach its own `NetworkLayer`.
 
 ---
 

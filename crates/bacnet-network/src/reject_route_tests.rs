@@ -10,18 +10,19 @@
 //! relayed by its DNET/DADR (Clause 6.6.3.5), which is what carries a reject
 //! back across a chain of routers to the device, unless it is addressed to
 //! the router itself, when it reaches the router's control receiver instead
-//! (#1175). Every reject is compared byte for byte.
+//! (#1175). Every reject is compared byte for byte, and the MAC each unicast
+//! reject goes to is checked too (#1243): a local reject to the SADR has the
+//! same bytes as one back to the link sender.
 
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::NetworkMessageType;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
-use tokio::sync::mpsc;
 
 use crate::loopback_fixture::{
-    next_frame_from_router, recv, wire, RouterFixture, ORIGIN, REMOTE, TOO_LONG,
+    next_frame_from_router, recv, wire, FromRouter, RouterFixture, ORIGIN, REMOTE, TOO_LONG,
 };
 use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use crate::router_table::ReachabilityStatus;
@@ -103,14 +104,13 @@ async fn fixture(busy: bool) -> RouterFixture {
 }
 
 /// Send `frame` from peer A to a fresh fixture router and return the first
-/// frame the router sends back to peer A.
-async fn first_answer(busy: bool, frame: &[u8]) -> Vec<u8> {
+/// frame the router sends back to peer A, with the MAC it was unicast to.
+async fn first_answer(busy: bool, frame: &[u8]) -> (Vec<u8>, MacAddr) {
     let mut fixture = fixture(busy).await;
     fixture.send_from_a(frame).await;
-    let (answer, broadcast) = next_frame_from_router(&mut fixture.from_router_a).await;
-    assert!(!broadcast, "a reject is a unicast");
+    let (answer, to) = next_frame_from_router(&mut fixture.from_router_a).await;
     fixture.stop().await;
-    answer.to_vec()
+    (answer.to_vec(), to.expect("a reject is a unicast"))
 }
 
 #[tokio::test]
@@ -120,8 +120,9 @@ async fn router_rejects_a_relayed_npdu_toward_its_snet_sadr() {
         // full hop count, sent back to peer A, the router that relayed it.
         let mut expected = vec![0x01, 0xA0, 0x0F, 0xA0, 0x01, 0x50, 0xFF, 0x03];
         expected.extend_from_slice(&refusal.reject);
-        let answer = first_answer(refusal.busy, &(refusal.frame)(Some((ORIGIN, 1)))).await;
+        let (answer, to) = first_answer(refusal.busy, &(refusal.frame)(Some((ORIGIN, 1)))).await;
         assert_eq!(answer, expected, "{}", refusal.what);
+        assert_eq!(to[..], [0x0A], "{}", refusal.what);
     }
 }
 
@@ -130,21 +131,51 @@ async fn router_rejects_a_local_npdu_with_a_local_unicast() {
     for refusal in refusals() {
         let mut expected = vec![0x01, 0x80, 0x03];
         expected.extend_from_slice(&refusal.reject);
-        let answer = first_answer(refusal.busy, &(refusal.frame)(None)).await;
+        let (answer, to) = first_answer(refusal.busy, &(refusal.frame)(None)).await;
         assert_eq!(answer, expected, "{}", refusal.what);
+        assert_eq!(to[..], [0x0A], "{}", refusal.what);
     }
 }
 
 #[tokio::test]
 async fn router_rejects_an_npdu_from_its_own_snet_with_a_local_unicast() {
     // SNET 1000 is the network peer A's port is on (#1174), so the
-    // originator, SADR 50, is on that link: no DNET, and the frame is the
-    // same local unicast an NPDU without SNET/SADR draws.
+    // originator, SADR 50, is on that link: no DNET, the same local unicast
+    // an NPDU without SNET/SADR draws, but sent to SADR 50, not to peer A.
     for refusal in refusals() {
         let mut expected = vec![0x01, 0x80, 0x03];
         expected.extend_from_slice(&refusal.reject);
-        let answer = first_answer(refusal.busy, &(refusal.frame)(Some((1000, 1)))).await;
+        let (answer, to) = first_answer(refusal.busy, &(refusal.frame)(Some((1000, 1)))).await;
         assert_eq!(answer, expected, "{}", refusal.what);
+        assert_eq!(to[..], [0x50], "{}", refusal.what);
+    }
+}
+
+/// `refusal`'s frame from SNET 1000 with the one-octet SADR `sadr`.
+fn from_sadr_on_1000(refusal: &Refusal, sadr: u8) -> Vec<u8> {
+    let mut frame = (refusal.frame)(Some((1000, 1)));
+    // The SADR follows the version, the control octet, any DNET/DLEN/DADR,
+    // and the SNET/SLEN.
+    let dnet_fields = if frame[1] & 0x20 != 0 {
+        3 + usize::from(frame[4])
+    } else {
+        0
+    };
+    frame[2 + dnet_fields + 3] = sadr;
+    frame
+}
+
+#[tokio::test]
+async fn router_rejects_a_node_with_its_other_ports_mac_at_that_mac() {
+    // 02 is the router's MAC on 2000, but on 1000, peer A's network, it is
+    // some other node (#1219): the reject is a local unicast to 02 on port A,
+    // not to peer A, and the router does not take it for itself.
+    for refusal in refusals() {
+        let mut expected = vec![0x01, 0x80, 0x03];
+        expected.extend_from_slice(&refusal.reject);
+        let (answer, to) = first_answer(refusal.busy, &from_sadr_on_1000(&refusal, 0x02)).await;
+        assert_eq!(answer, expected, "{}", refusal.what);
+        assert_eq!(to[..], [0x02], "{}", refusal.what);
     }
 }
 
@@ -154,13 +185,14 @@ async fn router_rejects_an_npdu_from_its_own_snet_with_a_local_unicast() {
 const FENCE: [u8; 8] = [0x01, 0x20, 0x17, 0x70, 0x00, 0xFF, 0x10, 0x08];
 const FENCE_REJECT: [u8; 6] = [0x01, 0x80, 0x03, 0x01, 0x17, 0x70];
 
-/// The next unicast the router sends to a peer, skipping any broadcast
-/// Who-Is-Router-To-Network solicitation for an unknown DNET.
-async fn next_unicast(rx: &mut mpsc::Receiver<ReceivedNpdu>) -> Vec<u8> {
+/// The next unicast the router sends to a peer, with the MAC it went to,
+/// skipping any broadcast Who-Is-Router-To-Network solicitation for an
+/// unknown DNET.
+async fn next_unicast(rx: &mut FromRouter) -> (Vec<u8>, MacAddr) {
     loop {
-        let (frame, broadcast) = next_frame_from_router(rx).await;
-        if !broadcast {
-            return frame.to_vec();
+        let (frame, to) = next_frame_from_router(rx).await;
+        if let Some(to) = to {
+            return (frame.to_vec(), to);
         }
         assert_eq!(
             frame[..],
@@ -181,8 +213,9 @@ async fn router_rejects_an_npdu_from_its_other_snet_out_that_port() {
         expected.extend_from_slice(&refusal.reject);
         let mut fixture = fixture(refusal.busy).await;
         fixture.send_from_a(&(refusal.frame)(Some((2000, 1)))).await;
-        let answer = next_unicast(&mut fixture.from_router_b).await;
+        let (answer, to) = next_unicast(&mut fixture.from_router_b).await;
         assert_eq!(answer, expected, "{}", refusal.what);
+        assert_eq!(to[..], [0x50], "{}", refusal.what);
         fixture.send_from_a(&FENCE).await;
         let (fenced, _) = next_frame_from_router(&mut fixture.from_router_a).await;
         assert_eq!(fenced[..], FENCE_REJECT, "{}", refusal.what);
@@ -196,17 +229,10 @@ async fn router_sends_no_reject_when_the_snet_sadr_is_its_own_port() {
     // came back to the router that sent it, so nothing answers it (#1219),
     // and the fence's reject is the next frame on port A.
     for refusal in refusals() {
-        let mut frame = (refusal.frame)(Some((1000, 1)));
-        // The one-octet SADR follows the version, the control octet, any
-        // DNET/DLEN/DADR, and the SNET/SLEN.
-        let dnet_fields = if frame[1] & 0x20 != 0 {
-            3 + usize::from(frame[4])
-        } else {
-            0
-        };
-        frame[2 + dnet_fields + 3] = 0x01;
         let mut fixture = fixture(refusal.busy).await;
-        fixture.send_from_a(&frame).await;
+        fixture
+            .send_from_a(&from_sadr_on_1000(&refusal, 0x01))
+            .await;
         fixture.send_from_a(&FENCE).await;
         let (answer, _) = next_frame_from_router(&mut fixture.from_router_a).await;
         assert_eq!(answer[..], FENCE_REJECT, "{}", refusal.what);
@@ -222,8 +248,9 @@ async fn router_falls_back_to_a_local_unicast_when_the_sadr_is_too_long() {
         wire(Some((REMOTE, 1)), Some((ORIGIN, TOO_LONG)), None),
         wire(Some((REMOTE, TOO_LONG)), Some((ORIGIN, TOO_LONG)), None),
     ] {
-        let answer = first_answer(false, &frame).await;
+        let (answer, to) = first_answer(false, &frame).await;
         assert_eq!(answer, [0x01, 0x80, 0x03, 0x06, 0x0B, 0xB8], "{frame:02X?}");
+        assert_eq!(to[..], [0x0A], "{frame:02X?}");
     }
 }
 
@@ -241,8 +268,8 @@ async fn router_relays_a_received_reject_to_the_node_its_dnet_names() {
             0x01, 0xA0, 0x03, 0xE8, 0x01, 0x0C, 0xFF, 0x03, 0x01, 0x13, 0x88,
         ])
         .await;
-    let (relayed, broadcast) = next_frame_from_router(&mut fixture.from_router_a).await;
-    assert!(!broadcast);
+    let (relayed, to) = next_frame_from_router(&mut fixture.from_router_a).await;
+    assert_eq!(to.as_deref(), Some(&[0x0C][..]), "straight to the DADR");
     // DNET/DADR come off; SNET 2000 / SADR 0B (peer B) go on.
     assert_eq!(
         relayed[..],
@@ -311,10 +338,10 @@ async fn router_hands_a_reject_addressed_to_itself_to_its_control_receiver() {
 #[tokio::test]
 async fn chained_routers_carry_a_reject_back_to_the_originating_device() {
     // device 0A --[1000]-- 01 R1 02 --[2000]-- 03 R2 04 --[3000]-- 0C
-    let (r1_a, mut device) = LoopbackTransport::pair(vec![0x01], vec![0x0A]);
+    let (mut r1_a, mut device) = LoopbackTransport::pair(vec![0x01], vec![0x0A]);
     let (r1_b, r2_a) = LoopbackTransport::pair(vec![0x02], vec![0x03]);
     let (r2_b, mut far) = LoopbackTransport::pair(vec![0x04], vec![0x0C]);
-    let mut to_device = device.start().await.unwrap();
+    let mut to_device = FromRouter::start(&mut r1_a, &mut device).await;
     let _to_far = far.start().await.unwrap();
     let port = |transport, network_number| RouterPort {
         transport,
@@ -353,8 +380,8 @@ async fn chained_routers_carry_a_reject_back_to_the_originating_device() {
 
     // R2 rejects toward 1000/0A, the SNET/SADR R1 put on the NPDU, through
     // R1; R1 relays it by that DNET to the device, from 2000/03.
-    let (reject, broadcast) = next_frame_from_router(&mut to_device).await;
-    assert!(!broadcast);
+    let (reject, to) = next_frame_from_router(&mut to_device).await;
+    assert_eq!(to.as_deref(), Some(&[0x0A][..]));
     assert_eq!(
         reject[..],
         [0x01, 0x88, 0x07, 0xD0, 0x01, 0x03, 0x03, 0x01, 0x13, 0x88]

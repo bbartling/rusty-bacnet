@@ -90,7 +90,7 @@ pub use control_policy::{ControlDecisionCounters, ControlGate, ControlPolicy};
 pub use control_policy::{ControlServiceCounters, ControlTrust};
 use forwarding::{forward_broadcast, forward_unicast};
 use local_control::{LocalControl, OwnAddresses};
-pub use options::{LocalApduReceiver, RouterOptions, StartedRouter};
+pub use options::{LocalApduReceiver, NetworkControlReceiver, RouterOptions, StartedRouter};
 use reject::{refuse_address_too_long, route_refusal, send_reject, Refused};
 
 /// A send request to be forwarded on a port.
@@ -361,13 +361,18 @@ impl BACnetRouter {
     ///
     /// Fails if two ports share a network number or a transport fails to
     /// start.
-    pub async fn start<T: TransportPort + 'static, A: LocalApduReceiver>(
+    pub async fn start<T, A, C>(
         ports: Vec<RouterPort<T>>,
-        options: RouterOptions<A>,
-    ) -> Result<StartedRouter<A>, Error> {
+        options: RouterOptions<A, C>,
+    ) -> Result<StartedRouter<A, C>, Error>
+    where
+        T: TransportPort + 'static,
+        A: LocalApduReceiver,
+        C: NetworkControlReceiver,
+    {
         let (control_tx, network_control) = if options.wants_network_control() {
-            let (tx, rx, _) = AdmissionReceiver::channel(false);
-            (Some(tx), Some(rx))
+            let (tx, rx, counters) = AdmissionReceiver::channel(C::TRACKED);
+            (Some(tx), Some(C::from_queue(rx, counters)))
         } else {
             (None, None)
         };
@@ -933,6 +938,8 @@ mod envelope_control_tests;
 mod envelope_discovery_tests;
 #[cfg(test)]
 mod envelope_harness;
+#[cfg(test)]
+mod ingress_harness;
 #[cfg(test)]
 mod init_routing_table_tests;
 #[cfg(test)]

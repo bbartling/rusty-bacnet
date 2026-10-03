@@ -19,23 +19,26 @@ use bytes::Bytes;
 use tokio::sync::mpsc;
 
 use crate::layer::NetworkLayer;
-use crate::loopback_fixture::{next_from_router, recv, reject_of, wire, LONGEST, REMOTE, TOO_LONG};
+use crate::loopback_fixture::{
+    next_from_router, recv, reject_of, wire, FromRouter, LONGEST, REMOTE, TOO_LONG,
+};
 use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 
 /// A port whose received frames the test supplies. What the stack sends
 /// through it comes back out of `sent`, as a [`ReceivedNpdu`] whose
-/// `link_layer_group` marks a broadcast, so the loopback fixture's helpers
-/// read it.
+/// `link_layer_group` marks a broadcast, with each unicast's MAC, so the
+/// loopback fixture's helpers read it.
 struct Injector {
     received: Option<mpsc::Receiver<ReceivedNpdu>>,
     sent: mpsc::Sender<ReceivedNpdu>,
+    unicast_macs: mpsc::UnboundedSender<MacAddr>,
     mac: [u8; 1],
 }
 
 /// The test's side of an [`Injector`].
 struct Link {
     deliver: mpsc::Sender<ReceivedNpdu>,
-    sent: mpsc::Receiver<ReceivedNpdu>,
+    sent: FromRouter,
 }
 
 impl Link {
@@ -54,24 +57,32 @@ impl Link {
 fn injector(mac: u8) -> (Injector, Link) {
     let (deliver, received) = mpsc::channel(16);
     let (sent_tx, sent) = mpsc::channel(64);
+    let (unicast_macs, macs) = mpsc::unbounded_channel();
     let port = Injector {
         received: Some(received),
         sent: sent_tx,
+        unicast_macs,
         mac: [mac],
     };
+    let sent = FromRouter::new(sent, macs);
     (port, Link { deliver, sent })
 }
 
 impl Injector {
-    fn record(&self, npdu: &[u8], broadcast: bool) {
+    /// Queue `npdu` for the test: to `unicast` when given, or as a broadcast.
+    fn record(&self, npdu: &[u8], unicast: Option<&[u8]>) {
         let frame = ReceivedNpdu::unverified(
             Bytes::copy_from_slice(npdu),
             MacAddr::from_slice(&self.mac),
-            broadcast,
+            unicast.is_none(),
             Vec::new(),
             None,
         );
-        let _ = self.sent.try_send(frame);
+        if self.sent.try_send(frame).is_ok() {
+            if let Some(mac) = unicast {
+                let _ = self.unicast_macs.send(MacAddr::from_slice(mac));
+            }
+        }
     }
 }
 
@@ -86,13 +97,13 @@ impl TransportPort for Injector {
         Ok(())
     }
 
-    async fn send_unicast(&self, npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        self.record(npdu, false);
+    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
+        self.record(npdu, Some(mac));
         Ok(())
     }
 
     async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.record(npdu, true);
+        self.record(npdu, None);
         Ok(())
     }
 
@@ -179,8 +190,8 @@ async fn router_drops_and_counts_a_frame_from_an_over_long_source_mac() {
         reject_of(&reject).reason,
         RejectMessageReason::NOT_DIRECTLY_CONNECTED
     );
-    let (solicit, broadcast) = next_from_router(&mut link_a.sent).await;
-    assert!(broadcast);
+    let (solicit, to) = next_from_router(&mut link_a.sent).await;
+    assert!(to.is_none(), "the solicitation is a broadcast");
     assert_eq!(
         solicit.message_type,
         Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw())
