@@ -14,7 +14,8 @@ impl BACnetServer {
     /// Add a Trend Log Multiple object to the server (before starting).
     ///
     /// The keyword arguments configure what the server's poller does with
-    /// it. `members` fills Log_DeviceObjectProperty in order, at most 64.
+    /// it. `members` fills Log_DeviceObjectProperty in order, at most 64; a
+    /// `device_identifier` that isn't a Device raises ValueError.
     /// `logging_type` is `"polled"` or `"triggered"`: POLLED with no
     /// `log_interval` takes a one-minute interval, and TRIGGERED zeroes it,
     /// so a `log_interval` with it raises WRITE_ACCESS_DENIED; `"cov"`

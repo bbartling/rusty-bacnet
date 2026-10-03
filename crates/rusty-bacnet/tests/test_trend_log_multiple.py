@@ -143,6 +143,17 @@ class TrendLogMultipleConfigurationTests(unittest.TestCase):
             server.add_trend_log_multiple(
                 1, "TLM-1", members=[{**member(1), "array_index": 1}]
             )
+        with self.assertRaises(ValueError):
+            server.add_trend_log_multiple(
+                1,
+                "TLM-1",
+                members=[
+                    {
+                        **member(1),
+                        "device_identifier": ObjectIdentifier(ObjectType.ANALOG_INPUT, 9),
+                    }
+                ],
+            )
         with self.assertRaises(TypeError):
             server.add_trend_log_multiple(1, "TLM-1", members=[ObjectType.ANALOG_INPUT])
 

@@ -462,3 +462,40 @@ fn value_source_address_variant() {
         _ => panic!("wrong variant"),
     }
 }
+
+#[test]
+fn access_rule_new_sets_each_specifier_from_its_reference() {
+    use crate::enums::{AccessRuleLocationSpecifier, AccessRuleTimeRangeSpecifier};
+
+    let schedule = ObjectIdentifier::new(ObjectType::SCHEDULE, 1).unwrap();
+    let time_range = BACnetDeviceObjectPropertyReference::new_local(
+        schedule,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    );
+    let point = BACnetDeviceObjectReference::from(
+        ObjectIdentifier::new(ObjectType::ACCESS_POINT, 2).unwrap(),
+    );
+
+    let specified = BACnetAccessRule::new(Some(time_range.clone()), Some(point.clone()), true);
+    assert_eq!(
+        specified,
+        BACnetAccessRule {
+            time_range_specifier: AccessRuleTimeRangeSpecifier::SPECIFIED,
+            time_range: Some(time_range),
+            location_specifier: AccessRuleLocationSpecifier::SPECIFIED,
+            location: Some(point),
+            enable: true,
+        }
+    );
+
+    let open = BACnetAccessRule::new(None, None, false);
+    assert_eq!(
+        open.time_range_specifier,
+        AccessRuleTimeRangeSpecifier::ALWAYS
+    );
+    assert_eq!(open.location_specifier, AccessRuleLocationSpecifier::ALL);
+    assert_eq!(
+        (open.time_range, open.location, open.enable),
+        (None, None, false)
+    );
+}

@@ -6,7 +6,7 @@ use super::super::*;
 use std::collections::BTreeMap;
 
 use bacnet_objects::notification_forwarder::{
-    FileSubscribedRecipientsPersistence, NotificationForwarderObject,
+    FileNotificationForwarderPersistence, NotificationForwarderObject,
 };
 use bacnet_types::constructed::BACnetPortPermission;
 
@@ -14,13 +14,15 @@ use bacnet_types::constructed::BACnetPortPermission;
 impl BACnetServer {
     /// Add a Notification Forwarder object to the server (before starting).
     ///
-    /// With `storage_path`, Subscribed_Recipients is kept in that file and
-    /// restored when the server is built again.
+    /// With `storage_path`, Recipient_List and Subscribed_Recipients are kept
+    /// in that file and restored when the server is built again.
     ///
     /// `recipients` seeds Recipient_List with `Destination` mappings, in
     /// order, through the object's `add_destination`, so the list holds the
     /// destinations a client could write: more than 32, or an address MAC
-    /// past 18 octets, raises BacnetProtocolError. `port_filter` serves
+    /// past 18 octets, raises BacnetProtocolError. With `storage_path`, a
+    /// Recipient_List a client wrote, once saved, wins: until a write sets
+    /// the list, the seed applies at every start and is not saved. `port_filter` serves
     /// Port_Filter as `(port_id, enabled)` pairs, one per network port; the
     /// server receives through Port_ID 0. Without it the property is absent.
     #[pyo3(signature = (
@@ -54,7 +56,7 @@ impl BACnetServer {
         let mut nf = match storage_path {
             Some(path) => {
                 let storage =
-                    Arc::new(FileSubscribedRecipientsPersistence::new(path).map_err(to_py_err)?);
+                    Arc::new(FileNotificationForwarderPersistence::new(path).map_err(to_py_err)?);
                 NotificationForwarderObject::with_persistence(instance, name, storage)
                     .map_err(to_py_err)?
             }
@@ -86,8 +88,8 @@ impl BACnetServer {
         Ok(())
     }
 
-    /// Sample each Notification Forwarder's Subscribed_Recipients save
-    /// counters, keyed by instance: `{"failed_saves": n}` per forwarder of
+    /// Sample each Notification Forwarder's save counters, keyed by
+    /// instance: `{"failed_saves": n}` per forwarder of
     /// the running server. The totals belong to the objects, so they count
     /// from registration and saturate at 2**64-1; a forwarder without
     /// `storage_path` stays at zero. Raises RuntimeError("server not

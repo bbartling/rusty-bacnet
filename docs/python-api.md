@@ -1599,15 +1599,18 @@ server.add_event_enrollment(
 The Notification Forwarder sends each event notification the server
 receives, and each one its own objects address to its Device, on to the
 destinations its Recipient_List and Subscribed_Recipients name. Clients
-configure both lists over the network. `storage_path` keeps
-Subscribed_Recipients in one file, replaced whole when the list changes and
-at most once a minute while its entries count down, so the list and each
-entry's remaining minutes survive a restart; without it the list lives in
-memory only. Every well-formed ConfirmedEventNotification is acknowledged,
-whether or not a forwarder takes it; a retransmission of one already received
-is acknowledged again but not forwarded again. One notification goes to at
-most 64 destinations across all the forwarders, and the server ignores a
-confirmed request sent by broadcast.
+configure both lists over the network. `storage_path` keeps both lists in
+one file, replaced whole when either list changes and at most once a minute
+while the Subscribed_Recipients entries count down, so the lists and each
+entry's remaining minutes survive a restart; without it the lists live in
+memory only. Saves run on a thread of their own, and the server waits for a
+list write's save without holding the object database, so a slow disk does not
+hold up its other requests. A list write whose request fails before it lands
+puts the saved lists back to the served ones at once. Every well-formed
+ConfirmedEventNotification is acknowledged, whether or not a forwarder takes
+it; a retransmission of one already received is acknowledged again but not
+forwarded again. One notification goes to at most 64 destinations across all
+the forwarders, and the server ignores a confirmed request sent by broadcast.
 
 `recipients` seeds Recipient_List with `Destination` mappings, typed as the
 `Destination` TypedDict in the stub. `recipient` takes the mapping the Audit
@@ -1622,7 +1625,10 @@ raises `BacnetProtocolError`. `port_filter` serves Port_Filter as
 `(port_id, enabled)` pairs, one per network port; the server receives through
 Port_ID 0, and without `port_filter` the property is absent. Clients can still
 change both lists over the network, within the limits Port_Filter's writes
-allow. Subscribed_Recipients save failures are counted by
+allow. With `storage_path`, a Recipient_List a client wrote, once saved, wins
+over `recipients`; until a write sets the list, `recipients` applies at every
+start and is not saved.
+Save failures are counted by
 [`forwarder_save_counters()`](#forwarder_save_counters---dictint-forwardersavecounters).
 
 `initial_source` is required and becomes the Alert Enrollment object's
@@ -1666,7 +1672,8 @@ record, one value per member in order; a client reads the records with
 
 - `members` is a list of `DeviceObjectPropertyReference` mappings
   (`object_identifier`, `property_identifier`, and optionally
-  `property_array_index` and `device_identifier`), at most 64. A member naming
+  `property_array_index` and `device_identifier`), at most 64. A
+  `device_identifier` that isn't a Device raises ValueError; a member naming
   another Device logs a failure for its slot, since the server reads only its
   own objects.
 - `log_interval` is in hundredths of a second. `logging_type` is `"polled"`
@@ -2278,6 +2285,45 @@ Active_Authentication_Policy (1 to the policy count) and the mode by writing
 Authorization_Mode (one of the supported modes). Another value is refused
 with VALUE_OUT_OF_RANGE, and another datatype with INVALID_DATA_TYPE.
 
+`add_access_rights` takes `positive_access_rules` and `negative_access_rules`,
+lists of `AccessRule` mappings for Positive_Access_Rules and
+Negative_Access_Rules, both read-only over the network:
+
+```python
+# Access Zone 3 in Device 99.
+remote_zone = (
+    ObjectIdentifier(ObjectType.DEVICE, 99),
+    ObjectIdentifier(ObjectType.ACCESS_ZONE, 3),
+)
+server.add_access_rights(
+    instance=3,
+    name="Lobby Weekdays",
+    positive_access_rules=[
+        {
+            # When: Schedule 1's Present_Value; leave out for any time.
+            "time_range": {
+                "object_identifier": ObjectIdentifier(ObjectType.SCHEDULE, 1),
+                "property_identifier": PropertyIdentifier.PRESENT_VALUE,
+            },
+            # Where: an Access Point or Access Zone; leave out for anywhere.
+            "location": ObjectIdentifier(ObjectType.ACCESS_POINT, 1),
+            "enable": True,
+        },
+    ],
+    negative_access_rules=[{"location": remote_zone, "enable": True}],
+)
+```
+
+`enable` is required. A `time_range` mapping takes `object_identifier`,
+`property_identifier` and the optional `property_array_index` and
+`device_identifier`; a `location` takes the forms `door_members` does. A
+missing or `None` member makes the rule apply at any time (ALWAYS) or at every
+access point (ALL). A wrong type raises `TypeError`; an unknown or missing key,
+or a device that isn't a Device, raises `ValueError`; a location naming
+another object type raises `BacnetProtocolError` (VALUE_OUT_OF_RANGE). Each
+rule reads back as `application_data` holding its BACnetAccessRule octets. The
+server stores and serves the rules; it doesn't evaluate them.
+
 Access Door, Access Point, Credential Data Input and Load Control take
 SubscribeCOV, and each report carries the values their Table 13-1 rows name:
 Door_Alarm_State on a door; Access_Event (in place of Present_Value),
@@ -2719,7 +2765,7 @@ pattern over the Rust struct, like `cov_counters()`.
 
 #### `forwarder_save_counters() -> dict[int, ForwarderSaveCounters]`
 
-Sample each Notification Forwarder's Subscribed_Recipients save counters: a
+Sample each Notification Forwarder's save counters: a
 dict keyed by forwarder instance whose values are `ForwarderSaveCounters`
 dicts with one field, `failed_saves`. It counts the saves the `storage_path`
 file refused: a write that needed one (and failed with DEVICE /
@@ -2730,7 +2776,7 @@ The totals belong to the objects, so they count from registration, saturate at
 
 ```python
 counters = await server.forwarder_save_counters()
-counters[1]["failed_saves"]  # refused saves of forwarder 1's list
+counters[1]["failed_saves"]  # refused saves of forwarder 1's lists
 ```
 
 #### `local_address() -> str`

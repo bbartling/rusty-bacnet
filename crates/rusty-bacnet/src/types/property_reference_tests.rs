@@ -104,6 +104,17 @@ fn reference_mappings_refuse_bad_shapes_and_types() {
         let wide = minimal(py);
         wide.set_item("property_array_index", 1_u64 << 32).unwrap();
         value_error(listed(py, wide).as_any(), "members[0].property_array_index");
+        let not_a_device = minimal(py);
+        not_a_device
+            .set_item(
+                "device_identifier",
+                PyObjectIdentifier::from_rust(oid(ObjectType::ANALOG_INPUT, 9)),
+            )
+            .unwrap();
+        value_error(
+            listed(py, not_a_device).as_any(),
+            "members[0]: the device must be a Device object identifier",
+        );
         for (key, bad) in [
             (
                 "property_identifier",
