@@ -28,7 +28,8 @@ use bacnet_objects::traits::{
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
-    BACnetDeviceObjectReference, BACnetLogRecord, BACnetObjectSelector,
+    BACnetDeviceObjectReference, BACnetLogRecord, BACnetObjectPropertyReference,
+    BACnetObjectSelector,
 };
 use bacnet_types::enums::{
     AuditLevel, ErrorClass, ErrorCode, EventState, LifeSafetyOperation, PropertyIdentifier,
@@ -430,6 +431,13 @@ impl BACnetObject for SourceReporter {
         sample: Option<PropertyValue>,
     ) -> Result<(), Error> {
         self.wrapped.add_averaging_sample_internal(sample)
+    }
+
+    fn take_due_averaging_sample_internal(
+        &mut self,
+        now: Duration,
+    ) -> Option<BACnetObjectPropertyReference> {
+        self.wrapped.take_due_averaging_sample_internal(now)
     }
 
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
