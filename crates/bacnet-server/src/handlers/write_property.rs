@@ -61,14 +61,26 @@ pub(crate) enum WritePropertyMultipleOutcome {
 /// Handle WPM while preserving the historical direct handler projection.
 ///
 /// The complete successful prefix remains committed if a later attempt fails.
+/// A Command object's Present_Value write in that prefix runs nothing: as in
+/// [`handle_write_property`], its list ends at once as unsuccessful.
 pub fn handle_write_property_multiple(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<Vec<ObjectIdentifier>, Error> {
     let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();
     match handle_write_property_multiple_detailed(db, service_data, &mut snapshots) {
-        WritePropertyMultipleOutcome::Success { committed_oids } => Ok(committed_oids),
-        WritePropertyMultipleOutcome::Error { error, .. } => Err(error),
+        WritePropertyMultipleOutcome::Success { committed_oids } => {
+            crate::command_lists::end_unmade(db, &committed_oids);
+            Ok(committed_oids)
+        }
+        WritePropertyMultipleOutcome::Error {
+            error,
+            committed_oids,
+            ..
+        } => {
+            crate::command_lists::end_unmade(db, &committed_oids);
+            Err(error)
+        }
         WritePropertyMultipleOutcome::Reject { reason } => Err(Error::Reject {
             reason: reason.to_raw(),
         }),
@@ -465,11 +477,20 @@ where
 }
 
 /// Handle a WriteProperty request.
+///
+/// This synchronous handler makes no writes on a Command object's behalf: it
+/// has no task to wait out a post delay in. A Present_Value write that selects
+/// a list with commands is accepted, and the run it starts ends at once with
+/// every command unsuccessful, so In_Process is FALSE again on return and
+/// All_Writes_Successful is FALSE (#1178). The bundled
+/// [`BACnetServer`](crate::server::BACnetServer) runs the lists.
 pub fn handle_write_property(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<ObjectIdentifier, Error> {
-    handle_write_property_observed(db, service_data, None, None, None)
+    let oid = handle_write_property_observed(db, service_data, None, None, None)?;
+    crate::command_lists::end_unmade(db, std::slice::from_ref(&oid));
+    Ok(oid)
 }
 
 pub(crate) fn handle_write_property_observed(

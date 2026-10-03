@@ -156,7 +156,7 @@ impl Request<'_> {
                 |oid| BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(oid)),
             );
             if let Ok(oid) = &result {
-                command_runs.extend(super::super::local_writes::take_command_runs(
+                command_runs.extend(crate::command_lists::take_runs(
                     &mut db,
                     std::slice::from_ref(oid),
                 ));
@@ -246,10 +246,7 @@ impl Request<'_> {
             let changes = snapshots.changes(&db, committed_oids);
             timed_revisits.extend_from_slice(observer.life_safety_queued());
             let plans = BACnetServer::<T>::take_staging_plans(&mut db, committed_oids);
-            command_runs.extend(super::super::local_writes::take_command_runs(
-                &mut db,
-                committed_oids,
-            ));
+            command_runs.extend(crate::command_lists::take_runs(&mut db, committed_oids));
             let schedule_cov =
                 crate::schedule::reevaluate_written(&mut db, committed_oids, cov_table).await;
             (outcome, changes, plans, schedule_cov)
