@@ -37,6 +37,8 @@ pub struct LightingOutputObject {
     default_ramp_rate: f32,
     /// Default_Step_Increment in percent, within 0.1..=100.0.
     default_step_increment: f32,
+    /// COV_Increment: the Present_Value change that triggers a notification.
+    cov_increment: f32,
     out_of_service: bool,
     status_flags: StatusFlags,
     /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
@@ -64,6 +66,7 @@ impl LightingOutputObject {
             default_fade_time: *DEFAULT_FADE_TIME_MS.start(),
             default_ramp_rate: 100.0,
             default_step_increment: 1.0,
+            cov_increment: 0.0,
             out_of_service: false,
             status_flags: StatusFlags::empty(),
             reliability: Reliability::NO_FAULT_DETECTED,
@@ -209,6 +212,9 @@ impl BACnetObject for LightingOutputObject {
             p if p == PropertyIdentifier::DEFAULT_STEP_INCREMENT => {
                 Ok(PropertyValue::Real(self.default_step_increment))
             }
+            p if p == PropertyIdentifier::COV_INCREMENT => {
+                Ok(PropertyValue::Real(self.cov_increment))
+            }
             p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
@@ -310,6 +316,10 @@ impl BACnetObject for LightingOutputObject {
             return Err(common::invalid_data_type_error());
         }
 
+        if let Some(result) = common::write_cov_increment(&mut self.cov_increment, property, &value)
+        {
+            return result;
+        }
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
         {
@@ -331,6 +341,10 @@ impl BACnetObject for LightingOutputObject {
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_lighting_output_object(self)
+    }
+
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
     }
 
     fn supports_cov(&self) -> bool {

@@ -108,6 +108,7 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::DEFAULT_RAMP_RATE,
             P::DEFAULT_STEP_INCREMENT,
             P::CURRENT_COMMAND_PRIORITY,
+            P::COV_INCREMENT,
         ],
         _ => vec![
             P::OBJECT_IDENTIFIER,
@@ -129,7 +130,11 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
     // Default_Fade_Time, Default_Ramp_Rate and Default_Step_Increment follow
     // Relinquish_Default on Lighting Output only; Current_Command_Priority
     // ends both projections.
-    let optional = vec![P::DESCRIPTION, P::RELIABILITY];
+    // COV_Increment is the last optional row on Lighting Output.
+    let mut optional = vec![P::DESCRIPTION, P::RELIABILITY];
+    if kind == ObjectType::LIGHTING_OUTPUT {
+        optional.push(P::COV_INCREMENT);
+    }
     let required: Vec<_> = all
         .iter()
         .copied()
