@@ -380,8 +380,9 @@ async fn a_held_back_value_still_goes_out_after_a_newer_change() {
     for confirmed in [false, true] {
         let warnings = crate::cov::timed::DropWarningCount::default();
         let _guard = warnings.install();
-        // The bound at a 50-octet subscriber holds about one change. A newer
-        // change must not evict the value its predecessor still owes (#1163).
+        // The bound at a 50-octet subscriber holds two or three changes. A
+        // newer change must not evict the value its predecessor still owes
+        // (#1163).
         let mut h = tiny_harness(ServerConfig::default(), confirmed, 10).await;
         hold_back_flags(&h, confirmed, 1).await;
         h.set_clock(2);
@@ -413,18 +414,21 @@ async fn only_a_real_overflow_drops_a_change_and_never_the_one_in_delivery() {
     for confirmed in [false, true] {
         let mut h = tiny_harness(ServerConfig::default(), confirmed, 1).await;
         hold_back_flags(&h, confirmed, 1).await;
-        // Two more changes queue behind the held Status_Flags: the
-        // unconfirmed context is blocked meanwhile, the confirmed one waits
-        // for its Ack.
+        // More changes queue behind the held Status_Flags, the unconfirmed
+        // context blocked meanwhile and the confirmed one waiting for its
+        // Ack, until they pass the room four notifications have for items:
+        // 92 octets unconfirmed and 84 confirmed, whose header is longer.
+        // The held part takes 19 and each change 33 (#1287).
         if !confirmed {
             h.server.comm_state.store(2, Ordering::Release);
         }
-        for second in 2..=3 {
+        let newest = if confirmed { 3 } else { 4 };
+        for second in 2..=newest {
             h.set_clock(second);
             h.write_local(f32::from(second)).await;
         }
-        // Over the bound: the change between the one in delivery and the
-        // newest is evicted, and it is the only change counted.
+        // Over the bound: the change after the one in delivery is evicted,
+        // and it is the only change counted.
         assert_eq!(
             h.server.cov_counters().timed_changes_dropped,
             1,
@@ -435,16 +439,21 @@ async fn only_a_real_overflow_drops_a_change_and_never_the_one_in_delivery() {
         } else {
             h.server.comm_state.store(0, Ordering::Release);
         }
-        // The Status_Flags still complete their change, before the newest.
+        // The Status_Flags still complete their change, before the rest.
         let mut expected = av1_apart(1.0, 1).split_off(1);
-        expected.extend(av1_apart(3.0, 3));
+        for second in 3..=newest {
+            expected.extend(av1_apart(f32::from(second), second));
+        }
         assert_eq!(
-            take(&h, 3, TINY_APDU, confirmed).await,
+            take(&h, expected.len(), TINY_APDU, confirmed).await,
             expected,
             "confirmed: {confirmed}"
         );
         h.no_notification().await;
-        assert_eq!(av1_completed(&h).await, Some(PropertyValue::Real(3.0)));
+        assert_eq!(
+            av1_completed(&h).await,
+            Some(PropertyValue::Real(f32::from(newest)))
+        );
         assert_eq!(h.server.cov_counters().timed_changes_dropped, 1);
         h.server.stop().await.unwrap();
     }
