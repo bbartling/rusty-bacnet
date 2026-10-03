@@ -50,8 +50,9 @@ impl CanonicalPeer {
 pub enum LeaseOwner {
     /// A local client-side confirmed request.
     Requester,
-    /// A confirmed notification initiated by the local server role. The
-    /// recipient answers it as that transaction's server.
+    /// A confirmed request the local server role initiates: a notification,
+    /// or a write a Command object makes in another device. The recipient
+    /// answers it as that transaction's server.
     Notification,
 }
 
@@ -117,7 +118,8 @@ impl LeaseMetadata {
         }
     }
 
-    /// Metadata for a server notification, whose successful terminal is SimpleACK.
+    /// Metadata for a request the server role initiates, whose successful
+    /// terminal is SimpleACK.
     pub fn notification(peer: CanonicalPeer, service_choice: ConfirmedServiceChoice) -> Self {
         Self {
             owner: LeaseOwner::Notification,

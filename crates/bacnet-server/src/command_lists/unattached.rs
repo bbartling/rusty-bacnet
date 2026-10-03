@@ -3,7 +3,8 @@
 //!
 //! Each write is made as the bare WriteProperty handler would make a request
 //! carrying it, with the Command or Channel as the initiating object. There
-//! is no COV table, notification path or task set here, so nothing is
+//! is no network here, so a command naming another device fails, and no COV
+//! table, notification path or task set, so nothing is
 //! reported and the runs go on inside the caller's future: a run that writes
 //! another Command's or Channel's Present_Value starts that run beside it,
 //! and the call returns once every run has ended.
@@ -22,9 +23,9 @@ use bytes::BytesMut;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use tokio::sync::{mpsc, RwLock};
-use tracing::warn;
 
-use super::{execute, RunHost, Unfinished};
+use super::{end_when_free, execute, RunHost, Unfinished};
+use crate::server::RemoteWriteError;
 
 /// Run `runs`, and any runs their writes start, to their ends.
 ///
@@ -76,7 +77,7 @@ impl Drop for Queue<'_> {
     fn drop(&mut self) {
         self.queued.close();
         while let Ok(run) = self.queued.try_recv() {
-            abandon(self.db, Unfinished::start(&run));
+            end_when_free(self.db, Unfinished::start(&run));
         }
     }
 }
@@ -118,31 +119,20 @@ impl RunHost for Unattached<'_> {
         .await
     }
 
+    async fn write_remote(
+        &self,
+        _device: ObjectIdentifier,
+        _command: &BACnetActionCommand,
+    ) -> Result<(), RemoteWriteError> {
+        Err(RemoteWriteError::NoNetwork)
+    }
+
     async fn committed(&self, _db: &ObjectDatabase, _source: ObjectIdentifier) {}
 
     async fn report(&self, _source: ObjectIdentifier) {}
 
     fn abandoned(&self, left: Unfinished) {
-        abandon(self.db, left);
-    }
-}
-
-/// End a run let go of before it ended: at once if the database is free,
-/// otherwise once it is.
-fn abandon(db: &Arc<RwLock<ObjectDatabase>>, left: Unfinished) {
-    if let Ok(mut db) = db.try_write() {
-        left.end(&mut db);
-        return;
-    }
-    match tokio::runtime::Handle::try_current() {
-        Ok(runtime) => {
-            let db = Arc::clone(db);
-            runtime.spawn(async move { left.end(&mut *db.write().await) });
-        }
-        Err(_) => warn!(
-            source = %left.source(),
-            "run dropped outside a runtime; its object stays busy"
-        ),
+        end_when_free(self.db, left);
     }
 }
 

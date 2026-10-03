@@ -10,12 +10,20 @@
 //!
 //! The writes are made one at a time, each through the same [`LocalWriter`]
 //! path as `write_local`: priorities, command-source tracking, audit, COV and
-//! the post-write event pass all apply as for any other local write. No
-//! database guard is held across a write's notifications or a delay. The
+//! the post-write event pass all apply as for any other local write. A
+//! command naming another device goes out as a confirmed WriteProperty
+//! through [`RemoteWriter`] (#1180). No database guard is held across a
+//! write's notifications, an outstanding remote write or a delay. The
 //! object's generation guards every report back, so a run whose object was
 //! replaced or reconfigured stops.
+//!
+//! A run let go of before it ends (cancelled by `stop()`, refused by a closed
+//! task set, or unwound by a panic) ends as unsuccessful at once when the
+//! database is free. Otherwise it waits in the request task set, and `stop()`
+//! ends it once those tasks are joined and the database is free (#1252).
 
 use super::local_writes::{LocalWrite, LocalWriter};
+use super::remote_writes::{RemoteWrite, RemoteWriter};
 use super::request_tasks::RequestTaskSpawner;
 use super::*;
 use crate::command_lists::{RunHost, Unfinished};
@@ -96,16 +104,41 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
     pub(super) fn start(&self, runs: Vec<CommandRun>) {
         use futures_util::FutureExt;
         for run in runs {
-            let runner = self.clone();
+            let mut queued = Queued {
+                runner: self.clone(),
+                left: Some(Unfinished::start(&run)),
+            };
             self.tasks.spawn(async move {
                 let (source, generation) = (run.source, run.generation);
-                let execution =
-                    std::panic::AssertUnwindSafe(crate::command_lists::execute(&runner, run));
+                let execution = std::panic::AssertUnwindSafe(crate::command_lists::execute(
+                    &queued.runner,
+                    run,
+                ));
+                // The run's own owner holds it from here.
+                queued.left = None;
                 if execution.catch_unwind().await.is_err() {
                     warn!(source = %source, "run panicked; ending it as failed");
-                    crate::command_lists::complete(&runner, source, generation, false).await;
+                    // Unwinding handed the run to `abandoned`, which ended it
+                    // if the database was free. Either way its subscribers
+                    // hear of the end.
+                    let runner = &queued.runner;
+                    if !crate::command_lists::complete(runner, source, generation, false).await {
+                        runner.report(source).await;
+                    }
                 }
             });
+        }
+    }
+
+    fn remote_writer(&self) -> RemoteWriter<'_, T> {
+        RemoteWriter {
+            network: &self.network,
+            transactions: &self.notification_transactions,
+            bindings: &self.device_bindings,
+            comm_state: &self.comm_state,
+            timeout: Duration::from_millis(self.config.cov_retry_timeout_ms),
+            retries: DEFAULT_APDU_RETRIES,
+            max_apdu: self.config.max_apdu_length,
         }
     }
 
@@ -161,6 +194,16 @@ impl<T: TransportPort + 'static> RunHost for CommandRunner<T> {
         crate::command_lists::admit(self, run, runs, |runs| self.start(runs)).await
     }
 
+    /// Write one value in another device as a confirmed WriteProperty.
+    async fn write_remote(
+        &self,
+        device: ObjectIdentifier,
+        command: &BACnetActionCommand,
+    ) -> Result<(), RemoteWriteError> {
+        let write = RemoteWrite::for_command(device, command)?;
+        self.remote_writer().write(&write).await
+    }
+
     /// Timestamped references capture the change under its guard (#856).
     async fn committed(&self, db: &ObjectDatabase, source: ObjectIdentifier) {
         let capture = self.cov_table.read().await.timed_capture(source);
@@ -173,7 +216,43 @@ impl<T: TransportPort + 'static> RunHost for CommandRunner<T> {
         BACnetServer::<T>::fire_cov_notifications(&self.writer().cov_context(), &source).await;
     }
 
-    /// The server cancels its runs only from `stop()`, which leaves them where
-    /// they stood; a panic is ended in [`Self::start`].
-    fn abandoned(&self, _left: Unfinished) {}
+    /// End the run where it stood if the database is free. Otherwise leave it
+    /// with the request task set for `stop()`, or, once the server is gone,
+    /// end it when the database frees up. Nothing is reported from here:
+    /// `stop()` is the usual caller, and a panic reports in [`Self::start`].
+    fn abandoned(&self, left: Unfinished) {
+        let source = left.source();
+        match self.db.try_write() {
+            Ok(mut db) => {
+                // The COV table comes after the database in lock order, so a
+                // busy one only costs the timestamped capture.
+                if left.end(&mut db) {
+                    if let Ok(table) = self.cov_table.try_read() {
+                        table.timed_capture(source).run(&db);
+                    }
+                }
+            }
+            Err(_) => {
+                if let Err(left) = self.tasks.strand(left) {
+                    crate::command_lists::end_when_free(&self.db, left);
+                }
+            }
+        }
+    }
+}
+
+/// A run taken for a task that hasn't started it yet. Dropping it first (a
+/// task set that refused the task, or an abort before its first poll) hands
+/// the run to [`RunHost::abandoned`], so its object isn't left busy.
+struct Queued<T: TransportPort + 'static> {
+    runner: CommandRunner<T>,
+    left: Option<Unfinished>,
+}
+
+impl<T: TransportPort + 'static> Drop for Queued<T> {
+    fn drop(&mut self) {
+        if let Some(left) = self.left.take() {
+            self.runner.abandoned(left);
+        }
+    }
 }

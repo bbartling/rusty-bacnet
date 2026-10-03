@@ -111,7 +111,8 @@ const DEFAULT_APDU_SEGMENT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Default retransmission budget for segmented response segments.
 const DEFAULT_APDU_SEGMENT_RETRIES: u8 = MAX_NEG_SEGMENT_ACK_RETRIES;
 
-/// Default number of APDU retries for confirmed COV notifications.
+/// Default number of APDU retries for confirmed notifications and the
+/// WriteProperty requests Command actions send to other devices.
 const DEFAULT_APDU_RETRIES: u8 = 3;
 
 /// Result of a confirmed COV notification from the subscriber's perspective.
@@ -599,6 +600,8 @@ mod local_writes;
 mod network_port;
 #[cfg(test)]
 mod network_port_tests;
+mod remote_writes;
+pub(crate) use remote_writes::RemoteWriteError;
 mod notification_transactions;
 #[doc(hidden)]
 pub use notification_transactions::{
@@ -680,6 +683,10 @@ mod channel_wire_tests;
 mod command_action_run_tests;
 #[cfg(test)]
 mod command_action_wire_tests;
+#[cfg(test)]
+mod command_remote_write_tests;
+#[cfg(test)]
+mod command_run_stop_tests;
 #[cfg(test)]
 mod confirmed_broadcast_tests;
 #[cfg(test)]
