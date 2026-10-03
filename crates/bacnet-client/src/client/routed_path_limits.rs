@@ -16,6 +16,15 @@ const CONSERVATIVE_ROUTED_PATH_MAX_NPDU: u16 = 228;
 /// Hard bound covering gates, configured evidence, and learned evidence.
 pub(super) const MAX_ROUTED_PATH_ENTRIES: usize = 256;
 
+/// Whether a router MAC or forwarded source MAC fits a routed path: 1 to
+/// [`NpduAddress::MAX_MAC_LEN`] octets. The NPDU codec carries no longer SADR
+/// or DADR (#1141), and the network layer drops a frame from a longer
+/// link-layer source (#1198), so a longer MAC could never complete a routed
+/// request (#1267).
+fn routed_mac_fits(length: usize) -> bool {
+    (1..=NpduAddress::MAX_MAC_LEN).contains(&length)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct RoutedPathKey {
     immediate_router_mac: MacAddr,
@@ -117,11 +126,19 @@ impl RoutedPathLimits {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Reserve and lock the path through `router_mac` to `dnet`. A router MAC
+    /// outside [`routed_mac_fits`] is refused before any entry is reserved.
     pub(super) async fn acquire(
         self: &Arc<Self>,
         router_mac: &[u8],
         dnet: u16,
     ) -> Result<RoutedPathLease, Error> {
+        if !routed_mac_fits(router_mac.len()) {
+            return Err(Error::Encoding(format!(
+                "immediate router MAC address must contain 1..={} octets",
+                NpduAddress::MAX_MAC_LEN
+            )));
+        }
         let key = RoutedPathKey::new(router_mac, dnet);
         let gate = self.reserve_gate(&key)?;
         let gate = gate.lock_owned().await;
@@ -371,12 +388,9 @@ pub(super) struct RoutedPathLease {
 }
 
 impl RoutedPathLease {
-    pub(super) fn max_apdu(
-        &self,
-        dadr_len: usize,
-        local_source_mac_len: usize,
-    ) -> Result<u16, Error> {
-        let forwarded_npci_len = forwarded_npci_len(dadr_len, local_source_mac_len)?;
+    /// The APDU allowance left on this path after the forwarded NPCI that
+    /// [`forwarded_npci_len`] measured.
+    pub(super) fn max_apdu(&self, forwarded_npci_len: u16) -> u16 {
         let state = self.limits.state();
         let entry = state
             .entries
@@ -406,15 +420,7 @@ impl RoutedPathLease {
                 );
                 configured_or_conservative.min(learned.exclusive_max_npdu.saturating_sub(1))
             });
-        Ok(effective_npdu.saturating_sub(forwarded_npci_len))
-    }
-
-    pub(super) fn forwarded_npci_len(
-        &self,
-        dadr_len: usize,
-        local_source_mac_len: usize,
-    ) -> Result<u16, Error> {
-        forwarded_npci_len(dadr_len, local_source_mac_len)
+        effective_npdu.saturating_sub(forwarded_npci_len)
     }
 
     /// Mark a source-correlated terminal response for the current generation.
@@ -483,19 +489,28 @@ pub(super) fn routed_path_quarantine_horizon(config: &ClientConfig) -> Duration 
     Duration::from_millis(config.apdu_timeout_ms.saturating_mul(attempts).max(1))
 }
 
-fn forwarded_npci_len(dadr_len: usize, local_source_mac_len: usize) -> Result<u16, Error> {
-    if dadr_len > u8::MAX as usize {
-        return Err(Error::Encoding(
-            "routed destination MAC address exceeds 255 bytes".into(),
-        ));
+/// The NPCI a router adds when it forwards a request to the DADR: the fixed
+/// fields plus DADR and the SADR it fills with the local source MAC. A DADR
+/// past [`NpduAddress::MAX_MAC_LEN`] or a source MAC outside
+/// [`routed_mac_fits`] is refused (#1267).
+pub(super) fn forwarded_npci_len(
+    dadr_len: usize,
+    local_source_mac_len: usize,
+) -> Result<u16, Error> {
+    if dadr_len > NpduAddress::MAX_MAC_LEN {
+        return Err(Error::Encoding(format!(
+            "routed destination MAC address must contain 0..={} octets",
+            NpduAddress::MAX_MAC_LEN
+        )));
     }
-    if local_source_mac_len == 0 || local_source_mac_len > u8::MAX as usize {
-        return Err(Error::Encoding(
-            "local source MAC address for routed forwarding must contain 1..=255 bytes".into(),
-        ));
+    if !routed_mac_fits(local_source_mac_len) {
+        return Err(Error::Encoding(format!(
+            "local source MAC address for routed forwarding must contain 1..={} octets",
+            NpduAddress::MAX_MAC_LEN
+        )));
     }
-    u16::try_from(9usize + dadr_len + local_source_mac_len)
-        .map_err(|_| Error::Encoding("forwarded routed NPCI length exceeds u16".into()))
+    Ok(u16::try_from(9 + dadr_len + local_source_mac_len)
+        .expect("two addresses within NpduAddress::MAX_MAC_LEN fit a u16"))
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -503,14 +518,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// The update waits for any request already active on the same path. It
     /// replaces the previous configured value and deliberately clears learned
-    /// reason-4 evidence for that path.
+    /// reason-4 evidence for that path. A router MAC outside 1 to
+    /// [`NpduAddress::MAX_MAC_LEN`] octets or a DNET outside 1..=65534 is
+    /// refused with [`Error::Encoding`].
     pub async fn configure_routed_path_max_npdu(
         &self,
         router_mac: &[u8],
         dnet: u16,
         max_npdu: u16,
     ) -> Result<(), Error> {
-        validate_public_path(router_mac, dnet)?;
+        check_public_dnet(dnet)?;
         let lease = self.routed_path_limits.acquire(router_mac, dnet).await?;
         lease.configure(max_npdu);
         Ok(())
@@ -520,21 +537,20 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// The update waits for an active request and clears both configured and
     /// learned reason-4 evidence. Later requests therefore use the 228-octet
-    /// conservative routed NPDU envelope until new evidence is supplied.
+    /// conservative routed NPDU envelope until new evidence is supplied. The
+    /// router MAC and DNET are checked as in
+    /// [`configure_routed_path_max_npdu`](Self::configure_routed_path_max_npdu).
     pub async fn clear_routed_path_limit(&self, router_mac: &[u8], dnet: u16) -> Result<(), Error> {
-        validate_public_path(router_mac, dnet)?;
+        check_public_dnet(dnet)?;
         let lease = self.routed_path_limits.acquire(router_mac, dnet).await?;
         lease.clear();
         Ok(())
     }
 }
 
-fn validate_public_path(router_mac: &[u8], dnet: u16) -> Result<(), Error> {
-    if router_mac.is_empty() || router_mac.len() > u8::MAX as usize {
-        return Err(Error::Encoding(
-            "immediate router MAC address must contain 1..=255 bytes".into(),
-        ));
-    }
+/// The path APIs name one remote network; [`RoutedPathLimits::acquire`] checks
+/// the router MAC.
+fn check_public_dnet(dnet: u16) -> Result<(), Error> {
     if dnet == 0 || dnet == 0xffff {
         return Err(Error::Encoding(
             "routed path DNET must be in 1..=65534".into(),

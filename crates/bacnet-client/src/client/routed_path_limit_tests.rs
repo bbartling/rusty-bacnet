@@ -717,3 +717,6 @@ async fn cancelled_generation_quarantines_delayed_reason_4_before_next_send() {
 
 #[path = "routed_path_segment_capacity_tests.rs"]
 mod segment_capacity;
+
+#[path = "routed_path_mac_bound_tests.rs"]
+mod mac_bound;

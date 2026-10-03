@@ -3,11 +3,11 @@ use bacnet_encoding::npdu::NpduAddress;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::error::Error;
 
-/// A source address length a restriction entry can hold and match: 1 to
-/// [`BACnetAddress::MAX_MAC_LEN`] octets. Every routed source and every
-/// built-in transport's MAC fits that bound (#1141), so a longer entry could
-/// never match anything (#1157).
-fn address_length_fits(length: usize) -> bool {
+/// A source address length a DCC or time-sync restriction entry can hold and
+/// match: 1 to [`BACnetAddress::MAX_MAC_LEN`] octets. Every routed source and
+/// every built-in transport's MAC fits that bound (#1141), so a longer entry
+/// could never match anything (#1157, #1266).
+pub(super) fn address_length_fits(length: usize) -> bool {
     (1..=BACnetAddress::MAX_MAC_LEN).contains(&length)
 }
 
