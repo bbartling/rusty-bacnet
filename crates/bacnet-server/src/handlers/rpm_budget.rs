@@ -1,8 +1,9 @@
 //! Bounded server-owned RPM planning and service-ACK accumulation.
+use super::group_present_value::GroupMembers;
 use super::*;
 use crate::server::ReadPropertyMultipleBudget;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::constructed::PropertyReference;
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
 #[derive(Debug)]
 pub(crate) enum RpmFailure {
@@ -11,11 +12,53 @@ pub(crate) enum RpmFailure {
     Bytes,
 }
 
+impl RpmFailure {
+    /// The error of a read made with no work or byte limit, which only a
+    /// service error can fail.
+    pub(super) fn unlimited(self) -> Error {
+        match self {
+            Self::Service(error) => error,
+            Self::Work | Self::Bytes => unreachable!("a read with no limit ran past one"),
+        }
+    }
+}
+
+/// The result rows one read request has expanded, counted against its work
+/// limit. A Group's Present_Value charges each member row to the request that
+/// reads it (#1172), so several Groups in one request share the one limit.
+pub(super) struct Work {
+    used: usize,
+    limit: usize,
+}
+
+impl Work {
+    pub(super) fn new(limit: usize) -> Self {
+        Self { used: 0, limit }
+    }
+
+    /// Count one more row, failing once the request would pass its limit.
+    pub(super) fn charge(&mut self) -> Result<(), RpmFailure> {
+        self.used = self
+            .used
+            .checked_add(1)
+            .filter(|&n| n <= self.limit)
+            .ok_or(RpmFailure::Work)?;
+        Ok(())
+    }
+}
+
 /// One specification after target resolution and ALL/REQUIRED/OPTIONAL
 /// expansion; a Group's Present_Value plans its members the same way.
 pub(super) struct PlannedObject {
     pub(super) lookup_oid: ObjectIdentifier,
-    pub(super) properties: Vec<PropertyReference>,
+    pub(super) properties: Vec<PlannedRow>,
+}
+
+/// One expanded result row. A row that reads a Group's whole Present_Value
+/// also carries the Group's members, planned and charged with the row.
+pub(super) struct PlannedRow {
+    pub(super) reference: PropertyReference,
+    pub(super) members: Option<GroupMembers>,
 }
 
 // Visit expansion rows without collecting a second, unbounded expansion vector.
@@ -83,37 +126,65 @@ pub(super) fn plan(
     limit: usize,
     view: Option<&DeviceReadContext<'_>>,
 ) -> Result<Vec<PlannedObject>, RpmFailure> {
+    plan_specs(
+        db,
+        &request.list_of_read_access_specs,
+        &mut Work::new(limit),
+        view,
+        true,
+    )
+}
+
+/// Resolve and expand `specs`, charging every row to `work`. With `groups`, a
+/// row that reads a Group's whole Present_Value plans the Group's members as
+/// well; member rows are planned without it, so they read each object's own
+/// value and a Group listed as a member can't make the read recurse.
+pub(super) fn plan_specs(
+    db: &ObjectDatabase,
+    specs: &[ReadAccessSpecification],
+    work: &mut Work,
+    view: Option<&DeviceReadContext<'_>>,
+    groups: bool,
+) -> Result<Vec<PlannedObject>, RpmFailure> {
     let mut plan = Vec::new();
-    let mut count = 0usize;
-    for spec in &request.list_of_read_access_specs {
+    for spec in specs {
         let lookup_oid = read_property::resolve_read_target(
             db,
             &spec.object_identifier,
             view.and_then(|view| view.registered_port),
         );
+        let stored = read_property::read_target_object(db, &lookup_oid);
+        let served = stored.and_then(|object| view.map(|view| view.object(object)));
+        let object = served
+            .as_ref()
+            .map(|served| served as &dyn BACnetObject)
+            .or(stored);
         let mut properties = Vec::new();
         for reference in &spec.list_of_property_references {
             let mut push = |id| {
-                count = count
-                    .checked_add(1)
-                    .filter(|&n| n <= limit)
-                    .ok_or(RpmFailure::Work)?;
-                properties.push(PropertyReference {
+                work.charge()?;
+                let row = PropertyReference {
                     property_identifier: id,
                     property_array_index: if id == reference.property_identifier {
                         reference.property_array_index
                     } else {
                         None
                     },
+                };
+                let members = match object {
+                    Some(object) if groups => {
+                        group_present_value::plan_members(db, view, object, &row, work)?
+                    }
+                    _ => None,
+                };
+                properties.push(PlannedRow {
+                    reference: row,
+                    members,
                 });
                 Ok(())
             };
-            match read_property::read_target_object(db, &lookup_oid) {
-                Some(object) => {
-                    let served = view.map(|view| view.object(object));
-                    let object: &dyn BACnetObject = served.as_ref().map_or(object, |served| served);
-                    expand(object, reference, push)?;
-                }
+            match object {
+                Some(object) => expand(object, reference, push)?,
                 None => push(reference.property_identifier)?,
             }
         }
@@ -125,6 +196,25 @@ pub(super) fn plan(
         });
     }
     Ok(plan)
+}
+
+/// Read one planned row. `object` is the effective read view of the row's
+/// target, if it exists; a Group's Present_Value row is built from the members
+/// it planned, every other row is the object's own answer.
+pub(super) fn read_row(
+    db: &ObjectDatabase,
+    view: Option<&DeviceReadContext<'_>>,
+    object: Option<&dyn BACnetObject>,
+    row: PlannedRow,
+) -> ReadResultElement {
+    let PlannedRow { reference, members } = row;
+    element(object, &reference, |object| match members {
+        Some(members) => group_present_value::value(db, view, members),
+        None => object.read_property(
+            reference.property_identifier,
+            reference.property_array_index,
+        ),
+    })
 }
 
 /// `object` is the effective read view for this row, if the object exists.
@@ -247,29 +337,22 @@ pub(crate) fn rpm_budgeted_request_observed(
         let mut header = BytesMut::new();
         ReadAccessResult::encode_header(&mut header, &spec.lookup_oid);
         scratch.append(&header, footer.len())?;
-        for reference in spec.properties {
+        for row in spec.properties {
             let object = read_property::read_target_object(db, &spec.lookup_oid);
             let served = object.and_then(|object| view.map(|view| view.object(object)));
             let object = served
                 .as_ref()
                 .map(|served| served as &dyn BACnetObject)
                 .or(object);
-            let result = element(object, &reference, |object| {
-                group_present_value::read_served_property(
-                    db,
-                    view,
-                    object,
-                    reference.property_identifier,
-                    reference.property_array_index,
-                )
-            });
+            let requested_index = row.reference.property_array_index;
+            let result = read_row(db, view, object, row);
             let mut encoded = BytesMut::new();
             result.encode(&mut encoded);
             scratch.append(&encoded, footer.len())?;
             completed(
                 spec.lookup_oid,
                 result.property_identifier,
-                reference.property_array_index,
+                requested_index,
                 result.error,
             );
         }

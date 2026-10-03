@@ -183,6 +183,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Some(cov_table.as_ref()),
                     crate::device_view::DeviceExecution::FullServer,
                     config.registered_network_port,
+                    config.read_property_multiple_budget.max_result_elements,
                     &req,
                     |db, oid, req, result| {
                         let result = match result {
@@ -300,7 +301,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     db,
                     cov_table,
                     &req,
-                    config.read_range_budget,
+                    config,
                     effective_max_apdu,
                     segmented_response_available,
                     |db, target, property, index, result| {

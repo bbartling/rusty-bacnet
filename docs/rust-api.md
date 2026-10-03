@@ -1708,7 +1708,12 @@ framing, through the shared `bacnet-encoding` codecs.
   ReadAccessResult per member, reading each member as ReadPropertyMultiple
   would, so a failed read carries its error and an object that isn't in the
   database reads OBJECT / UNKNOWN_OBJECT. Read directly from the object alone,
-  Present_Value is an empty list.
+  Present_Value is an empty list. Every member row counts against
+  `ReadPropertyMultipleBudget::max_result_elements` along with the request's
+  own rows, so several Groups in one request share it; ReadProperty, ReadRange
+  and `read_local` get the limit of a ReadPropertyMultiple naming only that
+  Present_Value. A request that would pass the limit is aborted with
+  OUT_OF_RESOURCES (`read_local` returns `Error::Abort`).
 - **Structured View `Subordinate_List` and Command `Action`** (Clauses 12.29
   and 12.10) are arrays too, with the same per-index reads, as is
   `Subordinate_Annotations`. A Subordinate_List element is a

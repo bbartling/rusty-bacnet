@@ -10,6 +10,24 @@ mod tests;
 pub(crate) enum ReadRangeFailure {
     Service(Error),
     Bytes,
+    /// Rebuilding a Group's Present_Value would pass the work limit (#1172).
+    Work,
+}
+
+impl From<Error> for ReadRangeFailure {
+    fn from(error: Error) -> Self {
+        Self::Service(error)
+    }
+}
+
+impl From<super::RpmFailure> for ReadRangeFailure {
+    fn from(failure: super::RpmFailure) -> Self {
+        match failure {
+            super::RpmFailure::Service(error) => Self::Service(error),
+            super::RpmFailure::Work => Self::Work,
+            super::RpmFailure::Bytes => Self::Bytes,
+        }
+    }
 }
 
 fn negative(range: &Option<RangeSpec>) -> bool {
