@@ -80,7 +80,7 @@ impl EventLogObject {
         self.description = desc.into();
     }
 
-    fn lifecycle(&mut self) -> LogLifecycle<'_> {
+    fn lifecycle(&mut self) -> LogLifecycle<'_, BACnetLogRecord> {
         LogLifecycle::new(
             &mut self.log_buffer,
             &mut self.log_enable,

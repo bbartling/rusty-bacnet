@@ -132,7 +132,10 @@ impl ActiveCovSubscriptions {
             })
             .collect();
         let mut encoded = BytesMut::new();
-        encode_cov_subscription_list(&mut encoded, &subscriptions);
+        // Admission holds every recipient to BACnetAddress::MAX_MAC_LEN
+        // (`CovRecipient::validate`, #1156), so each entry encodes.
+        encode_cov_subscription_list(&mut encoded, &subscriptions)
+            .expect("COV admission bounds recipient MACs");
         Self {
             device,
             encoded: encoded.to_vec(),
@@ -176,12 +179,23 @@ impl CovSubscriptionTable {
         selection: LiveCovSelection,
         now: Instant,
     ) -> LiveCovEntries {
+        #[cfg(test)]
+        self.live_samples
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         LiveCovEntries {
             active: selection.active.then(|| self.active_cov_entries(now)),
             multiple: selection
                 .multiple
                 .then(|| self.active_cov_multiple_entries(now)),
         }
+    }
+}
+
+#[cfg(test)]
+impl CovSubscriptionTable {
+    /// How many times a read request has sampled the live lists.
+    pub(crate) fn live_samples(&self) -> usize {
+        self.live_samples.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -504,7 +518,8 @@ mod tests {
                 // A binary value has no numeric increment.
                 expected(3, local, BACnetObjectPropertyReference::new(bv, pv), None),
             ],
-        );
+        )
+        .unwrap();
         let live = PropertyValue::ApplicationData(encoded.to_vec());
         assert_eq!(
             projected.resolve(device(), PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS),
@@ -524,6 +539,58 @@ mod tests {
                 .resolve(device(), PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS),
             Some(PropertyValue::ApplicationData(Vec::new()))
         );
+    }
+
+    #[test]
+    fn active_cov_subscriber_address_holds_to_the_bacnet_address_bound() {
+        // #1156: the list reports each subscriber as a BACnetAddress, so
+        // admission refuses a direct MAC or routed source past
+        // BACnetAddress::MAX_MAC_LEN and every admitted one encodes.
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()))
+            .unwrap();
+        let longest = BACnetAddress::MAX_MAC_LEN;
+        let mut direct = proposal(1, av(1), None, None);
+        direct.subscriber_mac = MacAddr::from_slice(&vec![0xA5; longest]);
+        let mut routed = proposal(2, av(1), None, None);
+        routed.subscriber_network = Some(NpduAddress {
+            network: 7,
+            mac_address: MacAddr::from_slice(&vec![0xA5; longest]),
+        });
+        let mut table = CovSubscriptionTable::new();
+        table.subscribe(direct.clone()).unwrap();
+        table.subscribe(routed.clone()).unwrap();
+        for mut too_long in [direct, routed] {
+            too_long.subscriber_process_identifier += 10;
+            match &mut too_long.subscriber_network {
+                Some(source) => source.mac_address.push(0xA5),
+                None => too_long.subscriber_mac.push(0xA5),
+            }
+            assert!(matches!(table.subscribe(too_long), Err(Error::Encoding(_))));
+        }
+        assert_eq!(table.len(), 2);
+
+        let entries = table.active_cov_entries(Instant::now());
+        let projected = ActiveCovSubscriptions::project(&db, device(), entries);
+        let Some(PropertyValue::ApplicationData(list)) =
+            projected.resolve(device(), PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS)
+        else {
+            panic!("live list")
+        };
+        let mut offset = 0;
+        let mut networks = Vec::new();
+        while offset < list.len() {
+            let (subscription, end) =
+                bacnet_encoding::constructed::decode_cov_subscription(&list, offset).unwrap();
+            let BACnetRecipient::Address(address) = subscription.recipient.recipient else {
+                panic!("address recipient")
+            };
+            assert_eq!(address.mac_address.len(), longest);
+            networks.push(address.network_number);
+            offset = end;
+        }
+        networks.sort_unstable();
+        assert_eq!(networks, [0, 7]);
     }
 
     #[test]

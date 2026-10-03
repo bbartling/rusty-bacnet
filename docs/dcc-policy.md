@@ -47,8 +47,11 @@ policy behavior. Generic, B/IP and SC builders expose `.dcc_source_restriction(.
 Use `Some(DccSourceRestriction::new(entries)?)` with `DccSource::Direct(Vec<u8>)`
 or `DccSource::Routed { network, address: Vec<u8> }`. Exhaustive Rust config
 literals need `dcc_source_restriction: None` (or a suitable default update).
-The validated list permits at most 256 entries and 1–255 octets per address;
-routed networks must be 1–65534. These are static local limits, not transport
+The validated list permits at most 256 entries and 1–18 octets per address
+(`BACnetAddress::MAX_MAC_LEN`, #1157); routed networks must be 1–65534. The
+network layer delivers no longer source address (#1141), and no built-in
+transport's MAC is longer, so a longer entry could never match and is refused
+rather than kept as a dead entry. These are static local limits, not transport
 support promises. No CIDR, prefixes, ranges or dynamic callbacks are supported.
 
 Python's keyword-only `dcc_source_restriction` accepts `None` or a list of

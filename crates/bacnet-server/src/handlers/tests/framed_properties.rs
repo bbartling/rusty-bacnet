@@ -69,7 +69,7 @@ fn framed_recipient_list() -> (Vec<u8>, Vec<BACnetDestination>) {
     };
     let destinations = vec![device_entry, address_entry];
     let mut buf = BytesMut::new();
-    bacnet_encoding::constructed::encode_destination_list(&mut buf, &destinations);
+    bacnet_encoding::constructed::encode_destination_list(&mut buf, &destinations).unwrap();
     (buf.to_vec(), destinations)
 }
 

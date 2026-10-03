@@ -20,12 +20,12 @@ impl From<Error> for ReadRangeFailure {
     }
 }
 
-impl From<super::RpmFailure> for ReadRangeFailure {
-    fn from(failure: super::RpmFailure) -> Self {
+impl From<super::ReadFailure> for ReadRangeFailure {
+    fn from(failure: super::ReadFailure) -> Self {
         match failure {
-            super::RpmFailure::Service(error) => Self::Service(error),
-            super::RpmFailure::Work => Self::Work,
-            super::RpmFailure::Bytes => Self::Bytes,
+            super::ReadFailure::Service(error) => Self::Service(error),
+            super::ReadFailure::Work => Self::Work,
+            super::ReadFailure::Bytes => Self::Bytes,
         }
     }
 }
@@ -113,7 +113,10 @@ where
             break;
         }
         let mut item = BytesMut::new();
-        encode_item(&mut item, &selected.items[index]).map_err(ReadRangeFailure::Service)?;
+        selected
+            .items
+            .encode_with(index, &mut item, &mut encode_item)
+            .map_err(ReadRangeFailure::Service)?;
         let Some(bytes) = accepted_bytes.checked_add(item.len()) else {
             break;
         };

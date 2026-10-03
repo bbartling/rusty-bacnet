@@ -5,7 +5,7 @@
 use super::event_forwarding::Reception;
 use super::event_recipient_routing_tests::{address_recipient, LITERAL_BROADCAST_MAC};
 use super::*;
-use crate::server::test_transport::{SendLog, TestTransport, BIP_LOCAL_MAC};
+use crate::server::test_transport::{SendLog, TestTransport, TestTransportHandle, BIP_LOCAL_MAC};
 use bacnet_encoding::constructed::encode_event_notification_subscription_list;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::notification_forwarder::NotificationForwarderObject;
@@ -105,7 +105,7 @@ pub(super) fn subscribe(
     subscriptions: &[BACnetEventNotificationSubscription],
 ) {
     let mut buf = BytesMut::new();
-    encode_event_notification_subscription_list(&mut buf, subscriptions);
+    encode_event_notification_subscription_list(&mut buf, subscriptions).unwrap();
     forwarder
         .write_property(
             PropertyIdentifier::SUBSCRIBED_RECIPIENTS,
@@ -199,6 +199,7 @@ pub(super) fn unconfirmed(to: To, process_identifier: u32) -> Copy {
 pub(super) struct Forwarding {
     pub(super) db: Arc<RwLock<ObjectDatabase>>,
     pub(super) sent: SendLog,
+    pub(super) handle: TestTransportHandle,
     services: UnconfirmedServices<TestTransport>,
 }
 
@@ -206,6 +207,7 @@ impl Forwarding {
     pub(super) fn new(db: ObjectDatabase) -> Self {
         let transport = forwarding_transport();
         let sent = transport.sent();
+        let handle = transport.handle();
         let db = Arc::new(RwLock::new(db));
         let services = UnconfirmedServices {
             db: Arc::clone(&db),
@@ -214,7 +216,12 @@ impl Forwarding {
                 ServerConfig::default(),
             )
         };
-        Self { db, sent, services }
+        Self {
+            db,
+            sent,
+            handle,
+            services,
+        }
     }
 
     /// Hand the server one UnconfirmedEventNotification addressed as
@@ -309,6 +316,35 @@ async fn received_notification_goes_to_recipient_list_and_subscriptions() {
                 process_identifier: 41,
             },
         ]
+    );
+}
+
+#[tokio::test]
+async fn a_forwarded_copy_whose_send_fails_is_counted_once() {
+    let mut nf = NotificationForwarderObject::new(1, "NF").unwrap();
+    nf.add_destination(destination(address_recipient(0, &PEER_A), 40, false))
+        .unwrap();
+    nf.add_destination(destination(address_recipient(0, &PEER_B), 41, false))
+        .unwrap();
+    let forwarding = Forwarding::new(database(vec![nf]));
+    forwarding.handle.fail_next_send();
+    // A failed send is still logged: both copies were attempted, and the
+    // second went out after the first failed.
+    assert_eq!(
+        forwarding
+            .receive(&notification(5), Reception::UNICAST)
+            .await,
+        [
+            unconfirmed(To::Local(PEER_A.to_vec()), 40),
+            unconfirmed(To::Local(PEER_B.to_vec()), 41),
+        ]
+    );
+    assert_eq!(
+        forwarding.counters(),
+        EventNotificationCounters {
+            unconfirmed_send_failed: 1,
+            ..Default::default()
+        }
     );
 }
 

@@ -127,7 +127,7 @@ impl SubscribedRecipientsPersistence for FileSubscribedRecipientsPersistence {
         let mut bytes = BytesMut::with_capacity(HEADER_LEN + 40 * subscriptions.len());
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&forwarder.encode());
-        encode_event_notification_subscription_list(&mut bytes, subscriptions);
+        encode_event_notification_subscription_list(&mut bytes, subscriptions)?;
         if let Some(parent) = self
             .path
             .parent()

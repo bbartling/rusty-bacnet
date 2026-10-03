@@ -83,7 +83,8 @@ async fn forwarder_relays_a_notification_between_clients_over_the_wire() {
             issue_confirmed_notifications: false,
             time_remaining: 10,
         }],
-    );
+    )
+    .unwrap();
     sender
         .write_property(
             &server_mac,
@@ -117,7 +118,8 @@ async fn forwarder_relays_a_notification_between_clients_over_the_wire() {
             issue_confirmed_notifications: true,
             transitions: EventTransitionBits::all(),
         }],
-    );
+    )
+    .unwrap();
     sender
         .add_list_element(
             &server_mac,

@@ -81,6 +81,14 @@ pub trait AuditLogStorage: Send + Sync {
         start_at_sequence_number: Option<u64>,
         requested_count: u16,
     ) -> AuditLogQueryPage;
+
+    /// The retained records oldest-to-newest, each with its sequence number.
+    ///
+    /// This is the Log_Buffer list that ReadRange pages (Clause 12.64.10), the
+    /// same ring `query` scans, so the two services never see different
+    /// copies. The view is borrowed: the caller reads it under its object
+    /// database guard, and nothing is copied or persisted.
+    fn retained_records(&self) -> &VecDeque<BACnetAuditLogRecordResult>;
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +434,10 @@ impl AuditLogStorage for AuditLogObject {
             no_more_items: !unreturned_match,
         }
     }
+
+    fn retained_records(&self) -> &VecDeque<BACnetAuditLogRecordResult> {
+        &self.buffer
+    }
 }
 
 impl BACnetObject for AuditLogObject {
@@ -510,6 +522,14 @@ impl BACnetObject for AuditLogObject {
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }
+            // Clause 12.64.10 opens the log buffer to ReadRange and
+            // AuditLogQuery only, so a property read names the property as
+            // present but not readable this way (Clause 15.5.1.3.1). ReadRange
+            // pages the ring through `AuditLogStorage::retained_records`.
+            p if p == PropertyIdentifier::LOG_BUFFER => Err(Error::Protocol {
+                class: ErrorClass::PROPERTY.to_raw() as u32,
+                code: ErrorCode::READ_ACCESS_DENIED.to_raw() as u32,
+            }),
             _ => Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
                 code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,

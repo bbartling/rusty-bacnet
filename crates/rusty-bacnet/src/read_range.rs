@@ -10,8 +10,8 @@ pub(crate) fn request(
     property: &PyPropertyIdentifier,
     array_index: Option<u32>,
     range_type: Option<&str>,
-    reference_index: Option<u32>,
-    reference_seq: Option<u32>,
+    reference_index: Option<u64>,
+    reference_seq: Option<u64>,
     count: Option<i32>,
 ) -> PyResult<ReadRangeRequest> {
     let range = match range_type {

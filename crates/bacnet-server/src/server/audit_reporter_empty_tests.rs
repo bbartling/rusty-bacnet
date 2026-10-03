@@ -33,7 +33,8 @@ async fn audit_empty_values_wp_recipient_list_preserves_present_empty_and_null()
     bacnet_encoding::constructed::encode_destination_list(
         &mut populated,
         std::slice::from_ref(&destination),
-    );
+    )
+    .unwrap();
     assert!(populated.len() <= 32);
     let mut object = NotificationClass::new(1, "empty-audit-destinations").unwrap();
     object.add_destination(destination).unwrap();

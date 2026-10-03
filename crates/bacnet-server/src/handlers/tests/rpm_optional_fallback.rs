@@ -90,7 +90,7 @@ fn rpm_optional_large_borrowed_all_required_preserves_empty_wrappers() {
         let mut out = BytesMut::from(&b"prefix"[..]);
         let result = handle_rpm_budgeted(&db, &data, &mut out, budget(1, bytes));
         if bytes == 13 {
-            assert!(matches!(result, Err(RpmFailure::Bytes)));
+            assert!(matches!(result, Err(ReadFailure::Bytes)));
             assert_eq!(&out[..], b"prefix");
         } else {
             result.unwrap();
@@ -115,12 +115,12 @@ fn rpm_optional_large_borrowed_mostly_required_order_duplicates_and_late_cap() {
     let result = expand(object, &reference(PropertyIdentifier::OPTIONAL), |id| {
         visits.push(id);
         if visits.len() == 3 {
-            Err(RpmFailure::Work)
+            Err(ReadFailure::Work)
         } else {
             Ok(())
         }
     });
-    assert!(matches!(result, Err(RpmFailure::Work)));
+    assert!(matches!(result, Err(ReadFailure::Work)));
     assert_eq!(visits, OPTIONAL_IDS[..3]);
 
     let data = request(vec![
@@ -130,7 +130,7 @@ fn rpm_optional_large_borrowed_mostly_required_order_duplicates_and_late_cap() {
     let mut out = BytesMut::from(&b"prefix"[..]);
     assert!(matches!(
         handle_rpm_budgeted(&db, &data, &mut out, budget(4, 1024)),
-        Err(RpmFailure::Work)
+        Err(ReadFailure::Work)
     ));
     assert_eq!(reads.load(Ordering::SeqCst), 0);
     assert_eq!(&out[..], b"prefix");

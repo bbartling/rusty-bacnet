@@ -30,6 +30,8 @@ pub use lift::{
     AssignedLandingCall, BACnetAssignedLandingCalls, BACnetLandingCallStatus,
     BACnetLandingDoorStatus, BACnetLiftCarCallList, LandingCallCommand, LandingDoor,
 };
+mod log;
+pub use log::{BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue};
 mod property_access;
 pub use property_access::{AccessResult, BACnetPropertyAccessResult};
 mod read_access;
@@ -283,15 +285,15 @@ impl BACnetDeviceObjectPropertyReference {
 pub struct BACnetAddress {
     /// Network number (0 = local network, 1-65534 = remote, 65535 = broadcast).
     pub network_number: u16,
-    /// MAC-layer address (variable length, at most [`Self::MAX_MAC_LEN`] in a
-    /// configured recipient; empty = broadcast).
+    /// MAC-layer address (variable length, at most [`Self::MAX_MAC_LEN`] on the
+    /// wire; empty = broadcast).
     pub mac_address: MacAddr,
 }
 
 impl BACnetAddress {
-    /// The longest `mac_address`, in octets, of a recipient this stack is
-    /// configured to notify (#1124), and of any DADR or SADR the network layer
-    /// encodes or decodes (#1141).
+    /// The longest `mac_address`, in octets, that this stack encodes or decodes
+    /// in any `BACnetAddress` (#1124, #1156), and of any DADR or SADR the
+    /// network layer encodes or decodes (#1141).
     ///
     /// Clause 21 puts no length on the OCTET STRING, but a MAC is only useful
     /// if it names a node on some data link. Table 6-2 gives the network-layer
@@ -302,14 +304,15 @@ impl BACnetAddress {
     /// 16-octet IPv6 address and 2-octet UDP port. A longer MAC names no node
     /// on any of them, nor on a standard data link behind a router.
     ///
-    /// A recipient the device is configured to notify (a Recipient_List
-    /// destination or the Audit_Notification_Recipient) is held to this bound:
-    /// its decoder refuses a longer MAC, and so do the local setters that store
-    /// one, so a stored recipient always decodes again. The NPDU codec refuses
-    /// a longer DLEN or SLEN (`NpduAddress::MAX_MAC_LEN` in bacnet-encoding),
-    /// so the source addresses the stack learns off the network, which COV
-    /// subscription lists and audit records report, fit the bound as well. The
-    /// generic recipient decoder still reads any length.
+    /// Every codec for this type in bacnet-encoding holds to the bound: the
+    /// recipient, ValueSource and AuditLogQuery decoders refuse a longer MAC
+    /// and their encoders refuse to write one. The local setters that store a
+    /// configured recipient (a Recipient_List destination or the
+    /// Audit_Notification_Recipient) refuse one too, so a stored recipient
+    /// always decodes again. The NPDU codec refuses a longer DLEN or SLEN
+    /// (`NpduAddress::MAX_MAC_LEN` in bacnet-encoding), so the source addresses
+    /// the stack learns off the network, which COV subscription lists and audit
+    /// records report, fit the bound as well.
     pub const MAX_MAC_LEN: usize = 18;
 
     /// Create a local-broadcast address.
@@ -410,83 +413,6 @@ pub struct BACnetPortPermission {
     /// `true` when notifications received through the port are forwarded
     /// (`[1]`).
     pub enabled: bool,
-}
-
-// ---------------------------------------------------------------------------
-// LogDatum (Clause 12.25 -- TrendLog Log_Buffer; Clause 21.6)
-// ---------------------------------------------------------------------------
-
-/// The datum field of a BACnetLogRecord: a CHOICE covering all possible
-/// logged value types.
-///
-/// Context tags per spec:
-/// - `[0]` log-status (BACnetLogStatus, 8-bit flags)
-/// - `[1]` boolean-value
-/// - `[2]` real-value
-/// - `[3]` enum-value (unsigned)
-/// - `[4]` unsigned-value
-/// - `[5]` signed-value
-/// - `[6]` bitstring-value
-/// - `[7]` null-value
-/// - `[8]` failure (BACnetError)
-/// - `[9]` time-change (REAL, clock-adjustment seconds)
-/// - `[10]` any-value (raw application-tagged bytes)
-#[derive(Debug, Clone, PartialEq)]
-pub enum LogDatum {
-    /// Log-status flags (context tag 0).  Bit 0=log-disabled, bit 1=buffer-purged,
-    /// bit 2=log-interrupted.
-    LogStatus(u8),
-    /// Boolean value (context tag 1).
-    BooleanValue(bool),
-    /// Real (f32) value (context tag 2).
-    RealValue(f32),
-    /// Enumerated value (context tag 3).
-    EnumValue(u32),
-    /// Unsigned integer value (context tag 4).
-    UnsignedValue(u64),
-    /// Signed integer value (context tag 5).
-    SignedValue(i64),
-    /// Bit-string value (context tag 6).
-    BitstringValue {
-        /// Number of unused bits in the last byte.
-        unused_bits: u8,
-        /// The bit data.
-        data: Vec<u8>,
-    },
-    /// Null value (context tag 7).
-    NullValue,
-    /// Error (context tag 8): error class + error code.
-    Failure {
-        /// Raw BACnet error class value.
-        error_class: u32,
-        /// Raw BACnet error code value.
-        error_code: u32,
-    },
-    /// Time-change: clock-adjustment amount in seconds (context tag 9).
-    TimeChange(f32),
-    /// Any-value: raw application-tagged bytes for types not enumerated above
-    /// (context tag 10).
-    AnyValue(Vec<u8>),
-}
-
-// ---------------------------------------------------------------------------
-// BACnetLogRecord (Clause 12.25 -- TrendLog Log_Buffer; Clause 21.6)
-// ---------------------------------------------------------------------------
-
-/// A single record stored in a TrendLog object's log buffer.
-///
-/// Contains a timestamp (date + time), the logged datum, and optional
-/// status flags that were in effect at logging time.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BACnetLogRecord {
-    /// The date at which this record was logged.
-    pub date: Date,
-    /// The time at which this record was logged.
-    pub time: Time,
-    /// The logged datum.
-    pub log_datum: LogDatum,
-    /// Optional status flags at time of logging (4-bit BACnet StatusFlags).
-    pub status_flags: Option<u8>,
 }
 
 // ---------------------------------------------------------------------------

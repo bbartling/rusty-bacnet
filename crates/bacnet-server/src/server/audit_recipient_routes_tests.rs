@@ -53,7 +53,8 @@ async fn audit_target_routes_are_callback_free_after_startup() {
                 bacnet_encoding::constructed::encode_recipient(
                     &mut bytes,
                     &BACnetRecipient::Device(oid(ObjectType::DEVICE, if direct { 21 } else { 20 })),
-                );
+                )
+                .unwrap();
                 let value = PropertyValue::ApplicationData(bytes.to_vec());
                 let target = oid(ObjectType::DEVICE, 10);
                 if direct {
@@ -157,7 +158,8 @@ async fn audit_target_routes_use_actual_bound_bip_broadcast_port() {
         "another UDP port is not this link broadcast"
     );
     let mut bytes = BytesMut::new();
-    bacnet_encoding::constructed::encode_recipient(&mut bytes, &recipient(endpoint.port()));
+    bacnet_encoding::constructed::encode_recipient(&mut bytes, &recipient(endpoint.port()))
+        .unwrap();
     assert!(server
         .write_local(
             &target,
@@ -267,7 +269,8 @@ async fn audit_target_routes_revalidate_generic_next_hops_after_startup() {
             bacnet_encoding::constructed::encode_recipient(
                 &mut bytes,
                 &BACnetRecipient::Device(if initially_unresolved { good } else { bad }),
-            );
+            )
+            .unwrap();
             if initially_unresolved {
                 assert!(server
                     .write_local(
@@ -297,7 +300,7 @@ async fn audit_target_routes_revalidate_generic_next_hops_after_startup() {
                 ));
             }
             let mut original = BytesMut::new();
-            bacnet_encoding::constructed::encode_recipient(&mut original, &initial);
+            bacnet_encoding::constructed::encode_recipient(&mut original, &initial).unwrap();
             assert_eq!(
                 server
                     .db

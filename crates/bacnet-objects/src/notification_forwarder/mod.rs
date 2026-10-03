@@ -110,7 +110,7 @@ impl NotificationForwarderObject {
     ) -> Result<Self, Error> {
         let mut forwarder = Self::new(instance, name)?;
         if let Some(saved) = persistence.load(forwarder.oid)? {
-            forwarder.subscribed_recipients.write(framed(&saved))?;
+            forwarder.subscribed_recipients.write(framed(&saved)?)?;
         }
         forwarder.persistence = Some(persistence);
         Ok(forwarder)
@@ -213,14 +213,16 @@ impl NotificationForwarderObject {
     }
 }
 
-/// A list of subscriptions in the framed form the store writes.
-fn framed(subscriptions: &[BACnetEventNotificationSubscription]) -> PropertyValue {
+/// A list of subscriptions in the framed form the store writes. Fails for a
+/// recipient MAC past `BACnetAddress::MAX_MAC_LEN`, which a loaded list cannot
+/// hold since its decoder refuses one.
+fn framed(subscriptions: &[BACnetEventNotificationSubscription]) -> Result<PropertyValue, Error> {
     let mut buf = BytesMut::new();
     bacnet_encoding::constructed::encode_event_notification_subscription_list(
         &mut buf,
         subscriptions,
-    );
-    PropertyValue::ApplicationData(buf.to_vec())
+    )?;
+    Ok(PropertyValue::ApplicationData(buf.to_vec()))
 }
 
 fn read_bool(value: &PropertyValue) -> Result<bool, Error> {
@@ -256,7 +258,7 @@ impl BACnetObject for NotificationForwarderObject {
                 bacnet_encoding::constructed::encode_destination_list(
                     &mut buf,
                     &self.recipient_list,
-                );
+                )?;
                 Ok(PropertyValue::ApplicationData(buf.to_vec()))
             }
             PropertyIdentifier::SUBSCRIBED_RECIPIENTS => Ok(self.subscribed_recipients.read()),

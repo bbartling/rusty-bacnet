@@ -348,6 +348,15 @@ impl AuditLogStorage for ExtendedReporter {
             no_more_items: false,
         }
     }
+
+    fn retained_records(
+        &self,
+    ) -> &std::collections::VecDeque<bacnet_types::constructed::BACnetAuditLogRecordResult> {
+        static EMPTY: std::collections::VecDeque<
+            bacnet_types::constructed::BACnetAuditLogRecordResult,
+        > = std::collections::VecDeque::new();
+        &EMPTY
+    }
 }
 
 #[tokio::test]

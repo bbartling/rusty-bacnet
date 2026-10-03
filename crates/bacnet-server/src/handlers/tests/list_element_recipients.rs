@@ -33,7 +33,7 @@ fn destination(device_instance: u32) -> BACnetDestination {
 
 fn framed(destinations: &[BACnetDestination]) -> Vec<u8> {
     let mut buf = BytesMut::new();
-    bacnet_encoding::constructed::encode_destination_list(&mut buf, destinations);
+    bacnet_encoding::constructed::encode_destination_list(&mut buf, destinations).unwrap();
     buf.to_vec()
 }
 

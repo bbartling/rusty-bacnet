@@ -21,6 +21,7 @@ use bacnet_types::enums::{EventState, EventType};
 use bytes::Bytes;
 use std::borrow::Cow;
 
+mod post_route_counters;
 mod route_skip_counters;
 mod suppression_counters;
 
@@ -116,11 +117,22 @@ pub(super) async fn distribute_from_database_with_bindings(
 /// [`distribute_from_database_with_bindings`] under the given DCC state, also
 /// returning the undelivered-notification counters the transition moved.
 pub(super) async fn distribute_counted(
+    db: ObjectDatabase,
+    device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
+    comm_state: u8,
+) -> (Vec<Bytes>, Vec<UnicastFrame>, EventNotificationCounters) {
+    let (transport, _) = routing_transport();
+    distribute_counted_on(transport, db, device_bindings, comm_state).await
+}
+
+/// [`distribute_counted`] over a caller-built transport.
+pub(super) async fn distribute_counted_on(
+    transport: TestTransport,
     mut db: ObjectDatabase,
     device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
     comm_state: u8,
 ) -> (Vec<Bytes>, Vec<UnicastFrame>, EventNotificationCounters) {
-    let (transport, sent) = routing_transport();
+    let sent = transport.sent();
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(AtomicU8::new(comm_state));
     let suppressions = Arc::default();
@@ -246,7 +258,8 @@ impl BACnetObject for TestNotificationClass {
                         })
                         .collect();
                     let mut list = BytesMut::new();
-                    bacnet_encoding::constructed::encode_destination_list(&mut list, &destinations);
+                    bacnet_encoding::constructed::encode_destination_list(&mut list, &destinations)
+                        .unwrap();
                     Ok(PropertyValue::ApplicationData(list.to_vec()))
                 }
             },

@@ -12,22 +12,30 @@ CHANGELOG.md, so parallel PRs don't conflict there. The file is named
     ---
     section: Fixed
     ---
-    - The entry: one Markdown bullet as it will read in CHANGELOG.md, with
-      continuation lines indented two spaces.
+    - The entry: one short Markdown bullet as it will read in CHANGELOG.md,
+      with continuation lines indented two spaces (#1188).
 
 check validates every fragment and fails if CHANGELOG.md's [Unreleased]
 section lists entries itself; it keeps only a note pointing to changelog.d/.
-With --no-fragments it also fails while any fragment is waiting (a release
-tag must have assembled them all).
+An entry is one paragraph with no nested bullets, at most ENTRY_CAP
+characters (MIGRATION_CAP under Migration notes), counting each line break
+and its indent as one space and leaving link targets out. With --no-fragments
+it also fails while any fragment is waiting (a release tag must have
+assembled them all).
 
 preview prints [Unreleased] as the fragments would assemble it.
 
 assemble writes the fragments into CHANGELOG.md as a new `## [X.Y.Z] - date`
 section below [Unreleased], grouped under the section headings in SECTIONS
-order and sorted by issue number, then slug, within each. It deletes the
-fragments it wrote and updates the compare links at the bottom of the file
-if there are any. With --output it writes the result to that file instead and
-leaves CHANGELOG.md and the fragments alone (release dry runs).
+order and sorted by issue number, then slug, within each. Each entry ends
+with a link to the GitHub commit that brought its fragment in along HEAD's
+first-parent history: dev's merge commit, when run on a branch cut from dev.
+A fragment that history doesn't add, or that a bulk move of more than
+BULK_ADDS fragments added, gets no link, and neither does any entry in a
+shallow clone. It deletes the fragments it wrote and updates the compare
+links at the bottom of the file if there are any. With --output it writes the
+result to that file instead and leaves CHANGELOG.md and the fragments alone
+(release dry runs). preview shows the same links.
 """
 
 from __future__ import annotations
@@ -35,6 +43,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +56,18 @@ README = "README.md"
 # Keep a Changelog's six, then the migration notes this changelog adds.
 SECTIONS = ("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security", "Migration notes")
 
+# The longest entry, in characters, and the longest Migration notes entry,
+# which also says what to change (#1188). Detail belongs in the issue.
+ENTRY_CAP = 300
+MIGRATION_CAP = 500
+
+# The public mirror, which has the same commits; readers can't reach Forgejo.
+COMMIT_URL = "https://github.com/jscott3201/rusty-bacnet/commit/"
+# A commit that adds more fragments than this moved existing entries (#1145
+# split [Unreleased] into 209 of them) rather than making the changes, so its
+# fragments get no link instead of all pointing at it.
+BULK_ADDS = 20
+
 NAME = re.compile(r"^(?:(\d+)-)?([a-z0-9]+(?:-[a-z0-9]+)*)\.md$")
 VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -55,6 +76,7 @@ FENCE = re.compile(r"^\s*(```|~~~)")
 LIST_ITEM = re.compile(r"^\s{0,3}(?:[-*+]|\d+[.)])(?:\s|$)")
 HEADING = re.compile(r"^\s{0,3}#{1,6}(?:\s|$)")
 UNRELEASED_LINK = re.compile(r"^\[Unreleased\]:\s*(\S+)/compare/(\S+?)\.\.\.(\S+)\s*$", re.IGNORECASE)
+LINK_TARGET = re.compile(r"\[([^\]]*)\]\([^)\s]*\)")
 
 
 class ChangelogError(Exception):
@@ -124,11 +146,26 @@ def parse_fragment(path):
     if not body[0].startswith("- ") or not body[0][2:].strip():
         fail("the entry is one Markdown bullet starting with '- '", first + 1)
     for offset, line in enumerate(body[1:], first + 2):
-        if line and not line.startswith("  "):
+        if not line:
+            fail("keep the entry to one paragraph; the issue and the commit carry the detail", offset)
+        if not line.startswith("  "):
             fail("indent continuation lines two spaces; a fragment holds one top-level bullet", offset)
+        if LIST_ITEM.match(line.lstrip()):
+            fail("no nested bullets: one or two high-level sentences, with the detail left to the issue", offset)
+    entry = "\n".join(body)
+    cap = MIGRATION_CAP if section == "Migration notes" else ENTRY_CAP
+    length = entry_length(entry)
+    if length > cap:
+        fail(f"the entry is {length} characters; keep it to {cap} (see {FRAGMENT_DIR}/{README})", first + 1)
 
     issue = int(m.group(1)) if m.group(1) else None
-    return Fragment(path, issue, m.group(2), section, "\n".join(body) + "\n")
+    return Fragment(path, issue, m.group(2), section, entry + "\n")
+
+
+def entry_length(entry):
+    """An entry's length, counting each line break and its indent as one space and links by their text."""
+    text = " ".join(line.strip() for line in entry.removeprefix("- ").split("\n"))
+    return len(LINK_TARGET.sub(r"\1", text))
 
 
 def load_fragments(directory):
@@ -186,15 +223,59 @@ def unreleased_problems(body, offset):
     return problems
 
 
-def render(fragments):
-    """The release section body: one heading per section, bullets in order."""
+def commit_links(root, fragments):
+    """{fragment path: SHA} of the commit that added each fragment along HEAD's first-parent history.
+
+    On dev, or a branch cut from it, that is the merge commit that brought the
+    fragment in. A commit that added more than BULK_ADDS fragments links none.
+    Empty when root isn't the top of a git work tree, in a shallow clone (whose
+    oldest commit seems to add every file), or without git.
+    """
+    root = Path(root)
+
+    def git(*args):
+        cmd = ["git", "-C", str(root), *args]
+        return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
+
+    try:
+        if Path(git("rev-parse", "--show-toplevel")).resolve() != root.resolve():
+            return {}
+        if git("rev-parse", "--is-shallow-repository") != "false":
+            return {}
+        log = git(
+            "log", "--first-parent", "--diff-merges=first-parent", "--diff-filter=A", "--no-renames",
+            "--name-only", "--format=%x00%H", "--", FRAGMENT_DIR,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return {}
+    added, adds, sha = {}, {}, None
+    for line in log.splitlines():
+        if line.startswith("\0"):
+            sha = line[1:]
+        elif line and sha:
+            added.setdefault(line, sha)  # newest first, so a fragment added again keeps its latest commit
+            adds[sha] = adds.get(sha, 0) + 1
+    by_name = {f"{FRAGMENT_DIR}/{f.path.name}": f.path for f in fragments}
+    return {path: added[name] for name, path in by_name.items() if name in added and adds[added[name]] <= BULK_ADDS}
+
+
+def linked(fragment, sha):
+    """The fragment's entry, ending with a link to its commit when there is one."""
+    if sha is None:
+        return fragment.text
+    return f"{fragment.text.removesuffix(chr(10))} ([{sha[:7]}]({COMMIT_URL}{sha}))\n"
+
+
+def render(fragments, links=None):
+    """The release section body: one heading per section, bullets in order, each with its commit link."""
+    links = links or {}
     out = []
     for section in SECTIONS:
         group = sorted((f for f in fragments if f.section == section), key=Fragment.sort_key)
         if not group:
             continue
         out.append(f"### {section}\n\n")
-        out.append("\n".join(f.text for f in group))
+        out.append("\n".join(linked(f, links.get(f.path)) for f in group))
         out.append("\n")
     return "".join(out).removesuffix("\n")
 
@@ -221,6 +302,7 @@ class Changelog:
     """CHANGELOG.md and changelog.d/ under one repository root."""
 
     def __init__(self, root):
+        self.root = Path(root)
         self.path = Path(root) / "CHANGELOG.md"
         self.directory = Path(root) / FRAGMENT_DIR
 
@@ -257,7 +339,7 @@ class Changelog:
         """[Unreleased] as the fragments would assemble it."""
         fragments = load_fragments(self.directory)
         self.read()
-        body = render(fragments) or f"No fragments in {FRAGMENT_DIR}/.\n"
+        body = render(fragments, commit_links(self.root, fragments)) or f"No fragments in {FRAGMENT_DIR}/.\n"
         return f"## [Unreleased]\n\n{body}"
 
     def assemble(self, version, date, output=None, allow_empty=False):
@@ -272,7 +354,7 @@ class Changelog:
 
         while body and not body[-1].strip():
             body = body[:-1]
-        section = f"## [{version}] - {date}\n\n{render(fragments)}".rstrip("\n")
+        section = f"## [{version}] - {date}\n\n{render(fragments, commit_links(self.root, fragments))}".rstrip("\n")
         lines = [*head, *body, "", *section.splitlines(), *([""] + rest if rest else [])]
         text = "\n".join(update_links(lines, version)) + "\n"
 

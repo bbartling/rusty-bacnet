@@ -2,7 +2,10 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
+use bacnet_encoding::constructed::decode_log_multiple_record;
+use bacnet_types::constructed::{
+    BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue,
+};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, PropertyValue, Time};
@@ -62,11 +65,12 @@ impl Family {
         }
     }
 
-    fn records(&self) -> &VecDeque<BACnetLogRecord> {
+    /// The resident records, a Trend Log Multiple's as single-datum records.
+    fn records(&self) -> VecDeque<BACnetLogRecord> {
         match self {
-            Self::Event(object) => object.records(),
-            Self::Trend(object) => object.records(),
-            Self::TrendMultiple(object) => object.records(),
+            Self::Event(object) => object.records().clone(),
+            Self::Trend(object) => object.records().clone(),
+            Self::TrendMultiple(object) => object.records().iter().map(single).collect(),
         }
     }
 
@@ -74,7 +78,15 @@ impl Family {
         match self {
             Self::Event(object) => object.add_record(record),
             Self::Trend(object) => object.add_record(record),
-            Self::TrendMultiple(object) => object.add_record(record),
+            Self::TrendMultiple(object) => object.add_record(multiple(record)),
+        }
+    }
+
+    /// Submit `record` through the trend insertion hook its family serves.
+    fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+        match self {
+            Self::TrendMultiple(object) => object.add_trend_multiple_record(multiple(record)),
+            _ => self.object_mut().add_trend_record(record),
         }
     }
 
@@ -115,7 +127,7 @@ impl Family {
         self.read(PropertyIdentifier::STOP_WHEN_FULL) == PropertyValue::Boolean(true)
     }
 
-    fn identities(&self) -> Vec<u32> {
+    fn identities(&self) -> Vec<u64> {
         self.object()
             .log_record_identities_internal()
             .unwrap()
@@ -182,6 +194,35 @@ fn valid_frame() -> ClockFrame {
     }
 }
 
+/// A single-datum test record as a one-member Trend Log Multiple record.
+fn multiple(record: BACnetLogRecord) -> BACnetLogMultipleRecord {
+    let log_data = match record.log_datum {
+        LogDatum::LogStatus(bits) => LogData::LogStatus(bits),
+        LogDatum::UnsignedValue(value) => LogData::Values(vec![LogValue::UnsignedValue(value)]),
+        other => panic!("no Trend Log Multiple form for {other:?}"),
+    };
+    BACnetLogMultipleRecord {
+        date: record.date,
+        time: record.time,
+        log_data,
+    }
+}
+
+/// The inverse of [`multiple`].
+fn single(record: &BACnetLogMultipleRecord) -> BACnetLogRecord {
+    let log_datum = match &record.log_data {
+        LogData::LogStatus(bits) => LogDatum::LogStatus(*bits),
+        LogData::Values(values) if values.len() == 1 => values[0].clone().into(),
+        other => panic!("no single-datum form for {other:?}"),
+    };
+    BACnetLogRecord {
+        date: record.date,
+        time: record.time,
+        log_datum,
+        status_flags: None,
+    }
+}
+
 fn ordinary(hour: u8, value: u64) -> BACnetLogRecord {
     BACnetLogRecord {
         date: valid_frame().local_date,
@@ -195,7 +236,8 @@ fn ordinary(hour: u8, value: u64) -> BACnetLogRecord {
 }
 
 fn assert_status(object: &Family, bits: u8) {
-    let record = object.records().back().expect("status record");
+    let records = object.records();
+    let record = records.back().expect("status record");
     assert_eq!(record.date, valid_frame().local_date);
     assert_eq!(record.time, valid_frame().local_time);
     assert_eq!(record.log_datum, LogDatum::LogStatus(bits));
@@ -204,6 +246,14 @@ fn assert_status(object: &Family, bits: u8) {
     let PropertyValue::List(records) = object.read(PropertyIdentifier::LOG_BUFFER) else {
         panic!("expected projected records");
     };
+    if let Family::TrendMultiple(_) = object {
+        let Some(PropertyValue::ApplicationData(bytes)) = records.last() else {
+            panic!("expected a framed status record");
+        };
+        let (decoded, _) = decode_log_multiple_record(bytes, 0).unwrap();
+        assert_eq!(decoded.log_data, LogData::LogStatus(bits));
+        return;
+    }
     let PropertyValue::List(fields) = records.last().expect("projected status record") else {
         panic!("expected projected record fields");
     };
@@ -328,7 +378,7 @@ fn stop_before_full_omits_triggering_ordinary_and_clock_failure_is_atomic() {
                 )
                 .unwrap();
             atomic.add_record(ordinary(1, 10)).unwrap();
-            let before_records = atomic.records().clone();
+            let before_records = atomic.records();
             let before_total = atomic.total();
             let before_identities = atomic.identities();
             assert_protocol(
@@ -336,7 +386,7 @@ fn stop_before_full_omits_triggering_ordinary_and_clock_failure_is_atomic() {
                 ErrorClass::DEVICE,
                 ErrorCode::OPERATIONAL_PROBLEM,
             );
-            assert_eq!(atomic.records(), &before_records, "{kind:?}");
+            assert_eq!(atomic.records(), before_records, "{kind:?}");
             assert_eq!(atomic.total(), before_total, "{kind:?}");
             assert_eq!(atomic.identities(), before_identities, "{kind:?}");
             assert!(atomic.enabled(), "{kind:?}");
@@ -498,7 +548,7 @@ fn status_writes_require_a_valid_clock_before_mutation() {
             if let Some(clock) = clock.clone() {
                 object.bind_clock(clock);
             }
-            let before = object.records().clone();
+            let before = object.records();
             let before_total = object.total();
             let before_enable = object.enabled();
             let before_stop = object.stop_when_full();
@@ -506,7 +556,7 @@ fn status_writes_require_a_valid_clock_before_mutation() {
                 .write(PropertyIdentifier::RECORD_COUNT, PropertyValue::Unsigned(0))
                 .unwrap_err();
             assert_protocol(error, ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM);
-            assert_eq!(object.records(), &before, "{kind:?}");
+            assert_eq!(object.records(), before, "{kind:?}");
             assert_eq!(object.total(), before_total, "{kind:?}");
             assert_eq!(object.enabled(), before_enable, "{kind:?}");
             assert_eq!(object.stop_when_full(), before_stop, "{kind:?}");
@@ -531,7 +581,7 @@ fn status_writes_require_a_valid_clock_before_mutation() {
             }
             stop.add_record(ordinary(1, 10)).unwrap();
             stop.add_record(ordinary(2, 20)).unwrap();
-            let before = stop.records().clone();
+            let before = stop.records();
             let error = stop
                 .write(
                     PropertyIdentifier::STOP_WHEN_FULL,
@@ -539,7 +589,7 @@ fn status_writes_require_a_valid_clock_before_mutation() {
                 )
                 .unwrap_err();
             assert_protocol(error, ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM);
-            assert_eq!(stop.records(), &before, "{kind:?}");
+            assert_eq!(stop.records(), before, "{kind:?}");
             assert_eq!(stop.total(), 2, "{kind:?}");
             assert!(stop.enabled(), "{kind:?}");
             assert!(!stop.stop_when_full(), "{kind:?}");

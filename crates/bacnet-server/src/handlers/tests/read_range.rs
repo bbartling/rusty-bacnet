@@ -7,9 +7,13 @@ use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::log_buffer::LogRecordIdentity;
 use bacnet_objects::trend::{TrendLogMultipleObject, TrendLogObject};
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
-use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
+use bacnet_types::constructed::{
+    BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue,
+};
 use bacnet_types::primitives::{Date, Time};
 
+#[path = "read_range_multiple.rs"]
+mod multiple;
 #[path = "read_range_pages.rs"]
 mod pages;
 #[path = "read_range_targets.rs"]
@@ -33,7 +37,7 @@ pub(super) fn time(hour: u8) -> Time {
     }
 }
 
-pub(super) fn identity(sequence_number: u32, hour: u8) -> LogRecordIdentity {
+pub(super) fn identity(sequence_number: u64, hour: u8) -> LogRecordIdentity {
     LogRecordIdentity::new(sequence_number, DATE, time(hour)).unwrap()
 }
 
@@ -156,7 +160,7 @@ pub(super) fn assert_ack(
     ack: &ReadRangeAck,
     expected: &[PropertyValue],
     flags: (bool, bool, bool),
-    first_sequence_number: Option<u32>,
+    first_sequence_number: Option<u64>,
 ) {
     assert_eq!(ack.item_count, expected.len() as u32);
     assert_eq!(ack.item_data, encoded_items(expected));
@@ -290,7 +294,11 @@ fn empty_and_unbounded_lists_have_only_included_endpoint_flags() {
 #[test]
 fn by_sequence_uses_exact_wrapped_identity_without_sorting() {
     let items = unsigned_items(&[u32::MAX as u64, 1, 2]);
-    let identities = vec![identity(u32::MAX, 1), identity(1, 2), identity(2, 3)];
+    let identities = vec![
+        identity(u64::from(u32::MAX), 1),
+        identity(1, 2),
+        identity(2, 3),
+    ];
     let (db, oid) = list_db(PropertyIdentifier::LOG_BUFFER, items, Some(identities));
 
     let positive = call(
@@ -324,7 +332,7 @@ fn by_sequence_uses_exact_wrapped_identity_without_sorting() {
         &negative,
         &unsigned_items(&[u32::MAX as u64, 1]),
         (true, false, false),
-        Some(u32::MAX),
+        Some(u64::from(u32::MAX)),
     );
 
     let absent = call(
@@ -381,6 +389,32 @@ fn record(value: u64) -> BACnetLogRecord {
     }
 }
 
+/// [`record`]'s sample as a one-member Trend Log Multiple record.
+pub(super) fn multiple_record(value: u64) -> BACnetLogMultipleRecord {
+    BACnetLogMultipleRecord {
+        date: DATE,
+        time: time(value as u8),
+        log_data: LogData::Values(vec![LogValue::UnsignedValue(value)]),
+    }
+}
+
+/// A sample record of `family` as a ReadRange item carries it: a Trend Log
+/// Multiple record framed whole, the others field by field.
+pub(super) fn projected(family: LogFamily, value: u64) -> PropertyValue {
+    match family {
+        LogFamily::TrendMultiple => {
+            let mut framed = BytesMut::new();
+            bacnet_encoding::constructed::encode_log_multiple_record(
+                &multiple_record(value),
+                &mut framed,
+            )
+            .unwrap();
+            PropertyValue::ApplicationData(framed.to_vec())
+        }
+        _ => projected_record(value),
+    }
+}
+
 pub(super) fn projected_record(value: u64) -> PropertyValue {
     PropertyValue::List(vec![
         PropertyValue::Date(DATE),
@@ -415,7 +449,7 @@ pub(super) fn fifo_log(family: LogFamily) -> Box<dyn BACnetObject> {
         LogFamily::TrendMultiple => {
             let mut object = TrendLogMultipleObject::new(1, "TLM-1", 3).unwrap();
             for value in 1..=4 {
-                object.add_record(record(value)).unwrap();
+                object.add_record(multiple_record(value)).unwrap();
             }
             Box::new(object)
         }
@@ -429,7 +463,7 @@ fn every_log_family_continues_by_surviving_fifo_identity() {
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(object).unwrap();
-        let expected = [projected_record(2), projected_record(3)];
+        let expected = [projected(family, 2), projected(family, 3)];
 
         let positive = call(
             &db,
@@ -559,6 +593,7 @@ fn item_encoding_error_keeps_response_byte_for_byte_unchanged() {
     let mut response = BytesMut::from(&b"existing-response"[..]);
     let before = response.clone();
     let mut encoded = 0;
+    let items = super::super::read_range::RangeItems::Values(items);
     let error = super::super::read_range::append_read_range_ack_with(
         &request,
         &items,

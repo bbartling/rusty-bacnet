@@ -4,7 +4,10 @@ use bacnet_objects::{
     traits::BACnetObject,
     trend::{TrendLogMultipleObject, TrendLogObject},
 };
-use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetLogRecord, LogDatum};
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetLogMultipleRecord, BACnetLogRecord, LogData,
+    LogDatum, LogValue,
+};
 use bacnet_types::primitives::{Date, PropertyValue, Time};
 use PropertyIdentifier as P;
 
@@ -23,9 +26,13 @@ fn log_objects(capacity: u32, configured: bool) -> [Box<dyn BACnetObject>; 3] {
         multiple.add_property_reference(reference);
         trend.set_logging_type(2);
         multiple.set_logging_type(2);
-        for (log_datum, status_flags) in [
-            (LogDatum::UnsignedValue(42), Some(0b1010)),
-            (LogDatum::LogStatus(3), None),
+        for (log_datum, status_flags, log_data) in [
+            (
+                LogDatum::UnsignedValue(42),
+                Some(0b1010),
+                LogData::Values(vec![LogValue::UnsignedValue(42)]),
+            ),
+            (LogDatum::LogStatus(3), None, LogData::LogStatus(3)),
         ] {
             let record = BACnetLogRecord {
                 date: Date {
@@ -44,7 +51,13 @@ fn log_objects(capacity: u32, configured: bool) -> [Box<dyn BACnetObject>; 3] {
                 status_flags,
             };
             trend.add_record(record.clone()).unwrap();
-            multiple.add_record(record.clone()).unwrap();
+            multiple
+                .add_record(BACnetLogMultipleRecord {
+                    date: record.date,
+                    time: record.time,
+                    log_data,
+                })
+                .unwrap();
             event.add_record(record).unwrap();
         }
     }
@@ -186,7 +199,7 @@ fn request(oid: ObjectIdentifier, references: &[(P, Option<u32>)]) -> BytesMut {
 }
 
 fn assert_budget_parity(db: &ObjectDatabase, request: &[u8], legacy: &[u8], count: usize) {
-    use crate::handlers::rpm_budget::{handle_rpm_budgeted, RpmFailure};
+    use crate::handlers::{rpm_budget::handle_rpm_budgeted, ReadFailure};
     use crate::server::ReadPropertyMultipleBudget;
     let budget = ReadPropertyMultipleBudget {
         max_result_elements: count,
@@ -206,7 +219,7 @@ fn assert_budget_parity(db: &ObjectDatabase, request: &[u8], legacy: &[u8], coun
                 ..budget
             }
         ),
-        Err(RpmFailure::Work)
+        Err(ReadFailure::Work)
     ));
     assert_eq!(&prefix[..], b"prefix");
     assert!(matches!(
@@ -219,7 +232,7 @@ fn assert_budget_parity(db: &ObjectDatabase, request: &[u8], legacy: &[u8], coun
                 ..budget
             }
         ),
-        Err(RpmFailure::Bytes)
+        Err(ReadFailure::Bytes)
     ));
     assert_eq!(&prefix[..], b"prefix");
 }
@@ -313,12 +326,24 @@ fn rpm_log_buffer_profile_bytes_match_rp_without_sequence_identity() {
         let oid = object.object_identifier();
         // Independent legacy application-value bytes: Date, Time, Unsigned;
         // only single-channel Trend appends the supplied StatusFlags. The next
-        // resident record is Date, Time, LogStatus. Neither contains a sequence.
-        let mut expected = vec![0xa4, 126, 9, 13, 7, 0xb4, 12, 0, 0, 0, 0x21, 42];
-        if oid.object_type() == ObjectType::TREND_LOG {
-            expected.extend([0x82, 4, 0xa0]);
-        }
-        expected.extend([0xa4, 126, 9, 13, 7, 0xb4, 12, 0, 0, 0, 0x82, 5, 0x60]);
+        // resident record is Date, Time, LogStatus. Trend Log Multiple frames
+        // each record whole instead (#1203): the timestamp [0], then log-data
+        // [1] holding the member list [1] or the log-status [0]. None of them
+        // contains a sequence.
+        let expected = if oid.object_type() == ObjectType::TREND_LOG_MULTIPLE {
+            vec![
+                0x0e, 0xa4, 126, 9, 13, 7, 0xb4, 12, 0, 0, 0, 0x0f, 0x1e, 0x1e, 0x39, 42, 0x1f,
+                0x1f, 0x0e, 0xa4, 126, 9, 13, 7, 0xb4, 12, 0, 0, 0, 0x0f, 0x1e, 0x0a, 5, 0x60,
+                0x1f,
+            ]
+        } else {
+            let mut expected = vec![0xa4, 126, 9, 13, 7, 0xb4, 12, 0, 0, 0, 0x21, 42];
+            if oid.object_type() == ObjectType::TREND_LOG {
+                expected.extend([0x82, 4, 0xa0]);
+            }
+            expected.extend([0xa4, 126, 9, 13, 7, 0xb4, 12, 0, 0, 0, 0x82, 5, 0x60]);
+            expected
+        };
         let identities = object.log_record_identities_internal().unwrap();
         assert_eq!(
             identities

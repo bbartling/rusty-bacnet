@@ -93,6 +93,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 continue;
             }
 
+            // Cannot fail for a notification that reached this loop: a local
+            // transition's payload and message text were validated when it
+            // was committed, and a forwarded copy only swaps the process
+            // identifier of a request that already decoded. See
+            // `EventNotificationCounters` for why nothing counts it.
             let service_bytes = match (outbound.encode_for)(*process_id) {
                 Ok(bytes) => bytes,
                 Err(e) => {
@@ -325,6 +330,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 };
 
                 if let Err(e) = send_result {
+                    suppressions.record(EventSuppression::UnconfirmedSendFailed);
                     warn!(
                         error = %e,
                         "Failed to send unconfirmed EventNotification"

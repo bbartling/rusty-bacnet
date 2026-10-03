@@ -8,6 +8,7 @@ const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
 const ACCUMULATOR: &str = include_str!("../../../crates/bacnet-objects/src/accumulator/mod.rs");
 const LOOP_OBJ: &str = include_str!("../../../crates/bacnet-objects/src/loop_obj.rs");
 const CONSTRUCTED: &str = include_str!("../../../crates/bacnet-types/src/constructed/mod.rs");
+const CONSTRUCTED_LOG: &str = include_str!("../../../crates/bacnet-types/src/constructed/log.rs");
 const SCHEDULE_CODECS: &str =
     include_str!("../../../crates/bacnet-encoding/src/constructed/schedule.rs");
 const ACCESS_ENUMS: &str = include_str!("../../../crates/bacnet-types/src/enums/access.rs");
@@ -44,9 +45,11 @@ fn assert_anchors(path: &str, src: &str, wrong: &[&str], right: &[&str]) {
 
 #[test]
 fn changelog_anchors_corrected_in_place() {
+    // Entries wrap at any word (#1188), so compare with line breaks as spaces.
+    let changelog = CHANGELOG.split_whitespace().collect::<Vec<_>>().join(" ");
     assert_anchors(
         "CHANGELOG.md",
-        CHANGELOG,
+        &changelog,
         &["§13.2.1", "§12.15.5", "(ASHRAE 135-2020 Clause 13.5)"],
         &[
             "(ASHRAE 135-2020 Clause 12.21)",
@@ -89,8 +92,8 @@ fn constructed_calendar_schedule_anchors() {
 #[test]
 fn constructed_trendlog_anchor() {
     assert_anchors(
-        "crates/bacnet-types/src/constructed/mod.rs",
-        CONSTRUCTED,
+        "crates/bacnet-types/src/constructed/log.rs",
+        CONSTRUCTED_LOG,
         &["12.20.5"],
         &["Clause 12.25"],
     );

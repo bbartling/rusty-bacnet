@@ -131,7 +131,7 @@ impl QueueAdmissionCounters {
 ///
 /// Created by [`NetworkLayer::start_with_admission`] or
 /// [`NetworkLayer::enable_network_control_receiver_with_admission`], or by
-/// [`BACnetRouter::start_with_admission`](crate::router::BACnetRouter::start_with_admission). The queue
+/// [`RouterOptions::track_admission`](crate::router::RouterOptions::track_admission). The queue
 /// holds 256 items; tracked APDUs additionally have a quota of 16 queued items per
 /// source MAC (NetworkLayer) or (ingress port network number, source MAC) (router).
 /// Controls have no per-source quota. **Closed > fairness > Full** determines
@@ -145,7 +145,8 @@ impl QueueAdmissionCounters {
 /// High-water/drop totals survive through an owned [`Self::counters`] handle.
 ///
 /// This wrapper deliberately does not expose the underlying receiver: all
-/// dequeues must update the snapshot. Use the existing layer/router `start` methods
+/// dequeues must update the snapshot. Use [`NetworkLayer::start`], or a router
+/// started without [`RouterOptions::track_admission`](crate::router::RouterOptions::track_admission),
 /// when a plain `mpsc::Receiver` is required instead, or
 /// [`NetworkLayer::enable_network_control_receiver`] for raw controls.
 #[derive(Debug)]
@@ -159,7 +160,7 @@ pub struct AdmissionReceiver<T> {
 
 impl<T> AdmissionReceiver<T> {
     // Crate-internal construction keeps the generic sender and accounting in
-    // this module while allowing the router to retain its legacy receiver API.
+    // this module while letting the router hand out a raw receiver as well.
     pub(crate) fn channel(
         track_depth: bool,
     ) -> (

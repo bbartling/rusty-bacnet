@@ -164,7 +164,10 @@ impl SubscribedRecipients {
     /// `PropertyValue::ApplicationData`.
     pub fn read(&self) -> PropertyValue {
         let mut buf = BytesMut::new();
-        encode_event_notification_subscription_list(&mut buf, &self.subscriptions());
+        // Every entry arrived through `write`, whose decoder holds recipients
+        // to BACnetAddress::MAX_MAC_LEN (#1156), so each one encodes.
+        encode_event_notification_subscription_list(&mut buf, &self.subscriptions())
+            .expect("stored recipients fit BACnetAddress::MAX_MAC_LEN");
         PropertyValue::ApplicationData(buf.to_vec())
     }
 

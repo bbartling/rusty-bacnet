@@ -54,7 +54,8 @@ pub(crate) struct DeviceReadContext<'a> {
     pub(crate) registered_port: Option<ObjectIdentifier>,
     /// Result rows a single-property read of a Group's Present_Value may
     /// expand, its own row and the member rows (#1172). ReadPropertyMultiple
-    /// charges its own budget instead; this starts at that budget's default.
+    /// charges its own budget instead; this starts at that budget's default,
+    /// and the endpoint responder sets its configured limit (#1215).
     pub(crate) work_limit: usize,
     execution: DeviceExecution,
     clock: bool,
@@ -62,16 +63,26 @@ pub(crate) struct DeviceReadContext<'a> {
 }
 
 impl<'a> DeviceReadContext<'a> {
-    pub(crate) fn new(
-        db: &ObjectDatabase,
-        execution: DeviceExecution,
-        live: Option<&'a LiveDeviceCov>,
-    ) -> Self {
+    /// A context serving no live COV list; a request that reads one adds its
+    /// snapshot with [`with_live`](Self::with_live) once its plan is known.
+    pub(crate) fn new(db: &ObjectDatabase, execution: DeviceExecution) -> Self {
         Self {
             registered_port: None,
             work_limit: crate::server::ReadPropertyMultipleBudget::default().max_result_elements,
             execution,
             clock: db.clock_frame().is_some(),
+            live: None,
+        }
+    }
+    /// The same context, serving the selected Device's COV lists from `live`.
+    /// A request plans with the context alone, since planning reads no value,
+    /// then samples the lists its plan reads and serves them from here (#1213).
+    pub(crate) fn with_live<'b>(self, live: Option<&'b LiveDeviceCov>) -> DeviceReadContext<'b> {
+        DeviceReadContext {
+            registered_port: self.registered_port,
+            work_limit: self.work_limit,
+            execution: self.execution,
+            clock: self.clock,
             live,
         }
     }

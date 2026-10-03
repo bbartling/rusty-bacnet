@@ -97,8 +97,23 @@ async fn dcc_disable_rate_validation_before_sc_dial() {
 
 #[test]
 fn dcc_source_restriction_configuration_bounds() {
-    for length in [0, 256, 65536] {
-        assert!(DccSourceRestriction::new(vec![DccSource::Direct(vec![1; length])]).is_err());
+    // #1157: an entry holds 1 to BACnetAddress::MAX_MAC_LEN octets, the
+    // longest source address the network layer delivers (#1141).
+    let longest = bacnet_types::constructed::BACnetAddress::MAX_MAC_LEN;
+    for length in [0, longest + 1, 255, 256, 65536] {
+        for source in [
+            DccSource::Direct(vec![1; length]),
+            DccSource::Routed {
+                network: 7,
+                address: vec![1; length],
+            },
+        ] {
+            assert!(
+                matches!(DccSourceRestriction::new(vec![source]),
+                    Err(Error::Encoding(m)) if m.contains("DCC source address")),
+                "{length}-octet entry"
+            );
+        }
     }
     for network in [0, 65535] {
         assert!(DccSourceRestriction::new(vec![DccSource::Routed {
@@ -108,7 +123,15 @@ fn dcc_source_restriction_configuration_bounds() {
         .is_err());
     }
     assert!(DccSourceRestriction::new(vec![DccSource::Direct(vec![1]); 257]).is_err());
-    assert!(DccSourceRestriction::new(vec![DccSource::Direct(vec![1; 255]); 256]).is_ok());
+    assert!(DccSourceRestriction::new(vec![DccSource::Direct(vec![1; longest]); 256]).is_ok());
+    assert!(DccSourceRestriction::new(vec![
+        DccSource::Routed {
+            network: 65534,
+            address: vec![1; longest],
+        };
+        256
+    ])
+    .is_ok());
     for entries in [vec![], vec![DccSource::Direct(vec![1])]] {
         let restriction = DccSourceRestriction::new(entries).unwrap();
         assert!(restriction
@@ -118,6 +141,31 @@ fn dcc_source_restriction_configuration_bounds() {
             assert!(restriction.validate_policy(policy).is_err());
         }
     }
+}
+
+#[tokio::test]
+async fn dcc_source_restriction_builds_with_the_longest_entries() {
+    // #1157: a server builds with 18-octet entries; one octet more never
+    // reaches the builder, since the restriction refuses it.
+    let longest = bacnet_types::constructed::BACnetAddress::MAX_MAC_LEN;
+    let restriction = DccSourceRestriction::new(vec![
+        DccSource::Direct(vec![0x2a; longest]),
+        DccSource::Routed {
+            network: 7,
+            address: vec![0x2b; longest],
+        },
+    ])
+    .unwrap();
+    let mut server = BACnetServer::generic_builder()
+        .transport(TestTransport::new())
+        .dcc_policy(DccPolicy::RequirePassword)
+        .dcc_password("required")
+        .dcc_source_restriction(Some(restriction))
+        .build()
+        .await
+        .unwrap();
+    server.stop().await.unwrap();
+    assert!(DccSourceRestriction::new(vec![DccSource::Direct(vec![0x2a; longest + 1])]).is_err());
 }
 
 #[tokio::test]

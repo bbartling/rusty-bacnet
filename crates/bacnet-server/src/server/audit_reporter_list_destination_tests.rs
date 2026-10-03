@@ -35,7 +35,8 @@ async fn audit_reporter_list_framed_destinations_decode_before_observation() {
     bacnet_encoding::constructed::encode_destination_list(
         &mut delta,
         std::slice::from_ref(&destination),
-    );
+    )
+    .unwrap();
     assert!(delta.len() <= 32);
     for service in SERVICES {
         let mut fixture = list_server(vec![1]).await;

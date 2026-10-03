@@ -42,7 +42,7 @@ fn subscription(
 
 fn framed_subscriptions(subscriptions: &[BACnetEventNotificationSubscription]) -> PropertyValue {
     let mut buf = BytesMut::new();
-    encode_event_notification_subscription_list(&mut buf, subscriptions);
+    encode_event_notification_subscription_list(&mut buf, subscriptions).unwrap();
     PropertyValue::ApplicationData(buf.to_vec())
 }
 
@@ -75,7 +75,7 @@ fn destination(
 
 fn framed_destinations(destinations: &[BACnetDestination]) -> PropertyValue {
     let mut buf = BytesMut::new();
-    encode_destination_list(&mut buf, destinations);
+    encode_destination_list(&mut buf, destinations).unwrap();
     PropertyValue::ApplicationData(buf.to_vec())
 }
 

@@ -26,7 +26,8 @@ async fn delayed_target_audit_historical_aba_summaries_use_captured_routes_witho
         bacnet_encoding::constructed::encode_recipient(
             &mut value,
             &BACnetRecipient::Device(oid(ObjectType::DEVICE, instance)),
-        );
+        )
+        .unwrap();
         assert!(matches!(
             dispatch(
                 &f.server,

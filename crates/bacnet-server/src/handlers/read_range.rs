@@ -1,11 +1,15 @@
 use std::ops::Range;
 
+use super::group_present_value::GroupMembers;
 use super::*;
 use bacnet_objects::log_buffer::LogRecordIdentity;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
 use bacnet_types::primitives::{Date, Time};
 
+#[path = "read_range_audit.rs"]
+mod audit;
+pub(crate) use audit::RangeItems;
 #[path = "read_range_items.rs"]
 mod items;
 #[path = "read_range_page.rs"]
@@ -112,7 +116,7 @@ pub(super) fn select_time_range(
     identities: Option<&[LogRecordIdentity]>,
     reference_time: (Date, Time),
     count: i32,
-) -> Result<(SignedRangeSelection, Option<u32>), Error> {
+) -> Result<(SignedRangeSelection, Option<u64>), Error> {
     let identities = identities.ok_or_else(list_item_not_timestamped)?;
     if identities.len() != item_count {
         return Err(list_item_not_timestamped());
@@ -143,19 +147,18 @@ pub(super) fn select_time_range(
 
 pub(super) fn append_read_range_ack_with<F>(
     request: &ReadRangeRequest,
-    items: &[PropertyValue],
+    items: &RangeItems<'_>,
     selection: &SignedRangeSelection,
-    first_sequence_number: Option<u32>,
+    first_sequence_number: Option<u64>,
     response: &mut BytesMut,
     mut encode_item: F,
 ) -> Result<(), Error>
 where
     F: FnMut(&mut BytesMut, &PropertyValue) -> Result<(), Error>,
 {
-    let selected = &items[selection.range.clone()];
     let mut item_data = BytesMut::new();
-    for item in selected {
-        encode_item(&mut item_data, item)?;
+    for index in selection.range.clone() {
+        items.encode_with(index, &mut item_data, &mut encode_item)?;
     }
 
     let ack = ReadRangeAck {
@@ -163,7 +166,7 @@ where
         property_identifier: request.property_identifier,
         property_array_index: request.property_array_index,
         result_flags: selection.result_flags,
-        item_count: selected.len() as u32,
+        item_count: selection.range.len() as u32,
         item_data: item_data.to_vec(),
         first_sequence_number,
     };
@@ -176,7 +179,9 @@ where
 /// Handle a ReadRange request against standalone object data.
 ///
 /// By Position uses the list's exact one-based order. By Sequence and By Time
-/// use aligned resident identities supplied for `LOG_BUFFER` by the object.
+/// use aligned resident identities supplied for `LOG_BUFFER` by the object; an
+/// Audit Log's `LOG_BUFFER` comes from its record store, which ReadProperty
+/// refuses.
 /// Like [`handle_read_property`], this low-level helper has no executor
 /// context: a built-in Device's COV subscription lists read as the object
 /// holds them, empty. Running server reads page the live subscription table.
@@ -185,14 +190,15 @@ pub fn handle_read_range(
     service_data: &[u8],
     response: &mut BytesMut,
 ) -> Result<(), Error> {
-    let selected = prepare_read_range(db, None, ReadRangeRequest::decode(service_data)?).map_err(
-        |failure| match failure {
-            ReadRangeFailure::Service(error) => error,
-            ReadRangeFailure::Bytes | ReadRangeFailure::Work => {
-                unreachable!("a read with no limit ran past one")
-            }
-        },
-    )?;
+    let unlimited = |failure| match failure {
+        ReadRangeFailure::Service(error) => error,
+        ReadRangeFailure::Bytes | ReadRangeFailure::Work => {
+            unreachable!("a read with no limit ran past one")
+        }
+    };
+    let request = ReadRangeRequest::decode(service_data)?;
+    let plan = plan_read_range(db, None, &request).map_err(unlimited)?;
+    let selected = prepare_read_range(db, None, request, plan.into_members()).map_err(unlimited)?;
     append_read_range_ack_with(
         &selected.request,
         &selected.items,
@@ -211,11 +217,30 @@ pub(crate) fn handle_read_range_budgeted(
     budget: crate::server::ReadRangeBudget,
 ) -> Result<(), ReadRangeFailure> {
     let request = ReadRangeRequest::decode(service_data).map_err(ReadRangeFailure::Service)?;
-    read_range_request_observed(db, None, request, response, budget, |_, _, _, _| {})
+    let plan = plan_read_range(db, None, &request)?;
+    read_range_request_observed(db, None, request, plan, response, budget, |_, _, _, _| {})
 }
 
-/// ReadRange evaluator over one decoded request. `view` carries the
-/// executor-owned Device definitions and the request-local COV lists that
+/// Plan a ReadRange of the object the request names: its row and, for a
+/// Group's whole Present_Value, the member rows, charged to the view's work
+/// limit before any value is read (#1172, #1213).
+pub(crate) fn plan_read_range(
+    db: &ObjectDatabase,
+    view: Option<&DeviceReadContext<'_>>,
+    request: &ReadRangeRequest,
+) -> Result<PropertyPlan, ReadRangeFailure> {
+    Ok(PropertyPlan::new(
+        db,
+        view,
+        request.object_identifier,
+        db.get(&request.object_identifier),
+        request.property_identifier,
+        request.property_array_index,
+    )?)
+}
+
+/// ReadRange evaluator over one decoded request and its plan. `view` carries
+/// the executor-owned Device definitions and the request-local COV lists that
 /// ReadProperty serves, so both services read the same value.
 ///
 /// Observe one request outcome, never a page-budget or work-limit failure.
@@ -224,6 +249,7 @@ pub(crate) fn read_range_request_observed(
     db: &ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
     request: ReadRangeRequest,
+    plan: PropertyPlan,
     response: &mut BytesMut,
     budget: crate::server::ReadRangeBudget,
     completed: impl FnOnce(ObjectIdentifier, PropertyIdentifier, Option<u32>, &Result<(), Error>),
@@ -231,7 +257,7 @@ pub(crate) fn read_range_request_observed(
     let target = request.object_identifier;
     let property = request.property_identifier;
     let index = request.property_array_index;
-    let result = prepare_read_range(db, view, request).and_then(|selected| {
+    let result = prepare_read_range(db, view, request, plan.into_members()).and_then(|selected| {
         page::append_page_with(&selected, response, budget, encode_property_value)
     });
     let result = match result {
@@ -243,11 +269,11 @@ pub(crate) fn read_range_request_observed(
     result.map_err(ReadRangeFailure::Service)
 }
 
-struct PreparedReadRange {
+struct PreparedReadRange<'a> {
     request: ReadRangeRequest,
-    items: Vec<PropertyValue>,
+    items: RangeItems<'a>,
     selection: SignedRangeSelection,
-    first_sequence_number: Option<u32>,
+    first_sequence_number: Option<u64>,
     identities: Option<Vec<LogRecordIdentity>>,
 }
 
@@ -263,6 +289,7 @@ fn read_range_items(
     view: Option<&DeviceReadContext<'_>>,
     object: &dyn BACnetObject,
     request: &ReadRangeRequest,
+    members: Option<GroupMembers>,
 ) -> Result<Vec<PropertyValue>, ReadRangeFailure> {
     let property = request.property_identifier;
     let index = request.property_array_index;
@@ -274,7 +301,8 @@ fn read_range_items(
             code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
         }));
     }
-    let value = group_present_value::read_served_property(db, view, object, property, index)?;
+    let value =
+        group_present_value::read_served_property(db, view, object, property, index, members)?;
     // An indexed array element is never a list: 135-2020 defines no
     // BACnetARRAY of BACnetLIST property.
     if index.is_some() || !object.is_list_property(property) {
@@ -293,19 +321,32 @@ fn read_range_items(
 /// Select the request's page from one read of the target list. A running
 /// server's `view` serves the Device's COV subscription lists from the
 /// snapshot it took for this request, so every item, flag and count comes
-/// from the same instant.
-fn prepare_read_range(
-    db: &ObjectDatabase,
+/// from the same instant. An Audit Log's Log_Buffer is paged straight from
+/// the stored object's record store, which the Device view has no part in.
+fn prepare_read_range<'a>(
+    db: &'a ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
     request: ReadRangeRequest,
-) -> Result<PreparedReadRange, ReadRangeFailure> {
+    members: Option<GroupMembers>,
+) -> Result<PreparedReadRange<'a>, ReadRangeFailure> {
     let stored = db.get(&request.object_identifier).ok_or(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
         code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
     })?;
     let served = view.map(|view| view.object(stored));
     let object: &dyn BACnetObject = served.as_ref().map_or(stored, |served| served);
-    let items = read_range_items(db, view, object, &request)?;
+    let (items, mut audit_identities) = match audit::audit_log_buffer(stored, &request)? {
+        Some((items, identities)) => (items, Some(identities)),
+        None => (
+            RangeItems::Values(read_range_items(db, view, object, &request, members)?),
+            None,
+        ),
+    };
+    let mut log_identities = || {
+        audit_identities
+            .take()
+            .unwrap_or_else(|| object.log_record_identities_internal())
+    };
 
     let mut resident_identities = None;
     let (selection, first_sequence_number) = match &request.range {
@@ -329,9 +370,7 @@ fn prepare_read_range(
             if request.property_identifier != PropertyIdentifier::LOG_BUFFER {
                 return Err(list_item_not_numbered().into());
             }
-            let identities = object
-                .log_record_identities_internal()
-                .ok_or_else(list_item_not_numbered)?;
+            let identities = log_identities().ok_or_else(list_item_not_numbered)?;
             if identities.len() != items.len() {
                 return Err(list_item_not_numbered().into());
             }
@@ -351,7 +390,7 @@ fn prepare_read_range(
             if request.property_identifier != PropertyIdentifier::LOG_BUFFER {
                 return Err(list_item_not_timestamped().into());
             }
-            resident_identities = object.log_record_identities_internal();
+            resident_identities = log_identities();
             select_time_range(
                 items.len(),
                 resident_identities.as_deref(),

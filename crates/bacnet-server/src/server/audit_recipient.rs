@@ -222,8 +222,8 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
             let new_route = self.routes.resolve(&new).ok_or_else(denied)?;
             let mut old_value = BytesMut::new();
             let mut new_value = BytesMut::new();
-            bacnet_encoding::constructed::encode_recipient(&mut old_value, current);
-            bacnet_encoding::constructed::encode_recipient(&mut new_value, &new);
+            bacnet_encoding::constructed::encode_recipient(&mut old_value, current)?;
+            bacnet_encoding::constructed::encode_recipient(&mut new_value, &new)?;
             let notification = BACnetAuditNotification {
                 source_timestamp: None,
                 target_timestamp: Some(timestamp),

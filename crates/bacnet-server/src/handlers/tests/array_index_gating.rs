@@ -688,7 +688,7 @@ fn indexed_access_to_recipient_list_rejected_with_not_an_array() {
     // The unindexed whole-list write is unaffected: Recipient_List stays
     // writable at the list level (tranche J's framed tests pin the wire form).
     let mut framed = BytesMut::new();
-    bacnet_encoding::constructed::encode_destination_list(&mut framed, &[]);
+    bacnet_encoding::constructed::encode_destination_list(&mut framed, &[]).unwrap();
     let mut db = gating_db();
     write_indexed(
         &mut db,

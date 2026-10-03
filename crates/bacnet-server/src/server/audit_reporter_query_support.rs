@@ -163,6 +163,12 @@ impl AuditLogStorage for Probe {
         }
         self.log.query(parameters, start, count)
     }
+
+    fn retained_records(
+        &self,
+    ) -> &std::collections::VecDeque<bacnet_types::constructed::BACnetAuditLogRecordResult> {
+        self.log.retained_records()
+    }
 }
 
 pub(super) async fn add_log(

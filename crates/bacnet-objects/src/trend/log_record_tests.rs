@@ -1,5 +1,6 @@
 use super::*;
-use bacnet_types::constructed::LogDatum;
+use bacnet_encoding::constructed::decode_log_multiple_record;
+use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogDatum, LogValue};
 use bacnet_types::primitives::{Date, Time};
 
 fn record(hour: u8, value: f32, status_flags: Option<u8>) -> BACnetLogRecord {
@@ -19,6 +20,25 @@ fn record(hour: u8, value: f32, status_flags: Option<u8>) -> BACnetLogRecord {
         log_datum: LogDatum::RealValue(value),
         status_flags,
     }
+}
+
+fn multiple_record(hour: u8, values: Vec<LogValue>) -> BACnetLogMultipleRecord {
+    let single = record(hour, 0.0, None);
+    BACnetLogMultipleRecord {
+        date: single.date,
+        time: single.time,
+        log_data: LogData::Values(values),
+    }
+}
+
+/// Decode one framed Trend Log Multiple Log_Buffer item.
+fn decoded(item: &PropertyValue) -> BACnetLogMultipleRecord {
+    let PropertyValue::ApplicationData(bytes) = item else {
+        panic!("expected a framed record, got {item:?}");
+    };
+    let (record, end) = decode_log_multiple_record(bytes, 0).unwrap();
+    assert_eq!(end, bytes.len());
+    record
 }
 
 fn projected_records(object: &dyn BACnetObject) -> Vec<PropertyValue> {
@@ -93,17 +113,24 @@ fn trend_log_keeps_log_status_and_record_status_flags_as_distinct_bitstrings() {
 }
 
 #[test]
-fn trend_multiple_retains_raw_flags_but_projects_three_fields() {
-    let mut trend = TrendLogMultipleObject::new(1, "TLM-1", 1).unwrap();
-    trend.add_record(record(1, 10.0, Some(0b0100))).unwrap();
+fn trend_multiple_projects_each_record_framed() {
+    let mut trend = TrendLogMultipleObject::new(1, "TLM-1", 2).unwrap();
+    let sample = multiple_record(
+        1,
+        vec![
+            LogValue::RealValue(10.0),
+            LogValue::Failure {
+                error_class: 2,
+                error_code: 32,
+            },
+        ],
+    );
+    trend.add_record(sample.clone()).unwrap();
 
-    assert_eq!(trend.records()[0].status_flags, Some(0b0100));
     let projected = projected_records(&trend);
-    let PropertyValue::List(fields) = &projected[0] else {
-        panic!("expected projected record fields");
-    };
-    assert_eq!(fields.len(), 3);
-    assert_eq!(fields[2], PropertyValue::Real(10.0));
+    assert_eq!(projected.len(), 1);
+    assert_eq!(decoded(&projected[0]), sample);
+    assert_eq!(trend.records()[0], sample);
 }
 
 #[test]
@@ -113,7 +140,10 @@ fn trend_family_identity_raw_and_projection_views_stay_fifo_aligned() {
     for hour in 1..=3 {
         trend.add_record(record(hour, hour as f32, None)).unwrap();
         multiple
-            .add_record(record(hour, hour as f32, Some(0b0001)))
+            .add_record(multiple_record(
+                hour,
+                vec![LogValue::RealValue(hour as f32)],
+            ))
             .unwrap();
     }
 
@@ -125,12 +155,21 @@ fn trend_family_identity_raw_and_projection_views_stay_fifo_aligned() {
         assert_eq!(identities[0].sequence_number(), 2);
         assert_eq!(identities[1].sequence_number(), 3);
         for (identity, wire) in identities.iter().zip(projected) {
-            let PropertyValue::List(fields) = wire else {
-                panic!("expected projected record fields");
+            let (date, time) = match wire {
+                PropertyValue::List(fields) => {
+                    assert_eq!(fields.len(), 3);
+                    (fields[0].clone(), fields[1].clone())
+                }
+                framed => {
+                    let record = decoded(&framed);
+                    (
+                        PropertyValue::Date(record.date),
+                        PropertyValue::Time(record.time),
+                    )
+                }
             };
-            assert_eq!(fields[0], PropertyValue::Date(identity.date()));
-            assert_eq!(fields[1], PropertyValue::Time(identity.time()));
-            assert_eq!(fields.len(), 3);
+            assert_eq!(date, PropertyValue::Date(identity.date()));
+            assert_eq!(time, PropertyValue::Time(identity.time()));
         }
     }
 }

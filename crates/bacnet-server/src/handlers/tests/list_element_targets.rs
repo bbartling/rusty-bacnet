@@ -351,7 +351,7 @@ fn framed_lists_of_other_elements_never_take_the_destination_codec() {
         transitions: EventTransitionBits::all(),
     };
     let mut framed = BytesMut::new();
-    bacnet_encoding::constructed::encode_destination_list(&mut framed, &[destination]);
+    bacnet_encoding::constructed::encode_destination_list(&mut framed, &[destination]).unwrap();
     // Schedule's list of BACnetDeviceObjectPropertyReference is held as raw
     // bytes, like Recipient_List, but takes its own reference codec (#1121):
     // a destination is not a reference, so the first element is refused.

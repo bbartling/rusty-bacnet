@@ -521,3 +521,45 @@ fn ack_requires_exact_application_field_tags() {
     primitives::encode_app_null(&mut trailing);
     assert!(GetEnrollmentSummaryAck::decode(&trailing).is_err());
 }
+
+#[test]
+fn enrollment_filter_recipient_mac_holds_to_the_bacnet_address_bound() {
+    // #1156: the filter's recipient is a BACnetRecipient, so its address MAC
+    // is at most BACnetAddress::MAX_MAC_LEN (18) octets in both directions.
+    let request = |len: usize| GetEnrollmentSummaryRequest {
+        acknowledgment_filter: AcknowledgmentFilter::ALL,
+        enrollment_filter: Some(RecipientProcess {
+            recipient: BACnetRecipient::Address(BACnetAddress {
+                network_number: 7,
+                mac_address: MacAddr::from_slice(&vec![0xA5; len]),
+            }),
+            process_identifier: 3,
+        }),
+        event_state_filter: None,
+        event_type_filter: None,
+        priority_filter: None,
+        notification_class_filter: None,
+    };
+    let longest = BACnetAddress::MAX_MAC_LEN;
+    let mut encoded = BytesMut::new();
+    request(longest).try_encode(&mut encoded).unwrap();
+    assert_eq!(
+        GetEnrollmentSummaryRequest::decode(&encoded).unwrap(),
+        request(longest)
+    );
+    // The same request with its MAC one octet longer on the wire.
+    let mac = [&[0x65, longest as u8][..], &vec![0xA5; longest]].concat();
+    let at = encoded.windows(mac.len()).position(|w| w == mac).unwrap();
+    let mut wire = encoded[..at].to_vec();
+    wire.extend([0x65, longest as u8 + 1]);
+    wire.extend(vec![0xA5; longest + 1]);
+    wire.extend_from_slice(&encoded[at + mac.len()..]);
+    assert!(GetEnrollmentSummaryRequest::decode(&wire).is_err());
+
+    let mut output = BytesMut::new();
+    assert!(matches!(
+        request(longest + 1).try_encode(&mut output),
+        Err(Error::Encoding(_))
+    ));
+    assert!(output.is_empty());
+}

@@ -62,7 +62,8 @@ async fn device_recipient_bip_address_change_delivers_to_both_real_loggers() {
                     network_number,
                     mac_address: MacAddr::from_slice(&mac),
                 }),
-            );
+            )
+            .unwrap();
             let error = client
                 .write_property(
                     target.local_mac(),
@@ -85,7 +86,7 @@ async fn device_recipient_bip_address_change_delivers_to_both_real_loggers() {
             mac_address: MacAddr::from_slice(new_logger.local_mac()),
         });
         let mut bytes = BytesMut::new();
-        bacnet_encoding::constructed::encode_recipient(&mut bytes, &address);
+        bacnet_encoding::constructed::encode_recipient(&mut bytes, &address).unwrap();
         client
             .write_property(
                 target.local_mac(),

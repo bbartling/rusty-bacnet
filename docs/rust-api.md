@@ -157,8 +157,9 @@ identifier; it replaces the earlier bare ObjectIdentifier payload.
 
 `bacnet_encoding::constructed::encode_value_source(&mut BytesMut, &BACnetValueSource)`
 returns `Result<(), Error>` and appends one framed CHOICE. Object-identifier widths
-are validated at construction. Unencodable MAC lengths are rejected by this codec
-before changing the buffer.
+are validated at construction. An address MAC longer than
+`BACnetAddress::MAX_MAC_LEN` (18) octets is refused with `Error::Encoding` before
+the buffer changes, and the decoder refuses one as malformed (#1156).
 `decode_value_source(&[u8], offset)` returns `Result<(BACnetValueSource, usize), Error>`;
 the second value is the next absolute offset, and suffix bytes remain available.
 A consumer decoding a complete property payload must check that this offset equals
@@ -1487,6 +1488,23 @@ use bacnet_network::layer::NetworkLayer;
 use bacnet_network::router::BACnetRouter;
 ```
 
+`BACnetRouter::start` takes the ports and a `RouterOptions` (#1220).
+`RouterOptions::new()` is the plain router: a raw `mpsc::Receiver` for local
+APDUs, the permissive wire-control policy and no network-control receiver.
+The builder methods turn options on, in any combination: `track_admission()`
+makes the local receiver an `AdmissionReceiver` with queue snapshots and a
+per-source quota, `control_policy()` and `control_authorizer()` set the RB-09
+gate for routing controls, and `network_control_receiver()` adds the receiver
+described below. The start returns a `StartedRouter` holding the router, the
+local APDU receiver and, when asked for, the network-control receiver.
+
+```rust
+use bacnet_network::router::{BACnetRouter, RouterOptions, StartedRouter};
+
+let StartedRouter { router, apdus, network_control } =
+    BACnetRouter::start(ports, RouterOptions::new().track_admission()).await?;
+```
+
 An inbound NPDU whose DLEN or SLEN is past `NpduAddress::MAX_MAC_LEN` is
 refused before anything else happens to it (#1141). `NetworkLayer` discards it
 and counts it in `address_length_drops()`; a non-router has no reject message
@@ -1501,17 +1519,22 @@ first sent the refused NPDU (Clause 6.4.4, #1158). An NPDU that arrived
 with SNET/SADR came through another router: the reject carries that SNET/SADR
 as its DNET/DADR, with a hop count of 255, and goes back out the arrival port
 to the router that relayed the NPDU. An NPDU without SNET/SADR draws a local
-unicast to its sender. An SNET equal to the arrival port's own network puts
-the originator on that link, so the reject is a local unicast to the SADR,
-with no DNET (Clause 6.5.4, #1174). A reason 6 reject for an over-long SADR
-has no originator to name, so it falls back to that local unicast. A received
-reject is relayed by its DNET/DADR like any routed NPDU (Clause 6.6.3.5).
+unicast to its sender. An SNET equal to one of the router's own networks puts
+the originator on a directly connected link, so the reject leaves by the port
+attached to that network as a local unicast to the SADR, with no DNET (Clause
+6.5.4). That is the arrival port when SNET is the arrival network (#1174), and
+another port when the NPDU looped back to the router through some other path
+(#1219). An SNET/SADR that is the router's own address on that network means
+the NPDU came back to the router that sent it, and no reject goes out
+(#1219). A reason 6 reject for an over-long SADR has no originator to name, so
+it falls back to that local unicast. A received reject is relayed by its
+DNET/DADR like any routed NPDU (Clause 6.6.3.5).
 
 A received reject with no DNET, or whose DADR is the router's own MAC on the
 port attached to its DNET, is addressed to the router itself (#1175). It
 updates the routing table and goes no further. Start the router with
-`BACnetRouter::start_with_network_control_receiver` to also get these rejects
-as `ReceivedNetworkControl` records, the same type a non-router
+`RouterOptions::network_control_receiver()` to also get these rejects as
+`ReceivedNetworkControl` records, the same type a non-router
 `NetworkLayer` control receiver yields. A client or server attached to a
 router through a `LoopbackTransport` port does not need this: it is an
 ordinary node on that port's network, and rejects for its requests reach its
@@ -1673,13 +1696,21 @@ framing, through the shared `bacnet-encoding` codecs.
   that brought it. `add_destination` returns `Result` and refuses past the cap
   too, and `recipient_list()` reads the list. An address recipient's MAC is at
   most `BACnetAddress::MAX_MAC_LEN` (18) octets, the B/IPv6 form (#1124):
-  `decode_destination` reads the recipient with `decode_configured_recipient`,
-  which refuses a longer one, so a write fails with PROPERTY /
-  INVALID_DATA_TYPE and `add_destination` refuses it with the same code. The
+  `decode_destination` reads the recipient with `decode_recipient`, which
+  refuses a longer one, so a write fails with PROPERTY / INVALID_DATA_TYPE and
+  `add_destination` refuses it with the same code. The
   Audit_Notification_Recipient has the same bound, refused there with PROPERTY /
-  INVALID_DATA_ENCODING. The generic `decode_recipient` takes any length, as
-  COV subscription lists and audit records report addresses learned off the
-  network. Only the framed form in `PropertyValue::ApplicationData` is a
+  INVALID_DATA_ENCODING. Every `BACnetAddress` codec holds to it (#1156):
+  `decode_recipient` wherever a recipient travels (COV subscription lists,
+  audit notifications and records, the GetEnrollmentSummary filter), the
+  ValueSource codec and the AuditLogQuery address filters, sharing
+  `check_decoded_mac_len`. Their encoders refuse a longer MAC with
+  `Error::Encoding` before writing, through `check_encoded_mac_len`, so
+  `encode_recipient`, `encode_destination(_list)` and the
+  `encode_cov_(multiple_)subscription(_list)` family return `Result`. The
+  stack stores nothing it could not encode: COV admission refuses a subscriber
+  whose address is longer, and so does a remote command origin. Only the
+  framed form in `PropertyValue::ApplicationData` is a
   Recipient_List value; the flat `PropertyValue::List` layout from before #152
   is refused (#1125). Routing holds every Notification Class, a custom object
   included, to the same cap: a class serving a longer list gets
@@ -1737,8 +1768,10 @@ framing, through the shared `bacnet-encoding` codecs.
   `ReadPropertyMultipleBudget::max_result_elements` along with the request's
   own rows, so several Groups in one request share it; ReadProperty, ReadRange
   and `read_local` get the limit of a ReadPropertyMultiple naming only that
-  Present_Value. A request that would pass the limit is aborted with
-  OUT_OF_RESOURCES (`read_local` returns `Error::Abort`).
+  Present_Value. The shared endpoint's ReadProperty uses
+  `SessionConfig::read_work_limit` (default 256) instead. A request that would
+  pass the limit is aborted with OUT_OF_RESOURCES (`read_local` returns
+  `Error::Abort`).
 - **Structured View `Subordinate_List` and Command `Action`** (Clauses 12.29
   and 12.10) are arrays too, with the same per-index reads, as is
   `Subordinate_Annotations`. A Subordinate_List element is a
@@ -2015,13 +2048,22 @@ means the operation was accepted; disabled logging can ignore the ordinary
 record, zero-capacity logging can count without storing it, and a status
 transition can replace it.
 
-The pre-1.0 `BACnetObject` contract now has one fallible `add_trend_record` hook.
-The void hook and `try_add_trend_record_internal` adapter have been replaced.
-Custom implementations return their insertion result directly; the default
-returns `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`. The server poller
-retries failed insertions without advancing its last-log time. Bounded evidence
-is recorded in `BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family conformance
-is not claimed.
+A Trend Log Multiple record is a `BACnetLogMultipleRecord`: a timestamp and a
+`LogData` holding one `LogValue` per Log_DeviceObjectProperty member, a log
+status, or a time change. `TrendLogMultipleObject::add_record` takes one and
+`records()` returns them; Log_Buffer serves each one framed as Clause 21's
+BACnetLogMultipleRecord (`bacnet_encoding::constructed::encode_log_multiple_record`
+and `decode_log_multiple_record`).
+
+The pre-1.0 `BACnetObject` contract has two fallible trend hooks:
+`add_trend_record` for Trend Log records and `add_trend_multiple_record` for
+Trend Log Multiple records. The void hook and `try_add_trend_record_internal`
+adapter have been replaced. Custom implementations return their insertion result
+directly; the default returns `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
+The server poller (`ObjectDatabase::poll_trend_logs`) samples both object types
+and retries failed insertions without advancing its last-log time. Bounded
+evidence is recorded in `BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family
+conformance is not claimed.
 
 #### Audit Reporter configuration and send delay
 
@@ -3418,6 +3460,19 @@ replay. Entries expire at 60 seconds, and a stored future timestamp fails open
 rather than suppressing indefinitely. The general process-local confirmed-
 request tracker remains the pending/session guard.
 
+`Log_Buffer` is listed in the object's Property_List, but ReadProperty and
+ReadPropertyMultiple answer it with `PROPERTY / READ_ACCESS_DENIED` (also
+inside RPM `ALL` and `REQUIRED`): Clause 12.64.10 makes the buffer reachable
+only through ReadRange and AuditLogQuery. ReadRange pages the same retained
+ring that AuditLogQuery scans, through `AuditLogStorage::retained_records`,
+oldest record first. Each item is one bare `BACnetAuditLogRecord` (timestamp
+and datum, including log-status and time-change records, which AuditLogQuery
+never returns), and By Sequence Number and By Time use the record's Unsigned64
+sequence number and timestamp, so a record carries the same sequence number in
+both services. `RangeSpec::ByPosition::reference_index`,
+`RangeSpec::BySequenceNumber::reference_seq` and
+`ReadRangeAck::first_sequence_number` are `u64` for these logs (Clause 15.8).
+
 `AuditLogSnapshot::completed_receipts` is part of the public custom-persistence
 snapshot contract. `FileAuditLogPersistence` writes schema v2, reads schema v1
 as an empty receipt ledger, rejects unknown future versions, and retains the
@@ -3792,6 +3847,7 @@ counters.confirmed_broadcast_recipient; // confirmed requested at a broadcast ad
 counters.confirmed_no_invoke_id;        // no invoke ID free for a confirmed notification
 counters.confirmed_rejected;            // the recipient answered Error, Reject or Abort
 counters.confirmed_unanswered;          // no acknowledgment after the last retry
+counters.unconfirmed_send_failed;       // an unconfirmed send the transport refused
 ```
 
 The four recipient-list fields count transitions, event and acknowledgment
@@ -3802,6 +3858,13 @@ configured behaviour and are not counted, nor are notifications held back by
 DCC or Event_Enable. The three confirmed fields count notifications to one
 recipient; a reservation refused because the server is stopping is not
 counted.
+
+`unconfirmed_send_failed` (#1196) counts unconfirmed notifications whose send
+returned a transport error, once per destination, and the transition's other
+destinations are still served. A confirmed send that fails locally counts in
+`confirmed_unanswered`. No field counts an encode failure: the committed
+payload and message text are validated before the destinations are walked, so
+a well-formed transition always encodes.
 
 The three route fields (#1160) count destinations that matched the transition
 but were skipped while their route was resolved, once per destination; the

@@ -7,6 +7,11 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, Time};
 use std::sync::{Arc, Mutex};
 
+#[path = "member_tests.rs"]
+mod member_tests;
+#[path = "multiple_tests.rs"]
+mod multiple_tests;
+
 struct WallClock(Mutex<Option<ClockFrame>>);
 impl ClockReader for WallClock {
     fn read_clock(&self) -> Option<ClockFrame> {
@@ -326,8 +331,7 @@ fn full_reference_and_logging_mode_changes_retire_previous_selection() {
         db.poll_trend_logs();
         assert_eq!(count(&db, oid), number as u64 + 2);
     }
-    // A missing target logs the failure a read of it reports (#1183); indexed
-    // execution is not added.
+    // A missing target logs the failure a read of it reports (#1183).
     assert_eq!(
         last_datum(&db, oid),
         failure(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT)
@@ -387,7 +391,10 @@ fn scalar_projection_preserves_supported_datums_and_unsupported_null() {
         (PropertyValue::Enumerated(7), LogDatum::EnumValue(7)),
         (PropertyValue::Null, LogDatum::NullValue),
     ] {
-        assert_eq!(property_value_to_log_datum(&value), expected);
+        assert_eq!(
+            LogDatum::from(property_value_to_log_value(&value)),
+            expected
+        );
     }
 }
 

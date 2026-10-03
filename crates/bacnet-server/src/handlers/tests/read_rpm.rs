@@ -671,7 +671,7 @@ fn rpm_multistate_indexed_state_text_and_list_gating_preserve_bytes() {
                     ..budget
                 }
             ),
-            Err(super::super::rpm_budget::RpmFailure::Bytes)
+            Err(super::super::ReadFailure::Bytes)
         ));
         assert_eq!(&prefix[..], b"prefix");
     }

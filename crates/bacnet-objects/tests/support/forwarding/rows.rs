@@ -12,7 +12,10 @@ use bacnet_objects::event_enrollment::{
 use bacnet_objects::schedule::ScheduleTargetOutcome;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
-use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetLogRecord, LogDatum};
+use bacnet_types::constructed::{
+    BACnetDeviceObjectReference, BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum,
+    LogValue,
+};
 use bacnet_types::enums::{
     AuditLevel, EventState, LifeSafetyOperation, ObjectType, PropertyIdentifier as P, Reliability,
 };
@@ -61,6 +64,14 @@ fn commit() -> EventTransitionCommit {
         ack_required: true,
         timestamp: BACnetTimeStamp::SequenceNumber(42),
         message_text: Some("probe commit".into()),
+    }
+}
+
+fn multiple_record() -> BACnetLogMultipleRecord {
+    BACnetLogMultipleRecord {
+        date: record().date,
+        time: noon(),
+        log_data: LogData::Values(vec![LogValue::UnsignedValue(77), LogValue::NullValue]),
     }
 }
 
@@ -429,5 +440,8 @@ pub const COMMANDS: &[(&str, Command)] = &[
     }),
     ("add_trend_record", |o| {
         format!("{:?}", o.add_trend_record(record()))
+    }),
+    ("add_trend_multiple_record", |o| {
+        format!("{:?}", o.add_trend_multiple_record(multiple_record()))
     }),
 ];

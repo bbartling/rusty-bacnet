@@ -2,8 +2,10 @@
 
 use std::collections::VecDeque;
 
-use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
+use bacnet_encoding::constructed::encode_log_multiple_record;
+use bacnet_types::constructed::{BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum};
 use bacnet_types::enums::PropertyIdentifier as P;
+use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, PropertyValue, Time};
 
 use crate::property_metadata::{
@@ -24,17 +26,18 @@ pub(crate) const TOTAL_RECORD_COUNT_METADATA: PropertyMetadata =
 /// Identity views returned by [`crate::traits::BACnetObject::log_record_identities_internal`]
 /// are ordered oldest-to-newest and align element-for-element with the owning
 /// object's resident records and `LOG_BUFFER` projection. Sequence numbers are
-/// always nonzero; after `u32::MAX`, the next accepted record uses 1.
+/// always nonzero. Event and Trend logs count in Unsigned32 and wrap from
+/// `u32::MAX` to 1; Audit Log counts in Unsigned64 and wraps from `u64::MAX`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LogRecordIdentity {
-    sequence_number: u32,
+    sequence_number: u64,
     date: Date,
     time: Time,
 }
 
 impl LogRecordIdentity {
     /// Construct an identity, rejecting zero as an invalid record sequence.
-    pub fn new(sequence_number: u32, date: Date, time: Time) -> Option<Self> {
+    pub fn new(sequence_number: u64, date: Date, time: Time) -> Option<Self> {
         (sequence_number != 0).then_some(Self {
             sequence_number,
             date,
@@ -42,8 +45,8 @@ impl LogRecordIdentity {
         })
     }
 
-    /// Return this record's nonzero Unsigned32 sequence number.
-    pub fn sequence_number(&self) -> u32 {
+    /// Return this record's nonzero sequence number.
+    pub fn sequence_number(&self) -> u64 {
         self.sequence_number
     }
 
@@ -58,17 +61,56 @@ impl LogRecordIdentity {
     }
 }
 
+/// The records of a single-datum log (Event Log and Trend Log). Trend Log
+/// alone projects a record's optional status flags.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum LogRecordProfile {
     Event,
     Trend,
-    TrendMultiple,
+}
+
+/// A record a [`LogRecordBuffer`] can hold: it carries its own timestamp, and
+/// the shared lifecycle can build the log-status record of its family.
+pub(crate) trait ResidentLogRecord: Clone {
+    /// The local date and time the record was acquired.
+    fn timestamp(&self) -> (Date, Time);
+    /// A log-status record carrying the BACnetLogStatus `bits`.
+    fn log_status(date: Date, time: Time, bits: u8) -> Self;
+}
+
+impl ResidentLogRecord for BACnetLogRecord {
+    fn timestamp(&self) -> (Date, Time) {
+        (self.date, self.time)
+    }
+
+    fn log_status(date: Date, time: Time, bits: u8) -> Self {
+        Self {
+            date,
+            time,
+            log_datum: LogDatum::LogStatus(bits),
+            status_flags: None,
+        }
+    }
+}
+
+impl ResidentLogRecord for BACnetLogMultipleRecord {
+    fn timestamp(&self) -> (Date, Time) {
+        (self.date, self.time)
+    }
+
+    fn log_status(date: Date, time: Time, bits: u8) -> Self {
+        Self {
+            date,
+            time,
+            log_data: LogData::LogStatus(bits),
+        }
+    }
 }
 
 #[derive(Clone)]
-pub(crate) struct LogRecordBuffer {
+pub(crate) struct LogRecordBuffer<R = BACnetLogRecord> {
     capacity: u32,
-    records: VecDeque<BACnetLogRecord>,
+    records: VecDeque<R>,
     total_record_count: u32,
 }
 
@@ -86,7 +128,7 @@ pub(crate) enum ForcedAdmission {
     CountOnly,
 }
 
-impl LogRecordBuffer {
+impl<R: ResidentLogRecord> LogRecordBuffer<R> {
     pub(crate) fn new(capacity: u32) -> Self {
         Self {
             capacity,
@@ -97,7 +139,7 @@ impl LogRecordBuffer {
 
     pub(crate) fn admit_ordinary(
         &mut self,
-        record: BACnetLogRecord,
+        record: R,
         enabled: bool,
         stop_when_full: bool,
     ) -> OrdinaryAdmission {
@@ -114,7 +156,7 @@ impl LogRecordBuffer {
         }
     }
 
-    pub(crate) fn insert_forced(&mut self, record: BACnetLogRecord) -> ForcedAdmission {
+    pub(crate) fn insert_forced(&mut self, record: R) -> ForcedAdmission {
         self.insert_counted(record)
     }
 
@@ -126,7 +168,7 @@ impl LogRecordBuffer {
         self.capacity > 0 && self.next_record_would_fill()
     }
 
-    pub(crate) fn records(&self) -> &VecDeque<BACnetLogRecord> {
+    pub(crate) fn records(&self) -> &VecDeque<R> {
         &self.records
     }
 
@@ -156,10 +198,11 @@ impl LogRecordBuffer {
         self.records
             .iter()
             .map(|record| {
+                let (date, time) = record.timestamp();
                 let identity = LogRecordIdentity {
-                    sequence_number,
-                    date: record.date,
-                    time: record.time,
+                    sequence_number: u64::from(sequence_number),
+                    date,
+                    time,
                 };
                 sequence_number = next_sequence(sequence_number);
                 identity
@@ -167,20 +210,11 @@ impl LogRecordBuffer {
             .collect()
     }
 
-    pub(crate) fn project(&self, profile: LogRecordProfile) -> PropertyValue {
-        PropertyValue::List(
-            self.records
-                .iter()
-                .map(|record| project_record(record, profile))
-                .collect(),
-        )
-    }
-
     fn next_record_would_fill(&self) -> bool {
         self.capacity == 0 || self.records.len().saturating_add(1) >= self.capacity as usize
     }
 
-    fn insert_counted(&mut self, record: BACnetLogRecord) -> ForcedAdmission {
+    fn insert_counted(&mut self, record: R) -> ForcedAdmission {
         self.total_record_count = next_sequence(self.total_record_count);
         if self.capacity == 0 {
             return ForcedAdmission::CountOnly;
@@ -196,6 +230,34 @@ impl LogRecordBuffer {
     pub(crate) fn set_total_record_count_for_test(&mut self, total_record_count: u32) {
         debug_assert!(self.records.is_empty());
         self.total_record_count = total_record_count;
+    }
+}
+
+impl LogRecordBuffer<BACnetLogRecord> {
+    /// Log_Buffer as a list of records, each its fields in order.
+    pub(crate) fn project(&self, profile: LogRecordProfile) -> PropertyValue {
+        PropertyValue::List(
+            self.records
+                .iter()
+                .map(|record| project_record(record, profile))
+                .collect(),
+        )
+    }
+}
+
+impl LogRecordBuffer<BACnetLogMultipleRecord> {
+    /// Log_Buffer as a list of records, each framed as Clause 21's
+    /// BACnetLogMultipleRecord. A record that can't be encoded fails the read.
+    pub(crate) fn project_framed(&self) -> Result<PropertyValue, Error> {
+        self.records
+            .iter()
+            .map(|record| {
+                let mut buf = bytes::BytesMut::new();
+                encode_log_multiple_record(record, &mut buf)?;
+                Ok(PropertyValue::ApplicationData(buf.to_vec()))
+            })
+            .collect::<Result<_, Error>>()
+            .map(PropertyValue::List)
     }
 }
 
@@ -400,7 +462,7 @@ mod tests {
                 .iter()
                 .map(LogRecordIdentity::sequence_number)
                 .collect::<Vec<_>>(),
-            vec![u32::MAX, 1, 2]
+            vec![u64::from(u32::MAX), 1, 2]
         );
 
         assert_eq!(
@@ -446,7 +508,10 @@ mod tests {
             OrdinaryAdmission::Inserted
         );
         assert_eq!(buffer.identities()[0].sequence_number(), 3);
-        assert_eq!(LogRecordBuffer::new(2).total_record_count(), 0);
+        assert_eq!(
+            LogRecordBuffer::<BACnetLogRecord>::new(2).total_record_count(),
+            0
+        );
     }
 
     #[test]

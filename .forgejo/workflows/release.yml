@@ -205,8 +205,9 @@ jobs:
           fi
           echo "notes: changelog_notes.py ${section[*]}"
           python3 scripts/release/changelog_notes.py "${section[@]}" >notes/notes.md
-          # GitHub refuses release bodies over 125,000 characters.
-          python3 scripts/release/changelog_notes.py "${section[@]}" --max-chars 120000 \
+          # GitHub refuses release bodies over 125,000 characters, and would
+          # link the Forgejo issue numbers to its own items: --github stops that.
+          python3 scripts/release/changelog_notes.py "${section[@]}" --github --max-chars 120000 \
             --full-url "https://github.com/jscott3201/rusty-bacnet/blob/${TAG:-dev}/CHANGELOG.md" >notes/notes-github.md
           wc -c notes/*
       - name: Third-party notices
