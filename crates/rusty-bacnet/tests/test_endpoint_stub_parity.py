@@ -46,6 +46,27 @@ def stub_arg_names(method: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
     ]
 
 
+def stub_arg_kinds(
+    method: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[tuple[str, inspect._ParameterKind]]:
+    """Each stub parameter but ``self`` with the kind its position gives it."""
+    kinds = [
+        * [(arg.arg, inspect.Parameter.POSITIONAL_ONLY) for arg in method.args.posonlyargs],
+        * [(arg.arg, inspect.Parameter.POSITIONAL_OR_KEYWORD) for arg in method.args.args],
+        * [(arg.arg, inspect.Parameter.KEYWORD_ONLY) for arg in method.args.kwonlyargs],
+    ]
+    return [(name, kind) for name, kind in kinds if name != "self"]
+
+
+def runtime_arg_kinds(callable_: object) -> list[tuple[str, inspect._ParameterKind]]:
+    """Each runtime parameter but ``self`` with its kind."""
+    return [
+        (name, parameter.kind)
+        for name, parameter in inspect.signature(callable_).parameters.items()
+        if name != "self"
+    ]
+
+
 class EndpointStubParityTests(unittest.TestCase):
     def test_endpoint_classes_present_in_runtime_and_stub(self):
         tree = installed_stub()
@@ -93,6 +114,13 @@ class EndpointStubParityTests(unittest.TestCase):
                 self.assertEqual(runtime, expected)
                 method = stub_method(classes[cls.__name__], "__init__")
                 self.assertEqual(stub_arg_names(method)[1:], expected)
+                # Kinds too: a parameter that turns keyword-only (or stops
+                # being so) on either side fails here.
+                self.assertEqual(runtime_arg_kinds(cls), stub_arg_kinds(method))
+                self.assertEqual(
+                    inspect.signature(cls).parameters["read_work_limit"].kind,
+                    inspect.Parameter.KEYWORD_ONLY,
+                )
 
     def test_role_and_owner_methods_match_stub(self):
         tree = installed_stub()
@@ -126,7 +154,10 @@ class EndpointStubParityTests(unittest.TestCase):
                     params = list(inspect.signature(getattr(cls, name)).parameters)
                     self.assertIn("instance", params)
                     self.assertIn("name", params)
-                    stub_method(classes[cls.__name__], name)
+                    method = stub_method(classes[cls.__name__], name)
+                    self.assertEqual(
+                        runtime_arg_kinds(getattr(cls, name)), stub_arg_kinds(method)
+                    )
         # Roles.
         self.assertEqual(
             list(inspect.signature(EndpointClient.read_property).parameters),

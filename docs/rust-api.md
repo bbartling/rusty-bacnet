@@ -1768,8 +1768,10 @@ framing, through the shared `bacnet-encoding` codecs.
   and the properties the group reports, encoded by
   `bacnet_encoding::constructed::encode_read_access_specification`.
   `GroupObject::add_member` refuses one
-  with no properties, and one that would report a Group's or Global Group's
-  Present_Value. The object stores no Present_Value: the server rebuilds it on
+  with no properties, one naming a property identifier above 4194303, and one
+  that would report a Group's or Global Group's Present_Value, returning a
+  `GroupMemberRefusal` that names the rule and converts to PROPERTY /
+  VALUE_OUT_OF_RANGE. The object stores no Present_Value: the server rebuilds it on
   every ReadProperty, ReadPropertyMultiple and ReadRange as one
   ReadAccessResult per member, reading each member as ReadPropertyMultiple
   would, so a failed read carries its error and an object that isn't in the

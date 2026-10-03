@@ -303,8 +303,9 @@ impl PyMstpEndpoint {
     /// `members` on each read, one result per member, in order.
     ///
     /// `members` takes the `read_property_multiple` spec shape,
-    /// `(object_id, [(property_id, array_index), ...])`; a member listing no
-    /// properties or reporting a group's Present_Value is a ValueError.
+    /// `(object_id, [(property_id, array_index), ...])`. A member listing no
+    /// properties, a property identifier past 22 bits, or a group's
+    /// Present_Value is a ValueError naming its position and the rule.
     #[pyo3(signature = (instance, name, members=None))]
     fn add_group(
         &self,

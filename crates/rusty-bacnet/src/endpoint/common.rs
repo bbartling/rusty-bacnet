@@ -345,9 +345,9 @@ pub(crate) fn pending_group(
 
 /// Create a pending Group object with its List_Of_Group_Members in order.
 ///
-/// Each member goes through `GroupObject::add_member`: a member listing no
-/// properties, or one reporting another group's Present_Value, is a
-/// ValueError naming its position.
+/// Each member goes through `GroupObject::add_member`. A refused member is a
+/// ValueError naming its position and the rule it breaks: no properties, a
+/// property identifier past 22 bits, or another group's Present_Value.
 fn make_group(
     instance: u32,
     name: &str,
@@ -355,10 +355,8 @@ fn make_group(
 ) -> PyResult<Box<dyn BACnetObject>> {
     let mut object = GroupObject::new(instance, name).map_err(to_py_err)?;
     for (position, member) in members.iter().enumerate() {
-        object.add_member(member.clone()).map_err(|_| {
-            PyValueError::new_err(format!(
-                "group member {position} must list properties and must not report a group's Present_Value"
-            ))
+        object.add_member(member.clone()).map_err(|refusal| {
+            PyValueError::new_err(format!("group member {position}: {refusal}"))
         })?;
     }
     Ok(Box::new(object))

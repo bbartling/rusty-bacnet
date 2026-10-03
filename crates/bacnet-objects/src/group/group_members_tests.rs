@@ -124,10 +124,9 @@ fn add_member_refuses_a_member_that_reports_a_group_present_value() {
                 oid(nested, 3),
                 &[(PropertyIdentifier::OBJECT_NAME, None), (selector, None)],
             );
-            assert_property_error(
-                group.add_member(refused).unwrap_err(),
-                ErrorCode::VALUE_OUT_OF_RANGE,
-            );
+            let refusal = group.add_member(refused).unwrap_err();
+            assert_eq!(refusal, GroupMemberRefusal::NestsGroupPresentValue);
+            assert_property_error(refusal.into(), ErrorCode::VALUE_OUT_OF_RANGE);
             assert_eq!(group.members(), before);
         }
     }
@@ -137,13 +136,40 @@ fn add_member_refuses_a_member_that_reports_a_group_present_value() {
 fn add_member_refuses_a_member_without_properties() {
     let mut group = configured();
     let before = group.members().to_vec();
-    assert_property_error(
-        group
-            .add_member(member(oid(ObjectType::ANALOG_INPUT, 3), &[]))
-            .unwrap_err(),
-        ErrorCode::VALUE_OUT_OF_RANGE,
-    );
+    let refusal = group
+        .add_member(member(oid(ObjectType::ANALOG_INPUT, 3), &[]))
+        .unwrap_err();
+    assert_eq!(refusal, GroupMemberRefusal::NoProperties);
+    assert_property_error(refusal.into(), ErrorCode::VALUE_OUT_OF_RANGE);
     assert_eq!(group.members(), before);
+}
+
+#[test]
+fn add_member_refuses_a_property_identifier_past_22_bits() {
+    // The property field holds 22 bits; 4194303 is the last identifier.
+    let mut group = configured();
+    let before = group.members().to_vec();
+    let past = PropertyIdentifier::from_raw(4_194_304);
+    let refusal = group
+        .add_member(member(
+            oid(ObjectType::ANALOG_INPUT, 3),
+            &[(PropertyIdentifier::PRESENT_VALUE, None), (past, Some(1))],
+        ))
+        .unwrap_err();
+    assert_eq!(refusal, GroupMemberRefusal::PropertyOutOfRange(past));
+    assert_eq!(
+        refusal.to_string(),
+        "property identifier 4194304 is above 4194303"
+    );
+    assert_property_error(refusal.into(), ErrorCode::VALUE_OUT_OF_RANGE);
+    assert_eq!(group.members(), before);
+    let last = PropertyIdentifier::from_raw(4_194_303);
+    group
+        .add_member(member(
+            oid(ObjectType::ANALOG_INPUT, 3),
+            &[(last, Some(u32::MAX))],
+        ))
+        .unwrap();
 }
 
 #[test]

@@ -3393,8 +3393,9 @@ class BipEndpoint:
         """Group whose Present_Value is rebuilt from ``members`` on each read.
 
         ``members`` has the ``read_property_multiple`` spec shape. A member
-        with no properties, or one reporting a group's Present_Value, raises
-        ValueError.
+        with no properties, a property identifier above 4194303, or one
+        reporting a group's Present_Value raises ValueError naming its
+        position and the rule. Indexes outside unsigned32 raise OverflowError.
         """
         ...
 
@@ -3490,8 +3491,9 @@ class ScEndpoint:
         """Group whose Present_Value is rebuilt from ``members`` on each read.
 
         ``members`` has the ``read_property_multiple`` spec shape. A member
-        with no properties, or one reporting a group's Present_Value, raises
-        ValueError.
+        with no properties, a property identifier above 4194303, or one
+        reporting a group's Present_Value raises ValueError naming its
+        position and the rule. Indexes outside unsigned32 raise OverflowError.
         """
         ...
 
@@ -3585,8 +3587,9 @@ class MstpEndpoint:
         """Group whose Present_Value is rebuilt from ``members`` on each read.
 
         ``members`` has the ``read_property_multiple`` spec shape. A member
-        with no properties, or one reporting a group's Present_Value, raises
-        ValueError.
+        with no properties, a property identifier above 4194303, or one
+        reporting a group's Present_Value raises ValueError naming its
+        position and the rule. Indexes outside unsigned32 raise OverflowError.
         """
         ...
 

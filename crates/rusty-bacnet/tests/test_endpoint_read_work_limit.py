@@ -82,17 +82,31 @@ class EndpointGroupRegistrationTests(unittest.TestCase):
                 endpoint.add_group(1, "Empty")
                 endpoint.add_group(2, "Members", [(AI_1, [(PV, None)]), (group_1, [(PropertyIdentifier.OBJECT_NAME, None)])])
                 self.assertEqual(endpoint._pending_registration_count(), 2)
-                for members in (
-                    [(AI_1, [])],
-                    [(group_1, [(PV, None)])],
-                    [(group_1, [(PropertyIdentifier.ALL, None)])],
+                past_22_bits = PropertyIdentifier.from_raw(4_194_304)
+                # Each refusal names the member's position and the rule it breaks.
+                for members, message in (
+                    ([(AI_1, [])], r"^group member 0: the member lists no properties$"),
+                    (
+                        [(AI_1, [(PV, None)]), (AI_1, [(past_22_bits, None)])],
+                        r"^group member 1: property identifier 4194304 is above 4194303$",
+                    ),
+                    ([(group_1, [(PV, None)])], r"^group member 0: the member reports a Group"),
+                    ([(group_1, [(PropertyIdentifier.ALL, None)])], r"^group member 0: the member reports a Group"),
                 ):
                     with self.subTest(owner=cls.__name__, members=members):
-                        with self.assertRaisesRegex(ValueError, "group member 0"):
+                        with self.assertRaisesRegex(ValueError, message):
                             endpoint.add_group(3, "Refused", members)
+                # The last 22-bit identifier, and any unsigned32 index, are accepted.
+                last = PropertyIdentifier.from_raw(4_194_303)
+                endpoint.add_group(4, "Edges", [(AI_1, [(last, 0), (PV, (1 << 32) - 1)])])
+                # Indexes outside unsigned32 fail conversion, as for read_property_multiple specs.
+                for index in (-1, 1 << 32):
+                    with self.subTest(owner=cls.__name__, index=index):
+                        with self.assertRaises(OverflowError):
+                            endpoint.add_group(3, "Refused", [(AI_1, [(PV, index)])])
                 with self.assertRaises(TypeError):
                     endpoint.add_group(3, "Malformed", [AI_1])
-                self.assertEqual(endpoint._pending_registration_count(), 2)
+                self.assertEqual(endpoint._pending_registration_count(), 3)
 
 
 class ReadWorkLimitWireTests(unittest.IsolatedAsyncioTestCase):
