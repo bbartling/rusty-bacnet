@@ -1,25 +1,36 @@
 //! Audit Log commits off the database lock (#1270).
 //!
 //! Every commit runs on the log's writer thread ([`crate::durable`]). The
-//! server stages an inbound notification batch, and a Log_Enable write it
-//! receives: the log builds the next snapshot and queues its commit, goes on
-//! serving the committed state, and takes the new snapshot only once the
-//! commit is durable. The server awaits the commit after dropping the
-//! database guard, so readers carry on meanwhile, and a confirmed batch is
-//! still acknowledged only after its records and receipt are stored. A
-//! commit that fails leaves the log as it was, and the request is refused.
+//! server stages an inbound notification batch, a Log_Enable or Buffer_Size
+//! write it receives, and an application's purge (#1238): the log builds the
+//! next snapshot and queues its commit, goes on serving the committed state,
+//! and takes the new snapshot only once the commit is durable. The server
+//! awaits the commit after dropping the database guard, so readers carry on
+//! meanwhile, and a confirmed batch is still acknowledged only after its
+//! records and receipt are stored. A commit that fails leaves the log as it
+//! was, and the request is refused.
+//!
+//! A request's Log_Enable and Buffer_Size writes are staged together: one
+//! commit holds them all, and the log keeps the state each leaves as a step
+//! the request takes when it makes that write. If the request stops before
+//! taking every step, the log keeps what it took and storage is set back to
+//! the state served.
 //!
 //! One commit is staged at a time; a request that finds one staged waits for
 //! it without the guard. Code that changes the log in place (an
-//! application's `add_record`, or a write nobody staged) first settles what
+//! application's `add_record`, or a change nobody staged) first settles what
 //! is staged: a batch whose commit ran is applied if it succeeded, its
-//! outcome kept for the batch's request, and a staged write is dropped, its
+//! outcome kept for the batch's request, and a staged change is dropped, its
 //! request then committing in place.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
+use super::buffer::{apply_change, written_buffer_size, Timestamp};
 use super::*;
-use crate::durable::{DurableWrites, Event, SaveTicket, SaveWait, SaveWriter, StageStep};
+use crate::durable::{
+    DurableWrites, Event, PendingWrite, SaveTicket, SaveWait, SaveWriter, StageStep,
+};
 
 /// Outcomes of batches settled before their requests came back for them.
 /// Past it the oldest is dropped and its request is refused with
@@ -64,9 +75,29 @@ pub(super) enum StagedKind {
         outcome: ConfirmedAuditNotificationOutcome,
         changed: bool,
     },
-    Write {
-        log_enable: bool,
-    },
+    /// The changes one request makes, in its order, all in one commit. The
+    /// request makes them one at a time under the guard, and the log takes
+    /// each change's step as it is made; `taken` counts the steps taken.
+    Changes { steps: VecDeque<Step>, taken: usize },
+}
+
+/// One staged change and the log as it leaves it. The last step's state is
+/// the snapshot committed.
+pub(super) struct Step {
+    change: StagedChange,
+    state: Arc<AuditLogSnapshot>,
+}
+
+/// A change a request stages and then makes under the guard, where the log
+/// takes the staged step if it still builds on the state served.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StagedChange {
+    /// A Log_Enable write of this value.
+    LogEnable(bool),
+    /// A Buffer_Size write of this size.
+    BufferSize(u32),
+    /// The application's purge.
+    Purge,
 }
 
 /// The next snapshot, held aside while its commit runs.
@@ -85,7 +116,7 @@ pub(super) struct Settled {
     result: Result<(ConfirmedAuditNotificationOutcome, bool), Error>,
 }
 
-fn operational_problem() -> Error {
+pub(super) fn operational_problem() -> Error {
     Error::Protocol {
         class: ErrorClass::DEVICE.to_raw() as u32,
         code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
@@ -126,6 +157,7 @@ impl AuditLogObject {
     fn apply_snapshot(&mut self, snapshot: Arc<AuditLogSnapshot>) {
         let snapshot = Arc::try_unwrap(snapshot).unwrap_or_else(|shared| (*shared).clone());
         self.generation = snapshot.generation;
+        self.buffer_size = snapshot.capacity;
         self.log_enable = snapshot.log_enable;
         self.total_record_count = snapshot.total_record_count;
         self.buffer = snapshot.records.into();
@@ -154,15 +186,15 @@ impl AuditLogObject {
                 }
                 self.settled.push_back(Settled { token, result });
             }
-            StagedKind::Write { .. } => self.drop_staged_write(&commit.ticket),
+            StagedKind::Changes { .. } => self.drop_staged_write(&commit.ticket),
         }
     }
 
-    /// A staged write is dropped without being taken. Its commit may have
-    /// left storage with a snapshot the log never served, at the generation
-    /// after the current one; commit the served state at that generation so
-    /// storage follows the log again. A commit made in place right after
-    /// lands later and replaces it.
+    /// Staged changes are dropped before the request took them all. Their
+    /// commit may have left storage with a snapshot the log never served;
+    /// commit the served state at the next generation so storage follows the
+    /// log again. A commit made in place right after lands later and
+    /// replaces it.
     fn drop_staged_write(&mut self, ticket: &SaveTicket) {
         if ticket.succeeded() == Some(false) {
             return;
@@ -184,20 +216,19 @@ impl AuditLogObject {
         let commit = self.staged.as_ref()?;
         let holds = match commit.kind {
             StagedKind::Batch { .. } => !commit.ticket.is_done(),
-            StagedKind::Write { .. } => !commit.ticket.outlived(),
+            StagedKind::Changes { .. } => !commit.ticket.outlived(),
         };
         if holds {
             return Some(match commit.kind {
                 StagedKind::Batch { .. } => commit.ticket.wait(),
-                StagedKind::Write { .. } => SaveWait::new(Arc::clone(&commit.released)),
+                StagedKind::Changes { .. } => SaveWait::new(Arc::clone(&commit.released)),
             });
         }
         self.settle_staged();
         None
     }
 
-    fn queue_staged(&mut self, snapshot: AuditLogSnapshot, kind: StagedKind) -> SaveWait {
-        let snapshot = Arc::new(snapshot);
+    fn queue_staged(&mut self, snapshot: Arc<AuditLogSnapshot>, kind: StagedKind) -> SaveWait {
         let ticket = self.writer.submit(Arc::clone(&snapshot));
         let saved = ticket.wait();
         self.staged = Some(StagedCommit {
@@ -263,7 +294,7 @@ impl AuditLogObject {
         self.next_token = self.next_token.wrapping_add(1);
         let token = self.next_token;
         let saved = self.queue_staged(
-            prospective,
+            Arc::new(prospective),
             StagedKind::Batch {
                 token,
                 outcome,
@@ -296,23 +327,56 @@ impl AuditLogObject {
             .result
     }
 
-    /// Take a staged Log_Enable write of `log_enable`, if one is staged on
-    /// the current state.
-    pub(super) fn claim_log_enable(&mut self, log_enable: bool) -> Option<Result<(), Error>> {
-        let commit = self.staged.as_ref()?;
-        let matches = matches!(commit.kind, StagedKind::Write { log_enable: staged } if staged == log_enable)
-            && self.generation.checked_add(1) == Some(commit.snapshot.generation);
-        if !matches {
+    /// Make `change`: take its step if it is the next one staged on the
+    /// current state, or build it and commit it in place. Errors building it
+    /// (no clock) pass through; a commit that fails is refused with DEVICE /
+    /// OPERATIONAL_PROBLEM, as a Notification Forwarder refuses a list it
+    /// cannot save, and leaves the log as it was. The writer has logged the
+    /// storage error.
+    pub(super) fn commit_change(&mut self, change: StagedChange) -> Result<(), Error> {
+        if let Some(taken) = self.take_step(change) {
+            return taken.map_err(|_| operational_problem());
+        }
+        let timestamp = match change {
+            StagedChange::BufferSize(_) => None,
+            StagedChange::LogEnable(_) | StagedChange::Purge => Some(self.valid_timestamp()?),
+        };
+        let mut prospective = self.snapshot_for_next_generation()?;
+        apply_change(&mut prospective, change, timestamp)?;
+        self.commit_and_apply(prospective)
+            .map_err(|_| operational_problem())
+    }
+
+    /// Take the next staged step if it is `change` and builds on the state
+    /// served: the first step on the state the changes were staged on, a
+    /// later one on the step before it. A commit that failed drops every
+    /// step and returns its error.
+    fn take_step(&mut self, change: StagedChange) -> Option<Result<(), Error>> {
+        let served = self.generation;
+        let commit = self.staged.as_mut()?;
+        let generation = commit.snapshot.generation;
+        let StagedKind::Changes { steps, taken } = &mut commit.kind else {
+            return None;
+        };
+        let base = if *taken == 0 {
+            generation.checked_sub(1)
+        } else {
+            Some(generation)
+        };
+        if steps.front().map(|step| step.change) != Some(change) || base != Some(served) {
             return None;
         }
-        let commit = self.staged.take().expect("matched above");
-        commit.released.set();
-        Some(
-            commit
-                .ticket
-                .take_outcome()
-                .map(|()| self.apply_snapshot(commit.snapshot)),
-        )
+        if let Err(error) = commit.ticket.take_outcome() {
+            self.staged.take().expect("matched above").released.set();
+            return Some(Err(error));
+        }
+        let step = steps.pop_front().expect("matched above");
+        *taken += 1;
+        if steps.is_empty() {
+            self.staged.take().expect("matched above").released.set();
+        }
+        self.apply_snapshot(step.state);
+        Some(Ok(()))
     }
 
     /// From the operation task: settle a batch whose commit has run, and drop
@@ -324,7 +388,7 @@ impl AuditLogObject {
         let finished = commit.ticket.is_done()
             && match commit.kind {
                 StagedKind::Batch { .. } => true,
-                StagedKind::Write { .. } => commit.ticket.outlived(),
+                StagedKind::Changes { .. } => commit.ticket.outlived(),
             };
         if finished {
             self.settle_staged();
@@ -337,6 +401,84 @@ impl AuditLogObject {
     pub(super) fn wait_for_commits(&self) {
         self.writer.wait_idle();
     }
+
+    /// Build a step for each of `changes` in turn and queue one commit of
+    /// the last. A change that cannot be built here, such as a purge without
+    /// a valid clock, ends the steps: made under the guard, it then fails as
+    /// it would unstaged, and the request makes no later change.
+    fn stage_changes(&mut self, changes: &[StagedChange]) -> StageStep {
+        let Ok(mut state) = self.snapshot_for_next_generation() else {
+            return StageStep::Skip;
+        };
+        let timestamp: Option<Timestamp> = self.valid_timestamp().ok();
+        let mut steps = VecDeque::with_capacity(changes.len());
+        // The change made to `state` but not yet kept as a step. Only the
+        // states between changes are copied; the last one is moved.
+        let mut made: Option<StagedChange> = None;
+        for &change in changes {
+            let before = made.map(|change| (change, state.clone()));
+            if apply_change(&mut state, change, timestamp).is_err() {
+                break;
+            }
+            if let Some((change, kept)) = before {
+                steps.push_back(Step {
+                    change,
+                    state: Arc::new(kept),
+                });
+            }
+            made = Some(change);
+        }
+        let Some(last) = made else {
+            return StageStep::Skip;
+        };
+        if validate_snapshot(&state).is_err() {
+            return StageStep::Skip;
+        }
+        let snapshot = Arc::new(state);
+        steps.push_back(Step {
+            change: last,
+            state: Arc::clone(&snapshot),
+        });
+        StageStep::Staged(self.queue_staged(snapshot, StagedKind::Changes { steps, taken: 0 }))
+    }
+}
+
+/// The Log_Enable and Buffer_Size changes `writes` make, in order, each
+/// judged as the log will be when the request makes it. A write the log will
+/// refuse ends the list, since the request makes no write after it; a write
+/// of the value the log will already hold changes nothing; other properties
+/// commit nothing.
+fn changes_made(
+    mut log_enable: bool,
+    mut buffer_size: u32,
+    writes: &[PendingWrite],
+) -> Vec<StagedChange> {
+    let mut changes = Vec::new();
+    for write in writes {
+        let change = match (write.property, write.array_index, &write.value) {
+            (PropertyIdentifier::LOG_ENABLE, None, PropertyValue::Boolean(on)) => {
+                if *on == log_enable {
+                    continue;
+                }
+                log_enable = *on;
+                StagedChange::LogEnable(*on)
+            }
+            (PropertyIdentifier::BUFFER_SIZE, None, value) => {
+                match written_buffer_size(log_enable, value) {
+                    Ok(size) if size == buffer_size => continue,
+                    Ok(size) => {
+                        buffer_size = size;
+                        StagedChange::BufferSize(size)
+                    }
+                    Err(_) => break,
+                }
+            }
+            (PropertyIdentifier::LOG_ENABLE | PropertyIdentifier::BUFFER_SIZE, ..) => break,
+            _ => continue,
+        };
+        changes.push(change);
+    }
+    changes
 }
 
 impl DurableWrites for AuditLogObject {
@@ -346,39 +488,48 @@ impl DurableWrites for AuditLogObject {
         array_index: Option<u32>,
         value: &PropertyValue,
     ) -> StageStep {
-        let (PropertyIdentifier::LOG_ENABLE, None, PropertyValue::Boolean(log_enable)) =
-            (property, array_index, value)
-        else {
+        self.stage_writes(&[PendingWrite {
+            property,
+            array_index,
+            value: value.clone(),
+        }])
+    }
+
+    /// Fold the request's Log_Enable and Buffer_Size writes into one staged
+    /// commit, so a WritePropertyMultiple that turns logging off and then
+    /// resizes commits both off the guard.
+    fn stage_writes(&mut self, writes: &[PendingWrite]) -> StageStep {
+        if !writes.iter().any(|write| {
+            matches!(
+                write.property,
+                PropertyIdentifier::LOG_ENABLE | PropertyIdentifier::BUFFER_SIZE
+            )
+        }) {
             return StageStep::Skip;
-        };
+        }
+        // Wait for a change staged ahead of these first: they are judged by
+        // the log as it is once that lands.
         if let Some(wait) = self.make_way() {
             return StageStep::Busy(wait);
         }
-        if *log_enable == self.log_enable {
-            return StageStep::Skip;
+        let changes = changes_made(self.log_enable, self.buffer_size, writes);
+        self.stage_changes(&changes)
+    }
+
+    fn stage_purge(&mut self) -> StageStep {
+        if let Some(wait) = self.make_way() {
+            return StageStep::Busy(wait);
         }
-        let Ok(timestamp) = self.valid_timestamp() else {
-            return StageStep::Skip;
-        };
-        let Ok(mut prospective) = self.snapshot_for_next_generation() else {
-            return StageStep::Skip;
-        };
-        prospective.log_enable = *log_enable;
-        append_record(&mut prospective, log_enable_record(timestamp, *log_enable));
-        if validate_snapshot(&prospective).is_err() {
-            return StageStep::Skip;
-        }
-        StageStep::Staged(self.queue_staged(
-            prospective,
-            StagedKind::Write {
-                log_enable: *log_enable,
-            },
-        ))
+        self.stage_changes(&[StagedChange::Purge])
+    }
+
+    fn commit_purge(&mut self) -> Result<(), Error> {
+        self.purge().map(drop)
     }
 
     fn release_staged_write(&mut self, staged: &SaveWait) {
         if self.staged.as_ref().is_some_and(|commit| {
-            matches!(commit.kind, StagedKind::Write { .. }) && commit.ticket.issued(staged)
+            matches!(commit.kind, StagedKind::Changes { .. }) && commit.ticket.issued(staged)
         }) {
             self.settle_staged();
         }

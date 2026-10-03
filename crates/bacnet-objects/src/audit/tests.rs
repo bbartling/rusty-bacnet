@@ -674,10 +674,11 @@ fn clocked_enable_and_purge_statuses_persist_and_record_count_is_read_only() {
 
     assert_eq!(log.purge().unwrap(), 2);
     assert_eq!(log.records().len(), 1);
-    assert!(matches!(
+    // Logging is off, so the purge record carries LOG_DISABLED too.
+    assert_eq!(
         log.records().back().unwrap().record.datum,
-        BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED)
-    ));
+        BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED | LogStatus::LOG_DISABLED)
+    );
 
     let snapshot = persistence.snapshot.lock().unwrap().clone().unwrap();
     assert!(!snapshot.log_enable);

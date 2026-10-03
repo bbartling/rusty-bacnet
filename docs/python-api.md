@@ -1786,6 +1786,17 @@ snapshot files with `.slot0` and `.slot1` suffixes. Reuse the same path when
 reopening that Audit Log; the server does not infer a global or
 working-directory location.
 
+An Audit Log's Buffer_Size takes a write, from a client or through
+`write_property_local`, only while Log_Enable is FALSE; with logging on the
+write raises `WRITE_ACCESS_DENIED`. A smaller size keeps the newest records
+that fit, and a larger one keeps them all. The size written is stored with
+the log, so a reopened log keeps it and `buffer_size` sizes only a log its
+storage path does not hold yet; when the two differ the log keeps the stored
+size and logs a warning. To give a stored log a new size, turn Log_Enable off,
+write Buffer_Size and turn Log_Enable on again, or use a new storage path. Clients cannot purge an Audit Log, since its
+Record_Count is read-only; the application calls
+[`purge_audit_log`](#purge_audit_logobject_id).
+
 #### Inbound Audit notification sink
 
 ```python
@@ -2745,6 +2756,27 @@ ReinitializeDevice, LifeSafety and Audit keep separate policies; this option
 neither configures endpoint Device-write authorization nor identifies certificate
 principals. See [Local mutation authorization](mutation-policy.md) for exact
 service coverage, validation precedence and exclusions.
+
+#### `purge_audit_log(object_id)`
+
+Purge an Audit Log on a running server: clear its records and append a
+BUFFER_PURGED status record, whether or not logging is enabled. The record
+also carries LOG_DISABLED while logging is off. Total_Record_Count keeps
+counting, and a confirmed notification already stored is still recognized
+when it is sent again. AuditLogQuery returns no records afterwards, since it
+returns notifications only; ReadRange shows the purge record. The purge
+reaches the log's storage before the log serves it, and the server's other
+requests carry on meanwhile. A notification batch lands whole on one side of
+the purge, in the order the two reached the log.
+
+An unknown object raises `BacnetProtocolError` with OBJECT / UNKNOWN_OBJECT,
+any object other than an Audit Log OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+and a missing clock or a failed commit DEVICE / OPERATIONAL_PROBLEM; the log is
+then left as it was. A server that is not running raises `RuntimeError`.
+
+```python
+await server.purge_audit_log(ObjectIdentifier(ObjectType.AUDIT_LOG, 1))
+```
 
 #### `comm_state() -> int`
 
