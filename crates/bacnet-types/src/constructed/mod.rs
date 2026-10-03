@@ -288,7 +288,8 @@ pub struct BACnetAddress {
 
 impl BACnetAddress {
     /// The longest `mac_address`, in octets, of a recipient this stack is
-    /// configured to notify (#1124).
+    /// configured to notify (#1124), and of any DADR or SADR the network layer
+    /// encodes or decodes (#1141).
     ///
     /// Clause 21 puts no length on the OCTET STRING, but a MAC is only useful
     /// if it names a node on some data link. Table 6-2 gives the network-layer
@@ -302,9 +303,11 @@ impl BACnetAddress {
     /// A recipient the device is configured to notify (a Recipient_List
     /// destination or the Audit_Notification_Recipient) is held to this bound:
     /// its decoder refuses a longer MAC, and so do the local setters that store
-    /// one, so a stored recipient always decodes again. Recipients the stack
-    /// reports from source addresses it learned off the network, in COV
-    /// subscription lists and audit records, are not bounded.
+    /// one, so a stored recipient always decodes again. The NPDU codec refuses
+    /// a longer DLEN or SLEN (`NpduAddress::MAX_MAC_LEN` in bacnet-encoding),
+    /// so the source addresses the stack learns off the network, which COV
+    /// subscription lists and audit records report, fit the bound as well. The
+    /// generic recipient decoder still reads any length.
     pub const MAX_MAC_LEN: usize = 18;
 
     /// Create a local-broadcast address.

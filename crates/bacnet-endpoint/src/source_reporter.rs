@@ -71,6 +71,8 @@ impl SourceReporter {
 // Delegate every BACnetObject method, including defaulted/hidden hooks: inheriting
 // a default here would silently discard a downstream object's override. Only the
 // source property and its write gate, plus deletion, belong to this adapter.
+// `trait_tests` runs each method the trait declares and fails on one that does
+// not reach the wrapped object unchanged.
 impl BACnetObject for SourceReporter {
     fn device_authority_internal(&mut self) -> Option<bacnet_objects::device::DeviceAuthority<'_>> {
         self.wrapped.device_authority_internal()
@@ -487,3 +489,7 @@ impl BACnetObject for SourceReporter {
 #[cfg(test)]
 #[path = "source_reporter_command_tests.rs"]
 mod command_tests;
+
+#[cfg(test)]
+#[path = "source_reporter_trait_tests.rs"]
+mod trait_tests;
