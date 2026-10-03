@@ -3,10 +3,10 @@
 //!
 //! The write only queues the run: under the guard that commits it, the object
 //! checks the value, marks itself busy and leaves a [`CommandRun`], which the
-//! server takes there and owns from then on (`crate::command_lists`). Each run then goes into the server's request
-//! task set as its own task, so neither the request that wrote Present_Value
-//! nor `write_local` waits for it, post delays included, and `stop` cancels
-//! it with the other request work.
+//! server takes there and owns from then on (`crate::command_lists`). Each
+//! run then goes into the server's request task set as its own task, so
+//! neither the request that wrote Present_Value nor `write_local` waits for
+//! it, delays included, and `stop` cancels it with the other request work.
 //!
 //! The writes are made one at a time, each through the same [`LocalWriter`]
 //! path as `write_local`: priorities, command-source tracking, audit, COV and

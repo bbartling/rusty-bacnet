@@ -149,3 +149,30 @@ async fn tick_schedules_stops_two_channels_naming_each_other() {
     assert_eq!(write_status(&db, 5).await, WriteStatus::FAILED);
     assert_eq!(write_status(&db, 6).await, WriteStatus::FAILED);
 }
+
+#[tokio::test(start_paused = true)]
+async fn tick_schedules_dropped_with_a_run_queued_but_not_started_ends_it() {
+    use futures_util::FutureExt;
+
+    // CH-1 writes CH-2 at once, then waits a second for AO-1. CH-2's run is
+    // queued by that write; the tick is dropped after its first poll, before
+    // the queued run is taken up.
+    let db = database(
+        ch(1),
+        vec![
+            channel(1, &[(ch(2), 0), (ao(1), 1000)]),
+            channel(2, &[(ao(2), 0)]),
+        ],
+    );
+    assert!(tick_schedules(&db).now_or_never().is_none());
+    assert_eq!(
+        read(&db, ch(2), PropertyIdentifier::PRESENT_VALUE).await,
+        PropertyValue::Real(1.0)
+    );
+    assert_eq!(write_status(&db, 2).await, WriteStatus::FAILED);
+    assert_eq!(write_status(&db, 1).await, WriteStatus::FAILED);
+    assert_eq!(
+        read(&db, ao(2), PropertyIdentifier::PRESENT_VALUE).await,
+        PropertyValue::Real(0.0)
+    );
+}

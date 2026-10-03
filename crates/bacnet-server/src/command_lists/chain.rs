@@ -12,10 +12,10 @@
 //! run's own object. A queued run whose object is already in its chain closes
 //! a loop, and one with more than [`MAX_RUN_DEPTH`] runs above it is too long
 //! a chain to follow: neither is started. Its object took the write, so the
-//! run is ended at once as failed (In_Process back to FALSE, or Write_Status
-//! FAILED), and the write that queued it counts as failed too, with OBJECT /
-//! BUSY, the answer an object gives a Present_Value write while it is still
-//! busy.
+//! run is ended at once as if none of its writes were made (In_Process back
+//! to FALSE with every command unsuccessful, or Write_Status FAILED), and the
+//! write that queued it counts as failed too, with OBJECT / BUSY, the answer
+//! an object gives a Present_Value write while it is still busy.
 
 use std::sync::Arc;
 
@@ -25,7 +25,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use tracing::debug;
 
-use super::{complete, RunHost};
+use super::{RunHost, Unfinished};
 
 /// The most runs one chain may hold above a run: a run started by a write
 /// eight runs down from a request or application write still starts, the
@@ -76,19 +76,59 @@ pub(crate) async fn admit<H: RunHost>(
     if refused.is_empty() {
         return Ok(());
     }
-    for run in refused {
+    for run in &refused {
         debug!(
             source = %parent.source,
             target = %run.source,
             depth = chain.len(),
             "a run would start its own object again or nest too deep; ending it as failed"
         );
-        complete(host, run.source, run.generation, false).await;
     }
+    end_refused(host, &refused).await;
     Err(Error::Protocol {
         class: ErrorClass::OBJECT.to_raw() as u32,
         code: ErrorCode::BUSY.to_raw() as u32,
     })
+}
+
+/// End refused runs as if none of their writes had been made: a Command's
+/// commands all read unsuccessful, a Channel's Write_Status reads FAILED.
+///
+/// Waiting for the database can be cut short (a timeout, an abort), so the
+/// runs are held in a guard until they're ended under the write guard; a
+/// drop before then hands each one to [`RunHost::abandoned`], which ends it
+/// once it can.
+async fn end_refused<H: RunHost>(host: &H, refused: &[CommandRun]) {
+    let mut held = Held {
+        host,
+        left: refused.iter().map(Unfinished::start).collect(),
+    };
+    let mut db = host.database().write().await;
+    let ended = std::mem::take(&mut held.left);
+    for left in &ended {
+        left.end(&mut db);
+    }
+    for left in &ended {
+        host.committed(&db, left.source()).await;
+    }
+    drop(db);
+    for left in &ended {
+        host.report(left.source()).await;
+    }
+}
+
+/// Refused runs not yet ended.
+struct Held<'h, H: RunHost> {
+    host: &'h H,
+    left: Vec<Unfinished>,
+}
+
+impl<H: RunHost> Drop for Held<'_, H> {
+    fn drop(&mut self) {
+        for left in self.left.drain(..) {
+            self.host.abandoned(left);
+        }
+    }
 }
 
 #[cfg(test)]

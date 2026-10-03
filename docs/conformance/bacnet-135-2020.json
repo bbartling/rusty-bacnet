@@ -2268,7 +2268,8 @@
     "crates/rusty-bacnet/src/types/action_list_tests.rs::action_command_mappings_refuse_bad_shapes_and_types",
     "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_invalid_actions_are_refused_and_add_nothing",
     "crates/bacnet-server/src/server/run_cycle_tests.rs::run_cycle_two_commands_naming_each_other_stop",
-    "crates/bacnet-objects/src/command/tests.rs::command_replacement_never_shares_a_run_generation"
+    "crates/bacnet-objects/src/command/tests.rs::command_replacement_never_shares_a_run_generation",
+    "crates/bacnet-server/src/command_lists/unattached_tests.rs::refused_command_run_marks_every_command_unsuccessful"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3039,7 +3040,10 @@
     "crates/bacnet-server/src/command_lists/chain.rs::tests::a_run_chain_refuses_its_own_objects_and_more_than_eight_ancestors",
     "crates/bacnet-server/src/schedule_channel_tests.rs::{tick_schedules_dropped_mid_distribution_ends_it_failed,tick_schedules_stops_two_channels_naming_each_other}",
     "crates/bacnet-server/src/handlers/tests/channel_present_value_writes.rs::{bare_write_property_ends_a_channel_distribution_it_cannot_make,bare_write_property_multiple_ends_the_distributions_its_writes_started}",
-    "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_refuses_a_channel_present_value_write_and_starts_no_distribution"
+    "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_refuses_a_channel_present_value_write_and_starts_no_distribution",
+    "crates/bacnet-server/src/command_lists/unattached_tests.rs::refused_run_dropped_while_waiting_for_the_database_still_ends",
+    "crates/bacnet-server/src/schedule_channel_tests.rs::tick_schedules_dropped_with_a_run_queued_but_not_started_ends_it",
+    "crates/bacnet-objects/src/channel/coercion_tests.rs::nan_and_infinities_fail_every_conversion_with_a_range"
    ],
    "benchmarks": [],
    "public_claims": [

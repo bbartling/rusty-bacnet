@@ -2345,6 +2345,13 @@ object, at the priority the write carried, once that member's delay has passed;
 every delay counts from the same start. The value is first converted to the
 datatype of the member property's current value by the Table 12-63 rules (a
 REAL 1.0 reaches a Binary Output as ACTIVE, a Multi-state Output as state 1).
+Readings of the rules: an Unsigned or ENUMERATED value above 2147483647
+fails for INTEGER, REAL and Double members. A REAL or Double going to an
+integer type keeps its integer part if it lies in 0 to 2147483000 (Unsigned,
+ENUMERATED) or -2147483000 to 2147483000 (INTEGER; the upper bound Rules 5
+and 6 print with a digit missing is read as 2147483000). A Double fits a REAL
+up to `f32::MAX`. NaN and the infinities fail every conversion that has a
+range, while rounding to a REAL's precision never fails.
 A value that can't be converted, or a member that refuses the write, makes
 Write_Status FAILED once every member has been tried; otherwise it reads
 SUCCESSFUL. A NULL a member refuses as the wrong datatype isn't a failure, so

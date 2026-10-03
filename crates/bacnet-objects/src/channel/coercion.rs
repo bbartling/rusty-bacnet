@@ -22,8 +22,19 @@
 //!   one fails. Unsigned to ENUMERATED and back is the pass-through above,
 //!   not Rule 3.
 //! - A REAL or Double going to an integer type keeps its integer part
-//!   (truncation toward zero) once the rule's range check passes. NaN is
-//!   outside every range.
+//!   (truncation toward zero) once the rule's range check passes.
+//! - Rules 5 and 6 print the INTEGER range as -2147483000 to 214783000. The
+//!   upper bound is read as 2147483000: one digit is missing, it would sit
+//!   below the Unsigned bound of the same rules, and it then mirrors the
+//!   lower bound.
+//! - Rule 6's REAL bound of about 3.4 x 10^38 is taken as the largest finite
+//!   REAL, `f32::MAX` (3.4028235 x 10^38), so every finite REAL is in range
+//!   and anything larger fails.
+//! - NaN and the infinities are inside no stated range, so they fail every
+//!   conversion that has one: REAL or Double to an integer type, and Double
+//!   to REAL. A REAL going to a Double has no range to check and passes as
+//!   it is, as does a value going to its own datatype. Rule 1 turns NaN into
+//!   TRUE, since it isn't zero.
 //! - The seven-significant-digit REAL limit in Rules 3 and 4 is read the
 //!   same way in both: the value is rounded to the nearest REAL, which is
 //!   what that precision means, and the rounding never fails the write. Only
@@ -180,9 +191,8 @@ impl Number {
             Self::Integer(value) => Some(value as f32),
             Self::Real(value) => Some(value),
             // Rule 6: a magnitude past the REAL range fails.
-            Self::Double(value) => {
-                (value.abs() <= f64::from(f32::MAX) || value.is_nan()).then_some(value as f32)
-            }
+            // Rule 6: the REAL bound is `f32::MAX`; NaN is inside no bound.
+            Self::Double(value) => (value.abs() <= f64::from(f32::MAX)).then_some(value as f32),
         }
     }
 

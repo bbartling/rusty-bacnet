@@ -260,6 +260,48 @@ fn double_row_rules_1_and_6() {
     assert_eq!(coerce(&V::Double(1.0e39), D::Real), None);
     assert_eq!(coerce(&V::Double(-1.0e39), D::Real), None);
     assert_eq!(coerce(&V::Double(3.0e38), D::Real), Some(V::Real(3.0e38)));
+    assert_eq!(
+        coerce(&V::Double(f64::from(f32::MAX)), D::Real),
+        Some(V::Real(f32::MAX))
+    );
+}
+
+#[test]
+fn nan_and_infinities_fail_every_conversion_with_a_range() {
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for (from, label) in [
+            (V::Real(value as f32), "REAL"),
+            (V::Double(value), "Double"),
+        ] {
+            for target in [D::Unsigned, D::Integer, D::Enumerated] {
+                assert_eq!(coerce(&from, target), None, "{label} {value} to {target:?}");
+            }
+        }
+        assert_eq!(
+            coerce(&V::Double(value), D::Real),
+            None,
+            "Double {value} to REAL"
+        );
+    }
+    // No range applies: a REAL widens to a Double, and a value goes to its
+    // own datatype, as it is.
+    let Some(V::Double(widened)) = coerce(&V::Real(f32::NAN), D::Double) else {
+        panic!("a REAL NaN widens to a Double");
+    };
+    assert!(widened.is_nan());
+    assert_eq!(
+        coerce(&V::Real(f32::INFINITY), D::Double),
+        Some(V::Double(f64::INFINITY))
+    );
+    assert_eq!(
+        coerce(&V::Double(f64::NEG_INFINITY), D::Double),
+        Some(V::Double(f64::NEG_INFINITY))
+    );
+    // Rule 1: NaN isn't zero.
+    assert_eq!(
+        coerce(&V::Double(f64::NAN), D::Boolean),
+        Some(V::Boolean(true))
+    );
 }
 
 #[test]

@@ -8,6 +8,7 @@
 //! another Command's or Channel's Present_Value starts that run beside it,
 //! and the call returns once every run has ended.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use bacnet_encoding::primitives::encode_property_value;
@@ -27,29 +28,55 @@ use super::{execute, RunHost, Unfinished};
 
 /// Run `runs`, and any runs their writes start, to their ends.
 ///
-/// Dropping the returned future first ends each unfinished run as
-/// unsuccessful, so none is left in process.
-pub(crate) async fn run_unattached(db: &Arc<RwLock<ObjectDatabase>>, runs: Vec<CommandRun>) {
-    if runs.is_empty() {
-        return;
+/// Dropping the returned future first, unpolled included, ends each
+/// unfinished run as unsuccessful, so none is left busy: a run being made
+/// through its [`execute`] owner, and one queued but not yet started through
+/// the queue's own guard.
+pub(crate) fn run_unattached(
+    db: &Arc<RwLock<ObjectDatabase>>,
+    runs: Vec<CommandRun>,
+) -> impl Future<Output = ()> + Send + '_ {
+    let (started, queued) = mpsc::unbounded_channel();
+    for run in runs {
+        // The receiver is in hand.
+        let _ = started.send(run);
     }
-    let (started, mut queued) = mpsc::unbounded_channel();
-    let host = Unattached { db, started };
-    let mut running: FuturesUnordered<_> =
-        runs.into_iter().map(|run| execute(&host, run)).collect();
-    loop {
-        // A run is only started from inside another's write, so once none is
-        // left running and none is queued, nothing more can start.
-        while let Ok(run) = queued.try_recv() {
-            running.push(execute(&host, run));
+    let mut queue = Queue { db, queued };
+    async move {
+        let host = Unattached { db, started };
+        let mut running = FuturesUnordered::new();
+        loop {
+            // A run is only started from inside another's write, so once none
+            // is left running and none is queued, nothing more can start.
+            while let Ok(run) = queue.queued.try_recv() {
+                running.push(execute(&host, run));
+            }
+            if running.is_empty() {
+                break;
+            }
+            // Queued runs first, so each gets its owner as soon as it can.
+            tokio::select! {
+                biased;
+                Some(run) = queue.queued.recv() => running.push(execute(&host, run)),
+                Some(()) = running.next() => {}
+                else => break,
+            }
         }
-        if running.is_empty() {
-            break;
-        }
-        tokio::select! {
-            Some(run) = queued.recv() => running.push(execute(&host, run)),
-            Some(()) = running.next() => {}
-            else => break,
+    }
+}
+
+/// Runs queued for [`run_unattached`] and not yet started. Dropping it ends
+/// each as unsuccessful.
+struct Queue<'a> {
+    db: &'a Arc<RwLock<ObjectDatabase>>,
+    queued: mpsc::UnboundedReceiver<CommandRun>,
+}
+
+impl Drop for Queue<'_> {
+    fn drop(&mut self) {
+        self.queued.close();
+        while let Ok(run) = self.queued.try_recv() {
+            abandon(self.db, Unfinished::start(&run));
         }
     }
 }
@@ -96,21 +123,26 @@ impl RunHost for Unattached<'_> {
     async fn report(&self, _source: ObjectIdentifier) {}
 
     fn abandoned(&self, left: Unfinished) {
-        if let Ok(mut db) = self.db.try_write() {
-            left.end(&mut db);
-            return;
+        abandon(self.db, left);
+    }
+}
+
+/// End a run let go of before it ended: at once if the database is free,
+/// otherwise once it is.
+fn abandon(db: &Arc<RwLock<ObjectDatabase>>, left: Unfinished) {
+    if let Ok(mut db) = db.try_write() {
+        left.end(&mut db);
+        return;
+    }
+    match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => {
+            let db = Arc::clone(db);
+            runtime.spawn(async move { left.end(&mut *db.write().await) });
         }
-        // Someone else holds the database; end the run once it's free.
-        match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => {
-                let db = Arc::clone(self.db);
-                runtime.spawn(async move { left.end(&mut *db.write().await) });
-            }
-            Err(_) => warn!(
-                source = %left.source(),
-                "run dropped outside a runtime; its object stays busy"
-            ),
-        }
+        Err(_) => warn!(
+            source = %left.source(),
+            "run dropped outside a runtime; its object stays busy"
+        ),
     }
 }
 
@@ -129,3 +161,7 @@ fn request(command: &BACnetActionCommand) -> Result<Vec<u8>, Error> {
     .encode(&mut request)?;
     Ok(request.to_vec())
 }
+
+#[cfg(test)]
+#[path = "unattached_tests.rs"]
+mod tests;
