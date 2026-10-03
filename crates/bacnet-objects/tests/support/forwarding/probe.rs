@@ -14,7 +14,7 @@ use bacnet_objects::audit::{
     AuditReporterObject, AuditSendDelay, ObjectAuditPolicy,
 };
 use bacnet_objects::clock::{ClockFrame, ClockReader};
-use bacnet_objects::command::CommandRun;
+use bacnet_objects::command::{CommandRun, RunPlan};
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::device::{DeviceAuthority, DeviceConfig, DeviceObject};
 use bacnet_objects::event::{
@@ -25,7 +25,7 @@ use bacnet_objects::event_enrollment::{
     EventEnrollmentEvalState, EventEnrollmentMonitoredSource, EventEnrollmentReliabilityCommit,
 };
 use bacnet_objects::file::{FileConfiguration, FileObject, FileStorage};
-use bacnet_objects::log_buffer::LogRecordIdentity;
+use bacnet_objects::log_buffer::{LogBufferRecords, LogRecordIdentity};
 use bacnet_objects::property_metadata::{
     PropertyConformance, PropertyMetadata, PropertyWriteCapability,
 };
@@ -35,6 +35,7 @@ use bacnet_objects::traits::{
     BACnetObject, CovReportedProperty, LifeSafetyOperationEffect, LifeSafetyOperationOutcome,
     MonotonicClock, ReliabilityEvaluation,
 };
+use bacnet_objects::trend::TrendLogObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
@@ -176,6 +177,7 @@ pub struct Probe {
     reporter: AuditReporterObject,
     audit_log: AuditLogObject,
     file: FileObject,
+    trend_log: TrendLogObject,
 }
 
 impl Probe {
@@ -203,6 +205,7 @@ impl Probe {
             reporter: AuditReporterObject::new(17, "Probe reporter").unwrap(),
             audit_log,
             file: FileObject::new(5, "Probe file", "test").unwrap(),
+            trend_log: TrendLogObject::new(6, "Probe trend", 4).unwrap(),
         }
     }
 
@@ -394,7 +397,8 @@ impl BACnetObject for Probe {
         Some(CommandRun {
             source: self.oid,
             generation: 11,
-            commands: Vec::new(),
+            plan: RunPlan::Actions(Vec::new()),
+            chain: std::sync::Arc::from([]),
         })
     }
     fn command_generation_internal(&self) -> Option<u64> {
@@ -675,6 +679,10 @@ impl BACnetObject for Probe {
             day_of_week: 5,
         };
         Some(vec![LogRecordIdentity::new(9, date, noon()).unwrap()])
+    }
+    fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
+        self.called("log_buffer_internal", ());
+        self.trend_log.log_buffer_internal()
     }
     fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
         self.called("add_trend_record", (record,));

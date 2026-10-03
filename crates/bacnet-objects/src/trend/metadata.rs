@@ -164,7 +164,10 @@ mod tests {
                             Optional
                         };
                         assert_eq!(row.conformance, conformance, "{kind:?} {p:?}");
-                        assert!(object.read_property(p, None).is_ok(), "{kind:?} {p:?}");
+                        assert!(
+                            crate::property_metadata_tests::metadata_row_reads(object.as_ref(), p),
+                            "{kind:?} {p:?}"
+                        );
                     }
                     let wire: Vec<_> = all
                         .iter()
@@ -196,10 +199,7 @@ mod tests {
                         ErrorClass::PROPERTY,
                         ErrorCode::INVALID_ARRAY_INDEX,
                     );
-                    assert_eq!(
-                        object.read_property(P::LOG_BUFFER, None).unwrap(),
-                        PropertyValue::List(vec![])
-                    );
+                    assert_eq!(object.log_buffer_internal().unwrap().record_count(), 0);
                 }
             }
         }
@@ -224,6 +224,18 @@ mod tests {
                     };
                     assert_eq!(row.write_capability, capability, "{kind:?} {p:?}");
                     assert_eq!(object.is_writable_property(p), capability.is_writable());
+                    if p == P::LOG_BUFFER {
+                        // Present but readable only by ReadRange (#1237);
+                        // writes are denied.
+                        for value in [PropertyValue::List(vec![]), PropertyValue::Null] {
+                            assert_error(
+                                object.write_property(p, None, value, None).unwrap_err(),
+                                ErrorClass::PROPERTY,
+                                ErrorCode::WRITE_ACCESS_DENIED,
+                            );
+                        }
+                        continue;
+                    }
                     let value = match p {
                         P::LOG_ENABLE => PropertyValue::Boolean(false),
                         P::LOG_INTERVAL => PropertyValue::Unsigned(17),
@@ -321,10 +333,7 @@ mod tests {
                     object.read_property(P::LOG_ENABLE, None).unwrap(),
                     PropertyValue::Boolean(true)
                 );
-                assert_eq!(
-                    object.read_property(P::LOG_BUFFER, None).unwrap(),
-                    PropertyValue::List(vec![])
-                );
+                assert_eq!(object.log_buffer_internal().unwrap().record_count(), 0);
                 assert_eq!(object.property_metadata().as_ref(), metadata);
             }
         }

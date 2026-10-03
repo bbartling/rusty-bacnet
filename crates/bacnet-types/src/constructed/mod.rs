@@ -32,7 +32,10 @@ pub use lift::{
     BACnetLandingDoorStatus, BACnetLiftCarCallList, LandingCallCommand, LandingDoor,
 };
 mod log;
-pub use log::{BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue};
+pub use log::{
+    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
+    LogDatum, LogValue,
+};
 mod property_access;
 pub use property_access::{AccessResult, BACnetPropertyAccessResult};
 mod read_access;

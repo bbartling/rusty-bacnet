@@ -1,5 +1,5 @@
 use bacnet_encoding::{primitives, tags};
-use bacnet_types::bitstring::AuditOperationFlags;
+use bacnet_types::bitstring::{AuditOperationFlags, LogStatus};
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
 use bacnet_types::enums::{
     AuditOperation, BACnetSuccessFilter, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
@@ -590,7 +590,7 @@ fn wide_cursor_pairs_with_wide_ack_sequence() {
         audit_log: oid(ObjectType::AUDIT_LOG, 1),
         records: vec![BACnetAuditLogRecordResult {
             sequence_number: cursor,
-            record: audit_record(BACnetAuditLogDatum::LogStatus(0b010)),
+            record: audit_record(BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED)),
         }],
         no_more_items: false,
     };
@@ -687,7 +687,7 @@ fn audit_log_query_ack_log_status_matches_clause_21_literal() {
         audit_log: oid(ObjectType::AUDIT_LOG, 1),
         records: vec![BACnetAuditLogRecordResult {
             sequence_number: 1,
-            record: audit_record(BACnetAuditLogDatum::LogStatus(0b010)),
+            record: audit_record(BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED)),
         }],
         no_more_items: false,
     };
@@ -748,7 +748,7 @@ fn audit_log_query_ack_time_change_and_adjacent_results_match_literal() {
             },
             BACnetAuditLogRecordResult {
                 sequence_number: 0,
-                record: audit_record(BACnetAuditLogDatum::LogStatus(0)),
+                record: audit_record(BACnetAuditLogDatum::LogStatus(LogStatus::empty())),
             },
         ],
         no_more_items: false,
@@ -768,11 +768,14 @@ fn audit_log_query_ack_time_change_and_adjacent_results_match_literal() {
 
 #[test]
 fn audit_log_query_ack_encode_is_atomic() {
+    let mut record = audit_record(BACnetAuditLogDatum::LogStatus(LogStatus::empty()));
+    // No month 20 exists, so the record cannot be encoded.
+    record.timestamp.0.month = 20;
     let ack = AuditLogQueryAck {
         audit_log: oid(ObjectType::AUDIT_LOG, 1),
         records: vec![BACnetAuditLogRecordResult {
             sequence_number: 1,
-            record: audit_record(BACnetAuditLogDatum::LogStatus(0b1000)),
+            record,
         }],
         no_more_items: false,
     };

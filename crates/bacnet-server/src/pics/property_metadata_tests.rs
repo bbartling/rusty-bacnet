@@ -20,6 +20,7 @@ mod accumulator;
 mod audit_log;
 mod audit_reporter;
 mod averaging;
+mod channel;
 mod color;
 mod command;
 mod elevator;

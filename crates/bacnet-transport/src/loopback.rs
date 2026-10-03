@@ -8,7 +8,10 @@
 //!
 //! The peer receives every frame, whatever MAC it was sent to.
 //! [`LoopbackTransport::record_unicast_destinations`] reports those MACs, so a
-//! test can see where each unicast went.
+//! test can see where each unicast went. The data attributes a frame is sent
+//! with are dropped, as on a data link that cannot carry them, unless
+//! [`LoopbackTransport::carry_data_attributes`] asks for them to reach the
+//! peer.
 
 use std::sync::{Mutex, PoisonError};
 
@@ -17,7 +20,7 @@ use bacnet_types::MacAddr;
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
-use crate::port::{ReceivedNpdu, TransportPort, TransportProvenance};
+use crate::port::{DataAttribute, ReceivedNpdu, TransportPort, TransportProvenance};
 
 /// In-process loopback transport backed by mpsc channels.
 pub struct LoopbackTransport {
@@ -33,6 +36,9 @@ pub struct LoopbackTransport {
     /// Held while a recorded unicast is queued for the peer, so concurrent
     /// sends record their MACs in the order the peer receives the frames.
     record_order: Mutex<()>,
+    /// Whether the peer gets each frame's data attributes, once
+    /// [`Self::carry_data_attributes`] asks for them.
+    carries_data_attributes: bool,
 }
 
 impl LoopbackTransport {
@@ -63,6 +69,7 @@ impl LoopbackTransport {
             self_rx: Some(self_rx),
             unicast_destinations: None,
             record_order: Mutex::new(()),
+            carries_data_attributes: false,
         }
     }
 
@@ -83,6 +90,73 @@ impl LoopbackTransport {
         self.unicast_destinations = Some(tx);
         rx
     }
+
+    /// Hand the peer the data attributes of each frame this transport sends
+    /// from now on (#1289).
+    ///
+    /// The attributes given to
+    /// [`send_unicast_with_data_attributes`](TransportPort::send_unicast_with_data_attributes)
+    /// or
+    /// [`send_broadcast_with_data_attributes`](TransportPort::send_broadcast_with_data_attributes)
+    /// then arrive in the peer's [`ReceivedNpdu::data_attributes`], as they
+    /// would over BACnet/SC. Without this call the transport drops them and
+    /// the peer's frames carry none. Set it on the side that sends: a test
+    /// that feeds a router attributes and checks what the router sends back
+    /// sets it on both.
+    pub fn carry_data_attributes(&mut self) {
+        self.carries_data_attributes = true;
+    }
+
+    /// The frame the peer receives for `npdu`.
+    fn frame(
+        &self,
+        npdu: &[u8],
+        link_layer_group: bool,
+        data_attributes: &[DataAttribute],
+    ) -> ReceivedNpdu {
+        let data_attributes = if self.carries_data_attributes {
+            data_attributes.to_vec()
+        } else {
+            Vec::new()
+        };
+        ReceivedNpdu {
+            direct_response: None,
+            npdu: Bytes::copy_from_slice(npdu),
+            source_mac: self.local_mac.clone(),
+            link_layer_group,
+            data_attributes,
+            provenance: TransportProvenance::unverified(),
+            reply_tx: None,
+        }
+    }
+
+    async fn unicast(
+        &self,
+        npdu: &[u8],
+        mac: &[u8],
+        data_attributes: &[DataAttribute],
+    ) -> Result<(), Error> {
+        let msg = self.frame(npdu, false, data_attributes);
+        let Some(destinations) = self.unicast_destinations.as_ref() else {
+            return self.peer_tx.send(msg).await.map_err(|_| peer_closed());
+        };
+        // Wait for room first, then record the MAC and queue the frame under
+        // one lock: the record and the peer's queue then share one order.
+        let permit = self.peer_tx.reserve().await.map_err(|_| peer_closed())?;
+        let _order = self
+            .record_order
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // A dropped record receiver only stops the record.
+        let _ = destinations.send(MacAddr::from_slice(mac));
+        permit.send(msg);
+        Ok(())
+    }
+
+    async fn broadcast(&self, npdu: &[u8], data_attributes: &[DataAttribute]) -> Result<(), Error> {
+        let msg = self.frame(npdu, true, data_attributes);
+        self.peer_tx.send(msg).await.map_err(|_| peer_closed())
+    }
 }
 
 fn peer_closed() -> Error {
@@ -102,42 +176,28 @@ impl TransportPort for LoopbackTransport {
     }
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        let msg = ReceivedNpdu {
-            direct_response: None,
-            npdu: Bytes::copy_from_slice(npdu),
-            source_mac: self.local_mac.clone(),
-            link_layer_group: false,
-            data_attributes: Vec::new(),
-            provenance: TransportProvenance::unverified(),
-            reply_tx: None,
-        };
-        let Some(destinations) = self.unicast_destinations.as_ref() else {
-            return self.peer_tx.send(msg).await.map_err(|_| peer_closed());
-        };
-        // Wait for room first, then record the MAC and queue the frame under
-        // one lock: the record and the peer's queue then share one order.
-        let permit = self.peer_tx.reserve().await.map_err(|_| peer_closed())?;
-        let _order = self
-            .record_order
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        // A dropped record receiver only stops the record.
-        let _ = destinations.send(MacAddr::from_slice(mac));
-        permit.send(msg);
-        Ok(())
+        self.unicast(npdu, mac, &[]).await
+    }
+
+    async fn send_unicast_with_data_attributes(
+        &self,
+        npdu: &[u8],
+        mac: &[u8],
+        data_attributes: &[DataAttribute],
+    ) -> Result<(), Error> {
+        self.unicast(npdu, mac, data_attributes).await
     }
 
     async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        let msg = ReceivedNpdu {
-            direct_response: None,
-            npdu: Bytes::copy_from_slice(npdu),
-            source_mac: self.local_mac.clone(),
-            link_layer_group: true,
-            data_attributes: Vec::new(),
-            provenance: TransportProvenance::unverified(),
-            reply_tx: None,
-        };
-        self.peer_tx.send(msg).await.map_err(|_| peer_closed())
+        self.broadcast(npdu, &[]).await
+    }
+
+    async fn send_broadcast_with_data_attributes(
+        &self,
+        npdu: &[u8],
+        data_attributes: &[DataAttribute],
+    ) -> Result<(), Error> {
+        self.broadcast(npdu, data_attributes).await
     }
 
     fn local_receive_apdu_capacity(&self) -> u16 {
@@ -264,6 +324,53 @@ mod tests {
         for thread in threads {
             thread.join().unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn data_attributes_reach_the_peer_only_when_carried() {
+        let (mut a, mut b) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+        let mut rx_b = b.start().await.unwrap();
+        let attributes = vec![DataAttribute {
+            option_type: 31,
+            must_understand: true,
+            data: vec![0x12, 0x34],
+        }];
+
+        // By default the peer gets the frames without their attributes.
+        a.send_unicast_with_data_attributes(b"one", &[0x02], &attributes)
+            .await
+            .unwrap();
+        a.send_broadcast_with_data_attributes(b"two", &attributes)
+            .await
+            .unwrap();
+        for npdu in [&b"one"[..], b"two"] {
+            let frame = rx_b.recv().await.unwrap();
+            assert_eq!(&frame.npdu[..], npdu);
+            assert!(frame.data_attributes.is_empty(), "dropped by default");
+        }
+
+        // Once asked, both kinds of frame carry them, also while unicast
+        // destinations are recorded, and a frame sent without any has none.
+        a.carry_data_attributes();
+        let mut destinations = a.record_unicast_destinations();
+        a.send_unicast_with_data_attributes(b"three", &[0x50], &attributes)
+            .await
+            .unwrap();
+        a.send_broadcast_with_data_attributes(b"four", &attributes)
+            .await
+            .unwrap();
+        a.send_unicast(b"five", &[0x02]).await.unwrap();
+        for (npdu, carried) in [
+            (&b"three"[..], &attributes[..]),
+            (b"four", &attributes),
+            (b"five", &[]),
+        ] {
+            let frame = rx_b.recv().await.unwrap();
+            assert_eq!(&frame.npdu[..], npdu);
+            assert_eq!(frame.data_attributes, carried);
+        }
+        assert_eq!(destinations.try_recv().unwrap().as_slice(), [0x50]);
+        assert_eq!(destinations.try_recv().unwrap().as_slice(), [0x02]);
     }
 
     #[tokio::test]

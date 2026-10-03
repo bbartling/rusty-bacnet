@@ -2,24 +2,70 @@
 
 use std::collections::VecDeque;
 
-use bacnet_encoding::constructed::encode_log_multiple_record;
-use bacnet_types::constructed::{BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum};
-use bacnet_types::enums::PropertyIdentifier as P;
+use bacnet_encoding::constructed::{
+    encode_event_log_record, encode_log_multiple_record, encode_log_record,
+};
+use bacnet_types::bitstring::LogStatus;
+use bacnet_types::constructed::{
+    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
+    LogDatum,
+};
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{Date, PropertyValue, Time};
+use bacnet_types::primitives::{Date, Time};
+use bytes::BytesMut;
 
 use crate::property_metadata::{
     PropertyConformance::RequiredRead, PropertyMetadata, PropertyWriteCapability::ReadOnly,
 };
 
-// Shared conformance rows only: LOG_BUFFER remains the existing LIST projection,
-// not an array or a serialization of the resident sequence identities.
+// Shared conformance rows only. LOG_BUFFER is a present, read-only BACnetLIST
+// that ReadProperty refuses; ReadRange pages it through `LogBufferRecords`.
 pub(crate) const BUFFER_SIZE_METADATA: PropertyMetadata =
     PropertyMetadata::new(P::BUFFER_SIZE, RequiredRead, None, ReadOnly);
 pub(crate) const LOG_BUFFER_METADATA: PropertyMetadata =
     PropertyMetadata::new(P::LOG_BUFFER, RequiredRead, None, ReadOnly);
 pub(crate) const TOTAL_RECORD_COUNT_METADATA: PropertyMetadata =
     PropertyMetadata::new(P::TOTAL_RECORD_COUNT, RequiredRead, None, ReadOnly);
+
+/// The answer a log object gives a ReadProperty of its Log_Buffer.
+///
+/// Clauses 12.25.14, 12.27.13, 12.30.19 and 12.64.10 open a log buffer to
+/// ReadRange (and, for an Audit Log, AuditLogQuery) only, so a property read
+/// names the property as present but not readable this way
+/// (Clause 15.5.1.3.1).
+pub(crate) fn log_buffer_read_denied() -> Error {
+    Error::Protocol {
+        class: ErrorClass::PROPERTY.to_raw() as u32,
+        code: ErrorCode::READ_ACCESS_DENIED.to_raw() as u32,
+    }
+}
+
+/// A log object's Log_Buffer as ReadRange pages it: the resident records,
+/// oldest first, each framed on demand as its Clause 21 record production.
+///
+/// The records align element for element with
+/// [`crate::traits::BACnetObject::log_record_identities_internal`]. A page
+/// encodes only the records it visits, so a narrow window over a full log
+/// stays cheap.
+pub trait LogBufferRecords {
+    /// The number of resident records.
+    fn record_count(&self) -> usize;
+
+    /// Append the record at `index` (0 is the oldest) to `buf`.
+    ///
+    /// Encoding cannot fail: the built-in logs refuse a record that would not
+    /// encode when it is added, and an implementation must keep that promise
+    /// too. Panics when `index` is not below
+    /// [`record_count`](Self::record_count).
+    fn encode_record(&self, index: usize, buf: &mut BytesMut);
+}
+
+/// The largest encoded value, in octets, that the trend pollers log as an
+/// any-value. A larger value (a long string, a big array) is logged as a
+/// PROPERTY / VALUE_TOO_LONG failure instead, so that one Trend Log record
+/// stays small enough for a ReadRange page on a 480-octet APDU.
+pub const ANY_VALUE_MAX_OCTETS: usize = 256;
 
 /// Stable object-owned identity for one resident log record.
 ///
@@ -61,21 +107,16 @@ impl LogRecordIdentity {
     }
 }
 
-/// The records of a single-datum log (Event Log and Trend Log). Trend Log
-/// alone projects a record's optional status flags.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum LogRecordProfile {
-    Event,
-    Trend,
-}
-
-/// A record a [`LogRecordBuffer`] can hold: it carries its own timestamp, and
-/// the shared lifecycle can build the log-status record of its family.
+/// A record a [`LogRecordBuffer`] can hold: it carries its own timestamp,
+/// the shared lifecycle can build the log-status record of its family, and
+/// it encodes as its family's Clause 21 production.
 pub(crate) trait ResidentLogRecord: Clone {
     /// The local date and time the record was acquired.
     fn timestamp(&self) -> (Date, Time);
-    /// A log-status record carrying the BACnetLogStatus `bits`.
-    fn log_status(date: Date, time: Time, bits: u8) -> Self;
+    /// A log-status record carrying `status`.
+    fn log_status(date: Date, time: Time, status: LogStatus) -> Self;
+    /// Append the record's wire form to `buf`, leaving it unchanged on error.
+    fn encode(&self, buf: &mut BytesMut) -> Result<(), Error>;
 }
 
 impl ResidentLogRecord for BACnetLogRecord {
@@ -83,13 +124,35 @@ impl ResidentLogRecord for BACnetLogRecord {
         (self.date, self.time)
     }
 
-    fn log_status(date: Date, time: Time, bits: u8) -> Self {
+    fn log_status(date: Date, time: Time, status: LogStatus) -> Self {
         Self {
             date,
             time,
-            log_datum: LogDatum::LogStatus(bits),
+            log_datum: LogDatum::LogStatus(status),
             status_flags: None,
         }
+    }
+
+    fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        encode_log_record(self, buf)
+    }
+}
+
+impl ResidentLogRecord for BACnetEventLogRecord {
+    fn timestamp(&self) -> (Date, Time) {
+        (self.date, self.time)
+    }
+
+    fn log_status(date: Date, time: Time, status: LogStatus) -> Self {
+        Self {
+            date,
+            time,
+            log_datum: EventLogDatum::LogStatus(status),
+        }
+    }
+
+    fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        encode_event_log_record(self, buf)
     }
 }
 
@@ -98,12 +161,16 @@ impl ResidentLogRecord for BACnetLogMultipleRecord {
         (self.date, self.time)
     }
 
-    fn log_status(date: Date, time: Time, bits: u8) -> Self {
+    fn log_status(date: Date, time: Time, status: LogStatus) -> Self {
         Self {
             date,
             time,
-            log_data: LogData::LogStatus(bits),
+            log_data: LogData::LogStatus(status),
         }
+    }
+
+    fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        encode_log_multiple_record(self, buf)
     }
 }
 
@@ -233,31 +300,18 @@ impl<R: ResidentLogRecord> LogRecordBuffer<R> {
     }
 }
 
-impl LogRecordBuffer<BACnetLogRecord> {
-    /// Log_Buffer as a list of records, each its fields in order.
-    pub(crate) fn project(&self, profile: LogRecordProfile) -> PropertyValue {
-        PropertyValue::List(
-            self.records
-                .iter()
-                .map(|record| project_record(record, profile))
-                .collect(),
-        )
+impl<R: ResidentLogRecord> LogBufferRecords for LogRecordBuffer<R> {
+    fn record_count(&self) -> usize {
+        self.records.len()
     }
-}
 
-impl LogRecordBuffer<BACnetLogMultipleRecord> {
-    /// Log_Buffer as a list of records, each framed as Clause 21's
-    /// BACnetLogMultipleRecord. A record that can't be encoded fails the read.
-    pub(crate) fn project_framed(&self) -> Result<PropertyValue, Error> {
-        self.records
-            .iter()
-            .map(|record| {
-                let mut buf = bytes::BytesMut::new();
-                encode_log_multiple_record(record, &mut buf)?;
-                Ok(PropertyValue::ApplicationData(buf.to_vec()))
-            })
-            .collect::<Result<_, Error>>()
-            .map(PropertyValue::List)
+    fn encode_record(&self, index: usize, buf: &mut BytesMut) {
+        // `LogLifecycle::try_add_ordinary` refuses a record that would not
+        // encode, the lifecycle's own status records always encode, and a
+        // resident record is never changed.
+        self.records[index]
+            .encode(buf)
+            .expect("every resident log record encodes");
     }
 }
 
@@ -274,49 +328,6 @@ fn previous_sequence(sequence_number: u32) -> u32 {
         u32::MAX
     } else {
         sequence_number - 1
-    }
-}
-
-fn project_record(record: &BACnetLogRecord, profile: LogRecordProfile) -> PropertyValue {
-    let mut fields = vec![
-        PropertyValue::Date(record.date),
-        PropertyValue::Time(record.time),
-        project_datum(&record.log_datum),
-    ];
-    if let (LogRecordProfile::Trend, Some(status_flags)) = (profile, record.status_flags) {
-        fields.push(PropertyValue::BitString {
-            unused_bits: 4,
-            data: vec![status_flags << 4],
-        });
-    }
-    PropertyValue::List(fields)
-}
-
-fn project_datum(datum: &LogDatum) -> PropertyValue {
-    match datum {
-        LogDatum::LogStatus(value) => PropertyValue::BitString {
-            unused_bits: 5,
-            data: vec![(value & 0b111) << 5],
-        },
-        LogDatum::BooleanValue(value) => PropertyValue::Boolean(*value),
-        LogDatum::RealValue(value) => PropertyValue::Real(*value),
-        LogDatum::EnumValue(value) => PropertyValue::Enumerated(*value),
-        LogDatum::UnsignedValue(value) => PropertyValue::Unsigned(*value),
-        LogDatum::SignedValue(value) => PropertyValue::Signed(*value as i32),
-        LogDatum::BitstringValue { unused_bits, data } => PropertyValue::BitString {
-            unused_bits: *unused_bits,
-            data: data.clone(),
-        },
-        LogDatum::NullValue => PropertyValue::Null,
-        LogDatum::Failure {
-            error_class,
-            error_code,
-        } => PropertyValue::List(vec![
-            PropertyValue::Unsigned(*error_class as u64),
-            PropertyValue::Unsigned(*error_code as u64),
-        ]),
-        LogDatum::TimeChange(value) => PropertyValue::Real(*value),
-        LogDatum::AnyValue(bytes) => PropertyValue::OctetString(bytes.clone()),
     }
 }
 

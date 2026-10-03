@@ -1,8 +1,48 @@
-//! SourceReporter forwards a Command object's run hooks (#1150) instead of
-//! inheriting the trait defaults, which would leave a wrapped Command busy.
+//! SourceReporter forwards the run hooks of a Command (#1150) or Channel
+//! (#1151) object instead of inheriting the trait defaults, which would
+//! leave a wrapped Command or Channel busy.
 use super::*;
+use bacnet_objects::channel::ChannelObject;
 use bacnet_objects::command::CommandObject;
-use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
+use bacnet_types::constructed::{
+    BACnetActionCommand, BACnetActionList, BACnetDeviceObjectPropertyReference,
+};
+use bacnet_types::enums::WriteStatus;
+
+#[test]
+fn channel_run_hooks_survive_wrapping() {
+    let mut channel = ChannelObject::new(1, "CH-1", 7).unwrap();
+    channel
+        .set_members(vec![BACnetDeviceObjectPropertyReference::new_local(
+            oid(ObjectType::ANALOG_VALUE, 1),
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )])
+        .unwrap();
+    let mut object: Box<dyn BACnetObject> = Box::new(channel);
+    let owner = bacnet_objects::database::AuditOwnership::for_source(
+        oid(ObjectType::DEVICE, 123),
+        selected(),
+    );
+    source_reporter::install(&mut object, &owner).unwrap();
+
+    object
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(1.0),
+            Some(8),
+        )
+        .unwrap();
+    let run = object.take_command_run_internal().unwrap();
+    assert_eq!(object.command_generation_internal(), Some(run.generation));
+    assert!(object.complete_command_run_internal(run.generation, false));
+    assert_eq!(
+        object
+            .read_property(PropertyIdentifier::WRITE_STATUS, None)
+            .unwrap(),
+        PropertyValue::Enumerated(WriteStatus::FAILED.to_raw())
+    );
+}
 
 #[test]
 fn command_run_hooks_and_property_cov_admission_survive_wrapping() {

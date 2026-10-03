@@ -1,3 +1,4 @@
+use super::log_fields::{decode_log_status, encode_log_status};
 use super::{decode_audit_notification_at, encode_audit_notification};
 use crate::{primitives, tags};
 use bacnet_types::constructed::{
@@ -33,14 +34,7 @@ pub fn encode_audit_log_record(
 
     tags::encode_opening_tag(buf, 1);
     match &record.datum {
-        BACnetAuditLogDatum::LogStatus(status) => {
-            if status & !0b111 != 0 {
-                return Err(Error::OutOfRange(format!(
-                    "BACnetAuditLogRecord log-status {status:#010b} exceeds three bits"
-                )));
-            }
-            primitives::encode_ctx_bit_string(buf, 0, 5, &[*status << 5]);
-        }
+        BACnetAuditLogDatum::LogStatus(status) => encode_log_status(buf, 0, *status),
         BACnetAuditLogDatum::AuditNotification(notification) => {
             tags::encode_opening_tag(buf, 1);
             encode_audit_notification(notification, buf)?;
@@ -166,13 +160,11 @@ fn decode_datum(data: &[u8]) -> Result<BACnetAuditLogDatum, Error> {
                 "log-status choice has trailing fields",
             ));
         }
-        if contents.len() != 2 || contents[0] != 5 || contents[1] & 0x1f != 0 {
-            return Err(Error::decoding(
-                0,
-                "BACnetAuditLogRecord log-status must be a canonical three-bit BitString",
-            ));
-        }
-        Ok(BACnetAuditLogDatum::LogStatus(contents[1] >> 5))
+        Ok(BACnetAuditLogDatum::LogStatus(decode_log_status(
+            contents,
+            0,
+            "BACnetAuditLogRecord",
+        )?))
     } else if choice.is_opening_tag(1) {
         let (notification_body, end) =
             decode_constructed_body(data, 0, 1, "AuditNotification choice")?;
@@ -282,6 +274,7 @@ fn decode_canonical_unsigned(data: &[u8], offset: usize, field: &str) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_types::bitstring::LogStatus;
 
     fn audit_record() -> BACnetAuditLogRecord {
         BACnetAuditLogRecord {
@@ -299,7 +292,28 @@ mod tests {
                     hundredths: 78,
                 },
             ),
-            datum: BACnetAuditLogDatum::LogStatus(0b010),
+            datum: BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED),
+        }
+    }
+
+    /// The log-status choice puts log-disabled, bit 0, in the top bit of the
+    /// octet (Clause 20.2.10), so it never reads back as log-interrupted.
+    #[test]
+    fn audit_record_log_status_has_bit0_first_wire_bytes() {
+        for (status, octet) in [
+            (LogStatus::LOG_DISABLED, 0x80),
+            (LogStatus::LOG_DISABLED | LogStatus::BUFFER_PURGED, 0xC0),
+            (LogStatus::LOG_INTERRUPTED, 0x20),
+        ] {
+            let record = BACnetAuditLogRecord {
+                datum: BACnetAuditLogDatum::LogStatus(status),
+                ..audit_record()
+            };
+            let mut encoded = BytesMut::new();
+            encode_audit_log_record(&record, &mut encoded).unwrap();
+            // Timestamp [0], then [1] around log-status [0] = 05 <octet>.
+            assert_eq!(&encoded[12..], &[0x1E, 0x0A, 0x05, octet, 0x1F], "{status}");
+            assert_eq!(decode_audit_log_record(&encoded).unwrap(), record);
         }
     }
 

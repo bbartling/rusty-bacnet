@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
     BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult,
 };
@@ -96,7 +97,7 @@ fn snapshot_with_record() -> AuditLogSnapshot {
                     hundredths: 0,
                 },
             ),
-            datum: BACnetAuditLogDatum::LogStatus(0),
+            datum: BACnetAuditLogDatum::LogStatus(LogStatus::empty()),
         },
     });
     snapshot
@@ -142,7 +143,7 @@ fn unknown_and_malformed_v2_receipt_fields_fail_closed() {
     let original = std::fs::read(&active).unwrap();
 
     let mut unknown = original.clone();
-    unknown[8..10].copy_from_slice(&3u16.to_be_bytes());
+    unknown[8..10].copy_from_slice(&4u16.to_be_bytes());
     rewrite_checksum(&mut unknown);
     std::fs::write(&active, unknown).unwrap();
     assert!(storage.load(oid()).is_err());

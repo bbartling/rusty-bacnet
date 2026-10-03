@@ -1311,7 +1311,9 @@ and `datum`. `timestamp` is `(date, time)`, where date is
 `(hour, minute, second, hundredths)`, matching the established
 `BACnetTimeStamp.date_time(...).value` convention. Datum mappings use `kind`
 values `"log_status"`, `"audit_notification"`, or `"time_change"`, with a
-same-named payload key. Nested notifications use the canonical field names
+same-named payload key. `log_status` is an int of BACnetLogStatus flags: 1
+log-disabled, 2 buffer-purged, 4 log-interrupted, decoded from the wire's
+bit order (log-disabled in the top bit of the octet). Nested notifications use the canonical field names
 listed above and include every optional key with either its decoded value or
 `None`. ACK projection is all-or-error and never returns a partial mapping.
 
@@ -1438,6 +1440,7 @@ server = BACnetServer(
     dcc_disable_rate_limit=None, # optional (capacity, refill_interval_ms); (3, 20000) enables default rate
     reinit_password=None,        # password for ReinitializeDevice
     cov_policy=None,             # keyword-only dict of COV limits; see COV policy below
+    time_sync_policy=None,       # keyword-only dict of clock limits; see Time synchronization policy below
 )
 ```
 
@@ -1490,6 +1493,28 @@ server.add_notification_forwarder(
     local_forwarding_only=False,
     storage_path="/application/state/forwarder-1",  # optional
 )
+server.add_notification_forwarder(
+    instance=2,
+    name="Seeded forwarder",
+    recipients=[  # keyword-only; seeds Recipient_List in order
+        {
+            "recipient": {"kind": "device",
+                          "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 99)},
+            "process_identifier": 1,
+        },
+        {
+            "recipient": {"kind": "address", "network_number": 0,
+                          "mac_address": bytes([192, 168, 1, 20, 0xBA, 0xC0])},
+            "process_identifier": 7,
+            "valid_days": 0b0011111,       # bit 0 Monday .. bit 6 Sunday
+            "from_time": (8, 0, 0, 0),     # (hour, minute, second, hundredths)
+            "to_time": (17, 30, 0, 0),
+            "issue_confirmed_notifications": True,
+            "transitions": 0b101,          # bit 0 to-offnormal, 1 to-fault, 2 to-normal
+        },
+    ],
+    port_filter=[(0, True)],  # keyword-only; (port_id, enabled) per network port
+)
 server.add_alert_enrollment(
     instance=1,
     name="Alert",
@@ -1511,6 +1536,22 @@ at most once a minute while its entries count down, so the list and each
 entry's remaining minutes survive a restart; without it the list lives in
 memory only. Every well-formed ConfirmedEventNotification is acknowledged,
 whether or not a forwarder takes it.
+
+`recipients` seeds Recipient_List with `Destination` mappings, typed as the
+`Destination` TypedDict in the stub. `recipient` takes the mapping the Audit
+services use for a recipient, and `process_identifier` is required. A key
+left out gives a destination that is active every day, all day, for every
+transition, with unconfirmed notifications. The binding checks shapes and
+Python types (unknown keys, out-of-range values and malformed time tuples
+raise `ValueError`, other wrong types `TypeError`), and the object's own
+`add_destination` decides what the list holds, as it does for a client's
+write: more than 32 destinations, or an address MAC longer than 18 octets,
+raises `BacnetProtocolError`. `port_filter` serves Port_Filter as
+`(port_id, enabled)` pairs, one per network port; the server receives through
+Port_ID 0, and without `port_filter` the property is absent. Clients can still
+change both lists over the network, within the limits Port_Filter's writes
+allow. Subscribed_Recipients save failures are counted by
+[`forwarder_save_counters()`](#forwarder_save_counters---dictint-forwardersavecounters).
 
 `initial_source` is required and becomes the Alert Enrollment object's
 read-only `Present_Value`. This is an intentional breaking correction; there
@@ -2136,9 +2177,25 @@ server.add_lift(instance=1, name="Elevator 1", num_floors=10)
 
 ```python
 server.add_group(instance=1, name="HVAC Group")
+server.add_group(
+    instance=2,
+    name="Zone 1",
+    members=[(ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
+              [(PropertyIdentifier.PRESENT_VALUE, None),
+               (PropertyIdentifier.OBJECT_NAME, None)])],
+)
 server.add_global_group(instance=1, name="All Temps")
 server.add_structured_view(instance=1, name="Floor Plan")
 ```
+
+`add_group(instance, name, members=None)` takes the members as the endpoint
+owners' `add_group` does: the `read_property_multiple` spec shape, checked
+member by member when it is added, with the same `ValueError` and
+`OverflowError` cases (see
+[Endpoint Groups](#endpoint-groups-and-the-read-work-limit)). The server
+rebuilds the Group's Present_Value from the members on every read, one result
+per member, and each member row counts against `rpm_max_result_elements`; a
+read past it is aborted with OUT_OF_RESOURCES (see [RPM budgets](rpm-budget.md)).
 
 #### Extended Value Types
 
@@ -2415,6 +2472,45 @@ same check before it starts a transport. The conversion names every field of
 the Rust struct without `..`, so a field added in Rust must get a key here
 before the bindings compile.
 
+#### Time synchronization policy
+
+The keyword-only `time_sync_policy` constructor argument limits which
+TimeSynchronization and UTCTimeSynchronization requests set the Device clock.
+It takes a dict, typed as the `TimeSyncPolicy` TypedDict in the stub, whose
+keys are the fields of the Rust `TimeSyncPolicy`, with `_ms` on the durations.
+A key left out keeps its default, and `None` or `{}` gives the default, which
+sets the clock from every valid request. The policy is copied at construction
+and applies to every later `start()`.
+
+```python
+server = BACnetServer(
+    1234,
+    time_sync_policy={
+        "source_restriction": [(None, bytes([192, 168, 1, 10, 0xBA, 0xC0]))],  # B/IP: IP then port
+        "max_step_ms": 300_000,   # refuse a correction of more than five minutes
+        "global_rate": (0.2, 2),  # (max_per_second, burst_capacity)
+    },
+)
+```
+
+| Key | Default | Limits |
+|---|---|---|
+| `enabled` | `True` | `False` refuses every request |
+| `source_restriction` | `None` | As `dcc_source_restriction`: `(None, mac)` for a direct source, `(network, address)` for a routed one; at most 256 entries of 1 to 18 octets, networks 1 to 65534. `[]` refuses every source |
+| `max_step_ms` | `None` | Largest correction, forward or back; 0 allows only an exact match |
+| `per_source_rate` | `None` | `(max_per_second, burst_capacity)`: rate positive and finite, burst positive |
+| `global_rate` | `None` | The same, for all sources together |
+| `coalesce_window_ms` | 0 | Least time between accepted requests from one source; 0 is off |
+| `global_coalesce_window_ms` | 0 | Least time between accepted requests from any source; 0 is off |
+| `max_sources` | 256 | Sources the rate and coalescing state tracks, 1 to 65536 |
+
+The constructor checks the dict before any I/O: an unknown or non-`str` key, or
+a value of the wrong type, raises `TypeError`, a negative or oversized integer
+`OverflowError`, and a limit in the table `ValueError`. Sources are claimed
+addresses, not authenticated identities. See
+[time synchronization policy](time-sync-policy.md) for the order of the checks
+and how each limit behaves.
+
 #### `event_notification_counters() -> EventNotificationCounters`
 
 Sample the totals of event notifications the server did not deliver: a dict
@@ -2458,6 +2554,22 @@ skip gives the finer reason. `unconfirmed_send_failed` (#1196) counts once
 per destination whose send fails; no field counts an encode failure, since a
 well-formed transition always encodes. The binding builds the dict from an exhaustive
 pattern over the Rust struct, like `cov_counters()`.
+
+#### `forwarder_save_counters() -> dict[int, ForwarderSaveCounters]`
+
+Sample each Notification Forwarder's Subscribed_Recipients save counters: a
+dict keyed by forwarder instance whose values are `ForwarderSaveCounters`
+dicts with one field, `failed_saves`. It counts the saves the `storage_path`
+file refused: a write that needed one (and failed with DEVICE /
+OPERATIONAL_PROBLEM) and a periodic save the server retries a minute later.
+The totals belong to the objects, so they count from registration, saturate at
+2**64-1, and stay zero for a forwarder without `storage_path`. Like
+`cov_counters()`, it raises `RuntimeError` before start and after stop.
+
+```python
+counters = await server.forwarder_save_counters()
+counters[1]["failed_saves"]  # refused saves of forwarder 1's list
+```
 
 #### `local_address() -> str`
 

@@ -24,7 +24,7 @@ use bacnet_objects::elevator::{ElevatorGroupObject, EscalatorObject, LiftObject}
 use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::file::FileObject;
-use bacnet_objects::group::{GlobalGroupObject, GroupObject, StructuredViewObject};
+use bacnet_objects::group::{GlobalGroupObject, StructuredViewObject};
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
 use bacnet_objects::lighting::{BinaryLightingOutputObject, LightingOutputObject};
 use bacnet_objects::load_control::LoadControlObject;
@@ -33,9 +33,6 @@ use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
 use bacnet_objects::notification_class::NotificationClass;
-use bacnet_objects::notification_forwarder::{
-    FileSubscribedRecipientsPersistence, NotificationForwarderObject,
-};
 use bacnet_objects::program::ProgramObject;
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
 use bacnet_objects::staging::{StagingConfig, StagingObject};
@@ -128,6 +125,7 @@ pub struct BACnetServer {
     read_range_budget: server::ReadRangeBudget,
     get_event_information_budget: server::GetEventInformationBudget,
     cov_policy: server::CovPolicy,
+    time_sync_policy: server::TimeSyncPolicy,
     audit_notification_sink: Option<AuditNotificationSink>,
     audit_reporters: Option<server::AuditReportersConfig>,
     audit_recipient: std::sync::Mutex<Option<bacnet_types::constructed::BACnetRecipient>>,
@@ -138,7 +136,19 @@ pub struct BACnetServer {
     started: Arc<AtomicBool>,
     /// Objects to add before starting. Cleared after start.
     pending_objects: std::sync::Mutex<Vec<Box<dyn BACnetObject + Send>>>,
+    /// Save counters of the pending Notification Forwarders, by instance,
+    /// pushed with each forwarder under the `pending_objects` lock.
+    pending_forwarder_save_counters: std::sync::Mutex<Vec<ForwarderSaveCounterEntry>>,
+    /// Save counters of the forwarders the running server holds, replaced
+    /// under the `inner` lock when a start publishes its server.
+    forwarder_save_counters: Arc<std::sync::Mutex<Vec<ForwarderSaveCounterEntry>>>,
 }
+
+/// One Notification Forwarder's instance and its shared save counters.
+type ForwarderSaveCounterEntry = (
+    u32,
+    bacnet_objects::notification_forwarder::ForwarderSaveCounters,
+);
 
 impl BACnetServer {
     /// Lock the pending_objects mutex, converting poison errors into PyRuntimeError.
@@ -177,7 +187,10 @@ mod server_methods {
     mod lifecycle;
     mod loop_methods;
     mod network_port;
+    mod notification_forwarder;
+    mod policy_dict;
     mod registration;
     mod request_admission;
+    mod time_sync_policy;
     mod value_registration;
 }

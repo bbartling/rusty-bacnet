@@ -1363,6 +1363,8 @@ In-process channel-based transport for composing a client and server without rea
 
 The peer receives every frame, whatever MAC a unicast was sent to. For tests that need to know, `record_unicast_destinations()` returns a receiver of those MACs, in the order the peer receives the unicast frames (#1243). Call it before handing the transport to a router or network layer; dropping the receiver stops the record.
 
+By default the transport drops the data attributes given to `send_unicast_with_data_attributes` and `send_broadcast_with_data_attributes`, like a data link that cannot carry them. `carry_data_attributes()` makes that side hand them to the peer in `ReceivedNpdu::data_attributes`, so a test can feed a router or network layer frames that carry attributes and check the ones it sends back (#1289).
+
 ### AnyTransport (enum dispatch)
 
 ```rust
@@ -1924,10 +1926,10 @@ whatever order the Devices were added in (#1204):
   notifications, the startup APDU capacity check, the APDU_Timeout an Audit Log
   sink uses on receipt, and the services the standalone PICS reports.
 - **Device-qualified references** go through `local_device().is_local`: Trend
-  Log polling, Event Enrollment references, Command action lists, the Schedule,
-  Staging and Averaging reference rewrites, and an Audit Log's forwarding
-  parent. A reference naming another Device in the same database still points
-  at another device.
+  Log polling, Event Enrollment references, Command action lists, the
+  Schedule, Channel, Staging and Averaging reference rewrites, and an Audit
+  Log's forwarding parent. A reference naming another Device in the same
+  database still points at another device.
 - **Audit and endpoint identity** need `local_device` to be a concrete built-in
   Device: target Audit Reporters, the endpoint's source Audit Reporter and
   endpoint Device writes. It names this device in audit records, owns the Audit
@@ -1941,7 +1943,7 @@ When the only Device has the wildcard instance there is a selected Device but
 no concrete identity, so Audit, endpoint Device writes, local command sources
 and Audit Log forwarding refuse to start or stay unconfigured.
 
-### Object Types (63)
+### Object Types (64)
 
 #### Core I/O (9)
 
@@ -2143,9 +2145,56 @@ transition can replace it.
 A Trend Log Multiple record is a `BACnetLogMultipleRecord`: a timestamp and a
 `LogData` holding one `LogValue` per Log_DeviceObjectProperty member, a log
 status, or a time change. `TrendLogMultipleObject::add_record` takes one and
-`records()` returns them; Log_Buffer serves each one framed as Clause 21's
-BACnetLogMultipleRecord (`bacnet_encoding::constructed::encode_log_multiple_record`
-and `decode_log_multiple_record`).
+`records()` returns them.
+
+An Event Log record is a `BACnetEventLogRecord`: a timestamp and an
+`EventLogDatum` holding a log status, a time change, or a notification as the
+encoded parameters of a ConfirmedEventNotification request
+(`bacnet_services::alarm_event::EventNotificationRequest::encode` writes them,
+`decode` reads them back). `EventLogObject::add_record` takes one. A Trend Log
+record stays a `BACnetLogRecord`; its optional `status_flags` is a
+`StatusFlags`.
+
+Every record kind, the Audit Log's included, carries a log status as the
+typed `bacnet_types::bitstring::LogStatus` flags (`LOG_DISABLED`,
+`BUFFER_PURGED`, `LOG_INTERRUPTED`). The codecs send bit 0 first, as for
+every BACnet bit string: log-disabled is `05 80`, buffer-purged `05 40`,
+log-interrupted `05 20`. `LogDatum` and `LogValue` keep INTEGER values as
+`i64` and ENUMERATED and Unsigned values as `u64`. Clause 21 lets a logging
+device hold these to 32 bits but doesn't require it, so a record read from a
+peer may carry wider values, and the decoders accept up to eight octets.
+
+`add_record` and the trend hooks refuse a record that would not encode (an
+any-value or notification whose tags don't balance, a bit string with
+impossible padding) with its encoding error, before anything changes. So
+`LogBufferRecords::encode_record` cannot fail, and one bad record can't break
+every ReadRange window over the log.
+
+Trend Log Multiple, Trend Log and Event Log objects list `Log_Buffer` in their
+Property_List, but ReadProperty and ReadPropertyMultiple answer it with
+`PROPERTY / READ_ACCESS_DENIED` (also inside RPM `ALL` and `REQUIRED`):
+Clauses 12.25.14, 12.27.13 and 12.30.19 make the buffer reachable only
+through ReadRange. ReadRange reads each object's records through
+`BACnetObject::log_buffer_internal`, a `LogBufferRecords` view, and returns
+each item as one record framed as its Clause 21 production:
+
+| Object | Record | Codec in `bacnet_encoding::constructed` |
+|--------|--------|------------------------------------------|
+| Trend Log | BACnetLogRecord | `encode_log_record` / `decode_log_record` |
+| Event Log | BACnetEventLogRecord | `encode_event_log_record` / `decode_event_log_record` |
+| Trend Log Multiple | BACnetLogMultipleRecord | `encode_log_multiple_record` / `decode_log_multiple_record` |
+
+Each decoder returns the offset after the record, so a client walks a
+ReadRange ACK's `item_data` record by record. The poller logs a value whose
+datatype has no alternative of its own (a CharacterString, Double, Date,
+ObjectIdentifier, whole array and so on) as `AnyValue` holding the value's
+own encoding, the bytes a ReadProperty of it carries; NULL is logged only
+for a NULL value. An any-value holds at most
+`bacnet_objects::log_buffer::ANY_VALUE_MAX_OCTETS` (256) octets of encoding.
+A longer value is logged as a `PROPERTY / VALUE_TOO_LONG` failure, so a Trend
+Log record stays small enough for a ReadRange page on a 480-octet APDU. A
+value no record could carry is logged as `SERVICES / OTHER`. Records an
+application adds itself are not capped.
 
 The pre-1.0 `BACnetObject` contract has two fallible trend hooks:
 `add_trend_record` for Trend Log records and `add_trend_multiple_record` for
@@ -2376,10 +2425,11 @@ when Present_Value moves by the writable `COV_Increment` (default 0), when
 Status_Flags changes (including a target-plan completion that changes
 Reliability), or when Present_Stage changes.
 
-#### Lighting & Color (4)
+#### Lighting & Color (5)
 
 | Type | Constructor |
 |------|-------------|
+| `ChannelObject` | `::new(instance, name, channel_number)` |
 | `LightingOutputObject` | `::new(instance, name)` |
 | `BinaryLightingOutputObject` | `::new(instance, name)` |
 | `ColorObject` | `::new(instance, name)` |
@@ -2392,6 +2442,57 @@ Lighting Output's `Default_Fade_Time`, `Default_Ramp_Rate` and
 A fade time outside 100 to 86,400,000 ms, or a rate or increment outside 0.1
 to 100.0, is refused with VALUE_OUT_OF_RANGE (Clauses 12.54.16 to 12.54.18).
 Both lighting objects serve `Current_Command_Priority`.
+
+A Channel passes each value written to its Present_Value on to its members
+(Clause 12.53, #1151). Give it the members with `ChannelObject::set_members`,
+each a `BACnetDeviceObjectPropertyReference` to an object in this device, then
+optionally one delay in milliseconds per member with `set_execution_delay`
+and the control groups with `set_control_groups`. All three are writable
+arrays on the network too. The member list and Execution_Delay always keep the
+same size: a write of index 0 to either resizes both, as does a whole write of
+the member list, while a whole write of Execution_Delay must give exactly one
+delay per member (VALUE_OUT_OF_RANGE otherwise). A member naming another
+Device is refused with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED; one naming the
+server's own Device is stored as the local reference it stands for.
+
+Present_Value takes any primitive value or a lighting command framed in
+context tag 0, at priority 1 to 16 (Last_Priority reads 16 when the write
+carried none). Write_Status then reads IN_PROGRESS, and any Present_Value
+write is OBJECT / BUSY until the members are done. A running server writes
+each member through the `write_local` path with the Channel as the initiating
+object, at the priority the write carried, once that member's delay has passed;
+every delay counts from the same start. The value is first converted to the
+datatype of the member property's current value by the Table 12-63 rules (a
+REAL 1.0 reaches a Binary Output as ACTIVE, a Multi-state Output as state 1).
+Readings of the rules: an Unsigned or ENUMERATED value above 2147483647
+fails for INTEGER, REAL and Double members. A REAL or Double going to an
+integer type keeps its integer part if it lies in 0 to 2147483000 (Unsigned,
+ENUMERATED) or -2147483000 to 2147483000 (INTEGER; the upper bound Rules 5
+and 6 print with a digit missing is read as 2147483000). A Double fits a REAL
+up to `f32::MAX`. NaN and the infinities fail every conversion that has a
+range, while rounding to a REAL's precision never fails.
+A value that can't be converted, or a member that refuses the write, makes
+Write_Status FAILED once every member has been tried; otherwise it reads
+SUCCESSFUL. A NULL a member refuses as the wrong datatype isn't a failure, so
+one Channel can relinquish commandable members alongside others. With no
+members Write_Status stays IDLE, empty references (instance 4194303) are
+skipped, and while Out_Of_Service is TRUE the value is kept but not passed on.
+Reliability and Allow_Group_Delay_Inhibit aren't served, and inbound WriteGroup,
+which addresses Channels by Channel_Number and Control_Groups, isn't executed
+yet.
+
+Channel runs are owned as Command runs are (#1178). Without a server,
+`tick_schedules` runs a distribution its Schedule writes start before it
+returns, delays included, and ends it FAILED if its future is dropped first.
+The bare `handle_write_property` and `handle_write_property_multiple` handlers
+end it at once as FAILED, without writing the members. The endpoint responder
+refuses a Channel's Present_Value write with WRITE_ACCESS_DENIED.
+
+A run that one Command's or Channel's write starts in another carries the
+objects above it. If it would start an object already in that chain, as two
+Channels naming each other would after their delays, or would have more than
+eight runs above it, it isn't started: it ends as failed at once and the write
+that started it fails with OBJECT / BUSY, so such a loop stops after one round.
 
 #### Life Safety (2)
 
@@ -3658,8 +3759,9 @@ both services. `RangeSpec::ByPosition::reference_index`,
 `ReadRangeAck::first_sequence_number` are `u64` for these logs (Clause 15.8).
 
 `AuditLogSnapshot::completed_receipts` is part of the public custom-persistence
-snapshot contract. `FileAuditLogPersistence` writes schema v2, reads schema v1
-as an empty receipt ledger, rejects unknown future versions, and retains the
+snapshot contract. `FileAuditLogPersistence` writes schema v3, reads schema v2
+and schema v1 (as an empty receipt ledger), rejects unknown future versions,
+and retains the
 existing two-slot generation/checksum recovery policy. When migrating a custom
 `AuditLogPersistence` implementation to 0.11.0, add `completed_receipts: Vec::new()`
 to newly constructed snapshots and when decoding an older format without
@@ -3667,10 +3769,18 @@ receipts. Thereafter, `commit` must durably store the supplied receipt ledger
 and records in the same atomic snapshot, and `load` must restore both. Dropping
 or separately committing the ledger loses confirmed-request duplicate
 protection after a reopen. The built-in file backend needs no separate v1
-conversion: it writes v2 on the next successful commit.
+conversion: it writes the current schema on the next successful commit.
 
-Back up both `.slot0` and `.slot1` files before the first v2 commit. A reader that
-supports only v1 cannot read v2 snapshots; rolling back to such an implementation
+Schema v1 and v2 files, which 0.11.0 and earlier wrote, store log-status
+records with their three bits reversed. The file backend restores each one
+when it loads such a file, so an old log-disabled record reads back as
+`LogStatus::LOG_DISABLED`, and the next commit saves the log as v3. A custom
+`AuditLogPersistence` that stored encoded records from those releases has to
+make the same correction: reverse the three bits of every log-status record
+it decodes.
+
+Back up both `.slot0` and `.slot1` files before the first commit under a newer schema. A reader that
+supports only an older schema cannot read newer snapshots; rolling back to such an implementation
 requires restoring a compatible backup and loses changes made after that backup.
 
 Unconfirmed receipt never emits a response and never writes the confirmed ledger.
@@ -3958,7 +4068,7 @@ The server automatically dispatches:
 **Unconfirmed:**
 - WhoIs / IAm
 - WhoHas / IHave
-- TimeSynchronization, UTCTimeSynchronization
+- TimeSynchronization, UTCTimeSynchronization (opt-in source, step and rate limits: [time synchronization policy](time-sync-policy.md))
 - UnconfirmedTextMessage
 - UnconfirmedEventNotification (offered to the Notification Forwarder objects)
 - UnconfirmedAuditNotification (explicit sink and distinct fail-closed authorizer; no response or duplicate tracking)

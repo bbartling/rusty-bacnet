@@ -27,14 +27,19 @@ use crate::value_types::{
 mod analog;
 
 /// Whether `property` reads the way its metadata row promises: with a value,
-/// or, for an Audit Log's Log_Buffer, with the PROPERTY / READ_ACCESS_DENIED
-/// that marks a present row only ReadRange and AuditLogQuery serve
-/// (Clause 12.64.10).
+/// or, for a log's Log_Buffer, with the PROPERTY / READ_ACCESS_DENIED that
+/// marks a present row only ReadRange (and AuditLogQuery) serve
+/// (Clauses 12.25.14, 12.27.13, 12.30.19 and 12.64.10).
 pub(crate) fn metadata_row_reads(object: &dyn BACnetObject, property: PropertyIdentifier) -> bool {
     use bacnet_types::enums::{ErrorClass, ErrorCode};
     let result = object.read_property(property, None);
-    if object.object_identifier().object_type() == ObjectType::AUDIT_LOG
-        && property == PropertyIdentifier::LOG_BUFFER
+    if matches!(
+        object.object_identifier().object_type(),
+        ObjectType::AUDIT_LOG
+            | ObjectType::EVENT_LOG
+            | ObjectType::TREND_LOG
+            | ObjectType::TREND_LOG_MULTIPLE
+    ) && property == PropertyIdentifier::LOG_BUFFER
     {
         return matches!(result, Err(Error::Protocol { class, code })
             if class == ErrorClass::PROPERTY.to_raw() as u32

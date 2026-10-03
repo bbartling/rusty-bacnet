@@ -88,8 +88,8 @@ const _: () = assert!(
 
 /// Handle a network-layer message.
 ///
-/// The caller ([`super::dispatch_network_message`]) has already applied the
-/// routing-first rule: only link-local messages (no DNET or global
+/// The caller ([`super::dispatch::dispatch_network_message`]) has already
+/// applied the routing-first rule: only link-local messages (no DNET or global
 /// broadcast), messages for our own ingress network, never-routed controls
 /// (What-Is / Network-Number-Is), and rejects reach this admission point.
 ///

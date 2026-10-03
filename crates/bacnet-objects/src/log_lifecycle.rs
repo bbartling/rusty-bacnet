@@ -2,9 +2,11 @@
 
 use std::sync::Arc;
 
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, Time};
+use bytes::BytesMut;
 
 use crate::clock::ClockReader;
 use crate::common::protocol_error;
@@ -23,9 +25,6 @@ pub(crate) const STOP_WHEN_FULL_METADATA: PropertyMetadata =
     PropertyMetadata::new(P::STOP_WHEN_FULL, RequiredRead, None, Always);
 pub(crate) const RECORD_COUNT_METADATA: PropertyMetadata =
     PropertyMetadata::new(P::RECORD_COUNT, RequiredWrite, None, Always);
-
-pub(crate) const LOG_DISABLED: u8 = 0b001;
-pub(crate) const BUFFER_PURGED: u8 = 0b010;
 
 pub(crate) struct LogLifecycle<'a, R: ResidentLogRecord> {
     buffer: &'a mut LogRecordBuffer<R>,
@@ -49,7 +48,11 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         }
     }
 
+    /// Admit an ordinary record. A record that would not encode is refused
+    /// with its encoding error before anything changes, so every resident
+    /// record can always be served.
     pub(crate) fn try_add_ordinary(&mut self, record: R) -> Result<OrdinaryAdmission, Error> {
+        record.encode(&mut BytesMut::new())?;
         let admission = self
             .buffer
             .admit_ordinary(record, *self.enabled, *self.stop_when_full);
@@ -59,7 +62,7 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
 
         let timestamp = valid_timestamp(self.clock)?;
         *self.enabled = false;
-        self.insert_status(timestamp, LOG_DISABLED);
+        self.insert_status(timestamp, LogStatus::LOG_DISABLED);
         Ok(admission)
     }
 
@@ -77,14 +80,19 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         let timestamp = valid_timestamp(self.clock)?;
         if !requested {
             *self.enabled = false;
-            self.insert_status(timestamp, LOG_DISABLED);
+            self.insert_status(timestamp, LogStatus::LOG_DISABLED);
             return Ok(());
         }
 
         let status_fills =
             *self.stop_when_full && self.buffer.next_record_would_fill_positive_capacity();
         *self.enabled = !status_fills;
-        self.insert_status(timestamp, u8::from(status_fills) * LOG_DISABLED);
+        let status = if status_fills {
+            LogStatus::LOG_DISABLED
+        } else {
+            LogStatus::empty()
+        };
+        self.insert_status(timestamp, status);
         Ok(())
     }
 
@@ -104,7 +112,7 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         let timestamp = valid_timestamp(self.clock)?;
         *self.stop_when_full = true;
         *self.enabled = false;
-        self.insert_status(timestamp, LOG_DISABLED);
+        self.insert_status(timestamp, LogStatus::LOG_DISABLED);
         Ok(())
     }
 
@@ -117,14 +125,15 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         if status_fills {
             *self.enabled = false;
         }
-        let bits = BUFFER_PURGED | (u8::from(disabled) * LOG_DISABLED);
-        self.insert_status(timestamp, bits);
+        let mut status = LogStatus::BUFFER_PURGED;
+        status.set(LogStatus::LOG_DISABLED, disabled);
+        self.insert_status(timestamp, status);
         Ok(())
     }
 
-    fn insert_status(&mut self, timestamp: (Date, Time), bits: u8) {
+    fn insert_status(&mut self, timestamp: (Date, Time), status: LogStatus) {
         self.buffer
-            .insert_forced(R::log_status(timestamp.0, timestamp.1, bits));
+            .insert_forced(R::log_status(timestamp.0, timestamp.1, status));
     }
 }
 

@@ -13,7 +13,9 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use crate::clock::ClockReader;
 use crate::common::{self, read_property_list_property};
-use crate::log_buffer::{LogRecordBuffer, LogRecordIdentity, LogRecordProfile};
+use crate::log_buffer::{
+    log_buffer_read_denied, LogBufferRecords, LogRecordBuffer, LogRecordIdentity,
+};
 use crate::log_lifecycle::LogLifecycle;
 use crate::traits::BACnetObject;
 
@@ -169,9 +171,8 @@ impl BACnetObject for TrendLogObject {
             p if p == PropertyIdentifier::RELIABILITY => {
                 Ok(PropertyValue::Enumerated(self.reliability.to_raw()))
             }
-            p if p == PropertyIdentifier::LOG_BUFFER => {
-                Ok(self.log_buffer.project(LogRecordProfile::Trend))
-            }
+            // ReadRange pages it through `log_buffer_internal`.
+            p if p == PropertyIdentifier::LOG_BUFFER => Err(log_buffer_read_denied()),
             p if p == PropertyIdentifier::LOGGING_TYPE => {
                 Ok(PropertyValue::Enumerated(self.logging_type))
             }
@@ -271,6 +272,10 @@ impl BACnetObject for TrendLogObject {
 
     fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
         Some(self.log_buffer.identities())
+    }
+
+    fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
+        Some(&self.log_buffer)
     }
 
     fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {

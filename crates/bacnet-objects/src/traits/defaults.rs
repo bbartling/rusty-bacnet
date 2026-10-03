@@ -53,9 +53,10 @@ pub(super) fn cov_reported_properties_default(
 ///   (Table 12-80), MONITORED_OBJECTS (Table 12-82), PORT_FILTER
 ///   (Table 12-58), AUTHENTICATION_FACTORS / ASSIGNED_ACCESS_RIGHTS
 ///   (Table 12-40, the only table carrying either), DOOR_MEMBERS
-///   (Table 12-30), ACCESS_DOORS (Table 12-36), and SUPPORTED_FORMATS /
-///   SUPPORTED_FORMAT_CLASSES (Table 12-43); each of those four appears in
-///   that one table only.
+///   (Table 12-30), ACCESS_DOORS (Table 12-36), SUPPORTED_FORMATS /
+///   SUPPORTED_FORMAT_CLASSES (Table 12-43), and EXECUTION_DELAY /
+///   CONTROL_GROUPS (Table 12-62); each of those six appears in that one
+///   table only.
 /// - **Type-dependent** identifiers classify by `object_type`: ACTION is
 ///   BACnetARRAY\[N\] on Command (Table 12-12) but a single BACnetAction on Loop
 ///   (Table 12-20), and ACTION_TEXT, its parallel array of descriptions, is
@@ -112,7 +113,9 @@ pub(super) fn array_property_default(
         | PropertyIdentifier::DOOR_MEMBERS
         | PropertyIdentifier::ACCESS_DOORS
         | PropertyIdentifier::SUPPORTED_FORMATS
-        | PropertyIdentifier::SUPPORTED_FORMAT_CLASSES => true,
+        | PropertyIdentifier::SUPPORTED_FORMAT_CLASSES
+        | PropertyIdentifier::EXECUTION_DELAY
+        | PropertyIdentifier::CONTROL_GROUPS => true,
         PropertyIdentifier::ACTION | PropertyIdentifier::ACTION_TEXT => {
             object_type == ObjectType::COMMAND
         }

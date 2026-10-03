@@ -31,7 +31,7 @@
 use bacnet_encoding::constructed::{
     decode_daily_schedule, decode_date_range, decode_special_event,
 };
-use bacnet_encoding::tags::{self, app_tag, Tag, TagClass};
+use bacnet_encoding::tags::{self, app_tag, TagClass};
 use bacnet_types::constructed::{
     BACnetCalendarEntry, BACnetSpecialEvent, BACnetTimeValue, SpecialEventPeriod,
 };
@@ -51,9 +51,6 @@ pub(super) fn no_space_error() -> Error {
     common::protocol_error(ErrorClass::RESOURCES, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY)
 }
 
-/// A shared codec for one array element: the element and the offset past it.
-type ElementDecoder<T> = fn(&[u8], usize) -> Result<(T, usize), Error>;
-
 /// The element appended when a write to index 0 lengthens Exception_Schedule.
 fn empty_special_event() -> BACnetSpecialEvent {
     BACnetSpecialEvent {
@@ -63,71 +60,16 @@ fn empty_special_event() -> BACnetSpecialEvent {
     }
 }
 
-/// The byte chunks of a written value: the raw payload, or the elements of a
-/// value as a read returns it.
-pub(super) fn chunks(value: PropertyValue) -> Result<Vec<Vec<u8>>, Error> {
-    match value {
-        PropertyValue::ApplicationData(bytes) => Ok(vec![bytes]),
-        PropertyValue::List(elements) => elements
-            .into_iter()
-            .map(|element| match element {
-                PropertyValue::ApplicationData(bytes) => Ok(bytes),
-                _ => Err(common::invalid_data_type_error()),
-            })
-            .collect(),
-        _ => Err(common::invalid_data_type_error()),
-    }
-}
-
-/// Decode every element in `value`, back to back within each chunk.
-///
-/// `starts` says whether a tag can begin an element of the property's
-/// datatype; `decode` is the shared codec for one element. An element that
-/// starts with any other tag is INVALID_DATA_TYPE, one that doesn't decode
-/// INVALID_DATA_ENCODING.
-pub(super) fn decode_elements<T>(
-    value: PropertyValue,
-    starts: fn(&Tag) -> bool,
-    decode: ElementDecoder<T>,
-) -> Result<Vec<T>, Error> {
-    let mut elements = Vec::new();
-    for bytes in chunks(value)? {
-        let mut offset = 0;
-        while offset < bytes.len() {
-            let (element, end) = decode_element(&bytes, offset, starts, decode)?;
-            elements.push(element);
-            offset = end;
-        }
-    }
-    Ok(elements)
-}
-
-/// Decode the element at `offset`, with the errors [`decode_elements`]
-/// describes, returning it and the offset past it.
-pub(super) fn decode_element<T>(
-    bytes: &[u8],
-    offset: usize,
-    starts: fn(&Tag) -> bool,
-    decode: ElementDecoder<T>,
-) -> Result<(T, usize), Error> {
-    match tags::decode_tag(bytes, offset) {
-        Ok((tag, _)) if starts(&tag) => {}
-        Ok(_) => return Err(common::invalid_data_type_error()),
-        Err(_) => return Err(common::invalid_data_encoding_error()),
-    }
-    decode(bytes, offset).map_err(|_| common::invalid_data_encoding_error())
-}
-
 /// The daily schedules in a written Weekly_Schedule value: each opens with
 /// context tag `[0]`.
 fn decode_days(value: PropertyValue) -> Result<Vec<Vec<BACnetTimeValue>>, Error> {
-    decode_elements(value, |tag| tag.is_opening_tag(0), decode_daily_schedule)
+    common::decode_elements(value, |tag| tag.is_opening_tag(0), decode_daily_schedule)
 }
 
 /// The special events in a written Exception_Schedule value: each opens with
 /// its period, a calendar entry under `[0]` or a Calendar reference `[1]`.
 fn decode_events(value: PropertyValue) -> Result<Vec<BACnetSpecialEvent>, Error> {
-    decode_elements(
+    common::decode_elements(
         value,
         |tag| tag.is_opening_tag(0) || tag.is_context(1),
         decode_special_event,

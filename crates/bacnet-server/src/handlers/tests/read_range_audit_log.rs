@@ -11,6 +11,7 @@ use bacnet_objects::audit::{AuditLogObject, AuditLogPersistence, AuditLogSnapsho
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_services::audit::{AuditLogQueryRequest, BACnetAuditLogQueryParameters};
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
     BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetAuditNotification,
     BACnetRecipient,
@@ -80,7 +81,7 @@ fn notification(operation: AuditOperation) -> BACnetAuditNotification {
 /// buffer lists every datum kind, not only notifications.
 fn record(hour: u8) -> BACnetAuditLogRecord {
     let datum = match hour {
-        3 => BACnetAuditLogDatum::LogStatus(0b001),
+        3 => BACnetAuditLogDatum::LogStatus(LogStatus::LOG_DISABLED),
         5 => BACnetAuditLogDatum::TimeChange(1.5),
         _ => BACnetAuditLogDatum::AuditNotification(notification(AuditOperation::WRITE)),
     };
@@ -361,7 +362,7 @@ fn audit_log_buffer_shows_records_appended_after_a_read_and_matches_audit_log_qu
         },
         BACnetAuditLogRecord {
             timestamp: (DATE, time(7)),
-            datum: BACnetAuditLogDatum::LogStatus(0b001),
+            datum: BACnetAuditLogDatum::LogStatus(LogStatus::LOG_DISABLED),
         },
     ];
     let next = read(&db, sequence(3, 5));

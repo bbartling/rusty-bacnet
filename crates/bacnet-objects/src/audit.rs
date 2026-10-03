@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
+use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, LogStatus};
 use bacnet_types::constructed::{
     BACnetAuditLogDatum, BACnetAuditLogQueryParameters, BACnetAuditLogRecord,
     BACnetAuditLogRecordResult, BACnetAuditNotification, BACnetObjectSelector, BACnetRecipient,
@@ -112,10 +112,6 @@ pub struct AuditLogObject {
     clock: Option<Arc<dyn ClockReader>>,
 }
 
-const LOG_DISABLED_STATUS: u8 = 0b001;
-#[cfg(test)]
-const BUFFER_PURGED_STATUS: u8 = 0b010;
-
 impl AuditLogObject {
     /// Open or initialize one AuditLog using the explicitly supplied storage.
     pub fn new(
@@ -220,7 +216,7 @@ impl AuditLogObject {
             &mut prospective,
             BACnetAuditLogRecord {
                 timestamp,
-                datum: BACnetAuditLogDatum::LogStatus(BUFFER_PURGED_STATUS),
+                datum: BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED),
             },
         );
         self.commit_and_apply(prospective)?;
@@ -522,14 +518,11 @@ impl BACnetObject for AuditLogObject {
             p if p == PropertyIdentifier::PROPERTY_LIST => {
                 read_property_list_property(&self.property_list(), array_index)
             }
-            // Clause 12.64.10 opens the log buffer to ReadRange and
-            // AuditLogQuery only, so a property read names the property as
-            // present but not readable this way (Clause 15.5.1.3.1). ReadRange
-            // pages the ring through `AuditLogStorage::retained_records`.
-            p if p == PropertyIdentifier::LOG_BUFFER => Err(Error::Protocol {
-                class: ErrorClass::PROPERTY.to_raw() as u32,
-                code: ErrorCode::READ_ACCESS_DENIED.to_raw() as u32,
-            }),
+            // ReadRange pages the ring through
+            // `AuditLogStorage::retained_records`.
+            p if p == PropertyIdentifier::LOG_BUFFER => {
+                Err(crate::log_buffer::log_buffer_read_denied())
+            }
             _ => Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,
                 code: ErrorCode::UNKNOWN_PROPERTY.to_raw() as u32,
@@ -557,9 +550,9 @@ impl BACnetObject for AuditLogObject {
                     BACnetAuditLogRecord {
                         timestamp,
                         datum: BACnetAuditLogDatum::LogStatus(if v {
-                            0
+                            LogStatus::empty()
                         } else {
-                            LOG_DISABLED_STATUS
+                            LogStatus::LOG_DISABLED
                         }),
                     },
                 );
@@ -742,6 +735,10 @@ mod receipt_tests;
 #[cfg(test)]
 #[path = "audit/persistence_receipt_tests.rs"]
 mod persistence_receipt_tests;
+
+#[cfg(test)]
+#[path = "audit/persistence_schema_tests.rs"]
+mod persistence_schema_tests;
 
 #[path = "audit/reporter_configuration.rs"]
 mod reporter_configuration;

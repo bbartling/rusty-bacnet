@@ -1,8 +1,8 @@
-//! Reject addressing and relay at the send-queue level (#1158), where the
-//! data attributes each reject carries are visible as well as its port and
-//! link MAC, and the rejects that stop at the router's own network-control
-//! consumer (#1175). The loopback tests in `crate::reject_route_tests` cover
-//! the same paths on the wire, port and destination MAC included (#1243).
+//! Reject addressing and relay at the send-queue level (#1158), and the
+//! rejects that stop at the router's own network-control consumer (#1175).
+//! The loopback tests in `crate::reject_route_tests` cover the same paths on
+//! the wire, port, destination MAC (#1243) and data attributes (#1289)
+//! included.
 
 use std::sync::Arc;
 
@@ -52,37 +52,6 @@ fn reject_for(origin: Option<&NpduAddress>) -> [Vec<SendRequest>; 2] {
     };
     send_reject(&refused, 5000, RejectMessageReason::NOT_DIRECTLY_CONNECTED);
     [0, 1].map(|port| std::iter::from_fn(|| rxs[port].try_recv().ok()).collect())
-}
-
-/// The one unicast in `sent`, which must carry the ingress attributes.
-fn only_unicast(mut sent: Vec<SendRequest>) -> (Vec<u8>, MacAddr) {
-    assert_eq!(sent.len(), 1, "exactly one reject");
-    let (npdu, mac, data_attributes) = unicast(sent.pop().unwrap());
-    assert_eq!(data_attributes, attributes());
-    (npdu, mac)
-}
-
-#[test]
-fn send_reject_addresses_the_originator_or_the_local_sender() {
-    let origin = address(4000, &[0x50, 0x51]);
-    let cases: [(Option<&NpduAddress>, &[u8]); 2] = [
-        // A relayed NPDU: DNET 4000, DLEN 2, DADR 50 51, hop count 255.
-        (
-            Some(&origin),
-            &[
-                0x01, 0xA0, 0x0F, 0xA0, 0x02, 0x50, 0x51, 0xFF, 0x03, 0x01, 0x13, 0x88,
-            ],
-        ),
-        // A local sender: no addressing at all.
-        (None, &[0x01, 0x80, 0x03, 0x01, 0x13, 0x88]),
-    ];
-    for (origin, expected) in cases {
-        let [arrival, other] = reject_for(origin);
-        let (npdu, mac) = only_unicast(arrival);
-        assert_eq!(npdu, expected, "{origin:?}");
-        assert_eq!(mac.as_slice(), SENDER, "goes to the link sender");
-        assert!(other.is_empty(), "{origin:?}");
-    }
 }
 
 #[test]

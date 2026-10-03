@@ -38,7 +38,9 @@ pub mod assigned_landing_calls;
 mod audit_notification;
 mod audit_record;
 pub mod calendar;
+mod channel_value;
 pub mod cov_subscription;
+mod event_log_record;
 pub mod event_notification_subscription;
 pub mod event_parameter;
 pub mod fault_parameter;
@@ -46,7 +48,9 @@ mod floor_pairs;
 pub mod landing_call_status;
 pub mod landing_door_status;
 pub mod lift_car_call_list;
+mod log_fields;
 mod log_multiple_record;
+mod log_record;
 mod members;
 pub mod object_property_reference;
 pub mod port_permission;
@@ -77,10 +81,12 @@ pub use calendar::{
     decode_calendar_entry, decode_calendar_entry_list, decode_date_range, encode_calendar_entry,
     encode_calendar_entry_list, encode_date_range,
 };
+pub use channel_value::{channel_value_end, is_lighting_command_channel_value};
 pub use cov_subscription::{
     decode_cov_multiple_subscription, decode_cov_subscription, encode_cov_multiple_subscription,
     encode_cov_multiple_subscription_list, encode_cov_subscription, encode_cov_subscription_list,
 };
+pub use event_log_record::{decode_event_log_record, encode_event_log_record};
 pub use event_notification_subscription::{
     decode_event_notification_subscription, encode_event_notification_subscription,
     encode_event_notification_subscription_list,
@@ -94,6 +100,7 @@ pub use landing_call_status::{
 pub use landing_door_status::{decode_landing_door_status, encode_landing_door_status};
 pub use lift_car_call_list::{decode_lift_car_call_list, encode_lift_car_call_list};
 pub use log_multiple_record::{decode_log_multiple_record, encode_log_multiple_record};
+pub use log_record::{decode_log_record, encode_log_record};
 pub use object_property_reference::{
     decode_object_property_reference, decode_setpoint_reference, encode_object_property_reference,
     encode_setpoint_reference,
