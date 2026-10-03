@@ -2138,6 +2138,14 @@ the one put aside, and the return to service serves them again, dropping the
 simulation. A simulated Door_Alarm_State sends the COV report as a real change
 does. The pulse relock runs on its timer whatever the simulated values say.
 
+A door's Secured_Status isn't stored: each read works it out from what the
+door serves (Clause 12.26.14). It reads SECURED while the door is commanded
+LOCK, isn't IN_ALARM, and its Door_Status and Lock_Status show it shut and
+locked (or UNUSED). Any other input makes it UNSECURED, so an UNLOCK or a pulse
+reads UNSECURED until it ends. A Door_Status or Lock_Status of UNKNOWN or a
+fault makes it UNKNOWN, unless another input has already made it UNSECURED.
+Simulated values count the same as the device's.
+
 #### Transportation (3)
 
 | Type | Constructor |
