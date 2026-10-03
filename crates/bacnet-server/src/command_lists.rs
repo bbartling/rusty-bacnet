@@ -17,8 +17,13 @@
 //!   task to wait out a delay in, so they end the run at once as unsuccessful
 //!   ([`end_unmade`]).
 //!
+//! A server that stops ends what is left once its own work has stopped: runs
+//! let go of while the database was busy, then any run nothing owns
+//! ([`end_unowned`], #1252).
+//!
 //! [`execute`] is the sequence every runner shares. A Command's commands go
-//! in list order, each through the owner's write path, each outcome recorded
+//! in list order, each through the owner's write path (a command naming
+//! another device through [`RunHost::write_remote`]), each outcome recorded
 //! under a generation check, the post delay after each attempt, a stop at a
 //! failure that quits, then the end of the run. A Channel's members go in
 //! delay order through the same write path. A run a write starts is admitted
@@ -30,11 +35,14 @@ use std::time::Duration;
 
 use bacnet_objects::command::{CommandRun, RunPlan};
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetActionCommand;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::RwLock;
-use tracing::debug;
+use tracing::{debug, warn};
+
+use crate::server::RemoteWriteError;
 
 mod chain;
 mod channel;
@@ -57,6 +65,15 @@ pub(crate) trait RunHost: Sync {
         run: &CommandRun,
         command: &BACnetActionCommand,
     ) -> impl Future<Output = Result<(), Error>> + Send;
+
+    /// Make one write in `device`, another device, as a confirmed
+    /// WriteProperty carrying `command`'s value. No database guard is held
+    /// while it is outstanding.
+    fn write_remote(
+        &self,
+        device: ObjectIdentifier,
+        command: &BACnetActionCommand,
+    ) -> impl Future<Output = Result<(), RemoteWriteError>> + Send;
 
     /// The object's run state changed under `db`, the guard that changed it.
     fn committed(
@@ -86,7 +103,8 @@ pub(crate) struct Unfinished {
 }
 
 impl Unfinished {
-    fn start(run: &CommandRun) -> Self {
+    /// `run` before any of its writes is made.
+    pub(crate) fn start(run: &CommandRun) -> Self {
         Self {
             source: run.source,
             generation: run.generation,
@@ -104,22 +122,119 @@ impl Unfinished {
         self.source
     }
 
+    /// Whether this is `source`'s run of `generation`.
+    pub(crate) fn is(&self, source: ObjectIdentifier, generation: u64) -> bool {
+        self.source == source && self.generation == generation
+    }
+
     /// End the run where it stood, as successful only if every write was
     /// made and succeeded. A Command's commands never made read unsuccessful
     /// and In_Process returns to FALSE; a Channel's Write_Status becomes
     /// SUCCESSFUL or FAILED. Nothing changes once the object has moved on to
-    /// another generation.
-    pub(crate) fn end(self, db: &mut ObjectDatabase) {
-        if let Some(object) = db.get_mut(&self.source) {
+    /// another generation. Returns whether the run ended here.
+    pub(crate) fn end(self, db: &mut ObjectDatabase) -> bool {
+        db.get_mut(&self.source).is_some_and(|object| {
             for index in self.next..self.len {
                 object.record_command_write_internal(self.generation, index, false);
             }
             object.complete_command_run_internal(
                 self.generation,
                 self.all_succeeded && self.next >= self.len,
-            );
+            )
+        })
+    }
+}
+
+/// End `left` once the database is free, for a run let go of where nothing
+/// else will end it.
+pub(crate) fn end_when_free(db: &Arc<RwLock<ObjectDatabase>>, left: Unfinished) {
+    when_free(db, move |db| {
+        left.end(db);
+    });
+}
+
+/// End `stranded`, runs let go of while the database was busy, where each
+/// stood, then every run nothing owns ([`end_ownerless`]), for a server whose
+/// own work has stopped. Whoever holds the database isn't waited for: the
+/// runs then end as soon as it lets go.
+pub(crate) fn end_unowned(db: &Arc<RwLock<ObjectDatabase>>, stranded: Vec<Unfinished>) {
+    when_free(db, move |db| {
+        for left in stranded {
+            left.end(db);
+        }
+        end_ownerless(db);
+    });
+}
+
+/// Run `end` under the database's write guard: at once if no guard is held,
+/// otherwise from a task once the database is free.
+///
+/// The task is detached on purpose: its caller is a `Drop` or a `stop()` that
+/// mustn't wait on a database an application holds, and nothing else would
+/// end these runs. A runtime that shuts down before the task runs drops it;
+/// that is logged, and the objects stay busy.
+fn when_free(
+    db: &Arc<RwLock<ObjectDatabase>>,
+    end: impl FnOnce(&mut ObjectDatabase) + Send + 'static,
+) {
+    if let Ok(mut db) = db.try_write() {
+        end(&mut db);
+        return;
+    }
+    match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => {
+            let db = Arc::clone(db);
+            runtime.spawn(async move {
+                let mut waiting = Waiting(true);
+                end(&mut *db.write().await);
+                waiting.0 = false;
+            });
+        }
+        Err(_) => warn!("runs let go of outside a runtime; their objects stay busy"),
+    }
+}
+
+/// Logs a [`when_free`] task dropped before it could end its runs.
+struct Waiting(bool);
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        if self.0 {
+            warn!("runtime dropped the task ending runs let go of; their objects stay busy");
         }
     }
+}
+
+/// End every run on `db` that nothing owns any more, once nothing can own
+/// one (#1252). A run in progress, or one queued on its object and never
+/// taken, ends unsuccessful: a Command with each command marked
+/// unsuccessful, a Channel with Write_Status FAILED. Runs whose progress is
+/// known are ended first through [`Unfinished::end`], so this only meets
+/// runs that made no write.
+///
+/// The sweep can't tell a server's runs from others on the same database: a
+/// run an application's own `tick_schedules` is driving ends here too, and
+/// that run then finds its generation stale and stops.
+fn end_ownerless(db: &mut ObjectDatabase) {
+    db.for_each_object_mut(|oid, object| {
+        if end_ownerless_object(object) {
+            debug!(source = %oid, "Ending a run nothing owns any more");
+        }
+    });
+}
+
+fn end_ownerless_object(object: &mut dyn BACnetObject) -> bool {
+    // A run still queued on the object belongs to the generation in progress,
+    // so ending that generation covers it.
+    drop(object.take_command_run_internal());
+    let Some(generation) = object.command_generation_internal() else {
+        return false;
+    };
+    let mut index = 0;
+    while object.record_command_write_internal(generation, index, false) {
+        index += 1;
+    }
+    object.complete_command_run_internal(generation, false)
 }
 
 /// Take the runs that Present_Value writes queued on Command and Channel
@@ -239,7 +354,7 @@ async fn make<H: RunHost>(
     index: usize,
     command: &BACnetActionCommand,
 ) -> Option<bool> {
-    let local = {
+    let remote = {
         let db = host.database().read().await;
         if db
             .get(&run.source)
@@ -248,14 +363,17 @@ async fn make<H: RunHost>(
         {
             return None;
         }
-        // Clause 12.10.8 leaves writes to other devices optional. These
-        // runners make local ones only, so a command naming another Device
-        // fails like any refused write. Naming this Device is the same as
-        // naming none.
-        db.local_device().is_local(command.device_identifier)
+        // Naming this Device is the same as naming none. Clause 12.10.8
+        // leaves writes to other devices optional; the server makes them over
+        // the network, a runner without one fails them.
+        if db.local_device().is_local(command.device_identifier) {
+            None
+        } else {
+            command.device_identifier
+        }
     };
-    let success = if local {
-        match host.write(run, command).await {
+    let success = match remote {
+        None => match host.write(run, command).await {
             Ok(()) => true,
             Err(error) => {
                 debug!(
@@ -267,14 +385,21 @@ async fn make<H: RunHost>(
                 );
                 false
             }
-        }
-    } else {
-        debug!(
-            command = %run.source,
-            device = ?command.device_identifier,
-            "Command list names another device; only local writes are made"
-        );
-        false
+        },
+        Some(device) => match host.write_remote(device, command).await {
+            Ok(()) => true,
+            Err(error) => {
+                debug!(
+                    command = %run.source,
+                    %device,
+                    target = %command.object_identifier,
+                    property = ?command.property_identifier,
+                    %error,
+                    "Command write to another device failed"
+                );
+                false
+            }
+        },
     };
     let recorded = {
         let mut db = host.database().write().await;
@@ -294,13 +419,14 @@ async fn make<H: RunHost>(
 }
 
 /// End a run: a Command's In_Process back to FALSE and All_Writes_Successful
-/// set, or a Channel's Write_Status set, reported through the host.
+/// set, or a Channel's Write_Status set, reported through the host. Returns
+/// whether the run ended here, rather than having ended or gone stale before.
 pub(crate) async fn complete<H: RunHost>(
     host: &H,
     source: ObjectIdentifier,
     generation: u64,
     all_succeeded: bool,
-) {
+) -> bool {
     let completed = {
         let mut db = host.database().write().await;
         let completed = db
@@ -314,4 +440,5 @@ pub(crate) async fn complete<H: RunHost>(
     if completed {
         host.report(source).await;
     }
+    completed
 }

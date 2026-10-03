@@ -2410,6 +2410,9 @@
     "crates/bacnet-endpoint/src/source_reporter.rs",
     "crates/bacnet-server/src/command_lists.rs",
     "crates/bacnet-server/src/command_lists/unattached.rs",
+    "crates/bacnet-server/src/server/remote_writes.rs",
+    "crates/bacnet-server/src/server/request_tasks.rs",
+    "crates/bacnet-server/src/server/shutdown.rs",
     "crates/bacnet-server/src/schedule.rs",
     "crates/bacnet-server/src/handlers/write_property.rs",
     "crates/rusty-bacnet/src/types/action_list.rs",
@@ -2426,7 +2429,9 @@
     "crates/bacnet-server/src/handlers/tests/command_present_value_writes.rs::{bare_write_property_ends_a_command_run_it_cannot_make,bare_write_property_multiple_ends_the_runs_its_committed_prefix_started}",
     "crates/rusty-bacnet/src/types/action_list_tests.rs::action_command_mappings_fill_every_field_and_default_the_optional_ones",
     "crates/rusty-bacnet/src/server/server_methods/registration_tests.rs::command_builder_applies_action_then_action_text_through_the_object_setters",
-    "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_present_value_write_runs_the_configured_list"
+    "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_present_value_write_runs_the_configured_list",
+    "crates/bacnet-server/src/server/command_remote_write_tests.rs::{command_writes_another_device_and_its_ack_marks_the_command_successful,command_write_through_a_routed_binding_completes_on_the_routed_ack}",
+    "crates/bacnet-integration-tests/tests/server/command_remote.rs::command_writes_a_target_in_another_device_over_bip"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/command_action_wire_tests.rs::{command_quit_on_failure_stops_the_list_and_action_reads_back_the_flags,command_present_value_above_the_action_size_is_value_out_of_range,command_naming_another_device_fails_and_naming_this_device_is_local,command_writing_its_own_present_value_is_refused_busy}",
@@ -2438,7 +2443,10 @@
     "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_invalid_actions_are_refused_and_add_nothing",
     "crates/bacnet-server/src/server/run_cycle_tests.rs::run_cycle_two_commands_naming_each_other_stop",
     "crates/bacnet-objects/src/command/tests.rs::command_replacement_never_shares_a_run_generation",
-    "crates/bacnet-server/src/command_lists/unattached_tests.rs::refused_command_run_marks_every_command_unsuccessful"
+    "crates/bacnet-server/src/command_lists/unattached_tests.rs::refused_command_run_marks_every_command_unsuccessful",
+    "crates/bacnet-server/src/server/command_remote_write_tests.rs::{command_write_another_device_refuses_busy_fails_at_once_and_quits,command_write_another_device_never_answers_is_retried_then_fails,command_write_another_device_fails_unsent_while_dcc_restricts_initiation,command_write_another_device_ends_at_the_first_retry_dcc_blocks,stop_during_an_outstanding_remote_write_ends_the_run_and_frees_its_invoke_id}",
+    "crates/bacnet-server/src/server/command_run_stop_tests.rs::{stop_during_a_post_delay_ends_the_run_with_what_it_made,stop_while_the_database_is_busy_ends_the_run_where_it_stood,run_no_task_starts_ends_at_once_as_unsuccessful,stop_during_a_channel_member_delay_ends_the_distribution_failed,stop_while_the_database_is_busy_ends_a_channel_distribution_failed,channel_run_no_task_starts_ends_at_once_failed,stop_ends_a_run_nothing_took,run_whose_write_panics_ends_with_its_unmade_commands_unsuccessful,stop_during_the_last_post_delay_ends_the_run_successful,run_whose_write_panics_while_the_database_is_busy_ends_where_it_stood}",
+    "crates/bacnet-server/src/server/remote_write_answer_tests.rs::{remote_write_ignores_answers_from_another_peer_or_for_another_service,remote_write_reject_or_abort_ends_it_at_once_without_retries,remote_write_blocked_by_dcc_at_a_retry_ends_there_as_disabled}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2446,7 +2454,9 @@
     "docs/rust-api.md#building-control-7 Command object",
     "CHANGELOG.md Unreleased Fixed entry for #1178 (Command runs outside the bundled server), from changelog.d/1178-command-runs-outside-server.md",
     "CHANGELOG.md Unreleased Added entry for #1179 (Python Command action lists), from changelog.d/1179-python-command-actions.md",
-    "docs/python-api.md#building-control Python add_command action and action_text"
+    "docs/python-api.md#building-control Python add_command action and action_text",
+    "CHANGELOG.md Unreleased Added entry for #1180 (Command actions in other devices), from changelog.d/1180-command-remote-writes.md",
+    "CHANGELOG.md Unreleased Fixed entry for #1252 (stop ends Command runs), from changelog.d/1252-stop-ends-command-runs.md"
    ],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1150, found in #1135). Breaking pre-1.0 wire change: Present_Value used to store any Unsigned and run nothing. Clause 12.10 and Table 12-12 were read as page images.",
@@ -2454,15 +2464,24 @@
     "Each command goes through the write_local path (LocalWriter) with the Command as the initiating object: priority, command-source tracking, audit, COV and the post-write event pass apply, and the value passes through the WriteProperty value decoding first.",
     "Every report back is guarded by a per-object generation, so a Command replaced or deleted mid-run stops the run without completing it. No database guard is held across a write's notifications or a post delay; lock order stays database, then COV table.",
     "Runs start from WriteProperty, WritePropertyMultiple, write_local, a Schedule tick or a written Schedule's own pass (background commits collect queued runs), and from a run's write to another Command.",
-    "Local policies: a command naming another Device fails like a refused write (Clause 12.10.8 makes remote writes optional), and one naming this Device is local; a post delay follows every attempt, a quitting failure included, before the run ends; failed writes leave Reliability alone (Clause 12.10.13); Command opts into SubscribeCOVProperty under Table 13-1a (SubscribeCOV stays refused, no Table 13-1 row), and the server fans COV out for the Command at the start, after each command and at the end; Action_Text is absent until CommandObject::set_action_text supplies one text per list, read-only on the network, and set_action resizes it (empty texts added, trailing texts dropped) and abandons a run in progress.",
-    "Not covered: writes to other devices; network writes of Action or Action_Text; resuming a run that stop() cut short (In_Process stays TRUE on the stopped server); intrinsic reporting on Command.",
+    "Local policies: a command naming this Device is local; a post delay follows every attempt, a quitting failure included, before the run ends; failed writes leave Reliability alone (Clause 12.10.13); Command opts into SubscribeCOVProperty under Table 13-1a (SubscribeCOV stays refused, no Table 13-1 row), and the server fans COV out for the Command at the start, after each command and at the end; Action_Text is absent until CommandObject::set_action_text supplies one text per list, read-only on the network, and set_action resizes it (empty texts added, trailing texts dropped) and abandons a run in progress.",
+    "Not covered: network writes of Action or Action_Text; resuming a run that stop() cut short; intrinsic reporting on Command.",
     "Run ownership (#1178): whatever commits a Present_Value write takes the run under that guard and finishes it, so no path leaves a Command in process.",
     "tick_schedules without a server runs the lists its writes start before it returns, post delays included: each command goes through the bare WriteProperty handler path with the Command as initiator, and a list that writes another Command starts that one beside it. Dropping the future ends each unfinished run as unsuccessful, with its unmade commands FALSE.",
     "The synchronous handle_write_property and handle_write_property_multiple make no writes for a Command: the run ends at once with In_Process FALSE, All_Writes_Successful FALSE and every Write_Successful FALSE. A second Present_Value write in the same WritePropertyMultiple still finds the Command busy.",
     "The endpoint responder refuses a Command Present_Value write with WRITE_ACCESS_DENIED (it writes only the Device's Description and Audit recipient), so it never starts a run.",
     "Python (#1179): BACnetServer.add_command takes keyword-only action (lists of ActionCommand mappings) and action_text. The binding checks shapes and Python types (TypeError, ValueError); CommandObject::set_action and set_action_text refuse a priority outside 1 to 16, an unencodable value or a text count mismatch (VALUE_OUT_OF_RANGE). Write_Successful starts FALSE.",
     "A run started by another run's write carries the chain of objects above it; one that would start its own Command again, or with more than eight runs above it, ends as failed and that write fails with OBJECT / BUSY (#1151), so two Commands writing each other between post delays stop after one round.",
-    "Run generations come from one process-wide counter (#1151), so a run left over from a replaced Command can't act on its replacement."
+    "Run generations come from one process-wide counter (#1151), so a run left over from a replaced Command can't act on its replacement.",
+    "A command naming another Device goes out as a confirmed WriteProperty, addressed from the device bindings only (a configured DeviceBinding or an I-Am under ten minutes old). No Who-Is is sent; an unbound device fails unsent.",
+    "Remote write bounds: each attempt waits cov_retry_timeout_ms, silence earns up to three retries under one invoke ID, and an Error (BUSY included), Reject or Abort is final. Nothing is sent while DCC restricts initiation, a retry included.",
+    "A remote write leases its invoke ID from the pool confirmed notifications use, and the lease names the peer and WriteProperty. No database guard is held while it is outstanding. tick_schedules, which has no network, fails remote commands.",
+    "stop() ends a cancelled run where it stood: In_Process FALSE, unmade commands FALSE, All_Writes_Successful TRUE only if every write was made and succeeded. Runs let go of while the database was busy, then ownerless ones, end once it is free.",
+    "A run whose write panics ends the same way, its unmade commands FALSE, and its property subscribers hear of the end."
+   ],
+   "gaps": [
+    "#1322: a remote target with no fresh binding fails unsent; no targeted Who-Is is sent on a binding-cache miss",
+    "#1324: runs a cancelled write_local took but never started stay in progress until stop()"
    ]
   },
   {
@@ -3608,7 +3627,8 @@
     "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_refuses_a_channel_present_value_write_and_starts_no_distribution",
     "crates/bacnet-server/src/command_lists/unattached_tests.rs::refused_run_dropped_while_waiting_for_the_database_still_ends",
     "crates/bacnet-server/src/schedule_channel_tests.rs::tick_schedules_dropped_with_a_run_queued_but_not_started_ends_it",
-    "crates/bacnet-objects/src/channel/coercion_tests.rs::nan_and_infinities_fail_every_conversion_with_a_range"
+    "crates/bacnet-objects/src/channel/coercion_tests.rs::nan_and_infinities_fail_every_conversion_with_a_range",
+    "crates/bacnet-server/src/server/command_run_stop_tests.rs::{stop_during_a_channel_member_delay_ends_the_distribution_failed,stop_while_the_database_is_busy_ends_a_channel_distribution_failed,channel_run_no_task_starts_ends_at_once_failed,stop_ends_a_run_nothing_took}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3620,7 +3640,7 @@
     "Members are local: a reference naming another Device is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, one naming this Device is stored without it. Caps are 1024 members and 64 control groups.",
     "Rule 3 bounds an Unsigned or ENUMERATED value at 2147483647 for INTEGER, REAL and Double members; rounding to a REAL's precision under Rules 3 and 4 never fails a write.",
     "A whole `Execution_Delay` write takes exactly one delay per member (VALUE_OUT_OF_RANGE otherwise); index-0 writes and whole member-list writes resize both arrays.",
-    "A run that would start its own object again, or with more than eight runs above it, ends failed and its writer gets OBJECT / BUSY. `tick_schedules` runs a distribution; the bare handlers end it FAILED."
+    "A run that would start its own object again, or with more than eight runs above it, ends failed and its writer gets OBJECT / BUSY. `tick_schedules` runs a distribution; the bare handlers and `stop()` end it FAILED."
    ],
    "gaps": [
     "Reliability, intrinsic reporting and members in other devices aren't served (no issue)",

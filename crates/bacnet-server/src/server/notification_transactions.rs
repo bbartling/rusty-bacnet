@@ -509,23 +509,28 @@ impl NotificationCore {
         }
     }
 
-    fn rearm(
-        &self,
-        token: LeaseToken,
-    ) -> Result<oneshot::Receiver<CovAckResult>, NotificationReserveError> {
+    fn rearm(&self, token: LeaseToken) -> Result<oneshot::Receiver<CovAckResult>, Rearm> {
         let (sender, receiver) = oneshot::channel();
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| NotificationReserveError::StatePoisoned)?;
+        let Ok(mut state) = self.state.lock() else {
+            return Err(Rearm::Closed);
+        };
         if state.closed {
-            return Err(NotificationReserveError::Closed);
+            return Err(Rearm::Closed);
         }
+        // Only an answer takes the sender out while the adapter is open.
         let Some(pending) = state.pending.get_mut(&token) else {
-            return Err(NotificationReserveError::Closed);
+            return Err(Rearm::Claimed);
         };
         *pending = sender;
         Ok(receiver)
+    }
+
+    /// Take the sender back from the pending answers: whether it was still
+    /// there, rather than taken by an answer or by closing.
+    fn withdraw(&self, token: LeaseToken) -> bool {
+        self.state
+            .lock()
+            .map_or(true, |mut state| state.pending.remove(&token).is_some())
     }
 
     fn release(&self, token: LeaseToken) {
@@ -562,8 +567,12 @@ impl NotificationOperation {
         self.token.invoke_id()
     }
 
-    fn rearm(&self) -> Result<oneshot::Receiver<CovAckResult>, NotificationReserveError> {
+    fn rearm(&self) -> Result<oneshot::Receiver<CovAckResult>, Rearm> {
         self.transactions.rearm(self.token)
+    }
+
+    fn withdraw(&self) -> bool {
+        self.transactions.withdraw(self.token)
     }
 
     fn terminal_completed(&mut self) {
@@ -596,10 +605,31 @@ impl Drop for NotificationOperation {
     }
 }
 
+/// Why an attempt's receiver couldn't be replaced.
+enum Rearm {
+    /// An answer took the sender as the timer fired; it is on its way to
+    /// the receiver already in hand.
+    Claimed,
+    /// The adapter closed.
+    Closed,
+}
+
+/// What one attempt at a confirmed request did.
+pub(super) enum Attempt<W> {
+    /// The request went out.
+    Sent,
+    /// The send failed. The attempt still waits for an answer, so it ends as
+    /// silence would.
+    NotSent,
+    /// Nothing may be sent any more: the transaction ends at once, its invoke
+    /// ID freed, with this reason.
+    Withdrawn(W),
+}
+
 #[doc(hidden)]
 pub async fn run_notification_worker<F, Fut, E>(
-    mut operation: NotificationOperation,
-    mut receiver: oneshot::Receiver<CovAckResult>,
+    operation: NotificationOperation,
+    receiver: oneshot::Receiver<CovAckResult>,
     timeout: Duration,
     max_retries: u8,
     mut send: F,
@@ -608,41 +638,87 @@ where
     F: FnMut(u8) -> Fut,
     Fut: Future<Output = Result<(), E>>,
 {
-    for attempt in 0..=max_retries {
-        let send_failed = send(attempt).await.is_err();
-        match tokio::time::timeout(timeout, receiver).await {
-            Ok(Ok(CovAckResult::Ack)) => {
-                operation.terminal_completed();
-                return NotificationWorkerResult::Ack;
-            }
-            Ok(Ok(CovAckResult::Error)) => {
-                operation.terminal_completed();
-                return NotificationWorkerResult::Error;
-            }
-            Ok(Err(_)) | Err(_) if attempt < max_retries => match operation.rearm() {
-                Ok(next_receiver) => receiver = next_receiver,
-                Err(_) => {
-                    operation.cancel();
-                    return NotificationWorkerResult::Closed;
-                }
-            },
-            Ok(Err(_)) => {
-                operation.cancel();
-                return NotificationWorkerResult::Closed;
-            }
-            Err(_) => {
-                if send_failed {
-                    operation.cancel();
-                } else {
-                    operation.release();
-                }
-                return NotificationWorkerResult::Exhausted;
+    let attempts = run_attempts(operation, receiver, timeout, max_retries, |attempt| {
+        let sent = send(attempt);
+        async move {
+            match sent.await {
+                Ok(()) => Attempt::<std::convert::Infallible>::Sent,
+                Err(_) => Attempt::NotSent,
             }
         }
+    });
+    match attempts.await {
+        Ok(result) => result,
+        Err(never) => match never {},
     }
+}
 
-    operation.release();
-    NotificationWorkerResult::Exhausted
+/// Make the first attempt and up to `max_retries` more, each waiting
+/// `timeout` for the answer. Only silence earns another attempt; an attempt
+/// that is withdrawn ends the transaction at once.
+pub(super) async fn run_attempts<F, Fut, W>(
+    mut operation: NotificationOperation,
+    mut receiver: oneshot::Receiver<CovAckResult>,
+    timeout: Duration,
+    max_retries: u8,
+    mut attempt_with: F,
+) -> Result<NotificationWorkerResult, W>
+where
+    F: FnMut(u8) -> Fut,
+    Fut: Future<Output = Attempt<W>>,
+{
+    let mut attempt = 0;
+    let answer = loop {
+        let send_failed = match attempt_with(attempt).await {
+            Attempt::Sent => false,
+            Attempt::NotSent => true,
+            Attempt::Withdrawn(reason) => {
+                operation.cancel();
+                return Err(reason);
+            }
+        };
+        // Borrowed, so an answer that claims the lease as the timer fires
+        // still reaches this receiver.
+        if let Ok(answer) = tokio::time::timeout(timeout, &mut receiver).await {
+            break answer;
+        }
+        if attempt < max_retries {
+            match operation.rearm() {
+                Ok(next) => receiver = next,
+                Err(Rearm::Claimed) => break receiver.await,
+                Err(Rearm::Closed) => {
+                    operation.cancel();
+                    return Ok(NotificationWorkerResult::Closed);
+                }
+            }
+            attempt += 1;
+            continue;
+        }
+        if !operation.withdraw() {
+            break receiver.await;
+        }
+        if send_failed {
+            operation.cancel();
+        } else {
+            operation.release();
+        }
+        return Ok(NotificationWorkerResult::Exhausted);
+    };
+    Ok(match answer {
+        Ok(CovAckResult::Ack) => {
+            operation.terminal_completed();
+            NotificationWorkerResult::Ack
+        }
+        Ok(CovAckResult::Error) => {
+            operation.terminal_completed();
+            NotificationWorkerResult::Error
+        }
+        // The sender went with the adapter's close.
+        Err(_) => {
+            operation.cancel();
+            NotificationWorkerResult::Closed
+        }
+    })
 }
 
 #[doc(hidden)]
