@@ -2238,24 +2238,43 @@
     "crates/bacnet-server/src/server/requests/mutations.rs",
     "crates/bacnet-server/src/committed_cov.rs",
     "crates/bacnet-server/src/device_view.rs",
-    "crates/bacnet-endpoint/src/source_reporter.rs"
+    "crates/bacnet-endpoint/src/source_reporter.rs",
+    "crates/bacnet-server/src/command_lists.rs",
+    "crates/bacnet-server/src/command_lists/unattached.rs",
+    "crates/bacnet-server/src/schedule.rs",
+    "crates/bacnet-server/src/handlers/write_property.rs",
+    "crates/rusty-bacnet/src/types/action_list.rs",
+    "crates/rusty-bacnet/src/server/server_methods/registration.rs",
+    "crates/rusty-bacnet/rusty_bacnet.pyi"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/command_action_wire_tests.rs::{command_present_value_write_runs_the_selected_list_on_local_targets,command_write_during_a_run_is_busy_and_the_post_delay_holds_the_next_write,command_rewriting_the_same_value_runs_the_list_again,command_zero_or_an_empty_list_writes_nothing_and_succeeds_at_once}",
     "crates/bacnet-server/src/server/command_action_run_tests.rs::{command_run_starts_from_write_local_and_write_property_multiple,command_run_writing_another_command_starts_its_list,command_property_subscribers_see_in_process_rise_and_fall,command_run_starts_when_a_schedule_writes_present_value}",
     "crates/bacnet-objects/src/command/tests.rs::{command_present_value_write_queues_the_selected_list_and_busies_the_object,command_zero_and_an_empty_list_complete_at_once,command_action_text_serves_one_text_per_list_and_follows_the_action_size,command_takes_property_subscriptions_but_not_subscribe_cov}",
     "crates/bacnet-objects/src/command/metadata.rs::tests::property_metadata_command_action_text_row_follows_action_once_set",
-    "crates/bacnet-endpoint/src/source_reporter_command_run_tests.rs::command_run_hooks_and_property_cov_admission_survive_wrapping"
+    "crates/bacnet-endpoint/src/source_reporter_command_run_tests.rs::command_run_hooks_and_property_cov_admission_survive_wrapping",
+    "crates/bacnet-server/src/schedule_command_tests.rs::tick_schedules_runs_the_command_lists_its_writes_start",
+    "crates/bacnet-server/src/handlers/tests/command_present_value_writes.rs::{bare_write_property_ends_a_command_run_it_cannot_make,bare_write_property_multiple_ends_the_runs_its_committed_prefix_started}",
+    "crates/rusty-bacnet/src/types/action_list_tests.rs::action_command_mappings_fill_every_field_and_default_the_optional_ones",
+    "crates/rusty-bacnet/src/server/server_methods/registration_tests.rs::command_builder_applies_action_then_action_text_through_the_object_setters",
+    "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_present_value_write_runs_the_configured_list"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/command_action_wire_tests.rs::{command_quit_on_failure_stops_the_list_and_action_reads_back_the_flags,command_present_value_above_the_action_size_is_value_out_of_range,command_naming_another_device_fails_and_naming_this_device_is_local,command_writing_its_own_present_value_is_refused_busy}",
     "crates/bacnet-server/src/server/command_action_run_tests.rs::command_replaced_during_a_post_delay_leaves_the_rest_of_the_run_unmade",
-    "crates/bacnet-objects/src/command/tests.rs::{command_quit_on_failure_marks_the_commands_after_it_unsuccessful,command_present_value_above_the_action_size_is_out_of_range,command_set_action_abandons_a_run_and_its_reports_go_stale}"
+    "crates/bacnet-objects/src/command/tests.rs::{command_quit_on_failure_marks_the_commands_after_it_unsuccessful,command_present_value_above_the_action_size_is_out_of_range,command_set_action_abandons_a_run_and_its_reports_go_stale}",
+    "crates/bacnet-server/src/schedule_command_tests.rs::tick_schedules_dropped_mid_run_ends_the_command_run_unsuccessful",
+    "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_refuses_a_command_present_value_write_and_starts_no_run",
+    "crates/rusty-bacnet/src/types/action_list_tests.rs::action_command_mappings_refuse_bad_shapes_and_types",
+    "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_invalid_actions_are_refused_and_add_nothing"
    ],
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Added entry for #1150 (Command action lists run), from changelog.d/1150-command-action-execution.md",
-    "docs/rust-api.md#building-control-7 Command object"
+    "docs/rust-api.md#building-control-7 Command object",
+    "CHANGELOG.md Unreleased Fixed entry for #1178 (Command runs outside the bundled server), from changelog.d/1178-command-runs-outside-server.md",
+    "CHANGELOG.md Unreleased Added entry for #1179 (Python Command action lists), from changelog.d/1179-python-command-actions.md",
+    "docs/python-api.md#building-control Python add_command action and action_text"
    ],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1150, found in #1135). Breaking pre-1.0 wire change: Present_Value used to store any Unsigned and run nothing. Clause 12.10 and Table 12-12 were read as page images.",
@@ -2264,7 +2283,12 @@
     "Every report back is guarded by a per-object generation, so a Command replaced or deleted mid-run stops the run without completing it. No database guard is held across a write's notifications or a post delay; lock order stays database, then COV table.",
     "Runs start from WriteProperty, WritePropertyMultiple, write_local, a Schedule tick or a written Schedule's own pass (background commits collect queued runs), and from a run's write to another Command.",
     "Local policies: a command naming another Device fails like a refused write (Clause 12.10.8 makes remote writes optional), and one naming this Device is local; a post delay follows every attempt, a quitting failure included, before the run ends; failed writes leave Reliability alone (Clause 12.10.13); Command opts into SubscribeCOVProperty under Table 13-1a (SubscribeCOV stays refused, no Table 13-1 row), and the server fans COV out for the Command at the start, after each command and at the end; Action_Text is absent until CommandObject::set_action_text supplies one text per list, read-only on the network, and set_action resizes it (empty texts added, trailing texts dropped) and abandons a run in progress.",
-    "Not covered: writes to other devices; network writes of Action or Action_Text; Python bindings configuring Action or Action_Text; resuming a run that stop() cut short (In_Process stays TRUE on the stopped server); the bare handlers, tick_schedules without a server and the endpoint runtime don't run lists, so a Command written there keeps its queued run and In_Process TRUE until code takes it; intrinsic reporting on Command."
+    "Not covered: writes to other devices; network writes of Action or Action_Text; resuming a run that stop() cut short (In_Process stays TRUE on the stopped server); intrinsic reporting on Command.",
+    "Run ownership (#1178): whatever commits a Present_Value write takes the run under that guard and finishes it, so no path leaves a Command in process.",
+    "tick_schedules without a server runs the lists its writes start before it returns, post delays included: each command goes through the bare WriteProperty handler path with the Command as initiator, and a list that writes another Command starts that one beside it. Dropping the future ends each unfinished run as unsuccessful, with its unmade commands FALSE.",
+    "The synchronous handle_write_property and handle_write_property_multiple make no writes for a Command: the run ends at once with In_Process FALSE, All_Writes_Successful FALSE and every Write_Successful FALSE. A second Present_Value write in the same WritePropertyMultiple still finds the Command busy.",
+    "The endpoint responder refuses a Command Present_Value write with WRITE_ACCESS_DENIED (it writes only the Device's Description and Audit recipient), so it never starts a run.",
+    "Python (#1179): BACnetServer.add_command takes keyword-only action (lists of ActionCommand mappings) and action_text. The binding checks shapes and Python types (TypeError, ValueError); CommandObject::set_action and set_action_text refuse a priority outside 1 to 16, an unencodable value or a text count mismatch (VALUE_OUT_OF_RANGE). Write_Successful starts FALSE."
    ]
   },
   {

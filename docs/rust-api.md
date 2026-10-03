@@ -2157,9 +2157,20 @@ returns to FALSE, with All_Writes_Successful TRUE only if every write
 succeeded. The server writes to its own objects only, so a command naming
 another Device fails. A Schedule writing a Command's Present_Value starts the
 run as well. Command takes SubscribeCOVProperty but not SubscribeCOV, so a
-client can follow In_Process. A run that `stop()` cuts short isn't resumed,
-and a Command used without the server keeps its queued run, and In_Process
-TRUE, until something takes it.
+client can follow In_Process. A run that `stop()` cuts short isn't resumed.
+
+Whatever commits a Present_Value write owns the run it starts and finishes it,
+so no path leaves a Command in process (#1178). Without a server,
+`tick_schedules` runs the lists its Schedule writes start before it returns,
+post delays included, making each command as the bare WriteProperty handler
+would with the Command as the initiating object; dropping its future first
+ends each unfinished run as unsuccessful. The bare `handle_write_property` and
+`handle_write_property_multiple` handlers are synchronous and make no writes
+for a Command: the run a Present_Value write starts ends at once, with
+In_Process FALSE, All_Writes_Successful FALSE and every command's
+`write_successful` FALSE. The endpoint responder refuses a Command's
+Present_Value write with WRITE_ACCESS_DENIED, as it does every write other
+than the Device's Description and Audit recipient.
 
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
 Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and
