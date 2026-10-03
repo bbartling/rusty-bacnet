@@ -55,7 +55,9 @@ pub struct AuditLogSnapshot {
 
 /// Application-owned persistence port for one AuditLog object.
 ///
-/// The object calls it from its writer thread, one call at a time.
+/// The object calls it from its writer thread, one call at a time. A commit
+/// lands in storage a moment before the log serves it: see [storage leads
+/// the served state](crate::durable#storage-leads-the-served-state).
 pub trait AuditLogPersistence: Send + Sync {
     /// Load the newest valid compatible snapshot, or `None` if neither slot exists.
     fn load(&self, expected_object: ObjectIdentifier) -> Result<Option<AuditLogSnapshot>, Error>;

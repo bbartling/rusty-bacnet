@@ -110,7 +110,8 @@ pub(crate) fn decode_property_reference(
 /// Door Door_Members, Access Point Access_Doors and Access_Event_Credential,
 /// Access Credential Assigned_Access_Rights, Staging Target_References,
 /// Structured View Subordinate_List, the elevator family's Energy_Meter_Ref
-/// and Channel List_Of_Object_Property_References (#1285).
+/// and Channel List_Of_Object_Property_References (#1285), and both
+/// references in each Access Rights rule (#1316).
 ///
 /// Not all of them yet: Event Enrollment's setter, Schedule
 /// List_Of_Object_Property_References, Global Group members and Command

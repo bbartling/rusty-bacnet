@@ -132,10 +132,22 @@ async fn notification_terminals_complete_exactly_once() {
 
     for (pdu, expected) in [
         (simple_ack(0, COV_SERVICE), CovAckResult::Ack),
-        (error(0, COV_SERVICE), CovAckResult::Error),
-        (reject(0), CovAckResult::Error),
+        (
+            error(0, COV_SERVICE),
+            CovAckResult::Error(Refusal::Error {
+                class: ErrorClass::DEVICE,
+                code: ErrorCode::OTHER,
+            }),
+        ),
+        (
+            reject(0),
+            CovAckResult::Error(Refusal::Reject(RejectReason::OTHER)),
+        ),
         // The recipient serves the notification: its Abort has the server flag.
-        (abort(0, true), CovAckResult::Error),
+        (
+            abort(0, true),
+            CovAckResult::Error(Refusal::Abort(AbortReason::OTHER)),
+        ),
     ] {
         let transactions = NotificationTransactions::new();
         let (operation, receiver) = transactions.reserve(direct_peer(1), COV_SERVICE).unwrap();

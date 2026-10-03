@@ -1,11 +1,73 @@
-//! Constructed values served by the Access Credential object (Clause 12.35)
-//! and the Credential Data Input object (Clause 12.36).
+//! Constructed values served by the Access Rights object (Clause 12.34), the
+//! Access Credential object (Clause 12.35) and the Credential Data Input
+//! object (Clause 12.36).
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-use super::BACnetDeviceObjectReference;
-use crate::enums::{AccessAuthenticationFactorDisable, AuthenticationFactorType};
+use super::{BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference};
+use crate::enums::{
+    AccessAuthenticationFactorDisable, AccessRuleLocationSpecifier, AccessRuleTimeRangeSpecifier,
+    AuthenticationFactorType,
+};
+
+/// One element of an Access Rights object's Positive_Access_Rules or
+/// Negative_Access_Rules array (`BACnetAccessRule`, Clause 21; Clause
+/// 12.34.9.1).
+///
+/// The fields mirror the five wire members in order: the time-range
+/// specifier as a context `[0]` ENUMERATED, the time-range reference framed
+/// in context tag `[1]`, the location specifier as a context `[2]`
+/// ENUMERATED, the location reference framed in context tag `[3]` and the
+/// enable flag as a context `[4]` BOOLEAN. Both references are optional on
+/// the wire. The codec is `bacnet_encoding::constructed::{encode_access_rule,
+/// decode_access_rule}`; it keeps whatever specifier values it reads, and the
+/// Access Rights setters refuse the combinations Clause 12.34.9.1 rules out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BACnetAccessRule {
+    /// SPECIFIED when `time_range` decides when the rule applies, ALWAYS
+    /// when it applies at any time.
+    pub time_range_specifier: AccessRuleTimeRangeSpecifier,
+    /// The property, typically a Schedule's Present_Value, whose value says
+    /// whether the rule applies now. Needed with SPECIFIED; with ALWAYS it is
+    /// left out or unspecified (instance 4194303).
+    pub time_range: Option<BACnetDeviceObjectPropertyReference>,
+    /// SPECIFIED when `location` names the place the rule covers, ALL when
+    /// it covers every access point.
+    pub location_specifier: AccessRuleLocationSpecifier,
+    /// Where the rule holds: an Access Point or an Access Zone. Needed with
+    /// SPECIFIED; with ALL it is left out or unspecified.
+    pub location: Option<BACnetDeviceObjectReference>,
+    /// Whether the rule is in force.
+    pub enable: bool,
+}
+
+impl BACnetAccessRule {
+    /// A rule whose specifiers follow the references: SPECIFIED for each
+    /// one given, ALWAYS for a missing time range and ALL for a missing
+    /// location.
+    pub fn new(
+        time_range: Option<BACnetDeviceObjectPropertyReference>,
+        location: Option<BACnetDeviceObjectReference>,
+        enable: bool,
+    ) -> Self {
+        Self {
+            time_range_specifier: if time_range.is_some() {
+                AccessRuleTimeRangeSpecifier::SPECIFIED
+            } else {
+                AccessRuleTimeRangeSpecifier::ALWAYS
+            },
+            time_range,
+            location_specifier: if location.is_some() {
+                AccessRuleLocationSpecifier::SPECIFIED
+            } else {
+                AccessRuleLocationSpecifier::ALL
+            },
+            location,
+            enable,
+        }
+    }
+}
 
 /// One element of an Access Credential's Assigned_Access_Rights array
 /// (`BACnetAssignedAccessRights`, Clause 21).
