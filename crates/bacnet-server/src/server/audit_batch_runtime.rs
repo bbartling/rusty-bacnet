@@ -7,7 +7,6 @@ pub(super) fn start<T: TransportPort + 'static>(
     queue: Arc<AuditBatchQueue>,
     network: Arc<NetworkLayer<T>>,
     transactions: &Arc<NotificationTransactions>,
-    comm_state: Arc<AtomicU8>,
 ) {
     let weak = Arc::downgrade(transactions);
     transactions.spawn(async move {
@@ -19,7 +18,7 @@ pub(super) fn start<T: TransportPort + 'static>(
             if queue.stop_deadline().is_some_and(|deadline| now >= deadline || (queue.empty() && sends.is_empty() && transactions.audit_idle())) {
                 // Only known locally unattempted records are resource losses. Close does
                 // not invent remote-loss counts for active sends or confirmed ACK waits.
-                for record in queue.close() { loss(&transactions,&network,&comm_state,&record); }
+                for record in queue.close() { loss(&transactions,&network,&record); }
                 transactions.close();
                 return;
             }
@@ -33,16 +32,16 @@ pub(super) fn start<T: TransportPort + 'static>(
                 match (permit,reserved) {
                     (Ok(permit),Ok(reserved)) => {
                         let bytes = encode_batch(&records, reserved.as_ref().map_or(0,|(operation,_)|operation.invoke_id()));
-                        let network = Arc::clone(&network); let comm_state = Arc::clone(&comm_state);
+                        let network = Arc::clone(&network);
                         let deadline = (now+Duration::from_secs(3)).min(queue.stop_deadline().unwrap_or(now+Duration::from_secs(3)));
                         sends.push(async move {
                             let _permit = permit;
-                            let delivered = super::audit_reporter::deliver_observed(&network,&comm_state,&records[0].route,&bytes,reserved,deadline,Some(local)).await;
+                            let delivered = super::audit_reporter::deliver_observed(&network,&records[0].route,&bytes,reserved,deadline,Some(local)).await;
                             for record in records { record.completion.finish(delivered); }
                         });
                     }
                     _ => {
-                        for record in records { loss(&transactions,&network,&comm_state,&record); }
+                        for record in records { loss(&transactions,&network,&record); }
                         drop(local);
                     }
                 }
@@ -60,13 +59,11 @@ pub(super) fn start<T: TransportPort + 'static>(
 fn loss<T: TransportPort + 'static>(
     transactions: &Arc<NotificationTransactions>,
     network: &Arc<NetworkLayer<T>>,
-    comm_state: &Arc<AtomicU8>,
     record: &QueuedAudit,
 ) {
     super::audit_reporter::record_resource_drop(
         transactions,
         network,
-        comm_state,
         &record.status,
         Some(record.failure.clone()),
         record.timestamp.clone(),

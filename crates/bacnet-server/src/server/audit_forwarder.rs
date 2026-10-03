@@ -98,13 +98,14 @@ impl ForwardBatch {
     }
 
     // Called only after the database guard has been released. Admission never
-    // waits, and workers belong to the existing joined shutdown owner.
+    // waits, and workers belong to the existing joined shutdown owner. A
+    // forward is a ConfirmedAuditNotification, which Clause 16.1 leaves
+    // running under DISABLE_INITIATION, so DCC state never holds it back.
     pub(super) fn start<T: TransportPort + 'static>(
         self,
         network: &Arc<NetworkLayer<T>>,
         transactions: &Arc<NotificationTransactions>,
         bindings: &Arc<RwLock<DeviceBindingTable>>,
-        comm_state: &Arc<AtomicU8>,
         max_apdu: u32,
     ) {
         let completion = Completion::new(Arc::clone(&self.profile));
@@ -131,9 +132,6 @@ impl ForwardBatch {
         let Some(route) = route else {
             return;
         };
-        if comm_state.load(Ordering::Acquire) != 0 {
-            return;
-        }
         // Four-octet unsegmented confirmed header; preserve the original service
         // bytes (including every optional notification field), not merged records.
         if self.payload.len().saturating_add(4) > max_apdu as usize {
@@ -163,7 +161,6 @@ impl ForwardBatch {
             return;
         }
         let network = Arc::clone(network);
-        let comm_state = Arc::clone(comm_state);
         transactions.spawn(async move {
             let _permit = permit;
             let delivered = tokio::time::timeout_at(
@@ -171,12 +168,8 @@ impl ForwardBatch {
                 run_notification_worker(operation, receiver, DEADLINE, 0, |_| async {
                     // timeout_at polls its inner future first. Do not initiate
                     // I/O if scheduling consumed the entire delivery budget.
-                    if tokio::time::Instant::now() >= deadline
-                        || comm_state.load(Ordering::Acquire) != 0
-                    {
-                        return Err(Error::Encoding(
-                            "audit forwarding deadline expired or initiation disabled".into(),
-                        ));
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(Error::Encoding("audit forwarding deadline expired".into()));
                     }
                     match (&route.local_target, &route.remote) {
                         (Some(mac), None) => {

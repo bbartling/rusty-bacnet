@@ -116,10 +116,11 @@ async fn audit_reporter_range_file_decode_and_budget_aborts_are_silent() {
 }
 
 #[tokio::test]
-async fn audit_reporter_range_file_dcc_duplicate_and_overload_are_silent() {
+async fn audit_reporter_range_file_disable_duplicate_and_overload_are_silent_disable_initiation_is_audited(
+) {
     use crate::server::{request_admission::Class, request_peer::canonical_requester};
     for kind in [Kind::Range, Kind::Stream, Kind::Record] {
-        for case in ["dcc", "disable initiation", "duplicate", "overload"] {
+        for case in ["disable", "disable initiation", "duplicate", "overload"] {
             let mut fixture = server(read_reporter()).await;
             let reads = add_target(&fixture, kind, None, false).await;
             let req = request(kind, kind.request(1, 1), false);
@@ -138,7 +139,7 @@ async fn audit_reporter_range_file_dcc_duplicate_and_overload_are_silent() {
             } else {
                 None
             };
-            if case == "dcc" {
+            if case == "disable" {
                 fixture.server.comm_state.store(1, Ordering::Release);
             }
             if case == "disable initiation" {
@@ -181,7 +182,17 @@ async fn audit_reporter_range_file_dcc_duplicate_and_overload_are_silent() {
                 reads.load(Ordering::Acquire),
                 usize::from(case == "disable initiation")
             );
-            assert!(records(&fixture).is_empty(), "{kind:?} {case}");
+            // Only the read DISABLE_INITIATION lets run is audited (Clause 16.1).
+            let records = records(&fixture);
+            assert_eq!(
+                records.len(),
+                usize::from(case == "disable initiation"),
+                "{kind:?} {case}"
+            );
+            for record in &records {
+                assert_eq!(record.operation, AuditOperation::READ, "{kind:?}");
+                assert_eq!(record.target_object, Some(kind.target()), "{kind:?}");
+            }
             assert_idle(&fixture);
             if let Some(pending) = pending {
                 drop(pending);
