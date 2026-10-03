@@ -1,4 +1,4 @@
-"""Installed-wheel event telemetry: BACnetServer.event_notification_counters() (#1142, #1160)."""
+"""Installed-wheel event telemetry: BACnetServer.event_notification_counters() (#1142, #1160, #1196)."""
 import ast
 import importlib.util
 from pathlib import Path
@@ -19,6 +19,7 @@ FIELDS = frozenset({
     "confirmed_no_invoke_id",
     "confirmed_rejected",
     "confirmed_unanswered",
+    "unconfirmed_send_failed",
 })
 
 
@@ -39,6 +40,10 @@ UNBOUND_DEVICE = b"\x0c\x02\x00\x00\x63"
 MAC_ON_NETWORK_65535 = b"\x1e\x22\xff\xff\x65\x06\x7f\x00\x00\x01\xba\xc1\x1f"
 # address [1]: network 0 with an empty MAC, the local broadcast.
 LOCAL_BROADCAST = b"\x1e\x21\x00\x60\x1f"
+# address [1]: network 0, 127.0.0.1 port 0, which the OS refuses to send to.
+UNSENDABLE_UNICAST = b"\x1e\x21\x00\x65\x06\x7f\x00\x00\x01\x00\x00\x1f"
+# address [1]: network 0, 127.0.0.1 port 1, which the OS accepts the send to.
+SENDABLE_UNICAST = b"\x1e\x21\x00\x65\x06\x7f\x00\x00\x01\x00\x01\x1f"
 
 
 async def enable_high_limit(server, target):
@@ -101,6 +106,33 @@ class EventNotificationCountersTests(unittest.IsolatedAsyncioTestCase):
             await server.set_present_value_local(target, PropertyValue.real(2))
             expected.update(device_recipient_unbound=1, recipient_unroutable=1,
                             confirmed_broadcast_recipient=1)
+            self.assertEqual(await server.event_notification_counters(), expected)
+        finally:
+            await server.stop()
+
+    async def test_a_failed_unconfirmed_send_is_counted_once_per_destination(self):
+        server = BACnetServer(503_809, interface="127.0.0.1", port=0,
+                              broadcast_address="127.0.0.1")
+        server.add_analog_input(1, "Send failures")
+        server.add_notification_class(0, "Send failure class")
+        target = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
+        await server.start()
+        try:
+            await server.write_property_local(
+                ObjectIdentifier(ObjectType.NOTIFICATION_CLASS, 0),
+                PropertyIdentifier.RECIPIENT_LIST,
+                PropertyValue.application_data(
+                    destination(UNSENDABLE_UNICAST, False)
+                    + destination(SENDABLE_UNICAST, False)
+                    + destination(UNSENDABLE_UNICAST, False)),
+                source_object=None)
+            await enable_high_limit(server, target)
+            expected = dict.fromkeys(FIELDS, 0)
+            self.assertEqual(await server.event_notification_counters(), expected)
+
+            # Two of the three destinations fail to send; the middle one is served.
+            await server.set_present_value_local(target, PropertyValue.real(2))
+            expected["unconfirmed_send_failed"] = 2
             self.assertEqual(await server.event_notification_counters(), expected)
         finally:
             await server.stop()

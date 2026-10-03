@@ -3641,6 +3641,7 @@ counters.confirmed_broadcast_recipient; // confirmed requested at a broadcast ad
 counters.confirmed_no_invoke_id;        // no invoke ID free for a confirmed notification
 counters.confirmed_rejected;            // the recipient answered Error, Reject or Abort
 counters.confirmed_unanswered;          // no acknowledgment after the last retry
+counters.unconfirmed_send_failed;       // an unconfirmed send the transport refused
 ```
 
 The four recipient-list fields count transitions, event and acknowledgment
@@ -3651,6 +3652,13 @@ configured behaviour and are not counted, nor are notifications held back by
 DCC or Event_Enable. The three confirmed fields count notifications to one
 recipient; a reservation refused because the server is stopping is not
 counted.
+
+`unconfirmed_send_failed` (#1196) counts unconfirmed notifications whose send
+returned a transport error, once per destination, and the transition's other
+destinations are still served. A confirmed send that fails locally counts in
+`confirmed_unanswered`. No field counts an encode failure: the committed
+payload and message text are validated before the destinations are walked, so
+a well-formed transition always encodes.
 
 The three route fields (#1160) count destinations that matched the transition
 but were skipped while their route was resolved, once per destination; the

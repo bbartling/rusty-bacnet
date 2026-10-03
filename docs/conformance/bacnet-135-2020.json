@@ -2605,6 +2605,9 @@
     "crates/bacnet-server/src/server/event_recipient_routing_tests/suppression_counters.rs::each_failed_closed_lookup_moves_only_its_own_counter",
     "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::each_route_skip_moves_only_its_own_counter_once",
     "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::one_transition_counts_each_skipped_destination_and_serves_the_rest",
+    "crates/bacnet-server/src/server/event_recipient_routing_tests/post_route_counters.rs::failed_unicasts_count_once_each_and_the_rest_are_still_sent",
+    "crates/bacnet-server/src/server/event_recipient_routing_tests/post_route_counters.rs::failed_broadcast_forms_count_once_each",
+    "crates/rusty-bacnet/tests/test_event_notification_counters.py::EventNotificationCountersTests::test_a_failed_unconfirmed_send_is_counted_once_per_destination",
     "crates/bacnet-server/src/server/event_confirmed_routing_tests/suppression_counters.rs::confirmed_route_skips_reserve_no_invoke_id"
    ],
    "benchmarks": [],
@@ -2622,7 +2625,8 @@
      "A destination's recipient decodes through decode_configured_recipient, which refuses a longer MAC, so a WriteProperty or WritePropertyMultiple fails with PROPERTY / INVALID_DATA_TYPE and an AddListElement with a ChangeList-Error naming the element; add_destination refuses with the same code so a stored list stays decodable.",
      "A destination is then at most 47 octets and a full list at most 1,504. Routing applies MAX_RECIPIENT_LIST_DESTINATIONS to every class: a custom NOTIFICATION_CLASS object serving a longer list yields RecipientListTooLong, the server logs a warning, counts the transition in EventNotificationCounters::recipient_list_too_long (#1142) and sends nothing for that transition (never a prefix), and decoding stops at the first destination past the cap.",
      "GetEnrollmentSummary membership still reads the list as configured. The generic decode_recipient stays unbounded for now: COV subscription lists and audit records report source addresses learned off the network, and the stack must read back what it encodes. Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, so those learned addresses fit the bound; holding decode_recipient to it as well is follow-up work (#1156).",
-     "#1160: a destination that matches but is skipped while its route is resolved now also counts, once per destination, in EventNotificationCounters: device_recipient_unbound (a Device with no configured or unexpired observed binding), recipient_unroutable (a Device identifier that is not a Device, a binding unusable on the link, or a MAC on network 65535) and confirmed_broadcast_recipient (confirmed notifications asked for at a broadcast address, skipped before an invoke ID is reserved). The transition's other destinations are still served."
+     "#1160: a destination that matches but is skipped while its route is resolved now also counts, once per destination, in EventNotificationCounters: device_recipient_unbound (a Device with no configured or unexpired observed binding), recipient_unroutable (a Device identifier that is not a Device, a binding unusable on the link, or a MAC on network 65535) and confirmed_broadcast_recipient (confirmed notifications asked for at a broadcast address, skipped before an invoke ID is reserved). The transition's other destinations are still served.",
+     "An unconfirmed notification whose send returns a transport error counts once per destination in EventNotificationCounters::unconfirmed_send_failed, and the other destinations are still served. A confirmed send that fails locally counts in confirmed_unanswered. No counter exists for an encode failure: the committed payload and message text are validated before the destinations are walked, so a well-formed transition always encodes."
     ]
   },
   {

@@ -2345,6 +2345,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `confirmed_no_invoke_id` | Confirmed notifications to one recipient not sent because no invoke ID was free |
 | `confirmed_rejected` | Confirmed notifications the recipient answered with an Error, Reject or Abort |
 | `confirmed_unanswered` | Confirmed notifications with no acknowledgment after the last retry |
+| `unconfirmed_send_failed` | Unconfirmed notifications the transport refused to send, once per destination; the other destinations are still served |
 
 The first four count event and acknowledgment notifications alike, once per
 transition. A class whose list is empty, or whose destinations all filter the
@@ -2353,7 +2354,9 @@ counted. Neither are notifications held back by DeviceCommunicationControl or
 Event_Enable, nor confirmed reservations refused while the server stops. The
 three route fields (#1160) count once per skipped destination, and the
 transition's other destinations are still served; the warning logged with each
-skip gives the finer reason. The binding builds the dict from an exhaustive
+skip gives the finer reason. `unconfirmed_send_failed` (#1196) counts once
+per destination whose send fails; no field counts an encode failure, since a
+well-formed transition always encodes. The binding builds the dict from an exhaustive
 pattern over the Rust struct, like `cov_counters()`.
 
 #### `local_address() -> str`
