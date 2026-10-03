@@ -15,7 +15,7 @@ fn lighting_objects(configured: bool) -> [Box<dyn BACnetObject>; 2] {
         lo.write_property(
             P::LIGHTING_COMMAND,
             None,
-            PropertyValue::OctetString(vec![0x01, 0x02]),
+            PropertyValue::ApplicationData(vec![0x09, 0x0A]),
             None,
         )
         .unwrap();
