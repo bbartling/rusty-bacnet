@@ -7,30 +7,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
+use bacnet_encoding::constructed::tagged::decode_ctx_unsigned;
 use bacnet_encoding::constructed::{extract_property_value, PropertyValueBoundary};
-
-fn decode_context_u32(
-    data: &[u8],
-    offset: usize,
-    tag_number: u8,
-    context: &str,
-) -> Result<(u32, usize), Error> {
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if !tag.is_context(tag_number) {
-        return Err(Error::decoding(
-            offset,
-            format!("{context} expected context tag {tag_number}"),
-        ));
-    }
-    let end = pos + tag.length as usize;
-    if end > data.len() {
-        return Err(Error::decoding(pos, format!("{context} truncated")));
-    }
-    let raw = primitives::decode_unsigned(&data[pos..end])?;
-    let value = u32::try_from(raw)
-        .map_err(|_| Error::decoding(pos, format!("{context} {raw} exceeds u32")))?;
-    Ok((value, end))
-}
 
 // ---------------------------------------------------------------------------
 // ReadPropertyRequest
@@ -85,7 +63,7 @@ impl ReadPropertyRequest {
 
         // [1] property-identifier
         let (prop_raw, end) =
-            decode_context_u32(data, offset, 1, "ReadProperty request property-id")?;
+            decode_ctx_unsigned::<u32>(data, offset, 1, "ReadProperty request property-id")?;
         let property_identifier = PropertyIdentifier::from_raw(prop_raw);
         offset = end;
 
@@ -100,7 +78,7 @@ impl ReadPropertyRequest {
                 ));
             }
             let (index, end) =
-                decode_context_u32(data, offset, 2, "ReadProperty request array-index")?;
+                decode_ctx_unsigned::<u32>(data, offset, 2, "ReadProperty request array-index")?;
             if end != data.len() {
                 return Err(Error::decoding(
                     end,
@@ -179,7 +157,8 @@ impl ReadPropertyACK {
         offset = end;
 
         // [1] property-identifier
-        let (prop_raw, end) = decode_context_u32(data, offset, 1, "ReadPropertyACK property-id")?;
+        let (prop_raw, end) =
+            decode_ctx_unsigned::<u32>(data, offset, 1, "ReadPropertyACK property-id")?;
         let property_identifier = PropertyIdentifier::from_raw(prop_raw);
         offset = end;
 
@@ -187,7 +166,8 @@ impl ReadPropertyACK {
         let mut property_array_index = None;
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         if tag.class == TagClass::Context && tag.number == 2 && !tag.is_opening && !tag.is_closing {
-            let (index, end) = decode_context_u32(data, offset, 2, "ReadPropertyACK array-index")?;
+            let (index, end) =
+                decode_ctx_unsigned::<u32>(data, offset, 2, "ReadPropertyACK array-index")?;
             property_array_index = Some(index);
             offset = end;
             let (tag, tag_end) = tags::decode_tag(data, offset)?;

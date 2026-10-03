@@ -12,7 +12,10 @@ use super::helpers::{
     validate_actual_time, validate_decoded_property_identifier, validate_property_identifier,
     validate_raw_property_value,
 };
-use crate::common::{decode_context, decode_context_u32, MAX_DECODED_ITEMS};
+use crate::common::MAX_DECODED_ITEMS;
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_object_id, decode_ctx_primitive, decode_ctx_unsigned, next_is_context,
+};
 
 // ---------------------------------------------------------------------------
 // COVNotificationMultipleRequest
@@ -160,17 +163,17 @@ impl COVNotificationMultipleRequest {
 
         // [0] subscriberProcessIdentifier
         let (subscriber_process_identifier, end) =
-            decode_context_u32(data, offset, 0, "COVNotificationMultiple process-id")?;
+            decode_ctx_unsigned::<u32>(data, offset, 0, "COVNotificationMultiple process-id")?;
         offset = end;
 
         // [1] initiatingDeviceIdentifier
-        let (content, end) = decode_context(data, offset, 1, "COVNotificationMultiple device-id")?;
-        let initiating_device_identifier = ObjectIdentifier::decode(content)?;
+        let (initiating_device_identifier, end) =
+            decode_ctx_object_id(data, offset, 1, "COVNotificationMultiple device-id")?;
         offset = end;
 
         // [2] timeRemaining
         let (time_remaining, end) =
-            decode_context_u32(data, offset, 2, "COVNotificationMultiple time-remaining")?;
+            decode_ctx_unsigned::<u32>(data, offset, 2, "COVNotificationMultiple time-remaining")?;
         offset = end;
 
         // [3] timestamp OPTIONAL — BACnetDateTime
@@ -223,9 +226,8 @@ impl COVNotificationMultipleRequest {
             }
 
             // [0] monitoredObjectIdentifier
-            let (content, end) =
-                decode_context(data, offset, 0, "COVNotificationMultiple monitored-id")?;
-            let oid = ObjectIdentifier::decode(content)?;
+            let (oid, end) =
+                decode_ctx_object_id(data, offset, 0, "COVNotificationMultiple monitored-id")?;
             offset = end;
 
             // [1] listOfValues — opening tag 1
@@ -265,8 +267,12 @@ impl COVNotificationMultipleRequest {
                 }
 
                 // [0] propertyIdentifier
-                let (prop_id, end) =
-                    decode_context_u32(data, offset, 0, "COVNotificationMultiple property-id")?;
+                let (prop_id, end) = decode_ctx_unsigned::<u32>(
+                    data,
+                    offset,
+                    0,
+                    "COVNotificationMultiple property-id",
+                )?;
                 offset = end;
                 let property_identifier = PropertyIdentifier::from_raw(prop_id);
                 validate_decoded_property_identifier(
@@ -276,18 +282,15 @@ impl COVNotificationMultipleRequest {
 
                 // [1] propertyArrayIndex OPTIONAL
                 let mut array_index = None;
-                if offset < data.len() {
-                    let (tag, _) = tags::decode_tag(data, offset)?;
-                    if tag.is_context(1) {
-                        let (value, end) = decode_context_u32(
-                            data,
-                            offset,
-                            1,
-                            "COVNotificationMultiple array-index",
-                        )?;
-                        array_index = Some(value);
-                        offset = end;
-                    }
+                if next_is_context(data, offset, 1)? {
+                    let (value, end) = decode_ctx_unsigned::<u32>(
+                        data,
+                        offset,
+                        1,
+                        "COVNotificationMultiple array-index",
+                    )?;
+                    array_index = Some(value);
+                    offset = end;
                 }
 
                 // [2] value (opening/closing)
@@ -310,31 +313,28 @@ impl COVNotificationMultipleRequest {
 
                 // [3] timeOfChange OPTIONAL — primitive context Time
                 let mut time_of_change = None;
-                if offset < data.len() {
-                    let (peek, _) = tags::decode_tag(data, offset)?;
-                    if peek.is_context(3) {
-                        let (content, end) = decode_context(
-                            data,
-                            offset,
-                            3,
-                            "COVNotificationMultiple time-of-change",
-                        )?;
-                        let decoded_time = Time::decode(content).map_err(|_| {
-                            reject(
-                                RejectReason::INVALID_DATA_ENCODING,
-                                "COVNotificationMultiple time-of-change is malformed",
-                            )
-                        })?;
-                        if !actual_time_is_valid(&decoded_time) {
-                            return Err(reject(
-                                RejectReason::INVALID_DATA_ENCODING,
-                                "COVNotificationMultiple time-of-change is not an actual Time",
-                            ));
-                        }
-                        time_of_change = Some(decoded_time);
-                        has_time_of_change = true;
-                        offset = end;
+                if next_is_context(data, offset, 3)? {
+                    let (content, end) = decode_ctx_primitive(
+                        data,
+                        offset,
+                        3,
+                        "COVNotificationMultiple time-of-change",
+                    )?;
+                    let decoded_time = Time::decode(content).map_err(|_| {
+                        reject(
+                            RejectReason::INVALID_DATA_ENCODING,
+                            "COVNotificationMultiple time-of-change is malformed",
+                        )
+                    })?;
+                    if !actual_time_is_valid(&decoded_time) {
+                        return Err(reject(
+                            RejectReason::INVALID_DATA_ENCODING,
+                            "COVNotificationMultiple time-of-change is not an actual Time",
+                        ));
                     }
+                    time_of_change = Some(decoded_time);
+                    has_time_of_change = true;
+                    offset = end;
                 }
 
                 values.push(COVNotificationValue {

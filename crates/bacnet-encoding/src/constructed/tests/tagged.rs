@@ -362,9 +362,12 @@ fn bit_and_octet_strings_and_character_strings_read_their_contents() {
 
 #[test]
 fn application_items_refuse_another_tag() {
-    assert_eq!(decode_app_unsigned(&[0x21, 0x07], 0, W).unwrap(), (7, 2));
     assert_eq!(
-        decoding(decode_app_unsigned(&[0x09, 0x07], 0, W)),
+        decode_app_unsigned::<u64>(&[0x21, 0x07], 0, W).unwrap(),
+        (7, 2)
+    );
+    assert_eq!(
+        decoding(decode_app_unsigned::<u64>(&[0x09, 0x07], 0, W)),
         (0, "Thing: expected application-tagged Unsigned".into())
     );
     assert_eq!(
@@ -390,7 +393,83 @@ fn application_items_refuse_another_tag() {
             "Thing: expected application-tagged CharacterString".into()
         )
     );
-    assert_eq!(short(decode_app_unsigned(&[0x22, 0x07], 0, W)), (3, 2));
+    assert_eq!(
+        short(decode_app_unsigned::<u64>(&[0x22, 0x07], 0, W)),
+        (3, 2)
+    );
+}
+
+#[test]
+fn application_primitives_read_any_type_and_name_the_expected_one() {
+    use crate::tags::app_tag;
+    // An INTEGER, an OCTET STRING and a Date, each read at its own offset.
+    let data = [0x31, 0xFF, 0x62, 0xAB, 0xCD, 0xA4, 0x7E, 0x0A, 0x03, 0x05];
+    assert_eq!(
+        decode_app_primitive(&data, 0, app_tag::SIGNED, W).unwrap(),
+        (&[0xFF][..], 2)
+    );
+    assert_eq!(
+        decode_app_primitive(&data, 2, app_tag::OCTET_STRING, W).unwrap(),
+        (&[0xAB, 0xCD][..], 5)
+    );
+    assert_eq!(
+        decode_app_primitive(&data, 5, app_tag::DATE, W).unwrap(),
+        (&[0x7E, 0x0A, 0x03, 0x05][..], 10)
+    );
+    // Each refusal names the type it wanted; a context tag of the same
+    // number is refused too.
+    for (number, kind) in [
+        (app_tag::SIGNED, "INTEGER"),
+        (app_tag::OCTET_STRING, "OCTET STRING"),
+        (app_tag::DATE, "Date"),
+        (app_tag::TIME, "Time"),
+        (app_tag::OBJECT_IDENTIFIER, "BACnetObjectIdentifier"),
+        (app_tag::DOUBLE, "Double"),
+        (13, "value of a reserved type"),
+    ] {
+        assert_eq!(
+            decoding(decode_app_primitive(&[0x21, 0x00], 0, number, W)),
+            (0, format!("Thing: expected application-tagged {kind}"))
+        );
+    }
+    assert_eq!(
+        decoding(decode_app_primitive(&[0x39, 0x01], 0, app_tag::SIGNED, W)),
+        (0, "Thing: expected application-tagged INTEGER".into())
+    );
+    // Contents cut short are a short buffer.
+    assert_eq!(
+        short(decode_app_primitive(
+            &[0x63, 0xAB],
+            0,
+            app_tag::OCTET_STRING,
+            W
+        )),
+        (4, 2)
+    );
+}
+
+#[test]
+fn application_unsigned_values_narrow_to_their_width() {
+    assert_eq!(
+        decode_app_unsigned::<u8>(&[0x22, 0x00, 0xFF], 0, W).unwrap(),
+        (255, 3)
+    );
+    assert_eq!(
+        decoding(decode_app_unsigned::<u8>(&[0xAA, 0x22, 0x01, 0x00], 1, W)),
+        (2, "Thing: Unsigned exceeds u8".into())
+    );
+    assert_eq!(
+        decoding(decode_app_unsigned::<u16>(&[0x23, 0x01, 0x00, 0x00], 0, W)),
+        (1, "Thing: Unsigned exceeds u16".into())
+    );
+    assert_eq!(
+        decode_app_unsigned::<u32>(&[0x24, 0xFF, 0xFF, 0xFF, 0xFF], 0, W).unwrap(),
+        (u32::MAX, 5)
+    );
+    assert_eq!(
+        decoding(decode_app_unsigned::<u32>(&[0x25, 5, 1, 0, 0, 0, 0], 0, W)),
+        (2, "Thing: Unsigned exceeds u32".into())
+    );
 }
 
 #[test]

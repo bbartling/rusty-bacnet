@@ -1,5 +1,5 @@
 //! What a peer receives for a confirmed request whose contents stop before
-//! a member's header says they should (#1303).
+//! a member's header says they should (#1303, #1304).
 //!
 //! The decoders behind these services report such a member as a short
 //! buffer, where some used to call it malformed. The server answers both
@@ -121,5 +121,43 @@ async fn confirmed_audit_notification_cut_short_draws_services_other() {
         let error = error_for(&mut h, service, &body).await;
         assert!(error.error_data.is_empty());
     }
+    h.server.stop().await.unwrap();
+}
+
+/// A `[0]` Unsigned announcing two contents octets and holding one.
+const PROCESS_CUT: [u8; 2] = [0x0A, 0x01];
+
+#[tokio::test(start_paused = true)]
+async fn service_parameters_cut_short_draw_services_other() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    // AV-1, then a `[1]` property identifier cut the same way; and a `[0]`
+    // object identifier with two of its four octets.
+    let property_cut = [&AV_1[..], &[0x1A, 0x55]].concat();
+    let object_cut = [0x0C, 0x00, 0x80];
+    let cases: [(ConfirmedServiceChoice, &[u8]); 9] = [
+        (ConfirmedServiceChoice::READ_PROPERTY, &property_cut),
+        (ConfirmedServiceChoice::WRITE_PROPERTY, &property_cut),
+        (ConfirmedServiceChoice::READ_RANGE, &object_cut),
+        (ConfirmedServiceChoice::SUBSCRIBE_COV, &PROCESS_CUT),
+        (ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY, &PROCESS_CUT),
+        (ConfirmedServiceChoice::ACKNOWLEDGE_ALARM, &PROCESS_CUT),
+        (ConfirmedServiceChoice::GET_EVENT_INFORMATION, &object_cut),
+        (ConfirmedServiceChoice::LIFE_SAFETY_OPERATION, &PROCESS_CUT),
+        (ConfirmedServiceChoice::AUDIT_LOG_QUERY, &object_cut),
+    ];
+    for (service, body) in cases {
+        let error = error_for(&mut h, service, body).await;
+        assert!(error.error_data.is_empty(), "{service:?}");
+    }
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn subscribe_cov_property_multiple_process_cut_short_draws_the_general_error() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    let service = ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE;
+    let error = error_for(&mut h, service, &PROCESS_CUT).await;
+    let formal = SubscribeCOVPropertyMultipleError::try_from(&error).unwrap();
+    assert_eq!(formal.first_failed_subscription, None);
     h.server.stop().await.unwrap();
 }

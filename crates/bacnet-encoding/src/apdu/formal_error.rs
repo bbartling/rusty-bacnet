@@ -135,7 +135,7 @@ fn vt_session_identifiers(data: &[u8], offset: usize, what: &str) -> Result<usiz
     let (sessions, end) = decode_ctx_constructed(data, offset, 1, what)?;
     let mut position = 0;
     while position < sessions.len() {
-        let (session, next) = decode_app_unsigned(sessions, position, what)?;
+        let (session, next) = decode_app_unsigned::<u64>(sessions, position, what)?;
         if u8::try_from(session).is_err() {
             return Err(Error::decoding(
                 position,

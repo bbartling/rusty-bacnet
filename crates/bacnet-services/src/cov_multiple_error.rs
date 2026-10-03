@@ -2,11 +2,11 @@
 //! under `[0]`, or under `[1]` the first failed subscription's `[0]` monitored
 //! object identifier, `[1]` property reference and `[2]` error.
 
-use crate::common::decode_context;
-use crate::common::error_type::{
-    decode_constructed, decode_error_in, decode_error_pdu, encode_error_in, error_pdu, finish,
-};
+use crate::common::error_type::{decode_error_in, decode_error_pdu, encode_error_in, error_pdu};
 use bacnet_encoding::apdu::ErrorPdu;
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_constructed, decode_ctx_primitive, expect_end,
+};
 use bacnet_encoding::constructed::{decode_property_reference, encode_property_reference};
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::constructed::{BACnetObjectPropertyReference, PropertyReference};
@@ -58,31 +58,33 @@ impl SubscribeCOVPropertyMultipleError {
         let opening = tags::decode_tag(data, 0)?.0;
         if opening.is_opening_tag(0) {
             let ((error_class, error_code), end) = decode_error_in(data, 0, 0, WHAT)?;
-            finish(data, end, WHAT)?;
+            expect_end(data, end, end, WHAT)?;
             return Ok(Self {
                 error_class,
                 error_code,
                 first_failed_subscription: None,
             });
         }
-        let (subscription, end) = decode_constructed(data, 0, 1, WHAT)?;
-        finish(data, end, WHAT)?;
-        let (object, offset) = decode_context(
+        let (subscription, end) = decode_ctx_constructed(data, 0, 1, WHAT)?;
+        expect_end(data, end, end, WHAT)?;
+        let (object, offset) = decode_ctx_primitive(
             subscription,
             0,
             0,
             "SubscribeCOVPropertyMultiple-Error monitored object identifier",
         )?;
         let object_identifier = ObjectIdentifier::decode(object)?;
-        let (reference_body, offset) = decode_constructed(subscription, offset, 1, WHAT)?;
+        let reference_at = offset;
+        let (reference_body, offset) = decode_ctx_constructed(subscription, offset, 1, WHAT)?;
         let (reference, reference_end) = decode_property_reference(reference_body, 0)?;
-        finish(
+        expect_end(
             reference_body,
             reference_end,
+            reference_at,
             "SubscribeCOVPropertyMultiple-Error monitored property reference",
         )?;
         let ((error_class, error_code), end) = decode_error_in(subscription, offset, 2, WHAT)?;
-        finish(subscription, end, WHAT)?;
+        expect_end(subscription, end, end, WHAT)?;
         Ok(Self {
             error_class,
             error_code,

@@ -1,10 +1,9 @@
+use bacnet_encoding::constructed::tagged::decode_ctx_boolean;
 use bacnet_encoding::tags;
 use bacnet_types::enums::{PropertyIdentifier, RejectReason};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, Time};
 use bytes::BytesMut;
-
-use crate::common::decode_context_bool;
 
 pub(super) fn reject(reason: RejectReason, _message: &'static str) -> Error {
     Error::Reject {
@@ -36,7 +35,7 @@ pub(super) fn decode_required_bool(
             "required Boolean is missing",
         ));
     }
-    decode_context_bool(data, offset, context_tag, field).map_err(|_| {
+    decode_ctx_boolean(data, offset, context_tag, field).map_err(|_| {
         reject(
             RejectReason::INVALID_DATA_ENCODING,
             "required Boolean value is malformed",
