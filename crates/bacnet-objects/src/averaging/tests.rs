@@ -118,42 +118,30 @@ fn averaging_set_object_property_reference() {
     let pv_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
     avg.set_object_property_reference(Some(BACnetObjectPropertyReference::new(oid, pv_raw)));
 
-    let val = avg
-        .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
-        .unwrap();
+    // BACnetDeviceObjectPropertyReference with no index or Device (#1182).
     assert_eq!(
-        val,
-        PropertyValue::List(vec![
-            PropertyValue::ObjectIdentifier(oid),
-            PropertyValue::Unsigned(pv_raw as u64),
-        ])
+        avg.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
+            .unwrap(),
+        PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x05, 0x19, 0x55])
     );
 }
 
 #[test]
 fn averaging_write_object_property_reference() {
     let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
-    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap();
-    let pv_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
-
+    // [0] analog-input 3, [1] present-value: what a read serves comes back.
+    let framed = PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x03, 0x19, 0x55]);
     avg.write_property(
         PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
         None,
-        PropertyValue::List(vec![
-            PropertyValue::ObjectIdentifier(oid),
-            PropertyValue::Unsigned(pv_raw as u64),
-        ]),
+        framed.clone(),
         None,
     )
     .unwrap();
-
     assert_eq!(
         avg.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
             .unwrap(),
-        PropertyValue::List(vec![
-            PropertyValue::ObjectIdentifier(oid),
-            PropertyValue::Unsigned(pv_raw as u64),
-        ])
+        framed
     );
 }
 
@@ -240,56 +228,45 @@ fn averaging_single_sample() {
 // --- #182 adversary blocker: strict shared decode on the reference arm ---
 
 #[test]
-fn averaging_reference_write_accepts_exact_shapes_and_both_member_typings() {
+fn averaging_reference_write_refuses_the_flat_list_forms() {
+    // Reads serve the context-tagged form (#1182), so a flat
+    // application-tagged reference is a value of another datatype.
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7).unwrap();
     let pv_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
-    for (label, members, expect_indexed) in [
-        (
-            "2-member Unsigned (historical flat form)",
-            vec![
-                PropertyValue::ObjectIdentifier(oid),
-                PropertyValue::Unsigned(pv_raw as u64),
-            ],
-            None,
-        ),
-        (
-            "2-member Enumerated (Loop-family flat form)",
-            vec![
-                PropertyValue::ObjectIdentifier(oid),
-                PropertyValue::Enumerated(pv_raw),
-            ],
-            None,
-        ),
-        (
-            "3-member indexed",
-            vec![
-                PropertyValue::ObjectIdentifier(oid),
-                PropertyValue::Unsigned(pv_raw as u64),
-                PropertyValue::Unsigned(4),
-            ],
-            Some(4),
-        ),
-    ] {
-        let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
-        avg.write_property(
-            PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
-            None,
-            PropertyValue::List(members),
-            None,
-        )
-        .unwrap_or_else(|e| panic!("{label}: must be accepted: {e:?}"));
-        let mut expected = vec![
+    for members in [
+        vec![
             PropertyValue::ObjectIdentifier(oid),
             PropertyValue::Unsigned(pv_raw as u64),
-        ];
-        if let Some(idx) = expect_indexed {
-            expected.push(PropertyValue::Unsigned(idx as u64));
-        }
+        ],
+        vec![
+            PropertyValue::ObjectIdentifier(oid),
+            PropertyValue::Enumerated(pv_raw),
+        ],
+        vec![
+            PropertyValue::ObjectIdentifier(oid),
+            PropertyValue::Unsigned(pv_raw as u64),
+            PropertyValue::Unsigned(4),
+        ],
+    ] {
+        let mut avg = AveragingObject::new(1, "AVG-1").unwrap();
+        let err = avg
+            .write_property(
+                PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
+                None,
+                PropertyValue::List(members.clone()),
+                None,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::Protocol { class, code }
+                if class == bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+                    && code == bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32),
+            "{members:?}: {err:?}"
+        );
         assert_eq!(
             avg.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
                 .unwrap(),
-            PropertyValue::List(expected),
-            "{label}: read-back fidelity"
+            PropertyValue::Null
         );
     }
 }
@@ -298,10 +275,7 @@ fn averaging_reference_write_accepts_exact_shapes_and_both_member_typings() {
 fn averaging_reference_write_rejects_bad_shapes_and_preserves_state() {
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7).unwrap();
     let pv_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
-    let baseline = PropertyValue::List(vec![
-        PropertyValue::ObjectIdentifier(oid),
-        PropertyValue::Unsigned(pv_raw as u64),
-    ]);
+    let baseline = PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x07, 0x19, 0x55]);
 
     // A framed device-qualified write ([3] device-identifier): the
     // Clause 12.5 typing is BACnetDeviceObjectPropertyReference, so the
@@ -361,6 +335,18 @@ fn averaging_reference_write_rejects_bad_shapes_and_preserves_state() {
             PropertyValue::ApplicationData(framed_device.to_vec()),
             bacnet_types::enums::ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
             "device-qualified framed reference",
+        ),
+        (
+            // [3] names analog-input 42, which is no Device (#1182).
+            PropertyValue::ApplicationData(
+                [
+                    &framed_device[..framed_device.len() - 5],
+                    &[0x3C, 0x00, 0x00, 0x00, 0x2A],
+                ]
+                .concat(),
+            ),
+            bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE,
+            "Device member that is no Device",
         ),
         (
             PropertyValue::ApplicationData(
@@ -430,13 +416,10 @@ fn averaging_reference_write_accepts_the_framed_local_form() {
         None,
     )
     .unwrap();
+    // The index member [2] comes back after [0] and [1].
     assert_eq!(
         avg.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
             .unwrap(),
-        PropertyValue::List(vec![
-            PropertyValue::ObjectIdentifier(oid),
-            PropertyValue::Unsigned(pv_raw as u64),
-            PropertyValue::Unsigned(2),
-        ])
+        PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x07, 0x19, 0x55, 0x29, 0x02])
     );
 }

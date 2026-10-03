@@ -10,15 +10,12 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
         let mut object = AveragingObject::new(7, "AVG-7").unwrap();
         if configured {
             // The reference write resets the window, so it comes first.
-            let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
             object
                 .write_property(
                     P::OBJECT_PROPERTY_REFERENCE,
                     None,
-                    PropertyValue::List(vec![
-                        PropertyValue::ObjectIdentifier(oid),
-                        PropertyValue::Unsigned(P::PRESENT_VALUE.to_raw() as u64),
-                    ]),
+                    // [0] analog-input 1, [1] present-value (#1182).
+                    PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x01, 0x19, 0x55]),
                     None,
                 )
                 .unwrap();
@@ -113,7 +110,7 @@ fn rpm_averaging_indexed_reads_and_bytes_are_unchanged() {
                 P::OBJECT_PROPERTY_REFERENCE,
                 None,
                 Ok(if configured {
-                    &[0xC4, 0x00, 0x00, 0x00, 0x01, 0x21, 85]
+                    &[0x0C, 0x00, 0x00, 0x00, 0x01, 0x19, 85]
                 } else {
                     &[0x00]
                 }),

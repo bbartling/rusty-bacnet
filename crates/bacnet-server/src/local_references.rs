@@ -1,17 +1,20 @@
-//! References that name this device (#1122, #1136, #1151, #1153).
+//! References that name this device (#1122, #1136, #1151, #1153, #1234).
 //!
-//! Four properties hold references this server keeps inside its own device:
+//! These properties hold references this server keeps inside its own device:
 //! the List_Of_Object_Property_References of a Schedule (Clause 12.24.10)
 //! and of a Channel (Clause 12.53.11), a Staging object's Target_References
-//! (Clause 12.62.14) and an Averaging object's Object_Property_Reference
-//! (Clause 12.5.13). Each clause lets the object stay within its own device,
-//! which permits refusing a reference to an object in some other device, and
-//! nothing more. None of these objects can tell which Device holds it, so
-//! each refuses every member that carries a Device identifier. A member whose
-//! Device identifier is this device's points inside the device, so refusing
-//! it would be stricter than the clauses allow. The server knows the local
-//! Device ([`ObjectDatabase::local_device`], under the same database guard as
-//! the write), so it rewrites such a member as the local reference it denotes
+//! (Clause 12.62.14), an Averaging object's Object_Property_Reference
+//! (Clause 12.5.13) and the Log_DeviceObjectProperty of a Trend Log or Trend
+//! Log Multiple (Clauses 12.25.8 and 12.30.11). Each clause lets the object
+//! stay within its own device, which permits refusing a reference to an
+//! object in some other device, and nothing more. None of these objects can
+//! tell which Device holds it, so each refuses every member that carries a
+//! Device identifier (a Trend Log Multiple keeps an empty element, one naming
+//! instance 4194303). A member whose Device identifier is this device's
+//! points inside the device, so refusing it would be stricter than the
+//! clauses allow. The server knows the local Device
+//! ([`ObjectDatabase::local_device`], under the same database guard as the
+//! write), so it rewrites such a member as the local reference it denotes
 //! before the object sees it: WriteProperty, WritePropertyMultiple,
 //! `write_local`, and, for the Schedule's list, the elements of
 //! AddListElement and RemoveListElement. A member naming any other device
@@ -87,8 +90,12 @@ fn rewrite(object_type: ObjectType, property: PropertyIdentifier) -> Option<Rewr
         (ObjectType::STAGING, PropertyIdentifier::TARGET_REFERENCES) => {
             Some(localize_members::<BACnetDeviceObjectReference>)
         }
-        (ObjectType::AVERAGING, PropertyIdentifier::OBJECT_PROPERTY_REFERENCE) => {
+        (ObjectType::AVERAGING, PropertyIdentifier::OBJECT_PROPERTY_REFERENCE)
+        | (ObjectType::TREND_LOG, PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY) => {
             Some(localize_single::<BACnetDeviceObjectPropertyReference>)
+        }
+        (ObjectType::TREND_LOG_MULTIPLE, PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY) => {
+            Some(localize_members::<BACnetDeviceObjectPropertyReference>)
         }
         _ => None,
     }

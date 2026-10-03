@@ -121,12 +121,14 @@ async fn ordinary_trend_poll_uses_synchronized_offset_and_dst_frame() {
     let mut db = ObjectDatabase::new();
     let target = AnalogValueObject::new(1, "AV", 95).unwrap();
     let mut trend = TrendLogObject::new(1, "Trend", 8).unwrap();
-    trend.set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
-        object_identifier: target.object_identifier(),
-        property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
-        property_array_index: None,
-        device_identifier: None,
-    }));
+    trend
+        .set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
+            object_identifier: target.object_identifier(),
+            property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
+            property_array_index: None,
+            device_identifier: None,
+        }))
+        .unwrap();
     trend
         .write_property(
             PropertyIdentifier::LOG_INTERVAL,

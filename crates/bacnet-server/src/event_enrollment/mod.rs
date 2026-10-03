@@ -79,6 +79,7 @@ use fault::{
     read_monitored_reliability, FaultAlgorithmEvaluation, MonitoredReliability,
     SupportedFaultAlgorithm,
 };
+pub(crate) use reference::decode_reference_value;
 #[cfg(test)]
 use reference::MonitoredReference;
 use reference::{params_fingerprint, read_object_property_ref};

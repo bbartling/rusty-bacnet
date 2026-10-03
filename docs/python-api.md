@@ -2068,7 +2068,9 @@ write of either, of Object_Property_Reference, or of zero to Attempted_Samples
 empties the window; out-of-range values raise VALUE_OUT_OF_RANGE. An
 Object_Property_Reference written with the server's own Device in it is kept
 as the local reference it names, and one naming another device is refused with
-OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (#1153). The
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (#1153). Peers read and write it as the
+context-tagged BACnetDeviceObjectPropertyReference; the flat application-tagged
+form is refused with INVALID_DATA_TYPE (#1182). The
 statistics and counts change together and go through the server's COV path.
 SubscribeCOV on an Averaging object is refused, since Table 13-1 has no row for
 it, but a property subscription (SubscribeCOVProperty or

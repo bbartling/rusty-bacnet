@@ -16,15 +16,12 @@ fn averaging_object(configured: bool) -> AveragingObject {
             .unwrap();
         // The reference and window writes reset the window, so they come
         // before the samples.
-        let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
         object
             .write_property(
                 P::OBJECT_PROPERTY_REFERENCE,
                 None,
-                PropertyValue::List(vec![
-                    PropertyValue::ObjectIdentifier(oid),
-                    PropertyValue::Unsigned(P::PRESENT_VALUE.to_raw() as u64),
-                ]),
+                // [0] analog-input 1, [1] present-value (#1182).
+                PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x00, 0x00, 0x01, 0x19, 0x55]),
                 None,
             )
             .unwrap();

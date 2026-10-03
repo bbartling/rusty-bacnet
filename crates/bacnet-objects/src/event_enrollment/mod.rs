@@ -298,22 +298,14 @@ impl BACnetObject for EventEnrollmentObject {
                 )?;
                 Ok(PropertyValue::ApplicationData(buf.to_vec()))
             }
+            // Table 12-14's BACnetDeviceObjectPropertyReference, its optional
+            // index and Device members present only when set; Null while the
+            // enrollment has no reference (#1182).
             p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => {
-                match &self.object_property_reference {
-                    None => Ok(PropertyValue::Null),
-                    Some(r) => Ok(PropertyValue::List(vec![
-                        PropertyValue::ObjectIdentifier(r.object_identifier),
-                        PropertyValue::Unsigned(r.property_identifier as u64),
-                        match r.property_array_index {
-                            Some(idx) => PropertyValue::Unsigned(idx as u64),
-                            None => PropertyValue::Null,
-                        },
-                        match r.device_identifier {
-                            Some(dev) => PropertyValue::ObjectIdentifier(dev),
-                            None => PropertyValue::Null,
-                        },
-                    ])),
-                }
+                Ok(self.object_property_reference.as_ref().map_or(
+                    PropertyValue::Null,
+                    crate::device_reference::property_reference_value,
+                ))
             }
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(self.event_state.to_raw()))

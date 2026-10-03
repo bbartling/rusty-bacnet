@@ -20,12 +20,14 @@ fn polled_with(property: P, index: Option<u32>) -> (ObjectDatabase, ObjectIdenti
     let ao = output.object_identifier();
     db.add(Box::new(output)).unwrap();
     let mut object = trend(u32::MAX, 16);
-    object.set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
-        object_identifier: ao,
-        property_identifier: property.to_raw(),
-        property_array_index: index,
-        device_identifier: None,
-    }));
+    object
+        .set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference {
+            object_identifier: ao,
+            property_identifier: property.to_raw(),
+            property_array_index: index,
+            device_identifier: None,
+        }))
+        .unwrap();
     db.add(Box::new(object)).unwrap();
     db.poll_trend_logs();
     assert_eq!(count(&db, oid), 1);

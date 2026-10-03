@@ -68,7 +68,9 @@ pub(super) fn cov_reported_properties_default(
 ///   BACnetARRAY\[N\] on Channel (Table 12-62) but BACnetLIST on Schedule
 ///   (Table 12-28) and Timer (Table 12-75); PRESENT_VALUE is
 ///   BACnetARRAY\[N\] of BACnetPropertyAccessResult on Global Group
-///   (Table 12-57) but scalar elsewhere.
+///   (Table 12-57) but scalar elsewhere; LOG_DEVICE_OBJECT_PROPERTY is
+///   BACnetARRAY\[N\] on Trend Log Multiple (Table 12-35) but a single
+///   reference on Trend Log (Table 12-29).
 /// - **Everything else** — scalars and the identifier-stable BACnetLIST
 ///   properties DATE_LIST (Table 12-11), LIST_OF_GROUP_MEMBERS
 ///   (Table 12-17), RECIPIENT_LIST (Table 12-24), LOG_BUFFER
@@ -136,6 +138,9 @@ pub(super) fn array_property_default(
                 | ObjectType::MULTI_STATE_VALUE
         ),
         PropertyIdentifier::PRESENT_VALUE => object_type == ObjectType::GLOBAL_GROUP,
+        PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => {
+            object_type == ObjectType::TREND_LOG_MULTIPLE
+        }
         _ => false,
     }
 }
