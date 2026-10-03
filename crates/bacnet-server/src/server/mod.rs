@@ -760,8 +760,6 @@ mod event_notifications_tests;
 #[cfg(test)]
 mod event_recipient_routing_tests;
 #[cfg(test)]
-mod file_request_tag_wire_tests;
-#[cfg(test)]
 mod life_safety_application_tests;
 #[cfg(test)]
 mod life_safety_cov_tests;
@@ -779,6 +777,8 @@ mod log_reference_resize_tests;
 mod loop_controlled_variable_tests;
 #[cfg(test)]
 mod loop_cov_tests;
+#[cfg(test)]
+mod mistagged_request_wire_tests;
 #[cfg(test)]
 mod notification_dcc_tests;
 #[cfg(test)]

@@ -1,12 +1,12 @@
-//! What a peer receives for an AtomicReadFile or AtomicWriteFile request
-//! with a member under the wrong tag (#1375).
+//! What a peer receives for an AtomicReadFile, AtomicWriteFile or
+//! DeleteObject request with a member under the wrong tag (#1375, #1374).
 //!
 //! Every member of these requests outside the access-method frame's own
 //! `[0]` or `[1]` is application-tagged (Clause 21's productions for Clauses
-//! 14.1 and 14.2). The decoder refuses one under any other tag, and the
+//! 14.1, 14.2 and 15.4). The decoders refuse one under any other tag, and the
 //! server answers that as it answers any request it can't decode: SERVICES /
-//! OTHER, with nothing read or written. A record write's count still draws
-//! its Rejects.
+//! OTHER, with nothing read, written or deleted. A record write's count
+//! still draws its Rejects.
 use super::*;
 use crate::server::cov_wire_test_support::Harness;
 use crate::server::truncated_request_wire_tests::{answer_to, error_for};
@@ -175,5 +175,26 @@ async fn record_counts_still_draw_their_rejects() {
         }
     }
     assert_eq!(contents(&h).await, before);
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn mistagged_delete_object_draws_services_other() {
+    use crate::server::cov_wire_test_support::av1;
+    let mut h = harness().await;
+    let delete = ConfirmedServiceChoice::DELETE_OBJECT;
+    // AV-1 as a context [0], and as an application Unsigned.
+    for body in [
+        [0x0C, 0x00, 0x80, 0x00, 0x01],
+        [0x24, 0x00, 0x80, 0x00, 0x01],
+    ] {
+        let error = error_for(&mut h, delete, &body).await;
+        assert!(error.error_data.is_empty(), "{body:02X?}");
+        assert!(h.server.database().read().await.get(&av1()).is_some());
+    }
+    // As an application object identifier it is deleted.
+    let answer = answer_to(&mut h, delete, &[0xC4, 0x00, 0x80, 0x00, 0x01]).await;
+    assert!(matches!(answer, Apdu::SimpleAck(_)), "{answer:?}");
+    assert!(h.server.database().read().await.get(&av1()).is_none());
     h.server.stop().await.unwrap();
 }

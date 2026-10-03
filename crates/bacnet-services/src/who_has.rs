@@ -1,5 +1,6 @@
 //! Who-Has and I-Have services per ASHRAE 135-2020 Clause 16.9.
 
+use bacnet_encoding::constructed::tagged::{decode_app_character_string, decode_app_object_id};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_types::error::Error;
@@ -138,32 +139,13 @@ impl IHaveRequest {
         Ok(())
     }
 
-    /// Decode the request from service-request octets; fails on malformed or truncated input.
+    /// Decode the request from service-request octets; fails on malformed or truncated input,
+    /// and on a member under any tag but its application tag.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IHave truncated at device-id"));
-        }
-        let device_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IHave truncated at object-id"));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IHave truncated at object-name"));
-        }
-        let object_name = primitives::decode_character_string(&data[pos..end])?;
+        let (device_identifier, offset) = decode_app_object_id(data, 0, "IHave device-identifier")?;
+        let (object_identifier, offset) =
+            decode_app_object_id(data, offset, "IHave object-identifier")?;
+        let (object_name, _) = decode_app_character_string(data, offset, "IHave object-name")?;
 
         Ok(Self {
             device_identifier,

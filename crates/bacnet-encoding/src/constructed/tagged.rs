@@ -645,7 +645,7 @@ fn narrow_app<T: UnsignedWidth>(
 }
 
 /// Decode one application-tagged CharacterString.
-pub(crate) fn decode_app_character_string(
+pub fn decode_app_character_string(
     data: &[u8],
     offset: usize,
     what: &str,

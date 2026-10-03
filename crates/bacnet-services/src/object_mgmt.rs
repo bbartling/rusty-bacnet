@@ -3,6 +3,7 @@
 //! - CreateObject (Clause 15.3)
 //! - DeleteObject (Clause 15.4)
 
+use bacnet_encoding::constructed::tagged::decode_app_object_id;
 use bacnet_encoding::constructed::{
     decode_bacnet_property_value_in_list, encode_bacnet_property_value,
 };
@@ -176,14 +177,11 @@ impl DeleteObjectRequest {
         primitives::encode_app_object_id(buf, &self.object_identifier);
     }
 
-    /// Decode the request from service-request octets; fails on malformed or truncated input.
+    /// Decode the request from service-request octets; fails on malformed or truncated input,
+    /// and on an object identifier under any tag but its application tag.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (tag, pos) = tags::decode_tag(data, 0)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "DeleteObject truncated at object-id"));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
+        let (object_identifier, _) =
+            decode_app_object_id(data, 0, "DeleteObject object-identifier")?;
         Ok(Self { object_identifier })
     }
 }

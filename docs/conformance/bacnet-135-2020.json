@@ -6472,7 +6472,10 @@
     "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::read_property_multiple_cut_short_draws_services_other",
     "crates/bacnet-encoding/src/constructed/tests/tagged.rs::{application_primitives_read_any_type_and_name_the_expected_one,application_unsigned_values_narrow_to_their_width,an_application_boolean_has_no_contents_to_read,fixed_size_contents_check_their_length_first}",
     "crates/bacnet-services/src/truncated_member_tests.rs::{members_cut_short_are_a_short_buffer,fixed_size_members_of_the_wrong_length_stay_malformed_when_cut_short,confirmed_cov_notification_rejects_keep_their_reasons,reals_and_times_check_their_length_before_their_contents}",
-    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{service_parameters_cut_short_draw_services_other,subscribe_cov_property_multiple_process_cut_short_draws_the_general_error,malformed_and_cut_short_requests_draw_the_same_reply}"
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{service_parameters_cut_short_draw_services_other,subscribe_cov_property_multiple_process_cut_short_draws_the_general_error,malformed_and_cut_short_requests_draw_the_same_reply}",
+    "crates/bacnet-services/src/malformed_member_tests/object.rs::delete_object_request",
+    "crates/bacnet-services/src/malformed_member_tests/discovery.rs::i_have_request",
+    "crates/bacnet-server/src/server/mistagged_request_wire_tests.rs::mistagged_delete_object_draws_services_other"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -6489,7 +6492,8 @@
     "A member cut short inside a constructed frame is caught when the frame is extracted (tags::extract_context_value), which reports Error::Decoding.",
     "The server answers a ReadPropertyMultiple, SubscribeCOVProperty or ConfirmedAuditNotification cut short with SERVICES / OTHER, and a SubscribeCOVPropertyMultiple with its general error, whichever kind the decoder reports.",
     "A service parameter member that bacnet-services reads through the same public helpers (constructed::tagged) is Error::BufferTooShort when cut short; members it still reads inline report Error::Decoding.",
-    "A ReadProperty, WriteProperty, ReadRange, SubscribeCOV, SubscribeCOVProperty, AcknowledgeAlarm, GetEventInformation, LifeSafetyOperation or AuditLogQuery cut short draws SERVICES / OTHER from the server."
+    "A ReadProperty, WriteProperty, ReadRange, SubscribeCOV, SubscribeCOVProperty, AcknowledgeAlarm, GetEventInformation, LifeSafetyOperation or AuditLogQuery cut short draws SERVICES / OTHER from the server.",
+    "DeleteObject and I-Have requests refuse an object identifier or object name under any tag but its application tag; the server answers such a DeleteObject with SERVICES / OTHER and deletes nothing."
    ]
   },
   {
@@ -8723,7 +8727,7 @@
      "crates/bacnet-services/src/file_width_tests.rs::atomic_write_record_short_list_is_missing_required_parameter",
     "crates/bacnet-services/src/file_width_tests.rs::atomic_write_record_extra_element_is_too_many_arguments",
     "crates/bacnet-services/src/malformed_member_tests/file.rs::{atomic_read_file_request,atomic_write_file_request}",
-    "crates/bacnet-server/src/server/file_request_tag_wire_tests.rs::{mistagged_file_requests_draw_services_other,record_counts_still_draw_their_rejects}"
+    "crates/bacnet-server/src/server/mistagged_request_wire_tests.rs::{mistagged_file_requests_draw_services_other,record_counts_still_draw_their_rejects}"
    ],
    "benchmarks": [],
    "public_claims": [],
