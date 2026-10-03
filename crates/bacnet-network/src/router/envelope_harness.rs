@@ -5,6 +5,8 @@
 //! dispatcher. Both test modules build ingress contexts here so discovery
 //! and control-envelope coverage stays in lockstep.
 
+use super::control_messages::handle_network_message;
+use super::dispatch::dispatch_network_message;
 use super::*;
 use bacnet_transport::port::TransportProvenance;
 

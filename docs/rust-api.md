@@ -1363,6 +1363,8 @@ In-process channel-based transport for composing a client and server without rea
 
 The peer receives every frame, whatever MAC a unicast was sent to. For tests that need to know, `record_unicast_destinations()` returns a receiver of those MACs, in the order the peer receives the unicast frames (#1243). Call it before handing the transport to a router or network layer; dropping the receiver stops the record.
 
+By default the transport drops the data attributes given to `send_unicast_with_data_attributes` and `send_broadcast_with_data_attributes`, like a data link that cannot carry them. `carry_data_attributes()` makes that side hand them to the peer in `ReceivedNpdu::data_attributes`, so a test can feed a router or network layer frames that carry attributes and check the ones it sends back (#1289).
+
 ### AnyTransport (enum dispatch)
 
 ```rust

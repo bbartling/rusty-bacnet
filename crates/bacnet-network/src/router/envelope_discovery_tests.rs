@@ -7,10 +7,12 @@
 //!
 //! Shares [`super::envelope_harness`] with the control-envelope module.
 
+use super::control_messages::handle_network_message;
 use super::envelope_harness::*;
 use super::*;
 use crate::router_table::ReachabilityStatus;
-use bacnet_encoding::npdu::NpduAddress;
+use bacnet_encoding::npdu::{decode_npdu, NpduAddress};
+use bacnet_types::enums::RejectMessageReason;
 
 // --- Who-Is discovery origin (Clause 6.6.3.2) ---
 
