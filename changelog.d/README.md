@@ -71,9 +71,11 @@ commit: 0123456789abcdef0123456789abcdef01234567
 - It takes 7 to 40 lowercase hex digits; write the full SHA.
 - `assemble` and `preview` link that commit ahead of the history lookup, even
   in a shallow clone.
-- `check` fails when the commit is not on HEAD's first-parent history (dev's
-  merge commits). A shallow clone, such as CI's lint checkout, skips that
-  check without failing.
+- `check` fails when the commit is on no mainline: the first-parent history
+  of HEAD, of `MERGE_HEAD` during a merge, or of the local `origin/dev` or
+  `dev` ref (dev's merge commits), so a branch that has merged dev still
+  passes. A shallow clone, such as CI's lint checkout, skips that check
+  without failing.
 - `python3 scripts/changelog_pin_commits.py [--dry-run]` pins fragments that
   have no link where exactly one dev merge names their issue. It needs full
   history, and running it twice changes nothing.

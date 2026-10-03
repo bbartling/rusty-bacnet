@@ -36,8 +36,9 @@ BULK_ADDS fragments added, gets no link, and neither does any unpinned entry in
 a shallow clone. A fragment can pin its commit with `commit: <sha>` (7 to 40
 lowercase hex digits) in the front matter; assemble and preview use that
 ahead of the history lookup, and check fails when the repository has full
-history and the pin is not on HEAD's first-parent history (a shallow clone
-skips that check). scripts/changelog_pin_commits.py adds pins for fragments
+history and the pin is on no mainline: the first-parent history of HEAD, of
+MERGE_HEAD during a merge, or of the local origin/dev or dev ref (a shallow
+clone skips that check). scripts/changelog_pin_commits.py adds pins for fragments
 a bulk move left without a link. assemble deletes the fragments it wrote and updates the compare
 links at the bottom of the file if there are any. With --output it writes the
 result to that file instead and leaves CHANGELOG.md and the fragments alone
@@ -73,6 +74,11 @@ COMMIT_URL = "https://github.com/jscott3201/rusty-bacnet/commit/"
 # split [Unreleased] into 209 of them) rather than making the changes, so its
 # fragments get no link instead of all pointing at it.
 BULK_ADDS = 20
+
+# Refs whose first-parent lines count as mainlines for `commit:` pins, beside
+# HEAD's. A branch that has merged dev holds dev's merge commits off its own
+# first-parent line, and a merge in progress doesn't hold them in HEAD yet.
+MAINLINE_REFS = ("MERGE_HEAD", "origin/dev", "dev")
 
 NAME = re.compile(r"^(?:(\d+)-)?([a-z0-9]+(?:-[a-z0-9]+)*)\.md$")
 VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
@@ -261,6 +267,28 @@ def full_history(root):
         return None
 
 
+def mainline_commits(root):
+    """Commits on any mainline a pin may name, HEAD's first-parent line first, or None without full history.
+
+    The other mainlines are the first-parent lines of the MAINLINE_REFS that
+    exist, so a pin to a dev merge commit still resolves on a branch that has
+    merged dev, or is merging it, and a side-branch commit still doesn't.
+    """
+    history = full_history(root)
+    if history is None:
+        return None
+    seen = set(history)
+    for ref in MAINLINE_REFS:
+        try:
+            tip = git_out(root, "rev-parse", "-q", "--verify", f"{ref}^{{commit}}")
+            line = git_out(root, "rev-list", "--first-parent", tip).split()
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        history += [sha for sha in line if sha not in seen]
+        seen.update(line)
+    return history
+
+
 def pinned_sha(pin, history):
     """The full SHA a pin names in history, or the pin as written when history can't say."""
     if history is None:
@@ -278,7 +306,8 @@ def commit_links(root, fragments):
     Otherwise empty when root has no full git history (see full_history).
     """
     history = full_history(root)
-    links = {f.path: pinned_sha(f.commit, history) for f in fragments if f.commit}
+    mainlines = mainline_commits(root) if any(f.commit for f in fragments) else history
+    links = {f.path: pinned_sha(f.commit, mainlines) for f in fragments if f.commit}
     if history is None:
         return links
     try:
@@ -303,9 +332,9 @@ def commit_links(root, fragments):
 
 
 def pin_problems(root, fragments):
-    """One message per `commit:` pin that isn't on HEAD's first-parent history; none without full history."""
+    """One message per `commit:` pin that is on no mainline (see mainline_commits); none without full history."""
     pinned = [f for f in fragments if f.commit]
-    history = full_history(root) if pinned else None
+    history = mainline_commits(root) if pinned else None
     if history is None:
         return []
     problems = []
@@ -313,7 +342,7 @@ def pin_problems(root, fragments):
         hits = [sha for sha in history if sha.startswith(f.commit)]
         where = f"{FRAGMENT_DIR}/{f.path.name}"
         if not hits:
-            problems.append(f"{where}: commit {f.commit} is not on HEAD's first-parent history")
+            problems.append(f"{where}: commit {f.commit} is on no mainline's first-parent history")
         elif len(hits) > 1:
             problems.append(f"{where}: commit {f.commit} is ambiguous; write more of the SHA")
     return problems
