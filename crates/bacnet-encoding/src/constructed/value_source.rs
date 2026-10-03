@@ -60,7 +60,7 @@ pub fn decode_value_source(
         return Ok((BACnetValueSource::Object(reference), end));
     }
     if tag.is_opening_tag(2) {
-        let (network, pos) = decode_app_unsigned(data, pos, WHAT)?;
+        let (network, pos) = decode_app_unsigned::<u64>(data, pos, WHAT)?;
         let network_number = u16::try_from(network).map_err(|_| {
             Error::decoding(pos, format!("{WHAT}: network number exceeds Unsigned16"))
         })?;

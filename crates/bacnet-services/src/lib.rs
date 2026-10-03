@@ -31,3 +31,6 @@ pub mod who_is;
 pub mod wpm;
 pub mod write_group;
 pub mod write_property;
+
+#[cfg(test)]
+mod truncated_member_tests;

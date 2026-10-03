@@ -172,7 +172,7 @@ pub fn decode_recipient(data: &[u8], offset: usize) -> Result<(BACnetRecipient, 
     }
     if tag.is_opening_tag(1) {
         // network-number Unsigned16
-        let (network_number, pos) = decode_app_unsigned(data, pos, what)?;
+        let (network_number, pos) = decode_app_unsigned::<u64>(data, pos, what)?;
         let network_number = u16::try_from(network_number).map_err(|_| {
             Error::decoding(pos, format!("{what}: network-number exceeds Unsigned16"))
         })?;
@@ -226,7 +226,7 @@ pub fn decode_destination(data: &[u8], offset: usize) -> Result<(BACnetDestinati
     // recipient CHOICE, its address MAC bounded.
     let (recipient, pos) = decode_recipient(data, pos)?;
     // process-identifier Unsigned32.
-    let (process_identifier, pos) = decode_app_unsigned(data, pos, what)?;
+    let (process_identifier, pos) = decode_app_unsigned::<u64>(data, pos, what)?;
     let process_identifier = u32::try_from(process_identifier).map_err(|_| {
         Error::decoding(
             pos,

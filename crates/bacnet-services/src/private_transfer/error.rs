@@ -1,11 +1,13 @@
 //! ConfirmedPrivateTransfer-Error (Clause 21): `[0]` Error, `[1]` vendor
 //! identifier, `[2]` service number and optional `[3]` error parameters.
 
-use crate::common::decode_context_u32;
 use crate::common::error_type::{
-    decode_constructed, decode_error_pdu, decode_error_type, encode_error_type, error_pdu, finish,
+    decode_error_pdu, decode_error_type, encode_error_type, error_pdu,
 };
 use bacnet_encoding::apdu::ErrorPdu;
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_constructed, decode_ctx_unsigned, expect_end,
+};
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, ErrorDetail};
@@ -45,9 +47,13 @@ impl PrivateTransferError {
     /// Decode one complete body with no trailing content.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let ((error_class, error_code), offset) = decode_error_type(data, WHAT)?;
-        let (vendor_id, offset) =
-            decode_context_u32(data, offset, 1, "ConfirmedPrivateTransfer-Error vendor-id")?;
-        let (service_number, mut offset) = decode_context_u32(
+        let (vendor_id, offset) = decode_ctx_unsigned::<u32>(
+            data,
+            offset,
+            1,
+            "ConfirmedPrivateTransfer-Error vendor-id",
+        )?;
+        let (service_number, mut offset) = decode_ctx_unsigned::<u32>(
             data,
             offset,
             2,
@@ -55,11 +61,11 @@ impl PrivateTransferError {
         )?;
         let mut error_parameters = None;
         if offset < data.len() {
-            let (parameters, end) = decode_constructed(data, offset, 3, WHAT)?;
+            let (parameters, end) = decode_ctx_constructed(data, offset, 3, WHAT)?;
             error_parameters = Some(parameters.to_vec());
             offset = end;
         }
-        finish(data, offset, WHAT)?;
+        expect_end(data, offset, offset, WHAT)?;
         Ok(Self {
             error_class,
             error_code,

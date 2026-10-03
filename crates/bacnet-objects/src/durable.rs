@@ -19,7 +19,8 @@
 //!   saved state, or refuses the request if the save failed. So a forwarder
 //!   list write that cannot be saved is refused and leaves the old list, and an
 //!   Audit notification is stored, and a confirmed one acknowledged, only once
-//!   its commit is durable.
+//!   its commit is durable. An application's Audit Log purge (#1238) stages
+//!   the same way, though no property is written.
 //! - A save no request waits for, such as a forwarder's lapse and minute
 //!   saves, coalesces: a queued save the thread has not started is replaced by
 //!   the newer one, so a burst costs one save of the latest state.
@@ -46,6 +47,9 @@
 //!   and a WritePropertyMultiple attempt when a mutation authorizer is
 //!   configured, since the authorizer sees each attempt only as the handler
 //!   reaches it under the guard;
+//! - a request's second write to an object that stages one write per request,
+//!   as a Notification Forwarder or Class does (an Audit Log folds a request's
+//!   Log_Enable and Buffer_Size writes into one staged commit instead);
 //! - an in-place change to an Audit Log, such as `add_record`, which first
 //!   lets a staged commit land, waiting for it if it is still running.
 //!
@@ -100,7 +104,7 @@ use std::task::{Context, Poll, Waker};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
@@ -551,14 +555,28 @@ pub enum StageStep {
     Skip,
 }
 
+/// One write a request makes to an object, as
+/// [`DurableWrites::stage_writes`] receives it.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingWrite {
+    /// The property written.
+    pub property: PropertyIdentifier,
+    /// The array index written, if any.
+    pub array_index: Option<u32>,
+    /// The value written.
+    pub value: PropertyValue,
+}
+
 /// Writes whose new state an object saves before serving it, staged so the
 /// save runs while the database guard is dropped (#1270).
 ///
-/// The bundled server stages each such write it receives: it calls
-/// [`stage_write`](Self::stage_write) under the guard, awaits the save after
-/// dropping it, makes the write under the guard again, and in that same
-/// critical section calls [`release_staged_write`](Self::release_staged_write).
-/// A write made without staging still works: the object then saves in place.
+/// The bundled server stages the writes each request makes to such an
+/// object: it calls [`stage_writes`](Self::stage_writes) under the guard,
+/// awaits the save after dropping it, makes the writes under the guard
+/// again, and in that same critical section calls
+/// [`release_staged_write`](Self::release_staged_write). A write made
+/// without staging still works: the object then saves in place.
 #[doc(hidden)]
 pub trait DurableWrites {
     /// Stage a write of `value` to `property` (at `array_index`).
@@ -568,6 +586,40 @@ pub trait DurableWrites {
         array_index: Option<u32>,
         value: &PropertyValue,
     ) -> StageStep;
+
+    /// Stage the writes one request makes to this object, in the order it
+    /// makes them; a WritePropertyMultiple can make several. The default
+    /// stages the first write the object takes through
+    /// [`stage_write`](Self::stage_write), and the request's later writes to
+    /// the object save in place. An object that can fold several writes into
+    /// one save overrides it.
+    fn stage_writes(&mut self, writes: &[PendingWrite]) -> StageStep {
+        for write in writes {
+            match self.stage_write(write.property, write.array_index, &write.value) {
+                StageStep::Skip => continue,
+                step => return step,
+            }
+        }
+        StageStep::Skip
+    }
+
+    /// Stage a purge of the object's records, which the application asks
+    /// for through the server (an Audit Log's, #1238). The server goes on as
+    /// for a staged write, calling [`commit_purge`](Self::commit_purge) where
+    /// it would make the write. The default has nothing to purge.
+    fn stage_purge(&mut self) -> StageStep {
+        StageStep::Skip
+    }
+
+    /// Purge the object's records: take the purge staged on the state the
+    /// object serves, if there is one, or purge in place. The default
+    /// refuses with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+    fn commit_purge(&mut self) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32,
+        })
+    }
 
     /// The request that staged a write is done, whether or not the write
     /// reached the object. `staged` is the wait [`StageStep::Staged`] gave

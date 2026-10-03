@@ -24,6 +24,8 @@ mod event_information;
 mod mutations;
 use mutations::{InitialCovNotification, MutationEffects};
 #[cfg(test)]
+mod audit_log_buffer_wire_tests;
+#[cfg(test)]
 mod durable_write_wire_tests;
 #[cfg(test)]
 mod executed;
