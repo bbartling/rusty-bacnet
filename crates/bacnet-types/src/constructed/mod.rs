@@ -17,8 +17,8 @@ mod action;
 pub use action::{BACnetActionCommand, BACnetActionList};
 mod access;
 pub use access::{
-    BACnetAssignedAccessRights, BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat,
-    BACnetCredentialAuthenticationFactor,
+    BACnetAccessRule, BACnetAssignedAccessRights, BACnetAuthenticationFactor,
+    BACnetAuthenticationFactorFormat, BACnetCredentialAuthenticationFactor,
 };
 mod audit;
 pub use audit::{
@@ -553,29 +553,6 @@ impl From<ObjectIdentifier> for BACnetDeviceObjectReference {
             object_identifier,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// BACnetAccessRule (Clause 12 -- used by AccessRights object)
-// ---------------------------------------------------------------------------
-
-/// BACnet Access Rule for access control objects.
-///
-/// Specifies a time range and location with an enable/disable flag,
-/// used in positive and negative access rules lists.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BACnetAccessRule {
-    /// Time range specifier: 0 = specified, 1 = always.
-    pub time_range_specifier: u32,
-    /// Optional time range (start date, start time, end date, end time).
-    /// Present only when `time_range_specifier` is 0 (specified).
-    pub time_range: Option<(Date, Time, Date, Time)>,
-    /// Location specifier: 0 = specified, 1 = all.
-    pub location_specifier: u32,
-    /// Optional location reference. Present only when `location_specifier` is 0 (specified).
-    pub location: Option<BACnetDeviceObjectReference>,
-    /// Whether access is enabled or disabled by this rule.
-    pub enable: bool,
 }
 
 // ---------------------------------------------------------------------------
