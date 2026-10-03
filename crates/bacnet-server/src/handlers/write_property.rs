@@ -169,7 +169,7 @@ pub(crate) fn handle_write_property_multiple_observed(
             reference.property_array_index,
             &attempt.value,
         ) {
-            Ok(value) => crate::schedule_references::localize(db, oid, property, value),
+            Ok(value) => crate::local_references::localize(db, oid, property, value),
             Err(error) => return semantic_failure(error, reference, committed_oids),
         };
         if property == PropertyIdentifier::OBJECT_NAME {
@@ -400,6 +400,8 @@ pub(crate) fn decode_write_property_value(
             bacnet_encoding::constructed::decode_stage_limit_value(data, offset).map(|(_, end)| end)
         });
     }
+    // Staging targets go one element per chunk; the handler then puts those
+    // naming this device in their local form (#1136).
     if array_index != Some(0) && property == PropertyIdentifier::TARGET_REFERENCES {
         return decode_structured_array(bytes, array_index, |data, offset| {
             bacnet_encoding::constructed::decode_device_object_reference(data, offset)
@@ -493,7 +495,7 @@ pub(crate) fn handle_write_property_observed(
         request.property_array_index,
         &request.property_value,
     )?;
-    let value = crate::schedule_references::localize(db, oid, request.property_identifier, value);
+    let value = crate::local_references::localize(db, oid, request.property_identifier, value);
     if request.property_identifier == PropertyIdentifier::OBJECT_NAME {
         check_and_prepare_name_write(db, &oid, &value)?;
     }
