@@ -29,14 +29,11 @@ fn accumulator_objects(configured: bool) -> [Box<dyn BACnetObject>; 2] {
             .unwrap();
         pc.write_property(P::COV_INCREMENT, None, PropertyValue::Real(0.5), None)
             .unwrap();
-        let target = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 1).unwrap();
+        // [0] accumulator 1, [1] present-value (#1312).
         pc.write_property(
             P::INPUT_REFERENCE,
             None,
-            PropertyValue::List(vec![
-                PropertyValue::ObjectIdentifier(target),
-                PropertyValue::Enumerated(P::PRESENT_VALUE.to_raw()),
-            ]),
+            PropertyValue::ApplicationData(vec![0x0C, 0x05, 0xC0, 0x00, 0x01, 0x19, 0x55]),
             None,
         )
         .unwrap();
