@@ -307,7 +307,7 @@ fn trendlog_read_logging_type() {
 #[test]
 fn trendlog_set_logging_type() {
     let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
-    tl.set_logging_type(1); // COV
+    tl.set_logging_type(LoggingType::COV);
     let val = tl
         .read_property(PropertyIdentifier::LOGGING_TYPE, None)
         .unwrap();

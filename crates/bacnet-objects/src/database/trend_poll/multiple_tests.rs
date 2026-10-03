@@ -12,7 +12,13 @@ const THIS_DEVICE: u32 = 100;
 /// AV-1 at 42.5, AO-1 holding 61.5 at priority 8, and Device 100, with the
 /// fixture's clocks and no Trend Log.
 fn database() -> (ObjectDatabase, Arc<Mutex<Duration>>) {
-    let (mut db, trend, time, _) = fixture(u32::MAX);
+    let (db, time, _) = clocked_database();
+    (db, time)
+}
+
+/// [`database`] and its Device clock, which reads [`frame`] until changed.
+pub(super) fn clocked_database() -> (ObjectDatabase, Arc<Mutex<Duration>>, Arc<WallClock>) {
+    let (mut db, trend, time, clock) = fixture(u32::MAX);
     db.remove(&trend).unwrap();
     db.remove(&target()).unwrap();
     let mut av = AnalogValueObject::new(1, "AV", 95).unwrap();
@@ -37,18 +43,18 @@ fn database() -> (ObjectDatabase, Arc<Mutex<Duration>>) {
         .unwrap(),
     ))
     .unwrap();
-    (db, time)
+    (db, time, clock)
 }
 
-fn av() -> ObjectIdentifier {
+pub(super) fn av() -> ObjectIdentifier {
     target()
 }
 
-fn ao() -> ObjectIdentifier {
+pub(super) fn ao() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap()
 }
 
-fn member(
+pub(super) fn member(
     object: ObjectIdentifier,
     property: P,
     index: Option<u32>,
@@ -63,7 +69,7 @@ fn member(
     }
 }
 
-fn multiple(
+pub(super) fn multiple(
     interval: u32,
     capacity: u32,
     members: Vec<BACnetDeviceObjectPropertyReference>,
@@ -83,7 +89,7 @@ fn multiple(
 }
 
 /// The log's records, decoded from the framed records ReadRange serves.
-fn records(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<BACnetLogMultipleRecord> {
+pub(super) fn records(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<BACnetLogMultipleRecord> {
     let records = db.get(&oid).unwrap().log_buffer_internal().unwrap();
     (0..records.record_count())
         .map(|index| {
@@ -305,13 +311,13 @@ fn polled_records_follow_the_buffer_size_and_stop_when_full() {
 #[test]
 fn only_polled_logs_with_an_interval_and_members_are_sampled() {
     let one = || vec![member(av(), P::PRESENT_VALUE, None, None)];
+    // TRIGGERED with Trigger FALSE acquires nothing.
     let mut triggered = multiple(u32::MAX, 8, one());
-    triggered.set_logging_type(2);
-    let mut cov = multiple(u32::MAX, 8, one());
-    cov.set_logging_type(1);
+    triggered
+        .set_logging_type(bacnet_types::enums::LoggingType::TRIGGERED)
+        .unwrap();
     for log in [
         triggered,
-        cov,
         multiple(0, 8, one()),
         multiple(u32::MAX, 8, Vec::new()),
     ] {
