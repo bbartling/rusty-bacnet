@@ -7,7 +7,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, Time};
 use pyo3::exceptions::PyValueError;
 
-use crate::types::{date_time_tuple, property_references_from_py};
+use crate::types::date_time_tuple;
 
 #[pymethods]
 impl BACnetServer {
@@ -57,7 +57,7 @@ impl BACnetServer {
     ) -> PyResult<()> {
         let settings = TrendLogMultipleSettings {
             members: members
-                .map(|members| property_references_from_py(members, "members"))
+                .map(|members| self.members_from_py(members, "members"))
                 .transpose()?
                 .unwrap_or_default(),
             log_interval,

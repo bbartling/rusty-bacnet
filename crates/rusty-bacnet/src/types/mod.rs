@@ -52,7 +52,7 @@ pub(crate) use destination::destination as destination_from_py;
 pub use device::PyDiscoveredDevice;
 pub use enums::*;
 pub use object_identifier::PyObjectIdentifier;
-pub(crate) use property_reference::property_references_from_py;
+pub(crate) use property_reference::{local_device, localize, property_references_from_py};
 pub use property_value::PyPropertyValue;
 pub(crate) use read_value::{decode_read_ack, decode_read_value};
 pub(crate) use rpm_wpm::{
