@@ -191,9 +191,11 @@ fn check_encoded_len(field: NpduAddressField, mac: &[u8]) -> Result<(), Error> {
 /// APDU bytes or network message data.
 ///
 /// A DLEN or SLEN past [`NpduAddress::MAX_MAC_LEN`] fails with
-/// [`NpduDecodeError::AddressTooLong`], raised before the address octets are
-/// read, so a caller can tell it apart from every other malformation
-/// ([`NpduDecodeError::Malformed`]).
+/// [`NpduDecodeError::AddressTooLong`], raised without reading the address
+/// octets, so a caller can tell it apart from every other malformation
+/// ([`NpduDecodeError::Malformed`]). For an over-long DADR the error still
+/// carries the SNET/SADR behind it, when the frame holds a valid one, so a
+/// router can address its reject (#1158).
 pub fn decode_npdu(data: Bytes) -> Result<Npdu, NpduDecodeError> {
     if data.len() < 2 {
         return Err(Error::buffer_too_short(2, data.len()).into());
@@ -236,7 +238,17 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, NpduDecodeError> {
         offset += 2;
         let dlen = data[offset];
         offset += 1;
-        let dadr = decode_address(&data, offset, NpduAddressField::Destination, dlen, dnet)?;
+        let dadr = match decode_address(&data, offset, NpduAddressField::Destination, dlen, dnet) {
+            Ok(dadr) => dadr,
+            Err(mut refused) => {
+                if let NpduDecodeError::AddressTooLong { source, .. } = &mut refused {
+                    *source = has_source
+                        .then(|| source_behind(&data, offset + usize::from(dlen)))
+                        .flatten();
+                }
+                return Err(refused);
+            }
+        };
         offset += dadr.len();
 
         destination = Some(NpduAddress {
@@ -333,6 +345,7 @@ fn decode_address(
             field,
             length,
             dnet: dnet.into(),
+            source: None,
         });
     }
     let end = offset + usize::from(length);
@@ -347,6 +360,26 @@ fn decode_address(
         .into());
     }
     Ok(MacAddr::from_slice(&data[offset..end]))
+}
+
+/// The SNET/SADR that starts at `offset`, behind a DADR too long to decode.
+///
+/// A router answers such an NPDU with a reject addressed to its original
+/// source (#1158), so the source is read past the DLEN octets the frame
+/// announces. Only a source the decoder would accept counts: a usable SNET, an
+/// SLEN within the bound and every SADR octet present.
+fn source_behind(data: &[u8], offset: usize) -> Option<NpduAddress> {
+    let header = data.get(offset..offset + 3)?;
+    let network = u16::from_be_bytes([header[0], header[1]]);
+    let length = usize::from(header[2]);
+    if network == 0 || network == 0xFFFF || length == 0 || length > NpduAddress::MAX_MAC_LEN {
+        return None;
+    }
+    let sadr = data.get(offset + 3..offset + 3 + length)?;
+    Some(NpduAddress {
+        network,
+        mac_address: MacAddr::from_slice(sadr),
+    })
 }
 
 /// Decode the fixed three-octet Reject-Message-To-Network payload.
