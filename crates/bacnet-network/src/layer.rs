@@ -101,7 +101,7 @@ pub use issuance::IssuedApdu;
 
 #[path = "layer_admission.rs"]
 mod admission;
-pub(crate) use admission::AdmissionSender;
+pub(crate) use admission::{link_source_fits, AdmissionSender};
 pub use admission::{AdmissionReceiver, QueueAdmissionCounters, QueueAdmissionSnapshot};
 
 /// A received APDU with source addressing information.
@@ -276,8 +276,9 @@ pub struct RoutedTarget<'a> {
 /// local routers using NPDU destination addressing.
 /// See the [receive-queue contract](self#receive-queue-admission) for raw/tracked
 /// receiver choices, admission limits, drop attribution and lifecycle.
-/// An inbound NPDU whose DLEN or SLEN is past [`NpduAddress::MAX_MAC_LEN`] is
-/// dropped before admission and counted by [`Self::address_length_drops`].
+/// An inbound frame from a link-layer source MAC longer than
+/// [`NpduAddress::MAX_MAC_LEN`], or whose DLEN or SLEN is past it, is dropped
+/// before admission and counted by [`Self::address_length_drops`].
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     response_scope: bacnet_transport::port::DirectResponseScope,
@@ -601,14 +602,17 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         self.network_control_ingress_sequence.load(Ordering::SeqCst)
     }
 
-    /// Inbound NPDUs dropped since this layer was created because their DLEN
-    /// or SLEN was past [`NpduAddress::MAX_MAC_LEN`] (#1141). Saturates at
-    /// `u64::MAX`.
+    /// Inbound NPDUs dropped since this layer was created because an address
+    /// in them was past [`NpduAddress::MAX_MAC_LEN`]: their DLEN or SLEN
+    /// (#1141), or the link-layer source MAC the transport reported (#1198).
+    /// Saturates at `u64::MAX`.
     ///
     /// Only routers answer an NPDU with Reject-Message-To-Network (Clause
     /// 6.6.3.5), so this non-router layer discards the NPDU and counts it.
     /// The NPDU reaches neither the APDU nor the control receiver, so it
-    /// never shows up in their admission counters.
+    /// never shows up in their admission counters. No built-in transport
+    /// reports a source MAC that long, so a nonzero count with well-formed
+    /// traffic points at a custom transport.
     pub fn address_length_drops(&self) -> u64 {
         self.address_length_drops.load(Ordering::Relaxed)
     }

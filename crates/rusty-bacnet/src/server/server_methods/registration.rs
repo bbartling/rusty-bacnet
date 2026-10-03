@@ -387,9 +387,26 @@ impl BACnetServer {
     // -----------------------------------------------------------------------
 
     /// Add a Command object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_command(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = CommandObject::new(instance, name).map_err(to_py_err)?;
+    ///
+    /// `action` is the Action array: one list of `ActionCommand` mappings per
+    /// element, so writing N to Present_Value runs list N. `action_text`
+    /// serves Action_Text and needs one text per list. Shapes and Python
+    /// types are checked here (TypeError / ValueError); the object's own
+    /// setters refuse what BACnet doesn't allow, such as a priority outside
+    /// 1 to 16 or a text count that differs from the list count, as a
+    /// protocol error (VALUE_OUT_OF_RANGE).
+    #[pyo3(signature = (instance, name, *, action=None, action_text=None))]
+    fn add_command(
+        &self,
+        instance: u32,
+        name: &str,
+        action: Option<Bound<'_, PyAny>>,
+        action_text: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let action = action
+            .map(|action| crate::types::action_lists_from_py(&action))
+            .transpose()?;
+        let obj = command(instance, name, action, action_text).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 
@@ -783,6 +800,24 @@ fn elevator_group(
     let mut obj = ElevatorGroupObject::new(instance, name)?;
     if let Some(oid) = machine_room_id {
         obj.set_machine_room_id(oid)?;
+    }
+    Ok(obj)
+}
+
+/// Build a Command, applying the optional Action lists and Action_Text through
+/// the object's own validating setters, Action first.
+fn command(
+    instance: u32,
+    name: &str,
+    action: Option<Vec<bacnet_types::constructed::BACnetActionList>>,
+    action_text: Option<Vec<String>>,
+) -> Result<CommandObject, bacnet_types::error::Error> {
+    let mut obj = CommandObject::new(instance, name)?;
+    if let Some(action) = action {
+        obj.set_action(action)?;
+    }
+    if let Some(texts) = action_text {
+        obj.set_action_text(texts)?;
     }
     Ok(obj)
 }

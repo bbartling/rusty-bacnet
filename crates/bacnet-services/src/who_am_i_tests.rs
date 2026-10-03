@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::constructed::BACnetAddress;
 
 /// Vendor 260, model "M", serial "S", all application-tagged.
 const IDENTITY: [u8; 9] = [0x22, 0x01, 0x04, 0x72, 0x00, 0x4D, 0x72, 0x00, 0x53];
@@ -306,4 +307,34 @@ fn who_am_i_model_name_over_253_octets_uses_two_octet_length() {
     request.encode(&mut buf).unwrap();
     assert_eq!(buf.to_vec(), expected);
     assert_eq!(WhoAmIRequest::decode(&expected).unwrap(), request);
+}
+
+/// An application-tagged OCTET STRING of `length` octets: tag 6 with the extended length
+/// octet, then the octets.
+fn app_octets(length: u8) -> Vec<u8> {
+    let mut wire = vec![0x65, length];
+    wire.extend((0..length).map(|i| 0xA0u8.wrapping_add(i)));
+    wire
+}
+
+#[test]
+fn you_are_mac_address_holds_to_the_bacnet_address_bound() {
+    let longest = BACnetAddress::MAX_MAC_LEN as u8;
+    // The B/IPv6 form, the longest MAC on any data link the stack serves (#1200).
+    let req = you_are(Some(device_1234()), Some(app_octets(longest)[2..].to_vec()));
+    let expected = concat(&[&IDENTITY, &DEVICE_1234, &app_octets(longest)]);
+    assert_eq!(encode_you_are(&req), expected);
+    assert_eq!(YouAreRequest::decode(&expected).unwrap(), req);
+
+    // One octet more names no node on any of them, in either direction.
+    for prefix in [&IDENTITY[..], &concat(&[&IDENTITY, &DEVICE_1234])] {
+        assert_you_are_decoding_error(&concat(&[prefix, &app_octets(longest + 1)]));
+    }
+    let too_long = you_are(
+        Some(device_1234()),
+        Some(app_octets(longest + 1)[2..].to_vec()),
+    );
+    let mut buf = BytesMut::from(&[0xEE][..]);
+    assert!(matches!(too_long.encode(&mut buf), Err(Error::Encoding(_))));
+    assert_eq!(&buf[..], &[0xEE]);
 }

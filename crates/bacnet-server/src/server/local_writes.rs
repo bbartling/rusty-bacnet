@@ -646,7 +646,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             }
             let staging_plans =
                 BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(oid));
-            let command_runs = take_command_runs(&mut db, std::slice::from_ref(oid));
+            let command_runs = crate::command_lists::take_runs(&mut db, std::slice::from_ref(oid));
             let changes = snapshots.changes(&db, std::slice::from_ref(oid));
             let capture = {
                 let table = self.cov_table.read().await;
@@ -700,18 +700,4 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
         .await;
         Ok(command_runs)
     }
-}
-
-/// Take the runs that Present_Value writes queued on Command objects among
-/// `oids`, under the guard that committed those writes.
-pub(super) fn take_command_runs(
-    db: &mut ObjectDatabase,
-    oids: &[ObjectIdentifier],
-) -> Vec<CommandRun> {
-    oids.iter()
-        .filter_map(|oid| {
-            db.get_mut(oid)
-                .and_then(|object| object.take_command_run_internal())
-        })
-        .collect()
 }
