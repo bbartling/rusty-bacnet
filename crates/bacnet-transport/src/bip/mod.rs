@@ -16,7 +16,9 @@ use tracing::{debug, warn};
 
 use crate::bbmd::{self, BbmdState, BdtEntry, FdtEntryWire};
 pub use crate::bbmd::{FdtCounters, ForeignDevicePolicy};
-use crate::bvll::{decode_bip_mac, decode_bvll, encode_bip_mac, encode_bvll, BvllMessage};
+#[cfg(test)]
+use crate::bvll::decode_bvll;
+use crate::bvll::{decode_bip_mac, encode_bip_mac, encode_bvll, BvllMessage};
 use crate::port::{ReceivedNpdu, TransportPort};
 use crate::udp_metadata::{DestinationReceiver, IpVersion};
 use bacnet_types::enums::{BvlcFunction, BvlcResultCode};
@@ -36,15 +38,18 @@ use bvlc_response::{
     PendingBvlcResponse,
 };
 use socket::BipSocket;
+mod ingress;
 mod io;
 mod own_broadcast;
 mod rate_limit;
 pub use access::AsBip;
 pub use fanout::{FanoutCounters, FanoutPolicy};
-use io::{
-    handle_bvll_message, original_destination_matches, send_register_foreign_device, Delivery,
-    RecvContext,
-};
+#[cfg(test)]
+use ingress::{admitted_delivery, Delivery};
+use ingress::{handle_datagram, IngressAddresses};
+#[cfg(test)]
+use io::handle_bvll_message;
+use io::{send_register_foreign_device, RecvContext};
 use own_broadcast::OwnBroadcastForwarder;
 pub use rate_limit::ManagementCounters;
 use rate_limit::ManagementRateLimiter;
@@ -700,6 +705,11 @@ impl TransportPort for BipTransport {
             force_dbtn_forward_failure: false,
         };
 
+        let ingress = IngressAddresses {
+            local_ip,
+            unicast_ips: local_unicast_ips,
+            wildcard_bind,
+        };
         let recv_task = tokio::spawn(async move {
             let mut recv_buf = vec![0u8; 2048];
             loop {
@@ -709,42 +719,7 @@ impl TransportPort for BipTransport {
                 {
                     Ok(received) => {
                         let data = &recv_buf[..received.len];
-                        match decode_bvll(data) {
-                            Ok(msg) => {
-                                if !original_destination_matches(
-                                    msg.function,
-                                    received.destination,
-                                    local_ip,
-                                    recv_ctx.broadcast_addr,
-                                    &local_unicast_ips,
-                                    wildcard_bind,
-                                    received.os_group_delivery,
-                                ) {
-                                    debug!(
-                                        function = msg.function.to_raw(),
-                                        destination = %received.destination,
-                                        "Dropping BVLL/IP destination mismatch"
-                                    );
-                                    continue;
-                                }
-                                let sender_addr =
-                                    if let std::net::SocketAddr::V4(v4) = received.peer {
-                                        (v4.ip().octets(), v4.port())
-                                    } else {
-                                        continue;
-                                    };
-                                let delivery = Delivery::of(
-                                    received.destination,
-                                    recv_ctx.broadcast_addr,
-                                    received.os_group_delivery,
-                                );
-
-                                handle_bvll_message(&msg, sender_addr, delivery, &recv_ctx).await;
-                            }
-                            Err(e) => {
-                                warn!(error = %e, "Failed to decode BVLL frame");
-                            }
-                        }
+                        handle_datagram(data, &received, &ingress, &recv_ctx).await;
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
                         debug!(error = %e, "Dropping UDP datagram with invalid destination metadata");
@@ -895,6 +870,8 @@ mod fanout_tests;
 mod fdt_tests;
 #[cfg(test)]
 mod forwarded_tests;
+#[cfg(test)]
+mod group_delivery_tests;
 #[cfg(test)]
 mod management_ack_tests;
 #[cfg(test)]

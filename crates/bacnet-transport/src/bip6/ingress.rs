@@ -64,6 +64,19 @@ pub(super) fn is_local_unicast_delivery(
     ip_matches && destination_vmac == Some(local_vmac) && os_group_delivery != Some(true)
 }
 
+/// Whether a datagram was sent to a group: an IPv6 multicast address, or a
+/// delivery the OS reports as multicast or broadcast.
+pub(super) fn group_destination(destination: IpAddr, os_group_delivery: Option<bool>) -> bool {
+    matches!(destination, IpAddr::V6(ip) if ip.is_multicast()) || os_group_delivery == Some(true)
+}
+
+/// Whether a frame's BVLC function fits the address it was sent to.
+///
+/// Annex U keeps directed and broadcast NPDUs apart by addressing: a directed
+/// NPDU goes to the recipient's unicast B/IPv6 address and VMAC in an
+/// Original-Unicast-NPDU (U.2.2, U.3), and a broadcast goes to a B/IPv6
+/// multicast group in an Original-Broadcast-NPDU (U.4). A frame that mixes the
+/// two is dropped before its NPDU reaches the network layer.
 pub(super) fn original_destination_matches(
     function: Bvlc6Function,
     destination: IpAddr,

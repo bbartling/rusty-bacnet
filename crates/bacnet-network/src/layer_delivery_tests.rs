@@ -264,3 +264,43 @@ fn broadcast_to_network_rejects_dnet_ffff() {
         "Error should mention 0xFFFF: {message}"
     );
 }
+
+/// Network 0 is not a network number, so every send that names a DNET
+/// refuses it by name and puts no frame on the link (#1314).
+#[tokio::test]
+async fn sends_naming_network_zero_are_refused_before_any_frame() {
+    let (transport, mut peer) = LoopbackTransport::pair(vec![1], vec![2]);
+    let mut frames = peer.start().await.unwrap();
+    let net = NetworkLayer::new(transport);
+    let apdu = [0x10, 0x08];
+    let priority = NetworkPriority::NORMAL;
+    let network_zero = NpduAddress {
+        network: 0,
+        mac_address: MacAddr::from_slice(&[7]),
+    };
+    let refusals = [
+        net.broadcast_to_network(&apdu, 0, false, priority).await,
+        net.send_apdu_routed(&apdu, 0, &[7], &[2], false, priority)
+            .await,
+        net.send_apdu_routed_via_local_broadcast(&apdu, 0, &[7], false, priority)
+            .await,
+        net.send_apdu_on_issuance(&apdu, &[2], Some(&network_zero), false, priority, || {
+            panic!("a refused response is never issued")
+        })
+        .await,
+    ];
+    for refusal in refusals {
+        let message = refusal.unwrap_err().to_string();
+        assert!(
+            message.contains("dest_network 0 is not a network number"),
+            "{message}"
+        );
+    }
+    assert!(frames.try_recv().is_err());
+
+    // The same broadcast to a real network number does reach the link.
+    net.broadcast_to_network(&apdu, 5, false, priority)
+        .await
+        .unwrap();
+    assert!(frames.try_recv().is_ok());
+}

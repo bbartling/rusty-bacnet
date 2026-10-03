@@ -30,9 +30,26 @@ use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use tokio::net::UdpSocket;
 use tokio::time::Duration;
 
-const DEVICE: u32 = 6257;
+pub(super) const DEVICE: u32 = 6257;
 
-fn npdu(apdu: &Apdu, expecting_reply: bool) -> Vec<u8> {
+/// A Device and AV-1, whose Present_Value starts at 0.0.
+pub(super) fn database() -> ObjectDatabase {
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(
+        DeviceObject::new(DeviceConfig {
+            instance: DEVICE,
+            name: "B/IPv6 server".into(),
+            ..DeviceConfig::default()
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()))
+        .unwrap();
+    db
+}
+
+pub(super) fn npdu(apdu: &Apdu, expecting_reply: bool) -> Vec<u8> {
     let mut payload = BytesMut::new();
     encode_apdu(&mut payload, apdu).unwrap();
     let mut npdu = BytesMut::new();
@@ -66,7 +83,7 @@ fn forwarded(npdu: &[u8]) -> BytesMut {
     frame
 }
 
-fn write_present_value(value: f32) -> Apdu {
+pub(super) fn write_present_value(value: f32) -> Apdu {
     let mut property_value = BytesMut::new();
     encode_app_real(&mut property_value, value);
     let mut request = BytesMut::new();
@@ -93,7 +110,7 @@ fn write_present_value(value: f32) -> Apdu {
     })
 }
 
-fn who_is() -> Apdu {
+pub(super) fn who_is() -> Apdu {
     let mut request = BytesMut::new();
     WhoIsRequest {
         low_limit: None,
@@ -139,21 +156,9 @@ async fn a_confirmed_request_forwarded_to_a_bip6_foreign_device_is_ignored() {
         bbmd_port: bbmd_address.port(),
         ttl: 60,
     });
-    let mut db = ObjectDatabase::new();
-    db.add(Box::new(
-        DeviceObject::new(DeviceConfig {
-            instance: DEVICE,
-            name: "B/IPv6 server".into(),
-            ..DeviceConfig::default()
-        })
-        .unwrap(),
-    ))
-    .unwrap();
-    db.add(Box::new(AnalogValueObject::new(1, "AV-1", 62).unwrap()))
-        .unwrap();
     // The I-Am fence goes by broadcast, which a foreign device hands its BBMD.
     let mut server = BACnetServer::generic_builder()
-        .database(db)
+        .database(database())
         .discovery_policy(DiscoveryPolicy {
             prefer_directed_responses: false,
             ..DiscoveryPolicy::default()

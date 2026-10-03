@@ -250,6 +250,20 @@ pub(crate) fn is_global_broadcast(destination: Option<&NpduAddress>) -> bool {
     destination.is_some_and(|destination| destination.network == 0xFFFF)
 }
 
+/// Refuse a caller-supplied destination network that no NPDU may name.
+/// Network numbers start at 1 (Clause 6.2.2.1); the local network is reached
+/// with no DNET at all.
+pub(crate) fn check_destination_network(network: u16) -> Result<(), Error> {
+    if network == 0 {
+        return Err(Error::Encoding(
+            "dest_network 0 is not a network number; reach the local network without a DNET \
+             (send_apdu or broadcast_apdu)"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn is_group_delivery(link_layer_group: bool, destination: Option<&NpduAddress>) -> bool {
     match destination {
         None => link_layer_group,
@@ -423,7 +437,8 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// Broadcast an APDU to a specific remote network via routers.
     ///
     /// Like `broadcast_global_apdu()` but targets a single network number
-    /// instead of all networks (DNET=0xFFFF).
+    /// instead of all networks (DNET=0xFFFF). Refuses `dest_network` 0 and
+    /// 0xFFFF without sending anything.
     pub async fn broadcast_to_network(
         &self,
         apdu: &[u8],
@@ -450,6 +465,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
+        check_destination_network(dest_network)?;
         if dest_network == 0xFFFF {
             return Err(Error::Encoding(
                 "dest_network 0xFFFF is reserved for global broadcasts; use broadcast_global_apdu instead".into(),
@@ -626,6 +642,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         expecting_reply: bool,
         priority: NetworkPriority,
     ) -> Result<BytesMut, Error> {
+        check_destination_network(dest_network)?;
         let npdu = Npdu {
             is_network_message: false,
             expecting_reply,

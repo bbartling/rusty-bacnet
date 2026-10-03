@@ -76,6 +76,9 @@ pub(crate) fn encode_response_npdu(
     expecting_reply: bool,
     priority: NetworkPriority,
 ) -> Result<BytesMut, Error> {
+    if let Some(destination) = destination {
+        crate::layer::check_destination_network(destination.network)?;
+    }
     let npdu = Npdu {
         destination: destination.cloned(),
         expecting_reply,

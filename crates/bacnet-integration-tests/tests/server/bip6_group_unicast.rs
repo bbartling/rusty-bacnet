@@ -1,0 +1,175 @@
+//! A B/IPv6 server neither executes nor answers a confirmed request carried
+//! in an Original-Unicast-NPDU that was sent to the BACnet multicast group
+//! (#1301). The same request sent to the server's own address is answered.
+//!
+//! The test sends to FF02::BAC0 on the loopback interface. macOS loops that
+//! back to a local socket; a Linux loopback without the multicast flag does
+//! not, so the test checks first and skips where it cannot.
+
+use super::bip6_group_confirmed::{database, npdu, who_is, write_present_value, DEVICE};
+use bacnet_encoding::apdu::{decode_apdu, Apdu, SimpleAck};
+use bacnet_encoding::npdu::decode_npdu;
+use bacnet_server::server::BACnetServer;
+use bacnet_transport::bip6::{
+    decode_bip6_mac, decode_bvlc6, encode_bvlc6_original_broadcast, encode_bvlc6_original_unicast,
+    Bip6Transport, BACNET_IPV6_MULTICAST_LINK_LOCAL,
+};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier, UnconfirmedServiceChoice};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bytes::{Bytes, BytesMut};
+use socket2::{Domain, Protocol, Socket, Type};
+use std::net::{Ipv6Addr, SocketAddrV6};
+use tokio::net::UdpSocket;
+use tokio::time::{timeout, Duration};
+
+const CLIENT_VMAC: [u8; 3] = [0x0A, 0x0B, 0x0C];
+
+/// The loopback interface's index, looked up by its usual names.
+#[allow(unsafe_code)]
+fn loopback_index() -> Option<u32> {
+    ["lo0", "lo"].into_iter().find_map(|name| {
+        let name = std::ffi::CString::new(name).unwrap();
+        // SAFETY: `name` is a NUL-terminated string that outlives the call,
+        // which only reads it.
+        let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
+        (index != 0).then_some(index)
+    })
+}
+
+/// An IPv6 UDP socket bound to `address` that sends multicast out the
+/// interface `index` and hears its own.
+fn socket(address: Ipv6Addr, index: u32) -> std::io::Result<UdpSocket> {
+    let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_only_v6(true)?;
+    socket.set_multicast_if_v6(index)?;
+    socket.set_multicast_loop_v6(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&SocketAddrV6::new(address, 0, 0, 0).into())?;
+    UdpSocket::from_std(socket.into())
+}
+
+/// Whether a datagram sent to FF02::BAC0 on the loopback interface reaches a
+/// local socket that joined the group there.
+async fn loopback_multicast_is_delivered(index: u32) -> bool {
+    let Ok(receiver) = socket(Ipv6Addr::UNSPECIFIED, index) else {
+        return false;
+    };
+    if receiver
+        .join_multicast_v6(&BACNET_IPV6_MULTICAST_LINK_LOCAL, index)
+        .is_err()
+    {
+        return false;
+    }
+    let port = receiver.local_addr().unwrap().port();
+    let Ok(sender) = socket(Ipv6Addr::LOCALHOST, index) else {
+        return false;
+    };
+    let group = SocketAddrV6::new(BACNET_IPV6_MULTICAST_LINK_LOCAL, port, 0, index);
+    if sender.send_to(b"probe", group).await.is_err() {
+        return false;
+    }
+    let mut datagram = [0u8; 8];
+    matches!(
+        timeout(Duration::from_secs(1), receiver.recv_from(&mut datagram)).await,
+        Ok(Ok((5, _))) if &datagram[..5] == b"probe"
+    )
+}
+
+/// The APDU in one datagram the server sent, if it carries one.
+fn apdu_of(datagram: &[u8]) -> Option<Apdu> {
+    let frame = decode_bvlc6(datagram).ok()?;
+    let npdu = decode_npdu(Bytes::copy_from_slice(&frame.payload)).ok()?;
+    decode_apdu(npdu.payload).ok()
+}
+
+async fn present_value(server: &BACnetServer<Bip6Transport>) -> PropertyValue {
+    server
+        .database()
+        .read()
+        .await
+        .get(&ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap())
+        .unwrap()
+        .read_property(PropertyIdentifier::PRESENT_VALUE, None)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn an_original_unicast_sent_to_the_multicast_group_is_not_answered() {
+    let Some(index) = loopback_index() else {
+        eprintln!("skipping: no loopback interface found by name");
+        return;
+    };
+    if !loopback_multicast_is_delivered(index).await {
+        eprintln!("skipping: this host does not loop FF02::BAC0 back on the loopback interface");
+        return;
+    }
+    let mut server = BACnetServer::generic_builder()
+        .database(database())
+        .transport(Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(DEVICE)))
+        .build()
+        .await
+        .unwrap();
+    let (_, port) = decode_bip6_mac(server.local_mac()).unwrap();
+    let server_vmac = {
+        let bytes = DEVICE.to_be_bytes();
+        [bytes[1], bytes[2], bytes[3]]
+    };
+    let client = socket(Ipv6Addr::LOCALHOST, index).unwrap();
+    let to_group = SocketAddrV6::new(BACNET_IPV6_MULTICAST_LINK_LOCAL, port, 0, index);
+    let to_server = SocketAddrV6::new(Ipv6Addr::LOCALHOST, port, 0, 0);
+    let mut request = BytesMut::new();
+    encode_bvlc6_original_unicast(
+        &mut request,
+        &CLIENT_VMAC,
+        &server_vmac,
+        &npdu(&write_present_value(42.0), true),
+    )
+    .unwrap();
+
+    // The WriteProperty goes first; the Who-Is behind it, multicast the
+    // proper way, is the fence: its I-Am comes back once the server has
+    // taken both datagrams off the socket.
+    client.send_to(&request, to_group).await.unwrap();
+    let mut fence = BytesMut::new();
+    encode_bvlc6_original_broadcast(&mut fence, &CLIENT_VMAC, &npdu(&who_is(), false)).unwrap();
+    client.send_to(&fence, to_group).await.unwrap();
+    timeout(Duration::from_secs(5), async {
+        let mut datagram = [0u8; 1500];
+        loop {
+            let (length, _) = client.recv_from(&mut datagram).await.unwrap();
+            match apdu_of(&datagram[..length]) {
+                Some(Apdu::UnconfirmedRequest(request))
+                    if request.service_choice == UnconfirmedServiceChoice::I_AM =>
+                {
+                    break
+                }
+                Some(Apdu::UnconfirmedRequest(_)) | None => {}
+                Some(answer) => panic!("the multicast request drew an answer: {answer:?}"),
+            }
+        }
+    })
+    .await
+    .expect("the server answers the multicast Who-Is");
+    for _ in 0..20 {
+        assert_eq!(present_value(&server).await, PropertyValue::Real(0.0));
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Sent to the server's own address, the same request is carried out.
+    client.send_to(&request, to_server).await.unwrap();
+    timeout(Duration::from_secs(5), async {
+        let mut datagram = [0u8; 1500];
+        loop {
+            let (length, _) = client.recv_from(&mut datagram).await.unwrap();
+            if let Some(Apdu::SimpleAck(SimpleAck { invoke_id: 1, .. })) =
+                apdu_of(&datagram[..length])
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the directed request is acknowledged");
+    assert_eq!(present_value(&server).await, PropertyValue::Real(42.0));
+    server.stop().await.unwrap();
+}
