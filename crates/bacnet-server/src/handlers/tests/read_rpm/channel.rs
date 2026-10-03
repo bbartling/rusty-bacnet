@@ -102,20 +102,21 @@ fn rpm_channel_arrays_serve_one_element_per_index() {
         (P::STATUS_FLAGS, None, Ok(&[0x82, 4, 0])),
         (P::OUT_OF_SERVICE, None, Ok(&[0x10])),
         (P::RELIABILITY, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+        (P::ALLOW_GROUP_DELAY_INHIBIT, None, Ok(&[0x10])),
         (
             P::ALLOW_GROUP_DELAY_INHIBIT,
-            None,
-            Err(ErrorCode::UNKNOWN_PROPERTY),
+            Some(1),
+            Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
         ),
         (
             P::PROPERTY_LIST,
             None,
             Ok(&[
                 0x91, 28, 0x91, 85, 0x92, 0x01, 0x71, 0x92, 0x01, 0x72, 0x91, 111, 0x91, 81, 0x91,
-                54, 0x92, 0x01, 0x70, 0x92, 0x01, 0x6E, 0x92, 0x01, 0x6F,
+                54, 0x92, 0x01, 0x70, 0x92, 0x01, 0x6D, 0x92, 0x01, 0x6E, 0x92, 0x01, 0x6F,
             ]),
         ),
-        (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 10])),
+        (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 11])),
     ];
     assert_cases(&db, oid, cases);
 }

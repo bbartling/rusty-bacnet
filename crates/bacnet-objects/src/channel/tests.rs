@@ -402,15 +402,60 @@ fn channel_read_only_rows_refuse_writes() {
             ErrorCode::WRITE_ACCESS_DENIED,
         );
     }
-    assert_property_error(
-        channel.write_property(
+}
+
+#[test]
+fn channel_allow_group_delay_inhibit_starts_false_and_takes_boolean_writes() {
+    let mut channel = configured();
+    assert_eq!(
+        read(&channel, P::ALLOW_GROUP_DELAY_INHIBIT),
+        PropertyValue::Boolean(false)
+    );
+    channel
+        .write_property(
             P::ALLOW_GROUP_DELAY_INHIBIT,
             None,
             PropertyValue::Boolean(true),
             None,
-        ),
-        ErrorCode::UNKNOWN_PROPERTY,
+        )
+        .unwrap();
+    assert_eq!(
+        read(&channel, P::ALLOW_GROUP_DELAY_INHIBIT),
+        PropertyValue::Boolean(true)
     );
+    assert_property_error(
+        channel.write_property(
+            P::ALLOW_GROUP_DELAY_INHIBIT,
+            None,
+            PropertyValue::Unsigned(0),
+            None,
+        ),
+        ErrorCode::INVALID_DATA_TYPE,
+    );
+    assert_property_error(
+        channel.write_property(
+            P::ALLOW_GROUP_DELAY_INHIBIT,
+            Some(1),
+            PropertyValue::Boolean(false),
+            None,
+        ),
+        ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+    );
+    channel.set_allow_group_delay_inhibit(false);
+    assert_eq!(
+        read(&channel, P::ALLOW_GROUP_DELAY_INHIBIT),
+        PropertyValue::Boolean(false)
+    );
+    // The flag leaves a Present_Value write's own delays alone.
+    channel.set_allow_group_delay_inhibit(true);
+    write_pv(&mut channel, PropertyValue::Real(1.0), Some(8)).unwrap();
+    let run = channel.take_command_run_internal().unwrap();
+    let delays: Vec<u32> = distribution(&run)
+        .members
+        .iter()
+        .map(|member| member.delay_ms)
+        .collect();
+    assert_eq!(delays, [0, 100, 200]);
 }
 
 #[test]
@@ -430,6 +475,7 @@ fn channel_property_list_and_required_rows_follow_table_12_62() {
             P::OUT_OF_SERVICE,
             P::LIST_OF_OBJECT_PROPERTY_REFERENCES,
             P::EXECUTION_DELAY,
+            P::ALLOW_GROUP_DELAY_INHIBIT,
             P::CHANNEL_NUMBER,
             P::CONTROL_GROUPS,
         ]
@@ -471,6 +517,7 @@ fn channel_property_list_and_required_rows_follow_table_12_62() {
             P::OUT_OF_SERVICE,
             P::LIST_OF_OBJECT_PROPERTY_REFERENCES,
             P::EXECUTION_DELAY,
+            P::ALLOW_GROUP_DELAY_INHIBIT,
             P::CHANNEL_NUMBER,
             P::CONTROL_GROUPS,
         ]

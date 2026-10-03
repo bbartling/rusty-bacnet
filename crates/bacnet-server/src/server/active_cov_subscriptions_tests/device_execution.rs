@@ -247,7 +247,7 @@ async fn device_execution_view_survives_public_profile_mutation_and_same_oid_rep
             .unwrap()
             .device_authority_internal()
             .unwrap()
-            .set_services_supported(&[ServiceSupported::WRITE_GROUP]);
+            .set_services_supported(&[ServiceSupported::VT_OPEN]);
         assert_profile(&mut wire, device(), clock).await;
         let mut replacement = DeviceObject::new(DeviceConfig {
             instance: device().instance_number(),

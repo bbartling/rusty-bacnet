@@ -7,6 +7,14 @@ an absent authorizer allows; an installed authorizer must approve. `DenyAll` den
 covered decisions even with an allow-all authorizer, without invoking it, using
 SERVICES / SERVICE_REQUEST_DENIED. Both modes accept any authorizer configuration.
 
+**Inbound WriteGroup is dropped under either restriction.** The authorization
+context only describes confirmed requests, so a callback can't decide a WriteGroup.
+The server executes WriteGroup only under `Permissive` with no authorizer installed:
+`DenyAll`, or any installed authorizer (even one that returns `true` for everything),
+drops every inbound WriteGroup without calling the callback. #1319 tracks letting the
+authorizer decide it. These drops are logged at debug only and aren't counted in
+`mutation_decision_counters()`.
+
 **SC mTLS channel/peer authentication is not service authorization.** Identities at
 this layer are claimed link/routed addresses, never certificate principals.
 Distinguishing SC certificate principals is out of scope: none reaches this layer.
@@ -71,7 +79,8 @@ AuditNotification service receptions.
 
 Coverage is the ten `mutation::MutationTarget` services. Reads, discovery, DCC,
 TimeSync, LifeSafety/Audit, direct handler calls and trusted local writes retain
-their existing behavior. Admission, duplicate detection, decoding and WPM validation
+their existing behavior. Inbound WriteGroup is the exception described above: it is
+dropped whenever the policy restricts anything. Admission, duplicate detection, decoding and WPM validation
 retain precedence. WPM makes one decision per reached element; empty requests make
 none, and a denial stops the suffix without rolling back an allowed prefix.
 WPM denials keep the `first_failed` error shape; other denials use
@@ -101,7 +110,8 @@ No Python callback or separate authorization gate is installed.
 Other strings raise `ValueError`, and non-strings raise `TypeError` synchronously
 in the constructor, before startup drains registrations or performs transport
 I/O. Reads and trusted local `write_property_local` calls remain available under
-`"deny_all"`. The option does not configure DCC, ReinitializeDevice, LifeSafety,
+`"deny_all"`. It also drops inbound WriteGroup, though the Python `BACnetServer`
+holds no Channel for a WriteGroup to change. The option does not configure DCC, ReinitializeDevice, LifeSafety,
 Audit or endpoint authorization, and does not establish a certificate principal.
 
 
@@ -110,3 +120,4 @@ Audit or endpoint authorization, and does not establish a certificate principal.
 and `policy_deny_total` (the deny-all subset). Samples are independent, not atomic
 aggregates. They count decisions, not successful mutations or delivered responses;
 they never affect authorization and retain no per-source state or durable history.
+Inbound WriteGroups dropped under `DenyAll` or an installed authorizer aren't counted.

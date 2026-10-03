@@ -49,7 +49,9 @@ impl<T: TransportPort + 'static> Clone for RequestServices<T> {
     }
 }
 
-/// The server handles an unconfirmed-request task owns.
+/// The server handles an unconfirmed-request task owns. The COV handles and
+/// the task spawner are WriteGroup's: its Channel writes notify like any
+/// local write, and the distributions they queue run beside the request.
 pub(super) struct UnconfirmedServices<T: TransportPort + 'static> {
     pub(super) db: Arc<RwLock<ObjectDatabase>>,
     pub(super) network: Arc<NetworkLayer<T>>,
@@ -62,6 +64,9 @@ pub(super) struct UnconfirmedServices<T: TransportPort + 'static> {
     pub(super) notification_transactions: Arc<NotificationTransactions>,
     pub(super) learned_routers: Arc<Mutex<LearnedRouterCache>>,
     pub(super) event_suppressions: Arc<super::event_suppression::EventSuppressions>,
+    pub(super) cov_table: Arc<RwLock<CovSubscriptionTable>>,
+    pub(super) cov_in_flight: Arc<Semaphore>,
+    pub(super) tasks: request_tasks::RequestTaskSpawner,
 }
 
 /// Everything the dispatch loop hands to [`BACnetServer::dispatch`]: the
@@ -91,6 +96,9 @@ impl<T: TransportPort + 'static> DispatchContext<T> {
             notification_transactions: Arc::clone(&self.services.notification_transactions),
             learned_routers: Arc::clone(&self.services.learned_routers),
             event_suppressions: Arc::clone(&self.services.event_suppressions),
+            cov_table: Arc::clone(&self.services.cov_table),
+            cov_in_flight: Arc::clone(&self.services.cov_in_flight),
+            tasks: self.request_tasks.spawner(),
         }
     }
 }
@@ -184,7 +192,9 @@ impl<T: TransportPort + 'static> DispatchContext<T> {
 #[cfg(test)]
 impl<T: TransportPort + 'static> UnconfirmedServices<T> {
     /// Fresh, empty handles around `network` and `config`, with no clock and
-    /// default limiters. Tests overwrite the fields they share or tune.
+    /// default limiters. Tests overwrite the fields they share or tune. The
+    /// task spawner's owner is gone, so a WriteGroup's distributions don't
+    /// start.
     pub(super) fn for_test(network: Arc<NetworkLayer<T>>, config: ServerConfig) -> Self {
         Self {
             db: Arc::new(RwLock::new(ObjectDatabase::new())),
@@ -198,6 +208,9 @@ impl<T: TransportPort + 'static> UnconfirmedServices<T> {
             notification_transactions: NotificationTransactions::new(),
             learned_routers: Arc::new(Mutex::new(LearnedRouterCache::new())),
             event_suppressions: Arc::default(),
+            cov_table: Arc::new(RwLock::new(CovSubscriptionTable::new())),
+            cov_in_flight: Arc::new(Semaphore::new(1)),
+            tasks: Arc::new(request_tasks::RequestTasks::default()).spawner(),
         }
     }
 }
@@ -242,6 +255,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             notification_transactions: Arc::clone(&self.notification_transactions),
             learned_routers: Arc::clone(&self.learned_routers),
             event_suppressions: Arc::clone(&self.event_suppressions),
+            cov_table: Arc::clone(&self.cov_table),
+            cov_in_flight: Arc::clone(&self.cov_in_flight),
+            tasks: self.request_tasks.spawner(),
         }
     }
 

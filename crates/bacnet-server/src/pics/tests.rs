@@ -340,8 +340,8 @@ fn services_match_implementation() {
     assert!(service_names.contains(&"DeleteObject"));
     assert!(service_names.contains(&"WhoIs"));
     assert!(
-        !service_names.contains(&"WriteGroup"),
-        "server PICS must not list unsupported inbound WriteGroup"
+        service_names.contains(&"WriteGroup"),
+        "server PICS lists the WriteGroup it executes on Channels"
     );
 
     // Initiator services
@@ -796,8 +796,8 @@ fn executed_services_match_dispatch_table() {
     use bacnet_types::enums::{ServiceSupported, UnconfirmedServiceChoice};
 
     assert!(
-        !crate::server::EXECUTED_UNCONFIRMED.contains(&UnconfirmedServiceChoice::WRITE_GROUP),
-        "inbound WriteGroup has no execution path"
+        crate::server::EXECUTED_UNCONFIRMED.contains(&UnconfirmedServiceChoice::WRITE_GROUP),
+        "inbound WriteGroup runs on the Channel objects"
     );
 
     let mut from_dispatch: Vec<u8> = crate::server::EXECUTED_CONFIRMED
