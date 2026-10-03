@@ -17,10 +17,12 @@ use bytes::BytesMut;
 use tracing::warn;
 
 use super::{LocalDevice, ObjectDatabase};
-use crate::clock::ClockFrame;
 use crate::device_reference::decode_property_reference;
 use crate::log_buffer::ANY_VALUE_MAX_OCTETS;
 use crate::traits::{BACnetObject, MonotonicClock};
+use alignment::{Alignment, DAY};
+
+mod alignment;
 
 /// Local maximum idle/configuration reconciliation delay and failure backoff.
 /// This is a scheduling policy, not a BACnet timing guarantee.
@@ -71,9 +73,8 @@ struct Schedule {
     last_success: Option<Duration>,
     /// Latest failed attempt, independent of the last accepted sample.
     retry_completed: Option<Duration>,
-    /// An aligned log's next acquisition on the monotonic clock, worked out
-    /// from the Device clock; `None` until the first is planned.
-    aligned_due: Option<Duration>,
+    /// An aligned log's plan, kept on the Device clock.
+    alignment: Alignment,
 }
 
 impl Schedule {
@@ -82,7 +83,7 @@ impl Schedule {
             configuration,
             last_success: None,
             retry_completed: None,
-            aligned_due: None,
+            alignment: Alignment::default(),
         }
     }
 
@@ -90,49 +91,18 @@ impl Schedule {
         if let Some(failed) = self.retry_completed {
             return RECONCILE.saturating_sub(now.saturating_sub(failed));
         }
-        match (self.configuration.mode, self.last_success, self.aligned_due) {
-            (Mode::Polled { interval }, Some(success), _) => {
+        match (self.configuration.mode, self.last_success) {
+            (Mode::Polled { interval }, Some(success)) => {
                 hundredths(interval).saturating_sub(now.saturating_sub(success))
             }
-            (Mode::Aligned { .. }, _, Some(due)) => due.saturating_sub(now),
+            (Mode::Aligned { interval, offset }, _) => self.alignment.wait(now, interval, offset),
             _ => Duration::ZERO,
         }
     }
 }
 
-/// Hundredths of a second in a day: an aligned interval divides it.
-const DAY: u32 = 8_640_000;
-
 fn hundredths(value: u32) -> Duration {
     Duration::from_millis(u64::from(value) * 10)
-}
-
-/// How far `frame`'s local time of day, in hundredths, lies past the most
-/// recent aligned boundary.
-fn past_boundary(frame: &ClockFrame, interval: u32, offset: u32) -> u32 {
-    let t = frame.local_time;
-    let time_of_day = ((u32::from(t.hour) * 60 + u32::from(t.minute)) * 60 + u32::from(t.second))
-        * 100
-        + u32::from(t.hundredths);
-    (time_of_day + interval - offset) % interval
-}
-
-/// The wait from `frame` to the first aligned boundary, none when it falls on
-/// one.
-fn first_aligned(frame: &ClockFrame, interval: u32, offset: u32) -> Duration {
-    hundredths((interval - past_boundary(frame, interval, offset)) % interval)
-}
-
-/// The wait from an acquisition at `frame` to the boundary after the one it
-/// served, taken as the nearer boundary, so a wake a little early or late
-/// for it never acquires twice for the same boundary.
-fn next_aligned(frame: &ClockFrame, interval: u32, offset: u32) -> Duration {
-    let past = past_boundary(frame, interval, offset);
-    hundredths(if past <= interval / 2 {
-        interval - past
-    } else {
-        2 * interval - past
-    })
 }
 
 #[derive(Default)]
@@ -175,7 +145,9 @@ impl ObjectDatabase {
     /// Trend Log Multiple acquires when the Device clock's time of day is
     /// Interval_Offset (modulo the interval) past a multiple of the interval
     /// (Clauses 12.30.14 and 12.30.15); the first acquisition waits for such a
-    /// boundary. Every pass also lets each log look at its Start_Time /
+    /// boundary. Such a log is judged against the Device clock on every pass,
+    /// so a clock change moves its plan with it (see the `alignment` module).
+    /// Every pass also lets each log look at its Start_Time /
     /// Stop_Time window, so one that opens or closes is recorded within a pass.
     ///
     /// The caller must hold exclusive database access for this whole call. The
@@ -237,24 +209,34 @@ impl ObjectDatabase {
     /// Acquire for `oid`'s schedule entry when it is due.
     fn poll_one(&mut self, oid: ObjectIdentifier, local: LocalDevice, monotonic: &MonotonicClock) {
         let now = monotonic();
-        if !self.trend_poll.0[&oid].remaining(now).is_zero() {
+        let entry = &self.trend_poll.0[&oid];
+        let mode = entry.configuration.mode;
+        // An aligned log looks at the Device clock on every pass, so its plan
+        // follows a clock change; the others wait for their deadline. Both
+        // wait out the retry delay after a failed attempt.
+        let waiting = match mode {
+            Mode::Aligned { .. } => entry
+                .retry_completed
+                .is_some_and(|failed| now.saturating_sub(failed) < RECONCILE),
+            _ => !entry.remaining(now).is_zero(),
+        };
+        if waiting {
             return;
         }
         let frame = self
             .clock_frame()
             .filter(|frame| frame.is_valid_actual_datetime());
         let entry = self.trend_poll.0.get_mut(&oid).unwrap();
-        let mode = entry.configuration.mode;
-        if let (Mode::Aligned { interval, offset }, None) = (mode, entry.aligned_due) {
-            // Plan the first boundary; without a clock, look again later.
+        let mut boundary = None;
+        if let Mode::Aligned { interval, offset } = mode {
+            // Without a clock there is no boundary to find; look again later.
             let Some(frame) = frame else {
                 entry.retry_completed = Some(now);
                 return;
             };
             entry.retry_completed = None;
-            let wait = first_aligned(&frame, interval, offset);
-            entry.aligned_due = Some(now + wait);
-            if !wait.is_zero() {
+            boundary = entry.alignment.due(now, &frame, interval, offset);
+            if boundary.is_none() {
                 return;
             }
         }
@@ -303,8 +285,8 @@ impl ObjectDatabase {
         }
         entry.last_success = Some(completed);
         entry.retry_completed = None;
-        if let (Mode::Aligned { interval, offset }, Some(frame)) = (mode, frame) {
-            entry.aligned_due = Some(now + next_aligned(&frame, interval, offset));
+        if let Some(boundary) = boundary {
+            entry.alignment.serve(boundary);
         }
     }
 

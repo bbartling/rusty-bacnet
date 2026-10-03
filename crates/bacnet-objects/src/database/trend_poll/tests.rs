@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex};
 
 #[path = "acquisition_tests.rs"]
 mod acquisition_tests;
+#[path = "alignment_tests.rs"]
+mod alignment_tests;
 #[path = "any_value_tests.rs"]
 mod any_value_tests;
 #[path = "member_tests.rs"]

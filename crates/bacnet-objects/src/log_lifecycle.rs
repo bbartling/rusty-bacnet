@@ -74,10 +74,16 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
     /// changes and the next look with a clock records what it finds. The
     /// first look after a local change only notes where the window stands.
     pub(crate) fn refresh_window(&mut self) -> bool {
+        let now = valid_timestamp(self.clock).ok();
+        self.refresh_window_at(now)
+    }
+
+    /// [`refresh_window`](Self::refresh_window) at the local moment `now`,
+    /// which also stamps any record it adds.
+    fn refresh_window_at(&mut self, now: Option<(Date, Time)>) -> bool {
         let Some(window) = self.window.as_deref_mut() else {
             return false;
         };
-        let now = valid_timestamp(self.clock).ok();
         let open = match now {
             _ if window.is_unbounded() => true,
             Some(now) => window.admits(now),
@@ -113,11 +119,20 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
 
     /// Admit an ordinary record. A record that would not encode is refused
     /// with its encoding error before anything changes, so every resident
-    /// record can always be served. A window that closed since the last look
-    /// is recorded first, and the record then ignored as a disabled log's is.
+    /// record can always be served.
+    ///
+    /// The window is judged at the record's own timestamp, so a record taken
+    /// just before or after an opening or closing lands on the right side of
+    /// the status that marks it: a change since the last look is recorded
+    /// first, stamped with that time, and a record outside the window is then
+    /// ignored as a disabled log's is. A timestamp that isn't an actual moment
+    /// is judged at the clock's time instead.
     pub(crate) fn try_add_ordinary(&mut self, record: R) -> Result<OrdinaryAdmission, Error> {
         record.encode(&mut BytesMut::new())?;
-        self.refresh_window();
+        let at = Some(record.timestamp())
+            .filter(|&timestamp| LogWindow::is_moment(timestamp))
+            .or_else(|| valid_timestamp(self.clock).ok());
+        self.refresh_window_at(at);
         let collecting = *self.enabled && self.window_open();
         let admission = self
             .buffer
@@ -132,6 +147,11 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         Ok(admission)
     }
 
+    /// A write of Enable. A change records the status it gives collection:
+    /// LOG_DISABLED, or a clear status unless that status would fill a
+    /// Stop_When_Full buffer. While the window is shut collection stays off
+    /// whatever Enable holds, so the change is kept without a record; the
+    /// window's opening is recorded when it comes.
     pub(crate) fn write_enable(&mut self, requested: bool) -> Result<(), Error> {
         if requested == *self.enabled {
             return Ok(());
@@ -145,6 +165,10 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
 
         let timestamp = valid_timestamp(self.clock)?;
         self.refresh_window();
+        if !self.window_open() {
+            *self.enabled = requested;
+            return Ok(());
+        }
         if !requested {
             *self.enabled = false;
             self.insert_status(timestamp, LogStatus::LOG_DISABLED);
@@ -154,8 +178,7 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         let status_fills =
             *self.stop_when_full && self.buffer.next_record_would_fill_positive_capacity();
         *self.enabled = !status_fills;
-        // Outside the window logging stays off, and the record says so.
-        let status = if status_fills || !self.window_open() {
+        let status = if status_fills {
             LogStatus::LOG_DISABLED
         } else {
             LogStatus::empty()

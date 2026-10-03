@@ -1686,12 +1686,13 @@ record, one value per member in order; a client reads the records with
 - `start_time` and `stop_time` keep records only from the start up to, not
   including, the stop. Each is a `((full_year, month, day, day_of_week),
   (hour, minute, second, hundredths))` pair; every field 255 leaves that side
-  open, and any other value that isn't an actual date and time raises
-  VALUE_OUT_OF_RANGE. The log records LOG_DISABLED when the window closes and
+  open, 255 seconds or hundredths count as zero, and any other value that
+  isn't an actual date and time raises VALUE_OUT_OF_RANGE. The log records LOG_DISABLED when the window closes and
   a clear status when it opens.
 - `align_intervals=True` makes a polled log acquire on clock boundaries when
   Log_Interval divides a day, `interval_offset` hundredths (modulo the
-  interval) after each one.
+  interval) after each one. The boundaries follow the device's clock, so
+  setting that clock moves them too.
 
 A triggered log logs one record each time Trigger is written TRUE, by a peer
 or by the application through `write_property_local`; Trigger reads TRUE until

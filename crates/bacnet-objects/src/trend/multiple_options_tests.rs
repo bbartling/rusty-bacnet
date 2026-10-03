@@ -353,21 +353,25 @@ fn the_window_holds_back_records_and_logs_each_change() {
     assert_eq!(data(&log)[3..], [DISABLED]);
     assert_eq!(log.records().len(), 4);
 
-    // Enable written TRUE outside the window leaves logging off, and the
-    // record says so; a purge there carries LOG_DISABLED too.
+    // Outside the window Enable changes leave logging off, so nothing is
+    // logged for them; a purge there carries LOG_DISABLED.
     write(
         &mut log,
         PropertyIdentifier::LOG_ENABLE,
         PropertyValue::Boolean(false),
     )
     .unwrap();
+    assert_eq!(
+        read(&log, PropertyIdentifier::LOG_ENABLE),
+        PropertyValue::Boolean(false)
+    );
     write(
         &mut log,
         PropertyIdentifier::LOG_ENABLE,
         PropertyValue::Boolean(true),
     )
     .unwrap();
-    assert_eq!(data(&log)[4..], [DISABLED, DISABLED]);
+    assert_eq!(log.records().len(), 4);
     write(
         &mut log,
         PropertyIdentifier::RECORD_COUNT,
@@ -397,7 +401,7 @@ fn the_window_holds_back_records_and_logs_each_change() {
         PropertyValue::Boolean(true),
     )
     .unwrap();
-    assert_eq!(data(&log)[1..], [DISABLED, ENABLED]);
+    assert_eq!(data(&log)[1..], [ENABLED]);
 
     // An unspecified Stop_Time leaves the window open after 11:00.
     clock.set(at(12, 0));
@@ -408,7 +412,36 @@ fn the_window_holds_back_records_and_logs_each_change() {
     )
     .unwrap();
     assert!(!log.refresh_log_window_internal());
-    assert_eq!(log.records().len(), 3);
+    assert_eq!(log.records().len(), 2);
+}
+
+#[test]
+fn each_record_is_judged_by_its_own_timestamp() {
+    // The clock already reads 10:00 when a record taken at 09:59 arrives:
+    // it is outside the window, and the opening it hasn't seen yet is
+    // logged with the next record, at that record's time.
+    let (mut log, clock) = clocked(16);
+    write(
+        &mut log,
+        PropertyIdentifier::START_TIME,
+        datetime(at(10, 0)),
+    )
+    .unwrap();
+    clock.set(at(10, 0));
+    log.add_record(sample(at(9, 59))).unwrap();
+    assert_eq!(data(&log), [DISABLED]);
+    log.add_record(sample(at(10, 0))).unwrap();
+    assert_eq!(data(&log), [DISABLED, ENABLED, sample(at(10, 0)).log_data]);
+    assert_eq!(log.records()[1].time, at(10, 0).1);
+
+    // The other way round: the clock still reads 10:59 when a record taken
+    // at 11:00 arrives; the closing is logged at 11:00 and the record kept
+    // out.
+    write(&mut log, PropertyIdentifier::STOP_TIME, datetime(at(11, 0))).unwrap();
+    clock.set(at(10, 59));
+    log.add_record(sample(at(11, 0))).unwrap();
+    assert_eq!(data(&log)[3..], [DISABLED]);
+    assert_eq!(log.records()[3].time, at(11, 0).1);
 }
 
 #[test]

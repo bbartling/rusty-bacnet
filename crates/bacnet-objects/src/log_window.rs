@@ -2,10 +2,12 @@
 //! inside which it logs (Clauses 12.25.6-7 and 12.30.9-10).
 //!
 //! Each end is a BACnetDateTime. One with every field unspecified leaves
-//! that side of the span open; any other value has to name an actual moment
-//! (a real day and a time with every field set), so the stack never has to
-//! guess what a partly unspecified end means. The span holds the start and
-//! excludes the stop, so a stop at or before the start admits nothing.
+//! that side of the span open. Any other value has to name an actual moment:
+//! a real day, and a time whose hour and minute are set. Workstations often
+//! send the seconds or the hundredths unspecified, so each of those counts as
+//! zero; any other partly unspecified end is refused rather than guessed at.
+//! The span holds the start and excludes the stop, so a stop at or before the
+//! start admits nothing.
 //!
 //! [`LogWindow`] keeps the configuration and whether the span admitted
 //! logging at the last look; [`crate::log_lifecycle::LogLifecycle`] turns a
@@ -39,12 +41,19 @@ impl End {
     /// The end `value` names, or `None` for a value that is neither wholly
     /// unspecified nor an actual moment. The weekday octet may be left
     /// unspecified or disagree with the date: it never changes the day named.
+    /// Unspecified seconds or hundredths count as zero.
     fn of((date, time): (Date, Time)) -> Option<Self> {
         if (date, time) == UNSPECIFIED_DATETIME {
             return Some(Self::Open);
         }
         let weekday = date.day_of_week == Date::UNSPECIFIED || (1..=7).contains(&date.day_of_week);
         let day = SpecificDate::from_date(&date).filter(|_| weekday)?;
+        let or_zero = |field: u8| if field == Time::UNSPECIFIED { 0 } else { field };
+        let time = Time {
+            second: or_zero(time.second),
+            hundredths: or_zero(time.hundredths),
+            ..time
+        };
         time.is_specific().then_some(Self::At(
             day,
             (time.hour, time.minute, time.second, time.hundredths),
@@ -135,6 +144,12 @@ impl LogWindow {
         self.start == UNSPECIFIED_DATETIME && self.stop == UNSPECIFIED_DATETIME
     }
 
+    /// Whether `value` names an actual moment, by the rules a window end
+    /// follows.
+    pub(crate) fn is_moment(value: (Date, Time)) -> bool {
+        matches!(End::of(value), Some(End::At(..)))
+    }
+
     /// Whether the span holds the local moment `now`: on or after the start
     /// and before the stop. A `now` that isn't an actual moment is outside.
     pub(crate) fn admits(&self, now: (Date, Time)) -> bool {
@@ -215,6 +230,59 @@ mod tests {
     }
 
     #[test]
+    fn unspecified_seconds_and_hundredths_count_as_zero() {
+        let (date, time) = at(3, 10);
+        let loose = (
+            date,
+            Time {
+                second: Time::UNSPECIFIED,
+                hundredths: Time::UNSPECIFIED,
+                ..time
+            },
+        );
+        let mut span = window(loose, UNSPECIFIED_DATETIME);
+        let just_before = Time {
+            hour: 9,
+            minute: 59,
+            second: 59,
+            hundredths: 99,
+        };
+        assert!(!span.admits((date, just_before)));
+        assert!(span.admits(at(3, 10)));
+        // Served back as written.
+        assert_eq!(
+            span.read(P::START_TIME).unwrap(),
+            PropertyValue::List(vec![
+                PropertyValue::Date(loose.0),
+                PropertyValue::Time(loose.1)
+            ])
+        );
+        // Either alone too, at a stop.
+        for stop in [
+            Time {
+                second: Time::UNSPECIFIED,
+                ..time
+            },
+            Time {
+                hundredths: Time::UNSPECIFIED,
+                ..time
+            },
+        ] {
+            span.set(P::STOP_TIME, (date, Time { hour: 11, ..stop }))
+                .unwrap();
+            assert!(span.admits((
+                date,
+                Time {
+                    hour: 10,
+                    minute: 59,
+                    ..just_before
+                }
+            )));
+            assert!(!span.admits(at(3, 11)));
+        }
+    }
+
+    #[test]
     fn writes_take_a_date_and_time_that_is_actual_or_wholly_unspecified() {
         let mut span = LogWindow::default();
         let value = |(date, time): (Date, Time)| {
@@ -261,10 +329,20 @@ mod tests {
             (
                 date,
                 Time {
+                    minute: Time::UNSPECIFIED,
+                    ..time
+                },
+            ),
+            (
+                date,
+                Time {
+                    hour: Time::UNSPECIFIED,
+                    second: Time::UNSPECIFIED,
                     hundredths: Time::UNSPECIFIED,
                     ..time
                 },
             ),
+            (date, UNSPECIFIED_DATETIME.1),
             (UNSPECIFIED_DATETIME.0, time),
         ] {
             refused(value(partly), ErrorCode::VALUE_OUT_OF_RANGE);

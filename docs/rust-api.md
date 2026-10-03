@@ -2228,19 +2228,25 @@ has a local setter returning `Result` where a write can be refused:
   NOT_CONFIGURED_FOR_TRIGGERED_LOGGING; FALSE is accepted and changes nothing.
 - **Start_Time / Stop_Time** (`set_start_time`, `set_stop_time`) are
   BACnetDateTime values, served as an application Date then Time. Every field
-  unspecified leaves that side open; any other value has to name an actual
-  date and time (the weekday may be unspecified) or it is VALUE_OUT_OF_RANGE.
-  Records are kept while Enable is TRUE and the local time is on or after the
-  start and before the stop. When the window opens or closes while Enable is
-  TRUE the log records it, LOG_DISABLED on closing and a clear status on
-  opening; a write records it at once, and the poller's next pass records a
-  change that time brings. The local setters are configuration: the first
+  unspecified leaves that side open. Any other value has to name an actual
+  date and time or it is VALUE_OUT_OF_RANGE: the weekday may be unspecified,
+  and unspecified seconds or hundredths count as zero, as workstations often
+  send them. Records are kept while Enable is TRUE and the local time is on
+  or after the start and before the stop; each record is judged at its own
+  timestamp. When the window opens or closes while Enable is TRUE the log
+  records it, LOG_DISABLED on closing and a clear status on opening; a write
+  records it at once, and the poller's next pass records a change that time
+  brings. Enable changes while the window is shut leave logging off, so they
+  add no record. The local setters are configuration: the first
   look afterwards notes the window without a record. The window logic lives
   in the shared log lifecycle, so the other log objects can take it up.
 - **Align_Intervals / Interval_Offset** (`set_align_intervals`,
   `set_interval_offset`) make a POLLED log acquire when the Device clock's
   time of day is Interval_Offset (modulo Log_Interval) past a multiple of
-  Log_Interval, when Log_Interval divides a day.
+  Log_Interval, when Log_Interval divides a day. The poller checks the Device
+  clock on every pass, so a clock change moves the plan with it: a boundary a
+  forward jump skips isn't made up off the grid, and one a backward jump
+  repeats, a daylight-saving fall-back say, is logged again when reached.
 
 An Event Log record is a `BACnetEventLogRecord`: a timestamp and an
 `EventLogDatum` holding a log status, a time change, or a notification as a
@@ -2317,7 +2323,9 @@ every pass calls the hidden `refresh_log_window_internal` hook so each log
 records its window opening or closing. Wrappers forward that hook, as
 `SourceReporter` does. `TrendLogObject::set_logging_type` takes a
 `LoggingType` too; a Trend Log keeps its read-only Logging_Type and has no
-window, alignment or Trigger yet. Bounded evidence is recorded in
+window, alignment or Trigger yet (#1353, #1354). Only POLLED and TRIGGERED
+logs are polled: a Trend Log set to a proprietary Logging_Type, which used to
+be polled as POLLED, no longer is. Bounded evidence is recorded in
 `BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family conformance is not
 claimed.
 

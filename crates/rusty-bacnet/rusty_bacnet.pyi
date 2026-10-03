@@ -1092,13 +1092,14 @@ class ActionCommand(TypedDict):
 
 
 class DeviceObjectPropertyReference(TypedDict):
-    """A property to monitor (``BACnetDeviceObjectPropertyReference``), such
-    as a Trend Log Multiple member.
+    """A property (``BACnetDeviceObjectPropertyReference``): a Trend Log
+    Multiple member, or the property whose value decides when an access rule
+    applies, such as a Schedule's Present_Value.
 
     Unknown keys and a ``device_identifier`` that isn't a Device raise
     ValueError; wrong types raise TypeError. The server reads only its own
-    objects, so a member naming another Device logs a failure instead of a
-    value.
+    objects, so a Trend Log Multiple member naming another Device logs a
+    failure instead of a value.
     """
 
     object_identifier: ObjectIdentifier
@@ -1108,18 +1109,8 @@ class DeviceObjectPropertyReference(TypedDict):
     device_identifier: NotRequired[ObjectIdentifier | None]
 
 
-class AccessRuleTimeRange(TypedDict):
-    """The property whose value decides when an access rule applies, such as
-    a Schedule's Present_Value (``BACnetDeviceObjectPropertyReference``).
-
-    Unknown keys and a ``device_identifier`` that isn't a Device raise
-    ValueError; wrong types raise TypeError.
-    """
-
-    object_identifier: ObjectIdentifier
-    property_identifier: PropertyIdentifier
-    property_array_index: NotRequired[int | None]
-    device_identifier: NotRequired[ObjectIdentifier | None]
+# An access rule's time range is read as any other property reference.
+AccessRuleTimeRange = DeviceObjectPropertyReference
 
 
 class AccessRule(TypedDict):
@@ -2738,9 +2729,9 @@ class BACnetServer:
 
         ``start_time`` and ``stop_time`` bound when records are kept, each a
         ``((full_year, month, day, day_of_week), (hour, minute, second,
-        hundredths))`` pair: every field 255 leaves that side open, and
-        anything else that isn't an actual date and time raises
-        BacnetProtocolError (VALUE_OUT_OF_RANGE). Records are kept from the
+        hundredths))`` pair: every field 255 leaves that side open, 255
+        seconds or hundredths count as zero, and anything else that isn't an
+        actual date and time raises BacnetProtocolError (VALUE_OUT_OF_RANGE). Records are kept from the
         start up to, not including, the stop, and each opening and closing
         is logged. ``align_intervals`` aligns a polled log's acquisitions to
         the clock when Log_Interval divides a day, shifted by

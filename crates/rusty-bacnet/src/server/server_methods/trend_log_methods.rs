@@ -24,8 +24,8 @@ impl BACnetServer {
     /// `start_time` and `stop_time` bound when records are kept, each a
     /// `(date, time)` pair of `(full_year, month, day, day_of_week)` and
     /// `(hour, minute, second, hundredths)` tuples, every field 255 to leave
-    /// that side open; anything else that isn't an actual date and time
-    /// raises VALUE_OUT_OF_RANGE. `align_intervals` and `interval_offset` (in
+    /// that side open; 255 seconds or hundredths count as zero, and anything
+    /// else that isn't an actual date and time raises VALUE_OUT_OF_RANGE. `align_intervals` and `interval_offset` (in
     /// hundredths) align a POLLED log's acquisitions to the clock. Peers can
     /// write each of these, and Trigger, which asks a TRIGGERED log for one
     /// record; `write_property_local` writes it from the application.

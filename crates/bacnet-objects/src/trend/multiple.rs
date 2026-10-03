@@ -194,9 +194,10 @@ impl TrendLogMultipleObject {
 
     /// Set Start_Time, the local date and time from which records are kept,
     /// as local configuration: nothing is recorded for the change itself.
-    /// Every field unspecified leaves the start open; any other value has to
-    /// name an actual date and time (the weekday may stay unspecified), or it
-    /// is PROPERTY / VALUE_OUT_OF_RANGE.
+    /// Every field unspecified leaves the start open. Any other value has to
+    /// name an actual date and time, or it is PROPERTY / VALUE_OUT_OF_RANGE:
+    /// the weekday may stay unspecified, and unspecified seconds or
+    /// hundredths count as zero.
     pub fn set_start_time(&mut self, date: Date, time: Time) -> Result<(), Error> {
         self.set_window_end(PropertyIdentifier::START_TIME, date, time)
     }
