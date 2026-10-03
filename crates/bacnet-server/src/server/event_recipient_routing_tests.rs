@@ -128,12 +128,24 @@ pub(super) async fn distribute_counted(
 /// [`distribute_counted`] over a caller-built transport.
 pub(super) async fn distribute_counted_on(
     transport: TestTransport,
-    mut db: ObjectDatabase,
+    db: ObjectDatabase,
     device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
     comm_state: u8,
 ) -> (Vec<Bytes>, Vec<UnicastFrame>, EventNotificationCounters) {
     let sent = transport.sent();
     let network = Arc::new(NetworkLayer::new(transport));
+    distribute_counted_through(&network, &sent, db, device_bindings, comm_state).await
+}
+
+/// [`distribute_counted`] through a caller's network, such as a started
+/// server's, reading what it sent from `sent`.
+pub(super) async fn distribute_counted_through(
+    network: &Arc<NetworkLayer<TestTransport>>,
+    sent: &SendLog,
+    mut db: ObjectDatabase,
+    device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
+    comm_state: u8,
+) -> (Vec<Bytes>, Vec<UnicastFrame>, EventNotificationCounters) {
     let comm_state = Arc::new(AtomicU8::new(comm_state));
     let suppressions = Arc::default();
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
@@ -163,7 +175,7 @@ pub(super) async fn distribute_counted_on(
     BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
         &EventDelivery {
             db: &db,
-            network: &network,
+            network,
             comm_state: &comm_state,
             learned_routers: &learned_routers,
             notification_transactions: &notifications,

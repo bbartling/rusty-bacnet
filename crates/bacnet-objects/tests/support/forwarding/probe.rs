@@ -695,27 +695,28 @@ impl BACnetObject for Probe {
     }
     fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
         self.called("add_trend_record", (record,));
-        // An error of the wrapped object's own, unlike the default's.
-        Err(Error::Protocol {
-            class: ErrorClass::DEVICE.to_raw() as u32,
-            code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
-        })
+        Err(own_record_error())
     }
     fn add_trend_multiple_record(&mut self, record: BACnetLogMultipleRecord) -> Result<(), Error> {
         self.called("add_trend_multiple_record", (record,));
-        // An error of the wrapped object's own, unlike the default's.
-        Err(Error::Protocol {
-            class: ErrorClass::DEVICE.to_raw() as u32,
-            code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
-        })
+        Err(own_record_error())
     }
     fn add_event_log_record(&mut self, record: BACnetEventLogRecord) -> Result<(), Error> {
         self.called("add_event_log_record", (record,));
-        // An error of the wrapped object's own, unlike the default's.
-        Err(Error::Protocol {
-            class: ErrorClass::DEVICE.to_raw() as u32,
-            code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
-        })
+        Err(own_record_error())
+    }
+    fn refresh_log_window_internal(&mut self) -> bool {
+        self.called("refresh_log_window_internal", ());
+        true
+    }
+}
+
+/// What the probe's log-record hooks answer: an error of the wrapped
+/// object's own, unlike the default's OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+fn own_record_error() -> Error {
+    Error::Protocol {
+        class: ErrorClass::DEVICE.to_raw() as u32,
+        code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
     }
 }
 

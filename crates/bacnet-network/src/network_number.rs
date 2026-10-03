@@ -1,6 +1,8 @@
 //! Shared packet contract for the two local nonrouter Network Number controls.
 use crate::layer::ReceivedNetworkControl;
 use bacnet_types::{enums::NetworkMessageType, network_number::NetworkNumber};
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::Arc;
 
 /// A validated local control, independent of transport and configured authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +58,36 @@ pub fn number_is_reply(state: NetworkNumber) -> Option<[u8; 6]> {
         number as u8,
         u8::from(quality == 3),
     ])
+}
+
+/// The number of the network a single-port node is attached to, shared
+/// between the task that owns its Number controls and the senders that read
+/// it. Each [`NetworkLayer`](crate::layer::NetworkLayer) holds one
+/// ([`NetworkLayer::local_network_number`](crate::layer::NetworkLayer::local_network_number)),
+/// and clones share one value. Reading or publishing takes no lock.
+///
+/// It starts unknown. The layer never learns a number by itself: the owner of
+/// its Number controls publishes the state it holds whenever an announcement
+/// may have changed it, and a registered Network Port's owner also publishes
+/// the port's number at startup. The value is a copy of that state, never a
+/// second authority.
+#[derive(Clone, Debug, Default)]
+pub struct LocalNetworkNumber(Arc<AtomicU16>);
+
+impl LocalNetworkNumber {
+    /// Record the number `state` holds. An unknown state records unknown;
+    /// a known number is always in 1..=65534.
+    pub fn publish(&self, state: NetworkNumber) {
+        self.0.store(state.snapshot().0, Ordering::Release);
+    }
+
+    /// The last number published, or `None` while it is unknown.
+    pub fn get(&self) -> Option<u16> {
+        match self.0.load(Ordering::Acquire) {
+            0 => None,
+            number => Some(number),
+        }
+    }
 }
 
 #[cfg(test)]

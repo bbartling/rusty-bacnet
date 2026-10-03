@@ -83,6 +83,8 @@ async fn client_number_worker_queue_is_bounded_and_closes_on_abort() {
     .unwrap();
     tx.try_send(NumberControl::WhatIs).unwrap();
     bounded(gates.entered.acquire()).await.unwrap().forget();
+    // The reply follows the announcement, so the layer already holds it.
+    assert_eq!(client.network.local_network_number().get(), Some(77));
     for _ in 0..network_number::CAPACITY {
         tx.try_send(NumberControl::WhatIs).unwrap();
     }
