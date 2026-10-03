@@ -1,4 +1,4 @@
-use crate::access_control::CredentialDataInputObject;
+use crate::access_control::{AccessZoneObject, CredentialDataInputObject};
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
@@ -316,6 +316,12 @@ macro_rules! reliability_gate_test {
 reliability_gate_test!(
     credential_data_input_reliability_requires_out_of_service,
     CredentialDataInputObject::new(1, "CDI-1").unwrap()
+);
+// Clause 12.32: footnote 1 of Table 12-37 makes Reliability writable while
+// Out_Of_Service is TRUE (#1247).
+reliability_gate_test!(
+    access_zone_reliability_requires_out_of_service,
+    AccessZoneObject::new(1, "ZONE-1").unwrap()
 );
 reliability_gate_test!(
     analog_input_reliability_requires_out_of_service,

@@ -2431,40 +2431,128 @@
   },
   {
    "id": "BACNET-12-CREDENTIAL-DATA-INPUT-OUT-OF-SERVICE-SIMULATION",
-   "standard_anchor": "Clause 12.36, Table 12-43 footnote 1 and Clauses 12.36.4 (Present_Value), 12.36.7 (Reliability), 12.36.8 (Out_Of_Service) and 12.36.11 (Update_Time); Clause 13.1 Table 13-1 (Credential Data Input row); Clause 15.9.1.3 WriteProperty errors; Clause 21 BACnetAuthenticationFactor, BACnetAuthenticationFactorType and BACnetReliability",
+   "standard_anchor": "Clause 12.36, Table 12-43 footnote 1 and Clauses 12.36.4 (Present_Value), 12.36.7 (Reliability), 12.36.8 (Out_Of_Service), 12.36.9 (Supported_Formats), 12.36.10 (Supported_Format_Classes) and 12.36.11 (Update_Time); Clause 13.1 Table 13-1 (Credential Data Input row); Clause 15.9.1.3 WriteProperty errors; Clause 21 BACnetAuthenticationFactor, BACnetAuthenticationFactorType and BACnetReliability",
    "priority": "P1",
-   "requirement_summary": "While Out_Of_Service is TRUE, a Credential Data Input takes WriteProperty and WritePropertyMultiple of Present_Value and Reliability; in service each fails with PROPERTY / WRITE_ACCESS_DENIED. A Present_Value write must be one BACnetAuthenticationFactor, else INVALID_DATA_TYPE. Its format type must be a named BACnetAuthenticationFactorType, and the format type and class must match a Supported_Formats element and the Supported_Format_Classes element at the same position, or be UNDEFINED or ERROR with class 0; else VALUE_OUT_OF_RANGE. A Reliability write must be an Enumerated in the BACnetReliability production, its proprietary range included. A refused write changes nothing. An accepted Present_Value write stamps Update_Time from the Device clock. Entering out of service sets the reader's Present_Value, Update_Time and Reliability aside and the return to service serves them again. Both rows are WhenOutOfService in the property metadata and writable in the PICS. A simulated value, and a restore that changes the row, sends the Credential Data Input SubscribeCOV report.",
+   "requirement_summary": "While Out_Of_Service is TRUE, a Credential Data Input takes WriteProperty and WritePropertyMultiple of Present_Value and Reliability; in service each fails with PROPERTY / WRITE_ACCESS_DENIED. A Present_Value write must be one BACnetAuthenticationFactor, else INVALID_DATA_TYPE. Its format type must be a named BACnetAuthenticationFactorType, and the format type and class must match a Supported_Formats element and the Supported_Format_Classes element at the same position, or be UNDEFINED or ERROR with class 0; else VALUE_OUT_OF_RANGE. A Reliability write must be an Enumerated in the BACnetReliability production, its proprietary range included. A refused write changes nothing. An accepted Present_Value write stamps Update_Time from the Device clock. Entering out of service sets the reader's Present_Value, Update_Time and Reliability aside and the return to service serves them again. Both rows are WhenOutOfService in the property metadata and writable in the PICS. A simulated value, and a restore that changes the row, sends the Credential Data Input SubscribeCOV report. Present_Value always names a declared format with its class, or is UNDEFINED or ERROR with class 0: CredentialDataInputObject::set_present_value refuses any other factor with VALUE_OUT_OF_RANGE, and a Supported_Formats change that no longer covers the factor served, or the reader's factor set aside, puts it back to UNDEFINED with Update_Time stamped from the Device clock.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/access_control/credential_data_input_out_of_service.rs",
+    "crates/bacnet-objects/src/access_control/credential_data_input_formats.rs",
     "crates/bacnet-objects/src/access_control/credential_data_input.rs::CredentialDataInputObject",
     "crates/bacnet-objects/src/access_control/metadata_identity.rs",
-    "crates/bacnet-objects/src/common.rs"
+    "crates/bacnet-objects/src/common.rs",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-objects/src/access_control/credential_data_input_out_of_service_tests.rs::{credential_data_input_takes_simulated_rows_out_of_service,credential_data_input_simulated_present_value_without_a_clock_stamps_unspecified,credential_data_input_return_to_service_serves_the_reader_again,credential_data_input_null_out_of_service_write_keeps_the_simulation}",
+    "crates/bacnet-objects/src/access_control/credential_data_input_out_of_service_tests.rs::{credential_data_input_takes_simulated_rows_out_of_service,credential_data_input_without_a_clock_stamps_update_time_with_a_sequence_number,sequence_numbers_climb_to_the_top_of_the_range_and_skip_zero,credential_data_input_return_to_service_serves_the_reader_again,credential_data_input_null_out_of_service_write_keeps_the_simulation}",
     "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::{property_metadata_access_identity_write_capabilities_match_dispatch,property_metadata_access_identity_writes_store_verbatim_and_deny}",
     "crates/bacnet-objects/src/reliability_writability_tests.rs::credential_data_input_reliability_requires_out_of_service",
     "crates/bacnet-server/src/handlers/tests/credential_data_input_oos_writes.rs::{write_property_takes_reader_rows_only_out_of_service,write_property_multiple_takes_reader_rows_only_out_of_service}",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::credential_data_input_simulated_rows_report_and_restore",
-    "crates/bacnet-server/src/pics/property_metadata_tests/access_identity.rs::pics_access_identity_property_metadata_is_exact"
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_identity.rs::pics_access_identity_property_metadata_is_exact",
+    "crates/bacnet-objects/src/access_control/credential_data_input_format_tests.rs::{credential_data_input_dropping_the_read_format_resets_present_value,credential_data_input_moving_the_read_format_to_another_class_resets_present_value,credential_data_input_dropping_a_format_out_of_service_covers_both_factors}",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_supported_formats_reach_both_arrays",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_supported_formats_reach_both_arrays_and_gate_simulated_reads"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/access_control/credential_data_input_out_of_service_tests.rs::{credential_data_input_refuses_simulated_rows_in_service,credential_data_input_simulated_rows_outside_their_datatypes_are_refused_unchanged,credential_data_input_set_reliability_internal_checks_the_production}",
-    "crates/bacnet-server/src/handlers/tests/credential_data_input_oos_writes.rs::reader_row_writes_outside_their_datatypes_are_refused_unchanged"
+    "crates/bacnet-server/src/handlers/tests/credential_data_input_oos_writes.rs::reader_row_writes_outside_their_datatypes_are_refused_unchanged",
+    "crates/bacnet-objects/src/access_control/credential_data_input_format_tests.rs::{credential_data_input_set_present_value_refuses_undeclared_factors,credential_data_input_refused_format_list_keeps_present_value}"
    ],
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Fixed entry for #1168 (Credential Data Input out-of-service writes), from changelog.d/1168-credential-data-input-oos-writes.md",
-    "docs/rust-api.md#access-control-7 out-of-service Present_Value and Reliability"
+    "docs/rust-api.md#access-control-7 out-of-service Present_Value and Reliability",
+    "CHANGELOG.md Unreleased Fixed entry for #1249 (Credential Data Input Present_Value kept to its formats), from changelog.d/1249-credential-data-input-formats.md",
+    "docs/python-api.md#access-control supported_formats"
    ],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1168, found in #1133). Breaking pre-1.0 wire change. Table 12-43 was read as a page image; footnote 1 marks Present_Value and Reliability.",
     "Local policies, recorded in access_control/credential_data_input_out_of_service.rs: a malformed factor is INVALID_DATA_TYPE, as for the Load Control shed levels; UNDEFINED and ERROR need no declared format; the value octets are not checked against Annex P.",
-    "A simulated Present_Value stamps Update_Time from the Device clock, with every field unspecified when there is none, as the Pulse Converter stamps Count; a Reliability write leaves Update_Time alone.",
+    "A simulated Present_Value stamps Update_Time from the Device clock, as the Pulse Converter stamps Count; a Reliability write leaves Update_Time alone.",
     "set_present_value updates the values set aside while out of service. The new set_reliability_internal is refused with WRITE_ACCESS_DENIED while out of service, as on the other Reliability carriers (BACNET-12-OOS-RELIABILITY-WRITABILITY).",
     "The server treats Present_Value as a COV trigger on this object as on every type but Access Point, so a simulated Present_Value reports even when Update_Time does not move.",
-    "Not covered: setting Present_Value to UNDEFINED when Supported_Formats stops listing its format; intrinsic and fault reporting; a Python route to declare formats."
+    "Not covered: intrinsic and fault reporting.",
+    "`CredentialDataInputObject::set_present_value` returns `Result` and refuses an undeclared factor with VALUE_OUT_OF_RANGE.",
+    "Local policy, recorded in access_control/credential_data_input_formats.rs: a factor whose format stays declared under another class is dropped too, since a write couldn't set that pair.",
+    "Python declares formats through add_credential_data_input(supported_formats=...), as (format, class) pairs.",
+    "With no usable Device clock a simulated Present_Value and a format reset stamp Update_Time in the sequence-number form of BACnetTimeStamp (Clauses 12.36.11 and 21.6), taking the object's next number from 1 to 65535, then 1 again."
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-ZONE-OUT-OF-SERVICE-SIMULATION",
+   "standard_anchor": "Clause 12.32, Table 12-37 footnote 1, Clauses 12.32.7 and 12.32.9 to 12.32.11, Clause 15.9.1.3",
+   "priority": "P1",
+   "summary": "An Access Zone takes Occupancy_Count and Reliability writes only while out of service and serves its own values again on the return to service.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/zone_out_of_service.rs",
+    "crates/bacnet-objects/src/access_control/zone.rs::AccessZoneObject",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs",
+    "crates/bacnet-objects/src/access_control/mod.rs",
+    "crates/bacnet-objects/src/common.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/zone_out_of_service_tests.rs::{access_zone_takes_simulated_rows_out_of_service,access_zone_return_to_service_serves_the_zone_again,access_zone_null_out_of_service_write_keeps_the_simulation}",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::{property_metadata_access_trio_write_capabilities_match_dispatch,property_metadata_access_point_and_zone_writes_store_verbatim}",
+    "crates/bacnet-objects/src/reliability_writability_tests.rs::access_zone_reliability_requires_out_of_service",
+    "crates/bacnet-server/src/handlers/tests/access_zone_oos_writes.rs::{write_property_takes_zone_rows_only_out_of_service,write_property_multiple_takes_zone_rows_only_out_of_service}",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/zone_out_of_service_tests.rs::{access_zone_refuses_simulated_rows_in_service,access_zone_simulated_rows_outside_their_datatypes_are_refused_unchanged}",
+    "crates/bacnet-server/src/handlers/tests/access_zone_oos_writes.rs::zone_row_writes_outside_their_datatypes_are_refused_unchanged"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#access-control-7",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "In service both writes fail with WRITE_ACCESS_DENIED. Out of service a count is an Unsigned and a Reliability an Enumerated in the BACnetReliability production, else INVALID_DATA_TYPE or VALUE_OUT_OF_RANGE.",
+    "`AccessZoneObject::set_occupancy_count` updates the count set aside while out of service, and `set_reliability_internal` is refused then, as on the other Reliability carriers.",
+    "The return to service serves the count set aside, a choice Clause 12.32.11 leaves to the implementation.",
+    "The zone serves neither Occupancy_State nor Adjust_Value, runs no intrinsic reporting and has no Table 13-1 row, so a simulated value raises no event and sends no COV report."
+   ],
+   "gaps": [
+    "#1284: Occupancy_State and Event_State, required Table 12-37 rows, are not served, nor are Occupancy_Count_Enable, Adjust_Value and the occupancy limits"
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-POINT-OUT-OF-SERVICE-EVENTS",
+   "standard_anchor": "Clause 12.31, Clauses 12.31.8 and 12.31.27 to 12.31.29, Clause 13.1, Table 13-1",
+   "priority": "P1",
+   "summary": "Each Out_Of_Service edge of an Access Point records an access event, OUT_OF_SERVICE or OUT_OF_SERVICE_RELINQUISHED, as a new transaction stamped from the Device clock.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/point.rs::AccessPointObject",
+    "crates/bacnet-objects/src/clock.rs",
+    "crates/bacnet-objects/src/common.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/point_out_of_service_tests.rs::{access_point_entering_out_of_service_records_out_of_service,access_point_return_to_service_records_out_of_service_relinquished,access_point_out_of_service_event_without_a_clock_stamps_the_tag_as_a_sequence_number,access_point_sequence_number_folds_a_tag_past_its_range,access_point_out_of_service_event_tag_wraps_at_the_top_of_its_range}",
+    "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_point_out_of_service_edges_record_events_and_report",
+    "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_point_out_of_service_round_trip_reports_without_a_clock",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_point_indexed_reads_and_bytes_are_unchanged"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/point_out_of_service_tests.rs::access_point_writes_that_keep_out_of_service_record_nothing"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#access-control-7",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "The Clause 12.31 introduction counts an operator action as a transaction and 12.31.27.1 moves the tag when one starts, so each edge moves Access_Event_Tag on by one, wrapping. A write that keeps the value records nothing.",
+    "With no usable Device clock Access_Event_Time takes the sequence-number form of BACnetTimeStamp (Clauses 12.31.29 and 21.6) holding the new tag, folded into 1 to 65535, so each edge still moves the Table 13-1 trigger.",
+    "Access_Event_Credential and Access_Event_Authentication_Factor are not served, so an edge sets neither. The point runs no intrinsic reporting, so an edge raises no event notification.",
+    "`set_access_event` still takes the application's events while out of service; reporting none then is left to the application.",
+    "Reliability stays read-only: nothing moves it off NO_FAULT_DETECTED, the condition Clause 12.31.8 sets for a writable Reliability."
+   ],
+   "gaps": [
+    "#1284: Access_Event_Credential, a required Table 12-36 row, is not served; each event would store it (12.31.27.1), with the no-credential value for an edge (12.31.30(b))",
+    "#1284: Authentication_Status, a required Table 12-36 row, is not served; it would read DISABLED while the point is out of service (12.31.9)"
    ]
   },
   {
@@ -2480,7 +2568,8 @@
     "crates/bacnet-objects/src/access_control/credential_data_input.rs::CredentialDataInputObject",
     "crates/bacnet-objects/src/access_control/door.rs::AccessDoorObject",
     "crates/bacnet-objects/src/access_control/point.rs::AccessPointObject",
-    "crates/bacnet-objects/src/common.rs::read_array"
+    "crates/bacnet-objects/src/common.rs::read_array",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/authentication_factor_format.rs::{authentication_factor_format_golden_bytes_and_round_trip,authentication_factor_formats_decode_one_element_at_a_time}",
@@ -2489,7 +2578,12 @@
     "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::{property_metadata_access_door_exact_sets_readable_rows_and_indexed_list,property_metadata_access_point_exact_sets_readable_rows_and_indexed_list}",
     "crates/bacnet-server/src/handlers/tests/access_control_arrays.rs::{credential_data_input_format_arrays_read_per_index,access_door_door_members_read_per_index,access_point_access_doors_read_per_index}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_identity.rs::rpm_credential_data_input_indexed_reads_and_bytes_are_unchanged",
-    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::{rpm_access_door_indexed_reads_and_bytes_are_unchanged,rpm_access_point_indexed_reads_and_bytes_are_unchanged,rpm_access_zone_indexed_reads_and_bytes_are_unchanged}"
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::{rpm_access_door_indexed_reads_and_bytes_are_unchanged,rpm_access_point_indexed_reads_and_bytes_are_unchanged,rpm_access_zone_indexed_reads_and_bytes_are_unchanged}",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::{python_door_members_and_access_doors_reach_the_arrays,python_supported_formats_reach_both_arrays}",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_door_members_reach_the_array",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_access_doors_reach_the_array_and_name_doors_only",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_array_keywords",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_supported_formats_reach_both_arrays_and_gate_simulated_reads"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/authentication_factor_format.rs::authentication_factor_format_rejects_malformed_elements",
@@ -2498,14 +2592,16 @@
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Fixed entry for #1169 (access-control arrays), from changelog.d/1169-access-control-arrays.md",
-    "docs/rust-api.md#constructed-property-framing access-control arrays"
+    "docs/rust-api.md#constructed-property-framing access-control arrays",
+    "docs/python-api.md#access-control array keyword arguments"
    ],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1169, found in #1133). Breaking pre-1.0 wire change. Tables 12-30, 12-36 and 12-43 and the Clause 21 production were read as page images.",
     "The object keeps Supported_Formats and Supported_Format_Classes as one list of pairs, so the two arrays always have one size. set_supported_formats refuses with VALUE_OUT_OF_RANGE a format outside the closed BACnetAuthenticationFactorType production, a CUSTOM format without both vendor members, and another format with a nonzero vendor member.",
     "set_access_doors refuses with VALUE_OUT_OF_RANGE a reference to anything but an Access Door object; Door_Members takes any reference, its contents being the device's choice.",
     "Access Zone has no Access_Doors row, so an indexed read of it fails with UNKNOWN_PROPERTY rather than PROPERTY_IS_NOT_AN_ARRAY, as for the other array identifiers on objects that lack them.",
-    "Not covered: network writes and resizing of Supported_Formats and Supported_Format_Classes, which Table 12-43 does not require; Python routes for the four setters."
+    "Not covered: network writes and resizing of Supported_Formats and Supported_Format_Classes, which Table 12-43 does not require.",
+    "Python sets the arrays at registration through add_access_door(door_members=...), add_access_point(access_doors=...) and add_credential_data_input(supported_formats=...). A reference is an ObjectIdentifier in this device or a (device, object) pair; a format is a type number or a (type, vendor id, vendor format) triple."
    ]
   },
   {
@@ -3400,7 +3496,7 @@
   },
   {
    "id": "BACNET-12-OOS-RELIABILITY-WRITABILITY",
-   "standard_anchor": "Clause 12.17 Table 12-20 footnote 7 and 12.17.9 Out_Of_Service (Loop Present_Value and Reliability); Clause 12 Out_Of_Service property texts (12.2/12.3/12.4/12.6/12.7/12.8/12.19/12.21/12.22 families); Clause 12.24 Schedule Reliability_Evaluation_Inhibit text; Clauses 12.15 and 12.16, Tables 12-18 and 12-19 footnote 1 (Life Safety Point and Zone); Clause 12.25 Table 12-29 and Clause 12.30 Table 12-35 (Trend Log / Trend Log Multiple); Clause 21 BACnetReliability",
+   "standard_anchor": "Clause 12.17 Table 12-20 footnote 7 and 12.17.9 Out_Of_Service (Loop Present_Value and Reliability); Clause 12 Out_Of_Service property texts (12.2/12.3/12.4/12.6/12.7/12.8/12.19/12.21/12.22 families); Clause 12.24 Schedule Reliability_Evaluation_Inhibit text; Clauses 12.15 and 12.16, Tables 12-18 and 12-19 footnote 1 (Life Safety Point and Zone); Clause 12.25 Table 12-29 and Clause 12.30 Table 12-35 (Trend Log / Trend Log Multiple); Clause 21 BACnetReliability; Clause 12.32, Table 12-37 footnote 1 (Access Zone)",
    "priority": "P1",
    "requirement_summary": "On object types carrying Out_Of_Service and Reliability, Reliability is network-writable exactly when Out_Of_Service is TRUE (the simulation grant quoted in each carrier's Out_Of_Service property text), and the written value is validated against the BACnetReliability production: the named set derived from Reliability::ALL_NAMED (enumerated 0..=25 with 11 reserved for a future addendum) plus the vendor-proprietary range 64..=65535, refusing anything else with PROPERTY / VALUE_OUT_OF_RANGE. In-service writes refuse PROPERTY / WRITE_ACCESS_DENIED (Clause 15.9.1.3 row for a property the requester cannot write at that time). The evaluated value is saved on the FALSE-to-TRUE edge and restored on the TRUE-to-FALSE edge; the internal set_reliability_internal route carries the complementary ownership guard (refused while Out_Of_Service is TRUE). Trend Log and Trend Log Multiple, whose Reliability_Evaluation_Inhibit paragraphs require NO_FAULT_DETECTED while evaluation is inhibited without the out-of-service write provision, refuse all network Reliability writes. Loop Present_Value, which the same footnote covers, follows the same gate: network-writable only while Out_Of_Service is TRUE and refused PROPERTY / WRITE_ACCESS_DENIED in service, with the application route (set_present_value_internal, reached through BACnetServer::set_present_value_local) carrying the complementary guard. Trend Log and Trend Log Multiple serve no Out_Of_Service at all, because Tables 12-29 and 12-35 define none.",
    "status": "supported-with-clause-evidence",
@@ -3413,7 +3509,8 @@
     "crates/bacnet-types/src/enums/object_level.rs",
     "crates/bacnet-objects/src/loop_obj/metadata.rs",
     "crates/bacnet-objects/src/trend/metadata.rs",
-    "crates/bacnet-objects/src/trend/multiple_metadata.rs"
+    "crates/bacnet-objects/src/trend/multiple_metadata.rs",
+    "crates/bacnet-objects/src/access_control/zone.rs::AccessZoneObject"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/reliability_writability_tests.rs::loop_reliability_requires_out_of_service",
@@ -3429,7 +3526,8 @@
     "crates/bacnet-server/src/server/loop_cov_tests.rs::loop_fault_and_out_of_service_notify_cov_subscribers",
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_present_value_is_writable_only_out_of_service",
     "crates/bacnet-server/src/server/loop_cov_tests.rs::loop_present_value_write_property_follows_out_of_service",
-    "crates/bacnet-objects/src/reliability_writability_tests.rs::credential_data_input_reliability_requires_out_of_service"
+    "crates/bacnet-objects/src/reliability_writability_tests.rs::credential_data_input_reliability_requires_out_of_service",
+    "crates/bacnet-objects/src/reliability_writability_tests.rs::access_zone_reliability_requires_out_of_service"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/trend/tests.rs::trendlog_reliability_is_not_network_writable",
@@ -3449,7 +3547,8 @@
     "#978 also gave Calendar an always-clear Status_Flags; #984 then removed it, with Event_State and Out_Of_Service, because Table 12-11 defines none of them (see BACNET-12-CALENDAR-PROPERTY-SET). #997 likewise removed Status_Flags, Out_Of_Service and Reliability from Elevator Group, whose Table 12-76 has none of them (see BACNET-12-ELEVATOR-GROUP-PROPERTY-SET).",
     "#985: Loop Present_Value joined the footnote 7 gate (metadata WhenOutOfService, so the PICS marks it writable), and set_present_value_local now accepts a Loop in service. Trend Log lost its writable compatibility Out_Of_Service and Trend Log Multiple its fixed-FALSE read-only one, as #984 did for Calendar: both are absent from Property_List, the metadata, RPM ALL and OPTIONAL and the PICS, and ReadProperty or WriteProperty on them fails with PROPERTY / UNKNOWN_PROPERTY.",
     "#1064 likewise removed Event Log's writable Out_Of_Service, which Table 12-31 doesn't define (BACNET-12-UNDEFINED-PROPERTY-ROWS). #1108 added Life Safety Point and Zone as the twelfth and thirteenth reliability_gate_test! carriers: footnote 1 of Tables 12-18 and 12-19 covers Reliability and Tracking_Value, both objects gained set_reliability_internal with the complementary guard, and the entry save and exit restore go through write_out_of_service_with_reliability_restore (Tracking_Value handling is BACNET-12-LIFE-SAFETY-OUT-OF-SERVICE-SIMULATION).",
-    "Credential Data Input is the fourteenth reliability_gate_test! carrier (#1168): footnote 1 of Table 12-43 covers Reliability and Present_Value, and set_reliability_internal carries the complementary guard (Present_Value handling is BACNET-12-CREDENTIAL-DATA-INPUT-OUT-OF-SERVICE-SIMULATION)."
+    "Credential Data Input is the fourteenth reliability_gate_test! carrier (#1168): footnote 1 of Table 12-43 covers Reliability and Present_Value, and set_reliability_internal carries the complementary guard (Present_Value handling is BACNET-12-CREDENTIAL-DATA-INPUT-OUT-OF-SERVICE-SIMULATION).",
+    "Access Zone carries the gate: footnote 1 of Table 12-37 makes its Reliability writable while out of service."
    ]
   },
   {

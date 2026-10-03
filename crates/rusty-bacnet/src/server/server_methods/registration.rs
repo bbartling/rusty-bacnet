@@ -493,24 +493,10 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
-    /// Add an Access Door object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_access_door(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = AccessDoorObject::new(instance, name).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
-
     /// Add an Access Credential object to the server (before starting).
     #[pyo3(signature = (instance, name))]
     fn add_access_credential(&self, instance: u32, name: &str) -> PyResult<()> {
         let obj = AccessCredentialObject::new(instance, name).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
-
-    /// Add an Access Point object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_access_point(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = AccessPointObject::new(instance, name).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 
@@ -532,13 +518,6 @@ impl BACnetServer {
     #[pyo3(signature = (instance, name))]
     fn add_access_zone(&self, instance: u32, name: &str) -> PyResult<()> {
         let obj = AccessZoneObject::new(instance, name).map_err(to_py_err)?;
-        self.push_pending(Box::new(obj))
-    }
-
-    /// Add a Credential Data Input object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_credential_data_input(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = CredentialDataInputObject::new(instance, name).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 

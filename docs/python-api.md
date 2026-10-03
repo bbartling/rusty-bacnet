@@ -2068,14 +2068,30 @@ Tracking_Value hears that one.
 #### Access Control
 
 ```python
-server.add_access_door(instance=1, name="Main Entry")
-server.add_access_point(instance=1, name="Lobby Access")
+lock = ObjectIdentifier(ObjectType.BINARY_OUTPUT, 1)
+door = ObjectIdentifier(ObjectType.ACCESS_DOOR, 1)
+server.add_access_door(instance=1, name="Main Entry", door_members=[lock])
+server.add_access_point(instance=1, name="Lobby Access", access_doors=[door])
 server.add_access_credential(instance=1, name="Badge 001")
 server.add_access_user(instance=1, name="John Doe")
 server.add_access_rights(instance=1, name="Employee Access")
 server.add_access_zone(instance=1, name="Building A")
-server.add_credential_data_input(instance=1, name="Card Reader")
+# Wiegand 26 (8) in class 0, and vendor 260's CUSTOM (2) format 7 in class 3.
+server.add_credential_data_input(
+    instance=1,
+    name="Card Reader",
+    supported_formats=[(8, 0), ((2, 260, 7), 3)],
+)
 ```
+
+The keyword arguments set arrays that are read-only over the network.
+`door_members` and `access_doors` take an `ObjectIdentifier` for an object in
+this device or a `(device, object)` pair for one in another device; an
+`access_doors` element that isn't an Access Door raises `BacnetProtocolError`
+(VALUE_OUT_OF_RANGE). `supported_formats` takes `(format, format_class)`
+pairs, a format being a BACnetAuthenticationFactorType number or a
+`(format_type, vendor_id, vendor_format)` triple, which a CUSTOM format
+needs; an ill-formed format raises VALUE_OUT_OF_RANGE.
 
 Access Door, Access Point, Credential Data Input and Load Control take
 SubscribeCOV, and each report carries the values their Table 13-1 rows name:
@@ -2088,10 +2104,16 @@ footnote 1); returning it to service brings back the door's own values. A
 door's Secured_Status follows its command, Door_Status and Lock_Status,
 simulated or not (Clause 12.26.14). A Credential Data Input's Present_Value
 and Reliability take writes the same way (Table 12-43 footnote 1); a
-simulated Present_Value must name a format the reader declares, and the Python
-API declares none yet, so only the UNDEFINED and ERROR factors are accepted.
-Supported_Formats, Supported_Format_Classes, Door_Members and Access_Doors
-read as arrays (index 0 is the size).
+simulated Present_Value must name one of the reader's `supported_formats`
+with its class, or be the UNDEFINED or ERROR factor with class 0. An Access
+Zone's Occupancy_Count and Reliability take writes the same way too (Table
+12-37 footnote 1), and the return to service brings back the zone's own
+values. Writing an Access Point's Out_Of_Service records an access event on
+each edge, OUT_OF_SERVICE on entry and OUT_OF_SERVICE_RELINQUISHED on the
+return, each with the next Access_Event_Tag and the Device clock's time, and
+each sends the point's COV report. Supported_Formats,
+Supported_Format_Classes, Door_Members and Access_Doors read as arrays (index
+0 is the size).
 
 #### Transportation
 

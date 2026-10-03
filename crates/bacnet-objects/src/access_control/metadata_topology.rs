@@ -45,18 +45,21 @@ use crate::property_metadata::{
 // removed the implementation-extra row the 0.1.0 import carried).
 // Access_Event, Access_Event_Tag, Access_Event_Time, Access_Doors, and
 // Event_State carry the table R code with no write arm, so
-// RequiredRead/ReadOnly.
+// RequiredRead/ReadOnly; an Out_Of_Service edge moves the three event rows
+// (#1248) without opening them to writes.
 // Zone Global_Identifier carries the table W code with the routed Unsigned
 // arm, so RequiredWrite/Always. Table 12-37 has neither Present_Value nor
 // Access_Doors, so the zone serves neither (#1064 removed the
 // implementation-extra rows the 0.1.0 import carried).
-// Occupancy_Count carries the table O code with no arm, so
-// Optional/ReadOnly; Entry_Points and Exit_Points carry the table R code
-// with no arm, so RequiredRead/ReadOnly. Status_Flags and Reliability carry
-// the table R code with no network write route, so RequiredRead/ReadOnly.
-// Apart from the door's three footnote-1 rows, every write arm is routed
-// unconditionally and the suites pin in-service writes, so those rows are
-// Always and the metadata mirrors dispatch. Presence is None throughout: the
+// Occupancy_Count carries the table O code and Reliability the table R code,
+// both with footnote 1, and dispatch takes their writes only while
+// Out_Of_Service is TRUE (#1247), so Optional/WhenOutOfService and
+// RequiredRead/WhenOutOfService. Entry_Points and Exit_Points carry the
+// table R code with no arm, so RequiredRead/ReadOnly, and Status_Flags the
+// table R code with no network write route, so RequiredRead/ReadOnly.
+// Apart from the door's and the zone's footnote-1 rows, every write arm is
+// routed unconditionally and the suites pin in-service writes, so those rows
+// are Always and the metadata mirrors dispatch. Presence is None throughout: the
 // implementation models no commandable, intrinsic-reporting, or paired-text
 // gating on this family.
 // The trio is not createable at runtime (the network factory builds only the
@@ -115,12 +118,12 @@ const ACCESS_ZONE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::GLOBAL_IDENTIFIER, RequiredWrite, None, Always),
-    PropertyMetadata::new(P::OCCUPANCY_COUNT, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::OCCUPANCY_COUNT, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::ENTRY_POINTS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::EXIT_POINTS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, WhenOutOfService),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -464,7 +467,8 @@ mod tests {
             (
                 || Box::new(AccessZoneObject::new(1, "ZONE-1").unwrap()),
                 &[P::DESCRIPTION, P::OUT_OF_SERVICE, P::GLOBAL_IDENTIFIER],
-                &[],
+                // Table 12-37 footnote 1 (#1247).
+                &[P::OCCUPANCY_COUNT, P::RELIABILITY],
             ),
         ];
         for (make, writable, when_out_of_service) in cases {
@@ -717,13 +721,19 @@ mod tests {
                 zone.read_property(P::GLOBAL_IDENTIFIER, None).unwrap(),
                 PropertyValue::Unsigned(99)
             );
-            for p in [
-                P::OCCUPANCY_COUNT,
-                P::ENTRY_POINTS,
-                P::EXIT_POINTS,
-                P::STATUS_FLAGS,
-                P::RELIABILITY,
-            ] {
+            // The footnote-1 rows take their own readback only while out of
+            // service (#1247).
+            for p in [P::OCCUPANCY_COUNT, P::RELIABILITY] {
+                let value = zone.read_property(p, None).unwrap();
+                let result = zone.write_property(p, None, value, None);
+                if out_of_service {
+                    result.unwrap();
+                } else {
+                    assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
+                }
+                assert!(zone.is_writable_property(p));
+            }
+            for p in [P::ENTRY_POINTS, P::EXIT_POINTS, P::STATUS_FLAGS] {
                 let value = zone.read_property(p, None).unwrap();
                 assert_error(
                     zone.write_property(p, None, value, None).unwrap_err(),

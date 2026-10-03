@@ -49,10 +49,16 @@ pub trait ClockReader: Send + Sync {
 /// with every field unspecified when there is no clock or its frame is not a
 /// valid actual date and time.
 pub(crate) fn stamp_datetime(clock: Option<&dyn ClockReader>) -> (Date, Time) {
-    match clock.and_then(ClockReader::read_clock) {
-        Some(frame) if frame.is_valid_actual_datetime() => (frame.local_date, frame.local_time),
-        _ => UNSPECIFIED_DATETIME,
-    }
+    current_datetime(clock).unwrap_or(UNSPECIFIED_DATETIME)
+}
+
+/// The Device clock's current local date and time, or `None` when there is
+/// no clock or its frame is not a valid actual date and time.
+pub(crate) fn current_datetime(clock: Option<&dyn ClockReader>) -> Option<(Date, Time)> {
+    clock
+        .and_then(ClockReader::read_clock)
+        .filter(|frame| frame.is_valid_actual_datetime())
+        .map(|frame| (frame.local_date, frame.local_time))
 }
 
 /// A BACnetDateTime with every field unspecified, the value of a timestamp
