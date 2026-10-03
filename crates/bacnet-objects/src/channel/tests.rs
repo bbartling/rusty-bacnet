@@ -125,10 +125,9 @@ fn channel_starts_with_null_priority_16_idle_and_group_zero() {
         read(&channel, P::EXECUTION_DELAY),
         PropertyValue::List(vec![])
     );
-    // Not served: Reliability is optional and the object has none.
-    assert_property_error(
-        channel.read_property(P::RELIABILITY, None),
-        ErrorCode::UNKNOWN_PROPERTY,
+    assert_eq!(
+        read(&channel, P::RELIABILITY),
+        PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
     );
 }
 
@@ -223,9 +222,9 @@ fn channel_present_value_write_queues_its_members_and_goes_in_progress() {
     assert_eq!(read(&channel, P::PRESENT_VALUE), PropertyValue::Real(42.5));
     assert_eq!(read(&channel, P::LAST_PRIORITY), PropertyValue::Unsigned(9));
 
-    assert!(channel.complete_command_run_internal(run.generation, true));
+    assert!(channel.complete_command_run_internal(run.generation, Ok(())));
     assert_eq!(write_status(&channel), WriteStatus::SUCCESSFUL);
-    assert!(!channel.complete_command_run_internal(run.generation, false));
+    assert!(!channel.complete_command_run_internal(run.generation, Err(WriteFailure::Process)));
     assert_eq!(write_status(&channel), WriteStatus::SUCCESSFUL);
 
     // Without a priority, Last_Priority is 16 and the members get none.
@@ -238,7 +237,7 @@ fn channel_present_value_write_queues_its_members_and_goes_in_progress() {
     assert_ne!(again.generation, run.generation);
     assert_eq!(distribution(&again).priority, None);
     assert_eq!(distribution(&again).value, PropertyValue::Null);
-    assert!(channel.complete_command_run_internal(again.generation, false));
+    assert!(channel.complete_command_run_internal(again.generation, Err(WriteFailure::Process)));
     assert_eq!(write_status(&channel), WriteStatus::FAILED);
 }
 
@@ -247,9 +246,9 @@ fn channel_stale_completion_is_ignored() {
     let mut channel = configured();
     write_pv(&mut channel, PropertyValue::Unsigned(3), None).unwrap();
     let run = channel.take_command_run_internal().unwrap();
-    assert!(!channel.complete_command_run_internal(run.generation.wrapping_add(1), true));
+    assert!(!channel.complete_command_run_internal(run.generation.wrapping_add(1), Ok(())));
     assert_eq!(write_status(&channel), WriteStatus::IN_PROGRESS);
-    assert!(channel.complete_command_run_internal(run.generation, true));
+    assert!(channel.complete_command_run_internal(run.generation, Ok(())));
 }
 
 #[test]
@@ -265,9 +264,9 @@ fn channel_replacement_never_shares_a_run_generation() {
     assert_eq!(stale.source, current.source);
     assert_ne!(stale.generation, current.generation);
     assert_ne!(Some(stale.generation), fresh.command_generation_internal());
-    assert!(!fresh.complete_command_run_internal(stale.generation, false));
+    assert!(!fresh.complete_command_run_internal(stale.generation, Err(WriteFailure::Process)));
     assert_eq!(write_status(&fresh), WriteStatus::IN_PROGRESS);
-    assert!(fresh.complete_command_run_internal(current.generation, true));
+    assert!(fresh.complete_command_run_internal(current.generation, Ok(())));
 }
 
 #[test]
@@ -472,6 +471,7 @@ fn channel_property_list_and_required_rows_follow_table_12_62() {
             P::LAST_PRIORITY,
             P::WRITE_STATUS,
             P::STATUS_FLAGS,
+            P::RELIABILITY,
             P::OUT_OF_SERVICE,
             P::LIST_OF_OBJECT_PROPERTY_REFERENCES,
             P::EXECUTION_DELAY,
@@ -514,6 +514,7 @@ fn channel_property_list_and_required_rows_follow_table_12_62() {
             P::OBJECT_NAME,
             P::DESCRIPTION,
             P::PRESENT_VALUE,
+            P::RELIABILITY,
             P::OUT_OF_SERVICE,
             P::LIST_OF_OBJECT_PROPERTY_REFERENCES,
             P::EXECUTION_DELAY,

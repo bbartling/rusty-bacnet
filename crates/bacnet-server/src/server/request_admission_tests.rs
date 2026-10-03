@@ -196,10 +196,14 @@ async fn admission_independent_handlers_and_eight_owned_abort_workers_never_queu
         .unwrap();
         assert_eq!(
             completed.try_recv(),
-            Ok(if kind == 0 {
-                CovAckResult::Ack
-            } else {
-                CovAckResult::Error
+            Ok(match kind {
+                0 => CovAckResult::Ack,
+                1 => CovAckResult::Error(Refusal::Error {
+                    class: ErrorClass::SERVICES,
+                    code: ErrorCode::OTHER,
+                }),
+                2 => CovAckResult::Error(Refusal::Reject(RejectReason::OTHER)),
+                _ => CovAckResult::Error(Refusal::Abort(AbortReason::OTHER)),
             })
         );
         drop(operation);

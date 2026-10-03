@@ -1,5 +1,6 @@
 //! Writes this server makes in other devices on behalf of its own objects: a
-//! Command action naming another Device (Clause 12.10.8, #1180).
+//! Command action naming another Device (Clause 12.10.8, #1180), or a Channel
+//! member in another device (Clause 12.53.11, #1264).
 //!
 //! Each write goes out as one unsegmented confirmed WriteProperty. The address
 //! comes from the server's device bindings only, a configured binding or an
@@ -16,7 +17,9 @@
 //!
 //! Each attempt waits `cov_retry_timeout_ms` for an answer, and only silence
 //! earns another attempt, up to the server's three retries; an Error (BUSY
-//! included), Reject or Abort is final. Nothing is sent while
+//! included), Reject or Abort is final, and the caller gets what it said
+//! (#1323): the Error's class and code, or the Reject or Abort reason.
+//! Nothing is sent while
 //! DeviceCommunicationControl restricts initiation: a retry it would block,
 //! or one whose observed binding has lapsed, ends the write there and frees
 //! its invoke ID. The caller holds no database guard while a write is
@@ -53,8 +56,8 @@ pub(crate) enum RemoteWriteError {
     NoInvokeId,
     /// The server is stopping.
     Stopping,
-    /// The device answered with an Error, Reject or Abort.
-    Refused,
+    /// The device answered with an Error, Reject or Abort, saying this.
+    Refused(Refusal),
     /// No answer to the first attempt or any retry.
     Unanswered,
     /// The runner has no network to send on: a run made without a server.
@@ -63,17 +66,21 @@ pub(crate) enum RemoteWriteError {
 
 impl fmt::Display for RemoteWriteError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
+        let reason = match self {
             Self::Disabled => "initiation is restricted by DeviceCommunicationControl",
             Self::Unbound => "no usable binding for the device",
             Self::Unencodable => "the value has no encoding",
             Self::TooLong => "the request is longer than one APDU",
             Self::NoInvokeId => "no invoke ID is free",
             Self::Stopping => "the server is stopping",
-            Self::Refused => "the device refused the write",
+            Self::Refused(refusal) => {
+                let answer = Error::from(*refusal);
+                return write!(formatter, "the device refused the write: {answer}");
+            }
             Self::Unanswered => "the device didn't answer",
             Self::NoNetwork => "no network to send the write on",
-        })
+        };
+        formatter.write_str(reason)
     }
 }
 
@@ -201,7 +208,7 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
         .await?;
         match outcome {
             NotificationWorkerResult::Ack => Ok(()),
-            NotificationWorkerResult::Error => Err(RemoteWriteError::Refused),
+            NotificationWorkerResult::Error(refusal) => Err(RemoteWriteError::Refused(refusal)),
             NotificationWorkerResult::Exhausted => Err(RemoteWriteError::Unanswered),
             NotificationWorkerResult::Closed => Err(RemoteWriteError::Stopping),
         }

@@ -1,4 +1,4 @@
-//! Channel's RPM selectors follow its Table 12-62 rows (#1151).
+//! Channel's RPM selectors follow its Table 12-62 rows (#1151, #1264).
 use super::*;
 use bacnet_objects::{channel::ChannelObject, traits::BACnetObject};
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
@@ -15,6 +15,7 @@ fn rpm_channel_metadata_selectors_preserve_bytes_and_budgets() {
         P::LAST_PRIORITY,
         P::WRITE_STATUS,
         P::STATUS_FLAGS,
+        P::RELIABILITY,
         P::OUT_OF_SERVICE,
         P::LIST_OF_OBJECT_PROPERTY_REFERENCES,
         P::EXECUTION_DELAY,
@@ -37,6 +38,7 @@ fn rpm_channel_metadata_selectors_preserve_bytes_and_budgets() {
     ];
     let optional = [
         P::DESCRIPTION,
+        P::RELIABILITY,
         P::EXECUTION_DELAY,
         P::ALLOW_GROUP_DELAY_INHIBIT,
     ];

@@ -1895,8 +1895,7 @@ framing, through the shared `bacnet-encoding` codecs.
   member is a `BACnetDeviceObjectPropertyReference`, which has the same
   method and rule: `ChannelObject::set_members` and network writes of
   `List_Of_Object_Property_References` refuse a member whose device
-  identifier isn't a Device with VALUE_OUT_OF_RANGE, before the remote-device
-  refusal.
+  identifier isn't a Device with VALUE_OUT_OF_RANGE.
 
 ### ObjectDatabase
 
@@ -2387,8 +2386,8 @@ A run that `stop()` cuts short isn't resumed. It ends where it stood
 (#1252): In_Process returns to FALSE, each command it hadn't made reads
 unsuccessful, and All_Writes_Successful is TRUE only if every write had
 already been made and succeeded, as when the stop falls in the last command's
-post delay. A Channel's distribution with members left unwritten ends FAILED.
-Once the
+post delay. A Channel's distribution with members left unwritten ends FAILED,
+with Reliability PROCESS_ERROR unless a member had already failed. Once the
 server's own work has stopped, `stop()` also ends any run still in progress on
 the database, such as one a write made straight into the database queued.
 `stop()` doesn't wait for a database the application holds: those runs end as
@@ -2570,15 +2569,16 @@ Both lighting objects serve `Current_Command_Priority`.
 
 A Channel passes each value written to its Present_Value on to its members
 (Clause 12.53, #1151). Give it the members with `ChannelObject::set_members`,
-each a `BACnetDeviceObjectPropertyReference` to an object in this device, then
-optionally one delay in milliseconds per member with `set_execution_delay`
+each a `BACnetDeviceObjectPropertyReference` to an object in this device or
+another, then optionally one delay in milliseconds per member with
+`set_execution_delay`
 and the control groups with `set_control_groups`. All three are writable
 arrays on the network too. The member list and Execution_Delay always keep the
 same size: a write of index 0 to either resizes both, as does a whole write of
 the member list, while a whole write of Execution_Delay must give exactly one
-delay per member (VALUE_OUT_OF_RANGE otherwise). A member naming another
-Device is refused with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED; one naming the
-server's own Device is stored as the local reference it stands for.
+delay per member (VALUE_OUT_OF_RANGE otherwise). A member naming the
+server's own Device is stored as the local reference it stands for; one
+naming another Device keeps it (#1264).
 
 Present_Value takes any primitive value or a lighting command framed in
 context tag 0, at priority 1 to 16 (Last_Priority reads 16 when the write
@@ -2598,11 +2598,54 @@ up to `f32::MAX`. NaN and the infinities fail every conversion that has a
 range, while rounding to a REAL's precision never fails.
 A value that can't be converted, or a member that refuses the write, makes
 Write_Status FAILED once every member has been tried; otherwise it reads
-SUCCESSFUL. A NULL a member refuses as the wrong datatype isn't a failure, so
-one Channel can relinquish commandable members alongside others. With no
-members Write_Status stays IDLE, empty references (instance 4194303) are
-skipped, and while Out_Of_Service is TRUE the value is kept but not passed on.
-Reliability isn't served.
+SUCCESSFUL. A NULL a member refuses as the wrong datatype (an Error of
+INVALID_DATA_TYPE or a Reject of INVALID_PARAMETER_DATA_TYPE) isn't a
+failure, so one Channel can relinquish commandable members alongside others.
+With no members Write_Status stays IDLE, empty references (instance 4194303)
+are skipped, and while Out_Of_Service is TRUE the value is kept but not passed
+on.
+
+A member in another device goes there as a confirmed WriteProperty, the way a
+Command's remote action does (#1264): addressed from the device bindings
+only, each attempt waiting `cov_retry_timeout_ms`, up to three retries for
+silence, nothing sent while DeviceCommunicationControl restricts initiation.
+The server can't read that property's datatype first, so the value goes as
+written (a lighting command only to `Lighting_Command`) and the device refuses
+a datatype it doesn't take (#1342). Members are written one at a time: while a
+remote write waits for its answer, Write_Status stays IN_PROGRESS (a
+Present_Value write, WriteGroup's included, is refused BUSY), and a member
+whose delay comes due meanwhile is written as soon as that write ends (#1343).
+A device that answers none of a write's attempts counts as offline for the
+rest of that distribution: its later members fail at once with nothing sent,
+while members in other devices and local ones are still written. A
+distribution therefore waits at most one write's attempts (four times
+`cov_retry_timeout_ms`, 12 seconds by default) per silent device. A run that
+`stop()` cuts short during a remote write ends FAILED and frees its invoke ID.
+Without a server, `tick_schedules` has no network, so a remote member fails
+there.
+
+Reliability reports how the last distribution ended (Clause 12.53.9):
+NO_FAULT_DETECTED after a SUCCESSFUL one, otherwise the kind of the first
+member that failed, in the order the members were written.
+CONFIGURATION_ERROR means the value couldn't be converted to the member's
+datatype, by datatype or by a coercion rule's range, or the member answered
+UNKNOWN_OBJECT, UNKNOWN_PROPERTY, INVALID_ARRAY_INDEX,
+PROPERTY_IS_NOT_AN_ARRAY, INVALID_DATA_TYPE, DATATYPE_NOT_SUPPORTED or a
+Reject of INVALID_PARAMETER_DATA_TYPE. A value the member itself refuses as
+out of range (VALUE_OUT_OF_RANGE) is PROCESS_ERROR: the clause leaves the
+choice open, and here only the Channel's own conversion counts against its
+configuration. COMMUNICATION_FAILURE means a remote member's device had no
+fresh binding, DCC restricted initiation, or no attempt was answered; an
+attempt the transport failed to send waits like a silent one, so a send
+failure on every attempt lands here too. PROCESS_ERROR covers any other
+refusal (another Error code, another Reject reason, an Abort), a write the
+server couldn't start (a value it can't encode, a request longer than one
+APDU, no free invoke ID, a stopping server, no network), and a run cut short
+before every member was tried. Reliability keeps its value
+while a distribution runs, and Status_Flags shows FAULT whenever it isn't
+NO_FAULT_DETECTED. While Out_Of_Service is TRUE it holds what it read and
+takes a client's write of any Reliability value; back in service it shows the
+last distribution's verdict again.
 
 A running server also executes inbound WriteGroup on its Channels (Clause
 15.11). For each change-list entry, every Channel whose Channel_Number is the
@@ -4315,7 +4358,14 @@ recipients use a learned router on the first attempt and local broadcast on
 later retries; a configured Device binding keeps its fixed next hop. The former
 public `ServerTsm` type and its unused transaction methods have been removed
 without a compatibility alias. `CovAckResult` remains available at its existing
-`bacnet_server::server` path.
+`bacnet_server::server` path. A refused confirmed request ends as
+`CovAckResult::Error(Refusal)`: `Refusal::Error { class, code }` for an Error
+PDU, `Refusal::Reject(reason)` or `Refusal::Abort(reason)` otherwise (#1323).
+`Error::from(refusal)` gives the `Error::Protocol`, `Error::Reject` or
+`Error::Abort` a client's WriteProperty would report. The notification senders
+only ask whether the request was taken; a Channel member in another device
+uses the payload to tell a NULL refused as the wrong datatype, which counts as
+written, from other refusals.
 
 ### Notification forwarding
 

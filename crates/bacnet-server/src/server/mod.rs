@@ -115,15 +115,6 @@ const DEFAULT_APDU_SEGMENT_RETRIES: u8 = MAX_NEG_SEGMENT_ACK_RETRIES;
 /// WriteProperty requests Command actions send to other devices.
 const DEFAULT_APDU_RETRIES: u8 = 3;
 
-/// Result of a confirmed COV notification from the subscriber's perspective.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CovAckResult {
-    /// SimpleAck received — subscriber accepted the notification.
-    Ack,
-    /// Error or Reject/Abort received — subscriber rejected the notification.
-    Error,
-}
-
 /// Data from a TimeSynchronization request.
 #[derive(Debug, Clone)]
 pub struct TimeSyncData {
@@ -594,6 +585,7 @@ mod event_recipient_route;
 mod event_send;
 mod event_suppression;
 pub use event_suppression::EventNotificationCounters;
+mod confirmed_answer;
 pub(crate) mod event_timestamp;
 mod handles;
 mod learned_router_cache;
@@ -602,6 +594,7 @@ mod local_writes;
 mod network_port;
 #[cfg(test)]
 mod network_port_tests;
+pub use confirmed_answer::{CovAckResult, Refusal};
 mod remote_writes;
 pub(crate) use remote_writes::RemoteWriteError;
 mod notification_transactions;
@@ -677,6 +670,10 @@ mod averaging_reference_write_tests;
 mod averaging_sample_tests;
 #[cfg(test)]
 mod binary_lighting_task_tests;
+#[cfg(test)]
+mod channel_reliability_tests;
+#[cfg(test)]
+mod channel_remote_write_tests;
 #[cfg(test)]
 mod channel_run_tests;
 #[cfg(test)]
