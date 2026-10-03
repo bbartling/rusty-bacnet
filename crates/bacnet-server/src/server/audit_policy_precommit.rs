@@ -35,9 +35,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let commit = |number| {
             self.transactions
                 .commit_audit(|| {
-                    if !owner.as_ref().is_some_and(|owner| owner.is_active())
-                        || self.comm_state.load(Ordering::Acquire) != 0
-                    {
+                    if !owner.as_ref().is_some_and(|owner| owner.is_active()) {
                         return Err(denied());
                     }
                     let route = pending.route.take().ok_or_else(denied)?;
@@ -72,7 +70,6 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                     )
                     .ok_or_else(denied)?;
                     let network = Arc::clone(self.network);
-                    let comm_state = Arc::clone(self.comm_state);
                     let deadline = tokio::time::Instant::now() + DELIVERY_TIMEOUT;
                     let completion = DeliveryCompletion {
                         status: pending.status,
@@ -84,10 +81,8 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
                     candidate.commit();
                     Ok(async move {
                         let _permit = permit;
-                        completion.finish(
-                            deliver(&network, &comm_state, &route, &bytes, reserved, deadline)
-                                .await,
-                        );
+                        completion
+                            .finish(deliver(&network, &route, &bytes, reserved, deadline).await);
                     })
                 })
                 .map_err(|_| denied())

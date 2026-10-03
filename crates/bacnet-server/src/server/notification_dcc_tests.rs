@@ -2,19 +2,16 @@
 //! (Clause 16.1, #1327): COV and event notifications are withdrawn at the
 //! attempt DCC would block, their invoke IDs freed there, and an answer that
 //! has already taken the lease still ends them. Audit notifications are left
-//! out of what DISABLE_INITIATION stops, so one already sent waits for its
-//! answer as usual.
+//! out of what DISABLE_INITIATION stops and never read the DCC state; their
+//! tests are in `audit_dcc_tests.rs`.
 //!
 //! The clock is paused, and each attempt waits three seconds for its answer.
 use std::sync::atomic::AtomicUsize;
 
 use bacnet_endpoint_core::coordinator::LeaseToken;
 
-use super::audit_reporter::deliver;
-use super::event_recipient_route::ConfirmedRecipientRoute;
 use super::notification_transactions::run_notification_under_dcc;
 use super::*;
-use crate::server::test_transport::{TestTransport, BIP_LOCAL_MAC};
 
 const TIMEOUT: Duration = Duration::from_secs(3);
 const PEER: [u8; 6] = [10, 0, 0, 9, 0xBA, 0xC0];
@@ -102,66 +99,5 @@ async fn an_answer_claimed_as_the_retry_timer_fires_still_ends_the_notification(
     answer.send(CovAckResult::Ack).unwrap();
     assert_eq!(worker.await.unwrap(), Ok(NotificationWorkerResult::Ack));
     assert_eq!(sends.load(Ordering::Acquire), 1);
-    assert_eq!(transactions.active_count(), 0);
-}
-
-/// Clause 16.1 leaves audit notifications out of what DISABLE_INITIATION
-/// stops, and they make one attempt with no retries, so DCC taking effect
-/// while one is outstanding does not end it: its acknowledgment delivers it.
-#[tokio::test(start_paused = true)]
-async fn disable_initiation_leaves_an_outstanding_audit_notification_to_its_answer() {
-    let transport = TestTransport::builder().local_mac(&BIP_LOCAL_MAC).build();
-    let sent = transport.sent();
-    let network = Arc::new(NetworkLayer::new(transport));
-    let transactions = NotificationTransactions::new();
-    let comm_state = Arc::new(AtomicU8::new(0));
-    let route = ConfirmedRecipientRoute {
-        canonical_peer: canonical_direct_peer(&PEER),
-        local_target: Some(MacAddr::from_slice(&PEER)),
-        remote: None,
-        freshness: None,
-    };
-    let reserved = transactions
-        .reserve(
-            route.canonical_peer.clone(),
-            ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
-        )
-        .unwrap();
-    let invoke_id = reserved.0.invoke_id();
-    let delivery = tokio::spawn({
-        let comm_state = Arc::clone(&comm_state);
-        let deadline = tokio::time::Instant::now() + TIMEOUT;
-        async move {
-            deliver(
-                &network,
-                &comm_state,
-                &route,
-                &[0x10],
-                Some(reserved),
-                deadline,
-            )
-            .await
-        }
-    });
-    settle().await;
-    assert_eq!(sent.unicasts().len(), 1);
-    comm_state.store(DISABLE_INITIATION, Ordering::Release);
-    tokio::time::advance(TIMEOUT / 2).await;
-    settle().await;
-    assert_eq!(
-        transactions.active_count(),
-        1,
-        "still waiting for its answer"
-    );
-    assert!(transactions.admit_terminal(
-        &PEER,
-        None,
-        &Apdu::SimpleAck(SimpleAck {
-            invoke_id,
-            service_choice: ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
-        }),
-    ));
-    assert!(delivery.await.unwrap(), "the acknowledgment delivers it");
-    assert_eq!(sent.unicasts().len(), 1);
     assert_eq!(transactions.active_count(), 0);
 }

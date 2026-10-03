@@ -247,7 +247,6 @@ async fn mandatory_policy_no_runtime_refuses_without_consuming_sequence() {
                     &f.server.config,
                     f.server.test_network(),
                     &f.server.notification_transactions,
-                    &f.server.comm_state,
                     &db,
                 )
                 .unwrap();
@@ -519,7 +518,6 @@ async fn mandatory_policy_stop_between_capture_and_commit_denies_without_assignm
         &f.server.config,
         f.server.test_network(),
         &f.server.notification_transactions,
-        &f.server.comm_state,
         &db,
     )
     .unwrap();
