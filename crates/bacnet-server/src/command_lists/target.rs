@@ -14,10 +14,11 @@
 //!   A value the Channel itself can't coerce is a configuration failure too
 //!   (in `channel`).
 //! - communication: a member in another device that couldn't be reached: no
-//!   fresh binding, initiation disabled by DeviceCommunicationControl, or no
-//!   answer to the first attempt or any retry. An attempt the transport
-//!   failed to send waits like a silent one, so a send failure on every
-//!   attempt ends here too.
+//!   fresh binding and no I-Am to the Who-Is sent for one (or none sent, as
+//!   one drew nothing within the last minute), initiation disabled by
+//!   DeviceCommunicationControl, or no answer to the first attempt or any
+//!   retry. An attempt the transport failed to send waits like a silent one,
+//!   so a send failure on every attempt ends here too.
 //! - process: every other refusal (an Error with another code, a Reject for
 //!   another reason, an Abort) and every write this server couldn't start:
 //!   a value it can't encode, a request longer than one APDU, no free invoke
@@ -45,7 +46,8 @@ pub(super) struct Failed {
     pub(super) failure: WriteFailure,
     /// The target's answer, when it refused the write.
     pub(super) answer: Option<Error>,
-    /// Whether the target's device answered none of the attempts.
+    /// Whether the target's device answered none of the attempts, or none of
+    /// the Who-Is sent to find it.
     pub(super) unanswered: bool,
 }
 
@@ -86,7 +88,7 @@ pub(super) async fn write<H: RunHost>(
                 other => Failed {
                     failure: unmade(other),
                     answer: None,
-                    unanswered: other == RemoteWriteError::Unanswered,
+                    unanswered: silent(other),
                 },
             }
         }
@@ -162,13 +164,24 @@ fn refused(error: &Error) -> WriteFailure {
     }
 }
 
+/// Whether a write in another device that ended with `error` found the
+/// device silent: no answer to any attempt, or no I-Am to the Who-Is sent
+/// to find it.
+fn silent(error: RemoteWriteError) -> bool {
+    matches!(
+        error,
+        RemoteWriteError::Unanswered | RemoteWriteError::Undiscovered
+    )
+}
+
 /// How a write in another device that got no answer, or was never sent,
 /// failed.
 fn unmade(error: RemoteWriteError) -> WriteFailure {
     match error {
-        RemoteWriteError::Disabled | RemoteWriteError::Unbound | RemoteWriteError::Unanswered => {
-            WriteFailure::Communication
-        }
+        RemoteWriteError::Disabled
+        | RemoteWriteError::Unbound
+        | RemoteWriteError::Undiscovered
+        | RemoteWriteError::Unanswered => WriteFailure::Communication,
         RemoteWriteError::Refused(refusal) => refused(&Error::from(refusal)),
         RemoteWriteError::Unencodable
         | RemoteWriteError::TooLong
@@ -222,6 +235,7 @@ mod tests {
         for silence in [
             RemoteWriteError::Disabled,
             RemoteWriteError::Unbound,
+            RemoteWriteError::Undiscovered,
             RemoteWriteError::Unanswered,
         ] {
             assert_eq!(unmade(silence), WriteFailure::Communication);
@@ -235,6 +249,26 @@ mod tests {
         ] {
             assert_eq!(unmade(local), WriteFailure::Process);
         }
+    }
+
+    #[test]
+    fn only_silence_to_the_write_or_its_who_is_marks_the_device_silent() {
+        assert!(silent(RemoteWriteError::Unanswered));
+        assert!(silent(RemoteWriteError::Undiscovered));
+        // Nothing was asked of the device for these.
+        for unasked in [
+            RemoteWriteError::Disabled,
+            RemoteWriteError::Unbound,
+            RemoteWriteError::NoInvokeId,
+            RemoteWriteError::Stopping,
+        ] {
+            assert!(!silent(unasked), "{unasked:?}");
+        }
+        let busy = Refusal::Error {
+            class: ErrorClass::OBJECT,
+            code: ErrorCode::BUSY,
+        };
+        assert!(!silent(RemoteWriteError::Refused(busy)));
     }
 
     #[test]

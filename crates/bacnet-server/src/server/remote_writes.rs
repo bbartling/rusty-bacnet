@@ -3,9 +3,16 @@
 //! member in another device (Clause 12.53.11, #1264).
 //!
 //! Each write goes out as one unsegmented confirmed WriteProperty. The address
-//! comes from the server's device bindings only, a configured binding or an
-//! I-Am heard in the last ten minutes; nothing sends a Who-Is, so an unknown
-//! or stale device fails at once with nothing sent.
+//! comes from the server's device bindings: a configured binding, or an I-Am
+//! heard in the last ten minutes. A device with neither is looked for first
+//! (#1322): one Who-Is limited to its instance, then a wait of the APDU
+//! timeout, from the send, for its I-Am. The Who-Is goes to every network for
+//! a device never heard from, or to the network the device's stale
+//! observation names, which a Who-Is that draws nothing drops. A write that
+//! misses while that Who-Is is out waits on it instead of sending another,
+//! and a device gets at most one Who-Is a minute (`binding_probes`), so a
+//! write that misses within a minute of a Who-Is that drew nothing fails at
+//! once. A write that ends with no binding sends no WriteProperty.
 //!
 //! The invoke ID is leased from the same device-wide pool as confirmed
 //! notifications (and, in an endpoint, client requests), so no two
@@ -19,13 +26,16 @@
 //! earns another attempt, up to the server's three retries; an Error (BUSY
 //! included), Reject or Abort is final, and the caller gets what it said
 //! (#1323): the Error's class and code, or the Reject or Abort reason.
-//! Nothing is sent while
-//! DeviceCommunicationControl restricts initiation: a retry it would block,
-//! or one whose observed binding has lapsed, ends the write there and frees
-//! its invoke ID. The caller holds no database guard while a write is
-//! outstanding.
+//! Nothing is sent while DeviceCommunicationControl restricts initiation, a
+//! Who-Is included, since Clause 16.1 lets such a device start no request but
+//! I-Am answers and audit notifications: a retry it would block, or one whose
+//! observed binding has lapsed, ends the write there and frees its invoke ID.
+//! The caller holds no database guard while a write is outstanding or waits
+//! for an I-Am, and the binding table's guard is never held across a send or
+//! a wait.
 
-use super::device_bindings::DeviceBindingTable;
+use super::binding_probes::{ProbeStep, WhoIsScope};
+use super::device_bindings::{DeviceBindingTable, DeviceResolution};
 use super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
 use super::notification_transactions::{run_attempts, Attempt, NotificationReserveError};
 use super::*;
@@ -45,9 +55,14 @@ pub(crate) enum RemoteWriteError {
     /// DeviceCommunicationControl restricts initiation: nothing was sent, or
     /// the write ended at the first retry after it took effect.
     Disabled,
-    /// No usable binding for the device: none configured, no I-Am heard in
-    /// the last ten minutes, or an observed one that lapsed before a retry.
+    /// No usable binding for the device, and no Who-Is sent for it: the
+    /// identifier can't be looked for, a Who-Is for it drew nothing within
+    /// the last minute, too many devices are being looked for, or an observed
+    /// binding lapsed before a retry.
     Unbound,
+    /// No binding for the device, and the Who-Is sent for it drew no I-Am
+    /// within the APDU timeout.
+    Undiscovered,
     /// The value has no encoding.
     Unencodable,
     /// The request doesn't fit in one APDU this device can send.
@@ -69,6 +84,7 @@ impl fmt::Display for RemoteWriteError {
         let reason = match self {
             Self::Disabled => "initiation is restricted by DeviceCommunicationControl",
             Self::Unbound => "no usable binding for the device",
+            Self::Undiscovered => "the device didn't answer a Who-Is",
             Self::Unencodable => "the value has no encoding",
             Self::TooLong => "the request is longer than one APDU",
             Self::NoInvokeId => "no invoke ID is free",
@@ -135,15 +151,7 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
         if self.initiation_restricted() {
             return Err(RemoteWriteError::Disabled);
         }
-        let resolution = {
-            let table = self.bindings.read().await;
-            table.resolve_at(&write.device, Instant::now(), |mac| {
-                self.network.transport().is_broadcast_mac(mac)
-            })
-        };
-        let route = RecipientRoute::from_device_resolution(resolution)
-            .into_confirmed()
-            .ok_or(RemoteWriteError::Unbound)?;
+        let route = self.route(write.device).await?;
         let mut service = BytesMut::new();
         write
             .request
@@ -214,9 +222,150 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
         }
     }
 
+    /// The route to `device`: its binding, or the one a targeted Who-Is finds
+    /// when it has none fresh.
+    async fn route(
+        &self,
+        device: ObjectIdentifier,
+    ) -> Result<ConfirmedRecipientRoute, RemoteWriteError> {
+        let resolution = self.resolve(&*self.bindings.read().await, device);
+        if !can_look_for(device, &resolution) {
+            return confirmed(resolution, RemoteWriteError::Unbound);
+        }
+        let (step, scope) = {
+            let mut table = self.bindings.write().await;
+            // An I-Am may have come in since the read guard went.
+            let resolution = self.resolve(&table, device);
+            if !can_look_for(device, &resolution) {
+                return confirmed(resolution, RemoteWriteError::Unbound);
+            }
+            if self.initiation_restricted() {
+                return Err(RemoteWriteError::Disabled);
+            }
+            let now = tokio::time::Instant::now();
+            let step = table.probes.begin(device, now, self.timeout);
+            (step, table.who_is_scope(&device))
+        };
+        let wait = match step {
+            ProbeStep::Send(wait) => {
+                self.who_is(device, scope, wait.id()).await?;
+                wait
+            }
+            ProbeStep::Join(wait) => wait,
+            ProbeStep::HeldOff | ProbeStep::Full => {
+                debug!(%device, ?step, "No Who-Is sent for an unbound device");
+                return Err(RemoteWriteError::Unbound);
+            }
+        };
+        // Woken by the I-Am or the deadline, the write looks again either way.
+        wait.answered().await;
+        let resolution = self.resolve(&*self.bindings.read().await, device);
+        if let Some(route) = RecipientRoute::from_device_resolution(resolution).into_confirmed() {
+            return Ok(route);
+        }
+        // A probe withdrawn before its Who-Is went out ends here too.
+        if self.initiation_restricted() {
+            return Err(RemoteWriteError::Disabled);
+        }
+        // Nothing answered where the device was last seen, so its next
+        // Who-Is asks every network instead.
+        self.bindings
+            .write()
+            .await
+            .forget_stale(&device, Instant::now());
+        Err(RemoteWriteError::Undiscovered)
+    }
+
+    fn resolve(&self, table: &DeviceBindingTable, device: ObjectIdentifier) -> DeviceResolution {
+        table.resolve_at(&device, Instant::now(), |mac| {
+            self.network.transport().is_broadcast_mac(mac)
+        })
+    }
+
+    /// Broadcast a Who-Is whose limits are both `device`'s instance across
+    /// `scope`, then start probe `probe`'s wait from the send. A failed send
+    /// leaves the probe to run out like a silent device's. If
+    /// DeviceCommunicationControl has restricted initiation since the probe
+    /// started, nothing is sent and the probe is withdrawn.
+    async fn who_is(
+        &self,
+        device: ObjectIdentifier,
+        scope: WhoIsScope,
+        probe: u64,
+    ) -> Result<(), RemoteWriteError> {
+        let instance = device.instance_number();
+        let mut service = BytesMut::new();
+        WhoIsRequest {
+            low_limit: Some(instance),
+            high_limit: Some(instance),
+        }
+        .encode(&mut service);
+        let mut apdu = BytesMut::new();
+        encode_apdu(
+            &mut apdu,
+            &Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
+                service_choice: UnconfirmedServiceChoice::WHO_IS,
+                service_request: service.freeze(),
+            }),
+        )
+        .expect("valid APDU encoding");
+        let scope = scope.localize(self.network.local_network_number().get());
+        let priority = NetworkPriority::NORMAL;
+        if self.initiation_restricted() {
+            self.bindings.write().await.probes.withdraw(&device, probe);
+            return Err(RemoteWriteError::Disabled);
+        }
+        let sent = match scope {
+            WhoIsScope::Local => self.network.broadcast_apdu(&apdu, false, priority).await,
+            WhoIsScope::Remote(network) => {
+                self.network
+                    .broadcast_to_network(&apdu, network, false, priority)
+                    .await
+            }
+            WhoIsScope::Global => {
+                self.network
+                    .broadcast_global_apdu(&apdu, false, priority)
+                    .await
+            }
+        };
+        match sent {
+            Ok(()) => debug!(%device, ?scope, "Who-Is for an unbound device sent"),
+            Err(error) => warn!(
+                %error,
+                %device,
+                ?scope,
+                "Who-Is for an unbound device not sent"
+            ),
+        }
+        let now = tokio::time::Instant::now();
+        let mut table = self.bindings.write().await;
+        table.probes.sent(&device, probe, now, self.timeout);
+        Ok(())
+    }
+
     fn initiation_restricted(&self) -> bool {
         self.comm_state.load(Ordering::Acquire) >= 1
     }
+}
+
+/// Whether a write may look for `device` with a Who-Is: it has no binding,
+/// or only a stale one, and its instance isn't the wildcard, which in a
+/// Who-Is calls on unconfigured devices instead (Clause 16.11).
+fn can_look_for(device: ObjectIdentifier, resolution: &DeviceResolution) -> bool {
+    matches!(
+        resolution,
+        DeviceResolution::Unknown | DeviceResolution::Stale
+    ) && device.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE
+}
+
+/// The confirmed route `resolution` gives, or `missing` when it gives none.
+fn confirmed(
+    resolution: DeviceResolution,
+    missing: RemoteWriteError,
+) -> Result<ConfirmedRecipientRoute, RemoteWriteError> {
+    RecipientRoute::from_device_resolution(resolution)
+        .into_confirmed()
+        .ok_or(missing)
 }
 
 /// One attempt: the request to the bound peer, or through the binding's

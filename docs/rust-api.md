@@ -2517,14 +2517,32 @@ follow In_Process.
 A command whose `device_identifier` names another device goes there as a
 confirmed WriteProperty (#1180). The address comes from the server's device
 bindings: a `DeviceBinding` registered on the builder, or an I-Am the server
-heard in the last ten minutes. The server sends no Who-Is, so a command naming
-a device it has no fresh binding for fails at once and nothing is sent. Each
-attempt waits `ServerConfig::cov_retry_timeout_ms` (3 seconds by default) for
-the answer, and only silence earns another attempt, up to three retries under
-the one invoke ID. An Error (BUSY included), Reject or Abort fails the command
-at once. Nothing is sent while DeviceCommunicationControl restricts
-initiation, and the run holds no database guard while the write is
-outstanding. Naming this server's own Device is the same as naming none.
+heard in the last ten minutes. For a device with neither, the server first
+broadcasts one Who-Is whose low and high limits are both that device's
+instance (#1322). A device it has never heard from is asked on every network
+(a global broadcast, DNET 65535). One whose stale I-Am is still held is asked
+where that I-Am came from: the local network, or the remote network it was
+routed from, where a remote network numbered as this device's own counts as
+local. If that Who-Is draws nothing, the stale I-Am is dropped, so the
+device's next Who-Is goes global. The server then waits
+`ServerConfig::cov_retry_timeout_ms`, counted from the send, for the I-Am,
+which binds the device as any I-Am does, and the write goes ahead; with no
+I-Am by then the command fails and no WriteProperty is sent. Writes that miss
+while that Who-Is is out share it and its wait. A device gets at most one
+Who-Is a minute, counted from when it went out, so a command naming it within
+a minute of one that drew nothing fails at once. At most 256 devices with a
+Who-Is out or held off are tracked, and a command needing another fails
+unsent; a device that answers frees its place at once and stays bound for
+ten minutes, so the cap limits unanswered Who-Is requests to 256 a minute.
+The wildcard instance 4194303 is never looked for. The write itself, to a
+binding routed through the local network's own number, still carries that
+DNET (#1358). Each attempt waits `ServerConfig::cov_retry_timeout_ms` (3
+seconds by default) for the answer, and only silence earns another attempt,
+up to three retries under the one invoke ID. An Error (BUSY included), Reject
+or Abort fails the command at once. Nothing is sent while
+DeviceCommunicationControl restricts initiation, a Who-Is included, and the
+run holds no database guard while the write is outstanding or waits for an
+I-Am. Naming this server's own Device is the same as naming none.
 
 A run that `stop()` cuts short isn't resumed. It ends where it stood
 (#1252): In_Process returns to FALSE, each command it hadn't made reads
@@ -2759,20 +2777,24 @@ are skipped, and while Out_Of_Service is TRUE the value is kept but not passed
 on.
 
 A member in another device goes there as a confirmed WriteProperty, the way a
-Command's remote action does (#1264): addressed from the device bindings
-only, each attempt waiting `cov_retry_timeout_ms`, up to three retries for
-silence, nothing sent while DeviceCommunicationControl restricts initiation.
+Command's remote action does (#1264): addressed from the device bindings,
+with one targeted Who-Is and a wait of `cov_retry_timeout_ms` for the I-Am
+when the device has no fresh binding (#1322, sent and limited as for a
+Command), each attempt waiting `cov_retry_timeout_ms`, up to three
+retries for silence, nothing sent while DeviceCommunicationControl restricts
+initiation.
 The server can't read that property's datatype first, so the value goes as
 written (a lighting command only to `Lighting_Command`) and the device refuses
 a datatype it doesn't take (#1342). Members are written one at a time: while a
 remote write waits for its answer, Write_Status stays IN_PROGRESS (a
 Present_Value write, WriteGroup's included, is refused BUSY), and a member
 whose delay comes due meanwhile is written as soon as that write ends (#1343).
-A device that answers none of a write's attempts counts as offline for the
-rest of that distribution: its later members fail at once with nothing sent,
-while members in other devices and local ones are still written. A
-distribution therefore waits at most one write's attempts (four times
-`cov_retry_timeout_ms`, 12 seconds by default) per silent device. A run that
+A device that answers none of a write's attempts, or none of the Who-Is sent
+to find it, counts as offline for the rest of that distribution: its later
+members fail at once with nothing sent, while members in other devices and
+local ones are still written. A distribution therefore waits at most one
+Who-Is and one write's attempts (five times `cov_retry_timeout_ms`, 15
+seconds by default) per silent device. A run that
 `stop()` cuts short during a remote write ends FAILED and frees its invoke ID.
 Without a server, `tick_schedules` has no network, so a remote member fails
 there.
@@ -2788,7 +2810,9 @@ Reject of INVALID_PARAMETER_DATA_TYPE. A value the member itself refuses as
 out of range (VALUE_OUT_OF_RANGE) is PROCESS_ERROR: the clause leaves the
 choice open, and here only the Channel's own conversion counts against its
 configuration. COMMUNICATION_FAILURE means a remote member's device had no
-fresh binding, DCC restricted initiation, or no attempt was answered; an
+fresh binding and no I-Am answered the Who-Is for it (or none was sent, under
+the one-a-minute limit), DCC restricted initiation, or no attempt was
+answered; an
 attempt the transport failed to send waits like a silent one, so a send
 failure on every attempt lands here too. PROCESS_ERROR covers any other
 refusal (another Error code, another Reject reason, an Abort), a write the
