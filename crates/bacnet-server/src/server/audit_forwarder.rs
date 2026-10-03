@@ -5,21 +5,16 @@ use super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
 use super::notification_transactions::{run_notification_worker, NotificationWorkerResult};
 use super::*;
 use bacnet_objects::audit::AuditLogForwarding;
+use bacnet_objects::database::LocalDevice;
 
 const DEADLINE: Duration = Duration::from_secs(3);
 
-fn local_device(db: &ObjectDatabase) -> Option<ObjectIdentifier> {
-    let mut devices = db
-        .list_objects()
-        .into_iter()
-        .filter(|oid| oid.object_type() == ObjectType::DEVICE);
-    let device = devices.next()?;
-    devices.next().is_none().then_some(device)
-}
-
+/// The configured route to the parent Audit Log's device. The parent must
+/// name a device other than this one ([`ObjectDatabase::local_device`]), and
+/// this device must have a concrete identity to tell the two apart.
 fn resolve(
     profile: &AuditLogForwarding,
-    local: Option<ObjectIdentifier>,
+    local: LocalDevice,
     bindings: &DeviceBindingTable,
     local_mac: &[u8],
     is_broadcast: impl Fn(&[u8]) -> bool,
@@ -27,8 +22,8 @@ fn resolve(
     let parent = profile.parent();
     let device = parent.device_identifier?;
     if device.object_type() != ObjectType::DEVICE
-        || Some(device) == local
-        || local.is_none()
+        || local.identifier().is_none()
+        || local.is_local(Some(device))
         || parent.object_identifier.object_type() != ObjectType::AUDIT_LOG
     {
         return None;
@@ -62,7 +57,7 @@ pub(super) fn initialize<T: TransportPort>(
         profile.status().set_configured(
             resolve(
                 &profile,
-                local_device(db),
+                db.local_device(),
                 bindings,
                 transport.local_mac(),
                 |mac| transport.is_broadcast_mac(mac),
@@ -74,7 +69,7 @@ pub(super) fn initialize<T: TransportPort>(
 
 pub(super) struct ForwardBatch {
     profile: Arc<AuditLogForwarding>,
-    local: Option<ObjectIdentifier>,
+    local: LocalDevice,
     payload: Bytes,
 }
 
@@ -90,7 +85,7 @@ impl ForwardBatch {
         }
         Some(Self {
             profile: db.get(&sink)?.audit_log_forwarding_internal()?,
-            local: local_device(db),
+            local: db.local_device(),
             payload,
         })
     }
