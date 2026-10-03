@@ -87,9 +87,10 @@ async fn audit_reporter_query_decode_validation_and_ack_encode_failures_are_sile
 }
 
 #[tokio::test]
-async fn audit_reporter_query_dcc_duplicate_and_overload_are_silent() {
+async fn audit_reporter_query_disable_duplicate_and_overload_are_silent_disable_initiation_is_audited(
+) {
     use crate::server::{request_admission::Class, request_peer::canonical_requester};
-    for case in ["dcc", "disable initiation", "duplicate", "overload"] {
+    for case in ["disable", "disable initiation", "duplicate", "overload"] {
         let mut fixture = server(read_reporter()).await;
         let (reads, _) = add_log(&fixture, 1, "real").await;
         let req = request(encode(&query(None, 1)));
@@ -108,7 +109,7 @@ async fn audit_reporter_query_dcc_duplicate_and_overload_are_silent() {
         } else {
             None
         };
-        if case == "dcc" {
+        if case == "disable" {
             fixture.server.comm_state.store(1, Ordering::Release);
         }
         if case == "disable initiation" {
@@ -151,7 +152,17 @@ async fn audit_reporter_query_dcc_duplicate_and_overload_are_silent() {
             reads.load(Ordering::Acquire),
             usize::from(case == "disable initiation")
         );
-        assert!(records(&fixture).is_empty());
+        // Only the query DISABLE_INITIATION lets run is audited (Clause 16.1).
+        let records = records(&fixture);
+        assert_eq!(
+            records.len(),
+            usize::from(case == "disable initiation"),
+            "{case}"
+        );
+        for record in &records {
+            assert_eq!(record.operation, AuditOperation::READ);
+            assert_eq!(record.target_object, Some(target()));
+        }
         assert_idle(&fixture);
         if let Some(pending) = pending {
             drop(pending);

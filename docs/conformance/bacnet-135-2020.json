@@ -436,7 +436,8 @@
     "crates/bacnet-server/src/server/audit_batching_tests.rs",
     "crates/bacnet-server/src/server/audit_delay_property_tests.rs",
     "crates/bacnet-server/src/server/audit_batch_history_tests.rs",
-    "crates/rusty-bacnet/tests/test_delayed_target_audit.py"
+    "crates/rusty-bacnet/tests/test_delayed_target_audit.py",
+    "crates/bacnet-server/src/server/audit_dcc_tests.rs::{audit_notifications_start_under_disable_initiation_and_keep_the_reporter_healthy,audit_owing_writes_commit_and_notify_under_disable_initiation,send_now_under_disable_initiation_flushes_the_queue_once}"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/audit_batch_resources_tests.rs",
@@ -459,7 +460,8 @@
     "TRUE always commands current unsent prefix, FALSE does not cancel it, internal reset does not create WRITE. FALSE after terminal failure means quiescent, not delivered; ACK health is separate from local-send completion.",
     "No retries/outbound segmentation/durability. Captured non-NONE level and AUDITING_FAILURE bit continue to filter summaries in this partial profile; normative tension with complete 19.6.6 remains tracked by #345/#732/#783.",
     "Earliest loss uses original admission ordinal, not callback or timestamp order. Historical summary cannot alter current health. Mandatory actual changes and dedicated Reporter attempts remain immediate; ordinary pressure does not deny service mutation.",
-    "First target stop gates application work and retains one absolute three-second drain deadline across cancellation, with ACK/control progress, joined workers and DB uninstall. Source rejects the optional pair and retains current-only loss semantics. This row supersedes only the earlier target no-batching/current-only-loss descriptions; historical slice evidence and global pins/statuses are unchanged. No full Audit/BIBB/BTL claim."
+    "First target stop gates application work and retains one absolute three-second drain deadline across cancellation, with ACK/control progress, joined workers and DB uninstall. Source rejects the optional pair and retains current-only loss semantics. This row supersedes only the earlier target no-batching/current-only-loss descriptions; historical slice evidence and global pins/statuses are unchanged. No full Audit/BIBB/BTL claim.",
+    "Delayed batches and Send_Now records go out under DISABLE_INITIATION like immediate ones, and the DCC timer re-enabling initiation sends none of them again."
    ]
   },
   {
@@ -599,7 +601,7 @@
    "standard_anchor": "Clause 16.1",
    "priority": "P1",
    "summary": "While DCC restricts initiation the server sends no COV or event notification and ends a confirmed one at its next attempt, freeing its invoke ID; audit notifications are exempt.",
-   "status": "in-progress",
+   "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-server/src/server/notification_transactions.rs::run_notification_under_dcc",
     "crates/bacnet-server/src/server/notification_transactions.rs::run_attempts",
@@ -611,7 +613,12 @@
     "crates/bacnet-server/src/handlers/device_mgmt.rs::validate_dcc"
    ],
    "positive_tests": [
-    "crates/bacnet-server/src/server/notification_dcc_tests.rs::{an_answer_claimed_as_the_retry_timer_fires_still_ends_the_notification,disable_initiation_leaves_an_outstanding_audit_notification_to_its_answer}",
+    "crates/bacnet-server/src/server/notification_dcc_tests.rs::an_answer_claimed_as_the_retry_timer_fires_still_ends_the_notification",
+    "crates/bacnet-server/src/server/audit_dcc_tests.rs::{an_outstanding_audit_notification_survives_disable_initiation_to_its_answer,audit_notifications_start_under_disable_initiation_and_keep_the_reporter_healthy,audit_owing_writes_commit_and_notify_under_disable_initiation,send_now_under_disable_initiation_flushes_the_queue_once,a_resource_drop_under_disable_initiation_is_summarized}",
+    "crates/bacnet-server/src/server/audit_reporter_read_boundary_tests.rs::audit_reporter_read_malformed_and_disable_are_silent_disable_initiation_is_audited",
+    "crates/bacnet-server/src/server/audit_reporter_query_boundary_tests.rs::audit_reporter_query_disable_duplicate_and_overload_are_silent_disable_initiation_is_audited",
+    "crates/bacnet-server/src/server/audit_reporter_range_file_boundary_tests.rs::audit_reporter_range_file_disable_duplicate_and_overload_are_silent_disable_initiation_is_audited",
+    "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_goes_out_under_disable_initiation",
     "crates/bacnet-server/src/server/notification_transactions_tests.rs::an_answer_ahead_of_a_withdrawn_retry_still_ends_the_transaction",
     "crates/bacnet-server/src/server/cov_timed_deadline_tests.rs::history_of_a_report_dcc_ends_at_a_retry_goes_out_once_enabled",
     "crates/bacnet-server/src/server/discovery_dcc_tests.rs::a_who_has_held_back_by_dcc_is_answered_once_the_timer_enables_initiation",
@@ -623,7 +630,8 @@
     "crates/bacnet-server/src/server/cov_confirmed_baseline_tests.rs::{confirmed_report_dcc_stops_at_a_retry_ends_there_without_a_hold_off,confirmed_follow_up_under_dcc_is_dropped_not_deferred}",
     "crates/bacnet-server/src/server/event_confirmed_routing_tests/dcc_retry.rs::dcc_ends_an_outstanding_confirmed_event_notification_at_its_next_retry",
     "crates/bacnet-server/src/server/cov_notifications/confirmed/tests.rs::a_report_dcc_withdraws_before_its_first_attempt_is_not_counted",
-    "crates/bacnet-integration-tests/tests/server/dcc.rs::{dcc_disable_rejected_without_changing_comm_state,dcc_disable_initiation_allows_rp_blocks_cov}"
+    "crates/bacnet-integration-tests/tests/server/dcc.rs::{dcc_disable_rejected_without_changing_comm_state,dcc_disable_initiation_allows_rp_blocks_cov}",
+    "crates/bacnet-server/src/server/audit_dcc_tests.rs::disable_initiation_still_holds_back_cov_and_events_beside_audit"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -634,12 +642,10 @@
     "Each attempt of a confirmed COV or event notification, retries included, reads the DCC state first. One that DISABLE_INITIATION blocks ends the notification there, its invoke ID freed, unless an answer has already taken the lease.",
     "A COV report ended this way takes no hold-off and keeps its baselines. Its timestamped history goes back to the queue for the backstop to send once initiation is enabled; untimestamped values go out at the next fanout.",
     "An event notification ended this way moves no `EventNotificationCounters` field and is not sent again once initiation is enabled. `Acked_Transitions` keeps what the transition committed.",
-    "Audit notifications are never ended this way: Clause 16.1 exempts them from DISABLE_INITIATION, and each makes one attempt, so one already sent waits for its answer and the reporter's health is unchanged.",
+    "Audit notifications, AUDITING_FAILURE summaries and Audit Log forwards go out under DISABLE_INITIATION, and one already outstanding waits for its answer; DCC never counts against a Reporter's health or as a dropped record.",
     "DISABLE is refused (`SERVICE_REQUEST_DENIED`), so DISABLE_INITIATION restricts initiation: Who-Is still gets its I-Am, but Who-Has gets no I-Have and `broadcast_i_am` fails. Command and Channel writes to other devices stop per attempt."
    ],
-   "gaps": [
-    "#1370: Audit notifications due to start while DISABLE_INITIATION is in force are held back and count as failed deliveries, though Clause 16.1 exempts them"
-   ]
+   "gaps": []
   },
   {
    "id": "BACNET-15-ENDPOINT-DEVICE-WRITE",
@@ -3402,7 +3408,7 @@
     "Current_Command_Priority comes from the value macro through `common::current_command_priority`, as on the analog, binary, multi-state and lighting objects. Its metadata matches Priority_Array: Optional with the Commandable presence condition, read-only.",
     "The value macro takes an optional `cov_increment` entry naming the table's datatype (`u64` for Unsigned, `f64` for Double), so only the three numeric types serve the row, with a validated `set_cov_increment` setter. Its metadata is the Analog Value shape: Optional, no presence condition, writable.",
     "`BACnetObject::cov_increment` returns an `f64` so a Double increment is compared without rounding through a REAL; a subscription's own REAL increment widens exactly. Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions report the increment in use as a REAL, so a Large Analog Value increment is narrowed there.",
-    "Default_Fade_Time starts at 100 ms, the shortest fade the range allows, as Default_Ramp_Rate starts at its fastest rate; `set_default_fade_time` applies the same range as WriteProperty. No fade operation runs: Lighting_Command is stored as opaque bytes.",
+    "Default_Fade_Time starts at 100 ms, the shortest fade the range allows, as Default_Ramp_Rate starts at its fastest rate; `set_default_fade_time` applies the same range as WriteProperty. No fade operation runs: Lighting_Command is stored typed but not carried out (#1384).",
     "Lighting Output serves a writable REAL COV_Increment, starting at 0, through `common::write_cov_increment`: a negative or non-finite value is VALUE_OUT_OF_RANGE and another datatype INVALID_DATA_TYPE. It is an optional row in Property_List, the metadata (writable) and the PICS, and a SubscribeCOV notification goes out when Present_Value moves by at least the increment. Binary Lighting Output has no COV_Increment."
    ]
   },
@@ -4043,6 +4049,8 @@
     "crates/bacnet-objects/src/channel/array_tests.rs::{channel_member_writes_keep_execution_delay_the_same_size,channel_number_and_control_groups_writes}",
     "crates/bacnet-objects/src/channel/tests.rs::{channel_replacement_never_shares_a_run_generation,channel_allow_group_delay_inhibit_starts_false_and_takes_boolean_writes}",
     "crates/bacnet-server/src/server/channel_run_tests.rs::{channel_lighting_command_reaches_its_member_without_the_context_0_framing,channel_members_with_equal_delays_go_in_list_order}",
+    "crates/bacnet-server/src/server/lighting_command_member_tests.rs::channel_lighting_command_reaches_a_lighting_output",
+    "crates/bacnet-objects/src/lighting/command_tests.rs::lighting_output_takes_a_lighting_command_a_channel_passes_on",
     "crates/bacnet-server/src/schedule_channel_tests.rs::tick_schedules_runs_the_channel_distributions_its_writes_start",
     "crates/bacnet-server/src/server/channel_remote_write_tests.rs::{channel_writes_a_member_in_another_device_and_waits_for_its_answer,channel_null_a_member_in_another_device_refuses_as_the_wrong_datatype_succeeds,write_group_distribution_writes_a_member_in_another_device,channel_skips_the_rest_of_a_silent_device_for_the_distribution,channel_member_in_an_unbound_device_is_written_once_its_who_is_is_answered}",
     "crates/bacnet-server/src/server/channel_reliability_tests.rs::{channel_member_that_refuses_is_a_process_error_until_a_good_run_clears_it,channel_reliability_takes_a_client_value_only_out_of_service,channel_reliability_names_the_first_failure_in_write_order}",
@@ -4096,8 +4104,7 @@
    "gaps": [
     "Intrinsic reporting and Reliability_Evaluation_Inhibit aren't served (no issue)",
     "#1342: a remote member's datatype isn't read first, so its value goes uncoerced",
-    "#1343: members are written one at a time, so an outstanding remote write delays members due after it",
-    "A Lighting Output keeps `Lighting_Command` as opaque octets, so a lighting-command value sent to it is refused (no issue)"
+    "#1343: members are written one at a time, so an outstanding remote write delays members due after it"
    ]
   },
   {
@@ -4119,6 +4126,7 @@
    "positive_tests": [
     "crates/bacnet-server/src/server/write_group_tests.rs::{write_group_plan_matches_group_and_number_per_channel_in_instance_order,write_group_writes_the_channels_in_the_group_with_each_number_at_the_entry_priority,write_group_inhibit_delay_skips_delays_only_where_the_channel_allows_it}",
     "crates/bacnet-server/src/server/channel_remote_write_tests.rs::write_group_distribution_writes_a_member_in_another_device",
+    "crates/bacnet-server/src/server/write_group_tests.rs::write_group_lighting_command_reaches_a_lighting_output",
     "crates/bacnet-services/src/write_group_tests.rs::{vector_annex_f_examples,vector_override_priority_inhibit_and_multiple_entries,vector_lighting_command_value}",
     "crates/bacnet-client/src/client/write_group_tests.rs::write_group_sends_the_request_to_a_device_or_a_broadcast",
     "crates/bacnet-objects/src/channel/tests.rs::channel_allow_group_delay_inhibit_starts_false_and_takes_boolean_writes",
@@ -4510,6 +4518,52 @@
      "Logical blink requests are retained only through a hidden internal observation for deterministic tests; a successful WPM prefix may arm or halt an operation even when a later write fails. There is no Rust/Python host callback, BACnet property, physical output, persistence, or hardware support claim.",
      "#842 removes direct Priority_Array writes: all well-formed values and indices reach read-only denial without completing or advancing an active operation. Valid same/higher Present_Value commands retain the existing halt ordering; lower-priority commands preserve the operation. Explicit elapsed-time tests cover OFF/ON/NULL array refusal without changing slots, blink count or the remaining deadline."
     ]
+  },
+  {
+   "id": "BACNET-12-LIGHTING-OUTPUT-COMMAND",
+   "standard_anchor": "Clauses 12.54, 15.9.1.3 and 21; Tables 12-64, 12-66 and 12-67",
+   "priority": "P1",
+   "summary": "Lighting Output stores and serves Lighting_Command as a typed BACnetLightingCommand checked against its operation, but doesn't carry the command out.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-types/src/constructed/lighting.rs::BACnetLightingCommand",
+    "crates/bacnet-encoding/src/constructed/lighting_command.rs::decode_lighting_command",
+    "crates/bacnet-encoding/src/constructed/lighting_command.rs::encode_lighting_command",
+    "crates/bacnet-encoding/src/constructed/channel_value.rs::channel_value_end",
+    "crates/bacnet-objects/src/lighting/command.rs",
+    "crates/bacnet-objects/src/lighting/mod.rs::LightingOutputObject",
+    "crates/bacnet-server/src/handlers/write_property.rs::decode_write_property_value"
+   ],
+   "positive_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/lighting_command.rs::{lighting_command_golden_vectors_round_trip_for_each_operation,lighting_command_decodes_at_an_offset_and_stops_at_the_next_other_tag,lighting_command_keeps_any_value_that_fits_and_re_encodes_it_shortest}",
+    "crates/bacnet-objects/src/lighting/command_tests.rs::{lighting_output_lighting_command_starts_at_none_and_serves_what_was_written,lighting_output_takes_a_lighting_command_a_channel_passes_on}",
+    "crates/bacnet-server/src/handlers/tests/lighting_command_writes.rs::lighting_command_reads_none_until_written_then_what_was_written",
+    "crates/bacnet-server/src/server/lighting_command_member_tests.rs::channel_lighting_command_reaches_a_lighting_output",
+    "crates/bacnet-server/src/server/write_group_tests.rs::write_group_lighting_command_reaches_a_lighting_output",
+    "crates/rusty-bacnet/tests/test_lighting_command.py::LightingCommandTests::{test_reads_none_until_written,test_commands_write_and_read_in_their_encoding,test_channel_passes_a_lighting_command_on}"
+   ],
+   "negative_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/lighting_command.rs::{lighting_command_cut_inside_a_field_is_a_short_buffer,lighting_command_wrong_tags_and_lengths_are_malformed,lighting_command_fields_too_wide_for_their_type_are_out_of_range,lighting_command_unsigned_past_four_octets_with_a_leading_zero_is_malformed,lighting_command_value_must_fill_its_input_before_a_field_is_too_wide}",
+    "crates/bacnet-encoding/src/constructed/tests/channel_value.rs::malformed_lighting_commands_are_refused",
+    "crates/bacnet-objects/src/lighting/command_tests.rs::{lighting_output_lighting_command_refuses_other_datatypes,lighting_output_lighting_command_checks_what_each_operation_takes}",
+    "crates/bacnet-server/src/handlers/tests/lighting_command_writes.rs::{lighting_command_refuses_other_datatypes_and_broken_encodings,lighting_command_checks_the_fields_each_operation_uses}",
+    "crates/rusty-bacnet/tests/test_lighting_command.py::LightingCommandTests::{test_octet_string_is_refused_and_changes_nothing,test_command_its_operation_cannot_take_is_out_of_range}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#lighting--color-5",
+    "docs/python-api.md#lighting"
+   ],
+   "notes": [
+    "Lighting_Command reads operation NONE until written, and a write of NONE is refused with VALUE_OUT_OF_RANGE.",
+    "A field the operation doesn't use is kept as written without a range check. A proprietary operation (256 to 65,535) has only its priority checked, so a direct write and a Channel value agree on priority.",
+    "FADE_TO or RAMP_TO without a target level, and a field too wide for its type, are VALUE_OUT_OF_RANGE.",
+    "A value that doesn't open with the operation field is INVALID_DATA_TYPE. Octets that aren't exactly one command, or an Unsigned of more than four octets that opens with zero, are INVALID_DATA_ENCODING, ahead of any oversized field.",
+    "A Channel value's lighting command is read by the same codec, which also requires its priority to be 1 to 16."
+   ],
+   "gaps": [
+    "#1384: a command doesn't fade, ramp, step, blink-warn or start egress; Present_Value, Tracking_Value and In_Progress don't change"
+   ]
   },
   {
    "id": "BACNET-12-REFERENCE-PROPERTY-WRITABILITY",
@@ -5486,10 +5540,10 @@
     "crates/bacnet-objects/src/audit/policy_authority.rs",
     "crates/bacnet-server/src/server/audit_policy_precommit.rs"
    ],
-   "target_create_delete_immediate": "RB-21d, Refs #345 (remains open). Standard 135-2020 Clause 19.6 and Tables 19-3/19-4/19-5, PDF pp. 819-828 (printed 817-826), inspected through the local licensed source navigation; paraphrase only. Uses the elected configured target Reporter to successful and authorized execution-failed CreateObject/DeleteObject operations. Lifecycle operations are locally classified as AUDIT_CONFIG, require their respective CREATE/DELETE bit, ignore priority filtering, and apply existing Monitored_Objects selection to the final/candidate created OID or captured deleted OID. CREATE/DELETE use nominal selector membership and their lifecycle operation bit. Each operation admits at most one immediate record, with source identity/invoke semantics, local target Device, completion timestamp, and no property, priority, target/current value, or separate initial-value WRITE records. Success omits Result; failure uses the unchanged response-mapped BACnet Error. By-type failures before allocation or without a wire-representable OID omit target_object instead of inventing an identity; only catch-all or the known requested type can select such a failure. Existing public handlers, factory support, response behavior, rollback/name-index removal, and COV cleanup remain unchanged. All configured Reporter identities remain protected until runtime quiescence. Other completed deletions retain the captured per-operation Reporter identity and health authority. Authorization denials, decode failures, DCC drops, overload and unknown Timeout/Reject/Abort outcomes remain silent. Reuses existing no-await admission, 64-active/three-second-total delivery bounds, health and stale-generation ownership. No source-side, per-object overrides, multi-Reporter arbitration, batching/Send_Now, AUDITING_FAILURE, retry/queue/segmentation/durable outbox, forwarding, Python parity, Audit BIBB, or BTL claim.",
-   "target_list_immediate": "RB-21e, Refs #345 (remains open). Standard 135-2020 Clause 19.6, Tables 19-3/19-4/19-5 (PDF pp. 821-825, printed 819-823), and existing Clause 15.1/15.2 handlers; licensed source inspected locally, paraphrase only. The selected single target Reporter emits at most one immediate WRITE notification for an authorized AddListElement/RemoveListElement success or valid execution failure. Full service, element and required framed-destination decoding precedes observation. Existing responses, error precedence, atomicity, duplicate additions, framing, capacities and event semantics are preserved. The record carries target object/property/requested array index and no priority. Owner-selected Target_Value policy retains the raw requested delta without another application tag; Current_Value uses the existing bounded pre-image policy. Values are included when structurally valid and at most 32 encoded octets, including present empty values, otherwise omitted without truncation. A successful no-match removal still reports once. Success omits Result; authorized unknown-object, property, target-shape, write-access and capacity failures carry the unchanged response-mapped Error and truthful known fields. NONE, missing WRITE, and unmatched Monitored_Objects suppress ordinary targets; AUDIT_CONFIG and AUDIT_ALL admit implemented non-Present_Value lists, priority filtering is irrelevant, and enabled Reporter targets bypass selection and WRITE but not NONE. Duplicated selectors never duplicate records. Denials, service/element/framed decode failures, DCC/admission drops and unknown Timeout/Reject/Abort outcomes remain silent. Reuses no-await admission, 64-active/three-second-total delivery, APDU fit, confirmed/unconfirmed transaction ownership, instance-owned health and no-recursion behavior. No queue, retries, segmentation, durability or complete WRITE claim: AtomicWriteFile is covered separately by RB-21f; inbound WriteGroup remains unsupported by design. Multi-Reporter association is qualified by target_multiple_reporters; no full Reporter, BIBB or BTL qualification, source operation expansion or batching is claimed here.",
-   "target_atomic_write_file_immediate": "RB-21f, Refs #345 (remains open). Standard 135-2020 Clause 19.6 / Tables 19-3, 19-4 and 19-5, PDF pp. 821-825 (printed 819-823), inspected locally through licensed source navigation; paraphrase only. The single configured target Reporter admits at most one immediate WRITE record after inbound AtomicWriteFile execution. Records retain the known target OID and omit target_property, target_priority, target_value and current_value: no synthetic file fields, payload wrappers, offsets, hashes or pre-images. Success omits Result; authorized execution failures include the unchanged response-mapped Error. Owner policy designates file writes as configuration operations: CONFIG and ALL admit WRITE, NONE suppresses, priority filtering is irrelevant. Existing catch-all/exact OID/type selection and enabled Reporter-target bypass apply; empty/all-NULL/unmatched ordinary targets stay silent. Admission follows the unchanged service decoder acceptance boundary, including currently tolerated trailing bytes; strict input consumption is not claimed. Decoder rejections, policy/authorization denials, DCC/admission drops, configured stream/record payload/count budget Abort and unknown Timeout/Reject/Abort outcomes stay silent. Existing ComplexACK bytes/positions, error precedence, READ_ONLY/access/storage gates and storage atomicity contracts are preserved. Completion and no-await audit admission share the database guard. Reuses the delivery core: 64 active, one total three-second deadline, no queue/retry/outbound segmentation/durability, instance-owned health and no recursion. Confirmed and unconfirmed producer-to-AuditLog paths are tested over loopback UDP. No READ, inbound WriteGroup, source-side production, Device Audit_Notification_Recipient, Audit_Source_Reporter change, per-object overrides, arbitration, batching/Send_Now, AUDITING_FAILURE, forwarding, Python parity, full Reporter/BIBB/BTL or complete WRITE claim.",
-   "target_resource_admission_failure": "RB-21g, Refs #345 (remains open). Standard 135-2020 Clause 19.6.6 and Table 19-5, PDF pp. 826-827 (printed 824-825), verified in the licensed local source; paraphrase only. This supersedes the earlier RB-21a-f per-slice AUDITING_FAILURE exclusions only for already-selected, already-filtered, execution-completed normal records dropped by the 64-active audit delivery semaphore or confirmed coordinator capacity exhaustion. The standalone server owns one synchronized pending batch and at most one summary worker per configured target Reporter, joined/aborted by the existing notification owner. A saturating memory-only u64 count retains the earliest counted event timestamp, including sequence wrap; no wall-clock substitution. The emitted AUDITING_FAILURE has that Target_Timestamp, local Device in Source_Device and Target_Device, and application-encoded Unsigned Current_Value; all other optional fields are absent. Reporter Audit_Level != NONE and its AUDITING_FAILURE bit are required, independently of Monitored_Objects and priority. Disabling invalidates a pending batch even across re-enablement. Capacity waits use semaphore admission and shared coordinator actual-release notifications, not polling or retries, and further drops coalesce while waiting or in flight into sequential batches. The existing route, confirmed/unconfirmed mode, APDU bound, no outbound segmentation, three-second total delivery deadline after admission, instance-owned health and 64-active limit are preserved. The bounded endpoint source READ summary extension is separately recorded in BACNET-19-SOURCE-READ-PROPERTY. Configuration generations now invalidate all incompatible pending contexts, including mode/filter changes and Reporter replacement; counts never transfer between contexts. Encoding/APDU-fit errors, initiation-disabled/DCC, network send/ACK failures, policy/authorization/decode/budget failures, unknown Timeout/Reject/Abort operation outcomes and summary failures never increment the count or recurse. Mutation/response behavior is unchanged. No ordinary-record queue, durable counter, restart guarantee, delivery retries, source-side reporting, READ, WriteGroup, Device recipient property, per-object overrides, batching/Send_Now, forwarding, Python parity, full Reporter/BIBB/BTL or #345 closure claim.",
+   "target_create_delete_immediate": "RB-21d, Refs #345 (remains open). Standard 135-2020 Clause 19.6 and Tables 19-3/19-4/19-5, PDF pp. 819-828 (printed 817-826), inspected through the local licensed source navigation; paraphrase only. Uses the elected configured target Reporter to successful and authorized execution-failed CreateObject/DeleteObject operations. Lifecycle operations are locally classified as AUDIT_CONFIG, require their respective CREATE/DELETE bit, ignore priority filtering, and apply existing Monitored_Objects selection to the final/candidate created OID or captured deleted OID. CREATE/DELETE use nominal selector membership and their lifecycle operation bit. Each operation admits at most one immediate record, with source identity/invoke semantics, local target Device, completion timestamp, and no property, priority, target/current value, or separate initial-value WRITE records. Success omits Result; failure uses the unchanged response-mapped BACnet Error. By-type failures before allocation or without a wire-representable OID omit target_object instead of inventing an identity; only catch-all or the known requested type can select such a failure. Existing public handlers, factory support, response behavior, rollback/name-index removal, and COV cleanup remain unchanged. All configured Reporter identities remain protected until runtime quiescence. Other completed deletions retain the captured per-operation Reporter identity and health authority. Authorization denials, decode failures, requests dropped under DCC DISABLE (not DISABLE_INITIATION), overload and unknown Timeout/Reject/Abort outcomes remain silent. Reuses existing no-await admission, 64-active/three-second-total delivery bounds, health and stale-generation ownership. No source-side, per-object overrides, multi-Reporter arbitration, batching/Send_Now, AUDITING_FAILURE, retry/queue/segmentation/durable outbox, forwarding, Python parity, Audit BIBB, or BTL claim.",
+   "target_list_immediate": "RB-21e, Refs #345 (remains open). Standard 135-2020 Clause 19.6, Tables 19-3/19-4/19-5 (PDF pp. 821-825, printed 819-823), and existing Clause 15.1/15.2 handlers; licensed source inspected locally, paraphrase only. The selected single target Reporter emits at most one immediate WRITE notification for an authorized AddListElement/RemoveListElement success or valid execution failure. Full service, element and required framed-destination decoding precedes observation. Existing responses, error precedence, atomicity, duplicate additions, framing, capacities and event semantics are preserved. The record carries target object/property/requested array index and no priority. Owner-selected Target_Value policy retains the raw requested delta without another application tag; Current_Value uses the existing bounded pre-image policy. Values are included when structurally valid and at most 32 encoded octets, including present empty values, otherwise omitted without truncation. A successful no-match removal still reports once. Success omits Result; authorized unknown-object, property, target-shape, write-access and capacity failures carry the unchanged response-mapped Error and truthful known fields. NONE, missing WRITE, and unmatched Monitored_Objects suppress ordinary targets; AUDIT_CONFIG and AUDIT_ALL admit implemented non-Present_Value lists, priority filtering is irrelevant, and enabled Reporter targets bypass selection and WRITE but not NONE. Duplicated selectors never duplicate records. Denials, service/element/framed decode failures, DCC DISABLE ingress drops, admission drops and unknown Timeout/Reject/Abort outcomes remain silent. Reuses no-await admission, 64-active/three-second-total delivery, APDU fit, confirmed/unconfirmed transaction ownership, instance-owned health and no-recursion behavior. No queue, retries, segmentation, durability or complete WRITE claim: AtomicWriteFile is covered separately by RB-21f; inbound WriteGroup remains unsupported by design. Multi-Reporter association is qualified by target_multiple_reporters; no full Reporter, BIBB or BTL qualification, source operation expansion or batching is claimed here.",
+   "target_atomic_write_file_immediate": "RB-21f, Refs #345 (remains open). Standard 135-2020 Clause 19.6 / Tables 19-3, 19-4 and 19-5, PDF pp. 821-825 (printed 819-823), inspected locally through licensed source navigation; paraphrase only. The single configured target Reporter admits at most one immediate WRITE record after inbound AtomicWriteFile execution. Records retain the known target OID and omit target_property, target_priority, target_value and current_value: no synthetic file fields, payload wrappers, offsets, hashes or pre-images. Success omits Result; authorized execution failures include the unchanged response-mapped Error. Owner policy designates file writes as configuration operations: CONFIG and ALL admit WRITE, NONE suppresses, priority filtering is irrelevant. Existing catch-all/exact OID/type selection and enabled Reporter-target bypass apply; empty/all-NULL/unmatched ordinary targets stay silent. Admission follows the unchanged service decoder acceptance boundary, including currently tolerated trailing bytes; strict input consumption is not claimed. Decoder rejections, policy/authorization denials, DCC DISABLE ingress drops, admission drops, configured stream/record payload/count budget Abort and unknown Timeout/Reject/Abort outcomes stay silent. Existing ComplexACK bytes/positions, error precedence, READ_ONLY/access/storage gates and storage atomicity contracts are preserved. Completion and no-await audit admission share the database guard. Reuses the delivery core: 64 active, one total three-second deadline, no queue/retry/outbound segmentation/durability, instance-owned health and no recursion. Confirmed and unconfirmed producer-to-AuditLog paths are tested over loopback UDP. No READ, inbound WriteGroup, source-side production, Device Audit_Notification_Recipient, Audit_Source_Reporter change, per-object overrides, arbitration, batching/Send_Now, AUDITING_FAILURE, forwarding, Python parity, full Reporter/BIBB/BTL or complete WRITE claim.",
+   "target_resource_admission_failure": "RB-21g, Refs #345 (remains open). Standard 135-2020 Clause 19.6.6 and Table 19-5, PDF pp. 826-827 (printed 824-825), verified in the licensed local source; paraphrase only. This supersedes the earlier RB-21a-f per-slice AUDITING_FAILURE exclusions only for already-selected, already-filtered, execution-completed normal records dropped by the 64-active audit delivery semaphore or confirmed coordinator capacity exhaustion. The standalone server owns one synchronized pending batch and at most one summary worker per configured target Reporter, joined/aborted by the existing notification owner. A saturating memory-only u64 count retains the earliest counted event timestamp, including sequence wrap; no wall-clock substitution. The emitted AUDITING_FAILURE has that Target_Timestamp, local Device in Source_Device and Target_Device, and application-encoded Unsigned Current_Value; all other optional fields are absent. Reporter Audit_Level != NONE and its AUDITING_FAILURE bit are required, independently of Monitored_Objects and priority. Disabling invalidates a pending batch even across re-enablement. Capacity waits use semaphore admission and shared coordinator actual-release notifications, not polling or retries, and further drops coalesce while waiting or in flight into sequential batches. The existing route, confirmed/unconfirmed mode, APDU bound, no outbound segmentation, three-second total delivery deadline after admission, instance-owned health and 64-active limit are preserved. The bounded endpoint source READ summary extension is separately recorded in BACNET-19-SOURCE-READ-PROPERTY. Configuration generations now invalidate all incompatible pending contexts, including mode/filter changes and Reporter replacement; counts never transfer between contexts. Encoding/APDU-fit errors, network send/ACK failures, policy/authorization/decode/budget failures, unknown Timeout/Reject/Abort operation outcomes and summary failures never increment the count or recurse. Mutation/response behavior is unchanged. No ordinary-record queue, durable counter, restart guarantee, delivery retries, source-side reporting, READ, WriteGroup, Device recipient property, per-object overrides, batching/Send_Now, forwarding, Python parity, full Reporter/BIBB/BTL or #345 closure claim.",
    "positive_tests": [
     "crates/bacnet-services/src/audit/empty_value_tests.rs::audit_empty_values_absent_golden",
     "crates/bacnet-services/src/audit/empty_value_tests.rs::audit_empty_values_target_golden",
@@ -5650,7 +5704,9 @@
     "crates/bacnet-objects/src/audit/staging_tests.rs::a_staged_log_enable_write_its_request_dropped_leaves_storage_with_the_served_log",
     "crates/bacnet-objects/src/audit/staging_tests.rs::a_finished_batch_its_request_forgot_lands_from_the_operation_task",
     "crates/bacnet-objects/src/audit/staging_tests.rs::staging_skips_a_write_with_nothing_to_commit",
-    "crates/bacnet-server/src/server/audit_notification_staging_tests.rs::a_confirmed_notification_commits_while_the_database_stays_available"
+    "crates/bacnet-server/src/server/audit_notification_staging_tests.rs::a_confirmed_notification_commits_while_the_database_stays_available",
+    "crates/bacnet-server/src/server/audit_dcc_tests.rs::{audit_notifications_start_under_disable_initiation_and_keep_the_reporter_healthy,audit_owing_writes_commit_and_notify_under_disable_initiation,send_now_under_disable_initiation_flushes_the_queue_once,a_resource_drop_under_disable_initiation_is_summarized}",
+    "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_goes_out_under_disable_initiation"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/audit_forwarder_tests.rs::audit_forwarding_invalid_parent_is_visible_at_startup_without_send",
@@ -5741,7 +5797,8 @@
     "crates/bacnet-objects/src/audit/staging_tests.rs::a_staged_batch_whose_commit_fails_leaves_the_log_as_it_was",
     "crates/bacnet-server/src/server/audit_notification_staging_tests.rs::a_confirmed_notification_whose_commit_fails_is_refused_and_stores_nothing",
     "crates/bacnet-encoding/src/constructed/tests/audit_notification.rs::{an_object_identifier_of_the_wrong_length_is_malformed_even_when_cut_short,an_object_identifier_cut_short_is_a_short_buffer}",
-    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::confirmed_audit_notification_cut_short_draws_services_other"
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::confirmed_audit_notification_cut_short_draws_services_other",
+    "crates/bacnet-server/src/server/audit_dcc_tests.rs::disable_initiation_still_holds_back_cov_and_events_beside_audit"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -5777,7 +5834,9 @@
     "The built-in Audit Log commits on its own writer thread. The server stages each inbound batch and awaits the commit without the database guard; the batch reaches memory, and a confirmed one its SimpleACK, once records and receipt are durable.",
     "One commit is staged per Audit Log at a time; a second batch waits for the first without the guard. A network or write_local Log_Enable change stages the same way; add_record and other in-place changes commit under the caller's guard.",
     "Storage holds a staged batch a moment before the log serves it: the commit returns on the writer thread, then the request applies the batch under the guard. A query made after the SimpleACK sees the batch.",
-    "A Buffer_Size write and `purge_audit_log` stage the same way. A Log_Enable or Buffer_Size write, or a purge, whose commit fails is refused with DEVICE / OPERATIONAL_PROBLEM."
+    "A Buffer_Size write and `purge_audit_log` stage the same way. A Log_Enable or Buffer_Size write, or a purge, whose commit fails is refused with DEVICE / OPERATIONAL_PROBLEM.",
+    "Audit notifications, AUDITING_FAILURE summaries and Audit Log forwards go out under DISABLE_INITIATION (Clause 16.1). DCC never holds one back, marks a Reporter COMMUNICATION_FAILURE or refuses a write that owes one; COV and events stay held.",
+    "The endpoint has no DeviceCommunicationControl service, so nothing gates its source audit notifications on DCC."
    ],
    "target_device_recipient": {
     "scope": "Target portion of #728; the completed bounded source endpoint migration is recorded separately in BACNET-19-SOURCE-READ-PROPERTY. Broader Audit conformance remains open. Corrected Device recipient requirement: Clause 12.11 with 135-2020 Errata Summary 2024-04-29 item 25 (PDF page 7), preserving base O and footnotes 19-20; NULL operation semantics in 15.9/15.10/19.2; record shape Table 19-4 and BACnetRecipient in Clause 21.",

@@ -146,7 +146,7 @@ fn rpm_lighting_output_indexed_reads_and_bytes_are_unchanged() {
                 .write_property(
                     P::LIGHTING_COMMAND,
                     None,
-                    PropertyValue::OctetString(vec![0x01, 0x02]),
+                    PropertyValue::ApplicationData(vec![0x09, 0x0A]),
                     None,
                 )
                 .unwrap();
@@ -233,9 +233,9 @@ fn rpm_lighting_output_indexed_reads_and_bytes_are_unchanged() {
                 P::LIGHTING_COMMAND,
                 None,
                 Ok(if configured {
-                    &[0x62, 0x01, 0x02]
+                    &[0x09, 0x0A]
                 } else {
-                    &[0x60]
+                    &[0x09, 0x00]
                 }),
             ),
             (

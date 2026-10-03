@@ -93,7 +93,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             audit_routes,
             &network,
             &notification_transactions,
-            &comm_state,
         );
         let target_audit = match target_audit {
             Ok(runtime) => runtime,

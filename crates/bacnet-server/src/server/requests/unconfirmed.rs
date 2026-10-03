@@ -348,7 +348,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     network,
                     notification_transactions,
                     device_bindings,
-                    comm_state,
                     config.max_apdu_length,
                 ),
                 Ok(None) => {}
