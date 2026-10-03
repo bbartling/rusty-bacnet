@@ -23,6 +23,7 @@ use bacnet_encoding::npdu::NpduAddress;
 
 use super::envelope_harness::*;
 use super::*;
+use crate::router_table::ReachabilityStatus;
 
 const BUSY: NetworkMessageType = NetworkMessageType::ROUTER_BUSY_TO_NETWORK;
 const AVAILABLE: NetworkMessageType = NetworkMessageType::ROUTER_AVAILABLE_TO_NETWORK;

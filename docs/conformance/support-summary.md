@@ -31,7 +31,7 @@ Row counts by priority and status are not committed, so concurrent ledger PRs me
 | `BACNET-5-SEGMENTATION-WINDOW` | Clauses 5.2-5.4 | P1 | implementation-present-needs-window-tests | 1 |
 | `BACNET-5-ROUTED-PATH-LIMIT` | Clauses 5.2.1.2, 6.4.4, and 19.4 | P1 | implementation-present-needs-conformance-tests | 1 |
 | `BACNET-6-NPDU-CONTROL` | Clause 6.2 | P1 | implementation-present-needs-negative-tests | 2 |
-| `BACNET-6-ROUTER-MESSAGES` | Clauses 6.4-6.6 | P1 | implementation-present-needs-conformance-tests | 2 |
+| `BACNET-6-ROUTER-MESSAGES` | Clauses 6.4-6.6 | P1 | implementation-present-needs-conformance-tests | 3 |
 | `BACNET-7-ETHERNET-LLC` | Clause 7 | P2 | implementation-present-needs-platform-tests | 2 |
 | `BACNET-8-ARCNET` | Clause 8 | P3 | unknown-pending-source-review | 0 |
 | `BACNET-9-MSTP-FRAMES` | Clause 9.3 | P2 | implementation-present-needs-source-review | 2 |

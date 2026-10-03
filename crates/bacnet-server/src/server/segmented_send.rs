@@ -235,5 +235,7 @@ pub(crate) struct SegmentedRequestState {
     /// carries the overrun cap — acceptance is strictly in order, so it
     /// reaches [`MAX_REQUEST_SEGMENTS`] exactly when the sequence number is
     /// about to wrap onto stored segment 0.
+    ///
+    /// [`MAX_REQUEST_SEGMENTS`]: super::MAX_REQUEST_SEGMENTS
     pub(crate) accepted_segments: usize,
 }

@@ -9,6 +9,7 @@
 
 use super::envelope_harness::*;
 use super::*;
+use crate::router_table::ReachabilityStatus;
 use bacnet_encoding::npdu::NpduAddress;
 
 // --- Who-Is discovery origin (Clause 6.6.3.2) ---
