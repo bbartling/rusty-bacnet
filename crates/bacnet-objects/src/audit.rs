@@ -147,6 +147,14 @@ impl AuditLogObject {
                     ));
                 }
                 validate_snapshot(&snapshot)?;
+                if snapshot.capacity != buffer_size {
+                    tracing::info!(
+                        audit_log = %oid,
+                        configured = buffer_size,
+                        stored = snapshot.capacity,
+                        "Audit Log keeps the Buffer_Size it stored"
+                    );
+                }
                 snapshot
             }
             None => {
