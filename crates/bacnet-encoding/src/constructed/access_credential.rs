@@ -1,7 +1,9 @@
 //! Clause 21 codecs for the elements of two Access Credential arrays
 //! (Clause 12.35): Assigned_Access_Rights (`BACnetAssignedAccessRights`) and
 //! Authentication_Factors (`BACnetCredentialAuthenticationFactor`, which
-//! embeds a `BACnetAuthenticationFactor`).
+//! embeds a `BACnetAuthenticationFactor`). The Credential Data Input serves
+//! the bare factor as its Present_Value and an array of
+//! `BACnetAuthenticationFactorFormat` as Supported_Formats (Clause 12.36).
 //!
 //! Each element is a bare SEQUENCE; a whole array concatenates them with no
 //! wrapper, so each decoder reads one element at `offset` and returns the
@@ -13,7 +15,8 @@
 //! judge; a member wider than 32 bits is malformed.
 
 use bacnet_types::constructed::{
-    BACnetAssignedAccessRights, BACnetAuthenticationFactor, BACnetCredentialAuthenticationFactor,
+    BACnetAssignedAccessRights, BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat,
+    BACnetCredentialAuthenticationFactor,
 };
 use bacnet_types::enums::{AccessAuthenticationFactorDisable, AuthenticationFactorType};
 use bacnet_types::error::Error;
@@ -29,6 +32,7 @@ use crate::{primitives, tags};
 const RIGHTS: &str = "BACnetAssignedAccessRights";
 const FACTOR: &str = "BACnetAuthenticationFactor";
 const CREDENTIAL_FACTOR: &str = "BACnetCredentialAuthenticationFactor";
+const FACTOR_FORMAT: &str = "BACnetAuthenticationFactorFormat";
 
 /// Encode one `BACnetAssignedAccessRights` SEQUENCE: the reference inside
 /// opening and closing tag 0, then the enable flag as context `[1]`.
@@ -92,6 +96,47 @@ pub fn decode_authentication_factor(
     ))
 }
 
+/// Encode one `BACnetAuthenticationFactorFormat` SEQUENCE: the format type
+/// as context `[0]`, then each vendor member that is present, the vendor
+/// identifier as context `[1]` and the vendor's format as context `[2]`.
+pub fn encode_authentication_factor_format(
+    buf: &mut BytesMut,
+    value: &BACnetAuthenticationFactorFormat,
+) {
+    primitives::encode_ctx_enumerated(buf, 0, value.format_type.to_raw());
+    if let Some(vendor_id) = value.vendor_id {
+        primitives::encode_ctx_unsigned(buf, 1, u64::from(vendor_id));
+    }
+    if let Some(vendor_format) = value.vendor_format {
+        primitives::encode_ctx_unsigned(buf, 2, u64::from(vendor_format));
+    }
+}
+
+/// Decode one `BACnetAuthenticationFactorFormat` SEQUENCE at `offset`.
+///
+/// The format type is required and the two vendor members optional, each
+/// read only when its tag comes next, so the decoder stops in front of the
+/// next element of an array. A missing format type, one wider than 32 bits,
+/// a vendor member above 65535 or a truncated member fails with
+/// [`Error::Decoding`] or [`Error::BufferTooShort`]. The decoder doesn't
+/// check whether the vendor members suit the format type; the object does.
+pub fn decode_authentication_factor_format(
+    data: &[u8],
+    offset: usize,
+) -> Result<(BACnetAuthenticationFactorFormat, usize), Error> {
+    let (format_type, pos) = decode_ctx_u32(data, offset, 0, FACTOR_FORMAT)?;
+    let (vendor_id, pos) = decode_optional_ctx_u16(data, pos, 1, FACTOR_FORMAT)?;
+    let (vendor_format, end) = decode_optional_ctx_u16(data, pos, 2, FACTOR_FORMAT)?;
+    Ok((
+        BACnetAuthenticationFactorFormat {
+            format_type: AuthenticationFactorType::from_raw(format_type),
+            vendor_id,
+            vendor_format,
+        },
+        end,
+    ))
+}
+
 /// Encode one `BACnetCredentialAuthenticationFactor` SEQUENCE: the disable
 /// value as context `[0]`, then the factor inside opening and closing tag 1.
 pub fn encode_credential_authentication_factor(
@@ -133,6 +178,23 @@ fn decode_ctx_u32(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<(u3
     let value = u32::try_from(value)
         .map_err(|_| Error::decoding(offset, format!("{what}: [{tag}] exceeds 32 bits")))?;
     Ok((value, end))
+}
+
+/// An Unsigned16 under primitive context tag `tag` when that tag comes next,
+/// else `None` with the offset unchanged.
+fn decode_optional_ctx_u16(
+    data: &[u8],
+    offset: usize,
+    tag: u8,
+    what: &str,
+) -> Result<(Option<u16>, usize), Error> {
+    let (contents, end) = tags::decode_optional_context(data, offset, tag)?;
+    let Some(contents) = contents else {
+        return Ok((None, offset));
+    };
+    let value = u16::try_from(primitives::decode_unsigned(contents)?)
+        .map_err(|_| Error::decoding(offset, format!("{what}: [{tag}] exceeds 16 bits")))?;
+    Ok((Some(value), end))
 }
 
 /// A primitive context tag `tag` holding an OCTET STRING.

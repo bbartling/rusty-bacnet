@@ -1,5 +1,6 @@
 ---
 section: Migration notes
+commit: ca35afcde79727fce0176fc562e280d93134904d
 ---
 - **Typed alarm values (#914, #930, #932):** replace raw integers with the
   `bacnet-types` enumerations (`EventState`, `Reliability`, `LifeSafetyState`

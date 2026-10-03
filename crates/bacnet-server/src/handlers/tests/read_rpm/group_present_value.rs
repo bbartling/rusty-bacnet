@@ -244,7 +244,7 @@ fn expanded_rows(db: &ObjectDatabase, specs: Vec<ReadAccessSpecification>) -> us
 
 #[test]
 fn member_rows_are_charged_to_the_rpm_work_budget_and_shared_between_groups() {
-    use crate::handlers::rpm_budget::{handle_rpm_budgeted_observed, RpmFailure};
+    use crate::handlers::{rpm_budget::handle_rpm_budgeted_observed, ReadFailure};
     let input = oid(ObjectType::ANALOG_INPUT, 1);
     let value = oid(ObjectType::ANALOG_VALUE, 2);
     // Group 7 expands ALL on AV-2; Group 8 is two explicit rows.
@@ -310,7 +310,7 @@ fn member_rows_are_charged_to_the_rpm_work_budget_and_shared_between_groups() {
             budget(work - 1),
             |_, _, _, _| observed += 1,
         );
-        assert!(matches!(result, Err(RpmFailure::Work)), "{specs:?}");
+        assert!(matches!(result, Err(ReadFailure::Work)), "{specs:?}");
         assert_eq!((&prefix[..], observed), (&b"prefix"[..], 0));
     }
     // Each Group alone fits the budget the pair overruns.

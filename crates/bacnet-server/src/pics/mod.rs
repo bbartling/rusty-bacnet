@@ -370,7 +370,6 @@ impl<'a> PicsGenerator<'a> {
                 crate::device_view::DeviceReadContext::new(
                     self.db,
                     crate::device_view::DeviceExecution::FullServer,
-                    None,
                 )
             });
             let supported_properties =

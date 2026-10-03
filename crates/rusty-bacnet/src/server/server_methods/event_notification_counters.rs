@@ -24,6 +24,7 @@ fn event_notification_counter_entries(
         confirmed_no_invoke_id,
         confirmed_rejected,
         confirmed_unanswered,
+        unconfirmed_send_failed,
     } = counters;
     HashMap::from([
         ("notification_class_missing", notification_class_missing),
@@ -39,6 +40,7 @@ fn event_notification_counter_entries(
         ("confirmed_no_invoke_id", confirmed_no_invoke_id),
         ("confirmed_rejected", confirmed_rejected),
         ("confirmed_unanswered", confirmed_unanswered),
+        ("unconfirmed_send_failed", unconfirmed_send_failed),
     ])
 }
 

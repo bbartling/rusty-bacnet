@@ -64,8 +64,8 @@ use crate::property_metadata::{
 // is_createable=false default holds) and remains deleteable (delete denies
 // only Device and NetworkPort, so the is_deleteable=true default holds);
 // neither needs an override. Array gating keeps the default: Priority_Array
-// (BACnetARRAY per Table 12-30) and Property_List admit an index while every
-// other served row rejects one. COV keeps its override: supports_cov=true on
+// and Door_Members (BACnetARRAYs per Table 12-30), Access_Doors (Table 12-36)
+// and Property_List admit an index while every other served row rejects one. COV keeps its override: supports_cov=true on
 // Access Door and Access Point (Table 13-1 lists both; #1061 added the
 // point) and false on Access Zone, and the COV gating path (read_property
 // plus supports_cov_property to supports_cov) never consults metadata.
@@ -282,8 +282,8 @@ mod tests {
             object.read_property(P::DOOR_MEMBERS, None).unwrap(),
             PropertyValue::List(vec![])
         );
-        // Priority_Array is BACnetARRAY (Table 12-30), so the service gate
-        // admits an index; Door_Members is BACnetLIST and rejects one.
+        // Priority_Array and Door_Members are BACnetARRAYs (Table 12-30), so
+        // the service gate admits an index on both (#1169).
         assert!(object.is_array_property(P::PRIORITY_ARRAY));
         assert_eq!(
             object.read_property(P::PRIORITY_ARRAY, Some(0)).unwrap(),
@@ -293,7 +293,7 @@ mod tests {
             object.read_property(P::PRIORITY_ARRAY, Some(1)).unwrap(),
             PropertyValue::Null
         );
-        assert!(!object.is_array_property(P::DOOR_MEMBERS));
+        assert!(object.is_array_property(P::DOOR_MEMBERS));
         assert!(!object.is_array_property(P::DOOR_STATUS));
         // The #1073 rows: the three times in tenths of a second, and no
         // command priority while Present_Value is the default.
@@ -375,10 +375,9 @@ mod tests {
             object.read_property(P::ACCESS_DOORS, None).unwrap(),
             PropertyValue::List(vec![])
         );
-        // Access_Event_Time is one BACnetTimeStamp, so an index is rejected.
-        // Access_Doors takes none either: it is served as a list of object
-        // identifiers, without per-index reads.
-        assert!(!object.is_array_property(P::ACCESS_DOORS));
+        // Access_Event_Time is one BACnetTimeStamp, so an index is rejected;
+        // Access_Doors is a BACnetARRAY and takes one (#1169).
+        assert!(object.is_array_property(P::ACCESS_DOORS));
         assert!(!object.is_array_property(P::ACCESS_EVENT_TIME));
     }
 

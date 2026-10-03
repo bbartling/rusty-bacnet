@@ -110,15 +110,9 @@ fn rpm_file_indexed_property_list_and_scalar_gates_preserve_bytes() {
                 too_small,
             );
             if too_small.max_result_elements < references.len() {
-                assert!(matches!(
-                    failure,
-                    Err(crate::handlers::rpm_budget::RpmFailure::Work)
-                ));
+                assert!(matches!(failure, Err(crate::handlers::ReadFailure::Work)));
             } else {
-                assert!(matches!(
-                    failure,
-                    Err(crate::handlers::rpm_budget::RpmFailure::Bytes)
-                ));
+                assert!(matches!(failure, Err(crate::handlers::ReadFailure::Bytes)));
             }
             assert_eq!(&prefix[..], b"prefix");
         }

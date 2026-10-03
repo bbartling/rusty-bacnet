@@ -85,7 +85,7 @@ fn assert_cases(
             }
         }
     }
-    use crate::handlers::rpm_budget::{handle_rpm_budgeted, RpmFailure};
+    use crate::handlers::{rpm_budget::handle_rpm_budgeted, ReadFailure};
     let budget = crate::server::ReadPropertyMultipleBudget {
         max_result_elements: cases.len(),
         max_service_ack_bytes: legacy.len(),
@@ -104,7 +104,7 @@ fn assert_cases(
                 ..budget
             }
         ),
-        Err(RpmFailure::Work)
+        Err(ReadFailure::Work)
     ));
     assert_eq!(&prefix[..], b"prefix");
     assert!(matches!(
@@ -117,7 +117,7 @@ fn assert_cases(
                 ..budget
             }
         ),
-        Err(RpmFailure::Bytes)
+        Err(ReadFailure::Bytes)
     ));
     assert_eq!(&prefix[..], b"prefix");
 }

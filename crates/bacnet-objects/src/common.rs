@@ -264,7 +264,7 @@ pub(crate) fn write_out_of_service_with_reliability_restore(
 /// it keeps what it holds. NULL relinquishment changes none of the fields.
 /// `None` for any property other than OUT_OF_SERVICE.
 #[inline]
-pub(crate) fn write_out_of_service_with_restore<T: Copy>(
+pub(crate) fn write_out_of_service_with_restore<T: Clone>(
     out_of_service: &mut bool,
     served: &mut T,
     set_aside: &mut Option<T>,
@@ -278,7 +278,7 @@ pub(crate) fn write_out_of_service_with_restore<T: Copy>(
     Some(match value {
         bacnet_types::primitives::PropertyValue::Boolean(v) => {
             match (*out_of_service, *v) {
-                (false, true) => *set_aside = Some(*served),
+                (false, true) => *set_aside = Some(served.clone()),
                 (true, false) => {
                     if let Some(own) = set_aside.take().or(fallback) {
                         *served = own;

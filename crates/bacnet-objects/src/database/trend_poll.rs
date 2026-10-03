@@ -3,7 +3,9 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
+use bacnet_types::constructed::{
+    BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue,
+};
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -20,11 +22,28 @@ const RECONCILE: Duration = Duration::from_millis(100);
 struct Configuration {
     interval: u32,
     logging_type: u32,
+    /// Log_DeviceObjectProperty as read, compared whole for scheduling
+    /// ownership.
     reference: PropertyValue,
-    target: ObjectIdentifier,
-    property: P,
-    /// The reference's optional Device member.
-    device: Option<ObjectIdentifier>,
+    /// What each acquisition reads: the one reference of a Trend Log, or every
+    /// element of a Trend Log Multiple in array order.
+    members: Vec<Member>,
+}
+
+/// One monitored reference of a log.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Member {
+    /// A Trend Log Multiple element naming object or device instance 4194303,
+    /// which Clause 12.30.11 treats as empty.
+    Unspecified,
+    /// A property to read, at one element when `index` is present.
+    Reference {
+        target: ObjectIdentifier,
+        property: P,
+        index: Option<u32>,
+        /// The reference's optional Device member.
+        device: Option<ObjectIdentifier>,
+    },
 }
 
 struct Schedule {
@@ -62,22 +81,31 @@ impl TrendPollSchedule {
 }
 
 impl ObjectDatabase {
-    /// Poll due local TrendLog references synchronously and return the next wait.
+    /// Poll every due local Trend Log or Trend Log Multiple synchronously and
+    /// return the next wait.
     ///
+    /// Each acquisition reads every reference of the log: a Trend Log's one,
+    /// or each Log_DeviceObjectProperty element of a Trend Log Multiple, whose
+    /// record then carries one value per element in array order (#1203).
     /// Only this database is read. A reference whose Device member names
     /// another device (see [`ObjectDatabase::local_device`]) is never read
-    /// here, even when a same-numbered local object exists: each due poll
-    /// logs a failure record for it instead, PROPERTY /
-    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A local read that fails logs a
-    /// failure record with the error a ReadProperty of it would report:
-    /// OBJECT / UNKNOWN_OBJECT for a missing object, or the read's own error
-    /// (#1183).
+    /// here, even when a same-numbered local object exists: its value is a
+    /// failure, PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A Trend Log
+    /// Multiple element naming instance 4194303 is empty and fails with
+    /// PROPERTY / NO_PROPERTY_SPECIFIED. A reference with an array index reads
+    /// that element (#1205). A local read that fails yields the error a
+    /// ReadProperty of it would report: OBJECT / UNKNOWN_OBJECT for a missing
+    /// object, PROPERTY / PROPERTY_IS_NOT_AN_ARRAY for an index on a property
+    /// that isn't an array, or the read's own error, such as INVALID_ARRAY_INDEX
+    /// for an index past the end (#1183).
     ///
-    /// The caller must hold exclusive database access for this whole call. The
-    /// bound monotonic clock drives scheduling; the shared Device clock provides
-    /// each actual acquisition timestamp. Without either clock an attempt cannot
-    /// succeed. A successful call to an object's insertion hook, including its
-    /// accepted disabled/count-only outcomes, starts the configured interval.
+    /// Only POLLED logs with a nonzero Log_Interval and at least one reference
+    /// are polled. The caller must hold exclusive database access for this
+    /// whole call. The bound monotonic clock drives scheduling; the shared
+    /// Device clock provides each actual acquisition timestamp. Without either
+    /// clock an attempt cannot succeed. A successful call to an object's
+    /// insertion hook, including its accepted disabled/count-only outcomes,
+    /// starts the configured interval.
     ///
     /// Log_Interval is in hundredths. Deadlines follow actual completion, without
     /// catch-up bursts. Invalid timestamps and insertion errors preserve the last
@@ -92,7 +120,9 @@ impl ObjectDatabase {
         };
         let mut eligible = HashSet::new();
         let local = self.local_device();
-        for oid in self.find_by_type(ObjectType::TREND_LOG) {
+        let mut logs = self.find_by_type(ObjectType::TREND_LOG);
+        logs.extend(self.find_by_type(ObjectType::TREND_LOG_MULTIPLE));
+        for oid in logs {
             let Some(configuration) = self.get(&oid).and_then(configuration) else {
                 continue;
             };
@@ -112,26 +142,40 @@ impl ObjectDatabase {
                     },
                 );
             }
-            let entry = self.trend_poll.0.get(&oid).unwrap();
-            if !entry.remaining(monotonic()).is_zero() {
+            if !self.trend_poll.0[&oid].remaining(monotonic()).is_zero() {
                 continue;
             }
-            let target = entry.configuration.target;
-            let property = entry.configuration.property;
-            let device = entry.configuration.device;
             let accepted = self
                 .clock_frame()
                 .filter(|frame| frame.is_valid_actual_datetime())
                 .map(|frame| {
-                    let datum = self.acquire(local, device, target, property);
-                    let record = BACnetLogRecord {
-                        date: frame.local_date,
-                        time: frame.local_time,
-                        log_datum: datum,
-                        status_flags: None,
-                    };
+                    let values: Vec<LogValue> = self.trend_poll.0[&oid]
+                        .configuration
+                        .members
+                        .iter()
+                        .map(|member| self.acquire(local, member))
+                        .collect();
                     // Exclusive access prevents structural change after selection.
-                    match self.get_mut(&oid).unwrap().add_trend_record(record) {
+                    let object = self.get_mut(&oid).unwrap();
+                    let inserted = if oid.object_type() == ObjectType::TREND_LOG_MULTIPLE {
+                        object.add_trend_multiple_record(BACnetLogMultipleRecord {
+                            date: frame.local_date,
+                            time: frame.local_time,
+                            log_data: LogData::Values(values),
+                        })
+                    } else {
+                        object.add_trend_record(BACnetLogRecord {
+                            date: frame.local_date,
+                            time: frame.local_time,
+                            // A Trend Log has exactly one reference.
+                            log_datum: values
+                                .into_iter()
+                                .next()
+                                .map_or(LogDatum::NullValue, LogDatum::from),
+                            status_flags: None,
+                        })
+                    };
+                    match inserted {
                         Ok(()) => true,
                         Err(error) => {
                             warn!(object = %oid, %error, "trend-log record insertion failed");
@@ -166,15 +210,18 @@ impl ObjectDatabase {
         }
     }
 
-    /// One acquisition: the datum read from `target`'s `property`, or the
-    /// failure that stopped the read (Clause 12.25, Log_Buffer).
-    fn acquire(
-        &self,
-        local: LocalDevice,
-        device: Option<ObjectIdentifier>,
-        target: ObjectIdentifier,
-        property: P,
-    ) -> LogDatum {
+    /// One reference's value, or the failure that stopped its read
+    /// (Clause 12.25 Log_Buffer; Clause 12.30.19 for each member).
+    fn acquire(&self, local: LocalDevice, member: &Member) -> LogValue {
+        let Member::Reference {
+            target,
+            property,
+            index,
+            device,
+        } = *member
+        else {
+            return failure(ErrorClass::PROPERTY, ErrorCode::NO_PROPERTY_SPECIFIED);
+        };
         if !local.is_local(device) {
             // Reading another device's property is not supported here.
             return failure(
@@ -185,10 +232,16 @@ impl ObjectDatabase {
         let Some(target) = self.get(&target) else {
             return failure(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT);
         };
-        match target.read_property(property, None) {
-            Ok(value) => property_value_to_log_datum(&value),
+        // ReadProperty's gate, which the Averaging sampler shares: only an
+        // array has elements, whatever an object's read arm does with the
+        // index.
+        if index.is_some() && !target.is_array_property(property) {
+            return failure(ErrorClass::PROPERTY, ErrorCode::PROPERTY_IS_NOT_AN_ARRAY);
+        }
+        match target.read_property(property, index) {
+            Ok(value) => property_value_to_log_value(&value),
             Err(Error::Protocol { class, code } | Error::Structured { class, code, .. }) => {
-                LogDatum::Failure {
+                LogValue::Failure {
                     error_class: class,
                     error_code: code,
                 }
@@ -200,8 +253,8 @@ impl ObjectDatabase {
     }
 }
 
-fn failure(class: ErrorClass, code: ErrorCode) -> LogDatum {
-    LogDatum::Failure {
+fn failure(class: ErrorClass, code: ErrorCode) -> LogValue {
+    LogValue::Failure {
         error_class: u32::from(class.to_raw()),
         error_code: u32::from(code.to_raw()),
     }
@@ -222,7 +275,35 @@ fn configuration(object: &dyn BACnetObject) -> Option<Configuration> {
     let reference = object
         .read_property(P::LOG_DEVICE_OBJECT_PROPERTY, None)
         .ok()?;
-    let PropertyValue::List(items) = &reference else {
+    let members = if object.object_identifier().object_type() == ObjectType::TREND_LOG_MULTIPLE {
+        let PropertyValue::List(elements) = &reference else {
+            return None;
+        };
+        elements
+            .iter()
+            .map(|element| member(element, true))
+            .collect::<Option<Vec<_>>>()?
+    } else {
+        vec![member(&reference, false)?]
+    };
+    if members.is_empty() {
+        return None;
+    }
+    Some(Configuration {
+        interval,
+        logging_type,
+        reference,
+        members,
+    })
+}
+
+/// One reference as a read projects it: object, property, then optional
+/// array index and Device, each Null when absent. Anything else leaves the
+/// log unpolled: a malformed index or Device can't be honoured, nor a Device
+/// told local or remote. `wildcard_is_empty` applies the Trend Log Multiple
+/// rule for instance 4194303.
+fn member(value: &PropertyValue, wildcard_is_empty: bool) -> Option<Member> {
+    let PropertyValue::List(items) = value else {
         return None;
     };
     let [PropertyValue::ObjectIdentifier(target), PropertyValue::Unsigned(property), rest @ ..] =
@@ -230,32 +311,38 @@ fn configuration(object: &dyn BACnetObject) -> Option<Configuration> {
     else {
         return None;
     };
-    // A Device member that isn't an identifier can't be told local or remote.
+    let index = match rest.first() {
+        None | Some(PropertyValue::Null) => None,
+        Some(PropertyValue::Unsigned(index)) => Some(u32::try_from(*index).ok()?),
+        Some(_) => return None,
+    };
     let device = match rest.get(1) {
         None | Some(PropertyValue::Null) => None,
         Some(PropertyValue::ObjectIdentifier(device)) => Some(*device),
         Some(_) => return None,
     };
-    // Retain the existing unindexed read behavior. The full reference is
-    // compared for scheduling ownership, without adding indexed support.
-    Some(Configuration {
-        interval,
-        logging_type,
+    let property = P::from_raw(u32::try_from(*property).ok()?);
+    let empty =
+        |oid: &ObjectIdentifier| oid.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE;
+    if wildcard_is_empty && (empty(target) || device.as_ref().is_some_and(empty)) {
+        return Some(Member::Unspecified);
+    }
+    Some(Member::Reference {
         target: *target,
-        property: P::from_raw(*property as u32),
+        property,
+        index,
         device,
-        reference,
     })
 }
 
-fn property_value_to_log_datum(value: &PropertyValue) -> LogDatum {
+fn property_value_to_log_value(value: &PropertyValue) -> LogValue {
     match value {
-        PropertyValue::Real(v) => LogDatum::RealValue(*v),
-        PropertyValue::Unsigned(v) => LogDatum::UnsignedValue(*v),
-        PropertyValue::Signed(v) => LogDatum::SignedValue(i64::from(*v)),
-        PropertyValue::Boolean(v) => LogDatum::BooleanValue(*v),
-        PropertyValue::Enumerated(v) => LogDatum::EnumValue(*v),
-        _ => LogDatum::NullValue,
+        PropertyValue::Real(v) => LogValue::RealValue(*v),
+        PropertyValue::Unsigned(v) => LogValue::UnsignedValue(*v),
+        PropertyValue::Signed(v) => LogValue::SignedValue(*v),
+        PropertyValue::Boolean(v) => LogValue::BooleanValue(*v),
+        PropertyValue::Enumerated(v) => LogValue::EnumValue(*v),
+        _ => LogValue::NullValue,
     }
 }
 

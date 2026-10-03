@@ -430,6 +430,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             targeted.process_identifier = *process_id;
 
             let mut service_buf = BytesMut::new();
+            // Cannot fail for a transition that reached this loop: the
+            // payload and message text were validated when it was committed.
+            // See `EventNotificationCounters` for why nothing counts it.
             if let Err(e) = targeted.encode(&mut service_buf) {
                 warn!(error = %e, "Failed to encode EventNotification");
                 continue;
@@ -661,6 +664,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 };
 
                 if let Err(e) = send_result {
+                    suppressions.record(EventSuppression::UnconfirmedSendFailed);
                     warn!(
                         error = %e,
                         "Failed to send unconfirmed EventNotification"

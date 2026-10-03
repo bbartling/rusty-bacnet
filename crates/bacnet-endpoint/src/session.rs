@@ -115,11 +115,13 @@ pub enum SessionRole {
     Both,
 }
 
-/// Session tuning (bounded queues + client timers).
+/// Session tuning (bounded queues, client timers, the responder's read work
+/// limit).
 ///
 /// Typed at the public boundary: every field is validated where it matters
-/// (`queue_capacity == 0` fails [`EndpointSession::new`]; APDU/timer values
-/// flow into the client role config unchanged).
+/// (`queue_capacity == 0` or `read_work_limit == 0` fails
+/// [`EndpointSession::new`]; APDU/timer values flow into the client role
+/// config unchanged).
 ///
 /// ```
 /// use bacnet_endpoint::session::SessionConfig;
@@ -127,6 +129,7 @@ pub enum SessionRole {
 /// let config = SessionConfig::default();
 /// assert!(config.queue_capacity > 0);
 /// assert_eq!(config.max_apdu_length, 480);
+/// assert_eq!(config.read_work_limit, 256);
 /// ```
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
@@ -147,6 +150,19 @@ pub struct SessionConfig {
     /// the identity value; the MS/TP builder additionally rejects identities
     /// above its 480 transport bound at build time.
     pub max_apdu_length: u16,
+    /// Result rows one ReadProperty served by the server role may expand
+    /// (default 256).
+    ///
+    /// The endpoint's counterpart of the server's
+    /// [`ReadPropertyMultipleBudget::max_result_elements`](bacnet_server::server::ReadPropertyMultipleBudget::max_result_elements),
+    /// with the same default. A read counts its own row, and a Group's
+    /// Present_Value adds one row per member property after ALL, REQUIRED
+    /// and OPTIONAL expand. A read past the limit is answered with an Abort
+    /// carrying OUT_OF_RESOURCES before any member is read.
+    ///
+    /// Must be greater than zero; [`EndpointSession::new`] returns
+    /// [`Error::Encoding`] otherwise.
+    pub read_work_limit: usize,
 }
 
 impl Default for SessionConfig {
@@ -156,6 +172,8 @@ impl Default for SessionConfig {
             apdu_timeout_ms: 1_000,
             apdu_retries: 0,
             max_apdu_length: 480,
+            read_work_limit: bacnet_server::server::ReadPropertyMultipleBudget::default()
+                .max_result_elements,
         }
     }
 }
@@ -266,8 +284,8 @@ pub enum SessionExit {
 impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Creates a session owning `transport` (not yet started).
     ///
-    /// Returns [`Error::Encoding`] when
-    /// `config.queue_capacity == 0`. Normally built via
+    /// Returns [`Error::Encoding`] when `config.queue_capacity` or
+    /// `config.read_work_limit` is zero. Normally built via
     /// [`BipEndpointBuilder`](crate::bip::BipEndpointBuilder),
     /// [`ScEndpointBuilder`](crate::sc::ScEndpointBuilder), or
     /// [`MstpEndpointBuilder`](crate::mstp::MstpEndpointBuilder) instead of
@@ -288,6 +306,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         if config.queue_capacity == 0 {
             return Err(Error::Encoding(
                 "endpoint session queue capacity must be greater than zero".into(),
+            ));
+        }
+        if config.read_work_limit == 0 {
+            return Err(Error::Encoding(
+                "endpoint session read work limit must be greater than zero".into(),
             ));
         }
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
@@ -943,3 +966,7 @@ mod registered_port_wire_tests;
 #[cfg(test)]
 #[path = "network_number_tests.rs"]
 mod network_number_tests;
+
+#[cfg(test)]
+#[path = "read_work_limit_tests.rs"]
+mod read_work_limit_tests;

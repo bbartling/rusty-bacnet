@@ -16,13 +16,13 @@ const DESCRIPTION: PropertyIdentifier = PropertyIdentifier::DESCRIPTION;
 const OBJECT_NAME: PropertyIdentifier = PropertyIdentifier::OBJECT_NAME;
 
 /// One member: an object and the properties the Group reports from it.
-type Member = (ObjectIdentifier, &'static [PropertyIdentifier]);
+pub(super) type Member = (ObjectIdentifier, &'static [PropertyIdentifier]);
 
-fn group(instance: u32) -> ObjectIdentifier {
+pub(super) fn group(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::GROUP, instance).unwrap()
 }
 
-async fn add_group(wire: &Wire, instance: u32, members: &[Member]) {
+pub(super) async fn add_group(wire: &Wire, instance: u32, members: &[Member]) {
     let mut object = GroupObject::new(instance, format!("GRP-{instance}")).unwrap();
     for &(object_identifier, properties) in members {
         object
@@ -46,7 +46,7 @@ async fn add_group(wire: &Wire, instance: u32, members: &[Member]) {
         .unwrap();
 }
 
-fn read_property(object: ObjectIdentifier) -> (ConfirmedServiceChoice, BytesMut) {
+pub(super) fn read_property(object: ObjectIdentifier) -> (ConfirmedServiceChoice, BytesMut) {
     let mut request = BytesMut::new();
     ReadPropertyRequest {
         object_identifier: object,
@@ -58,7 +58,7 @@ fn read_property(object: ObjectIdentifier) -> (ConfirmedServiceChoice, BytesMut)
 }
 
 /// ReadRange of a Group's whole Present_Value, every item.
-fn read_range(object: ObjectIdentifier) -> (ConfirmedServiceChoice, BytesMut) {
+pub(super) fn read_range(object: ObjectIdentifier) -> (ConfirmedServiceChoice, BytesMut) {
     let mut request = BytesMut::new();
     ReadRangeRequest {
         object_identifier: object,
@@ -152,7 +152,7 @@ async fn group_members_read_the_live_device_cov_lists_through_rp_readrange_and_l
         add_group(&wire, instance, &[member]).await;
         let value = wire.read(group(instance), PV, None).await.unwrap();
         assert_live(&member_rows(&value), &lists, expected);
-        // ReadRange and the local read take the same pre-scan.
+        // ReadRange and the local read plan and sample the same way.
         let Apdu::ComplexAck(ack) = wire.send(&direct(), read_range(group(instance))).await else {
             panic!("ReadRange of Group {instance}");
         };
@@ -207,7 +207,7 @@ async fn group_members_read_the_live_device_cov_lists_through_rpm() {
     wire.server.stop().await.unwrap();
 }
 
-fn abort(response: Apdu) -> (bool, AbortReason) {
+pub(super) fn abort(response: Apdu) -> (bool, AbortReason) {
     match response {
         Apdu::Abort(abort) => (abort.sent_by_server, abort.abort_reason),
         other => panic!("expected an abort, got {other:?}"),

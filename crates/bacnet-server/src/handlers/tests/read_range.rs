@@ -7,9 +7,13 @@ use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::log_buffer::LogRecordIdentity;
 use bacnet_objects::trend::{TrendLogMultipleObject, TrendLogObject};
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
-use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
+use bacnet_types::constructed::{
+    BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue,
+};
 use bacnet_types::primitives::{Date, Time};
 
+#[path = "read_range_multiple.rs"]
+mod multiple;
 #[path = "read_range_pages.rs"]
 mod pages;
 #[path = "read_range_targets.rs"]
@@ -385,6 +389,32 @@ fn record(value: u64) -> BACnetLogRecord {
     }
 }
 
+/// [`record`]'s sample as a one-member Trend Log Multiple record.
+pub(super) fn multiple_record(value: u64) -> BACnetLogMultipleRecord {
+    BACnetLogMultipleRecord {
+        date: DATE,
+        time: time(value as u8),
+        log_data: LogData::Values(vec![LogValue::UnsignedValue(value)]),
+    }
+}
+
+/// A sample record of `family` as a ReadRange item carries it: a Trend Log
+/// Multiple record framed whole, the others field by field.
+pub(super) fn projected(family: LogFamily, value: u64) -> PropertyValue {
+    match family {
+        LogFamily::TrendMultiple => {
+            let mut framed = BytesMut::new();
+            bacnet_encoding::constructed::encode_log_multiple_record(
+                &multiple_record(value),
+                &mut framed,
+            )
+            .unwrap();
+            PropertyValue::ApplicationData(framed.to_vec())
+        }
+        _ => projected_record(value),
+    }
+}
+
 pub(super) fn projected_record(value: u64) -> PropertyValue {
     PropertyValue::List(vec![
         PropertyValue::Date(DATE),
@@ -419,7 +449,7 @@ pub(super) fn fifo_log(family: LogFamily) -> Box<dyn BACnetObject> {
         LogFamily::TrendMultiple => {
             let mut object = TrendLogMultipleObject::new(1, "TLM-1", 3).unwrap();
             for value in 1..=4 {
-                object.add_record(record(value)).unwrap();
+                object.add_record(multiple_record(value)).unwrap();
             }
             Box::new(object)
         }
@@ -433,7 +463,7 @@ fn every_log_family_continues_by_surviving_fifo_identity() {
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(object).unwrap();
-        let expected = [projected_record(2), projected_record(3)];
+        let expected = [projected(family, 2), projected(family, 3)];
 
         let positive = call(
             &db,

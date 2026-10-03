@@ -53,7 +53,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let db = self.db.read().await;
         let lookup_oid =
             handlers::resolve_read_target(&db, oid, self.config.registered_network_port);
-        let live = match handlers::active_cov_device(&db, lookup_oid, property) {
+        let view = crate::device_view::DeviceReadContext::new(
+            &db,
+            crate::device_view::DeviceExecution::FullServer,
+        )
+        .with_work_limit(
+            self.config
+                .read_property_multiple_budget
+                .max_result_elements,
+        );
+        let plan =
+            handlers::plan_read_property(&db, Some(&view), lookup_oid, property, array_index)
+                .map_err(|failure| match failure {
+                    handlers::ReadFailure::Service(error) => error,
+                    handlers::ReadFailure::Work | handlers::ReadFailure::Bytes => Error::Abort {
+                        reason: AbortReason::OUT_OF_RESOURCES.to_raw(),
+                    },
+                })?;
+        let live = match plan.live_cov(&db) {
             Some(selection) if self.dispatch_task.is_none() => {
                 Some(crate::cov::active::LiveDeviceCov::stopped(selection))
             }
@@ -67,24 +84,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             ),
             None => None,
         };
-        let view = crate::device_view::DeviceReadContext::new(
-            &db,
-            crate::device_view::DeviceExecution::FullServer,
-            live.as_ref(),
-        )
-        .with_work_limit(
-            self.config
-                .read_property_multiple_budget
-                .max_result_elements,
-        );
-        handlers::read_property_value(&db, Some(&view), lookup_oid, property, array_index).map_err(
-            |failure| match failure {
-                handlers::RpmFailure::Service(error) => error,
-                handlers::RpmFailure::Work | handlers::RpmFailure::Bytes => Error::Abort {
-                    reason: AbortReason::OUT_OF_RESOURCES.to_raw(),
-                },
-            },
-        )
+        let view = view.with_live(live.as_ref());
+        handlers::read_property_value(&db, Some(&view), plan)
     }
 
     /// Create a cloneable handle for unsolicited I-Am announcements.
