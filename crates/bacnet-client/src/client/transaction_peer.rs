@@ -5,7 +5,26 @@ pub(super) struct TransactionPeer {
     pub(super) canonical: CanonicalPeer,
 }
 
-impl ConfirmedTarget<'_> {
+impl<'a> ConfirmedTarget<'a> {
+    /// This target as it is sent once the client knows `local_network`, the
+    /// number of its own network (#1358). A routed target on that network is
+    /// a local one: the DADR is a MAC on this link, so the request goes there
+    /// with no DNET and not through the router (Clause 6.5.1), since a
+    /// non-routing peer drops an NPDU whose DNET names a network (Clause
+    /// 6.5.2.1). Its answer then comes from that MAC with no SNET, so the
+    /// transaction is keyed to the local peer as well. Any other target, and
+    /// every target while the number is unknown, is unchanged.
+    pub(super) fn localized(self, local_network: Option<u16>) -> Self {
+        match self {
+            Self::Routed {
+                dest_network,
+                dest_mac,
+                ..
+            } if Some(dest_network) == local_network => Self::Local { mac: dest_mac },
+            target => target,
+        }
+    }
+
     pub(super) fn transaction_peer(self) -> TransactionPeer {
         match self {
             Self::Local { mac } => TransactionPeer {
@@ -75,6 +94,33 @@ mod tests {
         );
         assert_eq!(routed.tsm_mac, routed_response.tsm_mac);
         assert_eq!(routed.canonical, routed_response.canonical);
+    }
+
+    #[test]
+    fn only_a_routed_target_on_the_known_local_network_is_localized() {
+        let routed = |dest_network| ConfirmedTarget::Routed {
+            router_mac: &[9],
+            dest_network,
+            dest_mac: &[4, 5],
+        };
+        assert!(matches!(
+            routed(42).localized(Some(42)),
+            ConfirmedTarget::Local { mac: &[4, 5] }
+        ));
+        for local_network in [Some(7), None] {
+            assert!(matches!(
+                routed(42).localized(local_network),
+                ConfirmedTarget::Routed {
+                    router_mac: &[9],
+                    dest_network: 42,
+                    dest_mac: &[4, 5],
+                }
+            ));
+        }
+        assert!(matches!(
+            ConfirmedTarget::Local { mac: &[1] }.localized(Some(42)),
+            ConfirmedTarget::Local { mac: &[1] }
+        ));
     }
 
     #[test]

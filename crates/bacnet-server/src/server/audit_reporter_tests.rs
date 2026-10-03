@@ -682,6 +682,9 @@ mod batch_history;
 #[path = "audit_reporter_empty_tests.rs"]
 mod empty_values;
 
+#[path = "audit_local_network_tests.rs"]
+mod local_network;
+
 #[tokio::test(start_paused = true)]
 async fn immediate_and_delayed_reporter_raw_1474_emit_header_1024() {
     for delayed in [false, true] {

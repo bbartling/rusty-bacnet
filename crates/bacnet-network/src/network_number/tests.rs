@@ -72,3 +72,51 @@ fn local_network_number_shares_the_last_published_state() {
     slot.publish(NetworkNumber::configured(0).unwrap());
     assert_eq!(reader.get(), None);
 }
+
+/// The layer frames the destination its caller names, a published number
+/// notwithstanding (#1358): choosing local or routed traffic is the caller's,
+/// since an answer goes back by the route its request arrived on and a
+/// confirmed request is keyed to the peer it was sent to.
+#[tokio::test]
+async fn a_published_number_leaves_routed_sends_as_named() {
+    use crate::layer::NetworkLayer;
+    use bacnet_encoding::npdu::NpduAddress;
+    use bacnet_transport::loopback::LoopbackTransport;
+    use bacnet_transport::port::TransportPort;
+    use bacnet_types::enums::NetworkPriority;
+
+    let (mut link, mut peer) = LoopbackTransport::pair(vec![1], vec![2]);
+    let mut destinations = link.record_unicast_destinations();
+    let mut network = NetworkLayer::new(link);
+    let _apdus = network.start().await.unwrap();
+    let mut frames = peer.start().await.unwrap();
+    network
+        .local_network_number()
+        .publish(NetworkNumber::configured(7).unwrap());
+    let apdu = [0x10, 0x08];
+    let priority = NetworkPriority::NORMAL;
+
+    network
+        .send_apdu_routed(&apdu, 7, &[3], &[9], false, priority)
+        .await
+        .unwrap();
+    let frame = frames.recv().await.unwrap();
+    assert_eq!(destinations.recv().await.unwrap().as_slice(), [9]);
+    assert_eq!(
+        decode_npdu(frame.npdu).unwrap().destination,
+        Some(NpduAddress {
+            network: 7,
+            mac_address: [3].as_slice().into(),
+        })
+    );
+
+    network
+        .broadcast_to_network(&apdu, 7, false, priority)
+        .await
+        .unwrap();
+    let frame = frames.recv().await.unwrap();
+    assert!(frame.link_layer_group);
+    let destination = decode_npdu(frame.npdu).unwrap().destination.unwrap();
+    assert_eq!((destination.network, destination.mac_address.len()), (7, 0));
+    network.stop().await.unwrap();
+}

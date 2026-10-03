@@ -103,6 +103,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// with [`Error::Encoding`] before path or transaction state is taken.
     /// Every routed confirmed entry point, such as the `_to_device` and
     /// `_from_device` methods, applies the same rule.
+    ///
+    /// Once the client has learned its own network's number, a
+    /// `dest_network` naming it is this network. After those checks the
+    /// request goes to `dest_mac` as a local request, with no DNET and not
+    /// through `router_mac`, and its answer is expected from `dest_mac`
+    /// (#1358).
     pub async fn confirmed_request_routed(
         &self,
         router_mac: &[u8],
@@ -132,14 +138,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // A destination that is not one device (#1278), or a DADR or local
         // source MAC that no router could carry (#1267), fails here, before
         // the path gate is reserved or awaited and before TSM registration.
+        // A routed target on this client's own network is then sent as the
+        // local target it is (#1358); the peer's limits still come from the
+        // device-table row of the target as named.
+        let named = target;
+        if let ConfirmedTarget::Routed {
+            dest_network,
+            dest_mac,
+            ..
+        } = named
+        {
+            check_routed_unicast(dest_network, dest_mac.len())?;
+        }
+        let target = named.localized(self.network.local_network_number().get());
         let routed_forwarded_npci_len = match target {
             ConfirmedTarget::Local { .. } => None,
-            ConfirmedTarget::Routed {
-                dest_network,
-                dest_mac,
-                ..
-            } => {
-                check_remote_dnet(dest_network)?;
+            ConfirmedTarget::Routed { dest_mac, .. } => {
                 Some(forwarded_npci_len(dest_mac.len(), self.local_mac.len())?)
             }
         };
@@ -172,7 +186,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             // SNET/SADR of the NPDU that carried its I-Am identifies it
             // (Clause 5.2.1.2 term (c) binds the peer's Max APDU Length
             // Accepted regardless of how the peer is reached).
-            let (device, peer_segmentation) = match target {
+            let (device, peer_segmentation) = match named {
                 ConfirmedTarget::Local { mac } => {
                     (dt.get_by_mac(mac), dt.local_peer_segmentation(mac))
                 }
@@ -653,6 +667,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Broadcast an unconfirmed request to a specific remote network.
+    ///
+    /// Once the client has learned its own network's number, a
+    /// `dest_network` naming it is this network, and the request goes as a
+    /// local broadcast with no DNET (#1358).
     pub async fn broadcast_network_unconfirmed(
         &self,
         service_choice: UnconfirmedServiceChoice,
@@ -667,6 +685,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
         encode_apdu(&mut buf, &pdu)?;
 
+        if self.network.local_network_number().get() == Some(dest_network) {
+            return self
+                .network
+                .broadcast_apdu(&buf, false, NetworkPriority::NORMAL)
+                .await;
+        }
         self.network
             .broadcast_to_network(&buf, dest_network, false, NetworkPriority::NORMAL)
             .await

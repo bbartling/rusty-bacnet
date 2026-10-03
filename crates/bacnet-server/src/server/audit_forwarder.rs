@@ -11,12 +11,16 @@ const DEADLINE: Duration = Duration::from_secs(3);
 
 /// The configured route to the parent Audit Log's device. The parent must
 /// name a device other than this one ([`ObjectDatabase::local_device`]), and
-/// this device must have a concrete identity to tell the two apart.
+/// this device must have a concrete identity to tell the two apart. A
+/// binding routed through `local_network`, this network's own number when
+/// known, is taken as the local one it is (#1358), so the copy goes to the
+/// parent's MAC with no DNET.
 fn resolve(
     profile: &AuditLogForwarding,
     local: LocalDevice,
     bindings: &DeviceBindingTable,
     local_mac: &[u8],
+    local_network: Option<u16>,
     is_broadcast: impl Fn(&[u8]) -> bool,
 ) -> Option<ConfirmedRecipientRoute> {
     let parent = profile.parent();
@@ -31,8 +35,9 @@ fn resolve(
     let route = RecipientRoute::from_device_resolution(bindings.resolve_at(
         &device,
         Instant::now(),
-        is_broadcast,
+        &is_broadcast,
     ))
+    .localize(local_network, &is_broadcast)
     .into_confirmed()?;
     if route.freshness != Some(BindingFreshness::Configured)
         || route.local_target.as_deref() == Some(local_mac)
@@ -54,12 +59,14 @@ pub(super) fn initialize<T: TransportPort>(
         .and_then(|sink| db.get(&sink))
         .and_then(|object| object.audit_log_forwarding_internal())
     {
+        // Before the link starts, while no local network number is known.
         profile.status().set_configured(
             resolve(
                 &profile,
                 db.local_device(),
                 bindings,
                 transport.local_mac(),
+                None,
                 |mac| transport.is_broadcast_mac(mac),
             )
             .is_some(),
@@ -116,6 +123,7 @@ impl ForwardBatch {
             self.local,
             &bindings,
             network.local_mac(),
+            network.local_network_number().get(),
             |mac| network.transport().is_broadcast_mac(mac),
         );
         drop(bindings);
