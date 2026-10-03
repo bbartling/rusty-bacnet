@@ -79,10 +79,12 @@ fn over_long_address_length_is_refused_for_either_field() {
                     field: refused,
                     length: reported,
                     dnet,
+                    source,
                 }) => {
                     assert_eq!(refused, field);
                     assert_eq!(reported, length);
                     assert_eq!(dnet, expected_dnet(field), "{field} {length}");
+                    assert_eq!(source, None, "{field} {length}: no SNET/SADR to report");
                 }
                 other => panic!("{field} length {length}: expected AddressTooLong, got {other:?}"),
             }
@@ -141,6 +143,7 @@ fn source_refusal_reports_the_npdu_dnet() {
                 field: NpduAddressField::Source,
                 length: 19,
                 dnet: Some(DNET),
+                source: None,
             }
         ),
         "{refused:?}"
@@ -148,6 +151,71 @@ fn source_refusal_reports_the_npdu_dnet() {
     let accepted = decode(frame(NpduAddressField::Source, 18, 18, true)).unwrap();
     assert_eq!(accepted.destination.unwrap().network, DNET);
     assert_eq!(accepted.source.unwrap().mac_address.len(), 18);
+}
+
+/// A frame toward DNET whose DADR announces `dlen` octets and holds `held` of
+/// them, followed by `source` written as raw (SNET, SLEN, SADR octets held).
+fn behind_long_dadr(dlen: u8, held: u8, source: Option<(u16, u8, u8)>) -> Vec<u8> {
+    let mut out = vec![BACNET_PROTOCOL_VERSION, 0x20];
+    out.extend_from_slice(&DNET.to_be_bytes());
+    out.push(dlen);
+    out.extend((0..held).map(|i| 0xD0u8.wrapping_add(i)));
+    if let Some((snet, slen, sadr_held)) = source {
+        out[1] |= 0x08;
+        out.extend_from_slice(&snet.to_be_bytes());
+        out.push(slen);
+        out.extend((0..sadr_held).map(|i| 0x50 + i));
+    }
+    out.push(255);
+    out.extend_from_slice(&APDU);
+    out
+}
+
+fn reported_source(bytes: Vec<u8>) -> Option<NpduAddress> {
+    match decode(bytes) {
+        Err(NpduDecodeError::AddressTooLong {
+            field: NpduAddressField::Destination,
+            dnet: Some(DNET),
+            source,
+            ..
+        }) => source,
+        other => panic!("expected a DADR refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn destination_refusal_carries_the_source_behind_it() {
+    // #1158: the SNET/SADR after an over-long DADR is where a router sends
+    // its reject, so the refusal reports it.
+    for dlen in [19, 255] {
+        assert_eq!(
+            reported_source(behind_long_dadr(dlen, dlen, Some((SNET, 2, 2)))),
+            Some(NpduAddress {
+                network: SNET,
+                mac_address: MacAddr::from_slice(&[0x50, 0x51]),
+            }),
+            "DLEN {dlen}"
+        );
+        let longest = reported_source(behind_long_dadr(dlen, dlen, Some((SNET, 18, 18))));
+        assert_eq!(longest.unwrap().mac_address.len(), 18, "DLEN {dlen}");
+    }
+
+    // Nothing to report: no source, a DADR the frame does not hold, a reserved
+    // SNET, an SLEN of 0 or past the bound, or a truncated SADR.
+    for (case, bytes) in [
+        ("no source", behind_long_dadr(19, 19, None)),
+        ("short DADR", behind_long_dadr(19, 4, Some((SNET, 1, 1)))),
+        ("SNET 0", behind_long_dadr(19, 19, Some((0, 1, 1)))),
+        (
+            "SNET 0xFFFF",
+            behind_long_dadr(19, 19, Some((0xFFFF, 1, 1))),
+        ),
+        ("SLEN 0", behind_long_dadr(19, 19, Some((SNET, 0, 0)))),
+        ("SLEN 19", behind_long_dadr(19, 19, Some((SNET, 19, 19)))),
+        ("short SADR", behind_long_dadr(19, 19, Some((SNET, 6, 2)))),
+    ] {
+        assert_eq!(reported_source(bytes), None, "{case}");
+    }
 }
 
 #[test]
