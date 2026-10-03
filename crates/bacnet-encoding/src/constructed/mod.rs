@@ -36,6 +36,7 @@ use tagged::{
 };
 
 pub mod access_credential;
+pub mod access_rule;
 mod action_list;
 pub mod assigned_landing_calls;
 mod audit_notification;
@@ -72,6 +73,7 @@ pub use access_credential::{
     encode_assigned_access_rights, encode_authentication_factor,
     encode_authentication_factor_format, encode_credential_authentication_factor,
 };
+pub use access_rule::{decode_access_rule, encode_access_rule};
 pub use action_list::{
     decode_action_command, decode_action_list, encode_action_command, encode_action_list,
 };

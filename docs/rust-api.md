@@ -1866,6 +1866,19 @@ framing, through the shared `bacnet-encoding` codecs.
   declaring Present_Value's format and class puts Present_Value back to
   UNDEFINED, with Update_Time stamped from the Device clock; out of service
   that covers the simulated factor and the reader's factor put aside.
+- **Access Rights rules**: `Positive_Access_Rules` and `Negative_Access_Rules`
+  are BACnetARRAYs of `bacnet_types::constructed::BACnetAccessRule` (codec
+  `bacnet_encoding::constructed::{encode_access_rule, decode_access_rule}`),
+  read whole, by index and at index 0 for the size like the arrays above, and
+  read-only on the network. `BACnetAccessRule::new(time_range, location,
+  enable)` sets each specifier from its reference: SPECIFIED when given,
+  ALWAYS or ALL when `None`. `AccessRightsObject::set_positive_access_rules`
+  and `set_negative_access_rules` return `Result` and keep the old rules on
+  VALUE_OUT_OF_RANGE: a device member that isn't a Device, a specifier
+  outside its two values, SPECIFIED without its reference, ALWAYS or ALL with
+  a reference that isn't unspecified (instance 4194303), or a location that is
+  neither an Access Point nor an Access Zone. The object stores and serves the
+  rules; nothing in the stack evaluates them.
 - **Device references**: a
   `BACnetDeviceObjectReference` whose device identifier is present must name
   a Device object (Clause 21);

@@ -1091,6 +1091,36 @@ class ActionCommand(TypedDict):
     device_identifier: NotRequired[ObjectIdentifier | None]
 
 
+class AccessRuleTimeRange(TypedDict):
+    """The property whose value decides when an access rule applies, such as
+    a Schedule's Present_Value (``BACnetDeviceObjectPropertyReference``).
+
+    Unknown keys and a ``device_identifier`` that isn't a Device raise
+    ValueError; wrong types raise TypeError.
+    """
+
+    object_identifier: ObjectIdentifier
+    property_identifier: PropertyIdentifier
+    property_array_index: NotRequired[int | None]
+    device_identifier: NotRequired[ObjectIdentifier | None]
+
+
+class AccessRule(TypedDict):
+    """One element of an Access Rights rule array (``BACnetAccessRule``).
+
+    A missing or ``None`` ``time_range`` means the rule applies at any time
+    (ALWAYS), and a missing or ``None`` ``location`` that it covers every
+    access point (ALL). A ``location`` is an Access Point or Access Zone, as
+    an ``ObjectIdentifier`` in this device or a ``(device, object)`` pair.
+    """
+
+    enable: bool
+    time_range: NotRequired[AccessRuleTimeRange | None]
+    location: NotRequired[
+        ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier] | None
+    ]
+
+
 class AuditReporterConfiguration(TypedDict):
     """Owned pre-start target Reporter settings; no Python callbacks."""
     instance: int
@@ -2842,7 +2872,25 @@ class BACnetServer:
         with VALUE_OUT_OF_RANGE; either way nothing is registered.
         """
         ...
-    def add_access_rights(self, instance: int, name: str) -> None: ...
+    def add_access_rights(
+        self,
+        instance: int,
+        name: str,
+        *,
+        positive_access_rules: Optional[list[AccessRule]] = None,
+        negative_access_rules: Optional[list[AccessRule]] = None,
+    ) -> None:
+        """Add an Access Rights object to the server (before starting).
+
+        ``positive_access_rules`` and ``negative_access_rules`` set the two
+        rule arrays (read-only over the network) as ``AccessRule`` mappings.
+        A wrong shape or type raises TypeError, an unknown or missing key or a
+        device that isn't a Device raises ValueError, and a location naming
+        anything but an Access Point or Access Zone raises BacnetProtocolError
+        with VALUE_OUT_OF_RANGE; nothing is registered after any of them. The
+        server stores and serves the rules but doesn't evaluate them.
+        """
+        ...
     def add_access_user(self, instance: int, name: str) -> None: ...
     def add_access_zone(self, instance: int, name: str) -> None: ...
     def add_credential_data_input(

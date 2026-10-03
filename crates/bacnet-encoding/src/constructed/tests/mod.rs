@@ -9,6 +9,7 @@ use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
 
 mod access_credential;
+mod access_rule;
 mod action_list;
 mod assigned_landing_calls;
 mod authentication_factor_format;

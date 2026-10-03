@@ -18,11 +18,15 @@ use bacnet_types::constructed::{
 use bacnet_types::enums::AuthenticationFactorType;
 use PropertyIdentifier as P;
 
-type Expected = Result<Vec<u8>, ErrorCode>;
+pub(super) type Expected = Result<Vec<u8>, ErrorCode>;
 
 /// Read each `(property, index)` of `oid` with ReadProperty and with one
 /// ReadPropertyMultiple, and check both against the expected bytes or error.
-fn assert_reads(db: &ObjectDatabase, oid: ObjectIdentifier, cases: &[(P, Option<u32>, Expected)]) {
+pub(super) fn assert_reads(
+    db: &ObjectDatabase,
+    oid: ObjectIdentifier,
+    cases: &[(P, Option<u32>, Expected)],
+) {
     let mut request = BytesMut::new();
     ReadPropertyMultipleRequest {
         list_of_read_access_specs: vec![ReadAccessSpecification {
@@ -88,7 +92,7 @@ fn assert_reads(db: &ObjectDatabase, oid: ObjectIdentifier, cases: &[(P, Option<
 
 /// The read cases of an array holding `elements`: whole, size, first, last
 /// and one past the end.
-fn array_cases(property: P, elements: &[&[u8]]) -> Vec<(P, Option<u32>, Expected)> {
+pub(super) fn array_cases(property: P, elements: &[&[u8]]) -> Vec<(P, Option<u32>, Expected)> {
     let size = elements.len() as u32;
     let mut cases = vec![
         (property, None, Ok(elements.concat())),
@@ -106,7 +110,7 @@ fn array_cases(property: P, elements: &[&[u8]]) -> Vec<(P, Option<u32>, Expected
     cases
 }
 
-fn db_with(object: Box<dyn BACnetObject>) -> (ObjectDatabase, ObjectIdentifier) {
+pub(super) fn db_with(object: Box<dyn BACnetObject>) -> (ObjectDatabase, ObjectIdentifier) {
     let oid = object.object_identifier();
     let mut db = ObjectDatabase::new();
     db.add(object).unwrap();

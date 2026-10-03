@@ -2078,7 +2078,7 @@
     "None was a documented extension with a purpose of its own, so all go, as #984 did for Calendar, #985 for the Trend Logs, #997 for Elevator Group and #979 for the Access Credential Present_Value. Object types with Status_Flags but no Out_Of_Service read their shared rows through the no_out_of_service form of read_common_properties!, which holds the OUT_OF_SERVICE flag FALSE as each of those types requires; before, a write of the stray Out_Of_Service set that flag.",
     "File, Group, Structured View and Averaging read only read_identity_properties!. The Event Enrollment evaluator used to skip an enrollment whose Out_Of_Service was TRUE; with the property gone the gate goes too, and Event_Detection_Enable still suspends evaluation.",
     "Credential Data Input was a candidate, but Table 12-43 lists Out_Of_Service, so it keeps the row. Color and Color Temperature have no 135-2020 table and were not swept; Lift, Schedule and Loop had no undefined rows. Not covered: the required rows these objects still don't serve, and any datatype review of the rows that remain.",
-    "Access Rights serves Positive_Access_Rules and Negative_Access_Rules as empty arrays: no octets for the whole value and a size of 0 at index 0."
+    "Access Rights serves Positive_Access_Rules and Negative_Access_Rules as arrays, empty until the application sets rules (BACNET-12-ACCESS-RIGHTS-RULES): no octets for the whole value and a size of 0 at index 0."
    ]
   },
   {
@@ -2713,6 +2713,8 @@
     "crates/bacnet-objects/src/access_control/door.rs::set_door_members",
     "crates/bacnet-objects/src/access_control/point.rs::set_access_doors",
     "crates/bacnet-objects/src/staging.rs",
+    "crates/bacnet-objects/src/access_control/rights.rs::check_access_rule",
+    "crates/rusty-bacnet/src/types/access_rule.rs::check_device",
     "crates/bacnet-objects/src/group.rs::add_subordinate",
     "crates/bacnet-objects/src/channel/arrays.rs::check_member",
     "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs"
@@ -2725,6 +2727,8 @@
     "crates/bacnet-objects/src/access_control/device_reference_tests.rs::{access_door_door_members_refuse_a_non_device_device_identifier,access_point_access_doors_refuse_a_non_device_device_identifier,access_point_event_credential_refuses_a_non_device_device_identifier,access_credential_assigned_access_rights_refuse_a_non_device_device_identifier}",
     "crates/bacnet-objects/src/group/tests.rs::{structured_view_add_subordinate_refuses_a_non_device_device_identifier,structured_view_set_subordinates_replaces_both_arrays_or_nothing}",
     "crates/bacnet-objects/src/staging/tests.rs::target_references_refuse_a_non_device_device_identifier",
+    "crates/bacnet-objects/src/access_control/rights_tests.rs::access_rights_rules_refuse_a_non_device_device_identifier",
+    "crates/rusty-bacnet/src/types/access_rule_tests.rs::access_rule_mappings_refuse_wrong_shapes_and_non_device_devices",
     "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::set_energy_meter_ref_refuses_objects_that_are_not_meters_atomically",
     "crates/bacnet-server/src/server/staging_reference_write_tests.rs::a_target_whose_device_member_is_not_a_device_is_out_of_range",
     "crates/bacnet-objects/src/channel/array_tests.rs::channel_members_refuse_a_non_device_device_identifier",
@@ -2796,6 +2800,56 @@
     "Not covered: network writes and resizing of Supported_Formats and Supported_Format_Classes, which Table 12-43 does not require.",
     "Python sets the arrays at registration through add_access_door(door_members=...), add_access_point(access_doors=...) and add_credential_data_input(supported_formats=...). A reference is an ObjectIdentifier in this device or a (device, object) pair; a format is a type number or a (type, vendor id, vendor format) triple.",
     "Both setters, and the Python keyword arguments, refuse a reference whose device identifier is not a Device object (BACNET-21-DEVICE-OBJECT-REFERENCE-DEVICE-MEMBER)."
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-RIGHTS-RULES",
+   "standard_anchor": "Clause 12.34, Table 12-39, Clauses 12.34.9 to 12.34.10.1; Clause 21",
+   "priority": "P1",
+   "summary": "Access Rights serves Positive_Access_Rules and Negative_Access_Rules as BACnetARRAYs of BACnetAccessRule that the application sets and the network reads whole or by index.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-types/src/constructed/access.rs::BACnetAccessRule",
+    "crates/bacnet-types/src/enums/access.rs::AccessRuleTimeRangeSpecifier",
+    "crates/bacnet-encoding/src/constructed/access_rule.rs",
+    "crates/bacnet-objects/src/access_control/rights.rs::AccessRightsObject",
+    "crates/bacnet-objects/src/access_control/rights.rs::check_access_rule",
+    "crates/rusty-bacnet/src/types/access_rule.rs::access_rules_from_py",
+    "crates/rusty-bacnet/src/server/server_methods/access_rights_methods.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-types/src/enums/tests/access_production.rs::access_rule_specifier_values_match_clause_21",
+    "crates/bacnet-types/src/constructed/tests.rs::access_rule_new_sets_each_specifier_from_its_reference",
+    "crates/bacnet-encoding/src/constructed/tests/access_rule.rs::{access_rule_golden_bytes_and_round_trip,access_rule_decoder_keeps_what_the_object_judges,access_rules_decode_one_element_at_a_time}",
+    "crates/bacnet-objects/src/access_control/rights_tests.rs::access_rights_rule_arrays_read_whole_and_by_index",
+    "crates/bacnet-server/src/handlers/tests/access_rights_rules.rs::access_rights_rule_arrays_read_per_index",
+    "crates/rusty-bacnet/src/types/access_rule_tests.rs::access_rule_mappings_fill_the_rule_and_default_to_always_and_all",
+    "crates/rusty-bacnet/src/server/server_methods/access_rights_methods_tests.rs::python_access_rules_reach_both_arrays",
+    "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsRulesTests::test_rules_reach_both_arrays_and_read_back",
+    "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsStubContractTests::test_runtime_and_stub_expose_the_rule_keywords"
+   ],
+   "negative_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/access_rule.rs::access_rule_rejects_malformed_elements",
+    "crates/bacnet-objects/src/access_control/rights_tests.rs::{access_rights_setters_refuse_ill_formed_rules_and_keep_the_old_ones,access_rights_rules_refuse_a_non_device_device_identifier,access_rights_rule_arrays_stay_read_only_on_the_network}",
+    "crates/bacnet-server/src/handlers/tests/access_rights_rules.rs::access_rights_rule_arrays_refuse_network_writes",
+    "crates/rusty-bacnet/src/types/access_rule_tests.rs::access_rule_mappings_refuse_wrong_shapes_and_non_device_devices",
+    "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsRulesTests::test_ill_formed_rules_register_nothing"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#constructed-property-framing",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "Table 12-39 makes both arrays R rows, so they are read-only on the network: WriteProperty of the whole array, one element or index 0 gets WRITE_ACCESS_DENIED.",
+    "`set_positive_access_rules` and `set_negative_access_rules` keep the stored rules and answer VALUE_OUT_OF_RANGE for a non-Device device member, a specifier outside its two values, or a reference whose presence disagrees with its specifier.",
+    "ALWAYS and ALL take an absent or unspecified reference (instance 4194303). A SPECIFIED location names an Access Point or Access Zone or is unspecified; a time range may name any object's property.",
+    "The codec keeps any specifier value it reads and leaves the specifier checks to the object.",
+    "Python sets both arrays through `add_access_rights(positive_access_rules=..., negative_access_rules=...)`: lists of `AccessRule` mappings, where a missing time range or location means ALWAYS or ALL."
+   ],
+   "gaps": [
+    "Network writes of both arrays, indexed writes and the index 0 resize with Clause 12.34.9.3 defaults (no issue)",
+    "Nothing evaluates the stored rules: the Clause 12.34.9.2 authorization check isn't modeled (no issue)"
    ]
   },
   {
