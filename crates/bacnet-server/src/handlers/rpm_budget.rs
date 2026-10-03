@@ -2,7 +2,6 @@
 use super::group_present_value::GroupMembers;
 use super::read_budget::{ReadFailure, Work};
 use super::*;
-use crate::local_device::selected_device;
 #[cfg(test)]
 use crate::server::ReadPropertyMultipleBudget;
 use bacnet_objects::traits::BACnetObject;
@@ -111,7 +110,7 @@ pub(super) fn live_cov_selection<'a>(
             PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS => (false, true),
             _ => return,
         };
-        if *device.get_or_insert_with(|| selected_device(db)) != Some(oid) {
+        if *device.get_or_insert_with(|| db.selected_device()) != Some(oid) {
             return;
         }
         let selection = selection.get_or_insert(LiveCovSelection {

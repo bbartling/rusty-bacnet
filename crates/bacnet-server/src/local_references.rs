@@ -10,7 +10,7 @@
 //! each refuses every member that carries a Device identifier. A member whose
 //! Device identifier is this device's points inside the device, so refusing
 //! it would be stricter than the clauses allow. The server knows the local
-//! Device (`local_device::selected_device`, under the same database guard as
+//! Device ([`ObjectDatabase::local_device`], under the same database guard as
 //! the write), so it rewrites such a member as the local reference it denotes
 //! before the object sees it: WriteProperty, WritePropertyMultiple,
 //! `write_local`, and, for the Schedule's list, the elements of
@@ -25,7 +25,7 @@ use bacnet_encoding::constructed::{
     decode_device_object_property_reference, decode_device_object_reference,
     encode_device_object_property_reference, encode_device_object_reference,
 };
-use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::database::{LocalDevice, ObjectDatabase};
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
@@ -94,18 +94,10 @@ fn rewrite(object_type: ObjectType, property: PropertyIdentifier) -> Option<Rewr
     }
 }
 
-/// The Device a member must name to be local: the selected local Device,
-/// when its instance is concrete. A reference to the wildcard instance names
-/// no particular device.
-pub(crate) fn local_device(db: &ObjectDatabase) -> Option<ObjectIdentifier> {
-    crate::local_device::selected_device(db)
-        .filter(|device| device.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE)
-}
-
-/// Drop `member`'s Device identifier if it names `local`.
-pub(crate) fn localize_member<R: DeviceQualified>(member: &mut R, local: Option<ObjectIdentifier>) {
+/// Drop `member`'s Device identifier if it names this device.
+pub(crate) fn localize_member<R: DeviceQualified>(member: &mut R, local: LocalDevice) {
     let device = member.device_mut();
-    if device.is_some() && *device == local {
+    if local.is_local(*device) {
         *device = None;
     }
 }
@@ -122,7 +114,7 @@ pub(crate) fn localize(
     let Some(rewrite) = rewrite(oid.object_type(), property) else {
         return value;
     };
-    let Some(local) = local_device(db) else {
+    let Some(local) = db.local_device().identifier() else {
         return value;
     };
     rewrite(value, local)
@@ -168,7 +160,7 @@ fn localize_single<R: DeviceQualified>(
     if end != bytes.len() || *reference.device_mut() != Some(local) {
         return value;
     }
-    localize_member(&mut reference, Some(local));
+    *reference.device_mut() = None;
     let mut localized = BytesMut::new();
     reference.encode(&mut localized);
     PropertyValue::ApplicationData(localized.to_vec())
@@ -207,7 +199,7 @@ fn localize_bytes<R: DeviceQualified>(bytes: &[u8], local: ObjectIdentifier) -> 
             }
         };
         if *member.device_mut() == Some(local) {
-            localize_member(&mut member, Some(local));
+            *member.device_mut() = None;
             member.encode(&mut localized);
         } else {
             localized.extend_from_slice(&bytes[offset..end]);
@@ -512,7 +504,6 @@ mod tests {
         );
         // A Device at the wildcard instance names no device in particular.
         let wildcard = database(ObjectIdentifier::WILDCARD_INSTANCE);
-        assert_eq!(local_device(&wildcard), None);
         let named = encoded(&[member(1, Some(device(ObjectIdentifier::WILDCARD_INSTANCE)))]);
         assert_eq!(
             localize(

@@ -1,17 +1,8 @@
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::primitives::ObjectIdentifier;
 
-/// The Device this server answers for in wildcard reads, discovery and
-/// notifications: [`ObjectDatabase::selected_device`], which owns the policy
-/// for a database with several Devices.
-///
-/// Selection uses the current database guard. Changing Device membership after
-/// startup does not rebind the discovery limiter's startup identity.
-pub(crate) fn selected_device(db: &ObjectDatabase) -> Option<ObjectIdentifier> {
-    db.selected_device()
-}
-
-/// Validate the current selected Device under the caller's database guard.
+/// Validate the current [selected Device](ObjectDatabase::selected_device)
+/// under the caller's database guard.
 /// An empty database remains supported; applications own their Device objects.
 pub(crate) fn validate_apdu_declaration(
     db: &ObjectDatabase,
@@ -19,7 +10,7 @@ pub(crate) fn validate_apdu_declaration(
 ) -> Result<Option<ObjectIdentifier>, bacnet_types::error::Error> {
     use bacnet_types::primitives::PropertyValue;
     use bacnet_types::{enums::PropertyIdentifier, error::Error};
-    let Some(oid) = selected_device(db) else {
+    let Some(oid) = db.selected_device() else {
         return Ok(None);
     };
     let declared = db

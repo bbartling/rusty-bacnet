@@ -107,16 +107,9 @@ pub(crate) fn handle_confirmed_audit_notification_with_receipt(
     )
 }
 
+/// The [selected Device](ObjectDatabase::selected_device)'s APDU_Timeout.
 fn configured_apdu_timeout(db: &ObjectDatabase) -> Result<u32, Error> {
-    let devices: Vec<_> = db
-        .list_objects()
-        .into_iter()
-        .filter(|oid| oid.object_type() == ObjectType::DEVICE)
-        .collect();
-    let [device_oid] = devices.as_slice() else {
-        return Err(operational_problem());
-    };
-    let Some(device) = db.get(device_oid) else {
+    let Some(device) = db.selected_device().and_then(|oid| db.get(&oid)) else {
         return Err(operational_problem());
     };
     let Ok(PropertyValue::Unsigned(timeout)) =

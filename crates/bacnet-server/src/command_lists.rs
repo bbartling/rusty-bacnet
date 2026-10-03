@@ -252,9 +252,7 @@ async fn make<H: RunHost>(
         // runners make local ones only, so a command naming another Device
         // fails like any refused write. Naming this Device is the same as
         // naming none.
-        command
-            .device_identifier
-            .is_none_or(|device| crate::local_device::selected_device(&db) == Some(device))
+        db.local_device().is_local(command.device_identifier)
     };
     let success = if local {
         match host.write(run, command).await {
