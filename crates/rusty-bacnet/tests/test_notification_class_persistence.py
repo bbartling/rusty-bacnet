@@ -5,6 +5,7 @@ import inspect
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 import rusty_bacnet
 from rusty_bacnet import (
@@ -27,6 +28,20 @@ DEVICE_99 = (b"\x82\x01\xfe" b"\xb4\x00\x00\x00\x00" b"\xb4\x17\x3b\x3b\x63"
 # The same destination for Device 98.
 DEVICE_98 = DEVICE_99.replace(b"\x0c\x02\x00\x00\x63", b"\x0c\x02\x00\x00\x62")
 RECIPIENT_LIST = PropertyIdentifier.RECIPIENT_LIST
+
+
+def destination_read(device_instance: int) -> dict[str, Any]:
+    """How a read gives back the destination for `device_instance` above."""
+    return {
+        "recipient": {"kind": "device",
+                      "object_identifier": ObjectIdentifier(ObjectType.DEVICE, device_instance)},
+        "process_identifier": 1,
+        "valid_days": 0x7F,
+        "from_time": (0, 0, 0, 0),
+        "to_time": (23, 59, 59, 99),
+        "issue_confirmed_notifications": False,
+        "transitions": 0b111,
+    }
 
 
 def stub_method() -> ast.FunctionDef:
@@ -93,10 +108,13 @@ class NotificationClassRestartTests(unittest.IsolatedAsyncioTestCase):
         self.address = await server.local_address()
         return server
 
-    async def read(self, instance: int) -> PropertyValue:
-        return await asyncio.wait_for(
+    async def read(self, instance: int) -> list[dict[str, Any]]:
+        """The destinations a class serves, as a read gives them back."""
+        value = await asyncio.wait_for(
             self.client.read_property(self.address, class_oid(instance), RECIPIENT_LIST), 3
         )
+        self.assertEqual(value.tag, "list")
+        return value.value
 
     async def write(self, instance: int, octets: bytes) -> None:
         await asyncio.wait_for(
@@ -108,24 +126,20 @@ class NotificationClassRestartTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_a_written_recipient_list_survives_a_restart(self) -> None:
+        written = [destination_read(99), destination_read(98)]
         server = await self.start()
         try:
             for instance in (1, 2):
                 await self.write(instance, DEVICE_99 + DEVICE_98)
-                self.assertEqual(
-                    await self.read(instance),
-                    PropertyValue.application_data(DEVICE_99 + DEVICE_98),
-                )
+                self.assertEqual(await self.read(instance), written)
         finally:
             await server.stop()
 
         server = await self.start()
         try:
             # The kept class serves the written list; the other starts empty.
-            self.assertEqual(
-                await self.read(1), PropertyValue.application_data(DEVICE_99 + DEVICE_98)
-            )
-            self.assertEqual(await self.read(2), PropertyValue.list([]))
+            self.assertEqual(await self.read(1), written)
+            self.assertEqual(await self.read(2), [])
         finally:
             await server.stop()
 
@@ -142,7 +156,7 @@ class NotificationClassRestartTests(unittest.IsolatedAsyncioTestCase):
                 await self.write(1, DEVICE_98)
             self.assertEqual(raised.exception.error_class, ErrorClass.DEVICE.to_raw())
             self.assertEqual(raised.exception.error_code, ErrorCode.OPERATIONAL_PROBLEM.to_raw())
-            self.assertEqual(await self.read(1), PropertyValue.application_data(DEVICE_99))
+            self.assertEqual(await self.read(1), [destination_read(99)])
             # Class 2 keeps its list in memory, so the same write succeeds.
             await self.write(2, DEVICE_98)
         finally:
