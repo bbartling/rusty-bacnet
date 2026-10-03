@@ -14,7 +14,7 @@ use bacnet_objects::audit::{
     AuditReporterObject, AuditSendDelay, ObjectAuditPolicy,
 };
 use bacnet_objects::clock::{ClockFrame, ClockReader};
-use bacnet_objects::command::{CommandRun, RunPlan};
+use bacnet_objects::command::{CommandRun, RunPlan, WriteFailure};
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::device::{DeviceAuthority, DeviceConfig, DeviceObject};
 use bacnet_objects::durable::DurableWrites;
@@ -418,8 +418,12 @@ impl BACnetObject for Probe {
         );
         true
     }
-    fn complete_command_run_internal(&mut self, generation: u64, all_succeeded: bool) -> bool {
-        self.called("complete_command_run_internal", (generation, all_succeeded));
+    fn complete_command_run_internal(
+        &mut self,
+        generation: u64,
+        outcome: Result<(), WriteFailure>,
+    ) -> bool {
+        self.called("complete_command_run_internal", (generation, outcome));
         true
     }
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {

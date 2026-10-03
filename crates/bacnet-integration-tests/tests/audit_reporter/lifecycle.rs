@@ -121,7 +121,7 @@ async fn audit_reporter_create_delete_reach_real_log_over_udp() {
                     if class == ErrorClass::OBJECT.to_raw() as u32 && code == ErrorCode::UNKNOWN_OBJECT.to_raw() as u32));
             }
         }
-        wait_for_records(&persistence, step + 1).await;
+        wait_for_records(&logger, &persistence, step + 1).await;
     }
     let snapshot = persistence.0.lock().unwrap().clone().unwrap();
     assert_eq!(snapshot.records.len(), 4);

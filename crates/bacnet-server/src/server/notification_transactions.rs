@@ -19,7 +19,7 @@ use tokio::task::{JoinError, JoinSet};
 use tokio::time::Duration;
 
 use super::event_recipient_route::ConfirmedRecipientRoute;
-use super::CovAckResult;
+use super::{CovAckResult, Refusal};
 
 #[cfg(test)]
 #[path = "notification_worker_owner_tests.rs"]
@@ -49,7 +49,8 @@ impl fmt::Display for NotificationReserveError {
 #[doc(hidden)]
 pub enum NotificationWorkerResult {
     Ack,
-    Error,
+    /// The peer's Error, Reject or Abort, with what it said.
+    Error(Refusal),
     Exhausted,
     Closed,
 }
@@ -473,9 +474,19 @@ impl NotificationCore {
             {
                 CovAckResult::Ack
             }
-            Apdu::Error(pdu) if pdu.invoke_id == token.invoke_id() => CovAckResult::Error,
-            Apdu::Reject(pdu) if pdu.invoke_id == token.invoke_id() => CovAckResult::Error,
-            Apdu::Abort(pdu) if pdu.invoke_id == token.invoke_id() => CovAckResult::Error,
+            // What the refusal said goes to the waiting worker (#1323).
+            Apdu::Error(pdu) if pdu.invoke_id == token.invoke_id() => {
+                CovAckResult::Error(Refusal::Error {
+                    class: pdu.error_class,
+                    code: pdu.error_code,
+                })
+            }
+            Apdu::Reject(pdu) if pdu.invoke_id == token.invoke_id() => {
+                CovAckResult::Error(Refusal::Reject(pdu.reject_reason))
+            }
+            Apdu::Abort(pdu) if pdu.invoke_id == token.invoke_id() => {
+                CovAckResult::Error(Refusal::Abort(pdu.abort_reason))
+            }
             _ => return false,
         };
         let sender = match self.state.lock() {
@@ -709,9 +720,9 @@ where
             operation.terminal_completed();
             NotificationWorkerResult::Ack
         }
-        Ok(CovAckResult::Error) => {
+        Ok(CovAckResult::Error(refusal)) => {
             operation.terminal_completed();
-            NotificationWorkerResult::Error
+            NotificationWorkerResult::Error(refusal)
         }
         // The sender went with the adapter's close.
         Err(_) => {

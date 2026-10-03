@@ -60,6 +60,37 @@ pub enum RunPlan {
     Channel(crate::channel::ChannelDistribution),
 }
 
+/// Why a write a [`CommandRun`] made, or meant to make, failed. A Channel
+/// reports the first failure of a run in its Reliability (Clause 12.53.9); a
+/// Command keeps only whether each write succeeded.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteFailure {
+    /// The target can't take the value as configured: the Channel can't
+    /// coerce the value to the member's datatype, or the target says the
+    /// object or property doesn't exist, or that it takes no value of this
+    /// datatype.
+    Configuration,
+    /// The target turned the write down for another reason, or the run
+    /// couldn't make it: it ended first, or the request couldn't be built or
+    /// sent from here.
+    Process,
+    /// The target's device couldn't be reached: no binding for it, initiation
+    /// disabled by DeviceCommunicationControl, or no answer to any attempt.
+    Communication,
+}
+
+impl WriteFailure {
+    /// The Reliability a Channel whose run failed this way reports.
+    pub fn reliability(self) -> Reliability {
+        match self {
+            Self::Configuration => Reliability::CONFIGURATION_ERROR,
+            Self::Process => Reliability::PROCESS_ERROR,
+            Self::Communication => Reliability::COMMUNICATION_FAILURE,
+        }
+    }
+}
+
 /// BACnet Command object: runs the action list Present_Value selects.
 pub struct CommandObject {
     oid: ObjectIdentifier,
@@ -310,12 +341,17 @@ impl BACnetObject for CommandObject {
         true
     }
 
-    fn complete_command_run_internal(&mut self, generation: u64, all_succeeded: bool) -> bool {
+    fn complete_command_run_internal(
+        &mut self,
+        generation: u64,
+        outcome: Result<(), WriteFailure>,
+    ) -> bool {
         if generation != self.generation || !self.in_process {
             return false;
         }
         self.in_process = false;
-        self.all_writes_successful = all_succeeded;
+        // A failed write leaves Reliability alone (Clause 12.10.13).
+        self.all_writes_successful = outcome.is_ok();
         self.running = None;
         true
     }

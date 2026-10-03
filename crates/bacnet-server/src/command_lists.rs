@@ -26,14 +26,17 @@
 //! another device through [`RunHost::write_remote`]), each outcome recorded
 //! under a generation check, the post delay after each attempt, a stop at a
 //! failure that quits, then the end of the run. A Channel's members go in
-//! delay order through the same write path. A run a write starts is admitted
-//! through `chain`, which stops runs that feed back into themselves.
+//! delay order through the same write paths, a member in another device
+//! through [`RunHost::write_remote`] too. A failed write is sorted into a
+//! [`WriteFailure`] (`target`), and the run ends with its first one, which a
+//! Channel reports in Reliability. A run a write starts is admitted through
+//! `chain`, which stops runs that feed back into themselves.
 
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_objects::command::{CommandRun, RunPlan};
+use bacnet_objects::command::{CommandRun, RunPlan, WriteFailure};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetActionCommand;
@@ -46,6 +49,7 @@ use crate::server::RemoteWriteError;
 
 mod chain;
 mod channel;
+mod target;
 mod unattached;
 
 pub(crate) use chain::admit;
@@ -98,8 +102,9 @@ pub(crate) struct Unfinished {
     /// The first command, or member, not yet written.
     next: usize,
     len: usize,
-    /// Whether every write made so far succeeded.
-    all_succeeded: bool,
+    /// `Ok` while every write made so far succeeded, otherwise the first
+    /// failure.
+    outcome: Result<(), WriteFailure>,
 }
 
 impl Unfinished {
@@ -113,7 +118,7 @@ impl Unfinished {
                 RunPlan::Actions(commands) => commands.len(),
                 RunPlan::Channel(distribution) => distribution.members.len(),
             },
-            all_succeeded: true,
+            outcome: Ok(()),
         }
     }
 
@@ -130,17 +135,20 @@ impl Unfinished {
     /// End the run where it stood, as successful only if every write was
     /// made and succeeded. A Command's commands never made read unsuccessful
     /// and In_Process returns to FALSE; a Channel's Write_Status becomes
-    /// SUCCESSFUL or FAILED. Nothing changes once the object has moved on to
-    /// another generation. Returns whether the run ended here.
+    /// SUCCESSFUL or FAILED. A run cut short before a write failed fails as a
+    /// process error. Nothing changes once the object has moved on to another
+    /// generation. Returns whether the run ended here.
     pub(crate) fn end(self, db: &mut ObjectDatabase) -> bool {
+        let outcome = if self.next < self.len {
+            self.outcome.and(Err(WriteFailure::Process))
+        } else {
+            self.outcome
+        };
         db.get_mut(&self.source).is_some_and(|object| {
             for index in self.next..self.len {
                 object.record_command_write_internal(self.generation, index, false);
             }
-            object.complete_command_run_internal(
-                self.generation,
-                self.all_succeeded && self.next >= self.len,
-            )
+            object.complete_command_run_internal(self.generation, outcome)
         })
     }
 }
@@ -208,9 +216,9 @@ impl Drop for Waiting {
 /// End every run on `db` that nothing owns any more, once nothing can own
 /// one (#1252). A run in progress, or one queued on its object and never
 /// taken, ends unsuccessful: a Command with each command marked
-/// unsuccessful, a Channel with Write_Status FAILED. Runs whose progress is
-/// known are ended first through [`Unfinished::end`], so this only meets
-/// runs that made no write.
+/// unsuccessful, a Channel with Write_Status FAILED and Reliability
+/// PROCESS_ERROR. Runs whose progress is known are ended first through
+/// [`Unfinished::end`], so this only meets runs that made no write.
 ///
 /// The sweep can't tell a server's runs from others on the same database: a
 /// run an application's own `tick_schedules` is driving ends here too, and
@@ -234,7 +242,7 @@ fn end_ownerless_object(object: &mut dyn BACnetObject) -> bool {
     while object.record_command_write_internal(generation, index, false) {
         index += 1;
     }
-    object.complete_command_run_internal(generation, false)
+    object.complete_command_run_internal(generation, Err(WriteFailure::Process))
 }
 
 /// Take the runs that Present_Value writes queued on Command and Channel
@@ -285,36 +293,36 @@ pub(crate) fn execute<H: RunHost>(
         };
         // `None`: the object changed under the run, and whatever replaced it
         // owns its run state now.
-        if let Some(all_succeeded) = ended {
-            complete(host, run.source, run.generation, all_succeeded).await;
+        if let Some(outcome) = ended {
+            complete(host, run.source, run.generation, outcome).await;
         }
         owner.release();
     }
 }
 
-/// Make a Command's commands in order: whether all succeeded, or `None` once
-/// the run is stale.
+/// Make a Command's commands in order: `Ok` if all succeeded, otherwise the
+/// first failure, or `None` once the run is stale.
 async fn run_actions<H: RunHost>(
     host: &H,
     run: &CommandRun,
     commands: &[BACnetActionCommand],
     owner: &mut Owner<'_, H>,
-) -> Option<bool> {
-    let mut all_succeeded = true;
+) -> Option<Result<(), WriteFailure>> {
+    let mut outcome = Ok(());
     for (index, command) in commands.iter().enumerate() {
-        let success = make(host, run, index, command).await?;
-        all_succeeded &= success;
-        owner.progress(index + 1, all_succeeded);
+        let made = make(host, run, index, command).await?;
+        outcome = outcome.and(made);
+        owner.progress(index + 1, outcome);
         // Clause 12.10.8: the delay follows every attempt, failed or not,
         // and comes before the next write or the end of the run.
         if let Some(delay) = command.post_delay {
             tokio::time::sleep(Duration::from_secs(u64::from(delay))).await;
         }
-        if !success && command.quit_on_failure {
+        if made.is_err() && command.quit_on_failure {
             break;
         }
     }
-    Some(all_succeeded)
+    Some(outcome)
 }
 
 /// Holds where a run stands until it ends.
@@ -324,11 +332,12 @@ struct Owner<'h, H: RunHost> {
 }
 
 impl<H: RunHost> Owner<'_, H> {
-    /// `next` writes have been made, all successful if `all_succeeded`.
-    fn progress(&mut self, next: usize, all_succeeded: bool) {
+    /// `next` writes have been made; `outcome` is the first failure among
+    /// them, if any.
+    fn progress(&mut self, next: usize, outcome: Result<(), WriteFailure>) {
         if let Some(left) = &mut self.left {
             left.next = next;
-            left.all_succeeded = all_succeeded;
+            left.outcome = outcome;
         }
     }
 
@@ -353,7 +362,7 @@ async fn make<H: RunHost>(
     run: &CommandRun,
     index: usize,
     command: &BACnetActionCommand,
-) -> Option<bool> {
+) -> Option<Result<(), WriteFailure>> {
     let remote = {
         let db = host.database().read().await;
         if db
@@ -372,39 +381,13 @@ async fn make<H: RunHost>(
             command.device_identifier
         }
     };
-    let success = match remote {
-        None => match host.write(run, command).await {
-            Ok(()) => true,
-            Err(error) => {
-                debug!(
-                    command = %run.source,
-                    target = %command.object_identifier,
-                    property = ?command.property_identifier,
-                    %error,
-                    "Command write failed"
-                );
-                false
-            }
-        },
-        Some(device) => match host.write_remote(device, command).await {
-            Ok(()) => true,
-            Err(error) => {
-                debug!(
-                    command = %run.source,
-                    %device,
-                    target = %command.object_identifier,
-                    property = ?command.property_identifier,
-                    %error,
-                    "Command write to another device failed"
-                );
-                false
-            }
-        },
-    };
+    let made = target::write(host, run, remote, command)
+        .await
+        .map_err(|failed| failed.failure);
     let recorded = {
         let mut db = host.database().write().await;
         let recorded = db.get_mut(&run.source).is_some_and(|object| {
-            object.record_command_write_internal(run.generation, index, success)
+            object.record_command_write_internal(run.generation, index, made.is_ok())
         });
         if recorded {
             host.committed(&db, run.source).await;
@@ -415,23 +398,24 @@ async fn make<H: RunHost>(
         return None;
     }
     host.report(run.source).await;
-    Some(success)
+    Some(made)
 }
 
 /// End a run: a Command's In_Process back to FALSE and All_Writes_Successful
-/// set, or a Channel's Write_Status set, reported through the host. Returns
-/// whether the run ended here, rather than having ended or gone stale before.
+/// set, or a Channel's Write_Status and Reliability set, reported through the
+/// host. Returns whether the run ended here, rather than having ended or gone
+/// stale before.
 pub(crate) async fn complete<H: RunHost>(
     host: &H,
     source: ObjectIdentifier,
     generation: u64,
-    all_succeeded: bool,
+    outcome: Result<(), WriteFailure>,
 ) -> bool {
     let completed = {
         let mut db = host.database().write().await;
         let completed = db
             .get_mut(&source)
-            .is_some_and(|object| object.complete_command_run_internal(generation, all_succeeded));
+            .is_some_and(|object| object.complete_command_run_internal(generation, outcome));
         if completed {
             host.committed(&db, source).await;
         }
