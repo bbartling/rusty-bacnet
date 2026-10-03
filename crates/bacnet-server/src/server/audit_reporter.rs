@@ -31,8 +31,11 @@ mod policy_precommit;
 /// omit Result; execution failures include the mapped BACnet Error. There is no
 /// source-side reporting, forwarding, or durable outbox.
 /// Provision the typed recipient on the built-in Device before startup; configure
-/// Device routes with `device_binding`. Startup requires exactly one concrete
-/// built-in Device, a provision, and the selected Reporter capability. Unresolved
+/// Device routes with `device_binding`. Startup requires a concrete built-in
+/// local Device ([`ObjectDatabase::local_device`]: the lowest instance when the
+/// database holds several), a provision, and the selected Reporter capability.
+/// That Device names this device in every record and owns the recipient; any
+/// other Device in the database takes no part. Unresolved
 /// configured Device routes permit startup with CONFIGURATION_ERROR. Address
 /// choices require direct unicast IPv4 B/IP. The active Device recipient is
 /// required/writable; actual local or authorized WP/WPM changes atomically reserve
@@ -165,15 +168,6 @@ impl BipServerBuilder {
     }
 }
 
-fn local_device(db: &ObjectDatabase) -> Option<ObjectIdentifier> {
-    let mut devices = db
-        .list_objects()
-        .into_iter()
-        .filter(|oid| oid.object_type() == ObjectType::DEVICE);
-    let device = devices.next()?;
-    devices.next().is_none().then_some(device)
-}
-
 /// Validate the supported direct unicast IPv4 Audit address shape. Link-kind
 /// and interface-specific broadcast checks remain the runtime owner's duty.
 #[doc(hidden)]
@@ -254,7 +248,7 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
             network,
             transactions,
             comm_state,
-            source: BACnetRecipient::Device(local_device(db)?),
+            source: BACnetRecipient::Device(db.local_device().identifier()?),
             invoke_id: None,
             pending: None,
         })
@@ -355,7 +349,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             return;
         };
         let reporter = &selected_reporter.configuration;
-        let device = local_device(db);
+        let device = db.local_device().identifier();
         let route = device
             .and_then(|device| recipient(db, device))
             .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
@@ -426,7 +420,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             return;
         };
         let reporter = &selected_reporter.configuration;
-        let device = local_device(db);
+        let device = db.local_device().identifier();
         let route = device
             .and_then(|device| recipient(db, device))
             .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
@@ -509,7 +503,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             return;
         };
         let reporter = &selected_reporter.configuration;
-        let device = local_device(db);
+        let device = db.local_device().identifier();
         let route = device
             .and_then(|device| recipient(db, device))
             .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));

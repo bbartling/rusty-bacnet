@@ -33,7 +33,7 @@ pub(super) fn record_drop(
                     Arc::ptr_eq(&reporter.status_internal(), &batch.context.status)
                 });
             if !current
-                || db.find_by_type(ObjectType::DEVICE) != [batch.context.device]
+                || db.local_device().identifier() != Some(batch.context.device)
                 || source.operations.is_closed()
                 || !source
                     .runtime

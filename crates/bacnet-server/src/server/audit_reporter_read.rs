@@ -43,7 +43,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
     ) -> Option<ReadAuditIntent> {
         let selected_reporter = self.select(Some(target), target.object_type())?;
         let reporter = &selected_reporter.configuration;
-        let device = local_device(db);
+        let device = db.local_device().identifier();
         let route = device
             .and_then(|device| recipient(db, device))
             .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));

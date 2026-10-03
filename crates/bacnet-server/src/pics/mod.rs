@@ -467,25 +467,22 @@ impl<'a> PicsGenerator<'a> {
     ];
 
     fn build_services(&self) -> Vec<ServiceSupport> {
-        // Standalone callers inspect raw Device declarations. The full server
-        // always uses its fixed execution profile, filtered by database clock
-        // availability; a mutable/custom Device cannot override that contract.
+        // Standalone callers inspect the selected Device's raw declaration. The
+        // full server always uses its fixed execution profile, filtered by
+        // database clock availability; a mutable/custom Device cannot override
+        // that contract.
         let effective_executed = (!self.served)
             .then(|| {
-                self.db
-                    .iter_objects()
-                    .filter(|(oid, _)| oid.object_type() == ObjectType::DEVICE)
-                    .find_map(|(_, device)| {
-                        match device
-                            .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
-                            .ok()?
-                        {
-                            PropertyValue::BitString { data, .. } => {
-                                Some(ServicesSupported::from_bacnet(&data))
-                            }
-                            _ => None,
-                        }
-                    })
+                let device = self.db.get(&self.db.selected_device()?)?;
+                match device
+                    .read_property(PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED, None)
+                    .ok()?
+                {
+                    PropertyValue::BitString { data, .. } => {
+                        Some(ServicesSupported::from_bacnet(&data))
+                    }
+                    _ => None,
+                }
             })
             .flatten();
         let mut service_map: BTreeMap<&'static str, (bool, bool)> = BTreeMap::new();
@@ -816,3 +813,6 @@ mod property_union_tests;
 
 #[cfg(test)]
 mod character_set_tests;
+
+#[cfg(test)]
+mod selected_device_tests;

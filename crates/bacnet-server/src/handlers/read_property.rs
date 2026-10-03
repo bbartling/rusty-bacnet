@@ -1,5 +1,4 @@
 use super::*;
-use crate::local_device::selected_device;
 use bacnet_types::constructed::ReadAccessSpecification;
 
 /// Handle a ReadProperty request against standalone object data.
@@ -139,7 +138,7 @@ pub(crate) fn resolve_read_target(
             .unwrap_or(*oid);
     }
     if is_device_wildcard(oid) {
-        if let Some(device) = selected_device(db) {
+        if let Some(device) = db.selected_device() {
             return device;
         }
     }
@@ -229,7 +228,7 @@ pub(crate) fn active_cov_device(
     if !direct && !group {
         return None;
     }
-    let device = selected_device(db)?;
+    let device = db.selected_device()?;
     let (active, multiple) = if direct {
         if device != lookup_oid {
             return None;
@@ -272,7 +271,7 @@ pub(crate) fn active_cov_device_for_rpm(
         .filter(|spec| device_spec(spec) || group_spec(spec))
         .peekable();
     specs.peek()?;
-    let device = selected_device(db)?;
+    let device = db.selected_device()?;
     let (active, multiple) = specs
         .map(|spec| {
             let members = if group_spec(spec) {
