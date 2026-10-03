@@ -4158,7 +4158,10 @@ keeps the newest records that fit and drops the rest without a status
 record, as the ring does when it overflows; a larger size keeps them all, and
 the current size changes nothing. The size is part of the stored snapshot:
 a reopened log keeps the size last written, and the `buffer_size` passed to
-`AuditLogObject::new` only sizes a log its storage does not hold yet.
+`AuditLogObject::new` only sizes a log its storage does not hold yet. When the
+two differ the log keeps the stored size and logs a warning. To give a stored
+log a new size, turn Log_Enable off, write Buffer_Size and turn Log_Enable on
+again, or start from empty storage.
 
 Peers cannot purge an Audit Log. Its Record_Count is read-only, unlike the
 other logs' (Clause 12.64.11), so a Record_Count write fails with
@@ -4173,6 +4176,10 @@ it returns notifications only; ReadRange shows the purge record.
 
 Both stage like a Log_Enable write, so the commit runs with the database
 guard dropped and the log serves the new state only once storage holds it.
+A WritePropertyMultiple that turns Log_Enable off and then writes
+Buffer_Size stages the two together as one commit, made off the guard as
+well; the request takes each change as it reaches it, and if it stops
+between them, storage is set back to the state the log serves.
 A commit that fails refuses the write or the purge with
 `DEVICE / OPERATIONAL_PROBLEM` and leaves the log as it was; a Log_Enable
 write whose commit fails is refused the same way. Changes to one log land one

@@ -126,7 +126,10 @@ impl AuditLogObject {
     ///
     /// `buffer_size` sizes a log that storage does not hold yet. A log
     /// reopened from storage keeps the Buffer_Size it stored, which a write
-    /// may have changed since (#1238).
+    /// may have changed since (#1238), and logs a warning when that differs
+    /// from `buffer_size`. To give a stored log a new size, turn Log_Enable
+    /// off, write Buffer_Size and turn it on again, or start from empty
+    /// storage.
     pub fn new(
         instance: u32,
         name: impl Into<String>,
@@ -148,11 +151,11 @@ impl AuditLogObject {
                 }
                 validate_snapshot(&snapshot)?;
                 if snapshot.capacity != buffer_size {
-                    tracing::info!(
+                    tracing::warn!(
                         audit_log = %oid,
                         configured = buffer_size,
                         stored = snapshot.capacity,
-                        "Audit Log keeps the Buffer_Size it stored"
+                        "Audit Log keeps the Buffer_Size it stored, not the one configured"
                     );
                 }
                 snapshot
@@ -558,9 +561,7 @@ impl BACnetObject for AuditLogObject {
                 if v == self.log_enable {
                     return Ok(());
                 }
-                return self.commit_change(staging::StagedChange::LogEnable(v), |log| {
-                    log.log_enable_snapshot(v)
-                });
+                return self.commit_change(staging::StagedChange::LogEnable(v));
             }
             return Err(Error::Protocol {
                 class: ErrorClass::PROPERTY.to_raw() as u32,

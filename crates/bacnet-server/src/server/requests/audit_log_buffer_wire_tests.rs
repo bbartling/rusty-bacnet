@@ -331,8 +331,15 @@ async fn a_buffer_size_write_that_cannot_be_committed_is_refused_and_changes_not
     assert_eq!(storage.committed(), before);
 }
 
-#[tokio::test]
-async fn a_write_property_multiple_turns_logging_off_before_it_resizes() {
+fn log_attempts(first: BACnetPropertyValue, second: BACnetPropertyValue) -> Bytes {
+    wpm(vec![WriteAccessSpecification {
+        object_identifier: audit_log(),
+        list_of_properties: vec![first, second],
+    }])
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_write_property_multiple_turns_logging_off_then_resizes_in_one_commit_off_the_guard() {
     let storage = Arc::new(HeldStorage::default());
     let fixture = fixture(&storage).await;
     assert_eq!(
@@ -344,18 +351,16 @@ async fn a_write_property_multiple_turns_logging_off_before_it_resizes() {
         .await,
         SIMPLE_ACK_WRITE
     );
-    // Resizing first fails at that attempt and leaves logging on.
+    // Resizing first fails at that attempt, and the request stages nothing.
     let before = storage.committed();
-    let request = wpm(vec![WriteAccessSpecification {
-        object_identifier: audit_log(),
-        list_of_properties: vec![
-            attempt(PropertyIdentifier::BUFFER_SIZE, PropertyValue::Unsigned(2)),
-            attempt(
-                PropertyIdentifier::LOG_ENABLE,
-                PropertyValue::Boolean(false),
-            ),
-        ],
-    }]);
+    let commits = storage.commits.load(Ordering::SeqCst);
+    let request = log_attempts(
+        attempt(PropertyIdentifier::BUFFER_SIZE, PropertyValue::Unsigned(2)),
+        attempt(
+            PropertyIdentifier::LOG_ENABLE,
+            PropertyValue::Boolean(false),
+        ),
+    );
     let response = fixture
         .dispatch(ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE, request, 5)
         .await
@@ -377,44 +382,75 @@ async fn a_write_property_multiple_turns_logging_off_before_it_resizes() {
         PropertyValue::Boolean(true)
     );
     assert_eq!(held(&fixture).await, [1, 2, 3, 4]);
-    // The Log_Enable attempt it staged never ran, so storage holds the log
-    // it serves once the request lets the staged commit go.
-    let restored = tokio::time::timeout(WAIT, async {
-        while storage.committed().log_enable != before.log_enable
-            || storage.committed().records != before.records
-        {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await;
-    assert!(
-        restored.is_ok(),
-        "storage kept a state the log never served"
-    );
+    assert_eq!(storage.commits.load(Ordering::SeqCst), commits);
+    assert_eq!(storage.committed(), before);
 
-    // Turning logging off first lets the resize through in the same request.
-    let request = wpm(vec![WriteAccessSpecification {
-        object_identifier: audit_log(),
-        list_of_properties: vec![
+    // Turning logging off first lets the resize through in the same request,
+    // both in one commit made with the database guard dropped.
+    let (started, go) = storage.hold();
+    let sending = tokio::spawn({
+        let fixture = Arc::clone(&fixture);
+        let request = log_attempts(
             attempt(
                 PropertyIdentifier::LOG_ENABLE,
                 PropertyValue::Boolean(false),
             ),
             attempt(PropertyIdentifier::BUFFER_SIZE, PropertyValue::Unsigned(2)),
-        ],
-    }]);
-    assert_eq!(
-        wire(
-            &fixture,
-            ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
-            request
-        )
-        .await,
-        SIMPLE_ACK_WPM
-    );
+        );
+        async move {
+            wire(
+                &fixture,
+                ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+                request,
+            )
+            .await
+        }
+    });
+    tokio::task::spawn_blocking(move || started.recv_timeout(WAIT))
+        .await
+        .unwrap()
+        .expect("the commit started");
+    let enabled = tokio::time::timeout(
+        WAIT,
+        fixture.read(audit_log(), PropertyIdentifier::LOG_ENABLE),
+    )
+    .await;
+    let writable = tokio::time::timeout(WAIT, fixture.db.write()).await.is_ok();
+    let answered_early = sending.is_finished();
+    go.send(()).unwrap();
+    assert_eq!(sending.await.unwrap(), SIMPLE_ACK_WPM);
+    assert_eq!(enabled.ok(), Some(PropertyValue::Boolean(true)));
+    assert!(writable, "the database was held while the log committed");
+    assert!(!answered_early);
     assert_eq!(held(&fixture).await, [4, 5]);
+    assert_eq!(storage.commits.load(Ordering::SeqCst), commits + 1);
     assert_eq!(storage.committed().capacity, 2);
     assert!(!storage.committed().log_enable);
+}
+
+#[tokio::test]
+async fn a_log_enable_write_that_cannot_be_committed_is_refused_and_changes_nothing() {
+    let storage = Arc::new(HeldStorage::default());
+    let fixture = fixture(&storage).await;
+    let before = storage.committed();
+    storage.fail.store(true, Ordering::SeqCst);
+    assert_eq!(
+        write(
+            &fixture,
+            PropertyIdentifier::LOG_ENABLE,
+            PropertyValue::Boolean(true)
+        )
+        .await,
+        write_error(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM)
+    );
+    assert_eq!(
+        fixture
+            .read(audit_log(), PropertyIdentifier::LOG_ENABLE)
+            .await,
+        PropertyValue::Boolean(false)
+    );
+    assert_eq!(held(&fixture).await, [1, 2, 3]);
+    assert_eq!(storage.committed(), before);
 }
 
 #[tokio::test]

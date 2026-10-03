@@ -30,7 +30,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///   the commit fails; the log's writer logs the storage error.
     /// - The stopped-server error once [`stop`](Self::stop) has run.
     ///
-    /// On any error the log is left as it was.
+    /// On any error the log is left as it was. A purge whose future is
+    /// dropped before it finishes is handled as an abandoned write request
+    /// is: the log keeps serving its state, drops the staged purge once it
+    /// has waited long enough, and sets storage back to that state.
     ///
     /// [`AuditLogObject::purge`]: bacnet_objects::audit::AuditLogObject::purge
     pub async fn purge_audit_log(&self, oid: &ObjectIdentifier) -> Result<(), Error> {
@@ -44,7 +47,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 ErrorCode::UNKNOWN_OBJECT,
             )),
             Some(object) => match object.durable_writes_internal() {
-                Some(writes) => writes.purge(),
+                Some(writes) => writes.commit_purge(),
                 None => Err(protocol_error(
                     ErrorClass::OBJECT,
                     ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,

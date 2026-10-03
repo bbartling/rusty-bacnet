@@ -2,6 +2,7 @@
 //! the database stays available, the log serves the purge only once storage
 //! holds it, and a notification batch lands whole on one side of it.
 
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -219,6 +220,26 @@ async fn started(started: mpsc::Receiver<()>) -> mpsc::Receiver<()> {
     .unwrap()
 }
 
+/// Spawn `future`, a request on `db`, and return once it has found the log
+/// busy: it then waits for the staged commit held ahead of it.
+async fn spawn_until_busy<F>(db: &Arc<RwLock<ObjectDatabase>>, future: F) -> JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let before = super::super::durable_writes::busy_waits(db);
+    let task = tokio::spawn(future);
+    tokio::time::timeout(WAIT, async {
+        while super::super::durable_writes::busy_waits(db) == before {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the request found the log busy");
+    assert!(!task.is_finished(), "the request did not wait for the log");
+    task
+}
+
 fn assert_error(error: Error, class: ErrorClass, code: ErrorCode) {
     assert!(
         matches!(error, Error::Protocol { class: c, code: e }
@@ -329,11 +350,12 @@ async fn a_batch_committing_when_a_purge_is_asked_for_lands_first_and_is_purged(
     });
     let started_rx = started(started_rx).await;
     // The batch is staged and its commit held; the purge asked for now
-    // waits for it and then builds on it.
-    let purging = tokio::spawn({
+    // finds the log busy, waits for the batch, and then builds on it.
+    let purging = spawn_until_busy(&db, {
         let server = Arc::clone(&server);
         async move { server.purge_audit_log(&audit_log()).await }
-    });
+    })
+    .await;
     go.send(()).unwrap();
     let _started = started(started_rx).await;
     go.send(()).unwrap();
@@ -360,12 +382,13 @@ async fn a_batch_that_arrives_while_a_purge_commits_follows_the_purge_record() {
         async move { server.purge_audit_log(&audit_log()).await }
     });
     let started_rx = started(started_rx).await;
-    // The purge is staged and its commit held; the batch sent now waits
-    // until the purge lands, then commits after it.
-    let sending = tokio::spawn({
+    // The purge is staged and its commit held; the batch sent now finds the
+    // log busy, waits until the purge lands, then commits after it.
+    let sending = spawn_until_busy(&db, {
         let db = Arc::clone(&db);
         async move { notify(&db, 2).await }
-    });
+    })
+    .await;
     go.send(()).unwrap();
     let _started = started(started_rx).await;
     go.send(()).unwrap();

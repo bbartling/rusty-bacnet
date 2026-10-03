@@ -11,6 +11,11 @@
 //! section that makes the write. An application's Audit Log purge (#1238) is
 //! staged the same way.
 //!
+//! A request stages once per object, handing it all of the request's writes
+//! to it in order. An Audit Log folds a WritePropertyMultiple's Log_Enable
+//! and Buffer_Size writes into one save; a forwarder stages the first write
+//! it takes, and the request's later writes to it save in place.
+//!
 //! Other requests read and write the database while the save runs. One that
 //! stages a write to the same object waits for the first to land; requests
 //! that stage writes to several objects stage them in object order, so two
@@ -22,7 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::durable::{SaveWait, StageStep};
+use bacnet_objects::durable::{PendingWrite, SaveWait, StageStep};
 use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_services::wpm::{WritePropertyMultipleCursor, WritePropertyMultipleEvent};
 use bacnet_services::write_property::WritePropertyRequest;
@@ -119,9 +124,8 @@ impl DurableTarget {
     }
 
     /// The writes a WritePropertyMultiple request makes to objects that may
-    /// save them, in object order and then request order. [`stage`] stages
-    /// the first of each object's writes that the object takes; a later one
-    /// saves in place.
+    /// save them, in object order and then request order. [`stage`] hands
+    /// each object its writes together.
     pub(super) fn write_property_multiple(service_data: &[u8]) -> Vec<Self> {
         let mut cursor = WritePropertyMultipleCursor::new(service_data);
         let mut targets: Vec<Self> = Vec::new();
@@ -205,41 +209,71 @@ impl DurableTarget {
             change: Change::Purge,
         }]
     }
+}
 
-    /// Stage this change on its object, under the guard. `None` when there
-    /// is nothing to stage: the object is gone, does not save, or the
-    /// written list cannot be worked out.
-    fn stage_in(&self, db: &mut ObjectDatabase) -> Option<StageStep> {
-        let written = match &self.change {
-            Change::Write {
+impl TargetValue {
+    /// The value the write leaves, worked out under the guard as the handler
+    /// works it out. `None` when a list edit cannot be worked out.
+    fn resolve(
+        &self,
+        db: &ObjectDatabase,
+        oid: ObjectIdentifier,
+        property: PropertyIdentifier,
+    ) -> Option<PropertyValue> {
+        match self {
+            Self::Written(value) => Some(crate::local_references::localize(
+                db,
+                oid,
                 property,
-                array_index,
-                value,
-            } => {
-                let value = match value {
-                    TargetValue::Written(value) => Some(crate::local_references::localize(
-                        db,
-                        self.oid,
-                        *property,
-                        value.clone(),
-                    )),
-                    TargetValue::ListEdit {
-                        service_data,
-                        remove,
-                    } => handlers::edited_list_value(db, service_data, *remove),
-                }?;
-                Some((*property, *array_index, value))
-            }
-            Change::Purge => None,
-        };
-        let writes = db.get_mut(&self.oid)?.durable_writes_internal()?;
-        Some(match written {
-            Some((property, array_index, value)) => {
-                writes.stage_write(property, array_index, &value)
-            }
-            None => writes.stage_purge(),
-        })
+                value.clone(),
+            )),
+            Self::ListEdit {
+                service_data,
+                remove,
+            } => handlers::edited_list_value(db, service_data, *remove),
+        }
     }
+}
+
+/// Stage one object's changes under the guard: `group` holds the request's
+/// changes to that object, in request order. `None` when there is nothing
+/// to stage: the object is gone or does not save, or its first written list
+/// cannot be worked out. The writes go to the object together, so it can
+/// fold them into one save.
+fn stage_group(group: &[DurableTarget], db: &mut ObjectDatabase) -> Option<StageStep> {
+    let first = group.first()?;
+    let oid = first.oid;
+    if matches!(first.change, Change::Purge) {
+        return Some(db.get_mut(&oid)?.durable_writes_internal()?.stage_purge());
+    }
+    let mut writes = Vec::with_capacity(group.len());
+    for target in group {
+        let Change::Write {
+            property,
+            array_index,
+            value,
+        } = &target.change
+        else {
+            break;
+        };
+        // The request stops at a list it cannot edit; stage what comes first.
+        let Some(value) = value.resolve(db, oid, *property) else {
+            break;
+        };
+        writes.push(PendingWrite {
+            property: *property,
+            array_index: *array_index,
+            value,
+        });
+    }
+    if writes.is_empty() {
+        return None;
+    }
+    Some(
+        db.get_mut(&oid)?
+            .durable_writes_internal()?
+            .stage_writes(&writes),
+    )
 }
 
 /// The objects a request staged writes on, each with the wait its stage
@@ -261,6 +295,41 @@ impl StagedWrites {
             }
         }
     }
+}
+
+/// Requests that found an object busy, per database (by address), so a test
+/// can see a request reach its wait for another request's staged save.
+#[cfg(test)]
+static BUSY_WAITS: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+
+/// Note that a request on `db` found an object busy and is about to wait.
+/// Only tests count it; otherwise this does nothing.
+pub(super) fn note_busy(db: &Arc<RwLock<ObjectDatabase>>) {
+    #[cfg(test)]
+    {
+        let key = Arc::as_ptr(db) as usize;
+        let mut counts = BUSY_WAITS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match counts.iter_mut().find(|(at, _)| *at == key) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((key, 1)),
+        }
+    }
+    #[cfg(not(test))]
+    let _ = db;
+}
+
+/// How many times requests on `db` have found an object busy.
+#[cfg(test)]
+pub(super) fn busy_waits(db: &Arc<RwLock<ObjectDatabase>>) -> usize {
+    let key = Arc::as_ptr(db) as usize;
+    BUSY_WAITS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(at, _)| *at == key)
+        .map_or(0, |(_, count)| *count)
 }
 
 /// Wait for a staged save with the database guard dropped.
@@ -293,30 +362,24 @@ pub(super) async fn stage(
     targets: Vec<DurableTarget>,
 ) -> StagedWrites {
     let mut staged = Vec::new();
-    for target in targets {
-        // One staged write per object: its request's later writes to the
-        // object save in place.
-        if staged.iter().any(|(oid, _)| *oid == target.oid) {
-            continue;
-        }
+    // Each object stages once, with all of the request's changes to it.
+    for group in targets.chunk_by(|a, b| a.oid == b.oid) {
         loop {
             let step = {
                 let mut guard = db.write().await;
-                target.stage_in(&mut guard)
-            };
-            let Some(step) = step else {
-                break;
+                stage_group(group, &mut guard)
             };
             match step {
-                StageStep::Staged(wait) => {
+                Some(StageStep::Staged(wait)) => {
                     saved(wait.clone()).await;
-                    staged.push((target.oid, wait));
+                    staged.push((group[0].oid, wait));
                     break;
                 }
-                StageStep::Busy(wait) => {
+                Some(StageStep::Busy(wait)) => {
+                    note_busy(db);
                     let _ = tokio::time::timeout(BUSY_RECHECK, wait).await;
                 }
-                StageStep::Skip => break,
+                Some(StageStep::Skip) | None => break,
             }
         }
     }

@@ -1772,7 +1772,9 @@ An Audit Log's Buffer_Size takes a write, from a client or through
 write raises `WRITE_ACCESS_DENIED`. A smaller size keeps the newest records
 that fit, and a larger one keeps them all. The size written is stored with
 the log, so a reopened log keeps it and `buffer_size` sizes only a log its
-storage path does not hold yet. Clients cannot purge an Audit Log, since its
+storage path does not hold yet; when the two differ the log keeps the stored
+size and logs a warning. To give a stored log a new size, turn Log_Enable off,
+write Buffer_Size and turn Log_Enable on again, or use a new storage path. Clients cannot purge an Audit Log, since its
 Record_Count is read-only; the application calls
 [`purge_audit_log`](#purge_audit_logobject_id).
 

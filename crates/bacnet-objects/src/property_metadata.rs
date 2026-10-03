@@ -60,7 +60,10 @@ pub enum PropertyPresenceCondition {
 pub enum PropertyWriteCapability {
     /// No network property-write route is implemented.
     ReadOnly,
-    /// The property-write route is available without an object-state gate.
+    /// The property-write route is available whatever Out_Of_Service and
+    /// command ownership say. The object's own checks may still refuse a
+    /// value, or a write in some state: an Audit Log refuses a Buffer_Size
+    /// write while Log_Enable is TRUE, for example.
     Always,
     /// The property-write route is available only while Out_Of_Service is true.
     WhenOutOfService,

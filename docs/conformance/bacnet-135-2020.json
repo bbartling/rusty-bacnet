@@ -1505,6 +1505,7 @@
    "code_anchors": [
     "crates/bacnet-objects/src/audit/buffer.rs",
     "crates/bacnet-objects/src/audit/staging.rs::AuditLogObject::commit_change",
+    "crates/bacnet-objects/src/durable.rs::PendingWrite",
     "crates/bacnet-objects/src/audit/log_metadata.rs",
     "crates/bacnet-objects/src/durable.rs::DurableWrites",
     "crates/bacnet-server/src/server/audit_log_purge.rs",
@@ -1512,15 +1513,15 @@
     "crates/rusty-bacnet/src/server/server_methods/audit_log_methods.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-objects/src/audit/buffer_tests.rs::{buffer_size_takes_a_write_only_while_logging_is_off,a_shrink_below_the_record_count_keeps_the_newest_records,a_purge_leaves_one_buffer_purged_record_and_nothing_to_query,a_staged_resize_or_purge_commits_while_the_log_serves_its_committed_state,a_purge_staged_behind_a_batch_lands_after_it,a_batch_that_arrives_during_a_purge_lands_after_it}",
-    "crates/bacnet-server/src/server/requests/audit_log_buffer_wire_tests.rs::{buffer_size_is_written_only_while_logging_is_off,a_buffer_size_commit_runs_while_the_database_stays_available,a_write_property_multiple_turns_logging_off_before_it_resizes,a_paused_clock_stands_still_while_a_buffer_size_commit_runs}",
+    "crates/bacnet-objects/src/audit/buffer_tests.rs::{buffer_size_takes_a_write_only_while_logging_is_off,a_shrink_below_the_record_count_keeps_the_newest_records,a_purge_leaves_one_buffer_purged_record_and_nothing_to_query,a_staged_resize_or_purge_commits_while_the_log_serves_its_committed_state,a_purge_staged_behind_a_batch_lands_after_it,a_batch_that_arrives_during_a_purge_lands_after_it,a_request_folds_its_log_enable_and_buffer_size_writes_into_one_commit,a_request_that_stops_between_its_staged_writes_puts_the_served_log_in_storage}",
+    "crates/bacnet-server/src/server/requests/audit_log_buffer_wire_tests.rs::{buffer_size_is_written_only_while_logging_is_off,a_buffer_size_commit_runs_while_the_database_stays_available,a_write_property_multiple_turns_logging_off_then_resizes_in_one_commit_off_the_guard,a_paused_clock_stands_still_while_a_buffer_size_commit_runs}",
     "crates/bacnet-server/src/server/audit_log_purge_tests.rs::{a_purge_commits_while_the_database_stays_available_and_lands_once_durable,a_batch_committing_when_a_purge_is_asked_for_lands_first_and_is_purged,a_batch_that_arrives_while_a_purge_commits_follows_the_purge_record,a_paused_clock_stands_still_while_a_purge_commits}",
     "crates/bacnet-server/src/pics/property_metadata_tests/audit_log.rs::pics_audit_log_property_metadata_is_exact",
     "crates/rusty-bacnet/tests/test_audit_log_buffer.py::AuditLogBufferTests::test_buffer_size_writes_and_purge"
    ],
    "negative_tests": [
-    "crates/bacnet-objects/src/audit/buffer_tests.rs::{a_failing_store_refuses_a_resize_or_purge_and_leaves_the_log_unchanged,a_purge_without_a_valid_clock_changes_nothing,staging_skips_a_resize_the_write_would_refuse_or_not_need,an_object_without_a_log_refuses_a_purge}",
-    "crates/bacnet-server/src/server/requests/audit_log_buffer_wire_tests.rs::{record_count_stays_read_only_so_no_write_purges_the_log,a_buffer_size_write_that_cannot_be_committed_is_refused_and_changes_nothing,a_denied_buffer_size_write_stages_nothing}",
+    "crates/bacnet-objects/src/audit/buffer_tests.rs::{a_failing_store_refuses_a_resize_or_purge_and_leaves_the_log_unchanged,a_purge_without_a_valid_clock_changes_nothing,staging_skips_a_resize_the_write_would_refuse_or_not_need,an_object_without_a_log_refuses_a_purge,a_request_that_resizes_before_turning_logging_off_stages_nothing}",
+    "crates/bacnet-server/src/server/requests/audit_log_buffer_wire_tests.rs::{record_count_stays_read_only_so_no_write_purges_the_log,a_buffer_size_write_that_cannot_be_committed_is_refused_and_changes_nothing,a_log_enable_write_that_cannot_be_committed_is_refused_and_changes_nothing,a_denied_buffer_size_write_stages_nothing}",
     "crates/bacnet-server/src/server/audit_log_purge_tests.rs::{a_purge_that_cannot_be_committed_leaves_the_log_as_it_was,only_a_running_server_purges_and_only_an_audit_log}",
     "crates/bacnet-objects/src/audit/log_metadata.rs::tests::property_metadata_log_write_capabilities_match_dispatch"
    ],
@@ -1532,7 +1533,7 @@
    "notes": [
     "A smaller Buffer_Size keeps the newest records that fit and adds no status record, as ring overflow does; a larger one keeps them all. A reopened log keeps the stored size over the configured one.",
     "Record_Count stays read-only (Clause 12.64.11), so a peer has no purge. A purge keeps Total_Record_Count counting and the confirmed-receipt ledger, and flags LOG_DISABLED too while logging is off.",
-    "A Buffer_Size write and a server purge stage like a Log_Enable write; a commit that fails refuses them with DEVICE / OPERATIONAL_PROBLEM and leaves the log unchanged.",
+    "A Buffer_Size write and a server purge stage like a Log_Enable write, and a WritePropertyMultiple's Log_Enable and Buffer_Size writes share one commit. A failed commit refuses them with DEVICE / OPERATIONAL_PROBLEM.",
     "Changes to one log land in staging order: a batch committing when a purge is asked for is purged with the rest, and one arriving during the purge follows the purge record.",
     "Buffer_Size 2^32-1, the unknown size, and any size above 10,000 are VALUE_OUT_OF_RANGE."
    ]

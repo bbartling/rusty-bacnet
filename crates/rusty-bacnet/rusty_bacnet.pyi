@@ -3227,8 +3227,9 @@ class BACnetServer:
 
         No peer can purge an Audit Log, since its Record_Count is read-only,
         so this is the application's route. The record is appended whether or
-        not logging is enabled, and Total_Record_Count keeps counting. The
-        purge reaches storage before the log serves it. An unknown object
+        not logging is enabled, and also carries LOG_DISABLED while logging is
+        off; Total_Record_Count keeps counting. The purge reaches storage
+        before the log serves it. An unknown object
         raises UNKNOWN_OBJECT, any object other than an Audit Log
         OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and a missing clock or a failed
         commit DEVICE / OPERATIONAL_PROBLEM, leaving the log as it was. A

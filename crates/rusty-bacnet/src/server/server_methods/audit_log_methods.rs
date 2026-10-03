@@ -8,7 +8,8 @@ impl BACnetServer {
     ///
     /// No peer can purge an Audit Log, since its Record_Count is read-only,
     /// so this is the application's route. The record is appended whether
-    /// or not logging is enabled, and Total_Record_Count keeps counting.
+    /// or not logging is enabled, and also carries LOG_DISABLED while
+    /// logging is off; Total_Record_Count keeps counting.
     /// The log commits the purge to its storage before serving it, with the
     /// server's object database free meanwhile. Raises BacnetProtocolError
     /// with OBJECT / UNKNOWN_OBJECT when nothing has that identifier, OBJECT

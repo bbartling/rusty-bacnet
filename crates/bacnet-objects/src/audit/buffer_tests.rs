@@ -11,7 +11,7 @@ use bacnet_types::enums::{
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use crate::durable::{DurableWrites, StageStep};
+use crate::durable::{DurableWrites, PendingWrite, StageStep};
 use crate::traits::BACnetObject;
 
 use super::staging_tests::{
@@ -376,7 +376,7 @@ fn a_failing_store_refuses_a_resize_or_purge_and_leaves_the_log_unchanged() {
     assert_unchanged(&log, &storage, &before);
     let wait = staged_write(log.stage_purge());
     block_on(wait.clone());
-    assert_operational_problem(DurableWrites::purge(&mut log).unwrap_err());
+    assert_operational_problem(log.commit_purge().unwrap_err());
     log.release_staged_write(&wait);
     assert_unchanged(&log, &storage, &before);
 
@@ -420,7 +420,7 @@ fn a_staged_resize_or_purge_commits_while_the_log_serves_its_committed_state() {
     assert_eq!(held(&log), [3, 4]);
     go.send(()).unwrap();
     block_on(wait.clone());
-    DurableWrites::purge(&mut log).unwrap();
+    log.commit_purge().unwrap();
     log.release_staged_write(&wait);
     assert_eq!(held(&log), [5]);
     assert_eq!(
@@ -450,7 +450,7 @@ fn a_purge_staged_behind_a_batch_lands_after_it() {
     started.recv_timeout(WAIT).unwrap();
     go.send(()).unwrap();
     block_on(purge.clone());
-    DurableWrites::purge(&mut log).unwrap();
+    log.commit_purge().unwrap();
     log.release_staged_write(&purge);
 
     // The batch's request still gets its outcome, and its record went with
@@ -483,7 +483,7 @@ fn a_batch_that_arrives_during_a_purge_lands_after_it() {
     go.send(()).unwrap();
     block_on(purge.clone());
     assert!(!wait.is_ready());
-    DurableWrites::purge(&mut log).unwrap();
+    log.commit_purge().unwrap();
     log.release_staged_write(&purge);
     block_on(wait);
 
@@ -542,11 +542,118 @@ fn an_object_without_a_log_refuses_a_purge() {
         crate::notification_forwarder::NotificationForwarderObject::new(1, "NF").unwrap();
     let writes = forwarder.durable_writes_internal().unwrap();
     assert!(matches!(writes.stage_purge(), StageStep::Skip));
-    let error = writes.purge().unwrap_err();
+    let error = writes.commit_purge().unwrap_err();
     assert!(
         matches!(error, Error::Protocol { class, code }
             if class == ErrorClass::OBJECT.to_raw() as u32
                 && code == ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.to_raw() as u32),
         "{error:?}"
     );
+}
+
+fn pending(property: PropertyIdentifier, value: PropertyValue) -> PendingWrite {
+    PendingWrite {
+        property,
+        array_index: None,
+        value,
+    }
+}
+
+/// A WritePropertyMultiple that turns logging off, writes Description and
+/// then resizes.
+fn off_then_resize(size: u64) -> [PendingWrite; 3] {
+    [
+        pending(
+            PropertyIdentifier::LOG_ENABLE,
+            PropertyValue::Boolean(false),
+        ),
+        pending(
+            PropertyIdentifier::DESCRIPTION,
+            PropertyValue::CharacterString("resized".into()),
+        ),
+        pending(
+            PropertyIdentifier::BUFFER_SIZE,
+            PropertyValue::Unsigned(size),
+        ),
+    ]
+}
+
+#[test]
+fn a_request_folds_its_log_enable_and_buffer_size_writes_into_one_commit() {
+    let (mut log, storage) = log();
+    fill(&mut log, 1..4);
+    let generation = log.generation();
+    let commits = storage.commits.load(Ordering::SeqCst);
+    let (started, go) = storage.hold();
+    let wait = staged_write(log.stage_writes(&off_then_resize(2)));
+    assert_eq!(started.recv_timeout(WAIT).unwrap(), generation + 1);
+    // One commit holds both changes, while the log serves what it had.
+    assert!(log.log_enable());
+    assert_eq!(log.buffer_size(), 10);
+    assert_eq!(held(&log), [1, 2, 3]);
+    go.send(()).unwrap();
+    block_on(wait.clone());
+    let committed = storage.committed();
+    assert!(!committed.log_enable);
+    assert_eq!(committed.capacity, 2);
+
+    // The request makes its writes in order, each taking its own step.
+    enable(&mut log, false);
+    assert_eq!(log.buffer_size(), 10);
+    assert_eq!(held(&log), [1, 2, 3, 4]);
+    write(
+        &mut log,
+        PropertyIdentifier::DESCRIPTION,
+        PropertyValue::CharacterString("resized".into()),
+    )
+    .unwrap();
+    resize(&mut log, 2).unwrap();
+    log.release_staged_write(&wait);
+    log.wait_for_commits();
+    assert_eq!(held(&log), [3, 4]);
+    assert_eq!(log.generation(), generation + 1);
+    assert_eq!(storage.commits.load(Ordering::SeqCst), commits + 1);
+    assert_eq!(storage.committed(), committed);
+}
+
+#[test]
+fn a_request_that_stops_between_its_staged_writes_puts_the_served_log_in_storage() {
+    let (mut log, storage) = log();
+    fill(&mut log, 1..4);
+    let wait = staged_write(log.stage_writes(&off_then_resize(2)));
+    block_on(wait.clone());
+    assert_eq!(storage.committed().capacity, 2);
+    // Logging goes off, then the request fails before its resize.
+    enable(&mut log, false);
+    log.release_staged_write(&wait);
+    log.wait_for_commits();
+    let committed = storage.committed();
+    assert!(!committed.log_enable);
+    assert_eq!(committed.capacity, 10);
+    assert_eq!(
+        committed.records,
+        log.records().iter().cloned().collect::<Vec<_>>()
+    );
+    drop(log);
+    let log = reopen(&storage, 10);
+    assert_eq!(log.buffer_size(), 10);
+    assert!(!log.log_enable());
+    assert_eq!(held(&log), [1, 2, 3, 4]);
+}
+
+#[test]
+fn a_request_that_resizes_before_turning_logging_off_stages_nothing() {
+    let (mut log, storage) = log();
+    let commits = storage.commits.load(Ordering::SeqCst);
+    // The resize is refused while logging is on, so the request ends there.
+    let writes = [
+        pending(PropertyIdentifier::BUFFER_SIZE, PropertyValue::Unsigned(2)),
+        pending(
+            PropertyIdentifier::LOG_ENABLE,
+            PropertyValue::Boolean(false),
+        ),
+    ];
+    assert!(matches!(log.stage_writes(&writes), StageStep::Skip));
+    log.wait_for_commits();
+    assert_eq!(storage.commits.load(Ordering::SeqCst), commits);
 }
