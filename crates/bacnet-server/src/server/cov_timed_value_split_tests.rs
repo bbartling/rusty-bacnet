@@ -357,3 +357,95 @@ async fn an_oversized_value_is_counted_each_time_and_warned_once_per_admission()
         h.server.stop().await.unwrap();
     }
 }
+
+/// Change AV-1 to `second` at `second` and take the Present_Value part. Its
+/// Status_Flags part stays queued: its send fails when unconfirmed, and a
+/// confirmed report defers it until the Present_Value is acknowledged.
+async fn hold_back_flags(h: &Harness, confirmed: bool, second: u8) {
+    if !confirmed {
+        h.fail_notification(1);
+    }
+    h.set_clock(second);
+    h.write_local(f32::from(second)).await;
+    let first = h.notification().await;
+    assert_eq!(
+        vec![values(&first, TINY_APDU, confirmed)],
+        av1_apart(f32::from(second), second)[..1]
+    );
+    h.settle().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_held_back_value_still_goes_out_after_a_newer_change() {
+    for confirmed in [false, true] {
+        let warnings = crate::cov::timed::DropWarningCount::default();
+        let _guard = warnings.install();
+        // The bound at a 50-octet subscriber holds about one change. A newer
+        // change must not evict the value its predecessor still owes (#1163).
+        let mut h = tiny_harness(ServerConfig::default(), confirmed, 10).await;
+        hold_back_flags(&h, confirmed, 1).await;
+        h.set_clock(2);
+        h.write_local(2.0).await;
+        if confirmed {
+            // The newer change waits behind the outstanding report.
+            h.no_notification().await;
+            h.ack().await;
+        }
+        // The held Status_Flags go first, then the newer change value by
+        // value; the reference completes at the newer change.
+        let mut expected = av1_apart(1.0, 1).split_off(1);
+        expected.extend(av1_apart(2.0, 2));
+        assert_eq!(
+            take(&h, 3, TINY_APDU, confirmed).await,
+            expected,
+            "confirmed: {confirmed}"
+        );
+        h.no_notification().await;
+        assert_eq!(av1_completed(&h).await, Some(PropertyValue::Real(2.0)));
+        assert_eq!(h.server.cov_counters().timed_changes_dropped, 0);
+        assert_eq!(warnings.get(), 0, "confirmed: {confirmed}");
+        h.server.stop().await.unwrap();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn only_a_real_overflow_drops_a_change_and_never_the_one_in_delivery() {
+    for confirmed in [false, true] {
+        let mut h = tiny_harness(ServerConfig::default(), confirmed, 1).await;
+        hold_back_flags(&h, confirmed, 1).await;
+        // Two more changes queue behind the held Status_Flags: the
+        // unconfirmed context is blocked meanwhile, the confirmed one waits
+        // for its Ack.
+        if !confirmed {
+            h.server.comm_state.store(2, Ordering::Release);
+        }
+        for second in 2..=3 {
+            h.set_clock(second);
+            h.write_local(f32::from(second)).await;
+        }
+        // Over the bound: the change between the one in delivery and the
+        // newest is evicted, and it is the only change counted.
+        assert_eq!(
+            h.server.cov_counters().timed_changes_dropped,
+            1,
+            "confirmed: {confirmed}"
+        );
+        if confirmed {
+            h.ack().await;
+        } else {
+            h.server.comm_state.store(0, Ordering::Release);
+        }
+        // The Status_Flags still complete their change, before the newest.
+        let mut expected = av1_apart(1.0, 1).split_off(1);
+        expected.extend(av1_apart(3.0, 3));
+        assert_eq!(
+            take(&h, 3, TINY_APDU, confirmed).await,
+            expected,
+            "confirmed: {confirmed}"
+        );
+        h.no_notification().await;
+        assert_eq!(av1_completed(&h).await, Some(PropertyValue::Real(3.0)));
+        assert_eq!(h.server.cov_counters().timed_changes_dropped, 1);
+        h.server.stop().await.unwrap();
+    }
+}

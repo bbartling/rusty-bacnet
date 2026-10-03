@@ -1502,10 +1502,21 @@ first sent the refused NPDU (Clause 6.4.4, #1158). An NPDU that arrived
 with SNET/SADR came through another router: the reject carries that SNET/SADR
 as its DNET/DADR, with a hop count of 255, and goes back out the arrival port
 to the router that relayed the NPDU. An NPDU without SNET/SADR draws a local
-unicast to its sender. A reason 6 reject for an over-long SADR has no
-originator to name, so it falls back to that local unicast. A received reject
-is relayed by its DNET/DADR like any routed NPDU (Clause 6.6.3.5); one without
-a DNET is addressed to the router itself and goes no further.
+unicast to its sender. An SNET equal to the arrival port's own network puts
+the originator on that link, so the reject is a local unicast to the SADR,
+with no DNET (Clause 6.5.4, #1174). A reason 6 reject for an over-long SADR
+has no originator to name, so it falls back to that local unicast. A received
+reject is relayed by its DNET/DADR like any routed NPDU (Clause 6.6.3.5).
+
+A received reject with no DNET, or whose DADR is the router's own MAC on the
+port attached to its DNET, is addressed to the router itself (#1175). It
+updates the routing table and goes no further. Start the router with
+`BACnetRouter::start_with_network_control_receiver` to also get these rejects
+as `ReceivedNetworkControl` records, the same type a non-router
+`NetworkLayer` control receiver yields. A client or server attached to a
+router through a `LoopbackTransport` port does not need this: it is an
+ordinary node on that port's network, and rejects for its requests reach its
+own `NetworkLayer`.
 
 ---
 
@@ -1717,6 +1728,25 @@ framing, through the shared `bacnet-encoding` codecs.
   `BACnetActionList` values and refuses a command whose priority is outside 1
   to 16 or whose value can't be encoded. All three arrays are read-only on the
   network, and the Command stores Present_Value without running the actions.
+- **Load Control shed levels** (Clause 12.28): Requested_Shed_Level,
+  Expected_Shed_Level and Actual_Shed_Level are `BACnetShedLevel` values, one
+  context tag each: percent `[0]` or level `[1]` (Unsigned, `u64` in Rust) or
+  amount `[2]` (REAL). They start at level 0, the LEVEL choice's no-shed value.
+  A WriteProperty of Requested_Shed_Level must carry one of those choices;
+  anything else fails with INVALID_DATA_TYPE, and a percent above 100 or an
+  amount that is negative or not finite with VALUE_OUT_OF_RANGE.
+  `LoadControlObject::set_requested_shed_level` applies the same checks and
+  returns `Result`. Present_Value stays SHED_INACTIVE (the shed state machine
+  isn't modeled), so a new requested level also resets Expected_Shed_Level and
+  Actual_Shed_Level to its choice's Table 12-33 default: 100, 0 or 0.0.
+  `set_actual_shed_level` refuses a level of another choice than the requested
+  one.
+- **Access Point `Access_Event_Time` and Credential Data Input `Update_Time`**
+  are `BACnetTimeStamp` values, the unspecified date and time in the datetime
+  form until the first update. Credential Data Input `Present_Value` is a
+  `BACnetAuthenticationFactor`, the UNDEFINED factor until the first read.
+  `CredentialDataInputObject::set_present_value(factor, update_time)` records
+  a read and its time together.
 
 ### ObjectDatabase
 
@@ -1747,7 +1777,22 @@ entry after slow synchronous work yields for 1 ms instead of spinning. These are
 local scheduling policies, not hard real-time guarantees. Custom polling callers
 must bind the database's monotonic clock as well as its Device clock. The bundled
 server binds both. Existing disabled/count-only accepted outcomes still advance
-the schedule; remote/indexed reference execution is not added.
+the schedule. The poll reads only this database. A `Log_DeviceObjectProperty`
+naming another device logs a failure record, PROPERTY /
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and never a same-numbered local object;
+one naming this device reads locally, as one without a Device does. A local
+read that fails logs a failure record carrying its error (OBJECT /
+UNKNOWN_OBJECT for a missing object) where it used to log a null value (#1183).
+Indexed reference execution is not added.
+
+`ObjectDatabase::selected_device` is the Device the database represents (the
+lowest instance when it holds several). `ObjectDatabase::local_device` returns
+a `LocalDevice`, whose `is_local` tells whether a reference's optional Device
+member keeps it inside this device: no member, or the selected Device when its
+instance isn't the wildcard. The Trend Log poller and the server's Event
+Enrollment evaluation (monitored, setpoint and fault references) both resolve
+references through it, so a FLOATING_LIMIT setpoint naming this device is read
+and reported like an unqualified one (#1184).
 
 ### Object Types (62)
 
@@ -2168,9 +2213,10 @@ Access_Event_Tag and Access_Event_Time, and only an Access_Event_Time or
 Status_Flags change sends one. A Credential Data Input report carries
 Update_Time, whose change sends one. The application sets these values before
 adding the object with `AccessDoorObject::set_door_alarm_state`,
-`AccessPointObject::set_access_event` and
-`CredentialDataInputObject::set_update_time`, and a door's Door_Status and
-Lock_Status with `set_door_status` and `set_lock_status`.
+`AccessPointObject::set_access_event` (its time a `BACnetTimeStamp`) and
+`CredentialDataInputObject::set_present_value` (the factor read and its
+Update_Time), and a door's Door_Status and Lock_Status with `set_door_status`
+and `set_lock_status`.
 
 Over the network the Access Point and Credential Data Input values stay
 read-only. A door's Door_Status, Lock_Status and Door_Alarm_State, the rows
@@ -2757,7 +2803,12 @@ its values, so many tiny changes cannot outgrow the estimate. The context also
 keeps room, at most one notification's worth, for the most its untimestamped
 values have taken in one report since it was last admitted or lost a reference.
 Only on overflow, the last resort, is a change dropped: the oldest of the same
-reference first, then the oldest in the context, never a reference's latest. Parts
+reference first, then the oldest in the context, never a reference's latest.
+Nor is a reference's change in delivery dropped: once a change sent one value per
+notification has a part delivered, or sent as a confirmed report's first part,
+the rest of it stays queued until its last value is delivered, however small the
+subscriber's maximum APDU (#1163). Beyond the bound, a context therefore holds at
+most two changes per reference. Parts
 a confirmed report defers return to the queue without that check, so the bound
 never drops what the report just planned to send. Changes returned by a failed
 notification wait while a newer change of the same reference is in flight; once a
@@ -3620,13 +3671,16 @@ still readable after `stop()`. Fields are sampled independently.
 
 ```rust
 let counters = server.event_notification_counters();
-counters.notification_class_missing; // no Notification Class with that number
-counters.recipient_list_unavailable; // its Recipient_List could not be read
-counters.recipient_list_invalid;     // the list did not decode as a whole
-counters.recipient_list_too_long;    // a custom class served more than 32 destinations
-counters.confirmed_no_invoke_id;     // no invoke ID free for a confirmed notification
-counters.confirmed_rejected;         // the recipient answered Error, Reject or Abort
-counters.confirmed_unanswered;       // no acknowledgment after the last retry
+counters.notification_class_missing;    // no Notification Class with that number
+counters.recipient_list_unavailable;    // its Recipient_List could not be read
+counters.recipient_list_invalid;        // the list did not decode as a whole
+counters.recipient_list_too_long;       // a custom class served more than 32 destinations
+counters.device_recipient_unbound;      // a Device recipient with no current binding
+counters.recipient_unroutable;          // a recipient no binding or retry can route
+counters.confirmed_broadcast_recipient; // confirmed requested at a broadcast address
+counters.confirmed_no_invoke_id;        // no invoke ID free for a confirmed notification
+counters.confirmed_rejected;            // the recipient answered Error, Reject or Abort
+counters.confirmed_unanswered;          // no acknowledgment after the last retry
 ```
 
 The four recipient-list fields count transitions, event and acknowledgment
@@ -3637,6 +3691,22 @@ configured behaviour and are not counted, nor are notifications held back by
 DCC or Event_Enable. The three confirmed fields count notifications to one
 recipient; a reservation refused because the server is stopping is not
 counted.
+
+The three route fields (#1160) count destinations that matched the transition
+but were skipped while their route was resolved, once per destination; the
+transition's other destinations are still served. They are grouped by what
+fixes them, and the warning logged with each skip gives the finer reason:
+
+- `device_recipient_unbound`: no Device binding was configured or observed, or
+  the observed one expired. Observing the device's I-Am again, or configuring a
+  binding, clears it.
+- `recipient_unroutable`: the entry can't be routed as written. Its Device
+  identifier names an object that isn't a Device (or its binding is unusable on
+  this link), or its address puts a MAC on network 65535.
+- `confirmed_broadcast_recipient`: the entry asks for confirmed notifications at
+  a local, remote or global broadcast address. Clause 6.3 allows only
+  unconfirmed requests there, and sending one unconfirmed would lose the
+  acknowledgment, so the entry is skipped before any invoke ID is reserved.
 
 ### Concurrency
 

@@ -10,7 +10,10 @@
 //! of service (#1131), so those tests put an object holding the changed value
 //! into the database (`ObjectDatabase::add` replaces by identifier) and run the
 //! fanout a write commit would. The door's simulation test writes it over the
-//! wire instead.
+//! wire instead, as the Load Control test does Requested_Shed_Level.
+//!
+//! The BACnetTimeStamp, BACnetAuthenticationFactor and BACnetShedLevel values
+//! go out in their Clause 21 forms (#1133).
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::access_control::{
@@ -22,11 +25,12 @@ use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov::{COVNotificationRequest, SubscribeCOVRequest};
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
 use bacnet_services::write_property::WritePropertyRequest;
-use bacnet_types::constructed::BACnetShedLevel;
+use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetShedLevel};
 use bacnet_types::enums::{
-    AccessEvent, DoorAlarmState, DoorStatus, DoorValue, LockStatus, ObjectType,
+    AccessEvent, AuthenticationFactorType, DoorAlarmState, DoorStatus, DoorValue, LockStatus,
+    ObjectType,
 };
-use bacnet_types::primitives::{Date, Time};
+use bacnet_types::primitives::BACnetTimeStamp;
 
 type Values = Vec<(PropertyIdentifier, Vec<u8>)>;
 
@@ -49,16 +53,18 @@ fn normal() -> Vec<u8> {
     vec![0x82, 0x04, 0x00]
 }
 
-/// A date and time as the objects here serve them: Date, then Time.
-fn stamp(date: Date, time: Time) -> Vec<u8> {
-    encode(PropertyValue::List(vec![
-        PropertyValue::Date(date),
-        PropertyValue::Time(time),
-    ]))
+/// Today at `second` past 15:00, as a BACnetTimeStamp.
+fn stamp(second: u8) -> BACnetTimeStamp {
+    BACnetTimeStamp::DateTime {
+        date: at(0).local_date,
+        time: time(second),
+    }
 }
 
-fn today() -> Date {
-    at(0).local_date
+/// The datetime [2] choice framed around today's Date and the Time at
+/// `second` past 15:00, written out by hand.
+fn stamp_bytes(second: u8) -> Vec<u8> {
+    vec![0x2E, 0xA4, 126, 9, 29, 2, 0xB4, 15, 0, second, 0, 0x2F]
 }
 
 /// `(property, value bytes)` of a notification for `oid`, in wire order.
@@ -328,7 +334,7 @@ async fn access_door_simulated_door_alarm_state_reports_and_restores() {
 
 fn point(event: AccessEvent, tag: u64, second: u8) -> Box<dyn BACnetObject> {
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
-    point.set_access_event(event, tag, today(), time(second));
+    point.set_access_event(event, tag, stamp(second));
     Box::new(point)
 }
 
@@ -346,10 +352,7 @@ async fn access_point_cov_leads_with_access_event_and_triggers_on_its_time() {
             (PropertyIdentifier::ACCESS_EVENT, enumerated(event.to_raw())),
             (SF, normal()),
             (PropertyIdentifier::ACCESS_EVENT_TAG, unsigned(tag)),
-            (
-                PropertyIdentifier::ACCESS_EVENT_TIME,
-                stamp(today(), time(second)),
-            ),
+            (PropertyIdentifier::ACCESS_EVENT_TIME, stamp_bytes(second)),
         ]
     };
     assert_eq!(
@@ -373,9 +376,15 @@ async fn access_point_cov_leads_with_access_event_and_triggers_on_its_time() {
     h.server.stop().await.unwrap();
 }
 
+/// CDI-1 having read the same Wiegand 26 card at `second` past 15:00.
 fn reader(second: u8) -> Box<dyn BACnetObject> {
     let mut reader = CredentialDataInputObject::new(1, "CDI-1").unwrap();
-    reader.set_update_time(today(), time(second));
+    let card = BACnetAuthenticationFactor {
+        format_type: AuthenticationFactorType::WIEGAND26,
+        format_class: 0,
+        value: vec![0x12, 0x34, 0x56],
+    };
+    reader.set_present_value(card, stamp(second));
     Box::new(reader)
 }
 
@@ -388,12 +397,10 @@ async fn credential_data_input_cov_reports_and_triggers_on_update_time() {
     .await;
     let report = |second: u8| {
         vec![
-            (PV, enumerated(0)),
+            // format type [0] WIEGAND26, format class [1] 0, value [2].
+            (PV, vec![0x09, 0x08, 0x19, 0x00, 0x2B, 0x12, 0x34, 0x56]),
             (SF, normal()),
-            (
-                PropertyIdentifier::UPDATE_TIME,
-                stamp(today(), time(second)),
-            ),
+            (PropertyIdentifier::UPDATE_TIME, stamp_bytes(second)),
         ]
     };
     assert_eq!(subscribed(&mut h, oid).await, report(7));
@@ -415,11 +422,16 @@ async fn credential_data_input_cov_reports_and_triggers_on_update_time() {
     h.server.stop().await.unwrap();
 }
 
-/// LC-1 shedding 20 percent, with the requested level and Shed_Duration given.
-fn load_control(requested: u32, duration: u64) -> Box<dyn BACnetObject> {
+/// LC-1 at requested level `requested`, achieving level 1, with the
+/// Shed_Duration given.
+fn load_control(requested: u64, duration: u64) -> Box<dyn BACnetObject> {
     let mut object = LoadControlObject::new(1, "LC-1").unwrap();
-    object.set_requested_shed_level(BACnetShedLevel::Percent(requested));
-    object.set_actual_shed_level(BACnetShedLevel::Percent(20));
+    object
+        .set_requested_shed_level(BACnetShedLevel::Level(requested))
+        .unwrap();
+    object
+        .set_actual_shed_level(BACnetShedLevel::Level(1))
+        .unwrap();
     object
         .write_property(
             PropertyIdentifier::SHED_DURATION,
@@ -433,42 +445,28 @@ fn load_control(requested: u32, duration: u64) -> Box<dyn BACnetObject> {
 
 #[tokio::test(start_paused = true)]
 async fn load_control_cov_reports_and_triggers_on_its_shed_rows() {
+    const REQUESTED: PropertyIdentifier = PropertyIdentifier::REQUESTED_SHED_LEVEL;
     let oid = ObjectIdentifier::new(ObjectType::LOAD_CONTROL, 1).unwrap();
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
         db.add(Box::new(LoadControlObject::new(1, "LC-1").unwrap()))
             .unwrap();
     })
     .await;
-    let unspecified = stamp(
-        Date {
-            year: 0xFF,
-            month: 0xFF,
-            day: 0xFF,
-            day_of_week: 0xFF,
-        },
-        Time {
-            hour: 0xFF,
-            minute: 0xFF,
-            second: 0xFF,
-            hundredths: 0xFF,
-        },
-    );
-    // Duty_Window isn't served yet, so the report leaves it out.
-    let report = |requested: u64, duration: u64| {
+    // Start_Time is a BACnetDateTime: an application Date and Time.
+    let unspecified = vec![0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF];
+    // Duty_Window isn't served yet, so the report leaves it out. The
+    // requested level goes out as its BACnetShedLevel choice.
+    let report = |requested: Vec<u8>, duration: u64| {
         vec![
             (PV, enumerated(0)),
             (SF, normal()),
-            (
-                PropertyIdentifier::REQUESTED_SHED_LEVEL,
-                encode(PropertyValue::List(vec![PropertyValue::Unsigned(
-                    requested,
-                )])),
-            ),
+            (REQUESTED, requested),
             (PropertyIdentifier::START_TIME, unspecified.clone()),
             (PropertyIdentifier::SHED_DURATION, unsigned(duration)),
         ]
     };
-    assert_eq!(subscribed(&mut h, oid).await, report(0, 0));
+    // level [1] 0, the LEVEL choice's default.
+    assert_eq!(subscribed(&mut h, oid).await, report(vec![0x19, 0x00], 0));
 
     // Actual_Shed_Level isn't in the row, so its change doesn't report.
     h.replace_and_fan_out(load_control(0, 0)).await;
@@ -482,13 +480,82 @@ async fn load_control_cov_reports_and_triggers_on_its_shed_rows() {
         unsigned(3600),
     )
     .await;
-    assert_eq!(values(&h.cov_notification().await, oid), report(0, 3600));
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(vec![0x19, 0x00], 3600)
+    );
     h.no_notification().await;
 
-    // So does a Requested_Shed_Level change. The network write of that row
-    // doesn't decode yet, so the change comes from the application.
-    h.replace_and_fan_out(load_control(50, 3600)).await;
-    assert_eq!(values(&h.cov_notification().await, oid), report(50, 3600));
+    // So does a Requested_Shed_Level write, as level [1] 3 and as percent
+    // [0] 80.
+    for requested in [vec![0x19, 0x03], vec![0x09, 0x50]] {
+        write(&mut h, oid, REQUESTED, requested.clone()).await;
+        assert_eq!(
+            values(&h.cov_notification().await, oid),
+            report(requested, 3600)
+        );
+        h.no_notification().await;
+    }
+
+    // A level the application sets reports the same way.
+    h.replace_and_fan_out(load_control(5, 3600)).await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(vec![0x19, 0x05], 3600)
+    );
     h.no_notification().await;
+    h.server.stop().await.unwrap();
+}
+
+/// The three shed levels of `oid`, encoded as ReadProperty serves them.
+async fn shed_levels(h: &Harness, oid: ObjectIdentifier) -> [Vec<u8>; 3] {
+    let db = h.server.database().read().await;
+    let object = db.get(&oid).unwrap();
+    [
+        PropertyIdentifier::REQUESTED_SHED_LEVEL,
+        PropertyIdentifier::EXPECTED_SHED_LEVEL,
+        PropertyIdentifier::ACTUAL_SHED_LEVEL,
+    ]
+    .map(|p| encode(object.read_property(p, None).unwrap()))
+}
+
+#[tokio::test(start_paused = true)]
+async fn load_control_requested_shed_level_write_takes_the_choice_form() {
+    const REQUESTED: PropertyIdentifier = PropertyIdentifier::REQUESTED_SHED_LEVEL;
+    let oid = ObjectIdentifier::new(ObjectType::LOAD_CONTROL, 1).unwrap();
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        db.add(Box::new(LoadControlObject::new(1, "LC-1").unwrap()))
+            .unwrap();
+    })
+    .await;
+    // amount [2] 12.5 kW. The object stays SHED_INACTIVE, so Expected and
+    // Actual take the AMOUNT default, 0.0.
+    let amount = vec![0x2C, 0x41, 0x48, 0x00, 0x00];
+    let zero_kw = vec![0x2C, 0x00, 0x00, 0x00, 0x00];
+    let after = [amount.clone(), zero_kw.clone(), zero_kw];
+    write(&mut h, oid, REQUESTED, amount).await;
+    assert_eq!(shed_levels(&h, oid).await, after);
+
+    // The application-tagged forms served before #1133, and a context tag
+    // the CHOICE lacks, are the wrong datatype; asking for more load than
+    // the baseline is out of range. Nothing changes.
+    for (value, code) in [
+        (unsigned(50), ErrorCode::INVALID_DATA_TYPE),
+        (
+            encode(PropertyValue::Real(12.5)),
+            ErrorCode::INVALID_DATA_TYPE,
+        ),
+        (vec![0x39, 0x01], ErrorCode::INVALID_DATA_TYPE),
+        // percent [0] 101
+        (vec![0x09, 0x65], ErrorCode::VALUE_OUT_OF_RANGE),
+        // amount [2] -1.0
+        (
+            vec![0x2C, 0xBF, 0x80, 0x00, 0x00],
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+    ] {
+        assert_eq!(try_write(&mut h, oid, REQUESTED, value).await, Err(code));
+        assert_eq!(shed_levels(&h, oid).await, after);
+    }
     h.server.stop().await.unwrap();
 }

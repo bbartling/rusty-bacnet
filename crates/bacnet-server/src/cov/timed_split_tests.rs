@@ -561,3 +561,84 @@ fn a_value_too_large_alone_is_dropped_once_per_change_and_the_rest_still_goes() 
     assert_eq!(store.lock().histories[&k].committed, seq);
     assert!(store.lock().drain(&k, 1).1.is_empty());
 }
+
+#[test]
+fn the_bound_keeps_a_change_in_delivery_until_its_last_value_is_delivered() {
+    // A bound of one single-value change: a two-value change exceeds it
+    // alone, and so does any second change.
+    let (store, counters) = store(1, 4);
+    let (a, b) = (key(1, 1), key(1, 2));
+    for k in [&a, &b] {
+        store.lock().reset(k, 1, 0);
+    }
+    store.lock().push(&a, 1, change_of(1, &[4, 4]));
+    let mut parts = claim_all(&store, &a)
+        .split_values(|_, _| ValueFit::Fits)
+        .into_iter();
+    let (first, second) = (parts.next().unwrap(), parts.next().unwrap());
+    // The first value is delivered and the second's send fails: what is left
+    // of the change is in delivery, and newer changes do not evict it.
+    first.commit();
+    drop(second);
+    store.lock().push(&a, 1, change(2, 4));
+    store.lock().push(&b, 1, change(3, 4));
+    assert_eq!(dropped(&counters), 0, "only changes eviction may not take");
+    // A real overflow takes the change between the one in delivery and the
+    // newest, and only that change is counted (#1163).
+    store.lock().push(&a, 1, change(4, 4));
+    assert_eq!(dropped(&counters), 1);
+    let claim = claim_all(&store, &a);
+    let held: Vec<_> = claim
+        .in_order()
+        .iter()
+        .map(|(_, change)| (change.frame().local_time.second, change.values().len()))
+        .collect();
+    assert_eq!(held, [(1, 1), (4, 1)]);
+    assert_eq!(seconds(&store.lock().drain(&b, 1).1), [3]);
+    // Once its last value is delivered, the change keeps nothing back.
+    claim.commit();
+    for second in 5..=6 {
+        store.lock().push(&a, 1, change(second, 4));
+    }
+    assert_eq!(seconds(&store.lock().drain(&a, 1).1), [6]);
+    assert_eq!(dropped(&counters), 2);
+}
+
+#[test]
+fn a_change_is_in_delivery_only_once_a_part_of_it_went_out() {
+    let (store, counters) = store(1, 4);
+    let k = key(1, 1);
+    store.lock().reset(&k, 1, 0);
+    // No part went out: the parts rejoin, and a newer change evicts the
+    // change as before.
+    store.lock().push(&k, 1, change_of(1, &[4, 4]));
+    drop(claim_all(&store, &k).split_values(|_, _| ValueFit::Fits));
+    store.lock().push(&k, 1, change(2, 4));
+    assert_eq!(dropped(&counters), 1);
+    assert_eq!(seconds(&store.lock().drain(&k, 1).1), [2]);
+    // A confirmed report's first part going out puts its change in delivery
+    // before the Ack: the deferred rest outlasts newer changes.
+    store.lock().push(&k, 1, change_of(3, &[4, 4]));
+    let mut parts = claim_all(&store, &k)
+        .split_values(|_, _| ValueFit::Fits)
+        .into_iter();
+    let (first, second) = (parts.next().unwrap(), parts.next().unwrap());
+    first.going_out();
+    drop(second.without_eviction());
+    store.lock().push(&k, 1, change(4, 4));
+    store.lock().push(&k, 1, change_of(5, &[4, 4]));
+    assert_eq!(dropped(&counters), 2, "only the change at 4");
+    first.commit();
+    // The next report delivers the rest, then sends the change at 5 value by
+    // value; its first value delivered moves the mark to it.
+    let mut claim = claim_all(&store, &k);
+    assert_eq!(claimed_seconds(&claim), [3, 5]);
+    claim.split_oldest(1).commit();
+    let mut parts = claim.split_values(|_, _| ValueFit::Fits).into_iter();
+    let (first, second) = (parts.next().unwrap(), parts.next().unwrap());
+    first.commit();
+    drop(second);
+    store.lock().push(&k, 1, change(6, 4));
+    assert_eq!(seconds(&store.lock().drain(&k, 1).1), [5, 6]);
+    assert_eq!(dropped(&counters), 2);
+}

@@ -479,17 +479,23 @@ pub struct BACnetPrescale {
 }
 
 // ---------------------------------------------------------------------------
-// BACnetShedLevel (Clause 12 — used by LoadControl)
+// BACnetShedLevel (Clause 21 — used by LoadControl)
 // ---------------------------------------------------------------------------
 
-/// BACnet ShedLevel — CHOICE for LoadControl.
+/// A Load Control shed level (`BACnetShedLevel`, Clause 21): the datatype of
+/// Requested_Shed_Level, Expected_Shed_Level and Actual_Shed_Level
+/// (Clause 12.28).
+///
+/// On the wire each alternative is one primitive context tag: percent `[0]`,
+/// level `[1]`, amount `[2]`. The codec is
+/// `bacnet_encoding::constructed::{encode_shed_level, decode_shed_level}`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BACnetShedLevel {
-    /// Shed level as a percentage (0–100).
-    Percent(u32),
-    /// Shed level as an abstract level value.
-    Level(u32),
-    /// Shed level as a floating-point amount.
+    /// The load to run at, as a percentage of the baseline (Unsigned).
+    Percent(u64),
+    /// A preconfigured shed level (Unsigned). Level 0 means no shed.
+    Level(u64),
+    /// Kilowatts to take off the baseline (REAL).
     Amount(f32),
 }
 

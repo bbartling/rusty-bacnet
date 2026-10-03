@@ -59,12 +59,29 @@
 //! admitted or lost a reference; they travel with the last notification. Peers
 //! therefore cannot grow this state without limit. Only on overflow, the last
 //! resort, is a change dropped: the oldest of the same reference first, then
-//! the oldest in the context. A reference's newest change is never evicted, so
-//! the bound never hides a reference's current state. Each discarded change
-//! is counted in [`AtomicCovCounters::timed_changes_dropped`]; the log gets
-//! one warning per context and cause until the context is admitted afresh
-//! (#1039), so a subscriber too small for any timestamped value does not
-//! flood it.
+//! the oldest in the context. Two changes of a reference are never evicted:
+//! - its newest, so the bound never hides the reference's current state;
+//! - its change in delivery (#1163): one sent value by value of which a part
+//!   was delivered, or went out as a confirmed report's first part with the
+//!   rest deferred, kept until its last value is delivered.
+//!
+//! The second is for small subscribers. At a 50-octet maximum APDU the
+//! estimate comes to 68 octets, about one Present_Value and Status_Flags
+//! change, so a value held back by a failed send or a deferral would be
+//! evicted by the next change, and the value-by-value delivery of #1090
+//! could never finish. Counting the bound in values instead would still need
+//! an octet limit, as nothing limits a value's size when it is captured, and
+//! would change eviction for every change of such a context; exempting only
+//! the change already partly sent leaves every other eviction as it was.
+//! Each reference marks one change in delivery, the one a part last went out
+//! ahead of, so the memory ceiling stays fixed: after eviction a context
+//! holds at most its bound or, beyond it, only changes eviction may not take,
+//! two per reference at most.
+//!
+//! Each discarded change is counted in
+//! [`AtomicCovCounters::timed_changes_dropped`]; the log gets one warning per
+//! context and cause until the context is admitted afresh (#1039), so a
+//! subscriber too small for any timestamped value does not flood it.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -262,6 +279,10 @@ struct TimedHistory {
     /// Sequence of the newest delivered change. An older change returned by
     /// a failed notification would contradict what was already delivered.
     committed: u64,
+    /// Sequence of the change in delivery: the one a part carrying only some
+    /// of its values last went out ahead of. The bound never evicts it
+    /// (#1163); once it is delivered no pending change has its sequence.
+    in_delivery: u64,
     /// The context's Max_Notification_Delay, as last admitted.
     delay: Duration,
     entries: VecDeque<TimedChange>,
@@ -557,6 +578,7 @@ impl TimedHistories {
                 field: None,
                 latest: 0,
                 committed: 0,
+                in_delivery: 0,
                 delay,
                 entries: VecDeque::new(),
             });
@@ -835,51 +857,6 @@ impl TimedHistories {
         }
     }
 
-    fn enforce_bound(&mut self, key: &CovSubscriptionKey) {
-        let Some(context) = key.multiple_context().cloned() else {
-            return;
-        };
-        let Some(capacity) = self.terms.get(&context).map(|terms| terms.capacity()) else {
-            return;
-        };
-        while self.context_bytes.get(&context).copied().unwrap_or(0) > capacity {
-            // Only a change followed by a newer one of the same reference is
-            // evictable: prefer this reference, then the oldest in the context.
-            let evictable = |h: &TimedHistory| h.entries.len() > 1;
-            let victim = if self.histories.get(key).is_some_and(evictable) {
-                Some(key.clone())
-            } else {
-                self.histories
-                    .iter()
-                    .filter(|(k, h)| k.multiple_context() == Some(&context) && evictable(h))
-                    .min_by_key(|(_, h)| h.entries[0].seq)
-                    .map(|(k, _)| k.clone())
-            };
-            let Some(victim) = victim else {
-                return;
-            };
-            let evicted = self
-                .histories
-                .get_mut(&victim)
-                .and_then(|h| h.entries.pop_front())
-                .expect("victim has an older pending change");
-            self.release_bytes(&victim, evicted.cost);
-            self.dropped(&victim, 1, DropReason::HistoryFull);
-        }
-    }
-
-    fn release_bytes(&mut self, key: &CovSubscriptionKey, bytes: usize) {
-        let Some(context) = key.multiple_context() else {
-            return;
-        };
-        if let Some(used) = self.context_bytes.get_mut(context) {
-            *used = used.saturating_sub(bytes);
-            if *used == 0 {
-                self.context_bytes.remove(context);
-            }
-        }
-    }
-
     fn history(&self, key: &CovSubscriptionKey, generation: u64) -> Option<&TimedHistory> {
         self.histories
             .get(key)
@@ -966,6 +943,7 @@ impl TimedStore {
     }
 }
 
+mod bound;
 mod claim;
 mod drops;
 mod owed;

@@ -493,9 +493,19 @@ impl BACnetServer {
     }
 
     /// Add an Elevator Group object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_elevator_group(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = ElevatorGroupObject::new(instance, name).map_err(to_py_err)?;
+    ///
+    /// `machine_room_id` names the Positive Integer Value object served as
+    /// Machine_Room_ID. Any other object type raises a protocol error
+    /// (VALUE_OUT_OF_RANGE). Omit it to keep the "no room number" default.
+    #[pyo3(signature = (instance, name, machine_room_id=None))]
+    fn add_elevator_group(
+        &self,
+        instance: u32,
+        name: &str,
+        machine_room_id: Option<PyObjectIdentifier>,
+    ) -> PyResult<()> {
+        let obj = elevator_group(instance, name, machine_room_id.map(|oid| oid.to_rust()))
+            .map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 
@@ -728,6 +738,20 @@ fn staging_config(
             .collect(),
         stage_names,
     }
+}
+
+/// Build an Elevator Group, applying the optional Machine_Room_ID through the
+/// object's own validating setter.
+fn elevator_group(
+    instance: u32,
+    name: &str,
+    machine_room_id: Option<bacnet_types::primitives::ObjectIdentifier>,
+) -> Result<ElevatorGroupObject, bacnet_types::error::Error> {
+    let mut obj = ElevatorGroupObject::new(instance, name)?;
+    if let Some(oid) = machine_room_id {
+        obj.set_machine_room_id(oid)?;
+    }
+    Ok(obj)
 }
 
 #[cfg(test)]

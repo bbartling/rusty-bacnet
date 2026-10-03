@@ -18,7 +18,7 @@ fn load_control_object(configured: bool) -> LoadControlObject {
             .write_property(
                 P::REQUESTED_SHED_LEVEL,
                 None,
-                PropertyValue::List(vec![PropertyValue::Unsigned(50)]),
+                PropertyValue::ApplicationData(vec![0x09, 50]),
                 None,
             )
             .unwrap();

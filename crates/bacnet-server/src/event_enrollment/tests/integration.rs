@@ -166,12 +166,18 @@ fn foreign_reference_does_not_evaluate_same_numbered_local_object() {
 }
 
 #[test]
-fn qualified_reference_requires_one_containing_device() {
+fn qualified_reference_names_the_selected_device() {
     let (mut missing, _, _) = setup_qualified_reference(&[], 100);
     assert!(evaluate_event_enrollments(&mut missing, 1).is_empty());
 
-    let (mut ambiguous, _, _) = setup_qualified_reference(&[100, 200], 100);
-    assert!(evaluate_event_enrollments(&mut ambiguous, 1).is_empty());
+    // With two Devices the lower one is this device, as discovery and
+    // notifications already present it (#1184).
+    let (mut selected, _, ai_oid) = setup_qualified_reference(&[200, 100], 100);
+    let transitions = evaluate_event_enrollments(&mut selected, 1);
+    assert_eq!(transitions.len(), 1);
+    assert_eq!(transitions[0].monitored_oid, ai_oid);
+    let (mut other, _, _) = setup_qualified_reference(&[100, 200], 200);
+    assert!(evaluate_event_enrollments(&mut other, 1).is_empty());
 
     let (mut wildcard, _, _) = setup_qualified_reference(
         &[ObjectIdentifier::WILDCARD_INSTANCE],

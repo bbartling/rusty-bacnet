@@ -112,13 +112,9 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
 ) -> EventEnrollmentEvaluationBatch {
     let interval_secs = interval_secs.max(1);
     let oids = db.find_by_type(ObjectType::EVENT_ENROLLMENT);
-    // A qualified reference can identify self only when the containing Device
-    // object is unambiguous. Unqualified references remain local regardless.
-    let device_oids = db.find_by_type(ObjectType::DEVICE);
-    let local_device_oid = match device_oids.as_slice() {
-        [oid] if oid.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE => Some(*oid),
-        _ => None,
-    };
+    // The monitored, setpoint and fault references all resolve through this
+    // one rule: unqualified or naming this device is local (#1184).
+    let local_device = db.local_device();
 
     let mut updates: HashMap<ObjectIdentifier, EnrollmentUpdate> = HashMap::new();
     let mut database_eval_sources = HashSet::new();
@@ -201,7 +197,7 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         // Reliability precedence chain deterministically.
         let reference = read_object_property_ref(enrollment);
         let params = read_event_parameters(enrollment);
-        let fault_algorithm = read_fault_algorithm(enrollment, local_device_oid);
+        let fault_algorithm = read_fault_algorithm(enrollment, local_device);
         if matches!(reference, Err(LocalConfigurationReadError::Malformed))
             || matches!(params, Err(LocalConfigurationReadError::Malformed))
             || matches!(fault_algorithm, Err(LocalConfigurationReadError::Malformed))
@@ -254,10 +250,7 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
         // A well-formed remote target is temporarily unobservable in this
         // local-only slice. D4 clears only private continuity; no persistent
         // target-loss Reliability policy is inferred.
-        if monitored
-            .device_identifier
-            .is_some_and(|device| Some(device) != local_device_oid)
-        {
+        if !local_device.is_local(monitored.device_identifier) {
             queue_observation_gap(&mut updates, *oid, eval_state_supported, eval_source);
             continue;
         }
@@ -559,7 +552,7 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
                     );
                     continue;
                 };
-                let setpoint = match read_setpoint(db, setpoint_reference) {
+                let setpoint = match read_setpoint(db, local_device, setpoint_reference) {
                     SetpointRead::Value(value) => value,
                     SetpointRead::Unusable => {
                         queue_pending_cancellation(

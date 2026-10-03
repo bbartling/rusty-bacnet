@@ -1,8 +1,12 @@
 //! Reject addressing and relay at the send-queue level (#1158), where the
-//! link MAC each reject goes to is visible. The loopback tests in
+//! link MAC each reject goes to is visible, and the rejects that stop at the
+//! router's own network-control consumer (#1175). The loopback tests in
 //! `crate::reject_route_tests` cover the same paths on the wire.
 
-use super::super::envelope_harness::{attributes, Harness};
+use std::sync::Arc;
+
+use super::super::control_policy::ControlGate;
+use super::super::envelope_harness::{attributes, Harness, PORT_MACS};
 use super::*;
 use bytes::Bytes;
 
@@ -43,6 +47,7 @@ fn send_reject_addresses_the_originator_or_the_local_sender() {
         let data_attributes = attributes();
         let refused = Refused {
             send_tx: &tx,
+            port_network: 1000,
             sender_mac: &sender_mac,
             origin,
             data_attributes: &data_attributes,
@@ -57,13 +62,44 @@ fn send_reject_addresses_the_originator_or_the_local_sender() {
     }
 }
 
+#[test]
+fn send_reject_unicasts_an_originator_on_the_arrival_network_to_its_sadr() {
+    // SNET 1000 is the arrival port's own network (#1174): the originator is
+    // on this link, so the reject carries no DNET and goes to the SADR, not
+    // to the link sender.
+    let origin = NpduAddress {
+        network: 1000,
+        mac_address: MacAddr::from_slice(&[0x50, 0x51]),
+    };
+    let (tx, mut rx) = mpsc::channel(4);
+    let data_attributes = attributes();
+    let refused = Refused {
+        send_tx: &tx,
+        port_network: 1000,
+        sender_mac: &[0x0A, 0x00, 0x01, 0x01],
+        origin: Some(&origin),
+        data_attributes: &data_attributes,
+    };
+    send_reject(&refused, 5000, RejectMessageReason::NOT_DIRECTLY_CONNECTED);
+
+    let (npdu, mac, sent_attributes) = unicast(rx.try_recv().unwrap());
+    assert_eq!(npdu, [0x01, 0x80, 0x03, 0x01, 0x13, 0x88]);
+    assert_eq!(mac, origin.mac_address);
+    assert_eq!(sent_attributes, data_attributes);
+    assert!(rx.try_recv().is_err());
+}
+
 /// Direct 1000/0 and 2000/1, and 3000 learned behind [9] on port 0.
-fn relay_harness() -> Harness {
+fn relay_table() -> RouterTable {
     let mut table = RouterTable::new();
     table.add_direct(1000, 0);
     table.add_direct(2000, 1);
     table.add_learned(3000, 0, MacAddr::from_slice(&[9]));
-    Harness::with_table(table)
+    table
+}
+
+fn relay_harness() -> Harness {
+    Harness::with_table(relay_table())
 }
 
 fn received_reject(
@@ -166,4 +202,77 @@ async fn relay_drops_a_received_reject_it_cannot_route() {
             "{case}: never answered with a reject"
         );
     }
+}
+
+/// A reject from [0B] on port 1 (network 2000), reason 2 for network 3000,
+/// with the given DNET and one-octet DADR.
+fn busy_3000_reject(h: &Harness, destination: Option<(u16, u8)>) -> (Npdu, IngressContext) {
+    let mut npdu = received_reject(None, None, 255);
+    npdu.destination = destination.map(|(network, mac)| NpduAddress {
+        network,
+        mac_address: MacAddr::from_slice(&[mac]),
+    });
+    npdu.payload = Bytes::from_static(&[0x02, 0x0B, 0xB8]);
+    let mut ctx = h.ctx(1, &[0x0B], npdu.clone());
+    ctx.data_attributes = attributes();
+    (npdu, ctx)
+}
+
+#[tokio::test]
+async fn a_reject_addressed_to_the_router_reaches_its_consumer_and_the_table() {
+    // The router's own MACs are [01] on 1000 and [02] on 2000.
+    let cases = [
+        ("no DNET", None),
+        ("own MAC on the arrival network", Some((2000, PORT_MACS[1]))),
+        (
+            "own MAC on the other port's network",
+            Some((1000, PORT_MACS[0])),
+        ),
+    ];
+    for (case, destination) in cases {
+        let mut h = relay_harness();
+        let mut controls = h.network_control();
+        let (npdu, ctx) = busy_3000_reject(&h, destination);
+        h.handle(ctx).await;
+
+        let control = controls.try_recv().expect(case);
+        assert_eq!(control.npdu, npdu, "{case}");
+        assert_eq!(control.source_mac.as_slice(), [0x0B], "{case}");
+        assert_eq!(control.data_attributes, attributes(), "{case}");
+        assert_eq!(control.ingress_sequence, 1, "{case}");
+        assert!(controls.try_recv().is_err(), "{case}");
+        assert_eq!(
+            h.table.lock().await.effective_reachability(3000),
+            Some(ReachabilityStatus::Busy),
+            "{case}: the table still learns from it"
+        );
+        assert!(h.drain(0).is_empty(), "{case}: not relayed");
+        assert!(h.drain(1).is_empty(), "{case}: not relayed");
+    }
+}
+
+#[tokio::test]
+async fn a_reject_for_another_node_or_a_denied_one_skips_the_routers_consumer() {
+    // Meant for other nodes, so relayed out port 0: a device on 1000, and
+    // the router's port 1 MAC paired with the wrong network.
+    for dadr in [0x0A, PORT_MACS[1]] {
+        let mut h = relay_harness();
+        let mut controls = h.network_control();
+        let (_, ctx) = busy_3000_reject(&h, Some((1000, dadr)));
+        h.handle(ctx).await;
+        assert_eq!(h.drain(0).len(), 1, "DADR {dadr:02X}");
+        assert!(controls.try_recv().is_err(), "DADR {dadr:02X}");
+    }
+
+    // A reject the control policy denies changes nothing and reaches no one.
+    let mut h = Harness::with_gate(relay_table(), Arc::new(ControlGate::hardened()));
+    let mut controls = h.network_control();
+    let (_, ctx) = busy_3000_reject(&h, None);
+    h.handle(ctx).await;
+    assert!(controls.try_recv().is_err());
+    assert_eq!(
+        h.table.lock().await.effective_reachability(3000),
+        Some(ReachabilityStatus::Reachable)
+    );
+    h.assert_quiet();
 }
