@@ -27,6 +27,7 @@ fn event_notification_counter_entries(
         unconfirmed_send_failed,
         apdu_too_large,
         received_not_forwarded,
+        forwarding_cap_dropped,
     } = counters;
     HashMap::from([
         ("notification_class_missing", notification_class_missing),
@@ -45,6 +46,7 @@ fn event_notification_counter_entries(
         ("unconfirmed_send_failed", unconfirmed_send_failed),
         ("apdu_too_large", apdu_too_large),
         ("received_not_forwarded", received_not_forwarded),
+        ("forwarding_cap_dropped", forwarding_cap_dropped),
     ])
 }
 

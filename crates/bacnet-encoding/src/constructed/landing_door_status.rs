@@ -17,9 +17,9 @@ use super::floor_pairs::{decode_floor_pairs, encode_floor_pairs, PairNames};
 
 const NAMES: PairNames = PairNames {
     value: "landing door status",
-    frame: "landing-doors [0]",
-    entry: "landing door",
-    second: "door-status [1]",
+    frame: "landing door status landing-doors",
+    floor: "landing door floor-number",
+    second: "landing door door-status",
     second_oversized: "door-status [1] exceeds 32 bits",
 };
 

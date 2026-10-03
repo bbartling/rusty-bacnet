@@ -14,7 +14,10 @@ use bacnet_types::enums::LiftCarDirection;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-use super::members::{member_content, narrow, unsigned_member};
+use super::members::{narrow, unsigned_member};
+use super::tagged::{
+    contents, decode_ctx_character_string, decode_ctx_primitive, decode_optional_ctx,
+};
 use crate::primitives;
 use crate::tags;
 
@@ -81,23 +84,17 @@ pub fn decode_landing_call_status(
 ) -> Result<(BACnetLandingCallStatus, usize), Error> {
     let mut oversized = None;
 
-    let (tag, content) = tags::decode_tag(data, offset)?;
-    if !tag.is_context(0) {
-        return Err(Error::decoding(
-            offset,
-            "landing call status requires floor-number [0]",
-        ));
-    }
-    let (floor, offset) = member_content(data, content, tag.length)?;
+    let (floor, offset) =
+        decode_ctx_primitive(data, offset, 0, "landing call status floor-number")?;
     let floor_number = narrow(
-        unsigned_member(floor, content)?,
+        unsigned_member(floor, offset - floor.len())?,
         "floor-number [0] exceeds an Unsigned8",
         &mut oversized,
     );
 
     let (tag, content) = tags::decode_tag(data, offset)?;
-    let (command, mut offset) = if tag.is_context(1) {
-        let (raw, end) = member_content(data, content, tag.length)?;
+    let (command, offset) = if tag.is_context(1) {
+        let (raw, end) = contents(data, content, tag.length)?;
         let direction: u32 = narrow(
             unsigned_member(raw, content)?,
             "direction [1] exceeds 32 bits",
@@ -108,7 +105,7 @@ pub fn decode_landing_call_status(
             end,
         )
     } else if tag.is_context(2) {
-        let (raw, end) = member_content(data, content, tag.length)?;
+        let (raw, end) = contents(data, content, tag.length)?;
         let destination = narrow(
             unsigned_member(raw, content)?,
             "destination [2] exceeds an Unsigned8",
@@ -122,15 +119,13 @@ pub fn decode_landing_call_status(
         ));
     };
 
-    let mut floor_text = None;
-    if offset < data.len() {
-        let (tag, content) = tags::decode_tag(data, offset)?;
-        if tag.is_context(3) {
-            let (text, end) = member_content(data, content, tag.length)?;
-            floor_text = Some(primitives::decode_character_string(text)?);
-            offset = end;
-        }
-    }
+    let (floor_text, offset) = decode_optional_ctx(
+        data,
+        offset,
+        3,
+        "landing call status floor-text",
+        decode_ctx_character_string,
+    )?;
 
     if let Some(member) = oversized {
         return Err(Error::OutOfRange(format!("landing call status {member}")));

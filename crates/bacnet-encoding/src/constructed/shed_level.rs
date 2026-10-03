@@ -10,6 +10,7 @@ use bacnet_types::constructed::BACnetShedLevel;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
+use super::tagged::contents;
 use crate::{primitives, tags};
 
 const WHAT: &str = "BACnetShedLevel";
@@ -40,13 +41,7 @@ pub fn decode_shed_level(data: &[u8], offset: usize) -> Result<(BACnetShedLevel,
             format!("{WHAT}: expected percent [0], level [1] or amount [2]"),
         ));
     };
-    let end = pos
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{WHAT}: length overflow")))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    let contents = &data[pos..end];
+    let (contents, end) = contents(data, pos, tag.length)?;
     let unsigned = |name: &str| {
         primitives::decode_unsigned(contents)
             .map_err(|_| Error::decoding(pos, format!("{WHAT}: {name} needs 1 to 8 octets")))

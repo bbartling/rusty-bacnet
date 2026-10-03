@@ -764,7 +764,10 @@
     "crates/bacnet-server/src/server/confirmed_response_lifetime_tests.rs",
     "crates/bacnet-server/src/server/confirmed_tracker_tests.rs",
     "crates/bacnet-network/src/issuance_tests.rs",
-    "crates/bacnet-server/src/server/confirmed_segmented_lifetime_tests.rs"
+    "crates/bacnet-server/src/server/confirmed_segmented_lifetime_tests.rs",
+    "crates/bacnet-server/src/server/confirmed_broadcast_tests.rs::a_confirmed_request_sent_by_broadcast_is_neither_executed_nor_answered",
+    "crates/bacnet-server/src/server/confirmed_broadcast_tests.rs::a_segment_sent_by_broadcast_draws_no_segment_ack_or_abort",
+    "crates/bacnet-integration-tests/tests/server/bip6_group_confirmed.rs::a_confirmed_request_forwarded_to_a_bip6_foreign_device_is_ignored"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -778,7 +781,8 @@
     "Refs #876: ordinary generic exact duplicate detection is pending-only, bounded to 256 entries and 64 KiB of service-request bytes per tracked entry. Unsegmented ownership retires after APDU/NPDU encoding at local network issuance or synchronous MS/TP reply handoff, before eventual transport Result.",
     "Byte-identical Invoke ID reuse then executes again. Segmented ownership moves to the child through final ACK or terminal outcome; generated terminal Abort retires at local issuance even while its send is held.",
     "Cancellation, errors and rejected spawn drop ownership. Request-task and segmented-send permits remain independent. LSO completed replay and Audit receipts are separate unchanged policies; direct leaf/incarnation keys remain in generic and LSO stores.",
-    "Deterministic full-server direct/routed controls and virtual-clock child tests are local operation evidence, not physical emission/peer receipt or #524 response affinity/control confinement. See standard-135-2020-ledger.md#ordinary-confirmed-transaction-lifetimes."
+    "Deterministic full-server direct/routed controls and virtual-clock child tests are local operation evidence, not physical emission/peer receipt or #524 response affinity/control confinement. See standard-135-2020-ledger.md#ordinary-confirmed-transaction-lifetimes.",
+    "A ConfirmedRequest whose network destination is a broadcast or multicast (ReceivedApdu::is_group) is dropped before reassembly or dispatch, with no answer, whatever the service."
    ]
   },
   {
@@ -3300,7 +3304,10 @@
     "crates/bacnet-encoding/src/constructed/port_permission.rs",
     "crates/bacnet-network/src/layer.rs::ReceivedApdu",
     "crates/rusty-bacnet/src/server/server_methods/notification_forwarder.rs::add_notification_forwarder",
-    "crates/rusty-bacnet/src/types/destination.rs::destination"
+    "crates/rusty-bacnet/src/types/destination.rs::destination",
+    "crates/bacnet-server/src/server/event_forwarding.rs::MAX_FORWARDED_DESTINATIONS",
+    "crates/bacnet-server/src/server/event_forwarding_repeats.rs::ConfirmedEventRepeats",
+    "crates/bacnet-server/src/server/lifecycle.rs"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::forwarder_sends_to_its_recipient_list_and_its_subscriptions",
@@ -3324,7 +3331,10 @@
     "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_broadcast_notification_goes_confirmed_only_off_the_receiving_network",
     "crates/rusty-bacnet/tests/test_notification_forwarder.py::NotificationForwarderServerTests::test_seeded_recipient_list_and_port_filter_read_back",
     "crates/rusty-bacnet/src/types/destination_tests.rs::required_keys_alone_give_an_always_active_destination",
-    "crates/rusty-bacnet/src/types/destination_tests.rs::every_key_reaches_its_member"
+    "crates/rusty-bacnet/src/types/destination_tests.rs::every_key_reaches_its_member",
+    "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_recipient_naming_this_network_by_number_is_local_to_the_loop_rules",
+    "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_network_number_is_remote_while_this_network_has_none",
+    "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::a_repeat_is_matched_by_source_invoke_id_and_octets"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::out_of_service_forwarder_takes_nothing",
@@ -3341,7 +3351,16 @@
     "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_received_notification_no_forwarder_takes_is_counted",
     "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_copy_longer_than_the_local_apdu_capacity_is_dropped_and_counted",
     "crates/rusty-bacnet/tests/test_notification_forwarder.py::NotificationForwarderRegistrationTests::test_refused_seeds_leave_nothing_pending",
-    "crates/rusty-bacnet/src/types/destination_tests.rs::malformed_destinations_raise_value_or_type_errors"
+    "crates/rusty-bacnet/src/types/destination_tests.rs::malformed_destinations_raise_value_or_type_errors",
+    "crates/bacnet-server/src/server/confirmed_broadcast_tests.rs::a_confirmed_request_sent_by_broadcast_is_neither_executed_nor_answered",
+    "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::destinations_past_the_cap_across_forwarders_are_dropped_and_counted",
+    "crates/bacnet-server/src/server/event_forwarding_bounds_tests.rs::a_retransmitted_confirmed_notification_is_acknowledged_but_not_forwarded_again",
+    "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::an_entry_lasts_for_the_window_from_its_first_receipt",
+    "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::a_full_record_drops_its_oldest_entry",
+    "crates/bacnet-server/src/server/event_forwarding_repeats.rs::tests::an_expired_entry_out_of_time_order_does_not_match",
+    "crates/bacnet-server/src/server/event_forwarding_cap_tests.rs::the_cap_counts_only_copies_the_loop_rules_let_through",
+    "crates/bacnet-server/src/server/event_forwarding_cap_tests.rs::a_local_notification_under_several_process_identifiers_has_one_cap",
+    "crates/bacnet-server/src/server/event_forwarding_cap_tests.rs::the_cap_warning_goes_out_at_most_once_an_interval"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3352,15 +3371,12 @@
    "notes": [
     "Every received event notification, and each local one whose Notification Class names this device's Device object, goes to every NOTIFICATION_FORWARDER object, bundled or custom, read through its properties.",
     "A copy keeps the received request octet for octet after the process identifier, so text in any character set and event values the stack does not model pass through.",
-    "The server is a single-port node: a received notification arrives through Port_ID 0, and Port_Filter is absent unless the application sets one.",
-    "Every well-formed ConfirmedEventNotification is acknowledged before any copy is sent, whether or not a forwarder takes it; one that does not decode draws Reject INVALID_PARAMETER_DATA_TYPE.",
-    "Within one device a forwarder takes a notification once and a destination gets one copy, however many chained forwarders name it."
+    "The server is a single-port node: a notification arrives through Port_ID 0, Port_Filter is absent unless set, and an address naming the registered Network Port's known Network_Number is local to the loop rules.",
+    "A well-formed ConfirmedEventNotification sent to this device alone is acknowledged before any copy goes, taken or not; a repeat within 60 s with the same source, invoke ID and octets is acknowledged, not forwarded.",
+    "Within one device a forwarder takes a notification once, a destination gets one copy, and at most 64 copies that would be sent go out across all forwarders, local or received; forwarding_cap_dropped counts the rest."
    ],
    "gaps": [
     "#1256: Recipient_List writes are kept in memory only, so a restart loses them.",
-    "#1257: a ConfirmedEventNotification is treated as unicast, since confirmed requests carry no broadcast addressing.",
-    "#1258: a recipient address that names the local network by its number is treated as remote by the loop rules.",
-    "#1259: fan-out across several forwarders, and repeats of a confirmed notification, are bounded only by each list's cap.",
     "#1270: Subscribed_Recipients saves run while the ObjectDatabase write lock is held."
    ]
   },

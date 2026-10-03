@@ -12,7 +12,7 @@ use bytes::BytesMut;
 
 use crate::primitives;
 
-use super::cov_subscription::{decode_ctx_boolean, decode_ctx_u32};
+use super::tagged::{decode_ctx_boolean, decode_ctx_unsigned};
 
 /// Encode one bare `BACnetPortPermission` sequence.
 pub fn encode_port_permission(buf: &mut BytesMut, permission: &BACnetPortPermission) {
@@ -28,9 +28,7 @@ pub fn decode_port_permission(
     offset: usize,
 ) -> Result<(BACnetPortPermission, usize), Error> {
     let what = "BACnetPortPermission";
-    let (port_id, pos) = decode_ctx_u32(data, offset, 0, what)?;
-    let port_id = u8::try_from(port_id)
-        .map_err(|_| Error::decoding(offset, format!("{what}: [0] exceeds Unsigned8")))?;
+    let (port_id, pos) = decode_ctx_unsigned::<u8>(data, offset, 0, what)?;
     let (enabled, pos) = decode_ctx_boolean(data, pos, 1, what)?;
     Ok((BACnetPortPermission { port_id, enabled }, pos))
 }

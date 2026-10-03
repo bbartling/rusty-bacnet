@@ -22,11 +22,11 @@ use bacnet_types::enums::{AccessAuthenticationFactorDisable, AuthenticationFacto
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-use super::cov_subscription::decode_ctx_boolean;
-use super::{
-    decode_ctx_unsigned, decode_device_object_reference, encode_device_object_reference,
+use super::tagged::{
+    decode_ctx_boolean, decode_ctx_octet_string, decode_ctx_unsigned, decode_optional_ctx,
     expect_closing, expect_opening,
 };
+use super::{decode_device_object_reference, encode_device_object_reference};
 use crate::{primitives, tags};
 
 const RIGHTS: &str = "BACnetAssignedAccessRights";
@@ -83,9 +83,9 @@ pub fn decode_authentication_factor(
     data: &[u8],
     offset: usize,
 ) -> Result<(BACnetAuthenticationFactor, usize), Error> {
-    let (format_type, pos) = decode_ctx_u32(data, offset, 0, FACTOR)?;
-    let (format_class, pos) = decode_ctx_u32(data, pos, 1, FACTOR)?;
-    let (value, end) = decode_ctx_octets(data, pos, 2, FACTOR)?;
+    let (format_type, pos) = decode_ctx_unsigned::<u32>(data, offset, 0, FACTOR)?;
+    let (format_class, pos) = decode_ctx_unsigned::<u32>(data, pos, 1, FACTOR)?;
+    let (value, end) = decode_ctx_octet_string(data, pos, 2, FACTOR)?;
     Ok((
         BACnetAuthenticationFactor {
             format_type: AuthenticationFactorType::from_raw(format_type),
@@ -124,9 +124,11 @@ pub fn decode_authentication_factor_format(
     data: &[u8],
     offset: usize,
 ) -> Result<(BACnetAuthenticationFactorFormat, usize), Error> {
-    let (format_type, pos) = decode_ctx_u32(data, offset, 0, FACTOR_FORMAT)?;
-    let (vendor_id, pos) = decode_optional_ctx_u16(data, pos, 1, FACTOR_FORMAT)?;
-    let (vendor_format, end) = decode_optional_ctx_u16(data, pos, 2, FACTOR_FORMAT)?;
+    let (format_type, pos) = decode_ctx_unsigned::<u32>(data, offset, 0, FACTOR_FORMAT)?;
+    let (vendor_id, pos) =
+        decode_optional_ctx(data, pos, 1, FACTOR_FORMAT, decode_ctx_unsigned::<u16>)?;
+    let (vendor_format, end) =
+        decode_optional_ctx(data, pos, 2, FACTOR_FORMAT, decode_ctx_unsigned::<u16>)?;
     Ok((
         BACnetAuthenticationFactorFormat {
             format_type: AuthenticationFactorType::from_raw(format_type),
@@ -158,7 +160,7 @@ pub fn decode_credential_authentication_factor(
     data: &[u8],
     offset: usize,
 ) -> Result<(BACnetCredentialAuthenticationFactor, usize), Error> {
-    let (disable, pos) = decode_ctx_u32(data, offset, 0, CREDENTIAL_FACTOR)?;
+    let (disable, pos) = decode_ctx_unsigned::<u32>(data, offset, 0, CREDENTIAL_FACTOR)?;
     let pos = expect_opening(data, pos, 1, CREDENTIAL_FACTOR)?;
     let (authentication_factor, pos) = decode_authentication_factor(data, pos)?;
     let end = expect_closing(data, pos, 1, CREDENTIAL_FACTOR)?;
@@ -169,53 +171,4 @@ pub fn decode_credential_authentication_factor(
         },
         end,
     ))
-}
-
-/// A primitive context tag `tag` holding an Unsigned or ENUMERATED of at
-/// most 32 bits.
-fn decode_ctx_u32(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<(u32, usize), Error> {
-    let (value, end) = decode_ctx_unsigned(data, offset, tag, what)?;
-    let value = u32::try_from(value)
-        .map_err(|_| Error::decoding(offset, format!("{what}: [{tag}] exceeds 32 bits")))?;
-    Ok((value, end))
-}
-
-/// An Unsigned16 under primitive context tag `tag` when that tag comes next,
-/// else `None` with the offset unchanged.
-fn decode_optional_ctx_u16(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    what: &str,
-) -> Result<(Option<u16>, usize), Error> {
-    let (contents, end) = tags::decode_optional_context(data, offset, tag)?;
-    let Some(contents) = contents else {
-        return Ok((None, offset));
-    };
-    let value = u16::try_from(primitives::decode_unsigned(contents)?)
-        .map_err(|_| Error::decoding(offset, format!("{what}: [{tag}] exceeds 16 bits")))?;
-    Ok((Some(value), end))
-}
-
-/// A primitive context tag `tag` holding an OCTET STRING.
-fn decode_ctx_octets(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    what: &str,
-) -> Result<(Vec<u8>, usize), Error> {
-    let (t, pos) = tags::decode_tag(data, offset)?;
-    if !t.is_context(tag) {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: expected context tag [{tag}] OCTET STRING"),
-        ));
-    }
-    let end = pos
-        .checked_add(t.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{what}: length overflow")))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok((data[pos..end].to_vec(), end))
 }

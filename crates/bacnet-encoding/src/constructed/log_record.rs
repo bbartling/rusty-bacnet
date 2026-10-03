@@ -11,10 +11,11 @@
 //! primitive context 2 holding the four-bit Status_Flags may follow.
 
 use super::log_fields::{
-    check_bit_string, constructed, decode_any_value, decode_failure, decode_integer,
-    decode_log_status, decode_timestamp, encode_any_value, encode_ctx_integer, encode_failure,
-    encode_log_status, encode_timestamp, primitive,
+    check_bit_string, decode_any_value, decode_failure, decode_integer, decode_log_status,
+    decode_timestamp, encode_any_value, encode_ctx_integer, encode_failure, encode_log_status,
+    encode_timestamp,
 };
+use super::tagged::{contents, decode_ctx_constructed, expect_end};
 use crate::{primitives, tags};
 use bacnet_types::bitstring::status_flags_from_bacnet;
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
@@ -23,6 +24,9 @@ use bacnet_types::primitives::StatusFlags;
 use bytes::BytesMut;
 
 const RECORD: &str = "BACnetLogRecord";
+const TIMESTAMP: &str = "BACnetLogRecord timestamp";
+const DATUM: &str = "BACnetLogRecord log-datum";
+const FAILURE_FIELD: &str = "BACnetLogRecord failure";
 
 const LOG_STATUS: u8 = 0;
 const BOOLEAN: u8 = 1;
@@ -90,15 +94,15 @@ pub fn encode_log_record(record: &BACnetLogRecord, buf: &mut BytesMut) -> Result
 /// flags are read only when the very next tag is the primitive context 2;
 /// anything else is left for the caller as the start of what follows.
 pub fn decode_log_record(data: &[u8], offset: usize) -> Result<(BACnetLogRecord, usize), Error> {
-    let (date, time, datum_start) = decode_timestamp(data, offset, RECORD)?;
-    let (body, mut end) = constructed(data, datum_start, 1, RECORD, "log-datum")?;
+    let (date, time, datum_start) = decode_timestamp(data, offset, TIMESTAMP)?;
+    let (body, mut end) = decode_ctx_constructed(data, datum_start, 1, DATUM)?;
     let log_datum = decode_datum(body, datum_start)?;
     let mut status_flags = None;
     if end < data.len() {
         let (tag, start) = tags::decode_tag(data, end)?;
         if tag.is_context(STATUS_FLAGS) {
-            let (contents, next) = primitive(data, tag, start)?;
-            status_flags = match contents {
+            let (octets, next) = contents(data, start, tag.length)?;
+            status_flags = match octets {
                 [4, bits] if bits & 0x0f == 0 => Some(status_flags_from_bacnet(&[*bits])),
                 _ => {
                     return Err(Error::decoding(
@@ -125,7 +129,7 @@ fn decode_datum(data: &[u8], offset: usize) -> Result<LogDatum, Error> {
     let (tag, start) = tags::decode_tag(data, 0)?;
     let (datum, end) = if tag.is_opening_tag(FAILURE) {
         let (body, end) = tags::extract_context_value(data, start, FAILURE)?;
-        let (error_class, error_code) = decode_failure(body, offset, RECORD)?;
+        let (error_class, error_code) = decode_failure(body, offset, FAILURE_FIELD)?;
         let datum = LogDatum::Failure {
             error_class,
             error_code,
@@ -135,14 +139,12 @@ fn decode_datum(data: &[u8], offset: usize) -> Result<LogDatum, Error> {
         let (body, end) = tags::extract_context_value(data, start, ANY)?;
         (LogDatum::AnyValue(decode_any_value(body)?), end)
     } else if tag.class == tags::TagClass::Context && !tag.is_opening && !tag.is_closing {
-        let (contents, end) = primitive(data, tag, start)?;
-        (decode_primitive(tag.number, contents, offset)?, end)
+        let (octets, end) = contents(data, start, tag.length)?;
+        (decode_primitive(tag.number, octets, offset)?, end)
     } else {
         return Err(Error::decoding(offset, "log-datum has an unknown tag"));
     };
-    if end != data.len() {
-        return Err(Error::decoding(offset, "log-datum has trailing fields"));
-    }
+    expect_end(data, end, offset, DATUM)?;
     Ok(datum)
 }
 

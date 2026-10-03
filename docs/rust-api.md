@@ -4136,20 +4136,48 @@ in `apdu_too_large`; the other destinations are still served.
 No copy goes by global broadcast, a notification received by global broadcast
 (`ReceivedApdu::global_broadcast`) is not forwarded, a received notification is
 not broadcast back onto the local network, and one received by broadcast goes
-to no node on the local network. A ConfirmedEventNotification is treated as
-addressed to this device alone, and a recipient address that names the local
-network by its number is treated as remote. These skips are configured
-behaviour and move no counter. DeviceCommunicationControl's
-DISABLE_INITIATION stops every copy.
+to no node on the local network. The server ignores every confirmed request
+that arrives by broadcast or multicast (`ReceivedApdu::is_group`), whatever
+its service, with no answer (Clause 5.4.5.1), so a ConfirmedEventNotification
+it answers was addressed to it alone. When the registered Network Port
+(`ServerBuilder::registered_network_port`) knows the local network's number,
+configured or learned, a recipient address naming that number is local to
+these rules; a copy they let through still goes as the address is written.
+With no registered port, or while its number is unknown, such an address is
+taken as remote. These skips are configured behaviour and move no counter.
+DeviceCommunicationControl's DISABLE_INITIATION stops every copy.
 A destination naming the server's own Device object hands the copy to the
 forwarders that have not yet taken it, and across such a chain each
 destination (recipient, process identifier and confirmation) gets one copy.
+
+One notification goes to at most `MAX_FORWARDED_DESTINATIONS` (64, a full
+`Recipient_List` and `Subscribed_Recipients` of one forwarder) destinations
+across every forwarder that takes it, chained ones included, in forwarder then
+list order. Only copies that would be sent count: a destination the loop
+rules refuse, whose route is skipped or whose copy is too large takes no room,
+and neither does a destination naming the server's own Device object. A local
+notification whose Notification Class names that Device object under several
+process identifiers is one notification, with one cap and one copy per
+destination. The destinations past the cap are dropped and counted in
+`forwarding_cap_dropped`; a capped notification logs a warning at most once a
+minute per process, and at debug level in between. There is no rate limit on
+received notifications.
 
 The server executes ConfirmedEventNotification, so it acknowledges every
 well-formed one once it decodes, before any copy is sent and whatever
 forwarding then finds, including one no forwarder takes. A received
 notification that no forwarder takes counts in `received_not_forwarded`. One
 that does not decode is rejected with INVALID_PARAMETER_DATA_TYPE.
+
+The server remembers each ConfirmedEventNotification that decodes for 60
+seconds, at most 256 at once with the oldest dropped first, keyed by source
+address and invoke ID and matched only by the same service-request octets and
+only while its 60 seconds last. A
+retransmission it matches, sent because the acknowledgment went missing, is
+acknowledged again but not offered to the forwarders again, and does not count
+in `received_not_forwarded`. One that comes later, or after newer
+notifications pushed its entry out, is forwarded again. The record is in
+memory only.
 
 `with_persistence` keeps `Subscribed_Recipients` in an application-owned
 `SubscribedRecipientsPersistence`, saving the list, each entry with the minutes
@@ -4187,6 +4215,7 @@ counters.confirmed_unanswered;          // no acknowledgment after the last retr
 counters.unconfirmed_send_failed;       // an unconfirmed send the transport refused
 counters.apdu_too_large;                // a notification longer than the local APDU size
 counters.received_not_forwarded;        // a received notification no forwarder took
+counters.forwarding_cap_dropped;        // a destination past the forwarding cap
 ```
 
 The four recipient-list fields count transitions, event and acknowledgment
@@ -4210,7 +4239,9 @@ because their APDU is longer than the local APDU capacity; notifications are
 never sent segmented, and the other destinations are still served. It is
 mostly a forwarded copy of a notification that arrived segmented.
 `received_not_forwarded` counts received event notifications that decoded but
-that no Notification Forwarder took (see
+that no Notification Forwarder took, and `forwarding_cap_dropped` (#1259) the
+destinations a notification was not forwarded to because it already had
+`MAX_FORWARDED_DESTINATIONS` across the forwarders, one per destination (see
 [Notification forwarding](#notification-forwarding)).
 
 The three route fields (#1160) count destinations that matched the transition

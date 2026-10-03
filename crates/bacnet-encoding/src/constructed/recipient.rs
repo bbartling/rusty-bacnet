@@ -36,13 +36,16 @@
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipient};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, Time};
+use bacnet_types::primitives::Time;
 use bacnet_types::MacAddr;
 use bytes::BytesMut;
 
 use crate::primitives;
 use crate::tags::{self, TagClass};
 
+use super::tagged::{
+    contents, decode_app_bit_string, decode_app_unsigned, decode_ctx_object_id, expect_closing,
+};
 use super::MAX_FRAMED_ITEMS;
 
 /// The message for a `BACnetAddress` MAC of `length` octets, or `None` when it
@@ -163,24 +166,9 @@ pub fn decode_recipient(data: &[u8], offset: usize) -> Result<(BACnetRecipient, 
     let what = "BACnetRecipient";
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if tag.is_context(0) {
-        // device [0] — primitive, exactly 4 contents octets.
-        if tag.length != 4 {
-            return Err(Error::decoding(
-                offset,
-                format!(
-                    "{what}: device [0] expects 4 contents octets, got {}",
-                    tag.length
-                ),
-            ));
-        }
-        let end = pos + 4;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        return Ok((
-            BACnetRecipient::Device(ObjectIdentifier::decode(&data[pos..end])?),
-            end,
-        ));
+        // device [0] tags the primitive ObjectIdentifier.
+        let (device, end) = decode_ctx_object_id(data, offset, 0, "BACnetRecipient device")?;
+        return Ok((BACnetRecipient::Device(device), end));
     }
     if tag.is_opening_tag(1) {
         // network-number Unsigned16
@@ -190,19 +178,13 @@ pub fn decode_recipient(data: &[u8], offset: usize) -> Result<(BACnetRecipient, 
         })?;
         // mac-address OCTET STRING (a zero-length string is a broadcast)
         let (mac_address, pos) = decode_app_mac_address(data, pos, what)?;
-        let (close, close_pos) = tags::decode_tag(data, pos)?;
-        if !close.is_closing_tag(1) {
-            return Err(Error::decoding(
-                pos,
-                format!("{what}: missing closing tag [1] for BACnetAddress"),
-            ));
-        }
+        let end = expect_closing(data, pos, 1, "BACnetRecipient address")?;
         return Ok((
             BACnetRecipient::Address(BACnetAddress {
                 network_number,
                 mac_address,
             }),
-            close_pos,
+            end,
         ));
     }
     Err(Error::decoding(
@@ -308,28 +290,6 @@ pub fn decode_destination_list(data: &[u8]) -> Result<Vec<BACnetDestination>, Er
 // Small application-tagged member helpers
 // ---------------------------------------------------------------------------
 
-/// Decode an application-tagged Unsigned member, returning raw value + offset.
-pub(super) fn decode_app_unsigned(
-    data: &[u8],
-    offset: usize,
-    what: &str,
-) -> Result<(u64, usize), Error> {
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if tag.class != TagClass::Application || tag.number != tags::app_tag::UNSIGNED {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: expected application-tagged Unsigned"),
-        ));
-    }
-    let end = pos
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{what}: length overflow")))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok((primitives::decode_unsigned(&data[pos..end])?, end))
-}
-
 /// Decode the application-tagged OCTET STRING of a `BACnetAddress` MAC,
 /// refusing one longer than [`BACnetAddress::MAX_MAC_LEN`] octets before
 /// copying it.
@@ -346,13 +306,8 @@ pub(super) fn decode_app_mac_address(
         ));
     }
     check_decoded_mac_len(tag.length as usize, offset, what)?;
-    let end = pos
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{what}: length overflow")))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok((MacAddr::from_slice(&data[pos..end]), end))
+    let (mac, end) = contents(data, pos, tag.length)?;
+    Ok((MacAddr::from_slice(mac), end))
 }
 
 /// Decode an application-tagged Time member (exactly 4 contents octets).
@@ -364,11 +319,8 @@ fn decode_app_time(data: &[u8], offset: usize, what: &str) -> Result<(Time, usiz
             format!("{what}: expected application-tagged Time (4 octets)"),
         ));
     }
-    let end = pos + 4;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    Ok((Time::decode(&data[pos..end])?, end))
+    let (octets, end) = contents(data, pos, 4)?;
+    Ok((Time::decode(octets)?, end))
 }
 
 /// Fixed-width bit-string member validation. Per Clause 20.2.10 (initial
@@ -396,28 +348,4 @@ fn check_fixed_bit_string(
         ));
     }
     Ok(())
-}
-
-/// Decode an application-tagged BIT STRING member, returning
-/// `(unused_bits, data)` and the offset past it.
-fn decode_app_bit_string(
-    data: &[u8],
-    offset: usize,
-    what: &str,
-) -> Result<((u8, Vec<u8>), usize), Error> {
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if tag.class != TagClass::Application || tag.number != tags::app_tag::BIT_STRING {
-        return Err(Error::decoding(
-            offset,
-            format!("{what}: expected application-tagged BIT STRING"),
-        ));
-    }
-    let end = pos
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{what}: length overflow")))?;
-    if end > data.len() {
-        return Err(Error::buffer_too_short(end, data.len()));
-    }
-    let (unused_bits, bits) = primitives::decode_bit_string(&data[pos..end])?;
-    Ok(((unused_bits, bits), end))
 }

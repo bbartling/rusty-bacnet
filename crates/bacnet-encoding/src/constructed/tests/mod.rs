@@ -6,6 +6,7 @@ use bacnet_types::constructed::{
     BACnetPropertyStates, BACnetProprietaryPropertyState,
 };
 use bacnet_types::enums::ObjectType;
+use bacnet_types::primitives::ObjectIdentifier;
 
 mod access_credential;
 mod action_list;
@@ -31,6 +32,7 @@ mod recipient;
 mod schedule;
 mod shed_level;
 mod staging;
+mod tagged;
 mod value_source;
 
 /// A local BACnetDeviceObjectPropertyReference for tests.
