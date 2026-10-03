@@ -2324,17 +2324,40 @@ task, so the write that started the run is answered at once. Each command's
 `write_successful` flag records its outcome; a failure with `quit_on_failure`
 set stops the list and marks the rest unsuccessful. At the end In_Process
 returns to FALSE, with All_Writes_Successful TRUE only if every write
-succeeded. The server writes to its own objects only, so a command naming
-another Device fails. A Schedule writing a Command's Present_Value starts the
-run as well. Command takes SubscribeCOVProperty but not SubscribeCOV, so a
-client can follow In_Process. A run that `stop()` cuts short isn't resumed.
+succeeded. A Schedule writing a Command's Present_Value starts the run as
+well. Command takes SubscribeCOVProperty but not SubscribeCOV, so a client can
+follow In_Process.
+
+A command whose `device_identifier` names another device goes there as a
+confirmed WriteProperty (#1180). The address comes from the server's device
+bindings: a `DeviceBinding` registered on the builder, or an I-Am the server
+heard in the last ten minutes. The server sends no Who-Is, so a command naming
+a device it has no fresh binding for fails at once and nothing is sent. Each
+attempt waits `ServerConfig::cov_retry_timeout_ms` (3 seconds by default) for
+the answer, and only silence earns another attempt, up to three retries under
+the one invoke ID. An Error (BUSY included), Reject or Abort fails the command
+at once. Nothing is sent while DeviceCommunicationControl restricts
+initiation, and the run holds no database guard while the write is
+outstanding. Naming this server's own Device is the same as naming none.
+
+A run that `stop()` cuts short isn't resumed. It ends where it stood
+(#1252): In_Process returns to FALSE, each command it hadn't made reads
+unsuccessful, and All_Writes_Successful is TRUE only if every write had
+already been made and succeeded, as when the stop falls in the last command's
+post delay. A Channel's distribution with members left unwritten ends FAILED.
+Once the
+server's own work has stopped, `stop()` also ends any run still in progress on
+the database, such as one a write made straight into the database queued.
+`stop()` doesn't wait for a database the application holds: those runs end as
+soon as it lets go.
 
 Whatever commits a Present_Value write owns the run it starts and finishes it,
 so no path leaves a Command in process (#1178). Without a server,
 `tick_schedules` runs the lists its Schedule writes start before it returns,
 post delays included, making each command as the bare WriteProperty handler
-would with the Command as the initiating object; dropping its future first
-ends each unfinished run as unsuccessful. The bare `handle_write_property` and
+would with the Command as the initiating object; it has no network, so a
+command naming another device fails. Dropping its future first ends each
+unfinished run as unsuccessful. The bare `handle_write_property` and
 `handle_write_property_multiple` handlers are synchronous and make no writes
 for a Command: the run a Present_Value write starts ends at once, with
 In_Process FALSE, All_Writes_Successful FALSE and every command's

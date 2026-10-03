@@ -101,6 +101,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         stop_producer(&mut self.binary_lighting_operation_task).await;
         stop_producer(&mut self.cov_purge_task).await;
         stop_producer(&mut self.cov_revisit_task).await;
+        // Nothing can own a Command or Channel run any more. End the runs let
+        // go of while the database was busy where they stood, then any run no
+        // task took up, so none is left in progress (#1252). An application
+        // holding the database doesn't hold up stop: they end once it's free.
+        crate::command_lists::end_unowned(&self.db, self.request_tasks.take_stranded());
         // Dispatch has relinquished the sole join-consumer role. Retain the
         // set in self across await so a cancelled stop can finish this drain.
         while let Some(result) = self.notification_transactions.join_next().await {
