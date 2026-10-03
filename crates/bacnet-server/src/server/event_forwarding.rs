@@ -21,8 +21,12 @@
 //! [`EventNotificationCounters::received_not_forwarded`].
 //!
 //! One notification goes to at most [`MAX_FORWARDED_DESTINATIONS`]
-//! destinations across every forwarder in such a chain; the rest are dropped
-//! and counted in [`EventNotificationCounters::forwarding_cap_dropped`].
+//! destinations across every forwarder in such a chain, counting only the
+//! copies the loop and route rules let through ([`ForwardingBudget`]); the
+//! rest are dropped and counted in
+//! [`EventNotificationCounters::forwarding_cap_dropped`]. A local
+//! notification that names this device's Device object under several
+//! process identifiers is one notification, with one cap.
 //!
 //! The loop rules that need a destination's route are applied as each copy is
 //! sent ([`ForwardOrigin::admits`]). The server is one node on one network, so a
@@ -41,6 +45,7 @@ use bacnet_objects::notification_forwarder::{forwarding_targets, ForwardingInput
 use bacnet_objects::subscribed_recipients::MAX_SUBSCRIBED_RECIPIENTS;
 use bacnet_services::alarm_event::ForwardedEventNotification;
 use bacnet_types::constructed::BACnetRecipient;
+use std::sync::atomic::AtomicUsize;
 
 /// The Port_ID of the one network port this server receives through: a node
 /// that does not route numbers its port 0 (Clause 12.51.11).
@@ -50,12 +55,81 @@ const RECEIVING_PORT: u8 = 0;
 /// Notification Forwarder in this device that takes it: as many as one
 /// forwarder's full Recipient_List and Subscribed_Recipients name, so no
 /// single forwarder is cut short. It bounds how far one received notification
-/// can multiply. Destinations naming this device's own Device object, which
-/// hand the notification on within the device, do not count; the
-/// destinations past the cap count in
-/// [`EventNotificationCounters::forwarding_cap_dropped`].
+/// can multiply. Only copies that would be sent count: a destination the
+/// loop rules refuse, whose route is skipped, or whose copy is too large is
+/// not. Destinations naming this device's own Device object, which hand the
+/// notification on within the device, do not count either. The destinations
+/// past the cap count in [`EventNotificationCounters::forwarding_cap_dropped`].
 pub const MAX_FORWARDED_DESTINATIONS: usize =
     MAX_RECIPIENT_LIST_DESTINATIONS + MAX_SUBSCRIBED_RECIPIENTS;
+
+/// How often a capped notification is logged at warn level, process-wide;
+/// the ones in between log at debug and still count.
+pub(super) const CAP_WARNING_INTERVAL: Duration = Duration::from_secs(60);
+
+/// The process-wide throttle on the forwarding-cap warning.
+static CAP_WARNINGS: WarnThrottle = WarnThrottle::new();
+
+/// Lets a warning through once per [`CAP_WARNING_INTERVAL`].
+pub(super) struct WarnThrottle(std::sync::Mutex<Option<Instant>>);
+
+impl WarnThrottle {
+    pub(super) const fn new() -> Self {
+        Self(std::sync::Mutex::new(None))
+    }
+
+    /// Whether a warning at `now` goes out: the first one does, and then one
+    /// whenever the interval has passed since the last that did.
+    pub(super) fn due(&self, now: Instant) -> bool {
+        let mut last = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match *last {
+            Some(at) if now.saturating_duration_since(at) < CAP_WARNING_INTERVAL => false,
+            _ => {
+                *last = Some(now);
+                true
+            }
+        }
+    }
+}
+
+/// What is left of one notification's [`MAX_FORWARDED_DESTINATIONS`],
+/// shared by every copy it makes. The send path takes room for a copy only
+/// once the copy passed every rule and is about to go out.
+pub(super) struct ForwardingBudget {
+    remaining: AtomicUsize,
+    dropped: AtomicUsize,
+}
+
+impl ForwardingBudget {
+    fn new() -> Self {
+        Self {
+            remaining: AtomicUsize::new(MAX_FORWARDED_DESTINATIONS),
+            dropped: AtomicUsize::new(0),
+        }
+    }
+
+    /// Take room for one more copy, or, when none is left, note it as
+    /// dropped and return `false`. Copies of one notification are sent one
+    /// after another, so relaxed ordering is enough.
+    pub(super) fn take(&self) -> bool {
+        #[allow(deprecated, reason = "try_update needs Rust 1.95; the MSRV is 1.93")]
+        let taken = self
+            .remaining
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+            .is_ok();
+        if !taken {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        taken
+    }
+
+    fn dropped(&self) -> usize {
+        self.dropped.load(Ordering::Relaxed)
+    }
+}
 
 /// How a notification reached this device's forwarders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,6 +290,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 priority: notification.priority,
                 encode_for: &encode_for,
                 admits: &|_| true,
+                budget: None,
             };
             Self::send_event_notification(ctx, &outbound, &remote).await;
         }
@@ -229,24 +304,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 return;
             }
         };
-        for process_identifier in local {
-            Self::forward_event_notification(
-                ctx,
-                forwarded.retargeted(process_identifier),
-                ForwardOrigin::Local,
-            )
-            .await;
-        }
+        // One notification, whatever number of process identifiers names
+        // this device: one cap, and one copy per destination.
+        let offered = local
+            .into_iter()
+            .map(|process_identifier| forwarded.retargeted(process_identifier))
+            .collect();
+        Self::forward_event_notification(ctx, offered, ForwardOrigin::Local).await;
     }
 
-    /// Offer `notification` to this device's forwarders and send each copy
-    /// they ask for, up to [`MAX_FORWARDED_DESTINATIONS`] destinations.
-    /// Returns once every unconfirmed copy is sent and every confirmed one is
-    /// handed to its notification worker; it never reports a delivery
-    /// outcome to the caller.
+    /// Offer one notification, as `offered` gives it to this device's
+    /// forwarders (one entry per process identifier it reaches them under),
+    /// and send each copy they ask for, up to [`MAX_FORWARDED_DESTINATIONS`]
+    /// destinations in all. Returns once every unconfirmed copy is sent and
+    /// every confirmed one is handed to its notification worker; it never
+    /// reports a delivery outcome to the caller.
     pub(super) async fn forward_event_notification(
         ctx: &EventDelivery<'_, T>,
-        notification: ForwardedEventNotification,
+        offered: Vec<ForwardedEventNotification>,
         origin: ForwardOrigin,
     ) {
         if matches!(origin, ForwardOrigin::Received(reception) if reception.global) {
@@ -258,7 +333,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
         let mut taken = Vec::new();
         let mut sent: Vec<(BACnetRecipient, u32, bool)> = Vec::new();
-        let mut pending = vec![notification];
+        let budget = ForwardingBudget::new();
+        // A stack, so each entry's hand-offs within the device run before the
+        // next entry; reversed so the entries run in the order given.
+        let mut pending = offered;
+        pending.reverse();
         while let Some(notification) = pending.pop() {
             let (local_device, local_network, mut recipients) = {
                 let db = ctx.db.read().await;
@@ -307,20 +386,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             recipients.retain(|destination| !sent.contains(destination));
-            let room = MAX_FORWARDED_DESTINATIONS - sent.len();
-            if recipients.len() > room {
-                let dropped = recipients.len() - room;
-                warn!(
-                    dropped,
-                    cap = MAX_FORWARDED_DESTINATIONS,
-                    "Event notification reached the forwarding cap; dropping destinations"
-                );
-                for _ in 0..dropped {
-                    ctx.suppressions
-                        .record(EventSuppression::ForwardingCapDropped);
-                }
-                recipients.truncate(room);
-            }
             if recipients.is_empty() {
                 continue;
             }
@@ -337,8 +402,26 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 priority: notification.priority,
                 encode_for: &encode_for,
                 admits: &admits,
+                budget: Some(&budget),
             };
             Self::send_event_notification(ctx, &outbound, &recipients).await;
+        }
+        let dropped = budget.dropped();
+        if dropped > 0 {
+            if CAP_WARNINGS.due(Instant::now()) {
+                warn!(
+                    dropped,
+                    cap = MAX_FORWARDED_DESTINATIONS,
+                    "Event notification reached the forwarding cap; destinations dropped \
+                     (further cap drops log at debug for a minute)"
+                );
+            } else {
+                debug!(
+                    dropped,
+                    cap = MAX_FORWARDED_DESTINATIONS,
+                    "Event notification reached the forwarding cap; destinations dropped"
+                );
+            }
         }
     }
 }

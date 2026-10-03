@@ -432,7 +432,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             ),
                             invoke_id,
                             &req.service_request,
-                            Instant::now(),
+                            Instant::now,
                         ) {
                             received_event = Some(notification);
                         } else {
@@ -702,7 +702,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // device alone.
             Self::forward_event_notification(
                 &services.event_delivery(),
-                notification,
+                vec![notification],
                 ForwardOrigin::Received(Reception::UNICAST),
             )
             .await;

@@ -6,7 +6,8 @@ use std::sync::atomic::AtomicU64;
 /// Lifetime totals of event notifications that were not delivered, each
 /// saturating at `u64::MAX`. A new server starts at zero, and the totals stay
 /// readable after `stop()`. Fields are sampled independently, not as one
-/// atomic aggregate. Each refusal also logs a warning; these totals are the
+/// atomic aggregate. Each refusal also logs a warning (the forwarding cap's
+/// at most once a minute); these totals are the
 /// running signal, not an audit log.
 ///
 /// The first four count transitions (event or acknowledgment notifications)
@@ -95,9 +96,13 @@ pub struct EventNotificationCounters {
     /// acknowledged without being offered to them again, are not counted.
     pub received_not_forwarded: u64,
     /// Destinations a notification was not forwarded to because it already
-    /// had [`MAX_FORWARDED_DESTINATIONS`] destinations across this device's
-    /// forwarders, one per destination dropped. Destinations go in forwarder
-    /// order, then list order, so the ones dropped are the last.
+    /// had [`MAX_FORWARDED_DESTINATIONS`] copies on their way across this
+    /// device's forwarders, one per destination dropped. Only copies that
+    /// would be sent take room, so a destination the loop rules refuse is
+    /// neither counted here nor against the cap. Destinations go in
+    /// forwarder order, then list order, so the ones dropped are the last.
+    /// A capped notification logs a warning at most once a minute,
+    /// process-wide, and at debug level otherwise.
     pub forwarding_cap_dropped: u64,
 }
 

@@ -110,7 +110,7 @@ async fn a_network_number_is_remote_while_this_network_has_none() {
 }
 
 /// A node on this network, one per `index`.
-fn peer(index: usize) -> [u8; 6] {
+pub(super) fn peer(index: usize) -> [u8; 6] {
     [10, 0, 1, index as u8, 0xBA, 0xC0]
 }
 

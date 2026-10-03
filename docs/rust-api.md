@@ -4102,9 +4102,15 @@ destination (recipient, process identifier and confirmation) gets one copy.
 One notification goes to at most `MAX_FORWARDED_DESTINATIONS` (64, a full
 `Recipient_List` and `Subscribed_Recipients` of one forwarder) destinations
 across every forwarder that takes it, chained ones included, in forwarder then
-list order. A destination naming the server's own Device object does not
-count. The destinations past the cap are dropped, logged and counted in
-`forwarding_cap_dropped`. There is no rate limit on received notifications.
+list order. Only copies that would be sent count: a destination the loop
+rules refuse, whose route is skipped or whose copy is too large takes no room,
+and neither does a destination naming the server's own Device object. A local
+notification whose Notification Class names that Device object under several
+process identifiers is one notification, with one cap and one copy per
+destination. The destinations past the cap are dropped and counted in
+`forwarding_cap_dropped`; a capped notification logs a warning at most once a
+minute per process, and at debug level in between. There is no rate limit on
+received notifications.
 
 The server executes ConfirmedEventNotification, so it acknowledges every
 well-formed one once it decodes, before any copy is sent and whatever
@@ -4114,7 +4120,8 @@ that does not decode is rejected with INVALID_PARAMETER_DATA_TYPE.
 
 The server remembers each ConfirmedEventNotification that decodes for 60
 seconds, at most 256 at once with the oldest dropped first, keyed by source
-address and invoke ID and matched only by the same service-request octets. A
+address and invoke ID and matched only by the same service-request octets and
+only while its 60 seconds last. A
 retransmission it matches, sent because the acknowledgment went missing, is
 acknowledged again but not offered to the forwarders again, and does not count
 in `received_not_forwarded`. One that comes later, or after newer

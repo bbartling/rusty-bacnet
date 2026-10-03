@@ -2449,7 +2449,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `unconfirmed_send_failed` | Unconfirmed notifications the transport refused to send, once per destination; the other destinations are still served |
 | `apdu_too_large` | Notifications not sent to one destination because they exceed the local APDU size (notifications are never segmented); usually a forwarded copy of one that arrived segmented |
 | `received_not_forwarded` | Received event notifications that decoded but that no Notification Forwarder took; a confirmed one is still acknowledged |
-| `forwarding_cap_dropped` | Destinations a notification was not forwarded to because it already had 64 across the Notification Forwarders, one per destination dropped |
+| `forwarding_cap_dropped` | Destinations a notification was not forwarded to because 64 copies were already on their way across the Notification Forwarders, one per destination dropped; destinations the loop rules refuse take no room |
 
 The first four count event and acknowledgment notifications alike, once per
 transition. A class whose list is empty, or whose destinations all filter the

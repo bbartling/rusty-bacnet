@@ -731,6 +731,8 @@ mod event_enrollment_task_tests;
 #[cfg(test)]
 mod event_forwarding_bounds_tests;
 #[cfg(test)]
+mod event_forwarding_cap_tests;
+#[cfg(test)]
 mod event_forwarding_origin_tests;
 #[cfg(test)]
 mod event_forwarding_rule_tests;
