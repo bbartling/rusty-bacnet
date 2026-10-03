@@ -12,7 +12,7 @@ type Refusal = (ErrorClass, ErrorCode);
 /// A request's range, the run of elements it should return and its flags.
 type PageCase = (Option<RangeSpec>, Range<usize>, (bool, bool, bool));
 
-fn position(reference_index: u32, count: i32) -> Option<RangeSpec> {
+fn position(reference_index: u64, count: i32) -> Option<RangeSpec> {
     Some(RangeSpec::ByPosition {
         reference_index,
         count,
@@ -69,7 +69,7 @@ fn elements(property: PropertyIdentifier, value: &[u8]) -> Vec<Vec<u8>> {
             .iter()
             .map(|subscription| {
                 let mut encoded = BytesMut::new();
-                encode_cov_subscription(&mut encoded, subscription);
+                encode_cov_subscription(&mut encoded, subscription).unwrap();
                 encoded.to_vec()
             })
             .collect()
@@ -78,7 +78,7 @@ fn elements(property: PropertyIdentifier, value: &[u8]) -> Vec<Vec<u8>> {
             .iter()
             .map(|context| {
                 let mut encoded = BytesMut::new();
-                encode_cov_multiple_subscription(&mut encoded, context);
+                encode_cov_multiple_subscription(&mut encoded, context).unwrap();
                 encoded.to_vec()
             })
             .collect()
@@ -307,7 +307,7 @@ async fn active_cov_read_range_byte_cap_keeps_whole_elements_in_read_property_or
         };
         assert!(!fits(&one_more), "{property:?}: the next element fits");
 
-        let last = position(total as u32, -(total as i32));
+        let last = position(total as u64, -(total as i32));
         let (elements, backward) = bracketed(&mut wire, property, last).await;
         let kept = backward.item_count as usize;
         assert!(0 < kept && kept < total, "{property:?}: {kept} of {total}");

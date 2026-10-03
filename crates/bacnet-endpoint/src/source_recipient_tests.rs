@@ -9,7 +9,7 @@ fn device(n: u32) -> BACnetRecipient {
 }
 fn value(recipient: &BACnetRecipient) -> Vec<u8> {
     let mut data = BytesMut::new();
-    bacnet_encoding::constructed::encode_recipient(&mut data, recipient);
+    bacnet_encoding::constructed::encode_recipient(&mut data, recipient).unwrap();
     data.to_vec()
 }
 fn direct(network: &NetworkLayer<BipTransport>) -> BACnetRecipient {

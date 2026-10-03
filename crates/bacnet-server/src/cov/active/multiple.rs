@@ -144,7 +144,10 @@ impl ActiveCovMultipleSubscriptions {
             }
         }
         let mut encoded = BytesMut::new();
-        encode_cov_multiple_subscription_list(&mut encoded, &contexts);
+        // Admission holds every recipient to BACnetAddress::MAX_MAC_LEN
+        // (`CovRecipient::validate`, #1156), so each context encodes.
+        encode_cov_multiple_subscription_list(&mut encoded, &contexts)
+            .expect("COV admission bounds recipient MACs");
         Self {
             device,
             encoded: encoded.to_vec(),

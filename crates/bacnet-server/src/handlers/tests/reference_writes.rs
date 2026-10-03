@@ -4,7 +4,9 @@
 //! `Object_Property_Reference` (Clause 12.5) is the device-qualifying
 //! sibling production — each decoded STRICTLY from the context-tagged
 //! members the multi-element service decode hands over, with device
-//! members [3] refused (local-device-only posture for the in-tree models).
+//! members [3] refused (local-device-only posture for the in-tree models):
+//! INVALID_DATA_ENCODING where the production has no [3], and
+//! OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED on the Averaging (#1153).
 
 use super::*;
 use bacnet_objects::accumulator::PulseConverterObject;
@@ -407,6 +409,9 @@ fn averaging_object_property_reference_over_the_wire() {
 
     // Device-qualified [3] write is refused (remote sampling is the
     // standard's OPTIONAL branch, unmodeled) with the reference preserved.
+    // The database has no Device, so Device 42 is never this device; the
+    // encoding is valid for this production, so the refusal names the
+    // missing remote support (#1153).
     let mut framed = BytesMut::new();
     framed.extend_from_slice(&framed_reference(&BACnetObjectPropertyReference::new(
         target,
@@ -422,7 +427,7 @@ fn averaging_object_property_reference_over_the_wire() {
         oid,
         PropertyIdentifier::OBJECT_PROPERTY_REFERENCE,
         framed.to_vec(),
-        ErrorCode::INVALID_DATA_ENCODING,
+        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
         baseline.clone(),
         "device-qualified Object_Property_Reference",
     );

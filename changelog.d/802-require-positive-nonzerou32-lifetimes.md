@@ -1,8 +1,6 @@
 ---
 section: Fixed
 ---
-- Require positive `NonZeroU32` lifetimes in Rust single-property COV subscribe
-  methods; explicit cancellation remains separate. The request encoder is now
-  fallible and transactional. Invalid incoming field pairs reject before state
-  changes; paired zero lifetime returns SERVICES/VALUE_OUT_OF_RANGE (#802).
-  Ordinary COV indefinite lifetimes and existing Python APIs are unchanged.
+- **Breaking (Rust API):** single-property COV subscribe methods take a
+  `NonZeroU32` lifetime, and the server refuses a zero lifetime with
+  VALUE_OUT_OF_RANGE (#802).

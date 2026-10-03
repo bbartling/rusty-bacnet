@@ -1,7 +1,6 @@
 ---
 section: Fixed
 ---
-- Replace incomplete raw Network Port construction with a configured, unbound
-  IPV4/NORMAL snapshot: required application properties and DNS array, readonly
-  configuration/derived MAC, optional unknown Link_Speed, and no inert Command or
-  obsolete port62. Python uses `add_bip_network_port`; Device62 is unchanged (#867).
+- **Breaking (Rust and Python API):** raw Network Port construction is
+  replaced by a configured, unbound IPV4/NORMAL snapshot; Python uses
+  `add_bip_network_port` (#867).

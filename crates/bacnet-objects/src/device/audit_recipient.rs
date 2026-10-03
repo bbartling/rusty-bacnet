@@ -151,7 +151,7 @@ impl DeviceObject {
         bacnet_encoding::constructed::encode_recipient(
             &mut bytes,
             self.recipient.value.as_ref().expect("present"),
-        );
+        )?;
         Ok(PropertyValue::ApplicationData(bytes.to_vec()))
     }
 
@@ -186,7 +186,7 @@ impl DeviceObject {
         let PropertyValue::ApplicationData(bytes) = value else {
             return Err(property_error(ErrorCode::INVALID_DATA_TYPE));
         };
-        let (new, end) = bacnet_encoding::constructed::decode_configured_recipient(&bytes, 0)
+        let (new, end) = bacnet_encoding::constructed::decode_recipient(&bytes, 0)
             .map_err(|_| property_error(ErrorCode::INVALID_DATA_ENCODING))?;
         if end != bytes.len() {
             return Err(property_error(ErrorCode::INVALID_DATA_ENCODING));

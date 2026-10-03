@@ -1,0 +1,8 @@
+---
+section: Migration notes
+---
+- **Access Credential (Rust API, #1073):** Credential_Status is read-only now;
+  raise disable reasons with `add_disable_reason`. Set Assigned_Access_Rights
+  and Authentication_Factors with `set_assigned_access_rights` and
+  `set_authentication_factors`, and build `BACnetAssignedAccessRights` with a
+  `BACnetDeviceObjectReference`.

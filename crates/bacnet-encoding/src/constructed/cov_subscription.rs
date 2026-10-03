@@ -17,17 +17,29 @@ use bytes::BytesMut;
 
 use crate::{primitives, tags};
 
+use super::recipient::{check_encoded_recipient, write_recipient};
 use super::{
     decode_ctx_real, decode_ctx_unsigned, decode_object_property_reference, decode_recipient,
-    encode_object_property_reference, encode_recipient, expect_closing, expect_opening,
-    MAX_FRAMED_ITEMS,
+    encode_object_property_reference, expect_closing, expect_opening, MAX_FRAMED_ITEMS,
 };
 
-/// Encode one bare `BACnetCOVSubscription` sequence.
-pub fn encode_cov_subscription(buf: &mut BytesMut, subscription: &BACnetCOVSubscription) {
+/// Encode one bare `BACnetCOVSubscription` sequence. A recipient MAC past
+/// `BACnetAddress::MAX_MAC_LEN` octets is an error, returned before `buf`
+/// changes (#1156).
+pub fn encode_cov_subscription(
+    buf: &mut BytesMut,
+    subscription: &BACnetCOVSubscription,
+) -> Result<(), Error> {
+    check_encoded_recipient(&subscription.recipient.recipient)?;
+    write_cov_subscription(buf, subscription);
+    Ok(())
+}
+
+/// Write a subscription whose recipient has passed the MAC check.
+fn write_cov_subscription(buf: &mut BytesMut, subscription: &BACnetCOVSubscription) {
     tags::encode_opening_tag(buf, 0);
     tags::encode_opening_tag(buf, 0);
-    encode_recipient(buf, &subscription.recipient.recipient);
+    write_recipient(buf, &subscription.recipient.recipient);
     tags::encode_closing_tag(buf, 0);
     primitives::encode_ctx_unsigned(buf, 1, subscription.recipient.process_identifier as u64);
     tags::encode_closing_tag(buf, 0);
@@ -43,25 +55,45 @@ pub fn encode_cov_subscription(buf: &mut BytesMut, subscription: &BACnetCOVSubsc
     }
 }
 
-/// Encode a `BACnetLIST of BACnetCOVSubscription` in slice order.
-pub fn encode_cov_subscription_list(buf: &mut BytesMut, subscriptions: &[BACnetCOVSubscription]) {
+/// Encode a `BACnetLIST of BACnetCOVSubscription` in slice order. Every
+/// recipient is checked before `buf` changes, so a refused list writes nothing.
+pub fn encode_cov_subscription_list(
+    buf: &mut BytesMut,
+    subscriptions: &[BACnetCOVSubscription],
+) -> Result<(), Error> {
     for subscription in subscriptions {
-        encode_cov_subscription(buf, subscription);
+        check_encoded_recipient(&subscription.recipient.recipient)?;
     }
+    for subscription in subscriptions {
+        write_cov_subscription(buf, subscription);
+    }
+    Ok(())
 }
 
 /// Encode one bare `BACnetCOVMultipleSubscription` sequence: `[0]` recipient
 /// process, `[1]` form, `[2]` time remaining, `[3]` maximum notification
 /// delay and `[4]` the nested specifications, each an `[0]` object
 /// identifier plus `[1]` references of `[0]` BACnetPropertyReference,
-/// optional `[1]` REAL increment and `[2]` timestamped flag.
+/// optional `[1]` REAL increment and `[2]` timestamped flag. A recipient MAC
+/// past `BACnetAddress::MAX_MAC_LEN` octets is an error, returned before `buf`
+/// changes (#1156).
 pub fn encode_cov_multiple_subscription(
+    buf: &mut BytesMut,
+    subscription: &BACnetCOVMultipleSubscription,
+) -> Result<(), Error> {
+    check_encoded_recipient(&subscription.recipient.recipient)?;
+    write_cov_multiple_subscription(buf, subscription);
+    Ok(())
+}
+
+/// Write a Multiple context whose recipient has passed the MAC check.
+fn write_cov_multiple_subscription(
     buf: &mut BytesMut,
     subscription: &BACnetCOVMultipleSubscription,
 ) {
     tags::encode_opening_tag(buf, 0);
     tags::encode_opening_tag(buf, 0);
-    encode_recipient(buf, &subscription.recipient.recipient);
+    write_recipient(buf, &subscription.recipient.recipient);
     tags::encode_closing_tag(buf, 0);
     primitives::encode_ctx_unsigned(buf, 1, subscription.recipient.process_identifier as u64);
     tags::encode_closing_tag(buf, 0);
@@ -92,13 +124,19 @@ pub fn encode_cov_multiple_subscription(
 }
 
 /// Encode a `BACnetLIST of BACnetCOVMultipleSubscription` in slice order.
+/// Every recipient is checked before `buf` changes, so a refused list writes
+/// nothing.
 pub fn encode_cov_multiple_subscription_list(
     buf: &mut BytesMut,
     subscriptions: &[BACnetCOVMultipleSubscription],
-) {
+) -> Result<(), Error> {
     for subscription in subscriptions {
-        encode_cov_multiple_subscription(buf, subscription);
+        check_encoded_recipient(&subscription.recipient.recipient)?;
     }
+    for subscription in subscriptions {
+        write_cov_multiple_subscription(buf, subscription);
+    }
+    Ok(())
 }
 
 /// Decode one bare `BACnetCOVSubscription` at `offset`; returns it and the
