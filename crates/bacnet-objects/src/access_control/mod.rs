@@ -13,8 +13,8 @@ use bacnet_encoding::constructed::encode_device_object_reference;
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_types::constructed::BACnetDeviceObjectReference;
 use bacnet_types::enums::{
-    AccessEvent, AccessUserType, BinaryPV, DoorAlarmState, DoorSecuredStatus, DoorStatus,
-    DoorValue, EventState, LockStatus, ObjectType, PropertyIdentifier, Reliability,
+    AccessEvent, AccessUserType, AuthenticationStatus, BinaryPV, DoorAlarmState, DoorSecuredStatus,
+    DoorStatus, DoorValue, EventState, LockStatus, ObjectType, PropertyIdentifier, Reliability,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{
@@ -156,6 +156,7 @@ mod point;
 mod rights;
 mod user;
 mod zone;
+mod zone_occupancy;
 mod zone_out_of_service;
 pub use credential::*;
 pub use credential_data_input::*;
@@ -176,14 +177,20 @@ mod credential_data_input_out_of_service_tests;
 #[cfg(test)]
 mod credential_tests;
 #[cfg(test)]
+mod device_reference_tests;
+#[cfg(test)]
 mod door_out_of_service_tests;
 #[cfg(test)]
 mod door_pulse_tests;
 #[cfg(test)]
 mod point_out_of_service_tests;
 #[cfg(test)]
+mod point_status_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod typed_value_tests;
+#[cfg(test)]
+mod zone_occupancy_tests;
 #[cfg(test)]
 mod zone_out_of_service_tests;

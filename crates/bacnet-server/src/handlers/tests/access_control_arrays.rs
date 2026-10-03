@@ -176,7 +176,8 @@ fn access_door_door_members_read_per_index() {
         reference(None, ObjectType::BINARY_INPUT, 3),
         reference(None, ObjectType::BINARY_OUTPUT, 4),
         reference(Some(99), ObjectType::CREDENTIAL_DATA_INPUT, 1),
-    ]);
+    ])
+    .unwrap();
     let (db, oid) = db_with(Box::new(door));
     assert_reads(
         &db,

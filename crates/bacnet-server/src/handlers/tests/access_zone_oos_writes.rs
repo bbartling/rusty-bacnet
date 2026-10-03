@@ -1,7 +1,8 @@
 //! Occupancy_Count and Reliability writes on an Access Zone over
 //! WriteProperty and WritePropertyMultiple: taken while Out_Of_Service is
 //! TRUE, refused in service (Clauses 12.32.9, 12.32.10 and 12.32.11, Table
-//! 12-37 footnote 1, #1247).
+//! 12-37 footnote 1, #1247). Adjust_Value writes, taken either way but moving
+//! the count only in service (Clause 12.32.13, footnote 5, #1284).
 
 use super::*;
 use bacnet_objects::access_control::AccessZoneObject;
@@ -260,4 +261,60 @@ fn zone_row_writes_outside_their_datatypes_are_refused_unchanged() {
     write_property(&mut db, oid, COUNT, encode(&PropertyValue::Unsigned(1_000))).unwrap();
     assert_eq!(read_bytes(&db, oid, RELIABILITY), [0x91, 64]);
     assert_eq!(read_bytes(&db, oid, COUNT), [0x22, 0x03, 0xE8]);
+}
+
+#[test]
+fn adjust_value_writes_move_the_count_in_service_only() {
+    const ADJUST: PropertyIdentifier = PropertyIdentifier::ADJUST_VALUE;
+    const STATE: PropertyIdentifier = PropertyIdentifier::OCCUPANCY_STATE;
+    let mut zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
+    zone.set_occupancy_count(12);
+    zone.set_occupancy_limits(0, 10).unwrap();
+    let oid = zone.object_identifier();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(zone)).unwrap();
+    let counting = |db: &ObjectDatabase| [COUNT, STATE, ADJUST].map(|p| read_bytes(db, oid, p));
+    // Twelve is above the upper limit of ten (#1284).
+    assert_eq!(
+        counting(&db),
+        [vec![0x21, 12], vec![0x91, 4], vec![0x31, 0]]
+    );
+
+    // In service a write moves the count: WriteProperty by -3, then
+    // WritePropertyMultiple by -1 to sit at the limit.
+    write_property(&mut db, oid, ADJUST, encode(&PropertyValue::Signed(-3))).unwrap();
+    assert_eq!(
+        counting(&db),
+        [vec![0x21, 9], vec![0x91, 0], vec![0x31, 0xFD]]
+    );
+    write_property_multiple(&mut db, oid, &[(ADJUST, encode(&PropertyValue::Signed(1)))]).unwrap();
+    assert_eq!(
+        counting(&db),
+        [vec![0x21, 10], vec![0x91, 3], vec![0x31, 1]]
+    );
+
+    // Out of service the value is kept, but the count stays as simulated.
+    let (property, value) = out_of_service(true);
+    write_property(&mut db, oid, property, value).unwrap();
+    write_property(&mut db, oid, ADJUST, encode(&PropertyValue::Signed(5))).unwrap();
+    assert_eq!(
+        counting(&db),
+        [vec![0x21, 10], vec![0x91, 3], vec![0x31, 5]]
+    );
+    assert_property_error(
+        write_property(&mut db, oid, ADJUST, encode(&PropertyValue::Unsigned(5))),
+        ErrorCode::INVALID_DATA_TYPE,
+    );
+    // Occupancy_State and the other counting rows stay read-only.
+    for property in [
+        STATE,
+        PropertyIdentifier::OCCUPANCY_COUNT_ENABLE,
+        PropertyIdentifier::OCCUPANCY_UPPER_LIMIT,
+    ] {
+        let value = read_bytes(&db, oid, property);
+        assert_property_error(
+            write_property(&mut db, oid, property, value),
+            ErrorCode::WRITE_ACCESS_DENIED,
+        );
+    }
 }

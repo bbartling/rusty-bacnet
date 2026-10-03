@@ -2086,8 +2086,9 @@ server.add_credential_data_input(
 
 The keyword arguments set arrays that are read-only over the network.
 `door_members` and `access_doors` take an `ObjectIdentifier` for an object in
-this device or a `(device, object)` pair for one in another device; an
-`access_doors` element that isn't an Access Door raises `BacnetProtocolError`
+this device or a `(device, object)` pair for one in another device; a pair
+whose device isn't a Device raises `ValueError`, and an `access_doors`
+element that isn't an Access Door raises `BacnetProtocolError`
 (VALUE_OUT_OF_RANGE). `supported_formats` takes `(format, format_class)`
 pairs, a format being a BACnetAuthenticationFactorType number or a
 `(format_type, vendor_id, vendor_format)` triple, which a CUSTOM format
@@ -2096,7 +2097,8 @@ needs; an ill-formed format raises VALUE_OUT_OF_RANGE.
 Access Door, Access Point, Credential Data Input and Load Control take
 SubscribeCOV, and each report carries the values their Table 13-1 rows name:
 Door_Alarm_State on a door; Access_Event (in place of Present_Value),
-Access_Event_Tag and Access_Event_Time on an Access Point; Update_Time on a
+Access_Event_Tag, Access_Event_Time and Access_Event_Credential on an Access
+Point; Update_Time on a
 Credential Data Input; and Requested_Shed_Level, Start_Time and Shed_Duration
 on a Load Control. While a door's Out_Of_Service is TRUE, clients can write
 its Door_Status, Lock_Status and Door_Alarm_State to simulate it (Table 12-30

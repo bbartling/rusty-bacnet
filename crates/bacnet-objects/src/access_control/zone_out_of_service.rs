@@ -8,8 +8,9 @@
 //! Out_Of_Service is TRUE; in service both are refused with
 //! WRITE_ACCESS_DENIED, before the datatype is looked at. Out of service:
 //!
-//! - an Occupancy_Count write has to be an Unsigned, any value; another
-//!   datatype is INVALID_DATA_TYPE;
+//! - an Occupancy_Count write has to be an Unsigned, any value while
+//!   counting is on and only zero while it is off (VALUE_OUT_OF_RANGE
+//!   otherwise; see `zone_occupancy`); another datatype is INVALID_DATA_TYPE;
 //! - a Reliability write has to be an Enumerated inside the BACnetReliability
 //!   production, its proprietary range included; another number is
 //!   VALUE_OUT_OF_RANGE and another datatype INVALID_DATA_TYPE.
@@ -31,11 +32,13 @@
 //!   implementation; this is the choice made here.
 //!
 //! How a simulated value reaches the rest of the device: Status_Flags reads
-//! FAULT from the Reliability served, so a simulated fault sets it. The zone
-//! serves neither Occupancy_State nor Adjust_Value, runs no intrinsic
-//! reporting (no CHANGE_OF_STATE algorithm) and has no Table 13-1 row, so a
-//! simulated value raises no event and sends no SubscribeCOV report. Anything
-//! reading the two properties sees the simulation as it would see the zone.
+//! FAULT from the Reliability served, so a simulated fault sets it, and
+//! Occupancy_State follows the count served, so a simulated count moves it
+//! (12.32.10). An Adjust_Value write is kept but leaves the simulated count
+//! alone. The zone runs no intrinsic reporting (no CHANGE_OF_STATE
+//! algorithm) and has no Table 13-1 row, so a simulated value raises no event
+//! and sends no SubscribeCOV report. Anything reading these properties sees
+//! the simulation as it would see the zone.
 
 use bacnet_types::enums::{PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
@@ -54,10 +57,12 @@ pub(super) struct ZoneState {
 
 impl ZoneState {
     /// Apply a client's write of Occupancy_Count or Reliability, taken only
-    /// while `out_of_service`; `None` for any other property.
+    /// while `out_of_service`; while counting is off (`counting` FALSE) the
+    /// count takes only zero. `None` for any other property.
     pub(super) fn write(
         &mut self,
         out_of_service: bool,
+        counting: bool,
         property: PropertyIdentifier,
         value: &PropertyValue,
     ) -> Option<Result<(), Error>> {
@@ -77,6 +82,9 @@ impl ZoneState {
         let PropertyValue::Unsigned(count) = value else {
             return Some(Err(common::invalid_data_type_error()));
         };
+        if !counting && *count != 0 {
+            return Some(Err(common::value_out_of_range_error()));
+        }
         self.occupancy_count = *count;
         Some(Ok(()))
     }

@@ -172,6 +172,48 @@ fn construction_accepts_two_and_three_stages_and_rejects_all_config_boundaries()
 }
 
 #[test]
+fn target_references_refuse_a_non_device_device_identifier() {
+    // Another object type in the device member is no Device (#1285): it is
+    // refused as out of range before the remote-device rule applies.
+    let not_a_device = || BACnetDeviceObjectReference {
+        device_identifier: Some(ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 10).unwrap()),
+        object_identifier: ObjectIdentifier::new(ObjectType::BINARY_OUTPUT, 9).unwrap(),
+    };
+    let mut configured = config();
+    configured.target_references[0] = not_a_device();
+    assert_protocol_error(
+        StagingObject::new(4, "not a device", configured)
+            .err()
+            .unwrap(),
+        ErrorClass::PROPERTY,
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+    let mut object = StagingObject::new(1, "STG-1", config()).unwrap();
+    let before = object
+        .read_property(PropertyIdentifier::TARGET_REFERENCES, None)
+        .unwrap();
+    let element = |reference: &BACnetDeviceObjectReference| {
+        let mut encoded = BytesMut::new();
+        encode_device_object_reference(&mut encoded, reference);
+        PropertyValue::ApplicationData(encoded.to_vec())
+    };
+    // The whole array keeps its two elements, so only the device member is
+    // at fault; then the one element by index.
+    let whole = PropertyValue::List(vec![
+        element(&not_a_device()),
+        element(&reference(ObjectType::BINARY_VALUE, 2)),
+    ]);
+    for (index, written) in [(None, whole), (Some(1), element(&not_a_device()))] {
+        let error = object
+            .write_property(PropertyIdentifier::TARGET_REFERENCES, index, written, None)
+            .unwrap_err();
+        assert_protocol_error(error, ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE);
+    }
+    let after = object.read_property(PropertyIdentifier::TARGET_REFERENCES, None);
+    assert_eq!(after.unwrap(), before);
+}
+
+#[test]
 fn stage_limits_are_strictly_ascending_while_deadband_edges_may_touch() {
     let mut equal_limits = config();
     equal_limits.stages[0].deadband = 0.0;

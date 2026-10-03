@@ -383,6 +383,8 @@ pub(crate) fn value_out_of_range_error() -> bacnet_types::error::Error {
     )
 }
 
+mod device_reference;
+pub(crate) use device_reference::check_device_reference;
 mod list_element;
 #[cfg(test)]
 pub(crate) use list_element::assert_list_element_refused;

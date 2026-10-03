@@ -508,6 +508,19 @@ pub struct BACnetDeviceObjectReference {
     pub object_identifier: ObjectIdentifier,
 }
 
+impl BACnetDeviceObjectReference {
+    /// Whether the device identifier is absent or names a Device object.
+    ///
+    /// The Clause 21 production gives the first member to the Device that
+    /// holds the object, so an identifier of any other object type can't make
+    /// a valid reference. Setters and write paths that take these references
+    /// refuse one that fails this check.
+    pub fn device_identifier_is_device(&self) -> bool {
+        self.device_identifier
+            .is_none_or(|device| device.object_type() == crate::enums::ObjectType::DEVICE)
+    }
+}
+
 impl From<ObjectIdentifier> for BACnetDeviceObjectReference {
     /// A reference to an object in this device: no device identifier.
     fn from(object_identifier: ObjectIdentifier) -> Self {

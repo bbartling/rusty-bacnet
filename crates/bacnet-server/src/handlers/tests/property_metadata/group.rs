@@ -39,7 +39,7 @@ fn group_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
         global
             .present_value
             .push(AccessResult::Value(PropertyValue::Enumerated(1)));
-        view.add_subordinate(ai1, "a");
+        view.add_subordinate(ai1, "a").unwrap();
         let _ = ai2;
     }
     let mut objects: [Box<dyn BACnetObject>; 3] =

@@ -291,3 +291,22 @@ async fn a_target_in_another_device_is_refused_alone_or_in_a_mixed_array() {
     assert_targets(&h, &[bv(1), bo(2)], "the local targets").await;
     assert_commanded(&h, bo(2), true).await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_target_whose_device_member_is_not_a_device_is_out_of_range() {
+    let mut h = start().await;
+    let code = Err(ErrorCode::VALUE_OUT_OF_RANGE);
+    // Analog Value 856 shares the local Device's instance but is no Device,
+    // so it is neither localized nor taken as a remote device (#1285).
+    for other in [ObjectType::ANALOG_VALUE, ObjectType::BINARY_OUTPUT] {
+        let not_a_device = Some(ObjectIdentifier::new(other, 856).unwrap());
+        let mixed = targets(&[(bv(1), local()), (bo(2), not_a_device)]);
+        assert_eq!(write_property(&mut h, None, mixed.clone()).await, code);
+        assert_eq!(write_property_multiple(&mut h, None, mixed).await, code);
+        let alone = reference(bo(2), not_a_device);
+        assert_eq!(write_property(&mut h, Some(1), alone.clone()).await, code);
+        assert_eq!(write_property_multiple(&mut h, Some(1), alone).await, code);
+    }
+    assert_targets(&h, &[bo(1), bv(1)], "after the refusals").await;
+    assert_commanded(&h, bo(2), false).await;
+}

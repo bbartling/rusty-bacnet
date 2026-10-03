@@ -416,6 +416,24 @@ fn value_source_object_variant() {
 }
 
 #[test]
+fn device_object_reference_device_identifier_must_be_a_device() {
+    let object = ObjectIdentifier::new(ObjectType::ACCESS_DOOR, 7).unwrap();
+    let reference = |device_identifier| BACnetDeviceObjectReference {
+        device_identifier,
+        object_identifier: object,
+    };
+    assert!(reference(None).device_identifier_is_device());
+    for instance in [0, 9, ObjectIdentifier::MAX_INSTANCE] {
+        let device = ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
+        assert!(reference(Some(device)).device_identifier_is_device());
+    }
+    for object_type in [ObjectType::ANALOG_VALUE, ObjectType::ACCESS_DOOR] {
+        let other = ObjectIdentifier::new(object_type, 9).unwrap();
+        assert!(!reference(Some(other)).device_identifier_is_device());
+    }
+}
+
+#[test]
 fn value_source_address_variant() {
     let addr = BACnetAddress::from_ip([192, 168, 1, 10, 0xBA, 0xC0]);
     let vs = BACnetValueSource::Address(addr.clone());

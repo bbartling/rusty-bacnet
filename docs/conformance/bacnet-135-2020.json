@@ -1838,7 +1838,7 @@
     "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_pulses_at_two_priorities_expire_independently",
     "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_pulse_deadline_comes_from_the_bound_monotonic_clock",
     "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_current_command_priority_tracks_the_winning_slot",
-    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::property_metadata_access_door_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::property_metadata_access_door_exact_sets_readable_rows_and_indexed_list",
     "crates/bacnet-server/src/server/access_door_pulse_task_tests.rs::door_pulse_relocks_at_its_exact_deadline_with_one_cov",
     "crates/bacnet-server/src/server/access_door_pulse_task_tests.rs::door_extended_pulse_relocks_after_its_own_time_and_a_relinquish_disarms",
     "crates/bacnet-server/src/handlers/tests/access_required_rows.rs::wp_rp_access_door_times_and_command_priority",
@@ -1849,7 +1849,7 @@
     "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_pulse_below_a_live_command_or_of_zero_length_never_takes_effect",
     "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_rewriting_a_pulse_slot_cancels_or_rearms_its_deadline",
     "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_times_are_unsigned32_tenths",
-    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::property_metadata_access_door_writes_command_priority_and_gate_relinquish"
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::property_metadata_access_door_writes_command_priority_and_gate_relinquish"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -1876,7 +1876,7 @@
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/access_control/door_out_of_service_tests.rs::{access_door_takes_simulated_rows_out_of_service,access_door_return_to_service_serves_the_device_state_again,access_door_simulation_neither_drives_nor_follows_the_pulse_relock}",
-    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::{property_metadata_access_trio_write_capabilities_match_dispatch,property_metadata_access_door_writes_command_priority_and_gate_relinquish}",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_trio_write_capabilities_match_dispatch,property_metadata_access_door_writes_command_priority_and_gate_relinquish}",
     "crates/bacnet-objects/src/access_control/door_secured_status_tests.rs::{access_door_secured_status_is_secured_with_every_input_met,access_door_secured_status_follows_present_value,access_door_secured_status_follows_door_and_lock_status,access_door_secured_status_follows_the_in_alarm_flag,access_door_secured_status_is_unknown_when_an_input_cannot_be_told,access_door_secured_status_follows_a_pulse_and_its_relock,access_door_secured_status_follows_a_simulation_and_the_return_to_service}",
     "crates/bacnet-server/src/handlers/tests/access_door_oos_writes.rs::{write_property_takes_door_status_rows_only_out_of_service,write_property_multiple_takes_door_status_rows_only_out_of_service,read_property_derives_secured_status_from_the_served_door}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_door_indexed_reads_and_bytes_are_unchanged",
@@ -1940,8 +1940,8 @@
     "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_user_exact_sets_readable_rows_and_indexed_list",
     "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_rights_exact_sets_readable_rows_and_indexed_list",
     "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_credential_exact_sets_readable_rows_and_indexed_list",
-    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::property_metadata_access_point_exact_sets_readable_rows_and_indexed_list",
-    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::property_metadata_access_point_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list",
     "crates/bacnet-objects/src/averaging/metadata.rs::tests::property_metadata_averaging_exact_sets_readable_rows_and_indexed_list",
     "crates/bacnet-objects/src/command/metadata.rs::tests::property_metadata_command_exact_sets_readable_rows_and_indexed_list",
     "crates/bacnet-objects/src/event_enrollment/tests/timestamps.rs::enrollment_property_metadata_is_complete_and_pins_timestamp_requirements",
@@ -1979,7 +1979,7 @@
     "crates/bacnet-objects/src/notification_class/tests/properties.rs::out_of_service_is_unknown",
     "crates/bacnet-objects/src/event_enrollment/tests/status_flags.rs::event_enrollment_status_flags_follow_event_state_and_force_out_of_service_false",
     "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_identity_unserved_rows_stay_unknown",
-    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::property_metadata_access_trio_unserved_rows_stay_unknown",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::property_metadata_access_trio_unserved_rows_stay_unknown",
     "crates/bacnet-objects/src/group/metadata.rs::tests::property_metadata_group_trio_unserved_rows_stay_unknown",
     "crates/bacnet-objects/src/averaging/metadata.rs::tests::property_metadata_averaging_write_capabilities_match_dispatch",
     "crates/bacnet-objects/src/command/metadata.rs::tests::property_metadata_command_write_capabilities_match_dispatch",
@@ -2489,7 +2489,7 @@
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/access_control/zone_out_of_service_tests.rs::{access_zone_takes_simulated_rows_out_of_service,access_zone_return_to_service_serves_the_zone_again,access_zone_null_out_of_service_write_keeps_the_simulation}",
-    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::{property_metadata_access_trio_write_capabilities_match_dispatch,property_metadata_access_point_and_zone_writes_store_verbatim}",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_trio_write_capabilities_match_dispatch,property_metadata_access_point_and_zone_writes_store_verbatim}",
     "crates/bacnet-objects/src/reliability_writability_tests.rs::access_zone_reliability_requires_out_of_service",
     "crates/bacnet-server/src/handlers/tests/access_zone_oos_writes.rs::{write_property_takes_zone_rows_only_out_of_service,write_property_multiple_takes_zone_rows_only_out_of_service}",
     "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact"
@@ -2507,10 +2507,7 @@
     "In service both writes fail with WRITE_ACCESS_DENIED. Out of service a count is an Unsigned and a Reliability an Enumerated in the BACnetReliability production, else INVALID_DATA_TYPE or VALUE_OUT_OF_RANGE.",
     "`AccessZoneObject::set_occupancy_count` updates the count set aside while out of service, and `set_reliability_internal` is refused then, as on the other Reliability carriers.",
     "The return to service serves the count set aside, a choice Clause 12.32.11 leaves to the implementation.",
-    "The zone serves neither Occupancy_State nor Adjust_Value, runs no intrinsic reporting and has no Table 13-1 row, so a simulated value raises no event and sends no COV report."
-   ],
-   "gaps": [
-    "#1284: Occupancy_State and Event_State, required Table 12-37 rows, are not served, nor are Occupancy_Count_Enable, Adjust_Value and the occupancy limits"
+    "A simulated count moves Occupancy_State. The zone runs no intrinsic reporting and has no Table 13-1 row, so a simulated value raises no event and sends no COV report."
    ]
   },
   {
@@ -2528,6 +2525,7 @@
     "crates/bacnet-objects/src/access_control/point_out_of_service_tests.rs::{access_point_entering_out_of_service_records_out_of_service,access_point_return_to_service_records_out_of_service_relinquished,access_point_out_of_service_event_without_a_clock_stamps_the_tag_as_a_sequence_number,access_point_sequence_number_folds_a_tag_past_its_range,access_point_out_of_service_event_tag_wraps_at_the_top_of_its_range}",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_point_out_of_service_edges_record_events_and_report",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_point_out_of_service_round_trip_reports_without_a_clock",
+    "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_point_cov_leads_with_access_event_and_triggers_on_its_time",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_point_indexed_reads_and_bytes_are_unchanged"
    ],
    "negative_tests": [
@@ -2541,13 +2539,126 @@
    "notes": [
     "The Clause 12.31 introduction counts an operator action as a transaction and 12.31.27.1 moves the tag when one starts, so each edge moves Access_Event_Tag on by one, wrapping. A write that keeps the value records nothing.",
     "With no usable Device clock Access_Event_Time takes the sequence-number form of BACnetTimeStamp (Clauses 12.31.29 and 21.6) holding the new tag, folded into 1 to 65535, so each edge still moves the Table 13-1 trigger.",
-    "Access_Event_Credential and Access_Event_Authentication_Factor are not served, so an edge sets neither. The point runs no intrinsic reporting, so an edge raises no event notification.",
+    "An edge stores the no-credential reference in Access_Event_Credential (12.31.30(b)). The point runs no intrinsic reporting, so an edge raises no event notification.",
     "`set_access_event` still takes the application's events while out of service; reporting none then is left to the application.",
     "Reliability stays read-only: nothing moves it off NO_FAULT_DETECTED, the condition Clause 12.31.8 sets for a writable Reliability."
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-ZONE-OCCUPANCY",
+   "standard_anchor": "Clause 12.32, Table 12-37, Clauses 12.32.6, 12.32.8 and 12.32.10 to 12.32.15",
+   "priority": "P1",
+   "summary": "An Access Zone counts occupancy: Occupancy_State follows the count, the limits and Occupancy_Count_Enable, and Adjust_Value writes move the count.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/zone_occupancy.rs",
+    "crates/bacnet-objects/src/access_control/zone.rs::AccessZoneObject",
+    "crates/bacnet-objects/src/access_control/zone_out_of_service.rs",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/zone_occupancy_tests.rs::{access_zone_occupancy_state_follows_count_and_limits,access_zone_counting_off_reads_disabled_and_zero,access_zone_adjust_value_moves_the_count,access_zone_out_of_service_adjust_value_leaves_the_counts}",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list,property_metadata_access_trio_write_capabilities_match_dispatch}",
+    "crates/bacnet-server/src/handlers/tests/access_zone_oos_writes.rs::adjust_value_writes_move_the_count_in_service_only",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_zone_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/zone_occupancy_tests.rs::{access_zone_occupancy_limits_refuse_an_upper_limit_not_above_the_lower,access_zone_adjust_value_refuses_other_datatypes,access_zone_counting_off_out_of_service_takes_only_a_zero_count}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#access-control-7"
+   ],
+   "notes": [
+    "The zone always counts, so Occupancy_Count, Occupancy_Count_Enable, Adjust_Value and both limits are always served; Occupancy_State never reads NOT_SUPPORTED.",
+    "Occupancy_Count_Enable and the limits are read-only on the network; `set_occupancy_count_enable` and `set_occupancy_limits` set them, a nonzero upper limit at or below the lower one being VALUE_OUT_OF_RANGE.",
+    "Turning counting off zeroes the served count, the count set aside and Adjust_Value; meanwhile the application's counts are dropped and a simulated count other than zero is VALUE_OUT_OF_RANGE. Counting restarts from zero.",
+    "Adjust_Value is an Integer: in service a nonzero value is added to the count, stopping at zero, and zero clears it; out of service it is kept and the count stays as simulated.",
+    "Event_State reads NORMAL, as the zone runs no intrinsic reporting."
    ],
    "gaps": [
-    "#1284: Access_Event_Credential, a required Table 12-36 row, is not served; each event would store it (12.31.27.1), with the no-credential value for an edge (12.31.30(b))",
-    "#1284: Authentication_Status, a required Table 12-36 row, is not served; it would read DISABLED while the point is out of service (12.31.9)"
+    "Intrinsic reporting on Occupancy_State (CHANGE_OF_STATE) and its event rows are not modeled (no issue)",
+    "Entry_Points and Exit_Points serve Object Identifiers, not BACnetDeviceObjectReference elements, and have no setter (no issue)"
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-POINT-AUTHENTICATION-AND-CREDENTIAL",
+   "standard_anchor": "Clause 12.31, Table 12-36, Clauses 12.31.8, 12.31.9, 12.31.27.1 and 12.31.30, Table 13-1",
+   "priority": "P1",
+   "summary": "An Access Point serves Authentication_Status, DISABLED while out of service, and Access_Event_Credential, stored with each access event.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/point.rs::AccessPointObject",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs",
+    "crates/bacnet-objects/src/traits/defaults.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/point_status_tests.rs::{access_point_authentication_status_reads_disabled_out_of_service,access_point_access_event_stores_its_credential}",
+    "crates/bacnet-objects/src/access_control/point_out_of_service_tests.rs::access_point_entering_out_of_service_records_out_of_service",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::property_metadata_access_point_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_point_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_point_cov_leads_with_access_event_and_triggers_on_its_time"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/point_status_tests.rs::{access_point_authentication_status_refuses_values_past_the_production,access_point_access_event_refuses_a_credential_of_another_type}"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#access-control-7"
+   ],
+   "notes": [
+    "Authentication_Status is READY until the application reports another status with `set_authentication_status`; a value past IN_PROGRESS is VALUE_OUT_OF_RANGE. Both rows are read-only on the network.",
+    "Out of service the reported status is kept and DISABLED is served; the return to service serves the reported status again.",
+    "`set_access_event` takes the credential with the event, tag and time; `None` stores the no-credential reference, Access Credential 4194303 with no device identifier, and another object type is VALUE_OUT_OF_RANGE.",
+    "Access_Event_Credential rides along in the SubscribeCOV report; only Access_Event_Time and Status_Flags trigger it."
+   ],
+   "gaps": [
+    "Active_Authentication_Policy, Number_Of_Authentication_Policies, Authorization_Mode and Priority_For_Writing, required Table 12-36 rows, are not served (no issue)",
+    "#1132: the application can set Authentication_Status and the event rows only before the server holds the point"
+   ]
+  },
+  {
+   "id": "BACNET-21-DEVICE-OBJECT-REFERENCE-DEVICE-MEMBER",
+   "standard_anchor": "Clause 21 BACnetDeviceObjectReference, Clause 15.9.1.3",
+   "priority": "P1",
+   "summary": "Setters and write paths that store a BACnetDeviceObjectReference refuse one whose device identifier is not a Device object with VALUE_OUT_OF_RANGE.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-types/src/constructed/mod.rs::device_identifier_is_device",
+    "crates/bacnet-objects/src/common/device_reference.rs",
+    "crates/bacnet-objects/src/access_control/door.rs::set_door_members",
+    "crates/bacnet-objects/src/access_control/point.rs::set_access_doors",
+    "crates/bacnet-objects/src/staging.rs",
+    "crates/bacnet-objects/src/group.rs::add_subordinate",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-types/src/constructed/tests.rs::device_object_reference_device_identifier_must_be_a_device",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_door_members_and_access_doors_reach_the_arrays"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/device_reference_tests.rs::{access_door_door_members_refuse_a_non_device_device_identifier,access_point_access_doors_refuse_a_non_device_device_identifier,access_point_event_credential_refuses_a_non_device_device_identifier,access_credential_assigned_access_rights_refuse_a_non_device_device_identifier}",
+    "crates/bacnet-objects/src/group/tests.rs::structured_view_add_subordinate_refuses_a_non_device_device_identifier",
+    "crates/bacnet-objects/src/staging/tests.rs::target_references_refuse_a_non_device_device_identifier",
+    "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::set_energy_meter_ref_refuses_objects_that_are_not_meters_atomically",
+    "crates/bacnet-server/src/server/staging_reference_write_tests.rs::a_target_whose_device_member_is_not_a_device_is_out_of_range",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_device_reference_pairs_name_a_device",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_device_reference_pairs_name_a_device"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#constructed-property-framing",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "One check covers Door_Members, Access_Doors, Access_Event_Credential, Assigned_Access_Rights, Subordinate_List, Energy_Meter_Ref and Staging Target_References; a refused list leaves the property unchanged.",
+    "A Staging Target_References member gets this answer ahead of the remote-device refusal, and one naming another object type at the local Device's instance is not localized.",
+    "Python raises ValueError for a `(device, object)` pair whose device is not a Device, before any object is built.",
+    "Audit Log Member_Of keeps any parent and reports an unusable one as CONFIGURATION_ERROR, outside this check."
+   ],
+   "gaps": [
+    "The device member of a BACnetDeviceObjectPropertyReference and of a BACnetActionCommand is not checked the same way (no issue)"
    ]
   },
   {
@@ -2570,7 +2681,7 @@
     "crates/bacnet-encoding/src/constructed/tests/authentication_factor_format.rs::{authentication_factor_format_golden_bytes_and_round_trip,authentication_factor_formats_decode_one_element_at_a_time}",
     "crates/bacnet-objects/src/access_control/array_tests.rs::{credential_data_input_supported_formats_read_as_arrays,access_door_door_members_read_as_an_array,access_point_access_doors_read_as_an_array}",
     "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_credential_data_input_exact_sets_readable_rows_and_indexed_list",
-    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::{property_metadata_access_door_exact_sets_readable_rows_and_indexed_list,property_metadata_access_point_exact_sets_readable_rows_and_indexed_list}",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_door_exact_sets_readable_rows_and_indexed_list,property_metadata_access_point_exact_sets_readable_rows_and_indexed_list}",
     "crates/bacnet-server/src/handlers/tests/access_control_arrays.rs::{credential_data_input_format_arrays_read_per_index,access_door_door_members_read_per_index,access_point_access_doors_read_per_index}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_identity.rs::rpm_credential_data_input_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::{rpm_access_door_indexed_reads_and_bytes_are_unchanged,rpm_access_point_indexed_reads_and_bytes_are_unchanged,rpm_access_zone_indexed_reads_and_bytes_are_unchanged}",
@@ -2593,10 +2704,11 @@
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1169, found in #1133). Breaking pre-1.0 wire change. Tables 12-30, 12-36 and 12-43 and the Clause 21 production were read as page images.",
     "The object keeps Supported_Formats and Supported_Format_Classes as one list of pairs, so the two arrays always have one size. set_supported_formats refuses with VALUE_OUT_OF_RANGE a format outside the closed BACnetAuthenticationFactorType production, a CUSTOM format without both vendor members, and another format with a nonzero vendor member.",
-    "set_access_doors refuses with VALUE_OUT_OF_RANGE a reference to anything but an Access Door object; Door_Members takes any reference, its contents being the device's choice.",
+    "set_access_doors refuses with VALUE_OUT_OF_RANGE a reference to anything but an Access Door object; Door_Members takes a reference to any object type, its contents being the device's choice.",
     "Access Zone has no Access_Doors row, so an indexed read of it fails with UNKNOWN_PROPERTY rather than PROPERTY_IS_NOT_AN_ARRAY, as for the other array identifiers on objects that lack them.",
     "Not covered: network writes and resizing of Supported_Formats and Supported_Format_Classes, which Table 12-43 does not require.",
-    "Python sets the arrays at registration through add_access_door(door_members=...), add_access_point(access_doors=...) and add_credential_data_input(supported_formats=...). A reference is an ObjectIdentifier in this device or a (device, object) pair; a format is a type number or a (type, vendor id, vendor format) triple."
+    "Python sets the arrays at registration through add_access_door(door_members=...), add_access_point(access_doors=...) and add_credential_data_input(supported_formats=...). A reference is an ObjectIdentifier in this device or a (device, object) pair; a format is a type number or a (type, vendor id, vendor format) triple.",
+    "Both setters, and the Python keyword arguments, refuse a reference whose device identifier is not a Device object (BACNET-21-DEVICE-OBJECT-REFERENCE-DEVICE-MEMBER)."
    ]
   },
   {
@@ -5707,7 +5819,8 @@
     "Credential Data Input's Present_Value stays a trigger although its row's criteria name only Update_Time and Status_Flags: Clause 12.36 has Update_Time change on every Present_Value update, so this sends no report the row wouldn't.",
     "Load Control has no COV_Increment, so its Present_Value reports on any change. Door_Alarm_State, Update_Time and the Access Point event rows have no runtime application route yet: the new setters AccessDoorObject::set_door_alarm_state, AccessPointObject::set_access_event and CredentialDataInputObject::set_update_time reach the object only before the server holds it, so the wire tests replace the stored object and run the fanout.",
     "#1131 made Door_Alarm_State, Door_Status and Lock_Status writable while Out_Of_Service is TRUE (BACNET-12-ACCESS-DOOR-OUT-OF-SERVICE-SIMULATION), and table_13_1_cov_tests.rs::access_door_simulated_door_alarm_state_reports_and_restores shows a simulated Door_Alarm_State and its restore on the return to service each sending the report.",
-    "Not claimed for #1061: Access_Event_Credential, Access_Event_Authentication_Factor and Duty_Window, which the objects don't serve and the reports leave out (#1092); and a Load Control Start_Time write route.",
+    "Not claimed for #1061: Access_Event_Authentication_Factor and Duty_Window, which the objects don't serve and the reports leave out (#1092); and a Load Control Start_Time write route.",
+    "An Access Point serves Access_Event_Credential (#1284), so its reports carry it after Access_Event_Time (BACNET-12-ACCESS-POINT-AUTHENTICATION-AND-CREDENTIAL).",
     "The reports carry Credential Data Input Present_Value, the BACnetTimeStamp rows (Update_Time, Access_Event_Time) and the BACnetShedLevel rows exactly as ReadProperty serves them, in their Clause 21 forms since #1133 (BACNET-12-ACCESS-LOAD-CONTROL-DATATYPES).",
     "#1063 gave Controlled_Variable_Value an application route through the BACnetObject::set_controlled_variable_value_internal hook and the existing local-write path, which runs the COV capture under the database lock and fires after the guard drops; the server doesn't follow Controlled_Variable_Reference.",
     "Loop's other required rows are BACNET-12-LOOP-PROPERTY-SET (#1062). #1083 gave the Averaging object an application route through the BACnetObject::add_averaging_sample_internal hook and the same local-write path.",

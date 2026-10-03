@@ -44,6 +44,9 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::STATUS_FLAGS, false, false),
             (P::OUT_OF_SERVICE, false, true),
             (P::RELIABILITY, false, false),
+            // The Table 12-36 required rows #1284 added.
+            (P::AUTHENTICATION_STATUS, false, false),
+            (P::ACCESS_EVENT_CREDENTIAL, false, false),
             (P::PROPERTY_LIST, false, false),
         ],
         _ => vec![
@@ -60,6 +63,14 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::STATUS_FLAGS, false, false),
             (P::OUT_OF_SERVICE, false, true),
             (P::RELIABILITY, false, true),
+            // The Table 12-37 rows #1284 added; Adjust_Value is writable
+            // (footnote 5).
+            (P::OCCUPANCY_STATE, false, false),
+            (P::EVENT_STATE, false, false),
+            (P::OCCUPANCY_COUNT_ENABLE, true, false),
+            (P::ADJUST_VALUE, true, true),
+            (P::OCCUPANCY_UPPER_LIMIT, true, false),
+            (P::OCCUPANCY_LOWER_LIMIT, true, false),
             (P::PROPERTY_LIST, false, false),
         ],
     }

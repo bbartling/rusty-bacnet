@@ -122,7 +122,9 @@ fn credential_data_input_update_time_serves_each_timestamp_choice() {
 fn access_point_access_event_time_serves_each_timestamp_choice() {
     let mut point = AccessPointObject::new(1, "AP-1").unwrap();
     for (tag, (stamp, expected)) in (1..).zip(stamps()) {
-        point.set_access_event(AccessEvent::GRANTED, tag, stamp.clone());
+        point
+            .set_access_event(AccessEvent::GRANTED, tag, stamp.clone(), None)
+            .unwrap();
         let read = point
             .read_property(PropertyIdentifier::ACCESS_EVENT_TIME, None)
             .unwrap();

@@ -172,7 +172,8 @@ fn access_door_door_members_read_as_an_array() {
     door.set_door_members([
         local(ObjectType::BINARY_INPUT, 3),
         remote(99, ObjectType::CREDENTIAL_DATA_INPUT, 1),
-    ]);
+    ])
+    .unwrap();
     assert_array(
         &door,
         P::DOOR_MEMBERS,
