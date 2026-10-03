@@ -103,6 +103,8 @@ mod bip6_group_unicast;
 #[cfg(unix)]
 #[path = "server/bip_group_confirmed.rs"]
 mod bip_group_confirmed;
+#[path = "server/channel_remote.rs"]
+mod channel_remote;
 #[path = "server/command_remote.rs"]
 mod command_remote;
 #[path = "server/dcc.rs"]
