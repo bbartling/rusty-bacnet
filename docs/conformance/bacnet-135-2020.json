@@ -2575,7 +2575,8 @@
     "crates/bacnet-objects/src/notification_class/recipient_list.rs",
     "crates/bacnet-types/src/constructed/mod.rs",
     "crates/bacnet-server/src/server/event_recipient_lookup.rs",
-    "crates/bacnet-server/src/server/event_suppression.rs"
+    "crates/bacnet-server/src/server/event_suppression.rs",
+    "crates/bacnet-server/src/server/event_recipient_route.rs"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/recipient.rs",
@@ -2585,7 +2586,8 @@
     "crates/bacnet-objects/src/notification_class/tests/recipients.rs",
     "crates/bacnet-objects/src/notification_class/tests/routed_list.rs::custom_class_at_the_cap_routes_every_destination",
     "crates/bacnet-server/src/server/event_recipient_routing_tests.rs::custom_class_at_the_cap_reaches_every_destination",
-    "crates/bacnet-server/src/server/event_confirmed_routing_tests/learned_router_cache.rs::admitted_routes_stop_at_64_but_existing_network_updates_at_capacity"
+    "crates/bacnet-server/src/server/event_confirmed_routing_tests/learned_router_cache.rs::admitted_routes_stop_at_64_but_existing_network_updates_at_capacity",
+    "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::every_deliverable_route_moves_no_counter"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/recipient.rs",
@@ -2600,7 +2602,10 @@
     "crates/bacnet-server/src/server/requests/recipient_mac_bound_tests.rs::write_property_of_a_recipient_mac_past_the_bound_is_invalid_data_type",
     "crates/bacnet-server/src/server/requests/recipient_mac_bound_tests.rs::add_list_element_names_the_recipient_mac_past_the_bound",
     "crates/bacnet-server/src/server/event_recipient_routing_tests.rs::every_non_matched_lookup_outcome_emits_no_frame",
-    "crates/bacnet-server/src/server/event_recipient_routing_tests/suppression_counters.rs::each_failed_closed_lookup_moves_only_its_own_counter"
+    "crates/bacnet-server/src/server/event_recipient_routing_tests/suppression_counters.rs::each_failed_closed_lookup_moves_only_its_own_counter",
+    "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::each_route_skip_moves_only_its_own_counter_once",
+    "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::one_transition_counts_each_skipped_destination_and_serves_the_rest",
+    "crates/bacnet-server/src/server/event_confirmed_routing_tests/suppression_counters.rs::confirmed_route_skips_reserve_no_invoke_id"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2616,7 +2621,8 @@
      "#1124: an address MAC is at most 18 octets (BACnetAddress::MAX_MAC_LEN). Clause 21 leaves the OCTET STRING unbounded; the longest network-layer address in Table 6-2 is 7 octets (LonTalk Neuron_ID), and the longest link address this stack uses is the 18-octet B/IPv6 form (IPv6 address and UDP port).",
      "A destination's recipient decodes through decode_configured_recipient, which refuses a longer MAC, so a WriteProperty or WritePropertyMultiple fails with PROPERTY / INVALID_DATA_TYPE and an AddListElement with a ChangeList-Error naming the element; add_destination refuses with the same code so a stored list stays decodable.",
      "A destination is then at most 47 octets and a full list at most 1,504. Routing applies MAX_RECIPIENT_LIST_DESTINATIONS to every class: a custom NOTIFICATION_CLASS object serving a longer list yields RecipientListTooLong, the server logs a warning, counts the transition in EventNotificationCounters::recipient_list_too_long (#1142) and sends nothing for that transition (never a prefix), and decoding stops at the first destination past the cap.",
-     "GetEnrollmentSummary membership still reads the list as configured. The generic decode_recipient stays unbounded for now: COV subscription lists and audit records report source addresses learned off the network, and the stack must read back what it encodes. Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, so those learned addresses fit the bound; holding decode_recipient to it as well is follow-up work (#1156)."
+     "GetEnrollmentSummary membership still reads the list as configured. The generic decode_recipient stays unbounded for now: COV subscription lists and audit records report source addresses learned off the network, and the stack must read back what it encodes. Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, so those learned addresses fit the bound; holding decode_recipient to it as well is follow-up work (#1156).",
+     "#1160: a destination that matches but is skipped while its route is resolved now also counts, once per destination, in EventNotificationCounters: device_recipient_unbound (a Device with no configured or unexpired observed binding), recipient_unroutable (a Device identifier that is not a Device, a binding unusable on the link, or a MAC on network 65535) and confirmed_broadcast_recipient (confirmed notifications asked for at a broadcast address, skipped before an invoke ID is reserved). The transition's other destinations are still served."
     ]
   },
   {
