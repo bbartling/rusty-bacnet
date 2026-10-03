@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use crate::clock::{stamp_datetime, ClockReader, UNSPECIFIED_DATETIME};
 use crate::common::{self, read_common_properties};
+use crate::reference::{self, ReferenceFrame};
 use crate::traits::BACnetObject;
 
 mod metadata;
@@ -208,8 +209,9 @@ impl BACnetObject for PulseConverterObject {
             // Periodic COV notifications are not implemented, and zero is the
             // value that says so (Clause 13.1).
             p if p == PropertyIdentifier::COV_PERIOD => Ok(PropertyValue::Unsigned(0)),
+            // The reference's Clause 21 encoding, or Null when unset (#1312).
             p if p == PropertyIdentifier::INPUT_REFERENCE => Ok(
-                crate::reference::reference_read_value(&self.input_reference),
+                reference::object_property_reference_value(self.input_reference.as_ref()),
             ),
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
@@ -274,13 +276,11 @@ impl BACnetObject for PulseConverterObject {
                     Err(common::invalid_data_type_error())
                 }
             }
-            // Clause 12.23 Input_Reference (BACnetObjectPropertyReference):
-            // shared arm decode — legacy local List and framed network forms.
+            // Input_Reference is BACnetObjectPropertyReference (Table
+            // 12-27): its context-tagged members, or Null to clear it.
             p if p == PropertyIdentifier::INPUT_REFERENCE => {
-                self.input_reference = crate::reference::decode_reference_write(
-                    &value,
-                    crate::reference::ReferenceFrame::Bare,
-                )?;
+                self.input_reference =
+                    reference::decode_reference_write(&value, ReferenceFrame::Bare)?;
                 Ok(())
             }
             _ => Err(crate::common::unhandled_write_error(

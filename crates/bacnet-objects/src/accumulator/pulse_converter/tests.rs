@@ -128,12 +128,10 @@ fn pulse_converter_set_input_reference() {
     let val = pc
         .read_property(PropertyIdentifier::INPUT_REFERENCE, None)
         .unwrap();
+    // The Clause 21 members: [0] accumulator 1, [1] present-value (#1312).
     assert_eq!(
         val,
-        PropertyValue::List(vec![
-            PropertyValue::ObjectIdentifier(oid),
-            PropertyValue::Enumerated(prop_raw),
-        ])
+        PropertyValue::ApplicationData(vec![0x0C, 0x05, 0xC0, 0x00, 0x01, 0x19, 0x55])
     );
 }
 
@@ -165,14 +163,11 @@ fn pulse_converter_write_framed_indexed_input_reference_lands() {
         None,
     )
     .unwrap();
+    // It reads back as the octets written, the index member [2] included.
     assert_eq!(
         pc.read_property(PropertyIdentifier::INPUT_REFERENCE, None)
             .unwrap(),
-        PropertyValue::List(vec![
-            PropertyValue::ObjectIdentifier(oid),
-            PropertyValue::Enumerated(prop_raw),
-            PropertyValue::Unsigned(4),
-        ])
+        PropertyValue::ApplicationData(buf.to_vec())
     );
     // Null clears it again.
     pc.write_property(
@@ -225,6 +220,51 @@ fn pulse_converter_write_malformed_framed_input_reference_rejected() {
             .unwrap(),
         PropertyValue::Null
     );
+}
+
+#[test]
+fn pulse_converter_flat_input_reference_write_is_refused_and_changes_nothing() {
+    let mut pc = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let oid = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 1).unwrap();
+    let prop_raw = PropertyIdentifier::PRESENT_VALUE.to_raw();
+    pc.set_input_reference(BACnetObjectPropertyReference::new(oid, prop_raw));
+    let before = pc
+        .read_property(PropertyIdentifier::INPUT_REFERENCE, None)
+        .unwrap();
+    // The flat list reads used to serve is another datatype (#1312).
+    for flat in [
+        PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(oid),
+            PropertyValue::Enumerated(prop_raw),
+        ]),
+        PropertyValue::List(vec![
+            PropertyValue::ObjectIdentifier(oid),
+            PropertyValue::Enumerated(prop_raw),
+            PropertyValue::Unsigned(4),
+        ]),
+    ] {
+        match pc
+            .write_property(PropertyIdentifier::INPUT_REFERENCE, None, flat, None)
+            .unwrap_err()
+        {
+            Error::Protocol { class, code } => {
+                assert_eq!(
+                    class,
+                    bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+                );
+                assert_eq!(
+                    code,
+                    bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32
+                );
+            }
+            other => panic!("expected PROPERTY/INVALID_DATA_TYPE, got {other:?}"),
+        }
+        assert_eq!(
+            pc.read_property(PropertyIdentifier::INPUT_REFERENCE, None)
+                .unwrap(),
+            before
+        );
+    }
 }
 
 // --- #1092: Count, the count timestamps and Count_Before_Change ---
