@@ -203,6 +203,9 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("log_record_identities_internal", |o| {
         format!("{:?}", o.log_record_identities_internal())
     }),
+    ("log_buffer_internal", |o| {
+        format!("{:?}", o.log_buffer_internal().map(address))
+    }),
 ];
 
 pub const COMMANDS: &[(&str, Command)] = &[

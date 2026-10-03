@@ -437,7 +437,11 @@ fn ack_projection_covers_every_datum_and_nested_optional_field() {
         )
     };
     let datums = [
-        BACnetAuditLogDatum::LogStatus(0b010),
+        // Python sees the bit0-first value: log-disabled is 1, log-interrupted 4.
+        BACnetAuditLogDatum::LogStatus(
+            bacnet_types::bitstring::LogStatus::LOG_DISABLED
+                | bacnet_types::bitstring::LogStatus::LOG_INTERRUPTED,
+        ),
         BACnetAuditLogDatum::AuditNotification(audit_notification(true)),
         BACnetAuditLogDatum::AuditNotification(audit_notification(false)),
         BACnetAuditLogDatum::TimeChange(-1.5),
@@ -536,7 +540,7 @@ fn ack_projection_covers_every_datum_and_nested_optional_field() {
                         .unwrap()
                         .extract::<u8>()
                         .unwrap(),
-                    0b010
+                    0b101
                 ),
                 3 => assert_eq!(
                     datum

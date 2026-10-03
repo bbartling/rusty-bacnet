@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogValue};
 use bacnet_types::primitives::{Date, Time};
 
@@ -63,12 +64,14 @@ fn log_multiple_record_values_have_exact_bytes_and_round_trip() {
 #[test]
 fn log_multiple_record_every_alternative_round_trips() {
     for log_data in [
-        LogData::LogStatus(0b101),
+        LogData::LogStatus(LogStatus::LOG_DISABLED | LogStatus::LOG_INTERRUPTED),
         LogData::TimeChange(-1.5),
         LogData::Values(Vec::new()),
         LogData::Values(vec![
             LogValue::EnumValue(65_535),
             LogValue::SignedValue(-70_000),
+            LogValue::SignedValue(i64::MIN),
+            LogValue::EnumValue(u64::MAX),
             LogValue::BitstringValue {
                 unused_bits: 4,
                 data: vec![0b1010_0000],
@@ -79,6 +82,11 @@ fn log_multiple_record_every_alternative_round_trips() {
             },
             LogValue::BooleanValue(false),
             LogValue::AnyValue(vec![0xA4, 0x7E, 0x08, 0x1F, 0x01, 0x10]),
+            // A value with context tags of its own, such as one element of
+            // a BACnetTimeStamp array.
+            LogValue::AnyValue(vec![
+                0x2E, 0xA4, 0x7E, 0x08, 0x1F, 0x01, 0xB4, 0, 0, 0, 0, 0x2F,
+            ]),
         ]),
     ] {
         let value = record(log_data);
@@ -91,8 +99,10 @@ fn log_multiple_record_every_alternative_round_trips() {
         );
     }
     assert_eq!(
-        &encoded(&record(LogData::LogStatus(0b011)))[12..],
-        &[0x1E, 0x0A, 0x05, 0x60, 0x1F]
+        &encoded(&record(LogData::LogStatus(
+            LogStatus::LOG_DISABLED | LogStatus::BUFFER_PURGED
+        )))[12..],
+        &[0x1E, 0x0A, 0x05, 0xC0, 0x1F]
     );
     assert_eq!(
         &encoded(&record(LogData::TimeChange(0.0)))[12..],
@@ -100,10 +110,32 @@ fn log_multiple_record_every_alternative_round_trips() {
     );
 }
 
+/// A peer's member values need not stay within 32 bits (Clause 21), so
+/// five-octet INTEGER and ENUMERATED entries decode whole.
+#[test]
+fn log_multiple_record_from_a_peer_keeps_wide_integers() {
+    let mut bytes = TIMESTAMP.to_vec();
+    bytes.extend([
+        0x1E, 0x1E, // log-data [1], then its member list [1]
+        0x4D, 0x05, 0xFF, 0x7F, 0xFF, 0xFF, 0xFF, // integer-value [4]
+        0x2D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00, // enumerated-value [2]
+        0x1F, 0x1F,
+    ]);
+    let expected = record(LogData::Values(vec![
+        LogValue::SignedValue(-(1 << 31) - 1),
+        LogValue::EnumValue(1 << 32),
+    ]));
+    assert_eq!(
+        decode_log_multiple_record(&bytes, 0).unwrap(),
+        (expected.clone(), bytes.len())
+    );
+    assert_eq!(encoded(&expected), bytes);
+}
+
 #[test]
 fn consecutive_log_multiple_records_decode_by_returned_offset() {
     let first = record(LogData::Values(vec![LogValue::UnsignedValue(1)]));
-    let second = record(LogData::LogStatus(0b010));
+    let second = record(LogData::LogStatus(LogStatus::BUFFER_PURGED));
     let mut bytes = encoded(&first);
     bytes.extend(encoded(&second));
     let (decoded, next) = decode_log_multiple_record(&bytes, 0).unwrap();
@@ -117,7 +149,6 @@ fn consecutive_log_multiple_records_decode_by_returned_offset() {
 #[test]
 fn log_multiple_record_rejects_unencodable_values_without_writing() {
     for log_data in [
-        LogData::LogStatus(0b1000),
         LogData::Values(vec![LogValue::BitstringValue {
             unused_bits: 8,
             data: vec![0],
@@ -126,9 +157,11 @@ fn log_multiple_record_rejects_unencodable_values_without_writing() {
             unused_bits: 1,
             data: Vec::new(),
         }]),
-        // A context tag, and a value cut short.
-        LogData::Values(vec![LogValue::AnyValue(vec![0x09, 0x01])]),
+        // A value cut short, an opening tag left open, and a stray closing
+        // tag.
         LogData::Values(vec![LogValue::AnyValue(vec![0x44, 0x00])]),
+        LogData::Values(vec![LogValue::AnyValue(vec![0x0E, 0x21, 0x01])]),
+        LogData::Values(vec![LogValue::AnyValue(vec![0x21, 0x01, 0x0F])]),
     ] {
         let mut buf = BytesMut::from(&b"kept"[..]);
         assert!(encode_log_multiple_record(&record(log_data), &mut buf).is_err());

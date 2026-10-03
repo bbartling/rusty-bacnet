@@ -11,7 +11,7 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
 use bacnet_types::enums::ConfirmedServiceChoice;
-use bacnet_types::primitives::{Date, Time};
+use bacnet_types::primitives::{Date, StatusFlags, Time};
 use tokio::time::{timeout, Duration};
 
 fn assert_property_error(error: Error, expected: ErrorCode) {
@@ -280,15 +280,19 @@ fn record_with_status(value: u64) -> BACnetLogRecord {
         date: DATE,
         time: time(value as u8),
         log_datum: LogDatum::UnsignedValue(value),
-        status_flags: Some(0b0100),
+        status_flags: Some(StatusFlags::FAULT),
     }
 }
 
 fn log_with_record(family: LogFamily, record: BACnetLogRecord) -> Box<dyn BACnetObject> {
     match family {
         LogFamily::Event => {
+            // An Event Log record has no status flags to carry.
+            let LogDatum::UnsignedValue(value) = record.log_datum else {
+                panic!("an unsigned sample");
+            };
             let mut object = EventLogObject::new(1, "EL-1", 1).unwrap();
-            object.add_record(record).unwrap();
+            object.add_record(event_record(value)).unwrap();
             Box::new(object)
         }
         LogFamily::Trend => {
@@ -325,20 +329,17 @@ fn read_range_preserves_family_specific_status_projection_bytes() {
             }),
         )
         .unwrap();
-        let mut fields = vec![
-            PropertyValue::Date(DATE),
-            PropertyValue::Time(time(1)),
-            PropertyValue::Unsigned(1),
-        ];
-        if matches!(family, LogFamily::Trend) {
-            fields.push(PropertyValue::BitString {
-                unused_bits: 4,
-                data: vec![0b0100_0000],
-            });
-        }
+        // Only a Trend Log record carries status-flags [2], after its datum.
         let expected = match family {
-            LogFamily::TrendMultiple => projected(family, 1),
-            _ => PropertyValue::List(fields),
+            LogFamily::Trend => {
+                let mut framed = projected(family, 1);
+                let PropertyValue::ApplicationData(bytes) = &mut framed else {
+                    unreachable!()
+                };
+                bytes.extend([0x2A, 0x04, 0x40]);
+                framed
+            }
+            _ => projected(family, 1),
         };
         assert_ack(&ack, &[expected], (true, true, false), Some(1));
     }
@@ -445,13 +446,23 @@ async fn client_accepts_by_time_ack_and_continues_by_returned_sequence() {
     assert_ack(
         &first,
         &[
-            projected_record(2),
-            projected_record(3),
-            projected_record(4),
+            projected(LogFamily::Trend, 2),
+            projected(LogFamily::Trend, 3),
+            projected(LogFamily::Trend, 4),
         ],
         (true, true, false),
         Some(2),
     );
+    // The client's items decode as BACnetLogRecords, back to back (#1233).
+    let mut offset = 0;
+    let mut decoded = Vec::new();
+    while offset < first.item_data.len() {
+        let (record, next) =
+            bacnet_encoding::constructed::decode_log_record(&first.item_data, offset).unwrap();
+        decoded.push(record);
+        offset = next;
+    }
+    assert_eq!(decoded, vec![record(2), record(3), record(4)]);
 
     let returned_sequence = first.first_sequence_number.unwrap();
     let continuation = client
@@ -469,7 +480,10 @@ async fn client_accepts_by_time_ack_and_continues_by_returned_sequence() {
         .unwrap();
     assert_ack(
         &continuation,
-        &[projected_record(2), projected_record(3)],
+        &[
+            projected(LogFamily::Trend, 2),
+            projected(LogFamily::Trend, 3),
+        ],
         (true, false, false),
         Some(returned_sequence),
     );

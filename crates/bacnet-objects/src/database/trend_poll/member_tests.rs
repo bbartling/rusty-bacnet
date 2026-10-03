@@ -35,10 +35,10 @@ fn polled_with(property: P, index: Option<u32>) -> (ObjectDatabase, ObjectIdenti
 #[test]
 fn an_indexed_reference_logs_the_array_element() {
     for (index, expected) in [
-        (8, PropertyValue::Real(61.5)),
-        (16, PropertyValue::Null),
+        (8, LogDatum::RealValue(61.5)),
+        (16, LogDatum::NullValue),
         // Element zero is the array's length.
-        (0, PropertyValue::Unsigned(16)),
+        (0, LogDatum::UnsignedValue(16)),
     ] {
         let (db, oid) = polled_with(P::PRIORITY_ARRAY, Some(index));
         assert_eq!(last_datum(&db, oid), expected, "index {index}");
@@ -66,7 +66,7 @@ fn an_index_on_a_scalar_logs_property_is_not_an_array() {
     );
     // The unindexed read of the same property still logs its value.
     let (db, oid) = polled_with(P::PRESENT_VALUE, None);
-    assert_eq!(last_datum(&db, oid), PropertyValue::Real(61.5));
+    assert_eq!(last_datum(&db, oid), LogDatum::RealValue(61.5));
 }
 
 #[test]

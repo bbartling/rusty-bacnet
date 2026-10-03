@@ -4,14 +4,16 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use bacnet_types::constructed::BACnetLogRecord;
+use bacnet_types::constructed::BACnetEventLogRecord;
 use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use crate::clock::ClockReader;
 use crate::common::{self, read_common_properties};
-use crate::log_buffer::{LogRecordBuffer, LogRecordIdentity, LogRecordProfile};
+use crate::log_buffer::{
+    log_buffer_read_denied, LogBufferRecords, LogRecordBuffer, LogRecordIdentity,
+};
 use crate::log_lifecycle::LogLifecycle;
 use crate::traits::BACnetObject;
 
@@ -20,8 +22,8 @@ mod metadata;
 /// BACnet EventLog object.
 ///
 /// Ring buffer of timestamped event log records. The application calls
-/// `add_record()` to log event data. Resident records retain the legacy shared
-/// Rust `BACnetLogRecord` shape; Event Log projection remains family-specific.
+/// `add_record()` to log a notification or a clock change; the log adds its
+/// own status records.
 pub struct EventLogObject {
     oid: ObjectIdentifier,
     name: String,
@@ -29,7 +31,7 @@ pub struct EventLogObject {
     log_enable: bool,
     stop_when_full: bool,
     buffer_size: u32,
-    log_buffer: LogRecordBuffer,
+    log_buffer: LogRecordBuffer<BACnetEventLogRecord>,
     status_flags: StatusFlags,
     event_state: EventState,
     reliability: Reliability,
@@ -55,18 +57,18 @@ impl EventLogObject {
         })
     }
 
-    /// Add a BACnetLogRecord to the event log buffer.
+    /// Add a record to the event log buffer.
     ///
     /// Success does not guarantee a resident ordinary record: disabled logging
     /// is ignored, zero-capacity logging may only count, and a stop-before-full
     /// transition records status instead. Missing/invalid status clocks fail
     /// atomically with DEVICE / OPERATIONAL_PROBLEM.
-    pub fn add_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
+    pub fn add_record(&mut self, record: BACnetEventLogRecord) -> Result<(), Error> {
         self.lifecycle().try_add_ordinary(record).map(|_| ())
     }
 
     /// Get the current buffer contents.
-    pub fn records(&self) -> &VecDeque<BACnetLogRecord> {
+    pub fn records(&self) -> &VecDeque<BACnetEventLogRecord> {
         self.log_buffer.records()
     }
 
@@ -80,7 +82,7 @@ impl EventLogObject {
         self.description = desc.into();
     }
 
-    fn lifecycle(&mut self) -> LogLifecycle<'_, BACnetLogRecord> {
+    fn lifecycle(&mut self) -> LogLifecycle<'_, BACnetEventLogRecord> {
         LogLifecycle::new(
             &mut self.log_buffer,
             &mut self.log_enable,
@@ -122,9 +124,8 @@ impl BACnetObject for EventLogObject {
             p if p == PropertyIdentifier::BUFFER_SIZE => {
                 Ok(PropertyValue::Unsigned(self.buffer_size as u64))
             }
-            p if p == PropertyIdentifier::LOG_BUFFER => {
-                Ok(self.log_buffer.project(LogRecordProfile::Event))
-            }
+            // ReadRange pages it through `log_buffer_internal`.
+            p if p == PropertyIdentifier::LOG_BUFFER => Err(log_buffer_read_denied()),
             p if p == PropertyIdentifier::RECORD_COUNT => {
                 Ok(PropertyValue::Unsigned(self.records().len() as u64))
             }
@@ -187,6 +188,10 @@ impl BACnetObject for EventLogObject {
 
     fn log_record_identities_internal(&self) -> Option<Vec<LogRecordIdentity>> {
         Some(self.log_buffer.identities())
+    }
+
+    fn log_buffer_internal(&self) -> Option<&dyn LogBufferRecords> {
+        Some(&self.log_buffer)
     }
 }
 

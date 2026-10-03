@@ -2,13 +2,18 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use bacnet_encoding::constructed::decode_log_multiple_record;
+use bacnet_encoding::constructed::{
+    decode_event_log_record, decode_log_multiple_record, decode_log_record,
+};
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
-    BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue,
+    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
+    LogDatum, LogValue,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, PropertyValue, Time};
+use bytes::BytesMut;
 
 use crate::clock::{ClockFrame, ClockReader};
 use crate::event_log::EventLogObject;
@@ -18,8 +23,8 @@ use crate::trend::{TrendLogMultipleObject, TrendLogObject};
 #[path = "log_insertion_tests.rs"]
 mod insertion;
 
-const LOG_DISABLED: u8 = 0b001;
-const BUFFER_PURGED: u8 = 0b010;
+const LOG_DISABLED: LogStatus = LogStatus::LOG_DISABLED;
+const BUFFER_PURGED: LogStatus = LogStatus::BUFFER_PURGED;
 
 #[derive(Clone, Copy, Debug)]
 enum FamilyKind {
@@ -65,10 +70,11 @@ impl Family {
         }
     }
 
-    /// The resident records, a Trend Log Multiple's as single-datum records.
+    /// The resident records, an Event Log's and a Trend Log Multiple's as
+    /// Trend Log records.
     fn records(&self) -> VecDeque<BACnetLogRecord> {
         match self {
-            Self::Event(object) => object.records().clone(),
+            Self::Event(object) => object.records().iter().map(single_event).collect(),
             Self::Trend(object) => object.records().clone(),
             Self::TrendMultiple(object) => object.records().iter().map(single).collect(),
         }
@@ -76,10 +82,18 @@ impl Family {
 
     fn add_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
         match self {
-            Self::Event(object) => object.add_record(record),
+            Self::Event(object) => object.add_record(event(record)),
             Self::Trend(object) => object.add_record(record),
             Self::TrendMultiple(object) => object.add_record(multiple(record)),
         }
+    }
+
+    /// The newest record as ReadRange serves it.
+    fn served_last(&self) -> Vec<u8> {
+        let records = self.object().log_buffer_internal().unwrap();
+        let mut bytes = BytesMut::new();
+        records.encode_record(records.record_count() - 1, &mut bytes);
+        bytes.to_vec()
     }
 
     /// Submit `record` through the trend insertion hook its family serves.
@@ -208,6 +222,36 @@ fn multiple(record: BACnetLogRecord) -> BACnetLogMultipleRecord {
     }
 }
 
+/// A single-datum test record as an Event Log record, its sample carried as
+/// a clock change.
+fn event(record: BACnetLogRecord) -> BACnetEventLogRecord {
+    let log_datum = match record.log_datum {
+        LogDatum::LogStatus(bits) => EventLogDatum::LogStatus(bits),
+        LogDatum::UnsignedValue(value) => EventLogDatum::TimeChange(value as f32),
+        other => panic!("no Event Log form for {other:?}"),
+    };
+    BACnetEventLogRecord {
+        date: record.date,
+        time: record.time,
+        log_datum,
+    }
+}
+
+/// The inverse of [`event`].
+fn single_event(record: &BACnetEventLogRecord) -> BACnetLogRecord {
+    let log_datum = match &record.log_datum {
+        EventLogDatum::LogStatus(bits) => LogDatum::LogStatus(*bits),
+        EventLogDatum::TimeChange(value) => LogDatum::UnsignedValue(*value as u64),
+        other => panic!("no single-datum form for {other:?}"),
+    };
+    BACnetLogRecord {
+        date: record.date,
+        time: record.time,
+        log_datum,
+        status_flags: None,
+    }
+}
+
 /// The inverse of [`multiple`].
 fn single(record: &BACnetLogMultipleRecord) -> BACnetLogRecord {
     let log_datum = match &record.log_data {
@@ -235,35 +279,35 @@ fn ordinary(hour: u8, value: u64) -> BACnetLogRecord {
     }
 }
 
-fn assert_status(object: &Family, bits: u8) {
+fn assert_status(object: &Family, status: LogStatus) {
     let records = object.records();
     let record = records.back().expect("status record");
     assert_eq!(record.date, valid_frame().local_date);
     assert_eq!(record.time, valid_frame().local_time);
-    assert_eq!(record.log_datum, LogDatum::LogStatus(bits));
+    assert_eq!(record.log_datum, LogDatum::LogStatus(status));
     assert_eq!(record.status_flags, None);
-
-    let PropertyValue::List(records) = object.read(PropertyIdentifier::LOG_BUFFER) else {
-        panic!("expected projected records");
+    // On the wire log-disabled, bit 0, is the top bit of the octet
+    // (Clause 20.2.10). Every family puts the log-status [0] choice first
+    // inside its [1] field, right after the 12-octet timestamp.
+    let octet = if status == LOG_DISABLED {
+        0x80
+    } else if status == BUFFER_PURGED {
+        0x40
+    } else if status == LOG_DISABLED | BUFFER_PURGED {
+        0xC0
+    } else if status.is_empty() {
+        0x00
+    } else {
+        panic!("no wire vector for {status}")
     };
-    if let Family::TrendMultiple(_) = object {
-        let Some(PropertyValue::ApplicationData(bytes)) = records.last() else {
-            panic!("expected a framed status record");
-        };
-        let (decoded, _) = decode_log_multiple_record(bytes, 0).unwrap();
-        assert_eq!(decoded.log_data, LogData::LogStatus(bits));
-        return;
-    }
-    let PropertyValue::List(fields) = records.last().expect("projected status record") else {
-        panic!("expected projected record fields");
+    let served = object.served_last();
+    assert_eq!(&served[12..], &[0x1E, 0x0A, 0x05, octet, 0x1F], "{status}");
+    let decoded = match object {
+        Family::Event(_) => single_event(&decode_event_log_record(&served, 0).unwrap().0),
+        Family::Trend(_) => decode_log_record(&served, 0).unwrap().0,
+        Family::TrendMultiple(_) => single(&decode_log_multiple_record(&served, 0).unwrap().0),
     };
-    assert_eq!(
-        fields[2],
-        PropertyValue::BitString {
-            unused_bits: 5,
-            data: vec![(bits & 0b111) << 5],
-        }
-    );
+    assert_eq!(&decoded, record);
 }
 
 fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {
@@ -442,7 +486,7 @@ fn enable_and_stop_when_full_transitions_emit_exactly_one_status() {
             .unwrap();
         assert!(transitions.enabled(), "{kind:?}");
         assert_eq!(transitions.total(), 2, "{kind:?}");
-        assert_status(&transitions, 0);
+        assert_status(&transitions, LogStatus::empty());
 
         transitions
             .write(
