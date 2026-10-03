@@ -53,12 +53,13 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::OBJECT_TYPE, false, false),
             // Table 12-37 has no Present_Value or Access_Doors row (#1064).
             (P::GLOBAL_IDENTIFIER, false, true),
-            (P::OCCUPANCY_COUNT, true, false),
+            // Writable while Out_Of_Service is TRUE (Table 12-37 footnote 1).
+            (P::OCCUPANCY_COUNT, true, true),
             (P::ENTRY_POINTS, false, false),
             (P::EXIT_POINTS, false, false),
             (P::STATUS_FLAGS, false, false),
             (P::OUT_OF_SERVICE, false, true),
-            (P::RELIABILITY, false, false),
+            (P::RELIABILITY, false, true),
             (P::PROPERTY_LIST, false, false),
         ],
     }

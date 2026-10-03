@@ -21,8 +21,9 @@
 //!   element and the Supported_Format_Classes element at the same position.
 //!   Two types need no declaration: UNDEFINED (no factor read) and ERROR (a
 //!   read the reader can't decode), each with format class 0. Any other pair
-//!   is VALUE_OUT_OF_RANGE. The value octets aren't checked against the
-//!   Annex P layout of the format.
+//!   is VALUE_OUT_OF_RANGE. `set_present_value` applies the same rule
+//!   (`credential_data_input_formats`). The value octets aren't checked
+//!   against the Annex P layout of the format.
 //!
 //! A Reliability write has to be an Enumerated that passes
 //! `common::is_reliability_value_valid`: another number is VALUE_OUT_OF_RANGE
@@ -54,11 +55,13 @@
 //! reports, and the return to service reports when it changes any of them.
 
 use bacnet_encoding::constructed::decode_authentication_factor;
-use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat};
-use bacnet_types::enums::{AuthenticationFactorType, PropertyIdentifier, Reliability};
+use bacnet_types::constructed::BACnetAuthenticationFactor;
+use bacnet_types::enums::{PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
+use super::credential_data_input_formats::{is_declared, SupportedFormat};
+use super::simulated_reliability;
 use crate::clock::{stamp_datetime, ClockReader};
 use crate::common;
 
@@ -70,11 +73,6 @@ pub(super) struct Reading {
     pub(super) update_time: BACnetTimeStamp,
     pub(super) reliability: Reliability,
 }
-
-/// A supported format with the format class a factor read in it carries:
-/// one Supported_Formats element and the Supported_Format_Classes element at
-/// the same position.
-pub(super) type SupportedFormat = (BACnetAuthenticationFactorFormat, u32);
 
 impl Reading {
     /// Apply a client's write of Present_Value or Reliability, taken only
@@ -101,33 +99,12 @@ impl Reading {
             if !out_of_service {
                 return Some(Err(common::write_access_denied_error()));
             }
-            let PropertyValue::Enumerated(raw) = value else {
-                return Some(Err(common::invalid_data_type_error()));
-            };
-            return Some(
-                checked_reliability(Reliability::from_raw(*raw)).map(|reliability| {
-                    self.reliability = reliability;
-                }),
-            );
+            return Some(simulated_reliability(value).map(|reliability| {
+                self.reliability = reliability;
+            }));
         }
         None
     }
-}
-
-/// `reliability`, or VALUE_OUT_OF_RANGE outside the BACnetReliability
-/// production.
-pub(super) fn checked_reliability(reliability: Reliability) -> Result<Reliability, Error> {
-    if common::is_reliability_value_valid(reliability) {
-        Ok(reliability)
-    } else {
-        Err(common::value_out_of_range_error())
-    }
-}
-
-/// Whether `format_type` is a named BACnetAuthenticationFactorType. The
-/// production is closed; the bacnet-types production test pins its length.
-pub(super) fn is_factor_type(format_type: AuthenticationFactorType) -> bool {
-    format_type.to_raw() <= AuthenticationFactorType::USER_PASSWORD.to_raw()
 }
 
 /// Decode a client's Present_Value write and check it against `formats`.
@@ -136,7 +113,7 @@ fn checked_factor(
     formats: &[SupportedFormat],
 ) -> Result<BACnetAuthenticationFactor, Error> {
     let factor = decode_factor(value).ok_or_else(common::invalid_data_type_error)?;
-    if !is_factor_type(factor.format_type) || !is_declared(&factor, formats) {
+    if !is_declared(&factor, formats) {
         return Err(common::value_out_of_range_error());
     }
     Ok(factor)
@@ -168,15 +145,4 @@ fn decode_factor(value: &PropertyValue) -> Option<BACnetAuthenticationFactor> {
         Ok((factor, end)) if end == bytes.len() => Some(factor),
         _ => None,
     }
-}
-
-/// Whether `factor` names a format this reader declares, with that format's
-/// class, or is the UNDEFINED or ERROR factor with class 0.
-fn is_declared(factor: &BACnetAuthenticationFactor, formats: &[SupportedFormat]) -> bool {
-    if factor.format_type == AuthenticationFactorType::UNDEFINED {
-        return factor.format_class == 0;
-    }
-    formats.iter().any(|(format, class)| {
-        format.format_type == factor.format_type && *class == factor.format_class
-    }) || (factor.format_type == AuthenticationFactorType::ERROR && factor.format_class == 0)
 }

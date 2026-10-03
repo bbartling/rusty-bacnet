@@ -2697,13 +2697,68 @@ class BACnetServer:
     def add_structured_view(self, instance: int, name: str) -> None: ...
 
     # --- Access control ---
-    def add_access_door(self, instance: int, name: str) -> None: ...
+    def add_access_door(
+        self,
+        instance: int,
+        name: str,
+        *,
+        door_members: Optional[
+            list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
+        ] = None,
+    ) -> None:
+        """Add an Access Door object to the server (before starting).
+
+        ``door_members`` sets Door_Members, the objects that make up the door
+        (read-only over the network). Each element is an ``ObjectIdentifier``
+        in this device or a ``(device, object)`` pair of identifiers for one
+        in another device.
+        """
+        ...
     def add_access_credential(self, instance: int, name: str) -> None: ...
-    def add_access_point(self, instance: int, name: str) -> None: ...
+    def add_access_point(
+        self,
+        instance: int,
+        name: str,
+        *,
+        access_doors: Optional[
+            list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
+        ] = None,
+    ) -> None:
+        """Add an Access Point object to the server (before starting).
+
+        ``access_doors`` sets Access_Doors (read-only over the network), in the
+        element forms ``add_access_door`` takes for ``door_members``. A
+        reference to anything but an Access Door raises BacnetProtocolError
+        with VALUE_OUT_OF_RANGE.
+        """
+        ...
     def add_access_rights(self, instance: int, name: str) -> None: ...
     def add_access_user(self, instance: int, name: str) -> None: ...
     def add_access_zone(self, instance: int, name: str) -> None: ...
-    def add_credential_data_input(self, instance: int, name: str) -> None: ...
+    def add_credential_data_input(
+        self,
+        instance: int,
+        name: str,
+        *,
+        supported_formats: Optional[
+            list[tuple[int | tuple[int, int, int], int]]
+        ] = None,
+    ) -> None:
+        """Add a Credential Data Input object to the server (before starting).
+
+        ``supported_formats`` sets Supported_Formats and
+        Supported_Format_Classes (read-only over the network) as
+        ``(format, format_class)`` pairs. A format is a
+        BACnetAuthenticationFactorType number, or a
+        ``(format_type, vendor_id, vendor_format)`` triple; a CUSTOM format
+        (2) needs the triple. A format outside the closed production, a CUSTOM
+        format without its vendor members, a nonzero vendor member on another
+        format or one above 65535 raises BacnetProtocolError with
+        VALUE_OUT_OF_RANGE. While Out_Of_Service is TRUE a client's simulated
+        Present_Value must name one of these formats with its class, or be
+        the UNDEFINED or ERROR factor with class 0.
+        """
+        ...
     def add_alert_enrollment(
         self, instance: int, name: str, initial_source: ObjectIdentifier
     ) -> None: ...

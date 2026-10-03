@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use super::*;
+use crate::clock::{stamp_datetime, ClockReader};
 
 // AccessPointObject (type 33)
 // ---------------------------------------------------------------------------
@@ -8,6 +11,23 @@ use super::*;
 /// Represents an access point (reader/controller at a door) in an access control system.
 /// The most recent access event is Access_Event; Table 12-36 has no
 /// Present_Value row, so the object serves none (#1064).
+///
+/// Each change of Out_Of_Service is an access event of the point's own
+/// (Clause 12.31.8; #1248): entering out of service records OUT_OF_SERVICE
+/// and the return to service OUT_OF_SERVICE_RELINQUISHED. Recording one
+/// follows Clause 12.31.27.1: the change is an operator action and so starts
+/// a new access transaction, moving Access_Event_Tag on by one (wrapping at
+/// the top of the Unsigned range), and Access_Event_Time takes the time from
+/// the Device clock, every field unspecified when there is none. A write
+/// that leaves Out_Of_Service as it was, NULL included, records nothing. The
+/// point serves neither Access_Event_Credential nor
+/// Access_Event_Authentication_Factor, so neither is touched.
+///
+/// The new Access_Event_Time is the Table 13-1 trigger, so each edge sends
+/// the Access Point SubscribeCOV report, which also carries the changed
+/// OUT_OF_SERVICE flag. The point runs no intrinsic reporting (no
+/// ACCESS_EVENT algorithm; Event_State stays NORMAL), so an edge raises no
+/// event notification.
 pub struct AccessPointObject {
     oid: ObjectIdentifier,
     name: String,
@@ -20,6 +40,7 @@ pub struct AccessPointObject {
     status_flags: StatusFlags,
     out_of_service: bool,
     reliability: Reliability,
+    clock: Option<Arc<dyn ClockReader>>,
 }
 
 impl AccessPointObject {
@@ -38,6 +59,7 @@ impl AccessPointObject {
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             reliability: Reliability::NO_FAULT_DETECTED,
+            clock: None,
         })
     }
 
@@ -48,6 +70,11 @@ impl AccessPointObject {
     /// out in its Clause 21 CHOICE form. A change of it triggers a SubscribeCOV
     /// notification; the event and its tag only ride along (Table 13-1). Over
     /// the network all three stay read-only.
+    ///
+    /// While Out_Of_Service is TRUE the point performs no authentication or
+    /// authorization (Clause 12.31.8), so its access logic has nothing to
+    /// report until the return to service; the point leaves that to the
+    /// application rather than refusing the call.
     pub fn set_access_event(&mut self, event: AccessEvent, tag: u64, time: BACnetTimeStamp) {
         self.access_event = event;
         self.access_event_tag = tag;
@@ -75,6 +102,15 @@ impl AccessPointObject {
         }
         self.access_doors = doors;
         Ok(())
+    }
+
+    /// Record the access event an Out_Of_Service edge raises: a new
+    /// transaction, stamped from the Device clock.
+    fn record_out_of_service_event(&mut self, event: AccessEvent) {
+        let (date, time) = stamp_datetime(self.clock.as_deref());
+        self.access_event = event;
+        self.access_event_tag = self.access_event_tag.wrapping_add(1);
+        self.access_event_time = BACnetTimeStamp::DateTime { date, time };
     }
 }
 
@@ -125,9 +161,17 @@ impl BACnetObject for AccessPointObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
+        let was_out_of_service = self.out_of_service;
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
         {
+            match (was_out_of_service, self.out_of_service) {
+                (false, true) => self.record_out_of_service_event(AccessEvent::OUT_OF_SERVICE),
+                (true, false) => {
+                    self.record_out_of_service_event(AccessEvent::OUT_OF_SERVICE_RELINQUISHED)
+                }
+                _ => {}
+            }
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
@@ -152,6 +196,10 @@ impl BACnetObject for AccessPointObject {
     /// leads with Access_Event, as the point has no Present_Value.
     fn supports_cov(&self) -> bool {
         true
+    }
+
+    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
+        self.clock = clock;
     }
 }
 

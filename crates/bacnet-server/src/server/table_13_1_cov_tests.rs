@@ -15,7 +15,8 @@
 //! The BACnetTimeStamp, BACnetAuthenticationFactor and BACnetShedLevel values
 //! go out in their Clause 21 forms (#1133). A Credential Data Input's
 //! simulated Present_Value and Reliability are written over the wire while it
-//! is out of service (#1168).
+//! is out of service (#1168), and so is the Access Point Out_Of_Service whose
+//! edges record access events (#1248).
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::access_control::{
@@ -380,15 +381,87 @@ async fn access_point_cov_leads_with_access_event_and_triggers_on_its_time() {
     h.server.stop().await.unwrap();
 }
 
-/// CDI-1 having read the same Wiegand 26 card at `second` past 15:00.
+#[tokio::test(start_paused = true)]
+async fn access_point_out_of_service_edges_record_events_and_report() {
+    const OUT_OF_SERVICE: PropertyIdentifier = PropertyIdentifier::OUT_OF_SERVICE;
+    let oid = ObjectIdentifier::new(ObjectType::ACCESS_POINT, 1).unwrap();
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        db.add(point(AccessEvent::GRANTED, 1, 7)).unwrap();
+    })
+    .await;
+    let report = |event: AccessEvent, flags: u8, tag: u64, second: u8| {
+        vec![
+            (PropertyIdentifier::ACCESS_EVENT, enumerated(event.to_raw())),
+            (SF, vec![0x82, 0x04, flags]),
+            (PropertyIdentifier::ACCESS_EVENT_TAG, unsigned(tag)),
+            (PropertyIdentifier::ACCESS_EVENT_TIME, stamp_bytes(second)),
+        ]
+    };
+    assert_eq!(
+        subscribed(&mut h, oid).await,
+        report(AccessEvent::GRANTED, 0x00, 1, 7)
+    );
+
+    // Entering out of service records OUT_OF_SERVICE as a new transaction at
+    // the Device clock's time; one report carries it with the flag (#1248).
+    h.set_clock(20);
+    write(
+        &mut h,
+        oid,
+        OUT_OF_SERVICE,
+        encode(PropertyValue::Boolean(true)),
+    )
+    .await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(AccessEvent::OUT_OF_SERVICE, 0x10, 2, 20)
+    );
+    h.no_notification().await;
+
+    // TRUE again is no edge: nothing is recorded and nothing reports.
+    h.set_clock(25);
+    write(
+        &mut h,
+        oid,
+        OUT_OF_SERVICE,
+        encode(PropertyValue::Boolean(true)),
+    )
+    .await;
+    h.no_notification().await;
+
+    // The return to service records OUT_OF_SERVICE_RELINQUISHED.
+    h.set_clock(30);
+    write(
+        &mut h,
+        oid,
+        OUT_OF_SERVICE,
+        encode(PropertyValue::Boolean(false)),
+    )
+    .await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(AccessEvent::OUT_OF_SERVICE_RELINQUISHED, 0x00, 3, 30)
+    );
+    h.no_notification().await;
+    h.server.stop().await.unwrap();
+}
+
+/// CDI-1, a reader of Wiegand 26 cards (class 0), having read the same card
+/// at `second` past 15:00.
 fn reader(second: u8) -> Box<dyn BACnetObject> {
     let mut reader = CredentialDataInputObject::new(1, "CDI-1").unwrap();
+    reader
+        .set_supported_formats([(
+            BACnetAuthenticationFactorFormat::standard(AuthenticationFactorType::WIEGAND26),
+            0,
+        )])
+        .unwrap();
     let card = BACnetAuthenticationFactor {
         format_type: AuthenticationFactorType::WIEGAND26,
         format_class: 0,
         value: vec![0x12, 0x34, 0x56],
     };
-    reader.set_present_value(card, stamp(second));
+    reader.set_present_value(card, stamp(second)).unwrap();
     Box::new(reader)
 }
 
@@ -438,14 +511,16 @@ async fn credential_data_input_simulated_rows_report_and_restore() {
                 0,
             )])
             .unwrap();
-        reader.set_present_value(
-            BACnetAuthenticationFactor {
-                format_type: AuthenticationFactorType::WIEGAND26,
-                format_class: 0,
-                value: vec![0x12, 0x34, 0x56],
-            },
-            stamp(7),
-        );
+        reader
+            .set_present_value(
+                BACnetAuthenticationFactor {
+                    format_type: AuthenticationFactorType::WIEGAND26,
+                    format_class: 0,
+                    value: vec![0x12, 0x34, 0x56],
+                },
+                stamp(7),
+            )
+            .unwrap();
         db.add(Box::new(reader)).unwrap();
     })
     .await;

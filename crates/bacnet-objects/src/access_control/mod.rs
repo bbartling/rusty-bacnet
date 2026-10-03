@@ -67,10 +67,31 @@ fn device_object_references(references: &[BACnetDeviceObjectReference]) -> Vec<P
         .collect()
 }
 
+/// A client's simulated Reliability, written while Out_Of_Service is TRUE:
+/// an Enumerated inside the BACnetReliability production. Another datatype is
+/// INVALID_DATA_TYPE and another number VALUE_OUT_OF_RANGE.
+fn simulated_reliability(value: &PropertyValue) -> Result<Reliability, Error> {
+    let PropertyValue::Enumerated(raw) = value else {
+        return Err(common::invalid_data_type_error());
+    };
+    checked_reliability(Reliability::from_raw(*raw))
+}
+
+/// `reliability`, or VALUE_OUT_OF_RANGE outside the BACnetReliability
+/// production.
+fn checked_reliability(reliability: Reliability) -> Result<Reliability, Error> {
+    if common::is_reliability_value_valid(reliability) {
+        Ok(reliability)
+    } else {
+        Err(common::value_out_of_range_error())
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 mod credential;
 mod credential_data_input;
+mod credential_data_input_formats;
 mod credential_data_input_out_of_service;
 mod credential_rules;
 mod door;
@@ -81,6 +102,7 @@ mod point;
 mod rights;
 mod user;
 mod zone;
+mod zone_out_of_service;
 pub use credential::*;
 pub use credential_data_input::*;
 pub use door::*;
@@ -94,6 +116,8 @@ mod array_tests;
 #[cfg(test)]
 mod constructed_value_tests;
 #[cfg(test)]
+mod credential_data_input_format_tests;
+#[cfg(test)]
 mod credential_data_input_out_of_service_tests;
 #[cfg(test)]
 mod credential_tests;
@@ -102,6 +126,10 @@ mod door_out_of_service_tests;
 #[cfg(test)]
 mod door_pulse_tests;
 #[cfg(test)]
+mod point_out_of_service_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod typed_value_tests;
+#[cfg(test)]
+mod zone_out_of_service_tests;

@@ -363,10 +363,17 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
         // Access_Event_Time is a BACnetTimeStamp: the unspecified date and
-        // time framed as the datetime [2] choice (#1133).
+        // time framed as the datetime [2] choice (#1133). Going out of
+        // service records OUT_OF_SERVICE (10) as a new transaction, stamped
+        // unspecified for want of a Device clock (#1248).
         let unspec_event_time: &[u8] = &[
             0x2e, 0xa4, 0xff, 0xff, 0xff, 0xff, 0xb4, 0xff, 0xff, 0xff, 0xff, 0x2f,
         ];
+        let (access_event, access_event_tag): (&[u8], &[u8]) = if configured {
+            (&[0x91, 10], &[0x21, 1])
+        } else {
+            (&[0x91, 0], &[0x21, 0])
+        };
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             // Table 12-36 has no Present_Value row (#1064).
             (P::PRESENT_VALUE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
@@ -375,13 +382,13 @@ fn rpm_access_point_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::ACCESS_EVENT, None, Ok(&[0x91, 0])),
+            (P::ACCESS_EVENT, None, Ok(access_event)),
             (
                 P::ACCESS_EVENT,
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::ACCESS_EVENT_TAG, None, Ok(&[0x21, 0])),
+            (P::ACCESS_EVENT_TAG, None, Ok(access_event_tag)),
             (
                 P::ACCESS_EVENT_TAG,
                 Some(0),

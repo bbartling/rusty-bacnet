@@ -4,11 +4,11 @@ use bacnet_encoding::constructed::{
     encode_authentication_factor, encode_authentication_factor_format,
 };
 use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat};
-use bacnet_types::enums::AuthenticationFactorType;
 
-use super::credential_data_input_out_of_service::{
-    checked_reliability, is_factor_type, Reading, SupportedFormat,
+use super::credential_data_input_formats::{
+    drop_undeclared, is_declared, is_well_formed, undefined_factor, SupportedFormat,
 };
+use super::credential_data_input_out_of_service::Reading;
 use super::*;
 use crate::clock::ClockReader;
 
@@ -27,6 +27,9 @@ use crate::clock::ClockReader;
 /// Supported_Formats and Supported_Format_Classes are BACnetARRAYs of the
 /// same size (Clause 12.36.9.1), so the object keeps them as one list of
 /// pairs, set by [`Self::set_supported_formats`]. Both take an array index.
+/// Present_Value always names one of those formats with its class, or is the
+/// UNDEFINED or ERROR factor (Clause 12.36.4; #1249): the module
+/// `credential_data_input_formats` has the rule and how each route keeps it.
 ///
 /// While Out_Of_Service is TRUE a client can simulate Present_Value and
 /// Reliability by writing them, and the reader's own values come back on the
@@ -60,11 +63,7 @@ impl CredentialDataInputObject {
             name: name.into(),
             description: String::new(),
             reading: Reading {
-                present_value: BACnetAuthenticationFactor {
-                    format_type: AuthenticationFactorType::UNDEFINED,
-                    format_class: 0,
-                    value: Vec::new(),
-                },
+                present_value: undefined_factor(),
                 update_time: never_updated(),
                 reliability: Reliability::NO_FAULT_DETECTED,
             },
@@ -80,6 +79,10 @@ impl CredentialDataInputObject {
     /// Update_Time on every Present_Value update. Reading the same factor
     /// again is such an update.
     ///
+    /// The factor must name a declared format with the class declared beside
+    /// it, or be the UNDEFINED or ERROR factor with class 0 (Clause 12.36.4);
+    /// any other is refused with VALUE_OUT_OF_RANGE and nothing changes.
+    ///
     /// A change of Update_Time triggers a SubscribeCOV notification
     /// (Table 13-1). While Out_Of_Service is TRUE a client's simulated values
     /// keep being served, and these take over on the return to service.
@@ -87,10 +90,14 @@ impl CredentialDataInputObject {
         &mut self,
         factor: BACnetAuthenticationFactor,
         update_time: BACnetTimeStamp,
-    ) {
+    ) -> Result<(), Error> {
+        if !is_declared(&factor, &self.supported_formats) {
+            return Err(common::value_out_of_range_error());
+        }
         let reading = self.device_reading_mut();
         reading.present_value = factor;
         reading.update_time = update_time;
+        Ok(())
     }
 
     /// Declare the formats this reader reads: Supported_Formats takes each
@@ -103,8 +110,12 @@ impl CredentialDataInputObject {
     /// format must name its vendor and that vendor's format number; any other
     /// format may carry those members only as zero (Clause 12.36.9). A list
     /// breaking either rule is refused with VALUE_OUT_OF_RANGE and the
-    /// declared formats are kept. Present_Value isn't checked against the new
-    /// list.
+    /// declared formats are kept.
+    ///
+    /// A Present_Value whose format and class the new list doesn't declare
+    /// goes back to the UNDEFINED factor, with Update_Time stamped from the
+    /// Device clock (Clause 12.36.4). Out of service that covers both the
+    /// simulated factor served and the reader's factor put aside.
     pub fn set_supported_formats(
         &mut self,
         formats: impl IntoIterator<Item = (BACnetAuthenticationFactorFormat, u32)>,
@@ -114,6 +125,11 @@ impl CredentialDataInputObject {
             return Err(common::value_out_of_range_error());
         }
         self.supported_formats = formats;
+        let clock = self.clock.as_deref();
+        drop_undeclared(&mut self.reading, &self.supported_formats, clock);
+        if let Some(device) = &mut self.device_reading {
+            drop_undeclared(device, &self.supported_formats, clock);
+        }
         Ok(())
     }
 
@@ -121,18 +137,6 @@ impl CredentialDataInputObject {
     /// else the ones served.
     fn device_reading_mut(&mut self) -> &mut Reading {
         self.device_reading.as_mut().unwrap_or(&mut self.reading)
-    }
-}
-
-/// Whether `format` is a named format whose vendor members suit it.
-fn is_well_formed(format: &BACnetAuthenticationFactorFormat) -> bool {
-    if !is_factor_type(format.format_type) {
-        return false;
-    }
-    if format.format_type == AuthenticationFactorType::CUSTOM {
-        format.vendor_id.is_some() && format.vendor_format.is_some()
-    } else {
-        format.vendor_id.unwrap_or(0) == 0 && format.vendor_format.unwrap_or(0) == 0
     }
 }
 
@@ -264,7 +268,7 @@ impl BACnetObject for CredentialDataInputObject {
         if self.out_of_service {
             return Err(common::write_access_denied_error());
         }
-        self.reading.reliability = checked_reliability(reliability)?;
+        self.reading.reliability = super::checked_reliability(reliability)?;
         Ok(())
     }
 }

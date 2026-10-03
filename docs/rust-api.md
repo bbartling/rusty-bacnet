@@ -1811,7 +1811,9 @@ framing, through the shared `bacnet-encoding` codecs.
   form until the first update. Credential Data Input `Present_Value` is a
   `BACnetAuthenticationFactor`, the UNDEFINED factor until the first read.
   `CredentialDataInputObject::set_present_value(factor, update_time)` records
-  a read and its time together.
+  a read and its time together and returns `Result`: a factor whose format
+  type and class the reader doesn't declare, other than UNDEFINED or ERROR
+  with class 0, is VALUE_OUT_OF_RANGE.
 - **Access-control arrays**: Credential Data Input `Supported_Formats` (each
   element a `BACnetAuthenticationFactorFormat`: format type `[0]`, optional
   vendor id `[1]` and vendor format `[2]`) and `Supported_Format_Classes`
@@ -1824,7 +1826,10 @@ framing, through the shared `bacnet-encoding` codecs.
   CUSTOM format without both vendor members or another format with a nonzero
   one is VALUE_OUT_OF_RANGE), `AccessDoorObject::set_door_members` and
   `AccessPointObject::set_access_doors` (Access Door references only, else
-  VALUE_OUT_OF_RANGE).
+  VALUE_OUT_OF_RANGE). A format list that stops declaring Present_Value's
+  format and class puts Present_Value back to UNDEFINED, with Update_Time
+  stamped from the Device clock; out of service that covers the simulated
+  factor and the reader's factor put aside.
 
 ### ObjectDatabase
 
@@ -2355,7 +2360,21 @@ adding the object with `AccessDoorObject::set_door_alarm_state`,
 Update_Time), and a door's Door_Status and Lock_Status with `set_door_status`
 and `set_lock_status`.
 
-Over the network the Access Point values stay read-only. A Credential Data
+Over the network the Access Point event values stay read-only, but writing
+its Out_Of_Service records an event on each edge (Clause 12.31.8):
+OUT_OF_SERVICE on entry and OUT_OF_SERVICE_RELINQUISHED on the return, each
+a new transaction (Access_Event_Tag moves on by one, wrapping) whose
+Access_Event_Time comes from the Device clock, so each edge sends the COV
+report. A write that leaves Out_Of_Service as it was records nothing. An
+Access Zone's Occupancy_Count and Reliability, the rows footnote 1 of Table
+12-37 marks, take WriteProperty and WritePropertyMultiple while
+Out_Of_Service is TRUE and refuse them in service with WRITE_ACCESS_DENIED: a
+count must be an Unsigned and a Reliability a BACnetReliability value.
+`AccessZoneObject::set_occupancy_count` reports the zone's own count;
+entering out of service puts the count and Reliability aside, the count the
+application reports meanwhile replaces the one put aside,
+`set_reliability_internal` is refused, and the return to service serves the
+zone's values again. A Credential Data
 Input's Present_Value and Reliability, the rows footnote 1 of Table 12-43
 marks, take WriteProperty and WritePropertyMultiple while Out_Of_Service is
 TRUE and refuse them in service with WRITE_ACCESS_DENIED. A Present_Value

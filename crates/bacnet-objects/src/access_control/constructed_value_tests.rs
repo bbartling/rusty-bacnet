@@ -8,7 +8,7 @@
 
 use bacnet_encoding::constructed::decode_authentication_factor;
 use bacnet_encoding::primitives::decode_timestamp_choice;
-use bacnet_types::constructed::BACnetAuthenticationFactor;
+use bacnet_types::constructed::{BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat};
 use bacnet_types::enums::AuthenticationFactorType;
 
 use super::*;
@@ -68,12 +68,18 @@ fn stamp_read(value: PropertyValue) -> (Vec<u8>, BACnetTimeStamp) {
 #[test]
 fn credential_data_input_present_value_is_an_authentication_factor() {
     let mut cdi = CredentialDataInputObject::new(1, "CDI-1").unwrap();
+    cdi.set_supported_formats([(
+        BACnetAuthenticationFactorFormat::standard(AuthenticationFactorType::WIEGAND26),
+        1,
+    )])
+    .unwrap();
     let factor = BACnetAuthenticationFactor {
         format_type: AuthenticationFactorType::WIEGAND26,
         format_class: 1,
         value: vec![0x12, 0x34, 0x56],
     };
-    cdi.set_present_value(factor.clone(), BACnetTimeStamp::SequenceNumber(1));
+    cdi.set_present_value(factor.clone(), BACnetTimeStamp::SequenceNumber(1))
+        .unwrap();
     let PropertyValue::ApplicationData(bytes) = cdi
         .read_property(PropertyIdentifier::PRESENT_VALUE, None)
         .unwrap()
@@ -91,6 +97,11 @@ fn credential_data_input_present_value_is_an_authentication_factor() {
 #[test]
 fn credential_data_input_update_time_serves_each_timestamp_choice() {
     let mut cdi = CredentialDataInputObject::new(1, "CDI-1").unwrap();
+    cdi.set_supported_formats([(
+        BACnetAuthenticationFactorFormat::standard(AuthenticationFactorType::SIMPLE_NUMBER16),
+        0,
+    )])
+    .unwrap();
     let factor = BACnetAuthenticationFactor {
         format_type: AuthenticationFactorType::SIMPLE_NUMBER16,
         format_class: 0,
@@ -98,7 +109,8 @@ fn credential_data_input_update_time_serves_each_timestamp_choice() {
     };
     for (stamp, expected) in stamps() {
         // The same factor read again still moves Update_Time.
-        cdi.set_present_value(factor.clone(), stamp.clone());
+        cdi.set_present_value(factor.clone(), stamp.clone())
+            .unwrap();
         let read = cdi
             .read_property(PropertyIdentifier::UPDATE_TIME, None)
             .unwrap();

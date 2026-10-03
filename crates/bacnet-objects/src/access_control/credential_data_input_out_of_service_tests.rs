@@ -12,7 +12,7 @@ use super::*;
 use crate::clock::{ClockFrame, ClockReader};
 
 /// A clock that always reads 2026-10-02 (a Friday) at `hour`:30.
-struct FixedClock(u8);
+pub(super) struct FixedClock(pub(super) u8);
 
 impl ClockReader for FixedClock {
     fn read_clock(&self) -> Option<ClockFrame> {
@@ -36,20 +36,20 @@ impl ClockReader for FixedClock {
 }
 
 /// Update_Time as the datetime choice the clock above stamps at `hour`.
-fn stamped(hour: u8) -> PropertyValue {
+pub(super) fn stamped(hour: u8) -> PropertyValue {
     PropertyValue::ApplicationData(vec![0x2E, 0xA4, 126, 10, 2, 5, 0xB4, hour, 30, 0, 0, 0x2F])
 }
 
 /// The unspecified date and time in the datetime choice.
-fn unspecified() -> PropertyValue {
+pub(super) fn unspecified() -> PropertyValue {
     PropertyValue::ApplicationData(vec![
         0x2E, 0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF, 0x2F,
     ])
 }
 
 /// A reader of Wiegand 26 cards (class 0) and of vendor 260's format 7
-/// (class 3), whose last read was a Wiegand 26 card at 09:00.
-fn reader() -> CredentialDataInputObject {
+/// (class 3), whose last read was a Wiegand 26 card at 09:30.
+pub(super) fn reader() -> CredentialDataInputObject {
     let mut reader = CredentialDataInputObject::new(1, "CDI-1").unwrap();
     reader
         .set_supported_formats([
@@ -57,12 +57,14 @@ fn reader() -> CredentialDataInputObject {
             (BACnetAuthenticationFactorFormat::custom(260, 7), 3),
         ])
         .unwrap();
-    reader.set_present_value(card(&[0x12, 0x34, 0x56]), stamp(9));
+    reader
+        .set_present_value(card(&[0x12, 0x34, 0x56]), stamp(9))
+        .unwrap();
     reader.bind_clock_internal(Some(Arc::new(FixedClock(11))));
     reader
 }
 
-fn card(value: &[u8]) -> BACnetAuthenticationFactor {
+pub(super) fn card(value: &[u8]) -> BACnetAuthenticationFactor {
     BACnetAuthenticationFactor {
         format_type: F::WIEGAND26,
         format_class: 0,
@@ -70,7 +72,8 @@ fn card(value: &[u8]) -> BACnetAuthenticationFactor {
     }
 }
 
-fn stamp(hour: u8) -> BACnetTimeStamp {
+/// `hour`:30 on 2026-10-02.
+pub(super) fn stamp(hour: u8) -> BACnetTimeStamp {
     BACnetTimeStamp::DateTime {
         date: Date {
             year: 126,
@@ -88,21 +91,21 @@ fn stamp(hour: u8) -> BACnetTimeStamp {
 }
 
 /// A factor's bytes: format type `[0]`, format class `[1]`, value `[2]`.
-fn factor(format_type: u8, class: u8, value: &[u8]) -> Vec<u8> {
+pub(super) fn factor(format_type: u8, class: u8, value: &[u8]) -> Vec<u8> {
     let mut bytes = vec![0x09, format_type, 0x19, class, 0x28 | value.len() as u8];
     bytes.extend_from_slice(value);
     bytes
 }
 
-fn data(bytes: Vec<u8>) -> PropertyValue {
+pub(super) fn data(bytes: Vec<u8>) -> PropertyValue {
     PropertyValue::ApplicationData(bytes)
 }
 
-fn read(reader: &CredentialDataInputObject, property: P) -> PropertyValue {
+pub(super) fn read(reader: &CredentialDataInputObject, property: P) -> PropertyValue {
     reader.read_property(property, None).unwrap()
 }
 
-fn write(
+pub(super) fn write(
     reader: &mut CredentialDataInputObject,
     property: P,
     value: PropertyValue,
@@ -110,7 +113,7 @@ fn write(
     reader.write_property(property, None, value, None)
 }
 
-fn set_out_of_service(reader: &mut CredentialDataInputObject, out_of_service: bool) {
+pub(super) fn set_out_of_service(reader: &mut CredentialDataInputObject, out_of_service: bool) {
     write(
         reader,
         P::OUT_OF_SERVICE,
@@ -140,7 +143,7 @@ fn status_flags(fault: bool, out_of_service: bool) -> PropertyValue {
     }
 }
 
-fn assert_property_error(result: Result<(), Error>, code: ErrorCode) {
+pub(super) fn assert_property_error(result: Result<(), Error>, code: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code: actual })
             if class == ErrorClass::PROPERTY.to_raw() as u32
@@ -369,7 +372,7 @@ fn credential_data_input_return_to_service_serves_the_reader_again() {
 
     // Out of service the application's reads go aside, and its Reliability
     // is refused as on the other Reliability carriers.
-    reader.set_present_value(card(&[0x99]), stamp(10));
+    reader.set_present_value(card(&[0x99]), stamp(10)).unwrap();
     assert_property_error(
         reader.set_reliability_internal(Reliability::COMMUNICATION_FAILURE),
         ErrorCode::WRITE_ACCESS_DENIED,
@@ -397,7 +400,9 @@ fn credential_data_input_return_to_service_serves_the_reader_again() {
     reader
         .set_reliability_internal(Reliability::NO_FAULT_DETECTED)
         .unwrap();
-    reader.set_present_value(card(&[0x12, 0x34, 0x56]), stamp(9));
+    reader
+        .set_present_value(card(&[0x12, 0x34, 0x56]), stamp(9))
+        .unwrap();
     assert_eq!(served(&reader), device(false));
 
     // A second period out of service starts from the reader's values.
