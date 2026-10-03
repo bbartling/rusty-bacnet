@@ -328,7 +328,10 @@ fn audit_every_supported_type_derives_from_canonical_metadata() {
         // Every advertised row reads, and writability never drifts from dispatch.
         for row in metadata.iter() {
             assert!(
-                object.read_property(row.property_identifier, None).is_ok(),
+                crate::property_metadata_tests::metadata_row_reads(
+                    object.as_ref(),
+                    row.property_identifier
+                ),
                 "{object_type:?} must read {:?} without an array index",
                 row.property_identifier
             );

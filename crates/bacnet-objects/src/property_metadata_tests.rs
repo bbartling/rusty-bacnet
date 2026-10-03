@@ -26,6 +26,23 @@ use crate::value_types::{
 
 mod analog;
 
+/// Whether `property` reads the way its metadata row promises: with a value,
+/// or, for an Audit Log's Log_Buffer, with the PROPERTY / READ_ACCESS_DENIED
+/// that marks a present row only ReadRange and AuditLogQuery serve
+/// (Clause 12.64.10).
+pub(crate) fn metadata_row_reads(object: &dyn BACnetObject, property: PropertyIdentifier) -> bool {
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
+    let result = object.read_property(property, None);
+    if object.object_identifier().object_type() == ObjectType::AUDIT_LOG
+        && property == PropertyIdentifier::LOG_BUFFER
+    {
+        return matches!(result, Err(Error::Protocol { class, code })
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::READ_ACCESS_DENIED.to_raw() as u32);
+    }
+    result.is_ok()
+}
+
 struct InstanceMetadataObject {
     oid: ObjectIdentifier,
     include_description: bool,
@@ -322,7 +339,7 @@ fn property_metadata_contract_all_migrated_rows_are_readable() {
         let metadata = object.property_metadata();
         for row in metadata.iter() {
             assert!(
-                object.read_property(row.property_identifier, None).is_ok(),
+                metadata_row_reads(object.as_ref(), row.property_identifier),
                 "{:?} must read {:?} without an array index",
                 object.object_identifier().object_type(),
                 row.property_identifier

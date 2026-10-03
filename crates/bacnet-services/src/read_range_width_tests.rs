@@ -120,14 +120,14 @@ fn encode_ack_with_item_data(
 }
 
 #[test]
-fn request_unsigned_fields_accept_u32_max_with_leading_zero() {
+fn request_unsigned_fields_accept_their_widest_values() {
     let max = [0, 0xff, 0xff, 0xff, 0xff];
     let mut by_position = request_prefix(&max, Some(&max));
     append_range(
         &mut by_position,
         TestRange::Position,
         tags::app_tag::UNSIGNED,
-        &max,
+        &[0xff; 8],
         tags::app_tag::SIGNED,
         &[1],
     );
@@ -137,65 +137,91 @@ fn request_unsigned_fields_accept_u32_max_with_leading_zero() {
     assert!(matches!(
         decoded.range,
         Some(RangeSpec::ByPosition {
-            reference_index: u32::MAX,
+            reference_index: u64::MAX,
             count: 1
         })
     ));
 
-    let mut by_sequence = request_prefix(&[0x83], None);
-    append_range(
-        &mut by_sequence,
-        TestRange::Sequence,
-        tags::app_tag::UNSIGNED,
-        &max,
-        tags::app_tag::SIGNED,
-        &[0xff],
-    );
-    assert!(matches!(
-        ReadRangeRequest::decode(&by_sequence).unwrap().range,
-        Some(RangeSpec::BySequenceNumber {
-            reference_seq: u32::MAX,
-            count: -1
-        })
-    ));
-}
-
-#[test]
-fn request_unsigned_fields_reject_u32_overflow() {
-    for value in [&[1, 0, 0, 0, 0][..], &[0xff; 8][..]] {
-        assert!(ReadRangeRequest::decode(&request_prefix(value, None)).is_err());
-        assert!(ReadRangeRequest::decode(&request_prefix(&[0x83], Some(value))).is_err());
-
-        for range in [TestRange::Position, TestRange::Sequence] {
-            let mut request = request_prefix(&[0x83], None);
-            append_range(
-                &mut request,
-                range,
-                tags::app_tag::UNSIGNED,
-                value,
-                tags::app_tag::SIGNED,
-                &[1],
-            );
-            assert!(ReadRangeRequest::decode(&request).is_err());
-        }
+    // Audit Log sequence numbers pass 2^32 - 1, so the references carry
+    // Unsigned64 (Clause 15.8.1.1.4.1.1 and 15.8.1.1.4.2.1).
+    for (reference, expected) in [
+        (&[1, 0, 0, 0, 0][..], 1u64 << 32),
+        (&[0xff; 8][..], u64::MAX),
+    ] {
+        let mut by_sequence = request_prefix(&[0x83], None);
+        append_range(
+            &mut by_sequence,
+            TestRange::Sequence,
+            tags::app_tag::UNSIGNED,
+            reference,
+            tags::app_tag::SIGNED,
+            &[0xff],
+        );
+        let decoded = ReadRangeRequest::decode(&by_sequence).unwrap();
+        assert_eq!(
+            decoded.range,
+            Some(RangeSpec::BySequenceNumber {
+                reference_seq: expected,
+                count: -1
+            })
+        );
+        let mut encoded = BytesMut::new();
+        decoded.encode(&mut encoded).unwrap();
+        assert_eq!(ReadRangeRequest::decode(&encoded).unwrap(), decoded);
     }
 }
 
 #[test]
-fn ack_unsigned_fields_enforce_u32_without_rejecting_leading_zero() {
+fn request_unsigned_fields_reject_overflow() {
+    for value in [&[1, 0, 0, 0, 0][..], &[0xff; 8][..]] {
+        assert!(ReadRangeRequest::decode(&request_prefix(value, None)).is_err());
+        assert!(ReadRangeRequest::decode(&request_prefix(&[0x83], Some(value))).is_err());
+    }
+    // A nine-octet reference exceeds Unsigned64.
+    for range in [TestRange::Position, TestRange::Sequence] {
+        let mut request = request_prefix(&[0x83], None);
+        append_range(
+            &mut request,
+            range,
+            tags::app_tag::UNSIGNED,
+            &[1, 0, 0, 0, 0, 0, 0, 0, 0],
+            tags::app_tag::SIGNED,
+            &[1],
+        );
+        assert!(ReadRangeRequest::decode(&request).is_err());
+    }
+}
+
+#[test]
+fn ack_unsigned_fields_enforce_their_widths_without_rejecting_leading_zero() {
     let max = [0, 0xff, 0xff, 0xff, 0xff];
     let decoded = ReadRangeAck::decode(&encode_ack(&max, Some(&max), &max, Some(&max))).unwrap();
     assert_eq!(decoded.property_identifier.to_raw(), u32::MAX);
     assert_eq!(decoded.property_array_index, Some(u32::MAX));
     assert_eq!(decoded.item_count, u32::MAX);
-    assert_eq!(decoded.first_sequence_number, Some(u32::MAX));
+    assert_eq!(decoded.first_sequence_number, Some(u64::from(u32::MAX)));
+
+    for (wire, expected) in [
+        (&[1, 0, 0, 0, 0][..], 1u64 << 32),
+        (&[0xff; 8][..], u64::MAX),
+    ] {
+        let ack = ReadRangeAck::decode(&encode_ack(&[0x83], None, &[1], Some(wire))).unwrap();
+        assert_eq!(ack.first_sequence_number, Some(expected));
+        let mut encoded = BytesMut::new();
+        ack.encode(&mut encoded);
+        assert_eq!(
+            &encoded[..],
+            &encode_ack(&[0x83], None, &[1], Some(wire))[..]
+        );
+    }
 
     for value in [&[1, 0, 0, 0, 0][..], &[0xff; 8][..]] {
         assert!(ReadRangeAck::decode(&encode_ack(value, None, &[1], None)).is_err());
         assert!(ReadRangeAck::decode(&encode_ack(&[0x83], Some(value), &[1], None)).is_err());
         assert!(ReadRangeAck::decode(&encode_ack(&[0x83], None, value, None)).is_err());
-        assert!(ReadRangeAck::decode(&encode_ack(&[0x83], None, &[1], Some(value))).is_err());
     }
+    let nine = [1, 0, 0, 0, 0, 0, 0, 0, 0];
+    assert!(ReadRangeAck::decode(&encode_ack(&[0x83], None, &[1], Some(&nine))).is_err());
 }
 
 #[test]

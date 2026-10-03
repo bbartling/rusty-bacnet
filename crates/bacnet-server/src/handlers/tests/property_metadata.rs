@@ -72,6 +72,19 @@ fn rpm_property_ids(
     let ack = ReadPropertyMultipleACK::decode(&response_bytes).unwrap();
     let results = &ack.list_of_read_access_results[0].list_of_results;
     for result in results {
+        // An Audit Log's Log_Buffer is present, but only ReadRange and
+        // AuditLogQuery read it (Clause 12.64.10), so a selector naming it
+        // carries an inline READ_ACCESS_DENIED (Clause 15.7.3.1.2).
+        if object_identifier.object_type() == ObjectType::AUDIT_LOG
+            && result.property_identifier == PropertyIdentifier::LOG_BUFFER
+        {
+            assert_eq!(
+                result.error,
+                Some((ErrorClass::PROPERTY, ErrorCode::READ_ACCESS_DENIED))
+            );
+            assert!(result.property_value.is_none());
+            continue;
+        }
         assert!(
             result.error.is_none(),
             "RPM {selector:?} returned an inline error for {:?}: {:?}",

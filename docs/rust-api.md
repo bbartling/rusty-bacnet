@@ -3285,6 +3285,19 @@ replay. Entries expire at 60 seconds, and a stored future timestamp fails open
 rather than suppressing indefinitely. The general process-local confirmed-
 request tracker remains the pending/session guard.
 
+`Log_Buffer` is listed in the object's Property_List, but ReadProperty and
+ReadPropertyMultiple answer it with `PROPERTY / READ_ACCESS_DENIED` (also
+inside RPM `ALL` and `REQUIRED`): Clause 12.64.10 makes the buffer reachable
+only through ReadRange and AuditLogQuery. ReadRange pages the same retained
+ring that AuditLogQuery scans, through `AuditLogStorage::retained_records`,
+oldest record first. Each item is one bare `BACnetAuditLogRecord` (timestamp
+and datum, including log-status and time-change records, which AuditLogQuery
+never returns), and By Sequence Number and By Time use the record's Unsigned64
+sequence number and timestamp, so a record carries the same sequence number in
+both services. `RangeSpec::ByPosition::reference_index`,
+`RangeSpec::BySequenceNumber::reference_seq` and
+`ReadRangeAck::first_sequence_number` are `u64` for these logs (Clause 15.8).
+
 `AuditLogSnapshot::completed_receipts` is part of the public custom-persistence
 snapshot contract. `FileAuditLogPersistence` writes schema v2, reads schema v1
 as an empty receipt ledger, rejects unknown future versions, and retains the
