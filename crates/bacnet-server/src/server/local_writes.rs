@@ -1,7 +1,7 @@
 use super::cov_notify_context::CovNotifyContext;
 use super::*;
+use crate::command_lists::TakenRuns;
 use crate::handlers::{WriteCommitObserver, WriteTarget};
-use bacnet_objects::command::CommandRun;
 use bacnet_objects::staging::StagingWritePlan;
 
 #[cfg(test)]
@@ -107,6 +107,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// retains correction ownership regardless of the local initiator. Unrelated
     /// properties preserve their behavior without a usable command origin.
     /// Low-level object setters deliberately bypass this notification owner.
+    ///
+    /// # Cancellation
+    ///
+    /// Dropping the future once the write has committed keeps the write but
+    /// skips the COV and event work not yet done, and a Staging plan the
+    /// write queued is never carried out (#1367). A Command list or Channel
+    /// distribution the write started and hadn't yet handed to its task ends
+    /// as if none of its writes were made (#1324): In_Process FALSE with each
+    /// command unsuccessful, or Write_Status FAILED. It ends at once, or as
+    /// soon as the database is free, without `stop()`. A future dropped
+    /// outside a Tokio runtime while the database is busy can't wait for it:
+    /// a warning is logged and the object stays busy.
     ///
     /// [`WriteProperty`]: bacnet_services::write_property::WritePropertyRequest
     pub async fn write_local(
@@ -503,15 +515,18 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
     }
 
     /// Make one local write and the post-write work it owes. Returns the
-    /// Command runs it queued, directly or through a Schedule it changed,
-    /// for the caller to start.
+    /// Command and Channel runs it queued, directly or through a Schedule it
+    /// changed, for the caller to start. They are taken under the write's
+    /// guard and held in a [`TakenRuns`] until then, so dropping this future
+    /// part way, after the commit, ends them rather than leaving their
+    /// objects busy (#1324).
     pub(super) async fn write(
         &self,
         oid: &ObjectIdentifier,
         write: LocalWrite,
         value: PropertyValue,
         source: Option<crate::LocalCommandSource>,
-    ) -> Result<Vec<CommandRun>, Error> {
+    ) -> Result<TakenRuns, Error> {
         // Only a property write can carry OBJECT_NAME, so only it needs the name
         // index kept in step.
         let renaming = matches!(
@@ -561,7 +576,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                         number,
                         "WriteGroup skips a Channel no longer in the group with that number"
                     );
-                    return Ok(Vec::new());
+                    return Ok(TakenRuns::default());
                 }
                 group_skips_delays =
                     inhibit_delay && super::write_group::allows_delay_inhibit(object);
@@ -702,8 +717,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             }
             let staging_plans =
                 BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(oid));
-            let mut command_runs =
-                crate::command_lists::take_runs(&mut db, std::slice::from_ref(oid));
+            let mut command_runs = TakenRuns::take(self.db, &mut db, std::slice::from_ref(oid));
             if group_skips_delays {
                 super::write_group::skip_delays(&mut command_runs, *oid);
             }
@@ -718,6 +732,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             };
             capture.run(&db);
             let schedule_cov = crate::schedule::reevaluate_written(
+                self.db,
                 &mut db,
                 std::slice::from_ref(oid),
                 self.cov_table,
