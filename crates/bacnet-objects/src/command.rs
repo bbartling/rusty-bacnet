@@ -136,14 +136,18 @@ impl CommandObject {
     /// selects (Clause 12.10.8).
     ///
     /// Refused with PROPERTY / VALUE_OUT_OF_RANGE, leaving Action as it was,
-    /// when a command can't be encoded: a priority outside 1..=16, or a value
-    /// with no encoding. A present Action_Text follows the new size
-    /// (Clause 12.10.9), keeping its leading texts and adding empty ones. A
-    /// run in progress is abandoned: its remaining writes aren't made and
-    /// In_Process returns to FALSE.
+    /// when a command's device identifier isn't a Device object (#1308) or a
+    /// command can't be encoded: a priority outside 1..=16, or a value with no
+    /// encoding. A present Action_Text follows the new size (Clause 12.10.9),
+    /// keeping its leading texts and adding empty ones. A run in progress is
+    /// abandoned: its remaining writes aren't made and In_Process returns to
+    /// FALSE.
     pub fn set_action(&mut self, action: Vec<BACnetActionList>) -> Result<(), Error> {
         let mut scratch = BytesMut::new();
         for list in &action {
+            for command in &list.commands {
+                crate::device_reference::check_device_member(command.device_identifier)?;
+            }
             encode_action_list(&mut scratch, list)
                 .map_err(|_| common::value_out_of_range_error())?;
             scratch.clear();

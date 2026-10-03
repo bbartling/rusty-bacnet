@@ -121,7 +121,7 @@ impl TrendLogObject {
         let reference = match value {
             PropertyValue::Null => None,
             value => {
-                let reference = crate::device_reference::decode_property_reference(&value)?;
+                let reference = crate::device_reference::decode_reference(&value)?;
                 references::check_written(&reference, false)?;
                 Some(reference)
             }
@@ -217,7 +217,7 @@ impl BACnetObject for TrendLogObject {
             p if p == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => {
                 Ok(self.log_device_object_property.as_ref().map_or(
                     PropertyValue::Null,
-                    crate::device_reference::property_reference_value,
+                    crate::device_reference::reference_value,
                 ))
             }
             p if p == PropertyIdentifier::PROPERTY_LIST => {

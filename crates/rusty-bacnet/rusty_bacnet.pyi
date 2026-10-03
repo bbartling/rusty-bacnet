@@ -1076,8 +1076,9 @@ class ActionCommand(TypedDict):
     Unknown keys raise ValueError and wrong types raise TypeError. A
     ``device_identifier`` naming another Device sends that write there as a
     confirmed WriteProperty when the server has a binding for the Device;
-    with none, the command fails when the list runs. A read of Action gives
-    each command in this form, with every key present.
+    with none, the command fails when the list runs. A ``device_identifier``
+    that isn't a Device raises ValueError. A read of Action gives each
+    command in this form, with every key present.
     """
 
     object_identifier: ObjectIdentifier
@@ -2910,7 +2911,8 @@ class BACnetServer:
         """Add a Command object; writing N to its Present_Value runs action[N-1].
 
         ``action_text`` serves Action_Text and needs one text per list. A
-        priority outside 1..=16, a value with no encoding, or a text count
+        command whose ``device_identifier`` isn't a Device raises ValueError.
+        A priority outside 1..=16, a value with no encoding, or a text count
         that differs from the list count raises BacnetProtocolError with
         VALUE_OUT_OF_RANGE.
         """

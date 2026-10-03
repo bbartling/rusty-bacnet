@@ -117,10 +117,12 @@ fn assert_protocol(error: Error, class: ErrorClass, code: ErrorCode) {
 
 fn configured_event_enrollment() -> EventEnrollmentObject {
     let mut object = EventEnrollmentObject::new(1, "EE-ack", EventType::OUT_OF_RANGE).unwrap();
-    object.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 77).unwrap(),
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    object
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 77).unwrap(),
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )))
+        .unwrap();
     object.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 0.0,

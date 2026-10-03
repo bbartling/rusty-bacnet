@@ -154,10 +154,11 @@ fn localize_members<R: DeviceQualified>(
 }
 
 /// A value holding one reference, as a single chunk in its local form if the
-/// reference names `local`. The service decode splits a reference into one
-/// chunk per context-tagged member, so the chunks are joined before the
-/// decode. Unless the joined bytes are exactly one reference naming `local`,
-/// the value passes on as written, for the object to judge.
+/// reference names `local`. The service decode hands the reference over as
+/// one chunk; a caller of `write_local` may split it into one chunk per
+/// context-tagged member, so the chunks are joined before the decode. Unless
+/// the joined bytes are exactly one reference naming `local`, the value
+/// passes on as written, for the object to judge.
 fn localize_single<R: DeviceQualified>(
     value: PropertyValue,
     local: ObjectIdentifier,

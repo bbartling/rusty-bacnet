@@ -378,11 +378,12 @@ impl BACnetServer {
     ///
     /// `action` is the Action array: one list of `ActionCommand` mappings per
     /// element, so writing N to Present_Value runs list N. `action_text`
-    /// serves Action_Text and needs one text per list. Shapes and Python
-    /// types are checked here (TypeError / ValueError); the object's own
-    /// setters refuse what BACnet doesn't allow, such as a priority outside
-    /// 1 to 16 or a text count that differs from the list count, as a
-    /// protocol error (VALUE_OUT_OF_RANGE).
+    /// serves Action_Text and needs one text per list. Shapes, Python types
+    /// and each command's device identifier, which must be a Device, are
+    /// checked here (TypeError / ValueError); the object's own setters refuse
+    /// what else BACnet doesn't allow, such as a priority outside 1 to 16 or
+    /// a text count that differs from the list count, as a protocol error
+    /// (VALUE_OUT_OF_RANGE).
     #[pyo3(signature = (instance, name, *, action=None, action_text=None))]
     fn add_command(
         &self,

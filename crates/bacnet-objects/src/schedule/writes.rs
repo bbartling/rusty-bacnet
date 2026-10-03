@@ -63,14 +63,14 @@ fn empty_special_event() -> BACnetSpecialEvent {
 /// The daily schedules in a written Weekly_Schedule value: each opens with
 /// context tag `[0]`.
 fn decode_days(value: PropertyValue) -> Result<Vec<Vec<BACnetTimeValue>>, Error> {
-    common::decode_elements(value, |tag| tag.is_opening_tag(0), decode_daily_schedule)
+    common::decode_elements(&value, |tag| tag.is_opening_tag(0), decode_daily_schedule)
 }
 
 /// The special events in a written Exception_Schedule value: each opens with
 /// its period, a calendar entry under `[0]` or a Calendar reference `[1]`.
 fn decode_events(value: PropertyValue) -> Result<Vec<BACnetSpecialEvent>, Error> {
     common::decode_elements(
-        value,
+        &value,
         |tag| tag.is_opening_tag(0) || tag.is_context(1),
         decode_special_event,
     )

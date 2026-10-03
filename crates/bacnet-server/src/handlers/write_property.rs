@@ -410,12 +410,19 @@ pub(crate) fn decode_write_property_value(
         // Address routing and broadcast policy belong to the mutation owner.
         return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
-    // Log_DeviceObjectProperty reaches the log as raw reference bytes, which
-    // it decodes with the shared codec, after the handler has put any
-    // reference naming this device in its local form; a Trend Log Multiple's
-    // index 0, the array size, stays an Unsigned. An application Null alone
-    // is a Trend Log's empty reference (#1234).
-    if array_index != Some(0) && property == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY {
+    // Log_DeviceObjectProperty and an Averaging object's
+    // Object_Property_Reference reach the object as raw reference bytes, which
+    // it decodes with the shared device-reference helpers, after the handler
+    // has put any reference naming this device in its local form; a Trend Log
+    // Multiple's index 0, the array size, stays an Unsigned. An application
+    // Null alone is the empty single reference (#1234, #1313).
+    if array_index != Some(0)
+        && matches!(
+            property,
+            PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY
+                | PropertyIdentifier::OBJECT_PROPERTY_REFERENCE
+        )
+    {
         if bytes == [0x00] {
             return Ok(PropertyValue::Null);
         }
@@ -449,13 +456,12 @@ pub(crate) fn decode_write_property_value(
             bacnet_encoding::constructed::decode_stage_limit_value(data, offset).map(|(_, end)| end)
         });
     }
-    // Staging targets go one element per chunk; the handler then puts those
-    // naming this device in their local form (#1136).
+    // Staging targets reach the object as raw reference bytes too, decoded
+    // by the same helpers, once the handler has put those naming this device
+    // in their local form (#1136, #1313); index 0, the array size, stays an
+    // Unsigned.
     if array_index != Some(0) && property == PropertyIdentifier::TARGET_REFERENCES {
-        return decode_structured_array(bytes, array_index, |data, offset| {
-            bacnet_encoding::constructed::decode_device_object_reference(data, offset)
-                .map(|(_, end)| end)
-        });
+        return Ok(PropertyValue::ApplicationData(bytes.to_vec()));
     }
     let mut values = Vec::new();
     let mut offset = 0;

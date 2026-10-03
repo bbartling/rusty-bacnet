@@ -39,7 +39,8 @@ fn setup_cov(
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::ChangeOfValue {
         time_delay,
         criteria: ChangeOfValueCriteria::ReferencedPropertyIncrement(increment),

@@ -107,7 +107,8 @@ fn setup_qualified_setpoint(
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::FloatingLimit {
         time_delay: 0,
         setpoint_reference: BACnetDeviceObjectPropertyReference::new_remote(

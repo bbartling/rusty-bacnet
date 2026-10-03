@@ -192,12 +192,14 @@ pub(super) fn enrollment(
 ) -> EventEnrollmentObject {
     let mut enrollment =
         EventEnrollmentObject::new(instance, format!("enrollment-{instance}"), event_type).unwrap();
-    enrollment.set_object_property_reference(target.map(|oid| {
-        BACnetDeviceObjectPropertyReference::new_local(
-            oid,
-            PropertyIdentifier::PRESENT_VALUE.to_raw(),
-        )
-    }));
+    enrollment
+        .set_object_property_reference(target.map(|oid| {
+            BACnetDeviceObjectPropertyReference::new_local(
+                oid,
+                PropertyIdentifier::PRESENT_VALUE.to_raw(),
+            )
+        }))
+        .unwrap();
     enrollment.set_event_parameters(parameters);
     enrollment.set_event_enable(bacnet_types::bitstring::EventTransitionBits::all());
     enrollment

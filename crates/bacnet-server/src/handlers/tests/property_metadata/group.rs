@@ -28,13 +28,13 @@ fn group_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
                 .unwrap();
         }
         global
-            .group_members
-            .push(BACnetDeviceObjectPropertyReference {
+            .add_group_member(BACnetDeviceObjectPropertyReference {
                 object_identifier: ai1,
                 property_identifier: P::PRESENT_VALUE.to_raw(),
                 property_array_index: None,
                 device_identifier: None,
-            });
+            })
+            .unwrap();
         global.group_member_names.push("a".into());
         global
             .present_value

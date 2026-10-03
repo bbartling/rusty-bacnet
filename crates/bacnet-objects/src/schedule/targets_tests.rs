@@ -4,6 +4,7 @@
 //! leaves behind while the Schedule holds it.
 
 use super::*;
+use bacnet_encoding::constructed::encode_object_property_reference;
 use bacnet_types::calendar::SpecificDate;
 
 type P = PropertyIdentifier;
@@ -197,6 +198,10 @@ fn reference_list_refusals_leave_it_unchanged() {
     // [3] Device 9: an object in another device.
     remote.extend([0x3C, 0x02, 0x00, 0x00, 0x09]);
     let local_then_remote = [encoded(&[a()]), remote.clone()].concat();
+    // [3] naming analog-value 9, which is no Device (#1308).
+    let mut not_a_device = encoded(&[b()]);
+    not_a_device.extend([0x3C, 0x00, 0x80, 0x00, 0x09]);
+    let local_then_not_a_device = [encoded(&[a()]), not_a_device].concat();
     // A refusal of one member names its position in the list, from 1
     // (#1121); a refusal of the whole value names none.
     let cases = [
@@ -207,6 +212,14 @@ fn reference_list_refusals_leave_it_unchanged() {
             ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
             Some(2),
             "a member in another device",
+        ),
+        (
+            None,
+            PropertyValue::ApplicationData(local_then_not_a_device),
+            ErrorClass::PROPERTY,
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            Some(2),
+            "a member whose device identifier is no Device",
         ),
         (
             None,

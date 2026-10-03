@@ -58,12 +58,14 @@ fn event_enrollment_object_property_reference_is_served_framed() {
     let mut db = ObjectDatabase::new();
     let mut enrollment = EventEnrollmentObject::new(1, "EE-1", EventType::OUT_OF_RANGE).unwrap();
     let ee = enrollment.object_identifier();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference {
-        object_identifier: oid(ObjectType::ANALOG_INPUT, 5),
-        property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
-        property_array_index: Some(1),
-        device_identifier: Some(oid(ObjectType::DEVICE, 260)),
-    }));
+    enrollment
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference {
+            object_identifier: oid(ObjectType::ANALOG_INPUT, 5),
+            property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
+            property_array_index: Some(1),
+            device_identifier: Some(oid(ObjectType::DEVICE, 260)),
+        }))
+        .unwrap();
     db.add(Box::new(enrollment)).unwrap();
     assert_eq!(
         read(&db, ee, PropertyIdentifier::OBJECT_PROPERTY_REFERENCE),
