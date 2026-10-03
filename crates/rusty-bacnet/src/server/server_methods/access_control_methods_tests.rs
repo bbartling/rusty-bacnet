@@ -121,7 +121,7 @@ fn python_supported_formats_reach_both_arrays() {
         "CDI-1",
         Some(vec![
             (PyFactorFormat::Standard(8), 0),
-            (PyFactorFormat::Vendor(2, 260, 7), 3),
+            (PyFactorFormat::Vendor(2, Some(260), Some(7)), 3),
         ]),
     )
     .unwrap();
@@ -139,13 +139,31 @@ fn python_supported_formats_reach_both_arrays() {
         PropertyValue::List(vec![PropertyValue::Unsigned(0), PropertyValue::Unsigned(3)])
     );
 
+    // A vendor member left out (None, as a read gives it) is absent: a
+    // standard format may carry a zero vendor id alone (#1310).
+    let partial = credential_data_input(
+        4,
+        "CDI-4",
+        Some(vec![(PyFactorFormat::Vendor(10, Some(0), None), 1)]),
+    )
+    .unwrap();
+    // format type [0] 10, vendor id [1] 0, no vendor format.
+    assert_eq!(
+        partial
+            .read_property(PropertyIdentifier::SUPPORTED_FORMATS, Some(1))
+            .unwrap(),
+        PropertyValue::ApplicationData(vec![0x09, 0x0A, 0x19, 0x00])
+    );
+
     for formats in [
-        // A CUSTOM format without its vendor members, a vendor member on
-        // another format, a vendor member past Unsigned16, a type past the
-        // closed production.
+        // A CUSTOM format without its vendor members, or with one only, a
+        // vendor member on another format, a vendor member past Unsigned16,
+        // a type past the closed production.
         vec![(PyFactorFormat::Standard(2), 0)],
-        vec![(PyFactorFormat::Vendor(8, 260, 7), 0)],
-        vec![(PyFactorFormat::Vendor(2, 65_536, 7), 0)],
+        vec![(PyFactorFormat::Vendor(2, Some(260), None), 0)],
+        vec![(PyFactorFormat::Vendor(3, Some(4), None), 0)],
+        vec![(PyFactorFormat::Vendor(8, Some(260), Some(7)), 0)],
+        vec![(PyFactorFormat::Vendor(2, Some(65_536), Some(7)), 0)],
         vec![(PyFactorFormat::Standard(25), 0)],
     ] {
         let refused = credential_data_input(2, "CDI-2", Some(formats))

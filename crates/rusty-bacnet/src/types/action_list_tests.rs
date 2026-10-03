@@ -48,6 +48,7 @@ fn action_command_mappings_fill_every_field_and_default_the_optional_ones() {
         full.set_item("priority", 8).unwrap();
         full.set_item("post_delay", 5).unwrap();
         full.set_item("quit_on_failure", true).unwrap();
+        full.set_item("write_successful", true).unwrap();
         full.set_item(
             "device_identifier",
             PyObjectIdentifier::from_rust(oid(ObjectType::DEVICE, 9)),
@@ -79,6 +80,9 @@ fn action_command_mappings_fill_every_field_and_default_the_optional_ones() {
                 priority: Some(8),
                 post_delay: Some(5),
                 quit_on_failure: true,
+                // Taken so a read mapping can be given back, but only a run
+                // sets it.
+                write_successful: false,
                 ..plain
             }
         );
@@ -90,6 +94,7 @@ fn action_command_mappings_fill_every_field_and_default_the_optional_ones() {
         let parsed = action_lists_from_py(lists(py, &[nones]).as_any()).unwrap();
         assert_eq!(parsed[0].commands[0].priority, None);
         assert!(!parsed[0].commands[0].quit_on_failure);
+        assert!(!parsed[0].commands[0].write_successful);
     });
 }
 
@@ -140,6 +145,10 @@ fn action_command_mappings_refuse_bad_shapes_and_types() {
         for (key, bad) in [
             (
                 "quit_on_failure",
+                1_i64.into_pyobject(py).unwrap().into_any(),
+            ),
+            (
+                "write_successful",
                 1_i64.into_pyobject(py).unwrap().into_any(),
             ),
             (

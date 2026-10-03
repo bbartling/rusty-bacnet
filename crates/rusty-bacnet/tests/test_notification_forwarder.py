@@ -37,16 +37,17 @@ WEEKDAYS = {
     "issue_confirmed_notifications": True,
     "transitions": 0b101,  # to-offnormal and to-normal
 }
-# The same two destinations as Recipient_List serves them.
-ALWAYS_OCTETS = (b"\x82\x01\xfe" b"\xb4\x00\x00\x00\x00" b"\xb4\x17\x3b\x3b\x63"
-                 b"\x0c\x02\x00\x00\x63" b"\x21\x01" b"\x10" b"\x82\x05\xe0")
-WEEKDAYS_OCTETS = (b"\x82\x01\xf8" b"\xb4\x08\x00\x00\x00" b"\xb4\x11\x1e\x00\x00"
-                   b"\x1e\x21\x00\x65\x06\x7f\x00\x00\x01\xba\xc1\x1f"
-                   b"\x22\x01\x2c" b"\x11" b"\x82\x05\xa0")
-# Port 0 enabled, port 1 disabled: each element is port-id [0], enabled [1].
+# ALWAYS as a read gives it back, with the defaults filled in.
+ALWAYS_READ = {
+    **ALWAYS,
+    "valid_days": 0x7F,
+    "from_time": (0, 0, 0, 0),
+    "to_time": (23, 59, 59, 99),
+    "issue_confirmed_notifications": False,
+    "transitions": 0b111,
+}
+# Port 0 enabled, port 1 disabled.
 PORT_FILTER = [(0, True), (1, False)]
-PORT_0_ENABLED = b"\x09\x00\x19\x01"
-PORT_1_DISABLED = b"\x09\x01\x19\x00"
 # One Subscribed_Recipients entry: Device 99, process 1, unconfirmed, 60 minutes.
 SUBSCRIPTION = b"\x0e\x0c\x02\x00\x00\x63\x0f\x19\x01\x29\x00\x39\x3c"
 
@@ -183,19 +184,17 @@ class NotificationForwarderServerTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_seeded_recipient_list_and_port_filter_read_back(self) -> None:
-        # Constructed values come back as their octets; an empty list as [].
-        self.assertEqual(
-            await self.read(3, PropertyIdentifier.RECIPIENT_LIST),
-            PropertyValue.application_data(ALWAYS_OCTETS + WEEKDAYS_OCTETS),
-        )
+        # The lists read back as the values seeded, every key of a
+        # destination filled in (#1310); an empty list as [].
+        recipients = await self.read(3, PropertyIdentifier.RECIPIENT_LIST)
+        self.assertEqual(recipients.tag, "list")
+        self.assertEqual(recipients.value, [ALWAYS_READ, WEEKDAYS])
         self.assertEqual(await self.read(2, PropertyIdentifier.RECIPIENT_LIST),
                          PropertyValue.list([]))
         port_filter = PropertyIdentifier.PORT_FILTER
-        self.assertEqual(await self.read(3, port_filter),
-                         PropertyValue.application_data(PORT_0_ENABLED + PORT_1_DISABLED))
+        self.assertEqual((await self.read(3, port_filter)).value, PORT_FILTER)
         self.assertEqual(await self.read(3, port_filter, 0), PropertyValue.unsigned(2))
-        self.assertEqual(await self.read(3, port_filter, 2),
-                         PropertyValue.application_data(PORT_1_DISABLED))
+        self.assertEqual((await self.read(3, port_filter, 2)).value, PORT_FILTER[1])
         # Without port_filter the property is absent.
         with self.assertRaises(BacnetProtocolError) as raised:
             await self.read(2, port_filter)

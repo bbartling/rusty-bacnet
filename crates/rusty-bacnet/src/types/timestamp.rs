@@ -115,7 +115,7 @@ fn date_value(date: &primitives::Date) -> (u16, u8, u8, u8) {
     (actual_year(date), date.month, date.day, date.day_of_week)
 }
 
-fn time_value(time: &primitives::Time) -> (u8, u8, u8, u8) {
+pub(super) fn time_value(time: &primitives::Time) -> (u8, u8, u8, u8) {
     (time.hour, time.minute, time.second, time.hundredths)
 }
 

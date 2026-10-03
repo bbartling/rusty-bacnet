@@ -43,7 +43,7 @@ impl BACnetClient {
 
             let value = decode_read_ack(&ack).map_err(to_py_err)?;
 
-            Ok(PyPropertyValue::from_rust(value))
+            Ok(value)
         })
     }
 
@@ -265,7 +265,7 @@ impl BACnetClient {
                         match r.result {
                             Ok(ack) => match decode_read_ack(&ack) {
                                 Ok(value) => {
-                                    dict.set_item("value", PyPropertyValue::from_rust(value))?;
+                                    dict.set_item("value", value)?;
                                     dict.set_item("error", py.None())?;
                                 }
                                 Err(e) => {
