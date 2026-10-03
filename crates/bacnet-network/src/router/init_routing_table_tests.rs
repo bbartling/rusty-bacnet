@@ -9,6 +9,7 @@
 use super::envelope_harness::*;
 use super::*;
 use crate::router_table::RoutingClaimSnapshot;
+use bacnet_encoding::npdu::decode_npdu;
 
 /// Independent-peer entry walk: count + `DNET(2) + Port ID(1) + Port Info(N)`
 /// with no trailing bytes. Panics on any envelope deviation.

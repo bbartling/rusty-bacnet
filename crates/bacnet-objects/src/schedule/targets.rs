@@ -100,7 +100,7 @@ fn starts_reference(tag: &Tag) -> bool {
 /// a refusal names its member's position in the list (#1121).
 fn decode_references(value: PropertyValue) -> Result<Vec<BACnetObjectPropertyReference>, Error> {
     let mut references = Vec::new();
-    for bytes in writes::chunks(value)? {
+    for bytes in common::chunks(value)? {
         let mut offset = 0;
         while offset < bytes.len() {
             let index = references.len();
@@ -108,7 +108,7 @@ fn decode_references(value: PropertyValue) -> Result<Vec<BACnetObjectPropertyRef
             if index == MAX_REFERENCES {
                 return Err(at(writes::no_space_error()));
             }
-            let (member, end) = writes::decode_element(
+            let (member, end) = common::decode_element(
                 &bytes,
                 offset,
                 starts_reference,

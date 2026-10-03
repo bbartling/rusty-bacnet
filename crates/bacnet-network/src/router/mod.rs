@@ -62,9 +62,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress, NpduDecodeError};
+use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
 use bacnet_transport::port::{DataAttribute, TransportPort};
-use bacnet_types::enums::{NetworkMessageType, RejectMessageReason};
+use bacnet_types::enums::NetworkMessageType;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{BufMut, Bytes, BytesMut};
@@ -72,26 +72,25 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-use crate::layer::{is_group_delivery, AdmissionReceiver, QueueAdmissionCounters, ReceivedApdu};
-use crate::layer::{link_source_fits, AdmissionSender, ReceivedNetworkControl};
+use crate::layer::{AdmissionReceiver, QueueAdmissionCounters, ReceivedApdu};
+use crate::layer::{AdmissionSender, ReceivedNetworkControl};
 use crate::router_table::RouterTable;
 use bacnet_transport::port::TransportProvenance;
 
 mod control_messages;
 pub mod control_policy;
+mod dispatch;
 mod forwarding;
 mod local_control;
 mod options;
 mod reject;
 
-use control_messages::handle_network_message;
 pub use control_policy::{ControlAuthContext, ControlAuthorizer, ControlClass};
 pub use control_policy::{ControlDecisionCounters, ControlGate, ControlPolicy};
 pub use control_policy::{ControlServiceCounters, ControlTrust};
-use forwarding::{forward_broadcast, forward_unicast};
+use dispatch::PortDispatch;
 use local_control::{LocalControl, OwnAddresses};
 pub use options::{LocalApduReceiver, NetworkControlReceiver, RouterOptions, StartedRouter};
-use reject::{refuse_address_too_long, route_refusal, send_reject, Refused};
 
 /// A send request to be forwarded on a port.
 #[derive(Debug)]
@@ -210,39 +209,8 @@ impl DiscoveryTracker {
     }
 }
 
-/// Broadcast a link-local Who-Is-Router-To-Network for `dnet` out all ports
-/// except `ingress`, reusing the relay shape (no SNET/SADR, no DNET envelope).
-fn solicit_who_is(
-    send_txs: &[mpsc::Sender<SendRequest>],
-    ingress: usize,
-    dnet: u16,
-    data_attributes: &[DataAttribute],
-) {
-    let mut payload = BytesMut::with_capacity(2);
-    payload.put_u16(dnet);
-    let npdu = Npdu {
-        is_network_message: true,
-        message_type: Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK.to_raw()),
-        payload: payload.freeze(),
-        ..Npdu::default()
-    };
-    let mut buf = BytesMut::with_capacity(8);
-    if encode_npdu(&mut buf, &npdu).is_err() {
-        return;
-    }
-    let frozen = buf.freeze();
-    for (i, tx) in send_txs.iter().enumerate() {
-        if i != ingress {
-            let _ = tx.try_send(SendRequest::broadcast_with_attributes(
-                frozen.clone(),
-                data_attributes,
-            ));
-        }
-    }
-}
-
 /// Immutable ingress facts carried to the network-message admission point
-/// ([`dispatch_network_message`] / `handle_network_message`).
+/// ([`dispatch::dispatch_network_message`] / `handle_network_message`).
 ///
 /// This is a plain record of what arrived, free of trust assertions: ingress port
 /// identity, the immediate link peer (`source_mac`), link-layer group flag,
@@ -548,203 +516,20 @@ impl BACnetRouter {
             Arc::clone(&network_control_ingress_sequence),
         ));
 
-        for (port_idx, mut rx) in port_receivers.into_iter().enumerate() {
-            let table = Arc::clone(&table);
-            let discovery = Arc::clone(&discovery);
-            let control = Arc::clone(&control);
-            let local_control = Arc::clone(&local_control);
-            let address_length_drops = Arc::clone(&address_length_drops);
-            let local_tx = local_tx.clone();
-            let send_txs = Arc::clone(&send_txs);
-            let port_network = port_networks[port_idx];
-            let local_mac = port_local_macs[port_idx].clone();
-
-            let task = tokio::spawn(async move {
-                while let Some(received) = rx.recv().await {
-                    if !link_source_fits(&received.source_mac, &address_length_drops) {
-                        continue;
-                    }
-                    match decode_npdu(received.npdu.clone()) {
-                        Ok(npdu) => {
-                            if npdu.is_network_message {
-                                // RB-03 admission point: immutable ingress facts travel
-                                // together; RB-09 policy consumes them lock-free.
-                                // Controls never take the APDU reply path.
-                                let ctx = IngressContext {
-                                    port_idx,
-                                    port_network,
-                                    source_mac: received.source_mac.clone(),
-                                    link_layer_group: received.link_layer_group,
-                                    data_attributes: received.data_attributes.clone(),
-                                    provenance: received.provenance,
-                                    npdu,
-                                };
-                                dispatch_network_message(
-                                    &table,
-                                    &discovery,
-                                    &send_txs,
-                                    &ctx,
-                                    &control,
-                                    &local_control,
-                                )
-                                .await;
-                                continue;
-                            }
-
-                            if let Some(ref dest) = npdu.destination {
-                                let dest_net = dest.network;
-
-                                // Global broadcast — forward to all other ports
-                                if dest_net == 0xFFFF {
-                                    forward_broadcast(
-                                        &send_txs,
-                                        port_idx,
-                                        port_network,
-                                        &received.source_mac,
-                                        &npdu,
-                                        &received.data_attributes,
-                                    );
-
-                                    // Deliver locally as well
-                                    let apdu = local_delivery::application(
-                                        received,
-                                        npdu,
-                                        port_network,
-                                        true,
-                                    );
-                                    let _ = local_tx.try_send_apdu(apdu);
-                                    continue;
-                                }
-
-                                // Route lookup for destination network
-                                let (route, reachability) = {
-                                    let mut tbl = table.lock().await;
-                                    let route = tbl.lookup(dest_net).cloned();
-                                    let reachability = tbl.effective_reachability(dest_net);
-                                    if route.is_some() {
-                                        tbl.touch(dest_net);
-                                    }
-                                    (route, reachability)
-                                };
-
-                                if let Some(route) = route {
-                                    // Check reachability before forwarding (spec 6.6.3.6)
-                                    if let Some(reason) = route_refusal(reachability) {
-                                        let refused = Refused::frame(
-                                            &send_txs,
-                                            local_control.addresses(),
-                                            port_idx,
-                                            &received,
-                                            &npdu,
-                                        );
-                                        send_reject(&refused, dest_net, reason);
-                                        continue;
-                                    }
-                                    if route.port_index == port_idx && route.directly_connected {
-                                        let dest_mac = npdu
-                                            .destination
-                                            .as_ref()
-                                            .map(|d| &d.mac_address[..])
-                                            .unwrap_or(&[]);
-                                        if dest_mac == &local_mac[..] {
-                                            // DADR matches our MAC: deliver locally
-                                            let apdu = local_delivery::application(
-                                                received,
-                                                npdu,
-                                                port_network,
-                                                false,
-                                            );
-                                            let _ = local_tx.try_send_apdu(apdu);
-                                        } else {
-                                            // Remote broadcast to our network (DLEN=0):
-                                            // deliver locally AND forward
-                                            if dest_mac.is_empty() {
-                                                let apdu = local_delivery::application(
-                                                    received.clone(),
-                                                    npdu.clone(),
-                                                    port_network,
-                                                    true,
-                                                );
-                                                let _ = local_tx.try_send_apdu(apdu);
-                                            }
-                                            forward_unicast(
-                                                &send_txs,
-                                                &route,
-                                                port_network,
-                                                &received.source_mac,
-                                                npdu,
-                                                port_idx,
-                                                &received.data_attributes,
-                                            );
-                                        }
-                                    } else {
-                                        forward_unicast(
-                                            &send_txs,
-                                            &route,
-                                            port_network,
-                                            &received.source_mac,
-                                            npdu,
-                                            port_idx,
-                                            &received.data_attributes,
-                                        );
-                                    }
-                                } else {
-                                    // Unknown: bounded Who-Is discovery, then honest
-                                    // retryable reject (6.6.3.1/6.5). Coalesced per
-                                    // DNET; packets never buffered, no retries.
-                                    let solicit = {
-                                        let mut disc = discovery.lock().await;
-                                        disc.should_solicit(dest_net)
-                                    };
-                                    if solicit {
-                                        solicit_who_is(
-                                            &send_txs,
-                                            port_idx,
-                                            dest_net,
-                                            &received.data_attributes,
-                                        );
-                                    }
-                                    send_reject(
-                                        &Refused::frame(
-                                            &send_txs,
-                                            local_control.addresses(),
-                                            port_idx,
-                                            &received,
-                                            &npdu,
-                                        ),
-                                        dest_net,
-                                        RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-                                    );
-                                }
-                            } else {
-                                let is_group = is_group_delivery(received.link_layer_group, None);
-                                let apdu = local_delivery::application(
-                                    received,
-                                    npdu,
-                                    port_network,
-                                    is_group,
-                                );
-                                let _ = local_tx.try_send_apdu(apdu);
-                            }
-                        }
-                        Err(e @ NpduDecodeError::AddressTooLong { .. }) => {
-                            refuse_address_too_long(
-                                &send_txs,
-                                local_control.addresses(),
-                                port_idx,
-                                &received,
-                                &e,
-                                &address_length_drops,
-                            );
-                        }
-                        Err(e) => {
-                            warn!(error = %e, port = port_idx, "Router decode failed");
-                        }
-                    }
-                }
-            });
-
-            dispatch_tasks.push(task);
+        for (port_idx, rx) in port_receivers.into_iter().enumerate() {
+            let port = PortDispatch {
+                table: Arc::clone(&table),
+                discovery: Arc::clone(&discovery),
+                control: Arc::clone(&control),
+                local_control: Arc::clone(&local_control),
+                address_length_drops: Arc::clone(&address_length_drops),
+                local_tx: local_tx.clone(),
+                send_txs: Arc::clone(&send_txs),
+                port_idx,
+                port_network: port_networks[port_idx],
+                local_mac: port_local_macs[port_idx].clone(),
+            };
+            dispatch_tasks.push(tokio::spawn(port.run(rx)));
         }
 
         // Periodically purge stale learned routes, hardened pending slots and
@@ -822,107 +607,6 @@ impl BACnetRouter {
         // Cancel pending unknown-destination discovery so no further
         // solicitation is emitted and coalesced waiters observe shutdown.
         self.discovery.lock().await.cancel();
-    }
-}
-
-/// RB-03 admission point for ingress network-layer messages.
-///
-/// Directed (DNET-addressed, non-global) controls are routed by their actual
-/// destination first (Clauses 6.5.4 / 6.6.3.1) — uniformly for proprietary
-/// and non-proprietary types — and only messages for our own ingress network
-/// (or without a directed destination) fall through to local control
-/// treatment. This keeps directed discovery, table, and congestion controls
-/// off the local handler unless this router is their destination.
-///
-/// Never-routed controls (What-Is-Network-Number / Network-Number-Is,
-/// Clauses 6.4.19–6.4.20) always take local treatment, where their
-/// non-routed address restrictions are enforced. Reject-Message-To-Network
-/// (Clause 6.6.3.5) also always takes local treatment: it updates the local
-/// table, then either reaches `local` (when addressed to this router) or is
-/// relayed toward the node it names, and is never answered with another
-/// reject.
-///
-/// Network messages never enter the local APDU queue here. Directed-forward
-/// paths mutate nothing and take no policy decision; APDUs never arrive here.
-async fn dispatch_network_message(
-    table: &Arc<Mutex<RouterTable>>,
-    discovery: &Arc<Mutex<DiscoveryTracker>>,
-    send_txs: &[mpsc::Sender<SendRequest>],
-    ctx: &IngressContext,
-    control: &control_policy::ControlGate,
-    local: &LocalControl,
-) {
-    let msg_type = match ctx.npdu.message_type {
-        Some(t) => t,
-        None => return,
-    };
-
-    if msg_type == NetworkMessageType::WHAT_IS_NETWORK_NUMBER.to_raw()
-        || msg_type == NetworkMessageType::NETWORK_NUMBER_IS.to_raw()
-        || msg_type == NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()
-    {
-        handle_network_message(table, send_txs, ctx, control, local).await;
-        return;
-    }
-
-    let directed_elsewhere = match ctx.npdu.destination.as_ref() {
-        Some(dest) => dest.network != 0xFFFF && dest.network != ctx.port_network,
-        None => false,
-    };
-    if !directed_elsewhere {
-        handle_network_message(table, send_txs, ctx, control, local).await;
-        return;
-    }
-
-    // Directed at another network: mirror the APDU destination logic
-    // (lookup + touch, reachability, forward or reject). Controls are never
-    // delivered to the local application queue.
-    let dest_net = ctx
-        .npdu
-        .destination
-        .as_ref()
-        .map(|dest| dest.network)
-        .unwrap_or(0);
-    let (route, reachability) = {
-        let mut tbl = table.lock().await;
-        let route = tbl.lookup(dest_net).cloned();
-        let reachability = tbl.effective_reachability(dest_net);
-        if route.is_some() {
-            tbl.touch(dest_net);
-        }
-        (route, reachability)
-    };
-
-    if let Some(route) = route {
-        if let Some(reason) = route_refusal(reachability) {
-            let refused = Refused::control(send_txs, local.addresses(), ctx);
-            send_reject(&refused, dest_net, reason);
-            return;
-        }
-        forward_unicast(
-            send_txs,
-            &route,
-            ctx.port_network,
-            ctx.source_mac.as_slice(),
-            ctx.npdu.clone(),
-            ctx.port_idx,
-            &ctx.data_attributes,
-        );
-    } else {
-        // Unknown directed control: same bounded discovery as APDUs, then
-        // the honest retryable reject. Never buffered, never retried inline.
-        let solicit = {
-            let mut disc = discovery.lock().await;
-            disc.should_solicit(dest_net)
-        };
-        if solicit {
-            solicit_who_is(send_txs, ctx.port_idx, dest_net, &ctx.data_attributes);
-        }
-        send_reject(
-            &Refused::control(send_txs, local.addresses(), ctx),
-            dest_net,
-            RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-        );
     }
 }
 

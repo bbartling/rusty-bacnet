@@ -2,6 +2,14 @@ use super::*;
 use bacnet_types::constructed::BACnetActionCommand;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 
+/// The commands a queued run makes.
+fn commands(run: &CommandRun) -> &[BACnetActionCommand] {
+    match &run.plan {
+        RunPlan::Actions(commands) => commands,
+        other => panic!("a Command queues its list, not {other:?}"),
+    }
+}
+
 fn assert_property_error<T: std::fmt::Debug>(result: Result<T, Error>, expected: ErrorCode) {
     assert!(
         matches!(result, Err(Error::Protocol { class, code })
@@ -262,8 +270,8 @@ fn command_present_value_write_queues_the_selected_list_and_busies_the_object() 
     let run = cmd.take_command_run_internal().unwrap();
     assert_eq!(run.source, cmd.object_identifier());
     assert_eq!(Some(run.generation), cmd.command_generation_internal());
-    assert_eq!(run.commands.len(), 3);
-    assert!(run.commands[0].quit_on_failure);
+    assert_eq!(commands(&run).len(), 3);
+    assert!(commands(&run)[0].quit_on_failure);
     assert!(cmd.take_command_run_internal().is_none(), "taken once");
 
     // Any Present_Value write while the list runs, the same number included,
@@ -292,7 +300,7 @@ fn command_present_value_write_queues_the_selected_list_and_busies_the_object() 
     write_pv(&mut cmd, 1).unwrap();
     let again = cmd.take_command_run_internal().unwrap();
     assert_ne!(again.generation, run.generation);
-    assert_eq!(again.commands, run.commands);
+    assert_eq!(commands(&again), commands(&run));
 }
 
 #[test]
@@ -420,4 +428,22 @@ fn command_takes_property_subscriptions_but_not_subscribe_cov() {
     assert!(!cmd.supports_cov());
     assert!(cmd.supports_subscribe_cov_property());
     assert!(cmd.supports_cov_property(PropertyIdentifier::IN_PROCESS));
+}
+
+#[test]
+fn command_replacement_never_shares_a_run_generation() {
+    // Two objects with one identifier, each written once: a run left over
+    // from the first can't pass for the second's.
+    let mut old = configured();
+    write_pv(&mut old, 1).unwrap();
+    let stale = old.take_command_run_internal().unwrap();
+    let mut fresh = configured();
+    write_pv(&mut fresh, 1).unwrap();
+    let current = fresh.take_command_run_internal().unwrap();
+    assert_eq!(stale.source, current.source);
+    assert_ne!(stale.generation, current.generation);
+    assert!(!fresh.record_command_write_internal(stale.generation, 0, false));
+    assert!(!fresh.complete_command_run_internal(stale.generation, false));
+    assert_eq!(state(&fresh), (true, false));
+    assert!(fresh.complete_command_run_internal(current.generation, true));
 }

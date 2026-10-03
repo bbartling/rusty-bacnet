@@ -12,17 +12,19 @@
 //! the router itself, when it reaches the router's control receiver instead
 //! (#1175). Every reject is compared byte for byte, and the MAC each unicast
 //! reject goes to is checked too (#1243): a local reject to the SADR has the
-//! same bytes as one back to the link sender.
+//! same bytes as one back to the link sender. A reject also leaves with the
+//! data attributes the refused frame arrived with (#1289).
 
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::TransportPort;
+use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort};
 use bacnet_types::enums::NetworkMessageType;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
 
 use crate::loopback_fixture::{
-    next_frame_from_router, recv, wire, FromRouter, RouterFixture, ORIGIN, REMOTE, TOO_LONG,
+    next_frame_from_router, next_received_from_router, recv, wire, FromRouter, RouterFixture,
+    ORIGIN, REMOTE, TOO_LONG,
 };
 use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use crate::router_table::ReachabilityStatus;
@@ -188,14 +190,14 @@ const FENCE_REJECT: [u8; 6] = [0x01, 0x80, 0x03, 0x01, 0x17, 0x70];
 /// The next unicast the router sends to a peer, with the MAC it went to,
 /// skipping any broadcast Who-Is-Router-To-Network solicitation for an
 /// unknown DNET.
-async fn next_unicast(rx: &mut FromRouter) -> (Vec<u8>, MacAddr) {
+async fn next_unicast(rx: &mut FromRouter) -> (ReceivedNpdu, MacAddr) {
     loop {
-        let (frame, to) = next_frame_from_router(rx).await;
+        let (frame, to) = next_received_from_router(rx).await;
         if let Some(to) = to {
-            return (frame.to_vec(), to);
+            return (frame, to);
         }
         assert_eq!(
-            frame[..],
+            frame.npdu[..],
             [0x01, 0x80, WHO_IS, 0x13, 0x88],
             "a solicitation"
         );
@@ -214,12 +216,65 @@ async fn router_rejects_an_npdu_from_its_other_snet_out_that_port() {
         let mut fixture = fixture(refusal.busy).await;
         fixture.send_from_a(&(refusal.frame)(Some((2000, 1)))).await;
         let (answer, to) = next_unicast(&mut fixture.from_router_b).await;
-        assert_eq!(answer, expected, "{}", refusal.what);
+        assert_eq!(answer.npdu[..], expected, "{}", refusal.what);
         assert_eq!(to[..], [0x50], "{}", refusal.what);
         fixture.send_from_a(&FENCE).await;
         let (fenced, _) = next_frame_from_router(&mut fixture.from_router_a).await;
         assert_eq!(fenced[..], FENCE_REJECT, "{}", refusal.what);
         fixture.stop().await;
+    }
+}
+
+/// The data attributes peer A sends a refused frame with: one with no data
+/// that must be understood, and one with data that need not be.
+fn ingress_attributes() -> Vec<DataAttribute> {
+    vec![
+        DataAttribute {
+            option_type: 1,
+            must_understand: true,
+            data: Vec::new(),
+        },
+        DataAttribute {
+            option_type: 31,
+            must_understand: false,
+            data: vec![0x12, 0x34, 0x56],
+        },
+    ]
+}
+
+#[tokio::test]
+async fn router_rejects_with_the_ingress_data_attributes() {
+    // Whichever way the reject goes, it carries the attributes the refused
+    // frame came in with: back to peer A for a local sender or a relayed
+    // originator, or out port B to a node on 2000.
+    let attributes = ingress_attributes();
+    for refusal in refusals() {
+        for (source, out_port_b) in [
+            (None, false),
+            (Some((ORIGIN, 1)), false),
+            (Some((2000, 1)), true),
+        ] {
+            let what = format!("{}, SNET/SADR {source:?}", refusal.what);
+            let mut fixture = fixture(refusal.busy).await;
+            fixture
+                .send_from_a_with(&(refusal.frame)(source), &attributes)
+                .await;
+            let from_router = if out_port_b {
+                &mut fixture.from_router_b
+            } else {
+                &mut fixture.from_router_a
+            };
+            let (reject, _) = next_unicast(from_router).await;
+            let npdu = decode_npdu(reject.npdu).unwrap();
+            assert_eq!(
+                npdu.message_type,
+                Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK.to_raw()),
+                "{what}"
+            );
+            assert_eq!(npdu.payload[..], refusal.reject, "{what}");
+            assert_eq!(reject.data_attributes, attributes, "{what}");
+            fixture.stop().await;
+        }
     }
 }
 

@@ -673,6 +673,10 @@ mod averaging_sample_tests;
 #[cfg(test)]
 mod binary_lighting_task_tests;
 #[cfg(test)]
+mod channel_run_tests;
+#[cfg(test)]
+mod channel_wire_tests;
+#[cfg(test)]
 mod command_action_run_tests;
 #[cfg(test)]
 mod command_action_wire_tests;
@@ -756,6 +760,8 @@ mod notification_transactions_tests;
 mod pulse_converter_cov_tests;
 #[cfg(test)]
 mod rb07_provenance_tests;
+#[cfg(test)]
+mod run_cycle_tests;
 #[cfg(test)]
 mod schedule_reference_list_tests;
 #[cfg(test)]

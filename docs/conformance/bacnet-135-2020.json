@@ -941,8 +941,8 @@
    ],
    "positive_tests": [
     "crates/bacnet-network/src/address_bound_tests.rs::router_rejects_an_over_long_address_toward_a_dnet_with_reason_6",
-    "crates/bacnet-network/src/reject_route_tests.rs::{router_rejects_a_relayed_npdu_toward_its_snet_sadr,router_rejects_a_local_npdu_with_a_local_unicast,router_rejects_an_npdu_from_its_own_snet_with_a_local_unicast,router_rejects_a_node_with_its_other_ports_mac_at_that_mac,router_rejects_an_npdu_from_its_other_snet_out_that_port,router_relays_a_received_reject_to_the_node_its_dnet_names,router_hands_a_reject_addressed_to_itself_to_its_control_receiver,chained_routers_carry_a_reject_back_to_the_originating_device}",
-    "crates/bacnet-network/src/router/reject_tests.rs::{send_reject_addresses_the_originator_or_the_local_sender,relay_routes_a_received_reject_by_its_dnet,a_reject_addressed_to_the_router_reaches_its_consumer_and_the_table}",
+    "crates/bacnet-network/src/reject_route_tests.rs::{router_rejects_a_relayed_npdu_toward_its_snet_sadr,router_rejects_a_local_npdu_with_a_local_unicast,router_rejects_an_npdu_from_its_own_snet_with_a_local_unicast,router_rejects_a_node_with_its_other_ports_mac_at_that_mac,router_rejects_an_npdu_from_its_other_snet_out_that_port,router_relays_a_received_reject_to_the_node_its_dnet_names,router_hands_a_reject_addressed_to_itself_to_its_control_receiver,chained_routers_carry_a_reject_back_to_the_originating_device,router_rejects_with_the_ingress_data_attributes}",
+    "crates/bacnet-network/src/router/reject_tests.rs::{relay_routes_a_received_reject_by_its_dnet,a_reject_addressed_to_the_router_reaches_its_consumer_and_the_table}",
     "crates/bacnet-network/src/router/options_tests.rs::{one_start_combines_admission_tracking_a_control_policy_and_the_control_receiver,plain_options_start_a_permissive_router_without_a_control_receiver,tracked_network_control_receiver_counts_its_high_water_mark_and_drops}"
    ],
    "negative_tests": [
@@ -979,7 +979,8 @@
     "#1220: BACnetRouter::start takes RouterOptions, which turns on the tracked local APDU receiver, the RB-09 control policy and authorizer, and the network-control receiver in any combination. A loopback test starts a router with all three.",
     "#1198: the router drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN on any port before decoding it, counts it in address_length_drops() and sends nothing back. Such a frame is not delivered or forwarded and teaches no route; a test shows a route announced from a 19-octet MAC is not learned.",
     "`RouterOptions::network_control_receiver_with_admission` hands back the router's control receiver as an `AdmissionReceiver`. Its counters give queue depth, high-water mark and full and closed drops; a loopback test fills the 256-control queue.",
-    "Loopback reject tests check the MAC each unicast reject goes to as well as its bytes, through `LoopbackTransport::record_unicast_destinations`. That tells a local reject to the SADR from one to the link sender."
+    "Loopback reject tests check the MAC each unicast reject goes to as well as its bytes, through `LoopbackTransport::record_unicast_destinations`. That tells a local reject to the SADR from one to the link sender.",
+    "A loopback test sends each refused frame with data attributes, through `LoopbackTransport::carry_data_attributes`, and checks that its reject carries the same attributes, out the arrival port or the other one."
    ]
   },
   {
@@ -2364,7 +2365,7 @@
     "A command's members are context tags [0] to [8] in order, with the value framed in [4]; the decoder returns a one-element value as itself and any other count as a list, and keeps context-tagged content as ApplicationData, so a decoded command re-encodes to the same octets.",
     "Local policies: CommandObject::set_action takes typed BACnetActionList values and refuses, with PROPERTY / VALUE_OUT_OF_RANGE and Action unchanged, a command whose priority is outside 1..=16 or whose value has no encoding; the codec refuses the same priorities both ways.",
     "StructuredViewObject::add_subordinate takes anything that converts into a BACnetDeviceObjectReference, so an ObjectIdentifier alone still adds a subordinate in this device. The application sizes Subordinate_List and Subordinate_Annotations through the public fields, and each array serves its own length.",
-    "Running the action lists and Action_Text are BACNET-12-COMMAND-ACTION-EXECUTION (#1150). Not covered: Subordinate_Tags, Subordinate_Node_Types and Subordinate_Relationships aren't served; writable Subordinate_List with the Clause 12.29.7 resizing of its sibling arrays; the Channel object, which isn't modeled."
+    "Running the action lists and Action_Text are BACNET-12-COMMAND-ACTION-EXECUTION (#1150). Not covered: Subordinate_Tags, Subordinate_Node_Types and Subordinate_Relationships aren't served; writable Subordinate_List with the Clause 12.29.7 resizing of its sibling arrays."
    ]
   },
   {
@@ -2411,7 +2412,10 @@
     "crates/bacnet-server/src/schedule_command_tests.rs::tick_schedules_dropped_mid_run_ends_the_command_run_unsuccessful",
     "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_refuses_a_command_present_value_write_and_starts_no_run",
     "crates/rusty-bacnet/src/types/action_list_tests.rs::action_command_mappings_refuse_bad_shapes_and_types",
-    "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_invalid_actions_are_refused_and_add_nothing"
+    "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_invalid_actions_are_refused_and_add_nothing",
+    "crates/bacnet-server/src/server/run_cycle_tests.rs::run_cycle_two_commands_naming_each_other_stop",
+    "crates/bacnet-objects/src/command/tests.rs::command_replacement_never_shares_a_run_generation",
+    "crates/bacnet-server/src/command_lists/unattached_tests.rs::refused_command_run_marks_every_command_unsuccessful"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2433,7 +2437,9 @@
     "tick_schedules without a server runs the lists its writes start before it returns, post delays included: each command goes through the bare WriteProperty handler path with the Command as initiator, and a list that writes another Command starts that one beside it. Dropping the future ends each unfinished run as unsuccessful, with its unmade commands FALSE.",
     "The synchronous handle_write_property and handle_write_property_multiple make no writes for a Command: the run ends at once with In_Process FALSE, All_Writes_Successful FALSE and every Write_Successful FALSE. A second Present_Value write in the same WritePropertyMultiple still finds the Command busy.",
     "The endpoint responder refuses a Command Present_Value write with WRITE_ACCESS_DENIED (it writes only the Device's Description and Audit recipient), so it never starts a run.",
-    "Python (#1179): BACnetServer.add_command takes keyword-only action (lists of ActionCommand mappings) and action_text. The binding checks shapes and Python types (TypeError, ValueError); CommandObject::set_action and set_action_text refuse a priority outside 1 to 16, an unencodable value or a text count mismatch (VALUE_OUT_OF_RANGE). Write_Successful starts FALSE."
+    "Python (#1179): BACnetServer.add_command takes keyword-only action (lists of ActionCommand mappings) and action_text. The binding checks shapes and Python types (TypeError, ValueError); CommandObject::set_action and set_action_text refuse a priority outside 1 to 16, an unencodable value or a text count mismatch (VALUE_OUT_OF_RANGE). Write_Successful starts FALSE.",
+    "A run started by another run's write carries the chain of objects above it; one that would start its own Command again, or with more than eight runs above it, ends as failed and that write fails with OBJECT / BUSY (#1151), so two Commands writing each other between post delays stop after one round.",
+    "Run generations come from one process-wide counter (#1151), so a run left over from a replaced Command can't act on its replacement."
    ]
   },
   {
@@ -3344,26 +3350,75 @@
    ]
   },
   {
-   "id": "BACNET-12-CHANNEL-WITHDRAWAL",
-   "standard_anchor": "Clause 12.53 (pp. 508-517), Table 12-62 (pp. 509-510)",
+   "id": "BACNET-12-CHANNEL-OBJECT",
+   "standard_anchor": "Clauses 12.53 and 21; Tables 12-62 and 12-63",
    "priority": "P1",
-   "requirement_summary": "Bundled devices do not advertise or expose Channel object support until the object provides the required typed value model, member and control-group data, propagation, coercion, and write-status lifecycle, plus applicable delay behavior.",
-   "status": "unsupported-by-design",
+   "summary": "The Channel object serves its required rows and arrays and passes each Present_Value write to its local members, coerced per Table 12-63, at the written priority after each member's delay.",
+   "status": "supported-with-clause-evidence",
    "code_anchors": [
+    "crates/bacnet-objects/src/channel.rs::ChannelObject",
+    "crates/bacnet-objects/src/channel/arrays.rs",
+    "crates/bacnet-objects/src/channel/coercion.rs",
+    "crates/bacnet-objects/src/channel/metadata.rs",
+    "crates/bacnet-objects/src/command.rs::RunPlan",
+    "crates/bacnet-objects/src/traits/defaults.rs::array_property_default",
     "crates/bacnet-objects/src/device/mod.rs::DeviceObject::new",
-    "crates/bacnet-objects/src/lighting/mod.rs",
-    "crates/rusty-bacnet/src/server/mod.rs",
-    "crates/rusty-bacnet/src/server/server_methods/registration.rs",
-    "crates/rusty-bacnet/rusty_bacnet.pyi"
+    "crates/bacnet-encoding/src/constructed/channel_value.rs",
+    "crates/bacnet-server/src/command_lists.rs",
+    "crates/bacnet-server/src/command_lists/channel.rs",
+    "crates/bacnet-server/src/command_lists/chain.rs",
+    "crates/bacnet-server/src/command_lists/unattached.rs",
+    "crates/bacnet-server/src/server/command_runs.rs",
+    "crates/bacnet-server/src/local_references.rs",
+    "crates/bacnet-server/src/handlers/write_property.rs::decode_write_property_value"
    ],
-   "positive_tests": [],
+   "positive_tests": [
+    "crates/bacnet-server/src/server/channel_wire_tests.rs::{channel_value_reaches_members_of_each_datatype_coerced_at_the_written_priority,channel_null_relinquishes_commandable_members_and_is_not_failed_by_the_rest,channel_delays_run_side_by_side_and_writes_meanwhile_are_busy,channel_distribution_starts_from_write_local_and_write_property_multiple,channel_member_list_takes_local_members_over_the_wire_and_refuses_other_devices}",
+    "crates/bacnet-objects/src/channel/tests.rs::{channel_starts_with_null_priority_16_idle_and_group_zero,channel_arrays_read_one_element_per_index,channel_present_value_write_queues_its_members_and_goes_in_progress,channel_without_members_stays_idle_and_empty_references_are_skipped,channel_out_of_service_keeps_the_value_from_the_members,channel_present_value_takes_a_channel_value_and_a_priority_from_1_to_16,channel_property_list_and_required_rows_follow_table_12_62}",
+    "crates/bacnet-objects/src/channel/coercion_tests.rs::{member_datatype_follows_the_value_the_property_holds,null_passes_to_everything_but_a_lighting_command,boolean_row_rule_2,unsigned_row_rules_1_and_3,integer_row_rules_1_and_4,real_row_rules_1_and_5,double_row_rules_1_and_6,enumerated_row_rules_1_and_3,string_date_time_rows_pass_only_to_their_own_datatype,object_identifier_row_passes_to_unsigned_as_its_number,lighting_command_goes_to_a_lighting_command_member_only}",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/channel.rs::rpm_channel_arrays_serve_one_element_per_index",
+    "crates/bacnet-server/src/handlers/tests/property_metadata/channel.rs::rpm_channel_metadata_selectors_preserve_bytes_and_budgets",
+    "crates/bacnet-server/src/pics/property_metadata_tests/channel.rs::pics_channel_property_metadata_is_exact",
+    "crates/bacnet-endpoint/src/source_reporter_command_run_tests.rs::channel_run_hooks_survive_wrapping",
+    "crates/bacnet-server/src/local_references.rs::tests::channel_members_naming_the_local_device_lose_their_device",
+    "crates/bacnet-objects/src/device/tests.rs::read_protocol_object_types_supported",
+    "crates/bacnet-encoding/src/constructed/tests/channel_value.rs::{primitives_and_a_lighting_command_are_channel_values,malformed_lighting_commands_are_refused}",
+    "crates/bacnet-objects/src/channel/array_tests.rs::{channel_member_writes_keep_execution_delay_the_same_size,channel_number_and_control_groups_writes}",
+    "crates/bacnet-objects/src/channel/tests.rs::channel_replacement_never_shares_a_run_generation",
+    "crates/bacnet-server/src/server/channel_run_tests.rs::{channel_lighting_command_reaches_its_member_without_the_context_0_framing,channel_members_with_equal_delays_go_in_list_order}",
+    "crates/bacnet-server/src/schedule_channel_tests.rs::tick_schedules_runs_the_channel_distributions_its_writes_start"
+   ],
    "negative_tests": [
-    "crates/bacnet-objects/src/device/tests.rs::read_protocol_object_types_supported"
+    "crates/bacnet-server/src/server/channel_wire_tests.rs::{channel_value_no_member_can_take_fails_without_writing,channel_writing_its_own_present_value_is_refused_busy}",
+    "crates/bacnet-objects/src/channel/tests.rs::{channel_stale_completion_is_ignored,channel_read_only_rows_refuse_writes}",
+    "crates/bacnet-objects/src/channel/array_tests.rs::channel_member_writes_refuse_other_devices_bad_indexes_and_oversize",
+    "crates/bacnet-server/src/server/channel_run_tests.rs::{channel_deleted_during_a_delay_leaves_the_rest_of_its_members_unwritten,channel_replaced_during_a_delay_leaves_the_new_object_to_its_own_run}",
+    "crates/bacnet-server/src/server/run_cycle_tests.rs::{run_cycle_two_channels_naming_each_other_stop_after_one_round_trip,run_cycle_a_channel_and_a_command_naming_each_other_stop,run_cycle_a_chain_of_ten_channels_stops_past_eight_runs_deep}",
+    "crates/bacnet-server/src/command_lists/chain.rs::tests::a_run_chain_refuses_its_own_objects_and_more_than_eight_ancestors",
+    "crates/bacnet-server/src/schedule_channel_tests.rs::{tick_schedules_dropped_mid_distribution_ends_it_failed,tick_schedules_stops_two_channels_naming_each_other}",
+    "crates/bacnet-server/src/handlers/tests/channel_present_value_writes.rs::{bare_write_property_ends_a_channel_distribution_it_cannot_make,bare_write_property_multiple_ends_the_distributions_its_writes_started}",
+    "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_refuses_a_channel_present_value_write_and_starts_no_distribution",
+    "crates/bacnet-server/src/command_lists/unattached_tests.rs::refused_run_dropped_while_waiting_for_the_database_still_ends",
+    "crates/bacnet-server/src/schedule_channel_tests.rs::tick_schedules_dropped_with_a_run_queued_but_not_started_ends_it",
+    "crates/bacnet-objects/src/channel/coercion_tests.rs::nan_and_infinities_fail_every_conversion_with_a_range"
    ],
    "benchmarks": [],
-   "public_claims": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Added entry for #1151 (Channel object), from changelog.d/1151-channel-object.md",
+    "docs/rust-api.md#lighting--color-5 Channel object"
+   ],
    "notes": [
-    "Type 53 is absent from bundled Device Protocol_Object_Types_Supported values, and the public Rust placeholder plus Python add_channel method are removed. ObjectType::CHANNEL, Channel property identifiers, and the BACnetObject array-property classification remain wire-level protocol metadata rather than support claims. Reintroduction requires full member/control-group, propagation, coercion, write-status, and applicable delay behavior."
+    "A member's datatype is that of the value its property holds; NULL or a constructed value counts as unknown and passes unchanged, and `Lighting_Command` counts as a BACnetLightingCommand.",
+    "Members are local: a reference naming another Device is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, one naming this Device is stored without it. Caps are 1024 members and 64 control groups.",
+    "Rule 3 bounds an Unsigned or ENUMERATED value at 2147483647 for INTEGER, REAL and Double members; rounding to a REAL's precision under Rules 3 and 4 never fails a write.",
+    "A whole `Execution_Delay` write takes exactly one delay per member (VALUE_OUT_OF_RANGE otherwise); index-0 writes and whole member-list writes resize both arrays.",
+    "A run that would start its own object again, or with more than eight runs above it, ends failed and its writer gets OBJECT / BUSY. `tick_schedules` runs a distribution; the bare handlers end it FAILED."
+   ],
+   "gaps": [
+    "#1151: inbound WriteGroup and `Allow_Group_Delay_Inhibit`; Clause 12.53 expects a device with Channels to execute WriteGroup",
+    "Reliability, intrinsic reporting and members in other devices aren't served (no issue)",
+    "Python configuration of a Channel's members, delays and groups (no issue)",
+    "A Lighting Output keeps `Lighting_Command` as opaque octets, so a lighting-command value sent to it is refused (no issue)"
    ]
   },
   {
@@ -3387,7 +3442,8 @@
    "benchmarks": [],
    "public_claims": [],
    "notes": [
-    "Bundled Device Protocol_Services_Supported values omit bit 40, and the server has no inbound WriteGroup dispatch arm or handler. ServiceSupported::WRITE_GROUP, UnconfirmedServiceChoice::WRITE_GROUP, the codec, and Rust/Python client initiation remain protocol vocabulary. Reintroduction requires matching and group-zero behavior plus priority, supported Inhibit Delay behavior, and state-mutation integration evidence."
+    "Bundled Device Protocol_Services_Supported values omit bit 40, and the server has no inbound WriteGroup dispatch arm or handler. ServiceSupported::WRITE_GROUP, UnconfirmedServiceChoice::WRITE_GROUP, the codec, and Rust/Python client initiation remain protocol vocabulary. Reintroduction requires matching and group-zero behavior plus priority, supported Inhibit Delay behavior, and state-mutation integration evidence.",
+    "The Channel object exists (BACNET-12-CHANNEL-OBJECT), and Clause 12.53 expects a device with Channels to execute WriteGroup; that is #1151 part 2."
    ]
   },
   {
@@ -4976,13 +5032,14 @@
     "Indexed Recipient_List reads and writes fail with the same gate classification — mirrored at the object layer for direct calls — replacing the tranche-J INVALID_DATA_TYPE stopgap. #842 supersedes the historical #266 direct-write index behavior: Priority_Array is read-only under Clause 19.2.1 for all 20 affected first-party families.",
     "After existing preflight, whole-array, count index0, slots1–16, index17 and well-formed NULL writes return PROPERTY/WRITE_ACCESS_DENIED through the existing fallback. Index0 remains the valid count coordinate for reads; indexed reads and private priority maintenance remain intact.",
     "Actual WP/WPM and write_local tests cover all three former implementation paths, unchanged state and WPM successful prefix/failed coordinates; direct-trait metadata/PICS evidence covers all20 families.",
-    "Custom object write policies are unaffected. Limitations: the gate controls index admissibility only — every array the in-tree objects serve reads one element per index (Global Group since #1107, Structured View and Command since #1135, BACNET-12-COMMAND-STRUCTURED-VIEW-ARRAYS), and Channel has no object in-tree, and CharacterString/BitString Value ALARM_VALUES/FAULT_VALUES remain classified as arrays; effective write absence is handled at the indexed gate.",
+    "Custom object write policies are unaffected. Limitations: the gate controls index admissibility only — every array the in-tree objects serve reads one element per index (Global Group since #1107, Structured View and Command since #1135, BACNET-12-COMMAND-STRUCTURED-VIEW-ARRAYS), and CharacterString/BitString Value ALARM_VALUES/FAULT_VALUES remain classified as arrays; effective write absence is handled at the indexed gate.",
     "#789: both RPM response builders include a requested index only for an effectively declared array, including array errors and index zero; scalar errors omit it. Nonempty effective metadata is authoritative, otherwise the legacy property list determines presence before the object array classifier (including vendor overrides).",
     "Unknown objects/properties and unavailable declarations omit the response index as a conservative local interpretation; an undeclared legacy Property_List is not inferred from its standard identifier.",
     "This formatting decision does not change read/error precedence or probe read_property again. Target Audit retains the original requested index independently of the ACK field. Exact byte/work limits, duplicate order and real B/IP response parity are tested.",
     "#881: at the existing indexed WP/WPM service gate only, nonempty effective metadata that omits the property yields PROPERTY/UNKNOWN_PROPERTY before value decode, WPM authorization and write observer/source/Audit hooks.",
     "Absence-first is the selected local simultaneous-fault interpretation of Clauses15.9-15.10 (printed752-755/PDF754-757), not an explicit normative precedence rule. Empty optional custom metadata retains classifier/writer delegation; served scalars and BACnetLISTs retain PROPERTY_IS_NOT_AN_ARRAY and served arrays keep object-owned write/count/range rules.",
-    "Encoded AI and B/IP raw5555 plus unprovisioned Staging names cover valid/malformed values, while present Staging arrays, read-only B/IP DNS and a custom vendor array supply controls. WPM preserves its Description prefix and exact failed object/property/index, with no failing/suffix authorization, observer, source write or Audit record. A running-server fixture retains actual successful Audit delivery and source-aware writing. Unindexed writes, direct object calls, outer WP authorization and read service precedence are unchanged."
+    "Encoded AI and B/IP raw5555 plus unprovisioned Staging names cover valid/malformed values, while present Staging arrays, read-only B/IP DNS and a custom vendor array supply controls. WPM preserves its Description prefix and exact failed object/property/index, with no failing/suffix authorization, observer, source write or Audit record. A running-server fixture retains actual successful Audit delivery and source-aware writing. Unindexed writes, direct object calls, outer WP authorization and read service precedence are unchanged.",
+    "Channel's three arrays (List_Of_Object_Property_References, Execution_Delay, Control_Groups) admit an index and read one element per index (BACNET-12-CHANNEL-OBJECT)."
    ]
   },
   {
@@ -6646,6 +6703,7 @@
     "crates/bacnet-transport/src/sc/tests.rs",
     "crates/bacnet-network/src/layer.rs",
     "crates/bacnet-network/src/router/mod.rs",
+    "crates/bacnet-network/src/router/dispatch.rs",
     "crates/bacnet-network/src/router/forwarding.rs",
     "crates/bacnet-network/src/router/tests/data_attributes.rs"
    ],

@@ -38,6 +38,7 @@ pub mod assigned_landing_calls;
 mod audit_notification;
 mod audit_record;
 pub mod calendar;
+mod channel_value;
 pub mod cov_subscription;
 mod event_log_record;
 pub mod event_notification_subscription;
@@ -80,6 +81,7 @@ pub use calendar::{
     decode_calendar_entry, decode_calendar_entry_list, decode_date_range, encode_calendar_entry,
     encode_calendar_entry_list, encode_date_range,
 };
+pub use channel_value::{channel_value_end, is_lighting_command_channel_value};
 pub use cov_subscription::{
     decode_cov_multiple_subscription, decode_cov_subscription, encode_cov_multiple_subscription,
     encode_cov_multiple_subscription_list, encode_cov_subscription, encode_cov_subscription_list,
