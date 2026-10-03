@@ -1,16 +1,12 @@
 use super::*;
-use bacnet_objects::audit::{AuditLogNotificationSink, AuditLogQueryPage, AuditLogStorage};
+use bacnet_objects::audit::{AuditLogQueryPage, AuditLogStorage};
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollmentMonitoredSource};
-use bacnet_objects::file::{FileConfiguration, FileObject, FileStorage, FileWriteStart};
 use bacnet_objects::property_metadata::PropertyMetadata;
-use bacnet_objects::traits::{CovReportedProperty, MonotonicClock, ReliabilityEvaluation};
+use bacnet_objects::traits::MonotonicClock;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
-use bacnet_types::constructed::{
-    BACnetAuditLogQueryParameters, BACnetAuditNotification, BACnetLogRecord, BACnetObjectSelector,
-    LogDatum,
-};
-use bacnet_types::enums::{ErrorClass, ErrorCode, Reliability};
+use bacnet_types::constructed::{BACnetAuditLogQueryParameters, BACnetObjectSelector};
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 
 #[test]
 fn typed_device_authority_is_forwarded_without_copying() {
@@ -204,32 +200,27 @@ async fn built_in_configuration_identity_metadata_and_writes_survive_wrapping() 
 
 const CUSTOM: PropertyIdentifier = PropertyIdentifier::from_raw(5000);
 const CUSTOM_LIST: PropertyIdentifier = PropertyIdentifier::from_raw(5001);
-const REPORTED: [CovReportedProperty; 1] = [CovReportedProperty::Trigger(CUSTOM)];
 
 #[derive(Default)]
 struct Calls {
     clock_bindings: AtomicUsize,
     monotonic_bindings: AtomicUsize,
     configurations: AtomicUsize,
-    clock_reads: AtomicUsize,
 }
 
 impl ClockReader for Calls {
     fn read_clock(&self) -> Option<ClockFrame> {
-        self.clock_reads.fetch_add(1, Ordering::SeqCst);
         None
     }
 }
 
 // A custom Reporter implements the same complete configuration contract as the
 // built-in object; wrapping must preserve its override and all typed settings.
+// trait_tests checks that each method reaches the wrapped object.
 struct ExtendedReporter {
     reporter: AuditReporterObject,
     calls: Arc<Calls>,
-    clock: Option<Arc<dyn ClockReader>>,
-    monotonic: Option<Arc<MonotonicClock>>,
     value: u64,
-    file: FileObject,
     eval: EventEnrollmentEvalState,
     source: Option<EventEnrollmentMonitoredSource>,
 }
@@ -314,55 +305,11 @@ impl BACnetObject for ExtendedReporter {
     fn is_list_property(&self, p: PropertyIdentifier) -> bool {
         p == CUSTOM_LIST || self.reporter.is_list_property(p)
     }
-    fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
-        self.clock = clock;
+    fn bind_clock_internal(&mut self, _: Option<Arc<dyn ClockReader>>) {
         self.calls.clock_bindings.fetch_add(1, Ordering::SeqCst);
     }
-    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
-        self.monotonic = clock;
+    fn bind_monotonic_clock_internal(&mut self, _: Option<Arc<MonotonicClock>>) {
         self.calls.monotonic_bindings.fetch_add(1, Ordering::SeqCst);
-    }
-    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
-        self.monotonic.as_ref().map(|clock| clock())
-    }
-    fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
-        let _ = self.clock.as_ref().unwrap().read_clock();
-        self.value += elapsed.as_secs();
-        true
-    }
-    fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
-        self.value = now.as_secs();
-        true
-    }
-    fn supports_cov(&self) -> bool {
-        true
-    }
-    fn supports_cov_property(&self, p: PropertyIdentifier) -> bool {
-        p == CUSTOM
-    }
-    fn cov_increment(&self) -> Option<f32> {
-        Some(1.25)
-    }
-    fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {
-        &REPORTED
-    }
-    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
-        Some(Box::new(
-            AuditReporterObject::new(17, "Custom snapshot").unwrap(),
-        ))
-    }
-    fn binary_lighting_blink_count_internal(&self) -> u64 {
-        123
-    }
-    fn add_trend_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
-        let LogDatum::UnsignedValue(value) = record.log_datum else {
-            return Err(Error::Protocol {
-                class: ErrorClass::DEVICE.to_raw() as u32,
-                code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
-            });
-        };
-        self.value = value;
-        Ok(())
     }
     fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
         Some(self.eval.clone())
@@ -384,33 +331,7 @@ impl BACnetObject for ExtendedReporter {
         self.source = source;
         Ok(())
     }
-    fn evaluate_reliability_internal(&mut self) -> Result<ReliabilityEvaluation, Error> {
-        Ok(ReliabilityEvaluation::Changed {
-            old_reliability: Reliability::NO_SENSOR,
-            new_reliability: Reliability::OVER_RANGE,
-        })
-    }
-    fn reliability_evaluation_inhibited_internal(&self) -> bool {
-        true
-    }
-    fn file_configuration_internal(&self) -> Option<&dyn FileConfiguration> {
-        Some(&self.file)
-    }
-    fn file_configuration_internal_mut(&mut self) -> Option<&mut dyn FileConfiguration> {
-        Some(&mut self.file)
-    }
-    fn file_storage_internal(&self) -> Option<&dyn FileStorage> {
-        Some(&self.file)
-    }
-    fn file_storage_internal_mut(&mut self) -> Option<&mut dyn FileStorage> {
-        Some(&mut self.file)
-    }
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
-        Some(self)
-    }
-    fn audit_log_notification_sink_internal(
-        &mut self,
-    ) -> Option<&mut dyn AuditLogNotificationSink> {
         Some(self)
     }
 }
@@ -429,15 +350,6 @@ impl AuditLogStorage for ExtendedReporter {
     }
 }
 
-impl AuditLogNotificationSink for ExtendedReporter {
-    fn notification_logging_enabled(&self) -> bool {
-        true
-    }
-    fn store_notifications(&mut self, _: &[BACnetAuditNotification], _: u32) -> Result<(), Error> {
-        Err(Error::Encoding("custom sink failure".into()))
-    }
-}
-
 #[tokio::test]
 async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
     let (session, _peer, _) = session(SessionRole::ClientOnly);
@@ -447,10 +359,7 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
     db.add(Box::new(ExtendedReporter {
         reporter: AuditReporterObject::new(1, "Custom Reporter").unwrap(),
         calls: calls.clone(),
-        clock: None,
-        monotonic: None,
         value: 7,
-        file: FileObject::new(5, "Private file capability", "test").unwrap(),
         eval: EventEnrollmentEvalState::default(),
         source: Some(monitored),
     }))
@@ -591,113 +500,6 @@ async fn custom_capabilities_clocks_indexes_and_private_state_are_retained() {
         assert!(!object
             .property_list()
             .contains(&PropertyIdentifier::MONITORED_OBJECTS));
-        assert_eq!(
-            read(object, PropertyIdentifier::AUDIT_SOURCE_REPORTER),
-            PropertyValue::Boolean(true)
-        );
-        assert!(object.supports_cov());
-        assert!(object.supports_cov_property(CUSTOM));
-        assert!(!object.supports_cov_property(PropertyIdentifier::DESCRIPTION));
-        assert_eq!(object.cov_increment(), Some(1.25));
-        assert_eq!(object.cov_reported_properties(), &REPORTED);
-        assert_eq!(
-            object.cov_snapshot_internal().unwrap().object_name(),
-            "Custom snapshot"
-        );
-        assert_eq!(object.binary_lighting_blink_count_internal(), 123);
-        assert_eq!(
-            object.next_monotonic_deadline_internal(),
-            Some(Duration::from_secs(99))
-        );
-        assert!(object.advance_time_internal(Duration::from_secs(5)));
-        assert_eq!(calls.clock_reads.load(Ordering::SeqCst), 1);
-        assert_eq!(read(object, CUSTOM), PropertyValue::Unsigned(12));
-        assert!(object.advance_monotonic_time_internal(Duration::from_secs(33)));
-        assert_eq!(read(object, CUSTOM), PropertyValue::Unsigned(33));
-        object.bind_clock_internal(Some(calls.clone()));
-        object.bind_monotonic_clock_internal(Some(Arc::new(|| Duration::from_secs(101))));
-        assert_eq!(calls.clock_bindings.load(Ordering::SeqCst), clock_binds + 1);
-        assert_eq!(
-            calls.monotonic_bindings.load(Ordering::SeqCst),
-            monotonic_binds + 1
-        );
-        assert_eq!(
-            object.next_monotonic_deadline_internal(),
-            Some(Duration::from_secs(101))
-        );
-        assert_eq!(
-            object.enrollment_eval_source_internal(),
-            Some(Some(monitored))
-        );
-        object.set_enrollment_eval_source_internal(None).unwrap();
-        assert_eq!(object.enrollment_eval_source_internal(), Some(None));
-        let eval = object.enrollment_eval_state_internal().unwrap();
-        object.set_enrollment_eval_state_internal(eval).unwrap();
-        assert_eq!(
-            object.evaluate_reliability_internal().unwrap(),
-            ReliabilityEvaluation::Changed {
-                old_reliability: Reliability::NO_SENSOR,
-                new_reliability: Reliability::OVER_RANGE
-            }
-        );
-        assert!(object.reliability_evaluation_inhibited_internal());
-        object
-            .file_configuration_internal_mut()
-            .unwrap()
-            .set_stream_data(vec![1, 2])
-            .unwrap();
-        assert_eq!(
-            object
-                .file_configuration_internal()
-                .unwrap()
-                .stream_data()
-                .unwrap(),
-            &[1, 2]
-        );
-        object
-            .file_storage_internal_mut()
-            .unwrap()
-            .write_stream(FileWriteStart::Append, &[3])
-            .unwrap();
-        assert_eq!(
-            object
-                .file_storage_internal()
-                .unwrap()
-                .read_stream(0, 3)
-                .unwrap()
-                .data,
-            vec![1, 2, 3]
-        );
-        let sink = object.audit_log_notification_sink_internal().unwrap();
-        assert!(sink.notification_logging_enabled());
-        assert!(
-            matches!(sink.store_notifications(&[], 77), Err(Error::Encoding(message)) if message == "custom sink failure")
-        );
-        let mut record = BACnetLogRecord {
-            date: bacnet_types::primitives::Date {
-                year: 126,
-                month: 8,
-                day: 31,
-                day_of_week: 1,
-            },
-            time: bacnet_types::primitives::Time {
-                hour: 12,
-                minute: 0,
-                second: 0,
-                hundredths: 0,
-            },
-            log_datum: LogDatum::UnsignedValue(77),
-            status_flags: None,
-        };
-        object.add_trend_record(record.clone()).unwrap();
-        assert_eq!(read(object, CUSTOM), PropertyValue::Unsigned(77));
-        record.log_datum = LogDatum::NullValue;
-        assert!(
-            matches!(object.add_trend_record(record), Err(Error::Protocol { class, code })
-            if class == ErrorClass::DEVICE.to_raw() as u32
-                && code == ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32)
-        );
-        assert_eq!(read(object, CUSTOM), PropertyValue::Unsigned(77));
         assert_eq!(
             read(object, PropertyIdentifier::AUDIT_SOURCE_REPORTER),
             PropertyValue::Boolean(true)
