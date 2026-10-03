@@ -471,4 +471,7 @@ pub const COMMANDS: &[(&str, Command)] = &[
     ("add_event_log_record", |o| {
         format!("{:?}", o.add_event_log_record(event_log_record()))
     }),
+    ("refresh_log_window_internal", |o| {
+        o.refresh_log_window_internal().to_string()
+    }),
 ];
