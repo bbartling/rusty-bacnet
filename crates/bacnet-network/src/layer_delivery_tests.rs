@@ -245,6 +245,92 @@ async fn router_preserves_link_group_for_ultimate_network_unicast() {
 }
 
 #[test]
+fn global_broadcast_npdu_has_dnet_ffff() {
+    use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+    use bacnet_types::enums::NetworkPriority;
+
+    let npdu = Npdu {
+        is_network_message: false,
+        expecting_reply: false,
+        priority: NetworkPriority::NORMAL,
+        destination: Some(NpduAddress {
+            network: 0xFFFF,
+            mac_address: MacAddr::new(),
+        }),
+        source: None,
+        hop_count: 255,
+        payload: Bytes::from_static(&[0xAA]),
+        ..Npdu::default()
+    };
+
+    let mut buf = bytes::BytesMut::new();
+    encode_npdu(&mut buf, &npdu).unwrap();
+    let decoded = decode_npdu(Bytes::from(buf)).unwrap();
+    let dest = decoded.destination.unwrap();
+    assert_eq!(dest.network, 0xFFFF);
+    assert!(dest.mac_address.is_empty());
+    assert_eq!(decoded.hop_count, 255);
+}
+
+#[test]
+fn routed_send_encodes_dnet_dadr() {
+    use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+    use bacnet_types::enums::NetworkPriority;
+
+    let npdu = Npdu {
+        is_network_message: false,
+        expecting_reply: true,
+        priority: NetworkPriority::NORMAL,
+        destination: Some(NpduAddress {
+            network: 100,
+            mac_address: MacAddr::from_slice(&[1, 2, 3, 4, 5, 6]),
+        }),
+        source: None,
+        hop_count: 255,
+        payload: Bytes::from_static(&[0xAA, 0xBB]),
+        ..Npdu::default()
+    };
+
+    let mut buf = bytes::BytesMut::new();
+    encode_npdu(&mut buf, &npdu).unwrap();
+    let decoded = decode_npdu(Bytes::from(buf)).unwrap();
+    let dest = decoded.destination.unwrap();
+    assert_eq!(dest.network, 100);
+    assert_eq!(dest.mac_address.as_slice(), &[1, 2, 3, 4, 5, 6]);
+    assert_eq!(decoded.hop_count, 255);
+    assert!(decoded.expecting_reply);
+}
+
+#[test]
+fn broadcast_to_network_encodes_specific_dnet() {
+    use bacnet_encoding::npdu::{decode_npdu, encode_npdu, Npdu, NpduAddress};
+    use bacnet_types::enums::NetworkPriority;
+
+    let npdu = Npdu {
+        is_network_message: false,
+        expecting_reply: false,
+        priority: NetworkPriority::NORMAL,
+        destination: Some(NpduAddress {
+            network: 42,
+            mac_address: MacAddr::new(),
+        }),
+        source: None,
+        hop_count: 255,
+        payload: Bytes::from_static(&[0xCC]),
+        ..Npdu::default()
+    };
+
+    let mut buf = bytes::BytesMut::new();
+    encode_npdu(&mut buf, &npdu).unwrap();
+    let decoded = decode_npdu(Bytes::from(buf)).unwrap();
+    let dest = decoded.destination.unwrap();
+    assert_eq!(dest.network, 42);
+    assert!(dest.mac_address.is_empty());
+    assert_eq!(decoded.hop_count, 255);
+    assert!(!decoded.expecting_reply);
+}
+
+#[test]
 fn broadcast_to_network_rejects_dnet_ffff() {
     let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let net = NetworkLayer::new(transport);
@@ -317,4 +403,73 @@ async fn sends_naming_network_zero_are_refused_before_any_frame() {
         .await
         .unwrap();
     assert!(frames.try_recv().is_ok());
+}
+
+/// DNET 0xFFFF reaches every device on every network, so a send that pairs
+/// it with one device's MAC is refused by name and puts no frame on the link
+/// (#1340). The global broadcast itself (DLEN 0) and a routed send to a real
+/// network number with the same MAC still go out.
+#[tokio::test]
+async fn sends_pairing_the_global_network_with_a_device_are_refused_before_any_frame() {
+    use bacnet_encoding::npdu::decode_npdu;
+
+    let (transport, mut peer) = LoopbackTransport::pair(vec![1], vec![2]);
+    let mut frames = peer.start().await.unwrap();
+    let net = NetworkLayer::new(transport);
+    let apdu = [0x10, 0x08];
+    let priority = NetworkPriority::NORMAL;
+    let global_device = NpduAddress {
+        network: 0xFFFF,
+        mac_address: MacAddr::from_slice(&[7]),
+    };
+    let target = |network| RoutedTarget {
+        network,
+        mac: &[7],
+        router_mac: &[2],
+    };
+    let refusals = [
+        net.send_apdu_routed(&apdu, 0xFFFF, &[7], &[2], false, priority)
+            .await,
+        net.send_apdu_routed_with_data_attributes(&apdu, target(0xFFFF), false, priority, &[])
+            .await,
+        net.send_apdu_routed_via_local_broadcast(&apdu, 0xFFFF, &[7], false, priority)
+            .await,
+        net.send_apdu_routed_via_local_broadcast_with_data_attributes(
+            &apdu,
+            0xFFFF,
+            &[7],
+            false,
+            priority,
+            &[],
+        )
+        .await,
+        net.send_apdu_on_issuance(&apdu, &[2], Some(&global_device), false, priority, || {
+            panic!("a refused send is never issued")
+        })
+        .await,
+    ];
+    for refusal in refusals {
+        let message = refusal.unwrap_err().to_string();
+        assert!(
+            message.contains("dest_network 0xFFFF is the global broadcast")
+                && message.contains("broadcast_global_apdu"),
+            "{message}"
+        );
+    }
+    assert!(frames.try_recv().is_err());
+
+    let destination_of = |frame: bacnet_transport::port::ReceivedNpdu| {
+        decode_npdu(frame.npdu).unwrap().destination.unwrap()
+    };
+    net.broadcast_global_apdu(&apdu, false, priority)
+        .await
+        .unwrap();
+    let global = destination_of(frames.try_recv().unwrap());
+    assert_eq!((global.network, global.mac_address.len()), (0xFFFF, 0));
+
+    net.send_apdu_routed_with_data_attributes(&apdu, target(5), false, priority, &[])
+        .await
+        .unwrap();
+    let routed = destination_of(frames.try_recv().unwrap());
+    assert_eq!((routed.network, &routed.mac_address[..]), (5, &[7][..]));
 }
