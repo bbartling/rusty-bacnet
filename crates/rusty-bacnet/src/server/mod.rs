@@ -192,5 +192,6 @@ mod server_methods {
     mod registration;
     mod request_admission;
     mod time_sync_policy;
+    mod trend_log_methods;
     mod value_registration;
 }

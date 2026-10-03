@@ -1091,6 +1091,22 @@ class ActionCommand(TypedDict):
     device_identifier: NotRequired[ObjectIdentifier | None]
 
 
+class DeviceObjectPropertyReference(TypedDict):
+    """A property to monitor (``BACnetDeviceObjectPropertyReference``), such
+    as a Trend Log Multiple member.
+
+    Unknown keys raise ValueError and wrong types raise TypeError. The server
+    reads only its own objects, so a ``device_identifier`` naming another
+    Device logs a failure for that member instead of a value.
+    """
+
+    object_identifier: ObjectIdentifier
+    property_identifier: PropertyIdentifier
+    # 0..=4294967295; one element of an array property.
+    property_array_index: NotRequired[int | None]
+    device_identifier: NotRequired[ObjectIdentifier | None]
+
+
 class AuditReporterConfiguration(TypedDict):
     """Owned pre-start target Reporter settings; no Python callbacks."""
     instance: int
@@ -2659,7 +2675,50 @@ class BACnetServer:
         ``(port_id, enabled)`` pairs; the server receives through Port_ID 0.
         Without it Port_Filter is absent."""
     def add_trend_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
-    def add_trend_log_multiple(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
+    def add_trend_log_multiple(
+        self,
+        instance: int,
+        name: str,
+        buffer_size: int = 100,
+        *,
+        members: list[DeviceObjectPropertyReference] | None = None,
+        log_interval: int | None = None,
+        logging_type: Literal["polled", "triggered"] | None = None,
+        start_time: tuple[tuple[int, int, int, int], tuple[int, int, int, int]] | None = None,
+        stop_time: tuple[tuple[int, int, int, int], tuple[int, int, int, int]] | None = None,
+        align_intervals: bool | None = None,
+        interval_offset: int | None = None,
+    ) -> None:
+        """Add a Trend Log Multiple (Clause 12.30) that the server polls or
+        triggers, logging one value per member in each record.
+
+        ``members`` fills Log_DeviceObjectProperty in order; more than 64
+        raises BacnetProtocolError (NO_SPACE_TO_WRITE_PROPERTY).
+        ``log_interval`` is in hundredths of a second. ``logging_type``
+        ``"polled"`` with no ``log_interval`` takes a one-minute interval;
+        ``"triggered"`` zeroes Log_Interval and makes it read-only, so a
+        ``log_interval`` with it raises BacnetProtocolError
+        (WRITE_ACCESS_DENIED). ``"cov"`` raises BacnetProtocolError
+        (VALUE_OUT_OF_RANGE), as a client's write of COV does; any other
+        string raises ValueError. With neither, Log_Interval stays 0 and
+        nothing is polled.
+
+        ``start_time`` and ``stop_time`` bound when records are kept, each a
+        ``((full_year, month, day, day_of_week), (hour, minute, second,
+        hundredths))`` pair: every field 255 leaves that side open, and
+        anything else that isn't an actual date and time raises
+        BacnetProtocolError (VALUE_OUT_OF_RANGE). Records are kept from the
+        start up to, not including, the stop, and each opening and closing
+        is logged. ``align_intervals`` aligns a polled log's acquisitions to
+        the clock when Log_Interval divides a day, shifted by
+        ``interval_offset`` hundredths (modulo Log_Interval).
+
+        Peers can write each of these. To ask a triggered log for one
+        record, write Trigger TRUE, from a peer or with
+        ``write_property_local``; it reads TRUE until the poller acquires
+        the record. Read the records with ``read_range``.
+        """
+        ...
     def add_event_log(self, instance: int, name: str, buffer_size: int = 100) -> None: ...
     def add_audit_log(self, instance: int, name: str, storage_path: str, buffer_size: int = 100) -> None: ...
     def add_device_binding(self, device_instance: int, address: str) -> None:

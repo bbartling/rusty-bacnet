@@ -1636,7 +1636,20 @@ evaluator or notification-generation flow.
 
 ```python
 server.add_trend_log(instance=1, name="Temp Log", buffer_size=1000)
-server.add_trend_log_multiple(instance=1, name="Multi Log", buffer_size=1000)
+server.add_trend_log_multiple(
+    instance=1,
+    name="Multi Log",
+    buffer_size=1000,
+    members=[
+        {"object_identifier": ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
+         "property_identifier": PropertyIdentifier.PRESENT_VALUE},
+        {"object_identifier": ObjectIdentifier(ObjectType.ANALOG_INPUT, 2),
+         "property_identifier": PropertyIdentifier.PRESENT_VALUE},
+    ],
+    log_interval=6000,          # hundredths of a second: once a minute
+    logging_type="polled",
+    align_intervals=True,       # on each minute
+)
 server.add_event_log(instance=1, name="Event Log", buffer_size=500)
 server.add_audit_log(
     instance=1,
@@ -1647,7 +1660,49 @@ server.add_audit_log(
 server.add_audit_reporter(instance=1, name="Reporter")
 ```
 
-`storage_path` is application-owned and produces two sibling snapshot files
+The server's poller samples every `add_trend_log_multiple` member into one
+record, one value per member in order; a client reads the records with
+`read_range` on Log_Buffer. The keyword arguments are all optional:
+
+- `members` is a list of `DeviceObjectPropertyReference` mappings
+  (`object_identifier`, `property_identifier`, and optionally
+  `property_array_index` and `device_identifier`), at most 64. A member naming
+  another Device logs a failure for its slot, since the server reads only its
+  own objects.
+- `log_interval` is in hundredths of a second. `logging_type` is `"polled"`
+  or `"triggered"`. POLLED with no `log_interval` takes a one-minute interval;
+  TRIGGERED sets Log_Interval to 0 and makes it read-only, so passing both
+  raises `BacnetProtocolError` (WRITE_ACCESS_DENIED). A Trend Log Multiple
+  never logs by COV: `"cov"` raises VALUE_OUT_OF_RANGE, as a client's write of
+  COV to Logging_Type does. Without either argument Log_Interval stays 0 and
+  nothing is polled.
+- `start_time` and `stop_time` keep records only from the start up to, not
+  including, the stop. Each is a `((full_year, month, day, day_of_week),
+  (hour, minute, second, hundredths))` pair; every field 255 leaves that side
+  open, and any other value that isn't an actual date and time raises
+  VALUE_OUT_OF_RANGE. The log records LOG_DISABLED when the window closes and
+  a clear status when it opens.
+- `align_intervals=True` makes a polled log acquire on clock boundaries when
+  Log_Interval divides a day, `interval_offset` hundredths (modulo the
+  interval) after each one.
+
+A triggered log logs one record each time Trigger is written TRUE, by a peer
+or by the application through `write_property_local`; Trigger reads TRUE until
+the poller has acquired the record:
+
+```python
+await server.write_property_local(
+    ObjectIdentifier(ObjectType.TREND_LOG_MULTIPLE, 2),
+    PropertyIdentifier.TRIGGER,
+    PropertyValue.boolean(True),
+    source_object=None,
+)
+```
+
+Peers can write each of these properties; writing Trigger TRUE to a polled
+log raises NOT_CONFIGURED_FOR_TRIGGERED_LOGGING.
+
+An Audit Log's `storage_path` is application-owned and produces two sibling snapshot files
 with `.slot0` and `.slot1` suffixes. Reuse the same path when reopening that
 Audit Log; the server does not infer a global or working-directory location.
 

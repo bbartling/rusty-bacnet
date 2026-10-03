@@ -8,16 +8,19 @@ use bacnet_encoding::primitives::encode_property_value;
 use bacnet_types::constructed::{
     BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P};
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, LoggingType, ObjectType, PropertyIdentifier as P,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use bytes::BytesMut;
 use tracing::warn;
 
 use super::{LocalDevice, ObjectDatabase};
+use crate::clock::ClockFrame;
 use crate::device_reference::decode_property_reference;
 use crate::log_buffer::ANY_VALUE_MAX_OCTETS;
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, MonotonicClock};
 
 /// Local maximum idle/configuration reconciliation delay and failure backoff.
 /// This is a scheduling policy, not a BACnet timing guarantee.
@@ -25,14 +28,26 @@ const RECONCILE: Duration = Duration::from_millis(100);
 
 #[derive(PartialEq)]
 struct Configuration {
-    interval: u32,
-    logging_type: u32,
+    mode: Mode,
     /// Log_DeviceObjectProperty as read, compared whole for scheduling
     /// ownership.
     reference: PropertyValue,
     /// What each acquisition reads: the one reference of a Trend Log, or every
     /// element of a Trend Log Multiple in array order.
     members: Vec<Member>,
+}
+
+/// When a log acquires.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Mode {
+    /// POLLED: every `interval` hundredths, counted from each acquisition.
+    Polled { interval: u32 },
+    /// POLLED with Align_Intervals (Clause 12.30.14): at each local time of
+    /// day `offset` hundredths past a multiple of `interval`, which divides a
+    /// day. `offset` is Interval_Offset modulo the interval (12.30.15).
+    Aligned { interval: u32, offset: u32 },
+    /// TRIGGERED with Trigger TRUE: one acquisition now (Clause 12.30.16).
+    Triggered,
 }
 
 /// One monitored reference of a log.
@@ -56,20 +71,68 @@ struct Schedule {
     last_success: Option<Duration>,
     /// Latest failed attempt, independent of the last accepted sample.
     retry_completed: Option<Duration>,
+    /// An aligned log's next acquisition on the monotonic clock, worked out
+    /// from the Device clock; `None` until the first is planned.
+    aligned_due: Option<Duration>,
 }
 
 impl Schedule {
-    fn remaining(&self, now: Duration) -> Duration {
-        let (completed, wait) = match (self.retry_completed, self.last_success) {
-            (Some(failed), _) => (failed, RECONCILE),
-            (None, Some(success)) => (
-                success,
-                Duration::from_millis(u64::from(self.configuration.interval) * 10),
-            ),
-            (None, None) => return Duration::ZERO,
-        };
-        wait.saturating_sub(now.saturating_sub(completed))
+    fn new(configuration: Configuration) -> Self {
+        Self {
+            configuration,
+            last_success: None,
+            retry_completed: None,
+            aligned_due: None,
+        }
     }
+
+    fn remaining(&self, now: Duration) -> Duration {
+        if let Some(failed) = self.retry_completed {
+            return RECONCILE.saturating_sub(now.saturating_sub(failed));
+        }
+        match (self.configuration.mode, self.last_success, self.aligned_due) {
+            (Mode::Polled { interval }, Some(success), _) => {
+                hundredths(interval).saturating_sub(now.saturating_sub(success))
+            }
+            (Mode::Aligned { .. }, _, Some(due)) => due.saturating_sub(now),
+            _ => Duration::ZERO,
+        }
+    }
+}
+
+/// Hundredths of a second in a day: an aligned interval divides it.
+const DAY: u32 = 8_640_000;
+
+fn hundredths(value: u32) -> Duration {
+    Duration::from_millis(u64::from(value) * 10)
+}
+
+/// How far `frame`'s local time of day, in hundredths, lies past the most
+/// recent aligned boundary.
+fn past_boundary(frame: &ClockFrame, interval: u32, offset: u32) -> u32 {
+    let t = frame.local_time;
+    let time_of_day = ((u32::from(t.hour) * 60 + u32::from(t.minute)) * 60 + u32::from(t.second))
+        * 100
+        + u32::from(t.hundredths);
+    (time_of_day + interval - offset) % interval
+}
+
+/// The wait from `frame` to the first aligned boundary, none when it falls on
+/// one.
+fn first_aligned(frame: &ClockFrame, interval: u32, offset: u32) -> Duration {
+    hundredths((interval - past_boundary(frame, interval, offset)) % interval)
+}
+
+/// The wait from an acquisition at `frame` to the boundary after the one it
+/// served, taken as the nearer boundary, so a wake a little early or late
+/// for it never acquires twice for the same boundary.
+fn next_aligned(frame: &ClockFrame, interval: u32, offset: u32) -> Duration {
+    let past = past_boundary(frame, interval, offset);
+    hundredths(if past <= interval / 2 {
+        interval - past
+    } else {
+        2 * interval - past
+    })
 }
 
 #[derive(Default)]
@@ -105,12 +168,22 @@ impl ObjectDatabase {
     /// for an index past the end (#1183).
     ///
     /// Only POLLED logs with a nonzero Log_Interval and at least one reference
-    /// are polled. The caller must hold exclusive database access for this
-    /// whole call. The bound monotonic clock drives scheduling; the shared
-    /// Device clock provides each actual acquisition timestamp. Without either
-    /// clock an attempt cannot succeed. A successful call to an object's
-    /// insertion hook, including its accepted disabled/count-only outcomes,
-    /// starts the configured interval.
+    /// are polled. A TRIGGERED Trend Log Multiple whose Trigger reads TRUE
+    /// makes one acquisition, holding no values if it has no members, and the
+    /// object clears Trigger once it accepts the record (Clause 12.30.16). With
+    /// Align_Intervals TRUE and a Log_Interval that divides a day, a POLLED
+    /// Trend Log Multiple acquires when the Device clock's time of day is
+    /// Interval_Offset (modulo the interval) past a multiple of the interval
+    /// (Clauses 12.30.14 and 12.30.15); the first acquisition waits for such a
+    /// boundary. Every pass also lets each log look at its Start_Time /
+    /// Stop_Time window, so one that opens or closes is recorded within a pass.
+    ///
+    /// The caller must hold exclusive database access for this whole call. The
+    /// bound monotonic clock drives scheduling; the shared Device clock
+    /// provides each actual acquisition timestamp. Without either clock an
+    /// attempt cannot succeed. A successful call to an object's insertion hook,
+    /// including its accepted disabled/count-only outcomes, starts the
+    /// configured interval.
     ///
     /// Log_Interval is in hundredths. Deadlines follow actual completion, without
     /// catch-up bursts. Invalid timestamps and insertion errors preserve the last
@@ -128,6 +201,8 @@ impl ObjectDatabase {
         let mut logs = self.find_by_type(ObjectType::TREND_LOG);
         logs.extend(self.find_by_type(ObjectType::TREND_LOG_MULTIPLE));
         for oid in logs {
+            // Exclusive access prevents structural change after selection.
+            self.get_mut(&oid).unwrap().refresh_log_window_internal();
             let Some(configuration) = self.get(&oid).and_then(configuration) else {
                 continue;
             };
@@ -138,65 +213,9 @@ impl ObjectDatabase {
                 .get(&oid)
                 .is_none_or(|entry| entry.configuration != configuration)
             {
-                self.trend_poll.0.insert(
-                    oid,
-                    Schedule {
-                        configuration,
-                        last_success: None,
-                        retry_completed: None,
-                    },
-                );
+                self.trend_poll.0.insert(oid, Schedule::new(configuration));
             }
-            if !self.trend_poll.0[&oid].remaining(monotonic()).is_zero() {
-                continue;
-            }
-            let accepted = self
-                .clock_frame()
-                .filter(|frame| frame.is_valid_actual_datetime())
-                .map(|frame| {
-                    let values: Vec<LogValue> = self.trend_poll.0[&oid]
-                        .configuration
-                        .members
-                        .iter()
-                        .map(|member| self.acquire(local, member))
-                        .collect();
-                    // Exclusive access prevents structural change after selection.
-                    let object = self.get_mut(&oid).unwrap();
-                    let inserted = if oid.object_type() == ObjectType::TREND_LOG_MULTIPLE {
-                        object.add_trend_multiple_record(BACnetLogMultipleRecord {
-                            date: frame.local_date,
-                            time: frame.local_time,
-                            log_data: LogData::Values(values),
-                        })
-                    } else {
-                        object.add_trend_record(BACnetLogRecord {
-                            date: frame.local_date,
-                            time: frame.local_time,
-                            // A Trend Log has exactly one reference.
-                            log_datum: values
-                                .into_iter()
-                                .next()
-                                .map_or(LogDatum::NullValue, LogDatum::from),
-                            status_flags: None,
-                        })
-                    };
-                    match inserted {
-                        Ok(()) => true,
-                        Err(error) => {
-                            warn!(object = %oid, %error, "trend-log record insertion failed");
-                            false
-                        }
-                    }
-                })
-                .unwrap_or(false);
-            let completed = monotonic();
-            let entry = self.trend_poll.0.get_mut(&oid).unwrap();
-            if accepted {
-                entry.last_success = Some(completed);
-                entry.retry_completed = None;
-            } else {
-                entry.retry_completed = Some(completed);
-            }
+            self.poll_one(oid, local, &*monotonic);
         }
         self.trend_poll.0.retain(|oid, _| eligible.contains(oid));
         let now = monotonic();
@@ -212,6 +231,80 @@ impl ObjectDatabase {
             Duration::from_millis(1)
         } else {
             remaining
+        }
+    }
+
+    /// Acquire for `oid`'s schedule entry when it is due.
+    fn poll_one(&mut self, oid: ObjectIdentifier, local: LocalDevice, monotonic: &MonotonicClock) {
+        let now = monotonic();
+        if !self.trend_poll.0[&oid].remaining(now).is_zero() {
+            return;
+        }
+        let frame = self
+            .clock_frame()
+            .filter(|frame| frame.is_valid_actual_datetime());
+        let entry = self.trend_poll.0.get_mut(&oid).unwrap();
+        let mode = entry.configuration.mode;
+        if let (Mode::Aligned { interval, offset }, None) = (mode, entry.aligned_due) {
+            // Plan the first boundary; without a clock, look again later.
+            let Some(frame) = frame else {
+                entry.retry_completed = Some(now);
+                return;
+            };
+            entry.retry_completed = None;
+            let wait = first_aligned(&frame, interval, offset);
+            entry.aligned_due = Some(now + wait);
+            if !wait.is_zero() {
+                return;
+            }
+        }
+        let accepted = frame.is_some_and(|frame| {
+            let values: Vec<LogValue> = self.trend_poll.0[&oid]
+                .configuration
+                .members
+                .iter()
+                .map(|member| self.acquire(local, member))
+                .collect();
+            let object = self.get_mut(&oid).unwrap();
+            let inserted = if oid.object_type() == ObjectType::TREND_LOG_MULTIPLE {
+                object.add_trend_multiple_record(BACnetLogMultipleRecord {
+                    date: frame.local_date,
+                    time: frame.local_time,
+                    log_data: LogData::Values(values),
+                })
+            } else {
+                object.add_trend_record(BACnetLogRecord {
+                    date: frame.local_date,
+                    time: frame.local_time,
+                    // A Trend Log has exactly one reference.
+                    log_datum: values
+                        .into_iter()
+                        .next()
+                        .map_or(LogDatum::NullValue, LogDatum::from),
+                    status_flags: None,
+                })
+            };
+            inserted
+                .inspect_err(|error| {
+                    warn!(object = %oid, %error, "trend-log record insertion failed");
+                })
+                .is_ok()
+        });
+        let completed = monotonic();
+        if accepted && mode == Mode::Triggered {
+            // Served: the next Trigger starts a fresh entry.
+            self.trend_poll.0.remove(&oid);
+            return;
+        }
+        let entry = self.trend_poll.0.get_mut(&oid).unwrap();
+        if !accepted {
+            entry.retry_completed = Some(completed);
+            return;
+        }
+        entry.last_success = Some(completed);
+        entry.retry_completed = None;
+        if let (Mode::Aligned { interval, offset }, Some(frame)) = (mode, frame) {
+            entry.aligned_due = Some(now + next_aligned(&frame, interval, offset));
         }
     }
 
@@ -265,21 +358,40 @@ fn failure(class: ErrorClass, code: ErrorCode) -> LogValue {
     }
 }
 
+/// What a log's properties ask of the poller now; `None` when nothing.
 fn configuration(object: &dyn BACnetObject) -> Option<Configuration> {
-    let PropertyValue::Unsigned(raw) = object.read_property(P::LOG_INTERVAL, None).ok()? else {
-        return None;
+    let read = |property| object.read_property(property, None).ok();
+    let logging_type = match read(P::LOGGING_TYPE) {
+        Some(PropertyValue::Enumerated(value)) => LoggingType::from_raw(value),
+        _ => LoggingType::POLLED,
     };
-    let interval = u32::try_from(raw).ok().filter(|value| *value > 0)?;
-    let logging_type = match object.read_property(P::LOGGING_TYPE, None) {
-        Ok(PropertyValue::Enumerated(value)) => value,
-        _ => 0,
+    let mode = match logging_type {
+        // An object without a Trigger row is never triggered.
+        LoggingType::TRIGGERED => {
+            (read(P::TRIGGER) == Some(PropertyValue::Boolean(true))).then_some(Mode::Triggered)?
+        }
+        LoggingType::POLLED => {
+            let Some(PropertyValue::Unsigned(raw)) = read(P::LOG_INTERVAL) else {
+                return None;
+            };
+            let interval = u32::try_from(raw).ok().filter(|value| *value > 0)?;
+            let offset = match read(P::INTERVAL_OFFSET) {
+                Some(PropertyValue::Unsigned(offset)) => (offset % u64::from(interval)) as u32,
+                _ => 0,
+            };
+            let aligned = read(P::ALIGN_INTERVALS) == Some(PropertyValue::Boolean(true));
+            // Clause 12.30.14 aligns only an interval that goes evenly into
+            // one of its clock periods; each of those goes evenly into a day,
+            // so going evenly into a day is the same test.
+            if aligned && DAY.is_multiple_of(interval) {
+                Mode::Aligned { interval, offset }
+            } else {
+                Mode::Polled { interval }
+            }
+        }
+        _ => return None,
     };
-    if matches!(logging_type, 1 | 2) {
-        return None;
-    }
-    let reference = object
-        .read_property(P::LOG_DEVICE_OBJECT_PROPERTY, None)
-        .ok()?;
+    let reference = read(P::LOG_DEVICE_OBJECT_PROPERTY)?;
     let members = if object.object_identifier().object_type() == ObjectType::TREND_LOG_MULTIPLE {
         let PropertyValue::List(elements) = &reference else {
             return None;
@@ -291,12 +403,12 @@ fn configuration(object: &dyn BACnetObject) -> Option<Configuration> {
     } else {
         vec![member(&reference, false)?]
     };
-    if members.is_empty() {
+    // A Trigger is served even with no members, so it never stays TRUE.
+    if members.is_empty() && mode != Mode::Triggered {
         return None;
     }
     Some(Configuration {
-        interval,
-        logging_type,
+        mode,
         reference,
         members,
     })

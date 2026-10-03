@@ -447,4 +447,7 @@ pub const COMMANDS: &[(&str, Command)] = &[
     ("add_trend_multiple_record", |o| {
         format!("{:?}", o.add_trend_multiple_record(multiple_record()))
     }),
+    ("refresh_log_window_internal", |o| {
+        o.refresh_log_window_internal().to_string()
+    }),
 ];

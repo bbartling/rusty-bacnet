@@ -516,6 +516,10 @@ impl BACnetObject for SourceReporter {
     fn add_trend_multiple_record(&mut self, record: BACnetLogMultipleRecord) -> Result<(), Error> {
         self.wrapped.add_trend_multiple_record(record)
     }
+
+    fn refresh_log_window_internal(&mut self) -> bool {
+        self.wrapped.refresh_log_window_internal()
+    }
 }
 
 #[cfg(test)]

@@ -700,6 +700,10 @@ impl BACnetObject for Probe {
             code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
         })
     }
+    fn refresh_log_window_internal(&mut self) -> bool {
+        self.called("refresh_log_window_internal", ());
+        true
+    }
 }
 
 /// A probe's identity and readings, every provided method left at the trait
