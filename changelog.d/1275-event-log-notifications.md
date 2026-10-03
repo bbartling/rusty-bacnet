@@ -1,5 +1,6 @@
 ---
 section: Added
 ---
-- A running server records every event notification it generates in each Event
-  Log, for ReadRange to read back; received notifications are not logged (#1275).
+- A server with a valid Device clock records the device's own event notifications
+  in each Event Log, skipping notifications about Event Logs; received
+  notifications are not logged (#1275).

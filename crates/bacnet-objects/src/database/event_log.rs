@@ -15,18 +15,19 @@ impl ObjectDatabase {
     /// Event Log objects, as a notification record stamped with the Device
     /// clock's local date and time.
     ///
-    /// The server calls this for every notification it builds. Each log's own
+    /// The server calls this for each notification it builds once the
+    /// recipient lookup has read the Notification Class. Each log's own
     /// lifecycle decides what it keeps, as for a record the application adds
     /// through `add_record`: a disabled log ignores it, and a full log drops
     /// its oldest record or, with Stop_When_Full, stops and records that
     /// instead.
     ///
-    /// A log never takes a notification about itself: one whose
-    /// event-initiating object is the log, or an Event Enrollment of this
-    /// device that monitors one of the log's properties. Each such
-    /// notification would add a record, and the record would change what is
-    /// reported on, so a log taking them could prompt notifications about
-    /// itself without end. The other logs still take them.
+    /// No log takes a notification about an Event Log: one whose
+    /// event-initiating object is an Event Log, or an Event Enrollment of this
+    /// device monitoring a property of one. Logging it anywhere would add a
+    /// record that changes what such reports watch, so a report could prompt
+    /// the next without end, through the log it watches or crosswise through
+    /// another log watched in turn.
     ///
     /// Without a valid Device clock no record can carry its timestamp, so
     /// nothing is logged. A log that refuses the record keeps its state; the
@@ -48,11 +49,14 @@ impl ObjectDatabase {
             );
             return;
         };
-        let reported_log = self.reported_log(notification.event_object_identifier);
+        if self.reports_on_an_event_log(notification.event_object_identifier) {
+            debug!(
+                event_object = %notification.event_object_identifier,
+                "Notification about an Event Log not logged"
+            );
+            return;
+        }
         for oid in logs {
-            if Some(oid) == reported_log {
-                continue;
-            }
             let Some(log) = self.get_mut(&oid) else {
                 continue;
             };
@@ -73,23 +77,25 @@ impl ObjectDatabase {
         }
     }
 
-    /// The Event Log a notification about `event_object` reports on: the
-    /// object itself when it is an Event Log, or the local Event Log an Event
-    /// Enrollment monitors.
-    fn reported_log(&self, event_object: ObjectIdentifier) -> Option<ObjectIdentifier> {
+    /// Whether a notification about `event_object` reports on an Event Log of
+    /// this device: `event_object` is an Event Log, or an Event Enrollment
+    /// whose Object_Property_Reference names one here.
+    fn reports_on_an_event_log(&self, event_object: ObjectIdentifier) -> bool {
         match event_object.object_type() {
-            ObjectType::EVENT_LOG => Some(event_object),
-            ObjectType::EVENT_ENROLLMENT => {
-                let value = self
-                    .get(&event_object)?
-                    .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
-                    .ok()?;
-                let reference = decode_property_reference(&value).ok()?;
-                (reference.object_identifier.object_type() == ObjectType::EVENT_LOG
-                    && self.local_device().is_local(reference.device_identifier))
-                .then_some(reference.object_identifier)
-            }
-            _ => None,
+            ObjectType::EVENT_LOG => true,
+            ObjectType::EVENT_ENROLLMENT => self
+                .get(&event_object)
+                .and_then(|enrollment| {
+                    enrollment
+                        .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
+                        .ok()
+                })
+                .and_then(|value| decode_property_reference(&value).ok())
+                .is_some_and(|reference| {
+                    reference.object_identifier.object_type() == ObjectType::EVENT_LOG
+                        && self.local_device().is_local(reference.device_identifier)
+                }),
+            _ => false,
         }
     }
 }

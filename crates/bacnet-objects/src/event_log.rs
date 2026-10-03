@@ -22,8 +22,8 @@ mod metadata;
 /// BACnet EventLog object.
 ///
 /// Ring buffer of timestamped event log records. A server running the
-/// database logs each event notification the device builds into every Event
-/// Log ([`ObjectDatabase::log_event_notification`]); the application calls
+/// database logs the event notifications the device builds into its Event
+/// Logs ([`ObjectDatabase::log_event_notification`]); the application calls
 /// `add_record()` for anything else, such as a clock change or a notification
 /// it received. The log adds its own status records.
 ///

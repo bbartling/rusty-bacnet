@@ -129,14 +129,12 @@ fn every_event_log_records_the_notification_at_the_device_clock_time() {
 }
 
 #[test]
-fn a_log_never_records_a_notification_about_itself() {
+fn a_notification_about_an_event_log_goes_in_no_log() {
     let mut db = database(&[1, 2], 8);
     db.log_event_notification(&alarm(log_oid(1)));
-    assert!(records(&mut db, log_oid(1)).is_empty());
-    assert_eq!(
-        records(&mut db, log_oid(2)),
-        [notification_record(alarm(log_oid(1)))]
-    );
+    for log in [log_oid(1), log_oid(2)] {
+        assert!(records(&mut db, log).is_empty());
+    }
 }
 
 /// Event Enrollment `instance` monitoring `property` of `object`, its
@@ -165,7 +163,7 @@ fn ee(instance: u32) -> ObjectIdentifier {
 }
 
 #[test]
-fn a_log_never_records_an_enrollment_notification_about_its_own_properties() {
+fn an_enrollment_notification_about_any_local_event_log_goes_in_no_log() {
     let mut db = database(&[1, 2], 8);
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {
@@ -194,14 +192,13 @@ fn a_log_never_records_an_enrollment_notification_about_its_own_properties() {
     for instance in 1..=4 {
         db.log_event_notification(&alarm(ee(instance)));
     }
-    assert_eq!(
-        records(&mut db, log_oid(1)),
-        [2, 3, 4].map(|instance| notification_record(alarm(ee(instance))))
-    );
-    assert_eq!(
-        records(&mut db, log_oid(2)),
-        [1, 3, 4].map(|instance| notification_record(alarm(ee(instance))))
-    );
+    // EE-1 and EE-2 watch EL-1 and EL-2: neither log takes either report.
+    for log in [log_oid(1), log_oid(2)] {
+        assert_eq!(
+            records(&mut db, log),
+            [3, 4].map(|instance| notification_record(alarm(ee(instance))))
+        );
+    }
 }
 
 #[test]

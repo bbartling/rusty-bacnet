@@ -2239,22 +2239,31 @@ with `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`). The rules:
 
 - The record holds the notification as recipients get it, with Process
   Identifier 0 in place of a recipient's own.
-- It is logged whether or not a Notification Class recipient matched: the
-  Recipient_List selects network recipients, not local objects (Clause 13.2.5).
+- It is logged when the Notification Class reads fine but selects nobody (an
+  empty Recipient_List, or no destination open for that day, time or
+  transition): the Recipient_List picks network recipients, not local objects
+  (Clause 13.2.5).
+- It is not logged when the recipient lookup fails closed: the Notification
+  Class is missing, or its Recipient_List can't be read, is invalid or is past
+  the cap. The server refuses that transition whole, and a record would carry a
+  priority and ack policy the class never gave.
 - A transition whose Event_Enable bit is off, or one made while
   DeviceCommunicationControl stops initiation, builds no notification and
-  leaves no record.
+  leaves no record. Both are local choices: the logs hold what the device's
+  notification distribution produced.
 - Notifications the server receives are not logged.
-- A log never takes a notification about itself, one from the log or from an
-  Event Enrollment monitoring one of its properties, so such a report can't add
-  the record that prompts the next.
+- No log takes a notification about an Event Log: one whose event object is an
+  Event Log, or one from an Event Enrollment of this device monitoring a
+  property of an Event Log. Logging such a report anywhere would add a record
+  that changes what it watches, so reports could prompt each other without end,
+  directly or crosswise between two logs.
 - Each log applies its own Enable, Buffer_Size and Stop_When_Full handling.
   Event Log has no Start_Time or Stop_Time, so Enable alone switches logging.
 - Without a valid Device clock nothing is logged, since a record needs a
   timestamp.
 
-The record is added under its own short database write guard once the guard
-that built the notification is released, before the network send.
+The record is added under the database write guard that built the
+notification, before the network send.
 
 Every record kind, the Audit Log's included, carries a log status as the
 typed `bacnet_types::bitstring::LogStatus` flags (`LOG_DISABLED`,

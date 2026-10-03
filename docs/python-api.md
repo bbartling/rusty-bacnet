@@ -1653,12 +1653,14 @@ server.add_audit_log(
 server.add_audit_reporter(instance=1, name="Reporter")
 ```
 
-Once the server runs, every event notification it generates (an intrinsic or
-Event Enrollment transition, or an acknowledgment) is recorded in each Event
-Log, stamped with the Device clock, whether or not a recipient takes it. A
-client reads the records with `read_range` on `LOG_BUFFER`. Notifications the
-server receives are not logged, and a log never records a notification about
-itself. The Rust API's Logging & Trending notes give the details.
+Once the server runs with a valid Device clock, every event notification it
+generates (an intrinsic or Event Enrollment transition, or an acknowledgment)
+is recorded in each Event Log, stamped with that clock, even when no recipient
+takes it. A client reads the records with `read_range` on `LOG_BUFFER`. Not
+logged: notifications the server receives, notifications about an Event Log
+(from the log or from an Event Enrollment watching one), and transitions whose
+Notification Class is missing or unreadable. The Rust API's Logging & Trending
+notes give the details.
 
 `storage_path` is application-owned and produces two sibling snapshot files
 with `.slot0` and `.slot1` suffixes. Reuse the same path when reopening that

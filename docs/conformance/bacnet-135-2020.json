@@ -1268,16 +1268,17 @@
     "crates/bacnet-objects/src/database/event_log.rs::ObjectDatabase::log_event_notification",
     "crates/bacnet-objects/src/traits.rs::BACnetObject::add_event_log_record",
     "crates/bacnet-objects/src/event_log.rs::EventLogObject",
-    "crates/bacnet-server/src/server/event_notifications.rs::log_built_notification",
+    "crates/bacnet-server/src/server/event_notifications.rs::build_and_send_event_notification_with_bindings",
     "crates/bacnet-endpoint/src/source_reporter.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_local_alarm_and_its_return_to_normal_are_logged_and_read_back,a_notification_no_recipient_takes_is_still_logged,stop_when_full_stops_logging_before_the_buffer_fills}",
+    "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_local_alarm_and_its_return_to_normal_are_logged_and_read_back,an_acknowledgment_notification_is_logged,a_notification_no_recipient_takes_is_still_logged,stop_when_full_stops_logging_before_the_buffer_fills}",
     "crates/bacnet-objects/src/database/event_log_tests.rs::{every_event_log_records_the_notification_at_the_device_clock_time,stop_when_full_stops_the_log_before_it_fills}"
    ],
    "negative_tests": [
-    "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_disabled_log_takes_no_notification,a_transition_event_enable_suppresses_is_not_logged,a_transition_while_dcc_disables_initiation_is_not_logged,a_received_notification_is_not_logged,a_log_does_not_take_notifications_about_itself}",
-    "crates/bacnet-objects/src/database/event_log_tests.rs::{a_log_never_records_a_notification_about_itself,a_log_never_records_an_enrollment_notification_about_its_own_properties,nothing_is_logged_without_a_valid_device_clock,a_disabled_log_ignores_the_notification,a_log_that_refuses_the_record_leaves_the_others_logging}"
+    "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_disabled_log_takes_no_notification,a_transition_whose_notification_class_is_missing_is_not_logged,a_transition_event_enable_suppresses_is_not_logged,a_transition_while_dcc_disables_initiation_is_not_logged,a_received_notification_is_not_logged}",
+    "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_report_on_an_event_log_is_logged_nowhere,enrollments_watching_each_others_logs_do_not_feed_each_other}",
+    "crates/bacnet-objects/src/database/event_log_tests.rs::{a_notification_about_an_event_log_goes_in_no_log,an_enrollment_notification_about_any_local_event_log_goes_in_no_log,nothing_is_logged_without_a_valid_device_clock,a_disabled_log_ignores_the_notification,a_log_that_refuses_the_record_leaves_the_others_logging}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -1285,16 +1286,16 @@
     "docs/python-api.md#logging--trending"
    ],
    "notes": [
-    "Each intrinsic, Event Enrollment or acknowledgment notification is logged with Process Identifier 0, whether or not a recipient matched: the Recipient_List picks network recipients, not local objects.",
-    "A transition that Event_Enable suppresses, or one made while DCC stops initiation, builds no notification and so leaves no record.",
+    "Each intrinsic, Event Enrollment or acknowledgment notification is logged with Process Identifier 0, also when the Notification Class selects nobody: the Recipient_List picks network recipients, not local objects.",
+    "No record, as a local choice, for a transition that Event_Enable suppresses or that DCC stops, nor for one whose recipient lookup fails closed: a missing Notification Class, or an unreadable, invalid or over-cap Recipient_List.",
     "Received notifications are not logged. The logs hold this device's own events, the narrower of the choices Clause 12.27 leaves to the device.",
-    "A log skips a notification about itself, from the log or from an Event Enrollment monitoring one of its properties, so such a report can't add the record that prompts the next.",
-    "The record goes in under its own short database guard after the build guard drops, before the send. Without a valid Device clock nothing is logged."
+    "No log takes a notification about an Event Log: its event object is one, or it comes from an Event Enrollment here monitoring one. So reports can't prompt each other through a log, directly or crosswise.",
+    "The record goes in under the guard that built the notification, before the send. Without a valid Device clock nothing is logged."
    ],
    "gaps": [
     "Start_Time and Stop_Time are not modeled on Event Log, so Enable alone switches logging (no issue)",
-    "Logging received notifications, the AE-EL-E-B collection of Annex K.2.22, is not offered (no issue)",
-    "Event Log intrinsic reporting (BUFFER_READY, Notification_Threshold) is not modeled (no issue)"
+    "#1346: logging received notifications, the AE-EL-E-B collection of Annex K.2.22, is not offered",
+    "#1347: Event Log intrinsic reporting (BUFFER_READY, Notification_Threshold) is not modeled"
    ]
   },
   {

@@ -362,6 +362,48 @@ async fn a_notification_no_recipient_takes_is_still_logged() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_transition_whose_notification_class_is_missing_is_not_logged() {
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        alarm_and_logs(db, &[1], 8);
+        db.get_mut(&av1())
+            .unwrap()
+            .write_property(
+                PropertyIdentifier::NOTIFICATION_CLASS,
+                None,
+                PropertyValue::Unsigned(9),
+                None,
+            )
+            .unwrap();
+    })
+    .await;
+    h.set_clock(40);
+    h.write_local(90.0).await;
+    h.settle().await;
+    assert!(!notification_pending(&h), "the lookup fails closed");
+    // With Notification Class 0 back, the return to normal goes out.
+    h.server
+        .database()
+        .write()
+        .await
+        .get_mut(&av1())
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            None,
+            PropertyValue::Unsigned(0),
+            None,
+        )
+        .unwrap();
+    h.set_clock(41);
+    h.write_local(10.0).await;
+    let normal = sent_notification(&h).await;
+
+    assert_eq!(normal.to_state, EventState::NORMAL);
+    assert_eq!(read_log(&mut h, el(1)).await, [logged(41, &normal)]);
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_transition_event_enable_suppresses_is_not_logged() {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
         alarm_and_logs(db, &[1], 8);
@@ -504,44 +546,64 @@ async fn run_passes(h: &Harness, passes: usize) {
     }
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_log_does_not_take_notifications_about_itself() {
-    // EE-1 reports each new count of EL-1's records from 1 to 16: from
-    // NORMAL to OFFNORMAL at 1, then OFFNORMAL again at each other count.
-    // Were its notifications logged in EL-1, each would raise the count
-    // and prompt the next.
+/// Event Enrollment `instance`, reporting each count of `log`'s records
+/// from 1 to 16: from NORMAL to OFFNORMAL at 1, then OFFNORMAL again at each
+/// other count. Were its reports logged where it watches, each would raise
+/// the count and prompt the next.
+fn count_watcher(instance: u32, log: ObjectIdentifier) -> EventEnrollmentObject {
+    let mut enrollment = EventEnrollmentObject::new(
+        instance,
+        format!("EE-{instance}"),
+        EventType::CHANGE_OF_STATE,
+    )
+    .unwrap();
+    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        log,
+        PropertyIdentifier::TOTAL_RECORD_COUNT.to_raw(),
+    )));
+    enrollment.set_event_parameters(BACnetEventParameter::ChangeOfState {
+        time_delay: 0,
+        list_of_values: (1..=16).map(BACnetPropertyStates::UnsignedValue).collect(),
+    });
+    enrollment
+}
+
+fn ee(instance: u32) -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, instance).unwrap()
+}
+
+/// A server running Event Enrollment every second, with AV-1's alarm, EL-1
+/// and EL-2, and `watchers` as `(enrollment, watched log)` pairs. Once the
+/// enrollments have seen the logs empty, it raises the alarm at second 40
+/// and returns the alarm's notification.
+async fn alarm_watched_logs(watchers: &[(u32, u32)]) -> (Harness, EventNotificationRequest) {
     let config = ServerConfig {
         event_enrollment_interval_secs: 1,
         ..ServerConfig::default()
     };
-    let mut h = Harness::start_with(config, |db| {
+    let h = Harness::start_with(config, |db| {
         alarm_and_logs(db, &[1, 2], 32);
-        let mut enrollment =
-            EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_STATE).unwrap();
-        enrollment.set_object_property_reference(Some(
-            BACnetDeviceObjectPropertyReference::new_local(
-                el(1),
-                PropertyIdentifier::TOTAL_RECORD_COUNT.to_raw(),
-            ),
-        ));
-        enrollment.set_event_parameters(BACnetEventParameter::ChangeOfState {
-            time_delay: 0,
-            list_of_values: (1..=16).map(BACnetPropertyStates::UnsignedValue).collect(),
-        });
-        db.add(Box::new(enrollment)).unwrap();
+        for &(instance, log) in watchers {
+            db.add(Box::new(count_watcher(instance, el(log)))).unwrap();
+        }
     })
     .await;
     run_passes(&h, 2).await;
     h.set_clock(40);
     h.write_local(90.0).await;
     let alarm = sent_notification(&h).await;
+    (h, alarm)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_report_on_an_event_log_is_logged_nowhere() {
+    let (mut h, alarm) = alarm_watched_logs(&[(1, 1)]).await;
     let report = sent_notification(&h).await;
     run_passes(&h, 5).await;
 
-    let ee1 = ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap();
     assert_eq!(
         (report.event_object_identifier, report.to_state),
-        (ee1, EventState::OFFNORMAL)
+        (ee(1), EventState::OFFNORMAL)
     );
     assert_eq!(
         report.event_values,
@@ -551,10 +613,28 @@ async fn a_log_does_not_take_notifications_about_itself() {
         })
     );
     assert!(!notification_pending(&h), "EE-1 reported only once");
-    assert_eq!(read_log(&mut h, el(1)).await, [logged(40, &alarm)]);
-    assert_eq!(
-        read_log(&mut h, el(2)).await,
-        [logged(40, &alarm), logged(40, &report)]
-    );
+    for log in [el(1), el(2)] {
+        assert_eq!(read_log(&mut h, log).await, [logged(40, &alarm)]);
+    }
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn enrollments_watching_each_others_logs_do_not_feed_each_other() {
+    // Were EE-1's report logged in EL-2, EE-2 would report the new count,
+    // and its report logged in EL-1 would prompt EE-1 again.
+    let (mut h, alarm) = alarm_watched_logs(&[(1, 1), (2, 2)]).await;
+    let mut reporters = vec![
+        sent_notification(&h).await.event_object_identifier,
+        sent_notification(&h).await.event_object_identifier,
+    ];
+    run_passes(&h, 5).await;
+
+    reporters.sort_by_key(|reporter| reporter.instance_number());
+    assert_eq!(reporters, [ee(1), ee(2)]);
+    assert!(!notification_pending(&h), "each reported only once");
+    for log in [el(1), el(2)] {
+        assert_eq!(read_log(&mut h, log).await, [logged(40, &alarm)]);
+    }
     h.server.stop().await.unwrap();
 }

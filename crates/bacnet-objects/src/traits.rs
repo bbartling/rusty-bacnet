@@ -1244,8 +1244,8 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
 
     /// Submit an Event Log record to an object's log lifecycle.
     ///
-    /// The server hands each event notification this device builds to every
-    /// Event Log through this hook
+    /// The server hands the event notifications this device builds to its
+    /// Event Logs through this hook
     /// ([`ObjectDatabase::log_event_notification`](crate::database::ObjectDatabase::log_event_notification)).
     /// The outcomes match [`add_trend_record`](Self::add_trend_record).
     /// Objects without Event Log insertion return
