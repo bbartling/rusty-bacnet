@@ -3544,6 +3544,33 @@ public `ServerTsm` type and its unused transaction methods have been removed
 without a compatibility alias. `CovAckResult` remains available at its existing
 `bacnet_server::server` path.
 
+### Undelivered event notification counters
+
+`BACnetServer::event_notification_counters()` returns an
+`EventNotificationCounters` snapshot: lifetime totals of event notifications the
+server did not deliver, each saturating at `u64::MAX`, zero for a new server and
+still readable after `stop()`. Fields are sampled independently.
+
+```rust
+let counters = server.event_notification_counters();
+counters.notification_class_missing; // no Notification Class with that number
+counters.recipient_list_unavailable; // its Recipient_List could not be read
+counters.recipient_list_invalid;     // the list did not decode as a whole
+counters.recipient_list_too_long;    // a custom class served more than 32 destinations
+counters.confirmed_no_invoke_id;     // no invoke ID free for a confirmed notification
+counters.confirmed_rejected;         // the recipient answered Error, Reject or Abort
+counters.confirmed_unanswered;       // no acknowledgment after the last retry
+```
+
+The four recipient-list fields count transitions, event and acknowledgment
+notifications alike, whose Notification Class lookup failed closed: one per
+`RecipientLookupOutcome` that suppresses delivery, alongside the warning each
+one logs. `NoConfiguredDestinations` and `NoMatchingDestinations` are
+configured behaviour and are not counted, nor are notifications held back by
+DCC or Event_Enable. The three confirmed fields count notifications to one
+recipient; a reservation refused because the server is stopping is not
+counted.
+
 ### Concurrency
 
 - Lock ordering: always `db` before `cov_table`

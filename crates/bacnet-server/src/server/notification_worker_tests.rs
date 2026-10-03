@@ -124,6 +124,7 @@ async fn fire_event(server: &BACnetServer<TestTransport>) {
             learned_routers: &server.learned_routers,
             notification_transactions: &server.notification_transactions,
             device_bindings: &server.device_bindings,
+            suppressions: &Default::default(),
             retry_timeout_ms: 3000,
             local_apdu_capacity: 1476,
         },

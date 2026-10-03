@@ -243,6 +243,7 @@ async fn committed_ack_required_snapshot_survives_notification_class_replacement
             device_bindings: &Arc::new(RwLock::new(
                 crate::server::device_bindings::DeviceBindingTable::new(),
             )),
+            suppressions: &Default::default(),
             retry_timeout_ms: 1000,
             local_apdu_capacity: 1476,
         },

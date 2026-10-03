@@ -2310,6 +2310,40 @@ same check before it starts a transport. The conversion names every field of
 the Rust struct without `..`, so a field added in Rust must get a key here
 before the bindings compile.
 
+#### `event_notification_counters() -> EventNotificationCounters`
+
+Sample the totals of event notifications the server did not deliver: a dict
+holding every field of the Rust `EventNotificationCounters` under the same name,
+typed as the `EventNotificationCounters` TypedDict in the stub. Every field is a
+running total that starts at zero on each `start()` and saturates at 2**64-1.
+Each field is read on its own, so one sample is not an atomic aggregate. Like
+`cov_counters()`, it raises `RuntimeError` before start and after stop. Each
+counted refusal also logs a warning; the counters are the running signal.
+
+```python
+counters = await server.event_notification_counters()
+counters["notification_class_missing"]  # transitions whose class doesn't exist
+counters["confirmed_unanswered"]        # confirmed notifications never acknowledged
+```
+
+| Field | Counts |
+|---|---|
+| `notification_class_missing` | Transitions sent nowhere because no Notification Class object has the class number the event object names |
+| `recipient_list_unavailable` | Transitions sent nowhere because reading the class's Recipient_List failed |
+| `recipient_list_invalid` | Transitions sent nowhere because the Recipient_List did not decode as a whole (no decodable prefix is used) |
+| `recipient_list_too_long` | Transitions sent nowhere because a custom class served more than 32 destinations |
+| `confirmed_no_invoke_id` | Confirmed notifications to one recipient not sent because no invoke ID was free |
+| `confirmed_rejected` | Confirmed notifications the recipient answered with an Error, Reject or Abort |
+| `confirmed_unanswered` | Confirmed notifications with no acknowledgment after the last retry |
+
+The first four count event and acknowledgment notifications alike, once per
+transition. A class whose list is empty, or whose destinations all filter the
+transition out by day, time or transition, is configured behaviour and is not
+counted. Neither are notifications held back by DeviceCommunicationControl or
+Event_Enable, nor confirmed reservations refused while the server stops. The
+binding builds the dict from an exhaustive pattern over the Rust struct, like
+`cov_counters()`.
+
 #### `local_address() -> str`
 
 Get the server's bound address after start.
