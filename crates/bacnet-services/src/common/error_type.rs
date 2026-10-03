@@ -5,8 +5,10 @@
 //! context tag around the application-tagged class and code, `[0]` in every
 //! production except inside SubscribeCOVPropertyMultiple's failed subscription.
 
-use crate::common::decode_context_u32;
 use bacnet_encoding::apdu::ErrorPdu;
+use bacnet_encoding::constructed::tagged::{
+    decode_app_enumerated, decode_ctx_constructed, decode_ctx_unsigned, expect_end,
+};
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
@@ -48,15 +50,10 @@ pub(crate) fn decode_error_in(
     tag_number: u8,
     what: &str,
 ) -> Result<((ErrorClass, ErrorCode), usize), Error> {
-    let (body, end) = decode_constructed(data, offset, tag_number, what)?;
-    let (class, offset) = decode_enumerated(body, 0, what, "error-class")?;
-    let (code, body_end) = decode_enumerated(body, offset, what, "error-code")?;
-    if body_end != body.len() {
-        return Err(Error::decoding(
-            body_end,
-            format!("{what} [{tag_number}] has extra fields"),
-        ));
-    }
+    let (body, end) = decode_ctx_constructed(data, offset, tag_number, what)?;
+    let (class, position) = decode_app_enumerated::<u16>(body, 0, what)?;
+    let (code, body_end) = decode_app_enumerated::<u16>(body, position, what)?;
+    expect_end(body, body_end, offset, what)?;
     Ok((
         (ErrorClass::from_raw(class), ErrorCode::from_raw(code)),
         end,
@@ -82,22 +79,14 @@ pub(crate) fn decode_element_error(
     what: &str,
 ) -> Result<(ErrorClass, ErrorCode, u32), Error> {
     let ((class, code), offset) = decode_error_type(data, what)?;
-    let (number, end) = decode_context_u32(
+    let (number, end) = decode_ctx_unsigned::<u32>(
         data,
         offset,
         1,
         &format!("{what} first-failed-element-number"),
     )?;
-    finish(data, end, what)?;
+    expect_end(data, end, end, what)?;
     Ok((class, code, number))
-}
-
-/// Refuse content after the end of a production.
-pub(crate) fn finish(data: &[u8], end: usize, what: &str) -> Result<(), Error> {
-    if end != data.len() {
-        return Err(Error::decoding(end, format!("{what} has trailing content")));
-    }
-    Ok(())
 }
 
 /// The Error PDU answering `service_choice` with `encode`'s body. The APDU
@@ -144,48 +133,4 @@ pub(crate) fn decode_error_pdu<T>(
         ));
     }
     Ok(decoded)
-}
-
-/// The content of the constructed `[tag_number]` at `offset`, with the offset
-/// just past its closing tag.
-pub(crate) fn decode_constructed<'a>(
-    data: &'a [u8],
-    offset: usize,
-    tag_number: u8,
-    what: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (tag, content_start) = tags::decode_tag(data, offset)?;
-    if !tag.is_opening_tag(tag_number) {
-        return Err(Error::decoding(
-            offset,
-            format!("{what} [{tag_number}]: expected opening tag {tag_number}"),
-        ));
-    }
-    tags::extract_context_value(data, content_start, tag_number)
-}
-
-fn decode_enumerated(
-    data: &[u8],
-    offset: usize,
-    what: &str,
-    field: &str,
-) -> Result<(u16, usize), Error> {
-    let (tag, content_start) = tags::decode_tag(data, offset)?;
-    if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
-        return Err(Error::decoding(
-            offset,
-            format!("{what} {field}: expected application Enumerated"),
-        ));
-    }
-    let end = content_start
-        .checked_add(tag.length as usize)
-        .filter(|end| *end <= data.len())
-        .ok_or_else(|| {
-            Error::decoding(content_start, format!("{what} {field}: truncated payload"))
-        })?;
-    let value = primitives::decode_unsigned(&data[content_start..end])?;
-    let value = u16::try_from(value).map_err(|_| {
-        Error::decoding(content_start, format!("{what} {field}: value exceeds u16"))
-    })?;
-    Ok((value, end))
 }

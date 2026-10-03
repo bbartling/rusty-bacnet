@@ -11,7 +11,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::decode_application;
+use bacnet_encoding::constructed::tagged::{decode_app_primitive, decode_app_unsigned};
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -19,22 +19,15 @@ use crate::common::decode_application;
 
 /// Decode the vendor ID, model name and serial number that start both requests.
 fn decode_identity(data: &[u8], context: &str) -> Result<(u16, String, String, usize), Error> {
-    let (content, offset) = decode_application(
-        data,
-        0,
-        tags::app_tag::UNSIGNED,
-        &format!("{context} vendor-id"),
-    )?;
-    let vendor_id = u16::try_from(primitives::decode_unsigned(content)?)
-        .map_err(|_| Error::decoding(0, format!("{context} vendor-id exceeds 65535")))?;
-    let (content, offset) = decode_application(
+    let (vendor_id, offset) = decode_app_unsigned::<u16>(data, 0, &format!("{context} vendor-id"))?;
+    let (content, offset) = decode_app_primitive(
         data,
         offset,
         tags::app_tag::CHARACTER_STRING,
         &format!("{context} model-name"),
     )?;
     let model_name = primitives::decode_character_string(content)?;
-    let (content, offset) = decode_application(
+    let (content, offset) = decode_app_primitive(
         data,
         offset,
         tags::app_tag::CHARACTER_STRING,
@@ -195,7 +188,7 @@ impl YouAreRequest {
 
         let mut device_identifier = None;
         if offset < data.len() && is_app_tag(data, offset, tags::app_tag::OBJECT_IDENTIFIER)? {
-            let (content, end) = decode_application(
+            let (content, end) = decode_app_primitive(
                 data,
                 offset,
                 tags::app_tag::OBJECT_IDENTIFIER,
@@ -216,7 +209,7 @@ impl YouAreRequest {
         if offset < data.len() && is_app_tag(data, offset, tags::app_tag::OCTET_STRING)? {
             let what = "YouAre device-mac-address";
             let (content, end) =
-                decode_application(data, offset, tags::app_tag::OCTET_STRING, what)?;
+                decode_app_primitive(data, offset, tags::app_tag::OCTET_STRING, what)?;
             check_decoded_mac_len(content.len(), offset, what)?;
             device_mac_address = Some(content.to_vec());
             offset = end;

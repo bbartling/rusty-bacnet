@@ -85,6 +85,7 @@ async fn store_staged(
     Error,
 > {
     use bacnet_objects::audit::AuditBatchStage;
+    let staging_db = db;
     loop {
         let staged = {
             let mut db = db.write().await;
@@ -95,6 +96,7 @@ async fn store_staged(
                 }
                 AuditBatchStage::Busy(wait) => {
                     drop(db);
+                    super::super::durable_writes::note_busy(staging_db);
                     let _ = tokio::time::timeout(super::super::durable_writes::BUSY_RECHECK, wait)
                         .await;
                     continue;

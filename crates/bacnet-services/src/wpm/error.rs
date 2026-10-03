@@ -1,7 +1,8 @@
 //! Formal WritePropertyMultiple Error service body (Clause 21).
 
-use crate::common::error_type::{decode_constructed, decode_error_type, encode_error_type};
+use crate::common::error_type::{decode_error_type, encode_error_type};
 use bacnet_encoding::apdu::ErrorPdu;
+use bacnet_encoding::constructed::tagged::{decode_ctx_constructed, expect_end};
 use bacnet_encoding::constructed::{
     decode_object_property_reference, encode_object_property_reference,
 };
@@ -34,10 +35,8 @@ impl WritePropertyMultipleError {
     /// Decode one complete formal service body with no trailing content.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let ((error_class, error_code), offset) = decode_error_type(data, "WPM Error")?;
-        let (reference_body, end) = decode_constructed(data, offset, 1, "WPM Error")?;
-        if end != data.len() {
-            return Err(Error::decoding(end, "WPM Error has trailing content"));
-        }
+        let (reference_body, end) = decode_ctx_constructed(data, offset, 1, "WPM Error")?;
+        expect_end(data, end, end, "WPM Error")?;
         let first_failed_write_attempt = decode_object_property_reference(reference_body)?;
         Ok(Self {
             error_class,

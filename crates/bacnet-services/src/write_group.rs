@@ -11,7 +11,10 @@ use bacnet_encoding::tags;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-use crate::common::{decode_context, decode_context_bool, MAX_DECODED_ITEMS};
+use crate::common::MAX_DECODED_ITEMS;
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_boolean, decode_ctx_primitive, next_is_context,
+};
 
 // ---------------------------------------------------------------------------
 // Validation helpers
@@ -137,7 +140,7 @@ impl WriteGroupRequest {
     /// Fails on malformed, truncated or out-of-range input and on trailing data.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         // [0] group-number
-        let (content, mut offset) = decode_context(data, 0, 0, "WriteGroup group-number")?;
+        let (content, mut offset) = decode_ctx_primitive(data, 0, 0, "WriteGroup group-number")?;
         let group_raw = primitives::decode_unsigned(content)?;
         let group_number = u32::try_from(group_raw)
             .ok()
@@ -151,7 +154,7 @@ impl WriteGroupRequest {
 
         // [1] write-priority
         let priority_pos = offset;
-        let (content, end) = decode_context(data, offset, 1, "WriteGroup write-priority")?;
+        let (content, end) = decode_ctx_primitive(data, offset, 1, "WriteGroup write-priority")?;
         let write_priority = decode_priority(
             "write-priority",
             priority_pos,
@@ -184,7 +187,7 @@ impl WriteGroupRequest {
             }
 
             // [0] channel
-            let (content, end) = decode_context(data, offset, 0, "WriteGroup channel")?;
+            let (content, end) = decode_ctx_primitive(data, offset, 0, "WriteGroup channel")?;
             let channel_raw = primitives::decode_unsigned(content)?;
             let channel = u16::try_from(channel_raw).map_err(|_| {
                 Error::decoding(
@@ -196,9 +199,9 @@ impl WriteGroupRequest {
 
             // [1] overriding-priority OPTIONAL
             let mut override_priority = None;
-            if offset < data.len() && tags::decode_tag(data, offset)?.0.is_context(1) {
+            if next_is_context(data, offset, 1)? {
                 let (content, end) =
-                    decode_context(data, offset, 1, "WriteGroup override-priority")?;
+                    decode_ctx_primitive(data, offset, 1, "WriteGroup override-priority")?;
                 override_priority = Some(decode_priority(
                     "override-priority",
                     offset,
@@ -225,8 +228,8 @@ impl WriteGroupRequest {
 
         // [3] inhibit-delay OPTIONAL
         let mut inhibit_delay = None;
-        if offset < data.len() && tags::decode_tag(data, offset)?.0.is_context(3) {
-            let (inhibit, end) = decode_context_bool(data, offset, 3, "WriteGroup inhibit-delay")?;
+        if next_is_context(data, offset, 3)? {
+            let (inhibit, end) = decode_ctx_boolean(data, offset, 3, "WriteGroup inhibit-delay")?;
             inhibit_delay = Some(inhibit);
             offset = end;
         }

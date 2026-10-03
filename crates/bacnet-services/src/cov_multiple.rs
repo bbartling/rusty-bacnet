@@ -11,7 +11,10 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use crate::common::{decode_context, decode_context_u32, MAX_DECODED_ITEMS};
+use crate::common::MAX_DECODED_ITEMS;
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_object_id, decode_ctx_real, decode_ctx_unsigned, next_is_context,
+};
 use bacnet_types::constructed::PropertyReference;
 
 #[path = "cov_multiple_helpers.rs"]
@@ -157,7 +160,7 @@ impl SubscribeCOVPropertyMultipleRequest {
 
         // [0] subscriberProcessIdentifier
         let (subscriber_process_identifier, end) =
-            decode_context_u32(data, offset, 0, "SubscribeCOVPropertyMultiple process-id")?;
+            decode_ctx_unsigned::<u32>(data, offset, 0, "SubscribeCOVPropertyMultiple process-id")?;
         offset = end;
 
         // [1] issueConfirmedNotifications
@@ -171,30 +174,28 @@ impl SubscribeCOVPropertyMultipleRequest {
 
         // [2] lifetime OPTIONAL
         let mut lifetime = None;
-        if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(2) {
-                let (value, end) =
-                    decode_context_u32(data, offset, 2, "SubscribeCOVPropertyMultiple lifetime")?;
-                lifetime = Some(value);
-                offset = end;
-            }
+        if next_is_context(data, offset, 2)? {
+            let (value, end) = decode_ctx_unsigned::<u32>(
+                data,
+                offset,
+                2,
+                "SubscribeCOVPropertyMultiple lifetime",
+            )?;
+            lifetime = Some(value);
+            offset = end;
         }
 
         // [3] maxNotificationDelay OPTIONAL
         let mut max_notification_delay = None;
-        if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(3) {
-                let (value, end) = decode_context_u32(
-                    data,
-                    offset,
-                    3,
-                    "SubscribeCOVPropertyMultiple max-notification-delay",
-                )?;
-                max_notification_delay = Some(value);
-                offset = end;
-            }
+        if next_is_context(data, offset, 3)? {
+            let (value, end) = decode_ctx_unsigned::<u32>(
+                data,
+                offset,
+                3,
+                "SubscribeCOVPropertyMultiple max-notification-delay",
+            )?;
+            max_notification_delay = Some(value);
+            offset = end;
         }
 
         // [4] listOfCovSubscriptionSpecifications — opening tag 4
@@ -229,9 +230,8 @@ impl SubscribeCOVPropertyMultipleRequest {
             }
 
             // [0] monitoredObjectIdentifier
-            let (content, end) =
-                decode_context(data, offset, 0, "SubscribeCOVPropertyMultiple object-id")?;
-            let oid = ObjectIdentifier::decode(content)?;
+            let (oid, end) =
+                decode_ctx_object_id(data, offset, 0, "SubscribeCOVPropertyMultiple object-id")?;
             offset = end;
 
             // [1] listOfCovReferences — opening tag 1
@@ -294,12 +294,15 @@ impl SubscribeCOVPropertyMultipleRequest {
 
                 // [1] covIncrement OPTIONAL
                 let mut cov_increment = None;
-                if offset < data.len() {
-                    let (opt, new_off) = tags::decode_optional_context(data, offset, 1)?;
-                    if let Some(content) = opt {
-                        cov_increment = Some(primitives::decode_real(content)?);
-                        offset = new_off;
-                    }
+                if next_is_context(data, offset, 1)? {
+                    let (increment, end) = decode_ctx_real(
+                        data,
+                        offset,
+                        1,
+                        "SubscribeCOVPropertyMultiple COV increment",
+                    )?;
+                    cov_increment = Some(increment);
+                    offset = end;
                 }
 
                 // [2] timestamped
