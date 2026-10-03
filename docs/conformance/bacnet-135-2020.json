@@ -542,7 +542,8 @@
     "crates/bacnet-server/src/handlers/tests/audit_recipient_writes.rs::recipient_null_relinquishment_is_noop_and_wpm_continues",
     "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_device_write_null_relinquishment_is_authorized_noop",
     "crates/bacnet-server/src/handlers/tests/device_description_writes.rs::device_description_full_handler_null_is_noop_and_priority_range_is_typed",
-    "crates/bacnet-endpoint/src/source_recipient_tests.rs::source_recipient_local_and_authorized_wire_pair_bypass_ordinary_filters"
+    "crates/bacnet-endpoint/src/source_recipient_tests.rs::source_recipient_local_and_authorized_wire_pair_bypass_ordinary_filters",
+    "crates/bacnet-endpoint/src/device_write_tests.rs::bip_device_writes_reach_the_lowest_of_several_devices"
    ],
    "negative_tests": [
     "crates/bacnet-endpoint/src/device_write_tests.rs::device_write_preflight_errors_are_atomic_and_retryable",
@@ -568,7 +569,8 @@
     "Group silence, segmentation Abort, reply_tx and direct/routed response paths are preserved. Clause 15.9 priority1-16 is ignored for noncommandable Description. Authorized NULL relinquishment succeeds unchanged.",
     "Legal unsigned priorities outside1-16 return SERVICES/PARAMETER_OUT_OF_RANGE, while malformed encodings remain decoding failures. Absent targets/properties return UNKNOWN_OBJECT/UNKNOWN_PROPERTY and known out-of-scope writes are denied.",
     "The responder revalidates concrete typed Device authority under its commit lock and commits through that authority, including lower-level direct use and database replacement. The shared Audit_Notification_Recipient WP/WPM boundary also preserves exact NULL relinquishment as an operation; NULL is not Recipient state, a default or a disabled sentinel.",
-    "Its object owner must preserve state and permit WPM continuation. Deterministic and B/IP loopback evidence only. General database writes, WPM, inbound completed-response replay cache, Python callback APIs, full endpoint mutation parity, BIBB/BTL and Audit conformance remain excluded. No full-protocol status promotion."
+    "Its object owner must preserve state and permit WPM continuation. Deterministic and B/IP loopback evidence only. General database writes, WPM, inbound completed-response replay cache, Python callback APIs, full endpoint mutation parity, BIBB/BTL and Audit conformance remain excluded. No full-protocol status promotion.",
+    "#1204: with several Devices the write target is the lowest (ObjectDatabase::local_device). Only it advertises RP+WP, a write to any other Device is WRITE_ACCESS_DENIED, and a session identity must name it."
    ]
   },
   {
@@ -788,7 +790,8 @@
      "crates/bacnet-client/src/client/routed_path_limit_tests.rs::routed_sizing_uses_conservative_and_configured_forwarded_envelopes",
      "crates/bacnet-client/src/client/routed_path_limit_tests.rs::reason_4_completes_exact_caller_learns_bound_and_does_not_retry",
      "crates/bacnet-client/src/client/routed_path_limit_tests.rs::same_path_serializes_while_a_second_router_remains_concurrent",
-     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::capacity_cleanup_never_splits_a_held_or_waiting_same_path_gate"
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::capacity_cleanup_never_splits_a_held_or_waiting_same_path_gate",
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_path_macs_hold_to_the_npdu_address_bound"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/npdu.rs::tests::reject_message_to_network_payload_requires_exact_length",
@@ -800,7 +803,9 @@
      "crates/bacnet-client/src/client/routed_path_limit_tests.rs::cancelled_generation_quarantines_delayed_reason_4_before_next_send",
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::configured_and_learned_evidence_are_never_evicted_for_capacity",
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::control_queued_before_activation_cannot_claim_the_new_generation",
-     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::claimed_control_cannot_complete_reused_invoke_id_for_new_owner"
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::claimed_control_cannot_complete_reused_invoke_id_for_new_owner",
+     "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_path_macs_hold_to_the_npdu_address_bound",
+     "crates/bacnet-client/src/client/routed_path_mac_bound_tests.rs::over_long_routed_path_macs_fail_before_registration_or_emission"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -811,7 +816,8 @@
      "Configured evidence and process-lifetime learned exclusive upper bounds combine by minimum. One active owner per path makes reason-4 completion owner-qualified; learning occurs only when that completion wins, and retry/window retransmission stops afterward.",
      "Path state is capped at 256 entries; deterministic idle reclamation never removes configured/learned evidence or a gate with an owner/waiter, and exhaustion fails before TSM registration. Ambiguous termination holds the same-path gate through a configuration-derived stale-control quarantine, while monotonic network-ingress sequencing prevents controls queued before activation from claiming a later generation.",
      "Malformed, unmatched, stale, wrong-router, wrong-DNET, other-reason, and direct traffic do not mutate policy. Full active probing, persistent cache, router enforcement, and unconfirmed-traffic changes remain deferred. Third-party conformance evidence is still required.",
-    "A client attached to a BACnetRouter through a LoopbackTransport port gets reason 4 rejects on its own NetworkLayer from the router's port MAC, so it needs no router-side receiver (#1175)."
+    "A client attached to a BACnetRouter through a LoopbackTransport port gets reason 4 rejects on its own NetworkLayer from the router's port MAC, so it needs no router-side receiver (#1175).",
+    "Every MAC on a routed path holds to NpduAddress::MAX_MAC_LEN (18 octets). A routed request refuses a longer DADR or local source MAC, and an empty or longer router MAC, with Error::Encoding before it reserves or waits on the path; the path configuration methods refuse such a router MAC too (#1267)."
     ]
   },
   {
@@ -1013,10 +1019,12 @@
    "positive_tests": [
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/priority_array_writes.rs::priority_array_all_twenty_profiles_trait_metadata_and_pics_are_read_only",
     "crates/bacnet-server/src/pics/tests.rs",
-    "crates/bacnet-objects/src"
+    "crates/bacnet-objects/src",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_source_entries_hold_to_the_bacnet_address_bound"
    ],
    "negative_tests": [
-    "crates/bacnet-server/src/handlers/tests"
+    "crates/bacnet-server/src/handlers/tests",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_source_entries_hold_to_the_bacnet_address_bound"
    ],
    "benchmarks": [
     "benchmarks/src/stress/objects.rs"
@@ -1027,7 +1035,8 @@
     "docs/rust-api.md#bacnet-objects object model"
    ],
    "notes": [
-    "Initial family row only; later work should split high-claim services and object families into detailed rows."
+    "Initial family row only; later work should split high-claim services and object families into detailed rows.",
+    "Inbound TimeSynchronization and UTCTimeSynchronization can pass through an optional local source allowlist, TimeSyncSourceRestriction. Each entry holds 1 to BACnetAddress::MAX_MAC_LEN (18) octets, the longest source the network layer delivers; a longer one is refused with Error::Encoding (#1266)."
    ]
   },
   {
@@ -4020,6 +4029,7 @@
     "crates/bacnet-endpoint/src/source_property_identity_tests.rs::source_read_range_concrete_device_ack_establishes_target_device_for_this_record",
     "crates/rusty-bacnet/tests/test_read_property_correlation.py",
     "crates/bacnet-endpoint/src/source_read_tests.rs::source_read_wire_fields_both_roles_modes_and_result_before_delivery",
+    "crates/bacnet-endpoint/src/source_read_tests.rs::source_read_identity_is_the_lowest_of_several_devices",
     "crates/bacnet-endpoint/src/source_read_tests.rs::source_read_dropped_waiter_retries_once_per_logical_request",
     "crates/bacnet-endpoint/src/source_read_queue_tests.rs::source_read_queued_egress_is_owned_before_caller_cancellation",
     "crates/bacnet-endpoint/src/source_read_lifecycle_tests.rs::source_read_and_target_reporting_remain_independent_over_bip",
@@ -4135,7 +4145,8 @@
     "Whole-service failures fan out final failure to eligible attempted references as local representation, not remote success inference. Exactly one distinct successful concrete Device object in a complete ACK establishes operation-local Target_Device across records; error-only or conflicting successful Device IDs retain Address.",
     "Typed synchronous egress QueueFull is known local resource loss and joins existing High Volume coalescing; Closed/shutdown and attempted transport/ACK failures are not counted. A summary rejected by QueueFull is restored into the same bounded generation-fenced batch and awaits egress capacity without ordinary retries, recursive counts or unbounded waiters; stop owns its cancellation.",
     "Default16-slot congestion and128-slot full-success fixtures distinguish admission from delivery, while per-permit saturation counts only dropped occurrences. Source remains direct B/IP/Rust-configured, Python conversion matches standalone results, server scalar-error index producer issue remains #789, and broader Audit #345 stays open. No row status/global pin promotion.",
-    "Refs #1097: the source Reporter adapter hands every BACnetObject method to the object it wraps. Its test reads the method list from the trait's source and runs each method through the adapter against a probe that logs its calls, comparing arguments and answers with the probe's own; only deletion is answered by an active source itself."
+    "Refs #1097: the source Reporter adapter hands every BACnetObject method to the object it wraps. Its test reads the method list from the trait's source and runs each method through the adapter against a probe that logs its calls, comparing arguments and answers with the probe's own; only deletion is answered by an active source itself.",
+    "#1204: with several Devices the source identity is the lowest (ObjectDatabase::local_device). Source audit starts beside other Devices and names it as Source_Device; a session identity naming another Device fails preflight."
    ]
   },
   {
@@ -4252,7 +4263,9 @@
     "crates/bacnet-server/src/server/audit_object_policy_tests.rs::object_audit_policy_bv_create_delete_and_failed_av_create_fallback",
     "crates/bacnet-objects/src/audit/object_policy_tests.rs::object_audit_policy_independent_presence_metadata_and_scalar_writes",
     "crates/rusty-bacnet/tests/test_object_audit_policy.py",
-    "crates/bacnet-server/src/server/audit_reporter_identity_tests.rs::audit_reporter_identity_startup_requires_exactly_one_device",
+    "crates/bacnet-server/src/server/audit_reporter_identity_tests.rs::audit_reporter_identity_startup_requires_a_concrete_local_device",
+    "crates/bacnet-server/src/server/audit_reporter_identity_tests.rs::audit_reporter_identity_is_the_lowest_of_several_devices",
+    "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_follows_the_lowest_of_several_devices",
     "crates/bacnet-server/src/server/audit_reporter_identity_tests.rs::audit_reporter_identity_unique_device_preserves_configured_routed_logger",
     "crates/bacnet-server/src/server/audit_reporter_resource_tests.rs::audit_reporter_auditing_failure_unconfirmed_coalesces_64_active_drops",
     "crates/bacnet-server/src/server/audit_reporter_resource_tests.rs::audit_reporter_auditing_failure_confirmed_batches_are_sequential_and_bounded",
@@ -4482,7 +4495,7 @@
    "target_write_immediate": "RB-21a/b/c narrow slices only, Refs #345 (remains open). Clause 12.63 / Table 12-82 and Clause 19.6 / Tables 19-3, 19-4, 19-5; Standard 135-2020 PDF pp. 621-624 and 819-828 inspected, including table footnotes; 2024-04-29 errata checked, with commandable-priority footnotes visually verified on errata p. 4. Failed target-operation reporting is implementation-defined; Monitored_Objects and batching are optional. One elected configured Reporter emits separate successful WP/WPM elements after authorization and commit. RB-21b reports execution errors at the existing observed object-write boundary, after decode/semantic prechecks and authorization: WP emits at most one failed record with the actual response-mapped BACnet Error in Result; WPM emits each committed-prefix success, one failed-element record, then halts without attempting or reporting later elements. Authorization/policy denials remain silent by owner decision; decode/pre-execution failures and unknown/timeout/Reject/Abort outcomes are not recast as execution failures. Disabled NONE emits no ordinary records; AUDIT_CONFIG locally designates non-Present_Value properties as configuration, and proprietary levels use AUDIT_ALL behavior. The same filters apply to success and failure records. Commandable Present_Value uses the object's Priority_Array capability and omitted priority 16; other properties are not priority-filtered. External Reporter writes emit once when enabled even with WRITE disabled, while internal status changes cannot recurse. Records include pre-write current value when available, target value, object/property/index, incoming invoke ID, source address or unambiguous known Device identity, local target Device and execution-completion timestamp; successes still omit Result and all target records omit source timestamp. Values over 32 encoded octets are omitted. The target Device owns Audit_Notification_Recipient; configured local/routed Device bindings remain immutable route authority and passive discovery is ineligible. The separate mandatory recipient-change path is described in target_device_recipient. Delivery is best-effort: 64 active slots, no waiting queue, one total three-second send/ACK deadline, no retries, no outbound segmentation, and complete APDU size bounded by the server limit. Encoding/size/admission/send/ACK failures do not change protocol responses or roll back writes and expose COMMUNICATION_FAILURE; an unresolved configured Device destination exposes CONFIGURATION_ERROR; missing local Device or provision rejects startup. Saturation and deadline tests cover both delivery modes without queued replay or recursive records; real UDP tests deliver successes and failures to an Audit Log and query them separately. There is no durable delivery guarantee. Source operations beyond the bounded endpoint READ slice in BACNET-19-SOURCE-READ-PROPERTY, non-WP/WPM production (including ordinary direct local/schedule writes), per-object audit overrides, Maximum_Send_Delay/Send_Now/batching, AUDITING_FAILURE drop records, parent forwarding/outbox/receipt changes (RB-22), and Python parity (RB-23) are explicitly deferred. Corrected RB-20 query contracts are untouched; no full Reporter, BIBB, BTL, or #345 completion claim. Public scope: CHANGELOG.md RB-21a/b/c and AuditReportersConfig Rust API docs. Audit family status is not promoted. #809 narrows the historical best-effort response statement for eligible actual built-in AV/BV Audit setting changes only: object_owned_av_bv_policy.mandatory_precommit_admission records the local atomic reject-before-change contract.",
    "target_write_monitored_objects": "RB-21c, Refs #345. Clause 12.63 / Table 12-82 (PDF pp. 621-623, printed 619-621), Clause 19.6.2 (PDF p. 821, printed 819), Clause 21 BACnetObjectSelector (PDF p. 921, printed 919), and Clause 12.1.5.1 (PDF p. 164, printed 162) inspected. The 2024-04-29 errata do not change selector semantics; item 4 Property_List exclusions are preserved. Local Rust set_monitored_objects(None) omits the optional property and selects nominal catch-all membership. Some(empty) or all-NULL selects no ordinary targets; exact ObjectIdentifier and ObjectType alternatives select matching targets, ignoring NULL and admitting at most one record per attempted element despite duplicates. Selection precedes pending-record creation for both successful and failed WP/WPM elements and never changes execution, response, committed-prefix ordering, reliability, or delivery bounds. Enabled Reporter-target writes bypass selection and existing WRITE/priority filters. Network WP/WPM cannot mutate the property; denied Reporter execution produces one failure record under the existing rule, without recursive delivery records. Effective optional/read-only metadata, Property_List, RP/RPM (including array count/index errors), and runtime PICS reflect local property presence without a metadata-schema change. Existing application primitive codecs encode the untagged NULL/ObjectIdentifier/Enumerated CHOICE and concatenated array; independent byte vectors and real UDP selected success/failure receipt are tested. Multiple target association and overlap health are qualified separately by target_multiple_reporters; no broader support claim.",
    "notes": [
-    "Target Device recipient (#728): startup requires exactly one concrete built-in Device with a typed provision and the selected Reporter. Active membership protects both objects and rejects additional Devices; sealed shutdown retains protection until owned task quiescence.",
+    "Target Device recipient (#728): startup requires a concrete built-in local Device with a typed provision and the selected Reporter. Active membership protects both objects and rejects additional Devices; sealed shutdown retains protection until owned task quiescence.",
     "Device-owned recipient changes through direct/local/WP/WPM routes atomically admit both old/new notifications, with generation fencing and shared sequence ownership. Unresolved configured Device provisions may start CONFIGURATION_ERROR; invalid or unsupported Address configurations reject before activation.",
     "See target_device_recipient and docs/device-audit-recipient.md. Partial evidence; Refs #345. The request/ACK models follow the corrected 2020 baseline (Errata Summary 2024-04-29 items 7-8, visually verified from rendered p. 3): Unsigned64 start-at-sequence-number and the three-state BACnetSuccessFilter, including failures-only (see crates/bacnet-services/src/audit.rs, crates/bacnet-services/src/audit/query_codec.rs, crates/bacnet-types/src/constructed/audit.rs).",
     "The RB-02 codec migration and the RB-20 runtime/Python migration are done, so this row stays below supported status pending broader Audit review. AuditLogQuery behavior and query-visible record shape are unchanged: it executes both alternatives over the explicitly persisted, already-loaded retained snapshot, traverses insertion order newest-first without numeric sorting, applies the literal corrected-Unsigned64 start predicate (RB-02), scans completely for No_More_Items, and returns at most the 10,000-record persistence/ACK cap through the generic ComplexACK sizing and segmentation path.",
@@ -4498,7 +4511,9 @@
     "Refs #853: optional Target_Value [14] and Current_Value [15] preserve present empty versus absent fields, including extended tag15 exact vectors. The codec accepts structurally valid values above32 octets; target WP/list Reporter policy includes complete known0–32 octets and omits33+ whole.",
     "Actual Recipient_List WP populated-to-empty and empty-to-empty ACK/state/decoded reports distinguish encoded NULL; list observers retain independent malformed-nonempty validation. Python typed notification/query preserves empty bytes versus None. No source-WP expansion or row-status promotion.",
     "#1124: Audit_Notification_Recipient decodes as a configured recipient, so an address MAC longer than 18 octets (BACnetAddress::MAX_MAC_LEN) fails a write with PROPERTY / INVALID_DATA_ENCODING, and provision_audit_recipient refuses one with the same code.",
-    "#1156: every BACnetAddress the audit codecs carry (the AuditLogQuery device-address filters, and an AuditNotification's two recipient fields [2] and [10]) holds to the same 18 octets in both directions: a longer one does not decode, and the encoders refuse it before writing, so an audit record that could not be reported is never stored."
+    "#1156: every BACnetAddress the audit codecs carry (the AuditLogQuery device-address filters, and an AuditNotification's two recipient fields [2] and [10]) holds to the same 18 octets in both directions: a longer one does not decode, and the encoders refuse it before writing, so an audit record that could not be reported is never stored.",
+    "#1204: with several Devices the target Audit identity is the lowest (ObjectDatabase::local_device). It names this device in records and owns the recipient, and active membership refuses a new Device, so it stays the lowest.",
+    "#1204: notification receipt reads the lowest Device's APDU_Timeout. Forwarding skips a parent naming the lowest Device and forwards to any other, including a Device in the same database; with only a wildcard Device it forwards nothing."
    ],
    "target_device_recipient": {
     "scope": "Target portion of #728; the completed bounded source endpoint migration is recorded separately in BACNET-19-SOURCE-READ-PROPERTY. Broader Audit conformance remains open. Corrected Device recipient requirement: Clause 12.11 with 135-2020 Errata Summary 2024-04-29 item 25 (PDF page 7), preserving base O and footnotes 19-20; NULL operation semantics in 15.9/15.10/19.2; record shape Table 19-4 and BACnetRecipient in Clause 21.",
@@ -5610,7 +5625,8 @@
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/device_execution.rs::device_execution_view_keeps_context_free_helpers_on_raw_declared_profile",
     "crates/bacnet-endpoint/src/device_execution_tests.rs::endpoint_execution_view_covers_write_opt_in_and_custom_device_reader",
     "crates/bacnet-objects/src/device/service_profile_tests.rs::standalone_device_cov_properties_follow_declared_service_profile",
-    "crates/bacnet-server/src/pics/tests.rs"
+    "crates/bacnet-server/src/pics/tests.rs",
+    "crates/bacnet-server/src/pics/selected_device_tests.rs::standalone_pics_reads_the_lowest_of_several_devices"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/device_execution_writes.rs::device_execution_owned_wp_rejects_custom_writer",
@@ -5629,7 +5645,8 @@
     "Issue #834 makes served Device reads executor-owned for their complete PSS, COV presence/values, Property_List and selector/index definitions. Full-server wire RP, budgeted RPM, read_local and generate_pics use fixed EXECUTED_SERVICES with existing clock filtering, even after public Device profile mutation, same-OID replacement or opaque custom readers/metadata.",
     "Both COV lists are present on every served Device; only the selected minimum instance gets live values and other Devices get empty lists. Endpoint server roles execute exactly RP or RP+WP and expose neither COV list; incompatible identity declarations fail before ingress even without WP, while WP profile commit remains after all validation.",
     "ClientOnly has no responder and retains a local declaration. Standalone built-in Device metadata/direct reads follow declared services: 152 iff SubscribeCOV or SubscribeCOVProperty, 481 iff Multiple; present raw lists are empty.",
-    "Context-free RP/RPM and standalone PicsGenerator retain raw declarations. No runtime service-disable switch, general database guard, discovery rebinding, or conformance-status promotion is claimed. This ledger does not claim certification."
+    "Context-free RP/RPM and standalone PicsGenerator retain raw declarations. No runtime service-disable switch, general database guard, discovery rebinding, or conformance-status promotion is claimed. This ledger does not claim certification.",
+    "#1204: the standalone PicsGenerator takes declared executed services from the selected Device, the lowest instance, whatever order the database's hash map visits several Devices in."
    ]
   },
   {

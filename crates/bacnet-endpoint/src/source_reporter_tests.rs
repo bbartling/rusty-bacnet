@@ -321,21 +321,20 @@ async fn missing_database_can_be_attached_after_validation_failure() {
 
 #[tokio::test]
 async fn device_validation_is_atomic_and_correctable() {
-    for case in ["missing", "multiple", "mismatch"] {
+    for case in ["missing", "lower", "mismatch"] {
         let (session, _peer, observed) = session(SessionRole::Both);
         let mut db = database();
         if case == "missing" {
             db.remove(&oid(ObjectType::DEVICE, 123)).unwrap();
         }
-        if case == "multiple" {
-            let mut other = crate::identity::DeviceIdentity::new(456, 42)
+        // A lower Device is the local Device (#1204), so identity 123 is a
+        // mismatch.
+        if case == "lower" {
+            let mut other = crate::identity::DeviceIdentity::new(50, 42)
                 .unwrap()
                 .build_database()
                 .unwrap();
-            let device = other
-                .remove(&oid(ObjectType::DEVICE, 456))
-                .unwrap()
-                .unwrap();
+            let device = other.remove(&oid(ObjectType::DEVICE, 50)).unwrap().unwrap();
             // build_database uses the instance in the default Device name.
             db.add(device).unwrap();
         }
@@ -349,10 +348,10 @@ async fn device_validation_is_atomic_and_correctable() {
         rejected(
             &mut session,
             &observed,
-            if case == "mismatch" {
-                "does not match session identity"
+            if case == "missing" {
+                "concrete local Device"
             } else {
-                "exactly one"
+                "does not match session identity"
             },
         )
         .await;

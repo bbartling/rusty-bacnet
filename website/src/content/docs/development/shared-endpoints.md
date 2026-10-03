@@ -58,7 +58,7 @@ A requester write's commandability is a declaration about the remote property, n
 
 The optional Rust source Reporter profile belongs to this session and currently covers **direct IPv4 B/IP**. Configure it before startup:
 
-1. Put exactly one concrete built-in Device and the selected Audit Reporter in the database.
+1. Put a concrete built-in Device and the selected Audit Reporter in the database. If it holds several Devices, the lowest instance is the local one ([details](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/rust-api.md#databases-with-several-devices)).
 2. Provision the Device's typed Audit recipient. A Device recipient needs an immutable `source_audit_device_binding`; a direct Address recipient needs none.
 3. Set the Reporter's audit level and READ/WRITE operation policy. `Monitored_Objects` must be absent, including no empty or NULL-only list.
 4. Select `with_source_audit_reporter`. A `Both` session also requires an explicit Device write authorizer.
