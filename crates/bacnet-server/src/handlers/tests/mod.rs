@@ -144,6 +144,7 @@ mod life_safety_reset;
 mod lighting_required_rows;
 mod list_element_edits;
 mod list_element_recipients;
+mod list_element_subscriptions;
 mod list_element_targets;
 mod loop_properties;
 mod multi_element_writes;

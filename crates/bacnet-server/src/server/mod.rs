@@ -753,7 +753,11 @@ mod staging_cov_tests;
 #[cfg(test)]
 mod staging_reference_write_tests;
 #[cfg(test)]
+mod subscribed_recipients_expiry_tests;
+#[cfg(test)]
 mod table_13_1_cov_tests;
+#[cfg(test)]
+pub(crate) mod test_forwarder;
 #[cfg(test)]
 pub(crate) mod test_transport;
 #[cfg(test)]
