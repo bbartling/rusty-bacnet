@@ -178,7 +178,13 @@ class CovPolicyConstructorTests(unittest.TestCase):
             ({"max_confirmed_in_flight_per_peer": 0}, ValueError,
              r"max_confirmed_in_flight_per_peer must be positive$"),
             ({"reserved_peers": [b""]}, ValueError,
-             r"reserved_peers entries need a MAC of 1\.\.=255 octets$"),
+             r"reserved_peers entries need a MAC of 1\.\.=18 octets$"),
+            ({"reserved_peers": [bytes(19)]}, ValueError,
+             r"reserved_peers entries need a MAC of 1\.\.=18 octets$"),
+            ({"reserved_recipients": [(None, bytes(19))]}, ValueError,
+             r"reserved_recipients entries need a MAC of 1\.\.=18 octets$"),
+            ({"reserved_recipients": [(65534, bytes(19))]}, ValueError,
+             r"reserved_recipients entries need a MAC of 1\.\.=18 octets$"),
             ({"reserved_recipients": [(0, b"\x01")]}, ValueError,
              r"reserved_recipients networks must be 1\.\.=65534$"),
         ]:
@@ -192,7 +198,8 @@ class CovPolicyConstructorTests(unittest.TestCase):
         for policy in [
             {"max_subscriptions_global": (1 << 64) - 1},
             {"reserved_capacity": 0, "max_indefinite_per_peer": 0},
-            {"reserved_recipients": [(None, b"\x01"), (65534, bytes(255))]},
+            {"reserved_recipients": [(None, b"\x01"), (65534, bytes(18))]},
+            {"reserved_peers": [bytes(18)], "reserved_recipients": [(None, bytes(18))]},
         ]:
             with self.subTest(policy=policy):
                 BACnetServer(123, cov_policy=policy)

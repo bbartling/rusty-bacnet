@@ -3,6 +3,7 @@
 //! Both requests use only application tags, as in the Who-Am-I-Request and You-Are-Request
 //! productions of Clause 21.3.3.
 
+use bacnet_encoding::constructed::{check_decoded_mac_len, check_encoded_mac_len};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags::{self, TagClass};
 use bacnet_types::enums::ObjectType;
@@ -120,6 +121,14 @@ impl WhoAmIRequest {
 /// `device_mac_address` must be present; both [`encode`](Self::encode) and
 /// [`decode`](Self::decode) reject a request with neither. The identifier, when present,
 /// must name a Device object.
+///
+/// The MAC address is the one the matching device takes on the port the request arrived on
+/// (Clauses 16.11.3.1.5 and 16.11.4; Clause 19.7.2), so it names a node on one of
+/// that device's data links. Like a `BACnetAddress` MAC it is therefore at most
+/// [`BACnetAddress::MAX_MAC_LEN`] octets in both directions (#1200): no data link this stack
+/// serves needs more, and a longer one could not be valid for any receiving device.
+///
+/// [`BACnetAddress::MAX_MAC_LEN`]: bacnet_types::constructed::BACnetAddress::MAX_MAC_LEN
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct YouAreRequest {
     /// Vendor identifier (Unsigned16) of the device that should act on the request.
@@ -130,7 +139,10 @@ pub struct YouAreRequest {
     pub serial_number: String,
     /// Device object identifier to assign to the target device; `None` leaves it unchanged.
     pub device_identifier: Option<ObjectIdentifier>,
-    /// MAC address to configure on the target device; `None` leaves it unchanged.
+    /// MAC address to configure on the target device, at most
+    /// [`BACnetAddress::MAX_MAC_LEN`] octets; `None` leaves it unchanged.
+    ///
+    /// [`BACnetAddress::MAX_MAC_LEN`]: bacnet_types::constructed::BACnetAddress::MAX_MAC_LEN
     pub device_mac_address: Option<Vec<u8>>,
 }
 
@@ -138,7 +150,8 @@ impl YouAreRequest {
     /// Encode the request parameters into `buf`.
     ///
     /// Fails, leaving `buf` untouched, if neither optional field is present, the identifier
-    /// is not a Device object, or a character string cannot be encoded.
+    /// is not a Device object, the MAC address is longer than 18 octets, or a character string
+    /// cannot be encoded.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         if self.device_identifier.is_none() && self.device_mac_address.is_none() {
             return Err(Error::Encoding(
@@ -151,6 +164,9 @@ impl YouAreRequest {
                     "YouAre device identifier must name a Device object".into(),
                 ));
             }
+        }
+        if let Some(mac) = &self.device_mac_address {
+            check_encoded_mac_len(mac, "YouAre device-mac-address")?;
         }
         // Encode into a scratch buffer so a string error leaves `buf` unchanged.
         let mut scratch = BytesMut::new();
@@ -173,7 +189,7 @@ impl YouAreRequest {
     /// Decode the request from service-request octets.
     ///
     /// Fails on missing, mistagged or truncated fields, on a request carrying neither optional
-    /// field, and on trailing data.
+    /// field, on a MAC address longer than 18 octets, and on trailing data.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let (vendor_id, model_name, serial_number, mut offset) = decode_identity(data, "YouAre")?;
 
@@ -198,12 +214,10 @@ impl YouAreRequest {
 
         let mut device_mac_address = None;
         if offset < data.len() && is_app_tag(data, offset, tags::app_tag::OCTET_STRING)? {
-            let (content, end) = decode_application(
-                data,
-                offset,
-                tags::app_tag::OCTET_STRING,
-                "YouAre device-mac-address",
-            )?;
+            let what = "YouAre device-mac-address";
+            let (content, end) =
+                decode_application(data, offset, tags::app_tag::OCTET_STRING, what)?;
+            check_decoded_mac_len(content.len(), offset, what)?;
             device_mac_address = Some(content.to_vec());
             offset = end;
         }

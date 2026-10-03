@@ -12,12 +12,13 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBool, PyBytes, PyInt, PyList, PyMapping, PyString, PyTuple};
+use pyo3::types::{PyAny, PyBool, PyList, PyMapping, PyTuple};
 
-use super::{
-    PyAuditOperation, PyBACnetTimeStamp, PyErrorClass, PyErrorCode, PyObjectIdentifier,
-    PyPropertyIdentifier,
+use super::mapping::{
+    bytes, discriminator, mapping, object_identifier, optional_item, ranged_integer, required_item,
+    string, validate_keys,
 };
+use super::{PyAuditOperation, PyBACnetTimeStamp, PyErrorClass, PyErrorCode, PyPropertyIdentifier};
 
 const NOTIFICATION_REQUIRED: &[&str] = &["source_device", "operation", "target_device"];
 const NOTIFICATION_OPTIONAL: &[&str] = &[
@@ -36,119 +37,6 @@ const NOTIFICATION_OPTIONAL: &[&str] = &[
     "current_value",
     "result",
 ];
-
-fn mapping<'a, 'py>(
-    value: &'a Bound<'py, PyAny>,
-    name: &str,
-) -> PyResult<&'a Bound<'py, PyMapping>> {
-    value
-        .cast::<PyMapping>()
-        .map_err(|_| PyTypeError::new_err(format!("{name} must be a mapping")))
-}
-
-fn validate_keys(
-    value: &Bound<'_, PyMapping>,
-    name: &str,
-    required: &[&str],
-    optional: &[&str],
-) -> PyResult<()> {
-    for key in value.keys()?.iter() {
-        if key.cast::<PyString>().is_err() {
-            return Err(PyTypeError::new_err(format!(
-                "{name} mapping keys must be strings"
-            )));
-        }
-        let key = key.extract::<String>()?;
-        if !required.contains(&key.as_str()) && !optional.contains(&key.as_str()) {
-            return Err(PyValueError::new_err(format!(
-                "{name} contains unknown key '{key}'"
-            )));
-        }
-    }
-    for &key in required {
-        if !value.contains(key)? {
-            return Err(PyValueError::new_err(format!(
-                "{name} is missing required key '{key}'"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn required_item<'py>(
-    value: &Bound<'py, PyMapping>,
-    name: &str,
-    key: &str,
-) -> PyResult<Bound<'py, PyAny>> {
-    if !value.contains(key)? {
-        return Err(PyValueError::new_err(format!(
-            "{name} is missing required key '{key}'"
-        )));
-    }
-    value.get_item(key)
-}
-
-fn optional_item<'py>(
-    value: &Bound<'py, PyMapping>,
-    key: &str,
-) -> PyResult<Option<Bound<'py, PyAny>>> {
-    if !value.contains(key)? {
-        return Ok(None);
-    }
-    let item = value.get_item(key)?;
-    Ok((!item.is_none()).then_some(item))
-}
-
-fn discriminator(value: &Bound<'_, PyMapping>, name: &str) -> PyResult<String> {
-    required_item(value, name, "kind")?
-        .extract::<String>()
-        .map_err(|_| PyValueError::new_err(format!("{name}.kind must be a valid discriminator")))
-}
-
-fn integer(value: &Bound<'_, PyAny>, name: &str) -> PyResult<i128> {
-    if value.is_instance_of::<PyBool>() || value.cast::<PyInt>().is_err() {
-        return Err(PyTypeError::new_err(format!("{name} must be an integer")));
-    }
-    value.extract::<i128>().map_err(|_| {
-        PyValueError::new_err(format!("{name} is outside the supported integer range"))
-    })
-}
-
-fn ranged_integer(
-    value: &Bound<'_, PyAny>,
-    name: &str,
-    minimum: u64,
-    maximum: u64,
-) -> PyResult<u64> {
-    let value = integer(value, name)?;
-    if value < i128::from(minimum) || value > i128::from(maximum) {
-        return Err(PyValueError::new_err(format!(
-            "{name} must be {minimum}..={maximum}, got {value}"
-        )));
-    }
-    Ok(value as u64)
-}
-
-fn string(value: &Bound<'_, PyAny>, name: &str) -> PyResult<String> {
-    if value.cast::<PyString>().is_err() {
-        return Err(PyTypeError::new_err(format!("{name} must be a str")));
-    }
-    value.extract::<String>()
-}
-
-fn bytes(value: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<u8>> {
-    value
-        .cast::<PyBytes>()
-        .map(|value| value.as_bytes().to_vec())
-        .map_err(|_| PyTypeError::new_err(format!("{name} must be bytes")))
-}
-
-fn object_identifier(value: &Bound<'_, PyAny>, name: &str) -> PyResult<ObjectIdentifier> {
-    value
-        .extract::<PyObjectIdentifier>()
-        .map(|value| value.to_rust())
-        .map_err(|_| PyTypeError::new_err(format!("{name} must be an ObjectIdentifier")))
-}
 
 pub(crate) fn recipient(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetRecipient> {
     let value = mapping(value, name)?;

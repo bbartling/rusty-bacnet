@@ -2,6 +2,7 @@
 use super::*;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::error::Error;
 
 use crate::server::test_transport::TestTransport;
@@ -20,7 +21,8 @@ fn direct(mac: &[u8]) -> CovRecipient {
 
 #[test]
 fn cov_policy_validate_accepts_defaults_zero_reservations_and_clamped_relations() {
-    let long_mac = [7; 255];
+    // The longest source the network layer delivers (#1199).
+    let long_mac = [7; BACnetAddress::MAX_MAC_LEN];
     for policy in [
         CovPolicy::default(),
         CovPolicy::unlimited(),
@@ -102,35 +104,35 @@ fn cov_policy_validate_rejects_zero_limits_and_unmatchable_reservations() {
                 reserved_peers: vec![MacAddr::new()],
                 ..defaults()
             },
-            "COV policy reserved_peers entries need a MAC of 1..=255 octets",
+            "COV policy reserved_peers entries need a MAC of 1..=18 octets",
         ),
         (
             CovPolicy {
                 reserved_peers: vec![MacAddr::from_slice(&[7; 256])],
                 ..defaults()
             },
-            "COV policy reserved_peers entries need a MAC of 1..=255 octets",
+            "COV policy reserved_peers entries need a MAC of 1..=18 octets",
         ),
         (
             CovPolicy {
                 reserved_recipients: vec![direct(&[])],
                 ..defaults()
             },
-            "COV policy reserved_recipients entries need a MAC of 1..=255 octets",
+            "COV policy reserved_recipients entries need a MAC of 1..=18 octets",
         ),
         (
             CovPolicy {
                 reserved_recipients: vec![routed(10, &[])],
                 ..defaults()
             },
-            "COV policy reserved_recipients entries need a MAC of 1..=255 octets",
+            "COV policy reserved_recipients entries need a MAC of 1..=18 octets",
         ),
         (
             CovPolicy {
                 reserved_recipients: vec![routed(10, &[7; 256])],
                 ..defaults()
             },
-            "COV policy reserved_recipients entries need a MAC of 1..=255 octets",
+            "COV policy reserved_recipients entries need a MAC of 1..=18 octets",
         ),
         (
             CovPolicy {
@@ -149,6 +151,38 @@ fn cov_policy_validate_rejects_zero_limits_and_unmatchable_reservations() {
     ] {
         assert!(
             matches!(policy.validate(), Err(Error::Encoding(m)) if m == message),
+            "{policy:?}"
+        );
+    }
+}
+
+/// A reserved entry holds to [`BACnetAddress::MAX_MAC_LEN`], the longest
+/// source the network layer delivers, in every form (#1199): 18 octets are
+/// accepted and 19 refused, with the error the DCC source restriction uses.
+#[test]
+fn cov_policy_reserved_macs_hold_to_the_bacnet_address_bound() {
+    let entries = |mac: &[u8]| {
+        [
+            CovPolicy {
+                reserved_peers: vec![MacAddr::from_slice(mac)],
+                ..CovPolicy::default()
+            },
+            CovPolicy {
+                reserved_recipients: vec![direct(mac)],
+                ..CovPolicy::default()
+            },
+            CovPolicy {
+                reserved_recipients: vec![routed(10, mac)],
+                ..CovPolicy::default()
+            },
+        ]
+    };
+    for policy in entries(&[7; BACnetAddress::MAX_MAC_LEN]) {
+        assert!(policy.validate().is_ok(), "{policy:?}");
+    }
+    for policy in entries(&[7; BACnetAddress::MAX_MAC_LEN + 1]) {
+        assert!(
+            matches!(policy.validate(), Err(Error::Encoding(m)) if m.ends_with("need a MAC of 1..=18 octets")),
             "{policy:?}"
         );
     }

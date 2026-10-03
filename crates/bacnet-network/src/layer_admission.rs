@@ -537,6 +537,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
 
         let dispatch_task = tokio::spawn(async move {
             while let Some(received) = npdu_rx.recv().await {
+                if !link_source_fits(&received.source_mac, &address_length_drops) {
+                    continue;
+                }
                 match decode_npdu(received.npdu.clone()) {
                     Ok(npdu) => {
                         if npdu.is_network_message {
@@ -615,6 +618,26 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         self.dispatch_task = Some(dispatch_task);
         Ok((apdu_rx, counters))
     }
+}
+
+/// Whether a frame's link-layer source MAC fits [`NpduAddress::MAX_MAC_LEN`]
+/// (#1198). [`NetworkLayer`] and the router ask before decoding anything else
+/// in the frame. A longer MAC is counted in `drops` and its frame goes no
+/// further, so neither an APDU consumer nor the routing table ever learns an
+/// address that a `BACnetAddress` cannot hold. No built-in transport makes
+/// one: B/IP, BACnet/SC and Ethernet MACs are 6 octets, MS/TP 1 and B/IPv6
+/// 18; only a custom [`TransportPort`] can.
+pub(crate) fn link_source_fits(source_mac: &[u8], drops: &AtomicU64) -> bool {
+    if source_mac.len() <= NpduAddress::MAX_MAC_LEN {
+        return true;
+    }
+    count_address_length_drop(drops);
+    warn!(
+        octets = source_mac.len(),
+        limit = NpduAddress::MAX_MAC_LEN,
+        "Dropping a frame whose link-layer source MAC is over the limit"
+    );
+    false
 }
 
 #[cfg(test)]
