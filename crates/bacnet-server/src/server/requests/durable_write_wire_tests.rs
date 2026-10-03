@@ -28,49 +28,46 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex as StdMutex};
 use std::time::Duration;
 
-const WAIT: Duration = Duration::from_secs(10);
+pub(super) const WAIT: Duration = Duration::from_secs(10);
 /// How long the authorizer test watches the database stay held. Only a test
 /// that expects the guard held uses a short wait; the others use [`WAIT`],
 /// so a loaded runner cannot fail them.
 const HELD_FOR: Duration = Duration::from_millis(500);
-const SIMPLE_ACK_ADD: [u8; 3] = [0x20, 5, 8];
-const SIMPLE_ACK_WRITE: [u8; 3] = [0x20, 5, 15];
-const SIMPLE_ACK_WPM: [u8; 3] = [0x20, 5, 16];
-const SIMPLE_ACK_DELETE: [u8; 3] = [0x20, 5, 11];
+pub(super) const SIMPLE_ACK_ADD: [u8; 3] = [0x20, 5, 8];
+pub(super) const SIMPLE_ACK_WRITE: [u8; 3] = [0x20, 5, 15];
+pub(super) const SIMPLE_ACK_WPM: [u8; 3] = [0x20, 5, 16];
+pub(super) const SIMPLE_ACK_DELETE: [u8; 3] = [0x20, 5, 11];
 /// The first octet of an Error PDU.
-const ERROR_PDU: u8 = 0x50;
+pub(super) const ERROR_PDU: u8 = 0x50;
 
-/// Forwarder storage whose saves can fail, or wait until the test lets each
-/// one go.
+/// Storage of snapshots `S` whose saves can fail, or wait until the test
+/// lets each one go: a forwarder's here, a Notification Class's in
+/// `notification_class_durable_tests`.
 #[derive(Default)]
-struct HeldStorage {
-    saved: StdMutex<Option<ForwarderSnapshot>>,
-    saves: AtomicUsize,
-    fail: AtomicBool,
+pub(super) struct HeldStorage<S = ForwarderSnapshot> {
+    pub(super) saved: StdMutex<Option<S>>,
+    pub(super) saves: AtomicUsize,
+    pub(super) fail: AtomicBool,
     hold: StdMutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
-impl HeldStorage {
+impl<S: Clone> HeldStorage<S> {
     /// Make every later save report on the first channel and wait for a
     /// message on the second.
-    fn hold(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    pub(super) fn hold(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
         let (started, started_rx) = mpsc::channel();
         let (go, go_rx) = mpsc::channel();
         *self.hold.lock().unwrap() = Some((started, go_rx));
         (started_rx, go)
     }
-}
 
-impl NotificationForwarderPersistence for HeldStorage {
-    fn load(&self, _forwarder: ObjectIdentifier) -> Result<Option<ForwarderSnapshot>, Error> {
-        Ok(self.saved.lock().unwrap().clone())
+    /// What was saved last.
+    pub(super) fn load_saved(&self) -> Option<S> {
+        self.saved.lock().unwrap().clone()
     }
 
-    fn save(
-        &self,
-        _forwarder: ObjectIdentifier,
-        snapshot: &ForwarderSnapshot,
-    ) -> Result<(), Error> {
+    /// Save `snapshot`, waiting first if the test holds saves.
+    pub(super) fn store(&self, snapshot: &S) -> Result<(), Error> {
         if let Some((started, go)) = &*self.hold.lock().unwrap() {
             let _ = started.send(());
             let _ = go.recv();
@@ -81,6 +78,20 @@ impl NotificationForwarderPersistence for HeldStorage {
         *self.saved.lock().unwrap() = Some(snapshot.clone());
         self.saves.fetch_add(1, Ordering::SeqCst);
         Ok(())
+    }
+}
+
+impl NotificationForwarderPersistence for HeldStorage {
+    fn load(&self, _forwarder: ObjectIdentifier) -> Result<Option<ForwarderSnapshot>, Error> {
+        Ok(self.load_saved())
+    }
+
+    fn save(
+        &self,
+        _forwarder: ObjectIdentifier,
+        snapshot: &ForwarderSnapshot,
+    ) -> Result<(), Error> {
+        self.store(snapshot)
     }
 }
 
@@ -99,7 +110,7 @@ fn framed(subscriptions: &[BACnetEventNotificationSubscription]) -> Vec<u8> {
     buf.to_vec()
 }
 
-fn destination(instance: u32) -> BACnetDestination {
+pub(super) fn destination(instance: u32) -> BACnetDestination {
     BACnetDestination {
         valid_days: DaysOfWeek::all(),
         from_time: Time {
@@ -138,9 +149,9 @@ async fn fixture(storage: &Arc<HeldStorage>) -> (Arc<Fixture>, ObjectIdentifier)
 /// Send `request`, hold its save, and check that the database answers a
 /// reader and a writer while the save runs. Returns the response and whether
 /// the database answered both, each `within` the given time.
-async fn while_saving(
+pub(super) async fn while_saving<S: Clone>(
     fixture: &Arc<Fixture>,
-    storage: &HeldStorage,
+    storage: &HeldStorage<S>,
     service: ConfirmedServiceChoice,
     request: Bytes,
     within: Duration,
