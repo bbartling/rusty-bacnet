@@ -52,6 +52,10 @@ impl DeviceExecution {
 /// One execution profile and clock observation, shared across a served request.
 pub(crate) struct DeviceReadContext<'a> {
     pub(crate) registered_port: Option<ObjectIdentifier>,
+    /// Result rows a single-property read of a Group's Present_Value may
+    /// expand, its own row and the member rows (#1172). ReadPropertyMultiple
+    /// charges its own budget instead; this starts at that budget's default.
+    pub(crate) work_limit: usize,
     execution: DeviceExecution,
     clock: bool,
     live: Option<&'a LiveDeviceCov>,
@@ -65,6 +69,7 @@ impl<'a> DeviceReadContext<'a> {
     ) -> Self {
         Self {
             registered_port: None,
+            work_limit: crate::server::ReadPropertyMultipleBudget::default().max_result_elements,
             execution,
             clock: db.clock_frame().is_some(),
             live,
@@ -72,6 +77,10 @@ impl<'a> DeviceReadContext<'a> {
     }
     pub(crate) fn with_registered_port(mut self, oid: Option<ObjectIdentifier>) -> Self {
         self.registered_port = oid;
+        self
+    }
+    pub(crate) fn with_work_limit(mut self, limit: usize) -> Self {
+        self.work_limit = limit;
         self
     }
     pub(crate) fn object<'b>(&'b self, object: &'b dyn BACnetObject) -> DeviceReadView<'b> {
@@ -338,13 +347,16 @@ impl BACnetObject for DeviceReadView<'_> {
     fn staging_generation_internal(&self) -> Option<u64> {
         self.object.staging_generation_internal()
     }
+    fn command_generation_internal(&self) -> Option<u64> {
+        self.object.command_generation_internal()
+    }
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
         self.object.enrollment_summary_capability_internal()
     }
     fn supports_cov_property(&self, property: P) -> bool {
         self.object.supports_cov_property(property)
     }
-    fn cov_increment(&self) -> Option<f32> {
+    fn cov_increment(&self) -> Option<f64> {
         self.object.cov_increment()
     }
     fn cov_reported_properties(&self) -> &'static [CovReportedProperty] {

@@ -4,14 +4,17 @@ use bacnet_services::read_range::ReadRangeRequest;
 
 /// ReadRange under one database read guard, through the same executor Device
 /// view as ReadProperty (#1046). A request for the selected Device's
-/// `Active_COV_Subscriptions` or `Active_COV_Multiple_Subscriptions` samples
-/// the COV table once, after the database guard (the server lock order), so
-/// every item, flag and count of the page comes from one instant.
+/// `Active_COV_Subscriptions` or `Active_COV_Multiple_Subscriptions`, or for
+/// a Group's Present_Value whose members name them (#1171), samples the COV
+/// table once, after the database guard (the server lock order), so every
+/// item, flag and count of the page comes from one instant. The page follows
+/// the configured ReadRange budget, and a Group's Present_Value counts
+/// against the ReadPropertyMultiple work limit as in ReadProperty (#1172).
 pub(super) async fn response(
     db: &RwLock<ObjectDatabase>,
     cov_table: &RwLock<CovSubscriptionTable>,
     request: &ConfirmedRequestPdu,
-    mut budget: ReadRangeBudget,
+    config: &ServerConfig,
     effective_max_apdu: u16,
     segmented_response_available: bool,
     completed: impl FnOnce(
@@ -22,6 +25,7 @@ pub(super) async fn response(
         &Result<(), Error>,
     ),
 ) -> Apdu {
+    let mut budget = config.read_range_budget;
     if !segmented_response_available {
         budget.max_service_ack_bytes = budget.max_service_ack_bytes.min(
             event_information::unsegmented_complex_ack_service_budget(
@@ -45,7 +49,8 @@ pub(super) async fn response(
                 }
                 None => None,
             };
-            let view = DeviceReadContext::new(&db, DeviceExecution::FullServer, live.as_ref());
+            let view = DeviceReadContext::new(&db, DeviceExecution::FullServer, live.as_ref())
+                .with_work_limit(config.read_property_multiple_budget.max_result_elements);
             handlers::read_range_request_observed(
                 &db,
                 Some(&view),
@@ -78,6 +83,11 @@ pub(super) async fn response(
             sent_by_server: true,
             invoke_id: request.invoke_id,
             abort_reason: AbortReason::BUFFER_OVERFLOW,
+        }),
+        Err(handlers::ReadRangeFailure::Work) => Apdu::Abort(AbortPdu {
+            sent_by_server: true,
+            invoke_id: request.invoke_id,
+            abort_reason: AbortReason::OUT_OF_RESOURCES,
         }),
     }
 }

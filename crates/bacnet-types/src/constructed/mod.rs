@@ -375,6 +375,29 @@ pub struct BACnetDestination {
 }
 
 // ---------------------------------------------------------------------------
+// BACnetEventNotificationSubscription (Clause 21)
+// ---------------------------------------------------------------------------
+
+/// One entry of a Notification Forwarder's Subscribed_Recipients (Clause
+/// 12.51.9): a recipient that asked for forwarded notifications for a limited
+/// time.
+///
+/// The recipient and process identifier identify the entry: the list services
+/// match on those two members alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BACnetEventNotificationSubscription {
+    /// Device or address that receives the notifications (`[0]`).
+    pub recipient: BACnetRecipient,
+    /// Process on the recipient that receives them (`[1]`).
+    pub process_identifier: u32,
+    /// `true` for confirmed notifications, `false` for unconfirmed ones (`[2]`).
+    pub issue_confirmed_notifications: bool,
+    /// Minutes left before the entry lapses (`[3]`). Unlike COV subscription
+    /// lifetimes this counts minutes, not seconds.
+    pub time_remaining: u32,
+}
+
+// ---------------------------------------------------------------------------
 // LogDatum (Clause 12.25 -- TrendLog Log_Buffer; Clause 21.6)
 // ---------------------------------------------------------------------------
 

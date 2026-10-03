@@ -312,7 +312,13 @@ fn decode_recipient_process(
     ))
 }
 
-fn decode_ctx_u32(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<(u32, usize), Error> {
+/// A context-tagged Unsigned that must fit Unsigned32.
+pub(super) fn decode_ctx_u32(
+    data: &[u8],
+    offset: usize,
+    tag: u8,
+    what: &str,
+) -> Result<(u32, usize), Error> {
     let (value, end) = decode_ctx_unsigned(data, offset, tag, what)?;
     let value = u32::try_from(value)
         .map_err(|_| Error::decoding(offset, format!("{what}: [{tag}] exceeds Unsigned32")))?;

@@ -28,7 +28,7 @@ impl BACnetObject for Probe {
     fn is_array_property(&self, p: PropertyIdentifier) -> bool {
         p == SELECTED && self.0.lock().unwrap().array
     }
-    fn cov_increment(&self) -> Option<f32> {
+    fn cov_increment(&self) -> Option<f64> {
         Some(100.0)
     }
     fn read_property(&self, p: PropertyIdentifier, _: Option<u32>) -> Result<PropertyValue, Error> {

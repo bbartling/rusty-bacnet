@@ -14,6 +14,7 @@ use bacnet_objects::audit::{
     AuditReporterObject, AuditSendDelay, ObjectAuditPolicy,
 };
 use bacnet_objects::clock::{ClockFrame, ClockReader};
+use bacnet_objects::command::CommandRun;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::device::{DeviceAuthority, DeviceConfig, DeviceObject};
 use bacnet_objects::event::{
@@ -388,6 +389,34 @@ impl BACnetObject for Probe {
         );
         true
     }
+    fn take_command_run_internal(&mut self) -> Option<CommandRun> {
+        self.called("take_command_run_internal", ());
+        Some(CommandRun {
+            source: self.oid,
+            generation: 11,
+            commands: Vec::new(),
+        })
+    }
+    fn command_generation_internal(&self) -> Option<u64> {
+        self.called("command_generation_internal", ());
+        Some(11)
+    }
+    fn record_command_write_internal(
+        &mut self,
+        generation: u64,
+        command: usize,
+        success: bool,
+    ) -> bool {
+        self.called(
+            "record_command_write_internal",
+            (generation, command, success),
+        );
+        true
+    }
+    fn complete_command_run_internal(&mut self, generation: u64, all_succeeded: bool) -> bool {
+        self.called("complete_command_run_internal", (generation, all_succeeded));
+        true
+    }
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
         self.called("enrollment_summary_capability_internal", ());
         Some(EnrollmentSummaryCapability {
@@ -401,7 +430,7 @@ impl BACnetObject for Probe {
         // for every property.
         property == CUSTOM
     }
-    fn cov_increment(&self) -> Option<f32> {
+    fn cov_increment(&self) -> Option<f64> {
         self.called("cov_increment", ());
         Some(1.25)
     }

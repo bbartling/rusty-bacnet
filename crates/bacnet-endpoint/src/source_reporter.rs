@@ -9,6 +9,7 @@ use bacnet_objects::audit::{
     AuditLogForwarding, AuditLogNotificationSink, AuditLogStorage, AuditReporterObject,
 };
 use bacnet_objects::clock::ClockReader;
+use bacnet_objects::command::CommandRun;
 use bacnet_objects::event::{
     EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
     EventTransitionCommitError, TransitionOutcome,
@@ -259,6 +260,29 @@ impl BACnetObject for SourceReporter {
             .complete_staging_write_plan_internal(generation, success)
     }
 
+    fn take_command_run_internal(&mut self) -> Option<CommandRun> {
+        self.wrapped.take_command_run_internal()
+    }
+
+    fn command_generation_internal(&self) -> Option<u64> {
+        self.wrapped.command_generation_internal()
+    }
+
+    fn record_command_write_internal(
+        &mut self,
+        generation: u64,
+        command: usize,
+        success: bool,
+    ) -> bool {
+        self.wrapped
+            .record_command_write_internal(generation, command, success)
+    }
+
+    fn complete_command_run_internal(&mut self, generation: u64, all_succeeded: bool) -> bool {
+        self.wrapped
+            .complete_command_run_internal(generation, all_succeeded)
+    }
+
     fn enrollment_summary_capability_internal(&self) -> Option<EnrollmentSummaryCapability> {
         self.wrapped.enrollment_summary_capability_internal()
     }
@@ -267,7 +291,7 @@ impl BACnetObject for SourceReporter {
         self.wrapped.supports_cov_property(property)
     }
 
-    fn cov_increment(&self) -> Option<f32> {
+    fn cov_increment(&self) -> Option<f64> {
         self.wrapped.cov_increment()
     }
 

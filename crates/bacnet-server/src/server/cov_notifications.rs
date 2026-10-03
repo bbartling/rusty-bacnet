@@ -364,7 +364,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     && CovSubscriptionTable::should_notify(
                                         sub,
                                         Some(observation.sample()),
-                                        sub.cov_increment.or(increment),
+                                        sub.cov_increment.map(f64::from).or(increment),
                                     ))
                                 && !observation
                                     .flags_changed(sub.last_notified_observation.as_ref())

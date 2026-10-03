@@ -39,6 +39,7 @@ mod audit_notification;
 mod audit_record;
 pub mod calendar;
 pub mod cov_subscription;
+pub mod event_notification_subscription;
 pub mod event_parameter;
 pub mod fault_parameter;
 mod floor_pairs;
@@ -76,6 +77,10 @@ pub use calendar::{
 pub use cov_subscription::{
     decode_cov_multiple_subscription, decode_cov_subscription, encode_cov_multiple_subscription,
     encode_cov_multiple_subscription_list, encode_cov_subscription, encode_cov_subscription_list,
+};
+pub use event_notification_subscription::{
+    decode_event_notification_subscription, encode_event_notification_subscription,
+    encode_event_notification_subscription_list,
 };
 pub use event_parameter::{decode_event_parameter, encode_event_parameter};
 pub use fault_parameter::{decode_fault_parameters, encode_fault_parameters};

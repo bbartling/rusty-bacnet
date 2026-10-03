@@ -223,6 +223,105 @@ fn group_present_value_is_rebuilt_on_each_read() {
     );
 }
 
+/// The result rows the low-level ReadPropertyMultiple helper, which plans no
+/// budget, returns for `specs`: an independent count of their expansion.
+fn expanded_rows(db: &ObjectDatabase, specs: Vec<ReadAccessSpecification>) -> usize {
+    let mut request = BytesMut::new();
+    ReadPropertyMultipleRequest {
+        list_of_read_access_specs: specs,
+    }
+    .encode(&mut request)
+    .unwrap();
+    let mut ack = BytesMut::new();
+    handle_read_property_multiple(db, &request, &mut ack).unwrap();
+    ReadPropertyMultipleACK::decode(&ack)
+        .unwrap()
+        .list_of_read_access_results
+        .iter()
+        .map(|result| result.list_of_results.len())
+        .sum()
+}
+
+#[test]
+fn member_rows_are_charged_to_the_rpm_work_budget_and_shared_between_groups() {
+    use crate::handlers::rpm_budget::{handle_rpm_budgeted_observed, RpmFailure};
+    let input = oid(ObjectType::ANALOG_INPUT, 1);
+    let value = oid(ObjectType::ANALOG_VALUE, 2);
+    // Group 7 expands ALL on AV-2; Group 8 is two explicit rows.
+    let (mut db, seven) = database(vec![
+        member(input, &[(P::PRESENT_VALUE, None)]),
+        member(value, &[(P::ALL, None)]),
+    ]);
+    let mut group = GroupObject::new(8, "GRP-8").unwrap();
+    group
+        .add_member(member(
+            input,
+            &[(P::DESCRIPTION, None), (P::OBJECT_NAME, None)],
+        ))
+        .unwrap();
+    let eight = group.object_identifier();
+    db.add(Box::new(group)).unwrap();
+    let seven_members = 1 + expanded_rows(&db, vec![member(value, &[(P::ALL, None)])]);
+    let group_all = expanded_rows(&db, vec![member(seven, &[(P::ALL, None)])]);
+    let read_seven = member(seven, &[(P::PRESENT_VALUE, None)]);
+    let read_eight = member(eight, &[(P::PRESENT_VALUE, None)]);
+    let pair = 1 + seven_members + 1 + 2;
+    let budget = |max_result_elements| crate::server::ReadPropertyMultipleBudget {
+        max_result_elements,
+        max_service_ack_bytes: 16384,
+    };
+    let encode = |specs: &[ReadAccessSpecification]| {
+        let mut request = BytesMut::new();
+        ReadPropertyMultipleRequest {
+            list_of_read_access_specs: specs.to_vec(),
+        }
+        .encode(&mut request)
+        .unwrap();
+        request
+    };
+    let cases = [
+        // Present_Value by name: its row plus every member row.
+        (vec![read_seven.clone()], 1 + seven_members),
+        // ALL on the Group: its own rows plus the members of the one
+        // Present_Value among them.
+        (
+            vec![member(seven, &[(P::ALL, None)])],
+            group_all + seven_members,
+        ),
+        // Two Groups in one request draw on the one budget.
+        (vec![read_seven.clone(), read_eight.clone()], pair),
+    ];
+    for (specs, work) in cases {
+        let request = encode(&specs);
+        let mut ack = BytesMut::new();
+        handle_rpm_budgeted_observed(&db, &request, &mut ack, budget(work), |_, _, _, _| {})
+            .unwrap();
+        let mut legacy = BytesMut::new();
+        handle_read_property_multiple(&db, &request, &mut legacy).unwrap();
+        assert_eq!(ack, legacy, "{specs:?}");
+        // One row short fails as any request over its work budget does:
+        // nothing read, nothing written, nothing observed.
+        let mut prefix = BytesMut::from(&b"prefix"[..]);
+        let mut observed = 0;
+        let result = handle_rpm_budgeted_observed(
+            &db,
+            &request,
+            &mut prefix,
+            budget(work - 1),
+            |_, _, _, _| observed += 1,
+        );
+        assert!(matches!(result, Err(RpmFailure::Work)), "{specs:?}");
+        assert_eq!((&prefix[..], observed), (&b"prefix"[..], 0));
+    }
+    // Each Group alone fits the budget the pair overruns.
+    for alone in [read_seven, read_eight] {
+        let request = encode(std::slice::from_ref(&alone));
+        let mut ack = BytesMut::new();
+        handle_rpm_budgeted_observed(&db, &request, &mut ack, budget(pair - 1), |_, _, _, _| {})
+            .unwrap();
+    }
+}
+
 #[test]
 fn read_range_pages_the_rebuilt_present_value() {
     let (db, group) = database(pinned_members());

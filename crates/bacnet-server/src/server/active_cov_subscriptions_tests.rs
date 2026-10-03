@@ -9,6 +9,7 @@ use support::*;
 mod command_source;
 mod device_execution;
 mod device_selection;
+mod group_present_value;
 mod multiple_route;
 mod priority_array_writes;
 mod read_range;

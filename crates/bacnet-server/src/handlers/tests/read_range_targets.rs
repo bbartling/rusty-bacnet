@@ -441,6 +441,69 @@ fn read_range_splits_framed_schedule_references() {
 }
 
 #[test]
+fn read_range_splits_subscribed_recipients_into_subscriptions() {
+    use bacnet_encoding::constructed::{
+        encode_event_notification_subscription, encode_event_notification_subscription_list,
+    };
+    use bacnet_types::constructed::BACnetEventNotificationSubscription;
+
+    // A device and an address recipient encode to different lengths, so only
+    // the subscription codec finds each boundary.
+    let subscriptions = [
+        BACnetEventNotificationSubscription {
+            recipient: BACnetRecipient::Device(
+                ObjectIdentifier::new(ObjectType::DEVICE, 7).unwrap(),
+            ),
+            process_identifier: 1,
+            issue_confirmed_notifications: true,
+            time_remaining: 30,
+        },
+        BACnetEventNotificationSubscription {
+            recipient: BACnetRecipient::Address(bacnet_types::constructed::BACnetAddress {
+                network_number: 4,
+                mac_address: bacnet_types::MacAddr::from_slice(&[10, 0, 0, 2, 0xBA, 0xC0]),
+            }),
+            process_identifier: 2,
+            issue_confirmed_notifications: false,
+            time_remaining: 1440,
+        },
+    ];
+    let mut framed = BytesMut::new();
+    encode_event_notification_subscription_list(&mut framed, &subscriptions).unwrap();
+    let mut forwarder = crate::server::test_forwarder::TestForwarder::new(1);
+    forwarder
+        .subscribed_recipients
+        .write(PropertyValue::ApplicationData(framed.to_vec()))
+        .unwrap();
+    let mut db = ObjectDatabase::new();
+    let forwarder = add(&mut db, forwarder);
+    let items: Vec<_> = subscriptions
+        .iter()
+        .map(|subscription| {
+            let mut encoded = BytesMut::new();
+            encode_event_notification_subscription(&mut encoded, subscription).unwrap();
+            PropertyValue::ApplicationData(encoded.to_vec())
+        })
+        .collect();
+    let property = PropertyIdentifier::SUBSCRIBED_RECIPIENTS;
+
+    let all = call(&db, forwarder, property, None).unwrap();
+    assert_ack(&all, &items, (true, true, false), None);
+    assert_eq!(all.item_data, framed.to_vec());
+    let second = call(
+        &db,
+        forwarder,
+        property,
+        Some(RangeSpec::ByPosition {
+            reference_index: 2,
+            count: 1,
+        }),
+    )
+    .unwrap();
+    assert_ack(&second, &items[1..], (false, true, false), None);
+}
+
+#[test]
 fn read_range_standalone_device_cov_lists_page_as_read_property_reads_them() {
     // Without a running server the Device holds no COV subscriptions, and
     // standalone ReadProperty returns both lists empty. ReadRange splits the

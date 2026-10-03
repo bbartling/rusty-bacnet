@@ -53,7 +53,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
             // references capture it at commit time; every subscriber hears of
             // it once the guard is dropped, after the event notifications, as
             // on the write path (#889).
-            (out, commit.finish(&db, &fanout.cov_table).await)
+            (out, commit.finish(&mut db, &fanout.cov_table).await)
         };
         for (oid, resolved) in fired {
             BACnetServer::<T>::build_and_send_event_notification_with_bindings(
