@@ -13,7 +13,7 @@ pub(crate) struct PreparedCovValue {
     pub sample: CovSample,
     pub encoded: Vec<u8>,
     pub(super) numeric: bool,
-    pub(super) increment: Option<f32>,
+    pub(super) increment: Option<f64>,
 }
 impl PreparedCovValue {
     pub fn reports(&self, previous: Option<&CovSample>) -> bool {
@@ -48,12 +48,17 @@ pub(crate) fn prepare_value(
 
 /// Sole increment rule: an explicit subscription override wins; otherwise only a
 /// numeric Present_Value inherits the object's current `COV_Increment`.
+///
+/// The subscription's override is a REAL on the wire; the object's own
+/// increment may be wider (a Large Analog Value's Double), so the result is an
+/// `f64`.
 pub(crate) fn effective_increment(
     object: &dyn BACnetObject,
     property: PropertyIdentifier,
     numeric: bool,
     explicit: Option<f32>,
-) -> Option<f32> {
+) -> Option<f64> {
+    let explicit = explicit.map(f64::from);
     if numeric && property == PropertyIdentifier::PRESENT_VALUE {
         explicit.or_else(|| object.cov_increment())
     } else {

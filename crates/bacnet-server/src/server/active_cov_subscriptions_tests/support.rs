@@ -161,7 +161,7 @@ pub(super) fn subscribe_cov_property_multiple(
 /// ReadPropertyMultiple specifications: object plus `(property, index)` rows.
 pub(super) type RpmSpecs = Vec<(ObjectIdentifier, Vec<(PropertyIdentifier, Option<u32>)>)>;
 
-fn rpm_request(specs: RpmSpecs) -> (ConfirmedServiceChoice, BytesMut) {
+pub(super) fn rpm_request(specs: RpmSpecs) -> (ConfirmedServiceChoice, BytesMut) {
     let mut request = BytesMut::new();
     ReadPropertyMultipleRequest {
         list_of_read_access_specs: specs

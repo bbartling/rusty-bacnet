@@ -52,7 +52,8 @@ pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>) {
 }
 
 /// Evaluate schedules for the live server, returning the COV fanout owed for
-/// the objects they wrote once the database guard is dropped.
+/// the objects they wrote, and any Command runs those writes started, once
+/// the database guard is dropped.
 pub(crate) async fn tick_schedules_committed(
     db: &Arc<RwLock<ObjectDatabase>>,
     cov_table: &RwLock<CovSubscriptionTable>,
@@ -60,12 +61,13 @@ pub(crate) async fn tick_schedules_committed(
     let mut db_w = db.write().await;
     let schedules = db_w.find_by_type(ObjectType::SCHEDULE);
     let commit = evaluate(&mut db_w, schedules);
-    commit.finish(&db_w, cov_table).await
+    commit.finish(&mut db_w, cov_table).await
 }
 
 /// Evaluate the Schedules among `written`, objects a write just committed to,
 /// under the guard that committed it; returns the COV fanout owed for the
-/// objects they wrote once that guard is dropped.
+/// objects they wrote, and any Command runs those writes started, once that
+/// guard is dropped.
 ///
 /// This is the pass [`tick_schedules_committed`] runs, limited to those
 /// Schedules, so the new contents take effect without waiting for the next

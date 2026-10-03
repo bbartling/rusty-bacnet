@@ -4,7 +4,7 @@ fn sample(v: PropertyValue) -> CovSample {
     CovSample::new(&v).unwrap()
 }
 fn reports(before: PropertyValue, after: PropertyValue, increment: Option<f32>) -> bool {
-    sample(after).reports(Some(&sample(before)), increment, true)
+    sample(after).reports(Some(&sample(before)), increment.map(f64::from), true)
 }
 #[test]
 fn cov_sample_exact_integer_thresholds_and_numeric_types() {

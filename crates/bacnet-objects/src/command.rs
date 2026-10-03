@@ -1,11 +1,16 @@
-//! Command object (type 7) per ASHRAE 135-2020 Clause 12.
+//! Command object (type 7) per ASHRAE 135-2020 Clause 12.10.
 //!
-//! The Command object triggers a set of actions when its present value
-//! is written. Each Action element is a typed [`BACnetActionList`].
+//! Writing Present_Value selects one of the Action lists, each a typed
+//! [`BACnetActionList`], and starts it. The object owns the bookkeeping:
+//! the range check, the busy interlock while a list runs, In_Process,
+//! All_Writes_Successful and each command's write-successful flag. The writes
+//! themselves are the bundled server's: it takes the queued [`CommandRun`]
+//! under the guard that committed the Present_Value write and makes each
+//! write once that guard is released.
 
 use bacnet_encoding::constructed::encode_action_list;
-use bacnet_types::constructed::BACnetActionList;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
+use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
@@ -16,7 +21,19 @@ use crate::traits::BACnetObject;
 
 mod metadata;
 
-/// BACnet Command object — triggers a set of actions on PV write.
+/// The list a Present_Value write started, for the server to run.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommandRun {
+    /// The Command object; its generation guards every report back.
+    pub source: ObjectIdentifier,
+    /// The generation the write started.
+    pub generation: u64,
+    /// The selected list's commands, in the order they're made.
+    pub commands: Vec<BACnetActionCommand>,
+}
+
+/// BACnet Command object: runs the action list Present_Value selects.
 pub struct CommandObject {
     oid: ObjectIdentifier,
     name: String,
@@ -25,8 +42,14 @@ pub struct CommandObject {
     in_process: bool,
     all_writes_successful: bool,
     action: Vec<BACnetActionList>,
+    action_text: Option<Vec<String>>,
     status_flags: StatusFlags,
     reliability: Reliability,
+    /// Bumped by every Present_Value write and Action change.
+    generation: u64,
+    /// The Action element (zero-based) whose commands are being made.
+    running: Option<usize>,
+    pending_run: Option<CommandRun>,
 }
 
 impl CommandObject {
@@ -41,8 +64,12 @@ impl CommandObject {
             in_process: false,
             all_writes_successful: true,
             action: Vec::new(),
+            action_text: None,
             status_flags: StatusFlags::empty(),
             reliability: Reliability::NO_FAULT_DETECTED,
+            generation: 0,
+            running: None,
+            pending_run: None,
         })
     }
 
@@ -51,7 +78,10 @@ impl CommandObject {
     ///
     /// Refused with PROPERTY / VALUE_OUT_OF_RANGE, leaving Action as it was,
     /// when a command can't be encoded: a priority outside 1..=16, or a value
-    /// with no encoding.
+    /// with no encoding. A present Action_Text follows the new size
+    /// (Clause 12.10.9), keeping its leading texts and adding empty ones. A
+    /// run in progress is abandoned: its remaining writes aren't made and
+    /// In_Process returns to FALSE.
     pub fn set_action(&mut self, action: Vec<BACnetActionList>) -> Result<(), Error> {
         let mut scratch = BytesMut::new();
         for list in &action {
@@ -59,7 +89,58 @@ impl CommandObject {
                 .map_err(|_| common::value_out_of_range_error())?;
             scratch.clear();
         }
+        if let Some(texts) = &mut self.action_text {
+            texts.resize(action.len(), String::new());
+        }
         self.action = action;
+        self.generation = self.generation.wrapping_add(1);
+        self.in_process = false;
+        self.running = None;
+        self.pending_run = None;
+        Ok(())
+    }
+
+    /// Serve Action_Text, one description per Action list (Clause 12.10.9).
+    ///
+    /// Refused with PROPERTY / VALUE_OUT_OF_RANGE, leaving the property as it
+    /// was, unless there's exactly one text per Action element, so set Action
+    /// first. The property is read-only on the network.
+    pub fn set_action_text(&mut self, texts: Vec<String>) -> Result<(), Error> {
+        if texts.len() != self.action.len() {
+            return Err(common::value_out_of_range_error());
+        }
+        self.action_text = Some(texts);
+        Ok(())
+    }
+
+    /// Start the list `selected` names; zero or an empty list completes at
+    /// once (Clauses 12.10.5 to 12.10.8).
+    fn select(&mut self, selected: u64) -> Result<(), Error> {
+        // Refusing a write while a list runs also stops a Command whose list
+        // writes its own Present_Value from starting over (Clause 12.10).
+        if self.in_process {
+            return Err(common::protocol_error(ErrorClass::OBJECT, ErrorCode::BUSY));
+        }
+        let index = match usize::try_from(selected) {
+            Ok(0) => None,
+            Ok(n) if n <= self.action.len() => Some(n - 1),
+            _ => return Err(common::value_out_of_range_error()),
+        };
+        self.present_value = selected;
+        self.generation = self.generation.wrapping_add(1);
+        let commands = index.map_or_else(Vec::new, |i| self.action[i].commands.clone());
+        if commands.is_empty() {
+            self.all_writes_successful = true;
+            return Ok(());
+        }
+        self.in_process = true;
+        self.all_writes_successful = false;
+        self.running = index;
+        self.pending_run = Some(CommandRun {
+            source: self.oid,
+            generation: self.generation,
+            commands,
+        });
         Ok(())
     }
 }
@@ -111,6 +192,17 @@ impl BACnetObject for CommandObject {
                     .collect::<Result<Vec<_>, Error>>()?;
                 common::read_array(lists, array_index)
             }
+            p if p == PropertyIdentifier::ACTION_TEXT => match &self.action_text {
+                Some(texts) => common::read_array(
+                    texts
+                        .iter()
+                        .cloned()
+                        .map(PropertyValue::CharacterString)
+                        .collect(),
+                    array_index,
+                ),
+                None => Err(common::unknown_property_error()),
+            },
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -118,7 +210,7 @@ impl BACnetObject for CommandObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
@@ -126,23 +218,16 @@ impl BACnetObject for CommandObject {
             return result;
         }
         match property {
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                if let PropertyValue::Unsigned(v) = value {
-                    self.present_value = v;
-                    // In a real system this would trigger action execution
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
-            p if p == PropertyIdentifier::ACTION => {
-                // ACTION is read-only from the network
-                Err(common::write_access_denied_error())
-            }
+            p if p == PropertyIdentifier::PRESENT_VALUE => match value {
+                PropertyValue::Unsigned(selected) => self.select(selected),
+                _ => Err(common::invalid_data_type_error()),
+            },
+            // Action and a present Action_Text are read-only from the network;
+            // unhandled_write_error answers both from the metadata.
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                _array_index,
+                array_index,
             )),
         }
     }
@@ -154,203 +239,58 @@ impl BACnetObject for CommandObject {
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
-}
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+    fn supports_subscribe_cov_property(&self) -> bool {
+        // Table 13-1 has no Command row, so SubscribeCOV stays refused. A
+        // property subscription follows Table 13-1a, which lets a client watch
+        // In_Process and All_Writes_Successful through a run.
+        true
+    }
+
+    fn take_command_run_internal(&mut self) -> Option<CommandRun> {
+        self.pending_run.take()
+    }
+
+    fn command_generation_internal(&self) -> Option<u64> {
+        Some(self.generation)
+    }
+
+    fn record_command_write_internal(
+        &mut self,
+        generation: u64,
+        command: usize,
+        success: bool,
+    ) -> bool {
+        if generation != self.generation || !self.in_process {
+            return false;
+        }
+        let Some(list) = self.running.and_then(|index| self.action.get_mut(index)) else {
+            return false;
+        };
+        let Some(made) = list.commands.get_mut(command) else {
+            return false;
+        };
+        made.write_successful = success;
+        // A failed command that quits on failure ends the list: the commands
+        // after it are never made and read as unsuccessful (Clause 12.10.8).
+        if !success && made.quit_on_failure {
+            for skipped in &mut list.commands[command + 1..] {
+                skipped.write_successful = false;
+            }
+        }
+        true
+    }
+
+    fn complete_command_run_internal(&mut self, generation: u64, all_succeeded: bool) -> bool {
+        if generation != self.generation || !self.in_process {
+            return false;
+        }
+        self.in_process = false;
+        self.all_writes_successful = all_succeeded;
+        self.running = None;
+        true
+    }
+}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use bacnet_types::constructed::BACnetActionCommand;
-    use bacnet_types::enums::{ErrorClass, ErrorCode};
-
-    fn assert_property_error<T: std::fmt::Debug>(result: Result<T, Error>, expected: ErrorCode) {
-        assert!(
-            matches!(result, Err(Error::Protocol { class, code })
-                if class == ErrorClass::PROPERTY.to_raw() as u32
-                    && code == expected.to_raw() as u32),
-            "expected {expected:?}, got {result:?}"
-        );
-    }
-
-    #[test]
-    fn command_create_and_read_defaults() {
-        let cmd = CommandObject::new(1, "CMD-1").unwrap();
-        assert_eq!(cmd.object_name(), "CMD-1");
-        assert_eq!(
-            cmd.read_property(PropertyIdentifier::PRESENT_VALUE, None)
-                .unwrap(),
-            PropertyValue::Unsigned(0)
-        );
-        assert_eq!(
-            cmd.read_property(PropertyIdentifier::IN_PROCESS, None)
-                .unwrap(),
-            PropertyValue::Boolean(false)
-        );
-        assert_eq!(
-            cmd.read_property(PropertyIdentifier::ALL_WRITES_SUCCESSFUL, None)
-                .unwrap(),
-            PropertyValue::Boolean(true)
-        );
-    }
-
-    #[test]
-    fn command_object_type() {
-        let cmd = CommandObject::new(1, "CMD-1").unwrap();
-        assert_eq!(
-            cmd.read_property(PropertyIdentifier::OBJECT_TYPE, None)
-                .unwrap(),
-            PropertyValue::Enumerated(ObjectType::COMMAND.to_raw())
-        );
-    }
-
-    #[test]
-    fn command_write_present_value() {
-        let mut cmd = CommandObject::new(1, "CMD-1").unwrap();
-        cmd.write_property(
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            PropertyValue::Unsigned(3),
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            cmd.read_property(PropertyIdentifier::PRESENT_VALUE, None)
-                .unwrap(),
-            PropertyValue::Unsigned(3)
-        );
-    }
-
-    #[test]
-    fn command_write_present_value_wrong_type() {
-        let mut cmd = CommandObject::new(1, "CMD-1").unwrap();
-        let result = cmd.write_property(
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            PropertyValue::Real(1.0),
-            None,
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn command_action_read_only() {
-        let mut cmd = CommandObject::new(1, "CMD-1").unwrap();
-        cmd.set_action(vec![BACnetActionList::default()]).unwrap();
-        // Whole or one element, Action has no write route.
-        for index in [None, Some(0), Some(1)] {
-            let value = PropertyValue::ApplicationData(vec![0x0E, 0x0F]);
-            assert_property_error(
-                cmd.write_property(PropertyIdentifier::ACTION, index, value, None),
-                ErrorCode::WRITE_ACCESS_DENIED,
-            );
-        }
-        assert_eq!(
-            cmd.read_property(PropertyIdentifier::ACTION, Some(0))
-                .unwrap(),
-            PropertyValue::Unsigned(1)
-        );
-    }
-
-    #[test]
-    fn command_read_action_empty() {
-        let cmd = CommandObject::new(1, "CMD-1").unwrap();
-        assert_eq!(
-            cmd.read_property(PropertyIdentifier::ACTION, None).unwrap(),
-            PropertyValue::List(vec![])
-        );
-    }
-
-    fn write_ao1(priority: Option<u8>) -> BACnetActionCommand {
-        BACnetActionCommand {
-            device_identifier: None,
-            object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap(),
-            property_identifier: PropertyIdentifier::PRESENT_VALUE,
-            property_array_index: None,
-            property_value: PropertyValue::Real(50.0),
-            priority,
-            post_delay: None,
-            quit_on_failure: false,
-            write_successful: true,
-        }
-    }
-
-    #[test]
-    fn command_read_action_serves_one_framed_action_list_per_index() {
-        let mut cmd = CommandObject::new(1, "CMD-1").unwrap();
-        let lists = vec![
-            BACnetActionList {
-                commands: vec![write_ao1(Some(8))],
-            },
-            BACnetActionList::default(),
-        ];
-        cmd.set_action(lists.clone()).unwrap();
-        let elements: Vec<PropertyValue> = lists
-            .iter()
-            .map(|list| {
-                let mut encoded = BytesMut::new();
-                encode_action_list(&mut encoded, list).unwrap();
-                PropertyValue::ApplicationData(encoded.to_vec())
-            })
-            .collect();
-        assert_eq!(
-            cmd.read_property(PropertyIdentifier::ACTION, None).unwrap(),
-            PropertyValue::List(elements.clone())
-        );
-        assert_eq!(
-            cmd.read_property(PropertyIdentifier::ACTION, Some(0))
-                .unwrap(),
-            PropertyValue::Unsigned(2)
-        );
-        for (index, element) in (1..).zip(&elements) {
-            assert_eq!(
-                &cmd.read_property(PropertyIdentifier::ACTION, Some(index))
-                    .unwrap(),
-                element
-            );
-        }
-        // The empty list is its [0] frame alone.
-        assert_eq!(
-            elements[1],
-            PropertyValue::ApplicationData(vec![0x0E, 0x0F])
-        );
-        for index in [3, u32::MAX] {
-            assert_property_error(
-                cmd.read_property(PropertyIdentifier::ACTION, Some(index)),
-                ErrorCode::INVALID_ARRAY_INDEX,
-            );
-        }
-    }
-
-    #[test]
-    fn command_set_action_refuses_a_priority_outside_one_to_sixteen() {
-        let mut cmd = CommandObject::new(1, "CMD-1").unwrap();
-        let kept = vec![BACnetActionList {
-            commands: vec![write_ao1(Some(16))],
-        }];
-        cmd.set_action(kept).unwrap();
-        let before = cmd.read_property(PropertyIdentifier::ACTION, None).unwrap();
-        for priority in [0, 17] {
-            let refused = vec![BACnetActionList {
-                commands: vec![write_ao1(Some(1)), write_ao1(Some(priority))],
-            }];
-            assert_property_error(cmd.set_action(refused), ErrorCode::VALUE_OUT_OF_RANGE);
-            assert_eq!(
-                cmd.read_property(PropertyIdentifier::ACTION, None).unwrap(),
-                before
-            );
-        }
-    }
-
-    #[test]
-    fn command_property_list() {
-        let cmd = CommandObject::new(1, "CMD-1").unwrap();
-        let list = cmd.property_list();
-        assert!(list.contains(&PropertyIdentifier::PRESENT_VALUE));
-        assert!(list.contains(&PropertyIdentifier::IN_PROCESS));
-        assert!(list.contains(&PropertyIdentifier::ALL_WRITES_SUCCESSFUL));
-        assert!(list.contains(&PropertyIdentifier::ACTION));
-    }
-}
+mod tests;

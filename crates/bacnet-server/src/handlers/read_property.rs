@@ -1,5 +1,6 @@
 use super::*;
 use crate::local_device::selected_device;
+use bacnet_types::constructed::ReadAccessSpecification;
 
 /// Handle a ReadProperty request against standalone object data.
 ///
@@ -15,43 +16,52 @@ pub fn handle_read_property(
 ) -> Result<(), Error> {
     let request = ReadPropertyRequest::decode(service_data)?;
     read_property_request_observed(db, None, &request, buf, |_, _, _| {})
+        .map_err(RpmFailure::unlimited)
 }
 
 /// ReadProperty evaluator over one decoded request. `view` carries executor-owned
-/// Device definitions and request-local COV lists; observations carry only execution
-/// outcomes, never the read value.
+/// Device definitions, request-local COV lists and the work limit a Group's
+/// Present_Value is charged to; observations carry only execution outcomes,
+/// never the read value. A read past the work limit fails with
+/// [`RpmFailure::Work`] and is not observed, as a ReadPropertyMultiple over
+/// its work budget is not.
 pub(crate) fn read_property_request_observed(
     db: &ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
     request: &ReadPropertyRequest,
     buf: &mut BytesMut,
     mut completed: impl FnMut(ObjectIdentifier, &ReadPropertyRequest, &Result<(), Error>),
-) -> Result<(), Error> {
+) -> Result<(), RpmFailure> {
     let lookup_oid = resolve_read_target(
         db,
         &request.object_identifier,
         view.and_then(|view| view.registered_port),
     );
-    let result = read_property_decoded(db, view, request, lookup_oid, buf);
+    let result = match read_property_decoded(db, view, request, lookup_oid, buf) {
+        Ok(()) => Ok(()),
+        Err(RpmFailure::Service(error)) => Err(error),
+        Err(failure) => return Err(failure),
+    };
     completed(lookup_oid, request, &result);
-    result
+    result.map_err(RpmFailure::Service)
 }
 
 /// Evaluate one property read with ReadProperty error precedence: unknown
 /// object, then non-array index using the effective property definition, then
 /// the executor view or raw object's reader, except that a Group's
-/// Present_Value is rebuilt from its members.
+/// Present_Value is rebuilt from its members within the view's work limit.
 pub(crate) fn read_property_value(
     db: &ObjectDatabase,
     view: Option<&DeviceReadContext<'_>>,
     lookup_oid: ObjectIdentifier,
     property: PropertyIdentifier,
     array_index: Option<u32>,
-) -> Result<PropertyValue, Error> {
-    let object = read_target_object(db, &lookup_oid).ok_or(Error::Protocol {
-        class: ErrorClass::OBJECT.to_raw() as u32,
-        code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-    })?;
+) -> Result<PropertyValue, RpmFailure> {
+    let object =
+        read_target_object(db, &lookup_oid).ok_or(RpmFailure::Service(Error::Protocol {
+            class: ErrorClass::OBJECT.to_raw() as u32,
+            code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+        }))?;
 
     let served = view.map(|view| view.object(object));
     let object: &dyn bacnet_objects::traits::BACnetObject =
@@ -63,10 +73,10 @@ pub(crate) fn read_property_value(
     // type-dependent identifiers, e.g. ALARM_VALUES), so the handler defers
     // to the trait query.
     if array_index.is_some() && !object.is_array_property(property) {
-        return Err(Error::Protocol {
+        return Err(RpmFailure::Service(Error::Protocol {
             class: ErrorClass::PROPERTY.to_raw() as u32,
             code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
-        });
+        }));
     }
 
     group_present_value::read_served_property(db, view, object, property, array_index)
@@ -78,7 +88,7 @@ fn read_property_decoded(
     request: &ReadPropertyRequest,
     lookup_oid: ObjectIdentifier,
     buf: &mut BytesMut,
-) -> Result<(), Error> {
+) -> Result<(), RpmFailure> {
     let value = read_property_value(
         db,
         view,
@@ -88,7 +98,7 @@ fn read_property_decoded(
     )?;
 
     let mut value_buf = BytesMut::new();
-    encode_property_value(&mut value_buf, &value)?;
+    encode_property_value(&mut value_buf, &value).map_err(RpmFailure::Service)?;
 
     let ack = ReadPropertyACK {
         object_identifier: lookup_oid,
@@ -154,20 +164,81 @@ fn either(a: (bool, bool), b: (bool, bool)) -> (bool, bool) {
     (a.0 || b.0, a.1 || b.1)
 }
 
-/// The selected Device's server-owned COV list when `(lookup_oid, property)`
-/// names one; any other read needs no COV table snapshot.
+/// The lists one specification may select from `device`: its references'
+/// lists when it names that Device or the Device wildcard, else none.
+fn device_spec_lists(spec: &ReadAccessSpecification, device: ObjectIdentifier) -> (bool, bool) {
+    if spec.object_identifier != device && !is_device_wildcard(&spec.object_identifier) {
+        return (false, false);
+    }
+    spec.list_of_property_references
+        .iter()
+        .map(|reference| live_cov_lists(reference.property_identifier))
+        .fold((false, false), either)
+}
+
+/// Whether `property` may select a Group's Present_Value, by name or, as
+/// [`live_cov_lists`] assumes for the Device, through any selector.
+fn may_select_present_value(property: PropertyIdentifier) -> bool {
+    matches!(
+        property,
+        PropertyIdentifier::PRESENT_VALUE
+            | PropertyIdentifier::ALL
+            | PropertyIdentifier::REQUIRED
+            | PropertyIdentifier::OPTIONAL
+    )
+}
+
+/// The lists the members of Group `group` may select from `device` (#1171).
+/// The Present_Value rebuild reads its member rows through the request's view,
+/// so they serve the same snapshot as the request's own rows. A list that
+/// doesn't decode selects nothing; its read fails without reading a member.
+fn group_member_lists(
+    db: &ObjectDatabase,
+    group: ObjectIdentifier,
+    device: ObjectIdentifier,
+) -> (bool, bool) {
+    if group.object_type() != ObjectType::GROUP {
+        return (false, false);
+    }
+    db.get(&group)
+        .and_then(|object| group_present_value::members(object).ok())
+        .map_or((false, false), |members| {
+            members
+                .iter()
+                .map(|member| device_spec_lists(member, device))
+                .fold((false, false), either)
+        })
+}
+
+/// The selected Device's server-owned COV lists that `(lookup_oid, property)`
+/// may read: the Device's own list by name, or the lists the members of a
+/// Group read when `property` is that Group's Present_Value. Any other read
+/// needs no COV table snapshot.
 pub(crate) fn active_cov_device(
     db: &ObjectDatabase,
     lookup_oid: ObjectIdentifier,
     property: PropertyIdentifier,
 ) -> Option<LiveCovSelection> {
-    let (active, multiple) = match property {
+    let direct = matches!(
+        property,
         PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS
-        | PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS => live_cov_lists(property),
-        _ => return None,
+            | PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
+    );
+    let group = property == PropertyIdentifier::PRESENT_VALUE
+        && lookup_oid.object_type() == ObjectType::GROUP;
+    if !direct && !group {
+        return None;
+    }
+    let device = selected_device(db)?;
+    let (active, multiple) = if direct {
+        if device != lookup_oid {
+            return None;
+        }
+        live_cov_lists(property)
+    } else {
+        group_member_lists(db, lookup_oid, device)
     };
-    let device = selected_device(db).filter(|device| *device == lookup_oid)?;
-    Some(LiveCovSelection {
+    (active || multiple).then_some(LiveCovSelection {
         device,
         active,
         multiple,
@@ -175,32 +246,42 @@ pub(crate) fn active_cov_device(
 }
 
 /// The selected Device's COV lists that any ReadPropertyMultiple reference to
-/// it may select, explicitly or through ALL, REQUIRED or OPTIONAL expansion.
-/// One snapshot then serves every such row.
+/// it may select, explicitly or through ALL, REQUIRED or OPTIONAL expansion,
+/// together with the lists the members of every Group whose Present_Value
+/// the request may read select. One snapshot then serves every such row.
 pub(crate) fn active_cov_device_for_rpm(
     db: &ObjectDatabase,
     request: &ReadPropertyMultipleRequest,
 ) -> Option<LiveCovSelection> {
-    let spec_lists = |spec: &bacnet_types::constructed::ReadAccessSpecification| {
+    let group_spec = |spec: &ReadAccessSpecification| {
+        spec.object_identifier.object_type() == ObjectType::GROUP
+            && spec
+                .list_of_property_references
+                .iter()
+                .any(|reference| may_select_present_value(reference.property_identifier))
+    };
+    let device_spec = |spec: &ReadAccessSpecification| {
         spec.list_of_property_references
             .iter()
-            .map(|reference| live_cov_lists(reference.property_identifier))
-            .fold((false, false), either)
+            .any(|reference| live_cov_lists(reference.property_identifier) != (false, false))
     };
     // Only a request that may select either property pays the Device scan.
     let mut specs = request
         .list_of_read_access_specs
         .iter()
-        .map(|spec| (spec, spec_lists(spec)))
-        .filter(|(_, (active, multiple))| *active || *multiple)
+        .filter(|spec| device_spec(spec) || group_spec(spec))
         .peekable();
     specs.peek()?;
     let device = selected_device(db)?;
     let (active, multiple) = specs
-        .filter(|(spec, _)| {
-            spec.object_identifier == device || is_device_wildcard(&spec.object_identifier)
+        .map(|spec| {
+            let members = if group_spec(spec) {
+                group_member_lists(db, spec.object_identifier, device)
+            } else {
+                (false, false)
+            };
+            either(device_spec_lists(spec, device), members)
         })
-        .map(|(_, lists)| lists)
         .fold((false, false), either);
     (active || multiple).then_some(LiveCovSelection {
         device,
@@ -329,7 +410,9 @@ pub fn handle_read_property_multiple(
                             object,
                             prop_id,
                             array_index,
-                        ) {
+                        )
+                        .map_err(RpmFailure::unlimited)
+                        {
                             Ok(value) => {
                                 let mut value_buf = BytesMut::new();
                                 match encode_property_value(&mut value_buf, &value) {
