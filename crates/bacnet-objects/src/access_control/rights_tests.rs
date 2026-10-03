@@ -292,11 +292,9 @@ fn access_rights_enable_defaults_true_and_follows_the_setter_and_writes() {
         .write_property(P::LOG_ENABLE, None, PropertyValue::Boolean(true), None)
         .unwrap();
     assert!(rights.enable());
-    for wrong in [
-        PropertyValue::Unsigned(0),
-        PropertyValue::Enumerated(0),
-        PropertyValue::Null,
-    ] {
+    // A NULL write is left out: Clause 15.9.2 makes it a no-op success on a
+    // property like this one, which the stack doesn't do yet (#1396).
+    for wrong in [PropertyValue::Unsigned(0), PropertyValue::Enumerated(0)] {
         assert_property_error(
             rights.write_property(P::LOG_ENABLE, None, wrong, None),
             ErrorCode::INVALID_DATA_TYPE,

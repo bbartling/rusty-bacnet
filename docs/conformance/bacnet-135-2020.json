@@ -3166,7 +3166,7 @@
   },
   {
    "id": "BACNET-12-ACCESS-RIGHTS-RULES",
-   "standard_anchor": "Clause 12.34, Table 12-39, Clauses 12.34.8 to 12.34.10.1; Clause 21",
+   "standard_anchor": "Clause 12.34, Table 12-39, Clauses 12.34.8 to 12.34.10.1; Clauses 12.1.5.1, 15.9.1.3 and 21",
    "priority": "P1",
    "summary": "Access Rights serves Enable and its Positive_Access_Rules and Negative_Access_Rules BACnetARRAYs of BACnetAccessRule, which the application sets and peers read and write.",
    "status": "supported-with-clause-evidence",
@@ -3224,7 +3224,7 @@
    "gaps": [
     "#1331: nothing evaluates the stored rules or Enable; the Clause 12.34.9.2 authorization check isn't modeled",
     "#1344: Python reads each rule as application_data octets, not the AccessRule mapping add_access_rights takes",
-    "Rules and Enable written over the network are lost when the server restarts (no issue)"
+    "#1392: rules and Enable written over the network are lost when the server restarts"
    ]
   },
   {

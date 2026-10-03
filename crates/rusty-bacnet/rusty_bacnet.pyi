@@ -3062,9 +3062,10 @@ class BACnetServer:
         wrong shape or type raises TypeError, an unknown or missing key or a
         device that isn't a Device raises ValueError, and a location naming
         anything but an Access Point or Access Zone raises BacnetProtocolError
-        with VALUE_OUT_OF_RANGE (more than 1024 rules, with
-        NO_SPACE_TO_WRITE_PROPERTY); nothing is registered after any of them.
-        The server stores and serves the rules but doesn't evaluate them.
+        with VALUE_OUT_OF_RANGE, and so does a list of more than 1024 rules
+        (NO_SPACE_TO_WRITE_PROPERTY). Nothing is registered after any of
+        them. The server stores and serves the rules but doesn't evaluate
+        them.
         """
         ...
     def add_access_user(self, instance: int, name: str) -> None: ...
