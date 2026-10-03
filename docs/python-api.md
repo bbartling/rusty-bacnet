@@ -1648,7 +1648,12 @@ writes in that file and serves it again after a restart; without it the list
 lives in memory only. The file is replaced whole on each list write, and the
 save runs on a thread of its own while the server goes on answering other
 requests. A write whose list cannot be saved is refused with DEVICE /
-OPERATIONAL_PROBLEM, and the class keeps its old list.
+OPERATIONAL_PROBLEM, and the class keeps its old list. `storage_path` takes a
+`str` (a `pathlib.Path` raises `TypeError`, as for the forwarder). Give each
+class its own file: the file records which class it belongs to, so two
+classes sharing a path fail to register after a restart, and a file this
+backend did not write, or a corrupt one, makes `add_notification_class` raise
+`BacnetError`.
 
 The Notification Forwarder sends each event notification the server
 receives, and each one its own objects address to its Device, on to the

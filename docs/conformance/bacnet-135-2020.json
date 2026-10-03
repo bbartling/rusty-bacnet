@@ -3587,6 +3587,7 @@
     "crates/bacnet-objects/src/durable/tests.rs::a_directory_sync_follows_a_rename",
     "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_release_from_another_request_leaves_the_staged_write_alone",
     "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_slow_save_keeps_its_staged_write_for_a_lifetime_after_it_finishes",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::an_operation_task_call_drops_a_forgotten_staged_write_on_the_store_clock",
     "crates/bacnet-objects/src/durable/tests.rs::a_staged_lifetime_counts_from_the_end_of_the_save",
     "crates/bacnet-objects/src/durable/tests.rs::a_ticket_recognizes_only_its_own_wait",
     "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::a_write_property_multiple_stopped_before_its_list_write_puts_the_served_list_back",
@@ -3985,7 +3986,8 @@
    "code_anchors": [
     "crates/bacnet-objects/src/notification_class/persistence.rs::NotificationClassPersistence",
     "crates/bacnet-objects/src/notification_class/persistence.rs::FileNotificationClassPersistence",
-    "crates/bacnet-objects/src/notification_class/saving.rs::with_persistence",
+    "crates/bacnet-objects/src/notification_class/saving.rs::NotificationClass::with_persistence",
+    "crates/bacnet-objects/src/durable/staged.rs::StagedSaves::expire",
     "crates/bacnet-objects/src/durable/staged.rs::StagedSaves",
     "crates/bacnet-objects/src/durable/file.rs::ObjectFile",
     "crates/bacnet-server/src/server/durable_writes.rs::may_save",
@@ -4004,6 +4006,8 @@
     "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_write_nobody_staged_supersedes_a_staged_one",
     "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_forgotten_staged_write_is_dropped_by_the_next_write_that_stages",
     "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::staging_skips_writes_the_class_does_not_save_or_will_refuse",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::an_operation_task_call_drops_a_forgotten_staged_write_once_its_lifetime_is_over",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_staged_write_whose_request_vanished_is_put_back_within_its_lifetime_and_a_tick",
     "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_write_property_saves_off_the_lock_and_survives_a_rebuild",
     "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_write_property_multiple_saves_off_the_lock_and_survives_a_rebuild",
     "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::an_add_list_element_saves_off_the_lock_and_survives_a_rebuild",
@@ -4024,7 +4028,8 @@
     "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_staged_write_whose_save_fails_is_refused_and_the_old_list_stays",
     "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_list_that_cannot_be_saved_is_refused_on_every_path_and_the_old_list_stays",
     "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRestartTests::test_a_list_that_cannot_be_saved_is_refused_and_the_old_list_stays",
-    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_an_empty_storage_path_is_refused"
+    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_an_empty_storage_path_is_refused",
+    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_storage_path_is_a_str_naming_a_file_this_backend_wrote"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -4034,7 +4039,7 @@
    "notes": [
     "Destinations from `add_destination` are never saved and apply at each start until a write sets the list; after that the saved list wins, even when empty, and `add_destination` only checks.",
     "The server stages list writes from WriteProperty, WritePropertyMultiple, AddListElement, RemoveListElement and `write_local`, saving with the database guard dropped; WritePropertyMultiple under a mutation authorizer saves in place.",
-    "A list that cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM and the old list stays. A staged list no write took is replaced in storage by the served state at once.",
+    "A list that cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM. Storage goes back to the served list at once when a staged write is released unmade, or within 10 s and a tick when its request vanished.",
     "`FileNotificationClassPersistence` writes its own `RBNNCL01` format, a sibling of the forwarder's `RBNFWD01`, and refuses a file past 64 KiB or 32 destinations, or saved for another object.",
     "A class built with `NotificationClass::new`, and one added from Python without `storage_path`, keeps its Recipient_List in memory only."
    ],

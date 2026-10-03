@@ -12,11 +12,14 @@
 //!
 //! A staged write its request releases without making is dropped, and the
 //! class at once queues a save of the list it serves, so storage goes back to
-//! that list. Nothing but a write changes the list, so the class has no saves
-//! of its own between writes: a staged write whose request vanished without
-//! releasing it is dropped, and storage put back, by the next write that
-//! stages once
-//! [`STAGED_WRITE_LIFETIME`](crate::durable::STAGED_WRITE_LIFETIME) is over.
+//! that list. A staged write whose request vanished without releasing it, as
+//! when `stop()` aborts a request or an application drops a local write's
+//! future, is dropped the same way once
+//! [`STAGED_WRITE_LIFETIME`](crate::durable::STAGED_WRITE_LIFETIME) has
+//! passed since its save finished: by the next write that stages, or by the
+//! server's once-a-second operation task, which calls
+//! `advance_monotonic_time_internal`. The class saves nothing else between
+//! writes.
 //!
 //! A written list wins over the destinations the application configures:
 //! once a write has set the list and it was saved, a rebuilt class serves the
@@ -25,6 +28,7 @@
 //! never saved.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use bacnet_types::constructed::BACnetDestination;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
@@ -142,6 +146,13 @@ impl NotificationClass {
         }
         self.install(next);
         Ok(())
+    }
+
+    /// From the server's operation task at monotonic `now`: drop a staged
+    /// write whose request is gone and queue the save of the served list
+    /// (see the module docs). The save runs on the writer thread.
+    pub(super) fn expire_staged_write(&mut self, now: Duration) {
+        self.with_storage(|storage| storage.expire(now));
     }
 
     /// Run `f` on storage; then, if `f` dropped a staged write, queue the

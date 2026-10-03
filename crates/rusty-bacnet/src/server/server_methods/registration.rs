@@ -319,7 +319,9 @@ impl BACnetServer {
     /// With `storage_path`, a Recipient_List a client writes is kept in that
     /// file and restored when the server is built again. A write whose list
     /// cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM, and the
-    /// old list stays. Without it the list lives in memory only.
+    /// old list stays. Without it the list lives in memory only. Give each
+    /// class its own file: one that holds another object's list, or that
+    /// this backend did not write, raises BacnetError here.
     #[pyo3(signature = (instance, name, notification_class=0, storage_path=None))]
     fn add_notification_class(
         &self,

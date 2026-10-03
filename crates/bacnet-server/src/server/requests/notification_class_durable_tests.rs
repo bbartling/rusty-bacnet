@@ -533,3 +533,81 @@ async fn a_paused_clock_stands_still_while_a_class_save_runs() {
     assert!(!timer.is_finished());
     timer.abort();
 }
+
+/// How long a staged write waits for its request once its save has run, in
+/// a build of bacnet-objects outside its own tests.
+const STAGED_WRITE_LIFETIME: Duration = Duration::from_secs(10);
+/// The operation task's period.
+const TICK: Duration = Duration::from_secs(1);
+
+fn snapshot(list: &[BACnetDestination]) -> NotificationClassSnapshot {
+    NotificationClassSnapshot {
+        recipient_list: Some(list.to_vec()),
+    }
+}
+
+/// Whether storage comes to hold `expected` within [`WAIT`] of real time.
+/// The wait runs on the blocking pool, so a paused clock stands still.
+async fn comes_to_hold(storage: &Arc<ClassStorage>, expected: NotificationClassSnapshot) -> bool {
+    let storage = Arc::clone(storage);
+    tokio::task::spawn_blocking(move || {
+        let deadline = std::time::Instant::now() + WAIT;
+        while std::time::Instant::now() < deadline {
+            if storage.load_saved().as_ref() == Some(&expected) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_staged_write_whose_request_vanished_is_put_back_within_its_lifetime_and_a_tick() {
+    let storage = Arc::new(ClassStorage::default());
+    let (server, nc) = local_server(&storage).await;
+    let served = [destination(1)];
+    write_local(&server, nc, &served).await.unwrap();
+    let (started, go) = storage.hold();
+    let writing = tokio::spawn({
+        let server = Arc::clone(&server);
+        async move { write_local(&server, nc, &[destination(2)]).await }
+    });
+    tokio::task::spawn_blocking(move || started.recv_timeout(WAIT))
+        .await
+        .unwrap()
+        .expect("the save started");
+    // The request goes while its save is held, as when stop() aborts it or
+    // an application drops the future. Its staged write stays behind.
+    writing.abort();
+    assert!(writing.await.unwrap_err().is_cancelled());
+    // The save lands, so storage holds a list the class never served. The
+    // paused clock stands still until the save is done: the request's wait
+    // on the blocking pool outlives the request. Dropping `go` lets this
+    // save, and every later one, through.
+    drop(go);
+    let unserved = snapshot(&[destination(2)]);
+    assert!(comes_to_hold(&storage, unserved.clone()).await);
+    let start = tokio::time::Instant::now();
+    // Within the lifetime, storage keeps it.
+    tokio::time::sleep(STAGED_WRITE_LIFETIME - TICK).await;
+    assert_eq!(storage.load_saved(), Some(unserved));
+    // By a lifetime and a tick, the operation task has dropped the staged
+    // write and queued a save of the served list.
+    tokio::time::sleep_until(start + STAGED_WRITE_LIFETIME + TICK + Duration::from_millis(500))
+        .await;
+    assert!(
+        comes_to_hold(&storage, snapshot(&served)).await,
+        "storage kept a list the class never served"
+    );
+    let db = server.database().read().await;
+    let class = db.get(&nc).unwrap();
+    assert_eq!(
+        class.read_property(RECIPIENT_LIST, None).unwrap(),
+        framed(&served)
+    );
+    drop(db);
+    stop(server).await;
+}

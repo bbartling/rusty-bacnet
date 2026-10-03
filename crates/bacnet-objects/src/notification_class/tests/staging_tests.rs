@@ -10,7 +10,7 @@ use crate::durable::{DurableWrites, SaveWait, StageStep, STAGED_WRITE_LIFETIME};
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn staged(step: StageStep) -> SaveWait {
     match step {
@@ -180,15 +180,26 @@ fn a_forgotten_staged_write_is_dropped_by_the_next_write_that_stages() {
     let mut nc = persistent(&storage);
     let served = [make_dest_device(7)];
     write(&mut nc, &served).unwrap();
+    // The forgotten write's save ends after `before` and before `after`.
+    let before = Instant::now();
     let _forgotten = stage_saved(&mut nc, &[make_dest_device(9)]);
-    let list = [make_dest_device(8)];
-    let waiting = busy(nc.stage_write(P::RECIPIENT_LIST, None, &framed(&list)));
-    // Its request never comes back. A class has no operation task, so once
-    // the staged write's lifetime is over the next write that stages drops
-    // it, and storage is put back to the served list before the new save.
-    std::thread::sleep(STAGED_WRITE_LIFETIME + Duration::from_millis(100));
-    let wait = staged(nc.stage_write(P::RECIPIENT_LIST, None, &framed(&list)));
+    let after = Instant::now();
+    // A stage judged within the lifetime finds the class busy. Its request
+    // never comes back, so a stage judged once the lifetime is over drops
+    // it; these are the checks the next write's stage makes, at fixed
+    // instants.
+    let class_storage = nc.storage.as_mut().unwrap();
+    let waiting = class_storage
+        .busy_at(before)
+        .expect("the staged write holds the class");
+    assert!(class_storage
+        .busy_at(after + STAGED_WRITE_LIFETIME)
+        .is_none());
     assert!(waiting.is_ready());
+    // The next write's stage puts storage back to the served list before
+    // its own save.
+    let list = [make_dest_device(8)];
+    let wait = staged(nc.stage_write(P::RECIPIENT_LIST, None, &framed(&list)));
     block_on(&wait);
     write(&mut nc, &list).unwrap();
     nc.release_staged_write(&wait);
@@ -197,6 +208,39 @@ fn a_forgotten_staged_write_is_dropped_by_the_next_write_that_stages() {
     assert_eq!(storage.saved(), Some(list.to_vec()));
     // The first write, the forgotten one, the correction and the new one.
     assert_eq!(storage.saves(), 4);
+}
+
+#[test]
+fn an_operation_task_call_drops_a_forgotten_staged_write_once_its_lifetime_is_over() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nc = persistent(&storage);
+    let served = [make_dest_device(7)];
+    write(&mut nc, &served).unwrap();
+    // A save still running never expires, however late the call.
+    let held = storage.hold();
+    let wait = staged(nc.stage_write(P::RECIPIENT_LIST, None, &framed(&[make_dest_device(9)])));
+    held.started.recv_timeout(WAIT).unwrap();
+    assert!(!nc.advance_monotonic_time_internal(Duration::ZERO));
+    nc.advance_monotonic_time_internal(Duration::from_secs(3600));
+    drop(held.go);
+    block_on(&wait);
+    // Its request never comes back. The first call that finds the save
+    // finished starts the count on the operation task's clock; storage keeps
+    // the list nobody served until a lifetime has passed.
+    let start = Duration::from_secs(3601);
+    nc.advance_monotonic_time_internal(start);
+    nc.advance_monotonic_time_internal(start + STAGED_WRITE_LIFETIME - Duration::from_millis(1));
+    nc.wait_for_saves();
+    assert_eq!(storage.saved(), Some(vec![make_dest_device(9)]));
+    // The call a lifetime later drops it and puts storage back.
+    nc.advance_monotonic_time_internal(start + STAGED_WRITE_LIFETIME);
+    nc.wait_for_saves();
+    assert_eq!(storage.saved(), Some(served.to_vec()));
+    assert_eq!(nc.recipient_list(), served);
+    // A release that comes after all changes nothing more.
+    nc.release_staged_write(&wait);
+    nc.wait_for_saves();
+    assert_eq!(storage.saves(), 3);
 }
 
 #[test]

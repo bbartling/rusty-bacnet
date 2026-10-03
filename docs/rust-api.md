@@ -2058,11 +2058,15 @@ saved is refused with DEVICE / OPERATIONAL_PROBLEM, and the class keeps the
 old one. A WritePropertyMultiple under a `mutation_authorizer`, and
 application code writing through the database, save in place. A staged write
 its request releases without making (an earlier WritePropertyMultiple attempt
-failed, say) is dropped, and the class saves the list it serves at once. The
-class has no operation task, so a staged write whose request vanished without
-releasing it is dropped by the next write that stages, once 10 s have passed
-since its save finished. `wait_for_saves()` blocks until queued saves have
-run, and dropping the class waits for them too.
+failed, say) is dropped, and the class saves the list it serves at once. A
+staged write whose request vanished without releasing it (`stop()` aborted
+the request, or an application dropped a `write_local` future) is dropped the
+same way once 10 s have passed since its save finished: by the next write
+that stages, or within a further second by the server's once-a-second
+operation task, which measures the time on its own monotonic clock. The
+forwarder's operation task applies the same bound. `wait_for_saves()` blocks until queued
+saves have run, and dropping the class waits for them too. Like the forwarder,
+a `NotificationClass` is not `UnwindSafe` or `RefUnwindSafe`.
 
 A written list wins over `add_destination`, as on the forwarder:
 `NotificationClassSnapshot::recipient_list` stays `None` until a write sets

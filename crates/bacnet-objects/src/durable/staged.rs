@@ -5,15 +5,26 @@
 //! for a request keeps the state it leaves aside while its save runs, the
 //! write then takes that state or the save's error, and a staged write its
 //! request never makes is dropped and corrected.
+//!
+//! A request can vanish between its stage and its write: the server's
+//! `stop()` aborts requests, and an application can drop a local write's
+//! future. Its staged write then lingers, and storage may hold a state the
+//! object never served. Two checks drop it once
+//! [`STAGED_WRITE_LIFETIME`] has passed since
+//! its save finished: the next stage of a write to the object
+//! ([`busy`](StagedSaves::busy)), and the object's call from the server's
+//! once-a-second operation task ([`expire`](StagedSaves::expire)), which
+//! measures the lifetime on that task's monotonic clock. Either way the
+//! object then saves the state it serves.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
-use super::{Event, SaveTicket, SaveWait, SaveWriter, StageStep};
+use super::{Event, SaveTicket, SaveWait, SaveWriter, StageStep, STAGED_WRITE_LIFETIME};
 
 /// A write staged for a request: the state `N` it leaves, saving on the
 /// writer.
@@ -28,6 +39,9 @@ struct StagedWrite<N> {
     /// Set when the staged write is taken or dropped, for a request that
     /// found the object busy.
     released: Arc<Event>,
+    /// The operation task's monotonic time when it first found the save
+    /// finished; [`StagedSaves::expire`] counts the lifetime from it.
+    finished_seen_at: Option<Duration>,
 }
 
 /// One object's save writer, saving snapshots `S`, and the write staged on
@@ -57,7 +71,7 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
 
     /// The wait for a staged write that still holds the object: one whose
     /// save is running, or finished within
-    /// [`STAGED_WRITE_LIFETIME`](super::STAGED_WRITE_LIFETIME). An older one
+    /// [`STAGED_WRITE_LIFETIME`]. An older one
     /// is dropped.
     pub(crate) fn busy(&mut self) -> Option<SaveWait> {
         self.busy_at(Instant::now())
@@ -93,8 +107,32 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
             next,
             ticket,
             released: Arc::default(),
+            finished_seen_at: None,
         });
         StageStep::Staged(wait)
+    }
+
+    /// From the object's operation-task call at monotonic `now`: drop a
+    /// staged write whose request is gone. The first call that finds its
+    /// save finished starts the count, and a call
+    /// [`STAGED_WRITE_LIFETIME`] or more after that drops it, so on the
+    /// server's once-a-second task a forgotten write goes within the lifetime
+    /// and one tick of its save. A save still running never expires. A clock
+    /// that moved back, such as a newly bound one, starts the count again.
+    pub(crate) fn expire(&mut self, now: Duration) {
+        let Some(staged) = self.staged.as_mut() else {
+            return;
+        };
+        if !staged.ticket.is_done() {
+            return;
+        }
+        let seen = match staged.finished_seen_at {
+            Some(seen) if seen <= now => seen,
+            _ => *staged.finished_seen_at.insert(now),
+        };
+        if now - seen >= STAGED_WRITE_LIFETIME {
+            self.drop_staged();
+        }
     }
 
     /// Take the staged state for a write of `value` to `property` made at

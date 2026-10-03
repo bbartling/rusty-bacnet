@@ -191,6 +191,9 @@ impl Storage {
         if lapsed {
             self.resave_now = true;
         }
+        // A staged write whose request is gone lets go here, on the store's
+        // clock or the wall clock, whichever runs out first.
+        self.saves.expire(now);
         if self.busy().is_some() {
             return;
         }

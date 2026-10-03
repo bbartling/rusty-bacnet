@@ -85,6 +85,17 @@ class NotificationClassRegistrationTests(unittest.TestCase):
             server.add_notification_class(1, "Empty path", storage_path="")
         self.assertEqual(server._pending_registration_count(), 0)
 
+    def test_storage_path_is_a_str_naming_a_file_this_backend_wrote(self) -> None:
+        server = BACnetServer(9875)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "class-1"
+            with self.assertRaises(TypeError):
+                server.add_notification_class(1, "Path object", storage_path=path)
+            path.write_bytes(b"not a notification class file")
+            with self.assertRaisesRegex(BacnetError, "has no valid header"):
+                server.add_notification_class(1, "Corrupt file", storage_path=str(path))
+        self.assertEqual(server._pending_registration_count(), 0)
+
 
 class NotificationClassRestartTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -142,6 +153,11 @@ class NotificationClassRestartTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await self.read(2), [])
         finally:
             await server.stop()
+
+        # Class 1's file names class 1, so another class can't share it.
+        other = BACnetServer(9876)
+        with self.assertRaisesRegex(BacnetError, "belongs to another object"):
+            other.add_notification_class(3, "Shares a path", 3, str(self.state / "class-1"))
 
     async def test_a_list_that_cannot_be_saved_is_refused_and_the_old_list_stays(self) -> None:
         server = await self.start()

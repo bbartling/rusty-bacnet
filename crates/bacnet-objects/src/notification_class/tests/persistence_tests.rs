@@ -268,6 +268,13 @@ fn file_persistence_round_trips_and_refuses_another_objects_file() {
     .unwrap();
     let refusal = storage.load(class).unwrap_err().to_string();
     assert!(refusal.contains("has no valid header"), "{refusal}");
+    // And the other way round: a forwarder backend refuses a class's file.
+    storage.save(class, &snapshot).unwrap();
+    let refusal =
+        crate::notification_forwarder::NotificationForwarderPersistence::load(&forwarder, class)
+            .unwrap_err()
+            .to_string();
+    assert!(refusal.contains("has no valid header"), "{refusal}");
 
     assert!(FileNotificationClassPersistence::new("").is_err());
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
