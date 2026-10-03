@@ -80,3 +80,13 @@ def gaps(row: dict) -> list[str]:
     if not isinstance(value, list):
         raise TypeError(f"{row.get('id')}: gaps must be an array, not {value!r}")
     return value
+
+
+def notes_text(row: dict) -> str:
+    """A row's notes as one text, its entries joined with single spaces, the
+    way the generated pages print them. Notes are always an array (#1176):
+    one topic per entry, so PRs that add different entries merge cleanly."""
+    value = row["notes"]
+    if not isinstance(value, list) or not all(isinstance(entry, str) for entry in value):
+        raise TypeError(f"{row.get('id')}: notes must be an array of strings, not {value!r}")
+    return " ".join(value)
