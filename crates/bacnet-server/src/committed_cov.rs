@@ -7,13 +7,14 @@
 //! A Schedule writing a Command object's Present_Value also leaves a Command
 //! run to start once the guard is dropped (#1150).
 
+use crate::command_lists::TakenRuns;
 use crate::cov::CovSubscriptionTable;
 use crate::life_safety_cov::{is_life_safety_object, LifeSafetyCovChange, LifeSafetyCovSnapshots};
-use bacnet_objects::command::CommandRun;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
 use std::collections::HashSet;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Objects one background pass changed, collected under its database guard.
@@ -60,24 +61,29 @@ impl BackgroundCommit {
         }
     }
 
-    /// Take the Command runs the pass's writes queued, under its guard. The
-    /// caller owns them (#1178).
-    pub(crate) fn take_command_runs(&self, db: &mut ObjectDatabase) -> Vec<CommandRun> {
-        crate::command_lists::take_runs(db, &self.changed)
+    /// Take the Command runs the pass's writes queued, under its guard `db` on
+    /// `database`. The caller owns them (#1178).
+    pub(crate) fn take_command_runs(
+        &self,
+        database: &Arc<RwLock<ObjectDatabase>>,
+        db: &mut ObjectDatabase,
+    ) -> TakenRuns {
+        TakenRuns::take(database, db, &self.changed)
     }
 
-    /// Finish under the same guard: record timestamped COV-multiple history at
-    /// commit time, take the Command runs the pass queued, then split the
-    /// fanout owed once the guard is dropped.
+    /// Finish under the same guard, `db` on `database`: record timestamped
+    /// COV-multiple history at commit time, take the Command runs the pass
+    /// queued, then split the fanout owed once the guard is dropped.
     pub(crate) async fn finish(
         self,
+        database: &Arc<RwLock<ObjectDatabase>>,
         db: &mut ObjectDatabase,
         cov_table: &RwLock<CovSubscriptionTable>,
     ) -> CommittedCov {
         if self.changed.is_empty() {
             return CommittedCov::default();
         }
-        let command_runs = self.take_command_runs(db);
+        let command_runs = self.take_command_runs(database, db);
         let (life_safety, coarse): (Vec<_>, Vec<_>) = self
             .changed
             .into_iter()
@@ -107,10 +113,10 @@ impl BackgroundCommit {
 pub(crate) struct CommittedCov {
     pub(crate) coarse: Vec<ObjectIdentifier>,
     pub(crate) life_safety: Vec<LifeSafetyCovChange>,
-    /// Runs the pass's Present_Value writes queued on Command objects. A pass
-    /// that can write one (the Schedule's) must start them, or the Command
-    /// stays busy.
-    pub(crate) command_runs: Vec<CommandRun>,
+    /// Runs the pass's Present_Value writes queued on Command and Channel
+    /// objects. A pass that can write one (the Schedule's) starts them; any
+    /// left unstarted end unsuccessful when this is dropped.
+    pub(crate) command_runs: TakenRuns,
 }
 
 impl CommittedCov {
@@ -124,7 +130,7 @@ impl CommittedCov {
         self,
         coarse: &mut Vec<ObjectIdentifier>,
         life_safety: &mut Vec<LifeSafetyCovChange>,
-        command_runs: &mut Vec<CommandRun>,
+        command_runs: &mut TakenRuns,
     ) {
         for oid in self.coarse {
             if !coarse.contains(&oid) {

@@ -237,6 +237,44 @@ async fn the_dcc_timer_reenabling_communication_sends_at_once() {
     h.server.stop().await.unwrap();
 }
 
+/// A confirmed report that DISABLE_INITIATION ends at its first retry (#1327)
+/// returns its history to the queue with no hold-off: once communication is
+/// enabled again the overdue change goes out at once, its time kept.
+#[tokio::test(start_paused = true)]
+async fn history_of_a_report_dcc_ends_at_a_retry_goes_out_once_enabled() {
+    use bacnet_types::enums::EnableDisable;
+    let mut h = Harness::start(permissive_dcc()).await;
+    h.subscribe_with_delay(true, av1_timed(), DELAY).await;
+    h.notification().await;
+    h.ack().await;
+    h.settle().await;
+    h.set_clock(19);
+    let changed = TokioInstant::now();
+    h.write_local(1.0).await;
+    h.notification().await;
+    let (invoke_id, _) = h.take_confirmed();
+    h.dcc(EnableDisable::DISABLE_INITIATION, None).await;
+    h.workers_idle().await;
+    let ended = changed.elapsed();
+    assert!(
+        (Duration::from_millis(2_900)..Duration::from_millis(3_050)).contains(&ended),
+        "lease freed {ended:?} after the report"
+    );
+    // The deadline passes while initiation is disabled; nothing goes out,
+    // not even a retry of the withdrawn report.
+    tokio::time::sleep_until(changed + Duration::from_secs(u64::from(DELAY) + 2)).await;
+    h.no_notification().await;
+    assert!(!h.frames.lock().unwrap().iter().any(
+        |apdu| matches!(apdu, Apdu::ConfirmedRequest(request) if request.invoke_id == invoke_id)
+    ));
+    let enabled = TokioInstant::now();
+    h.dcc(EnableDisable::ENABLE, None).await;
+    let report = h.notification().await;
+    promptly(enabled, "after ENABLE");
+    assert_eq!(pv_rows(&report), vec![(real(1.0), Some(time(19)))]);
+    h.server.stop().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_report_outstanding_at_the_deadline_leaves_the_follow_up_to_its_ack() {
     let mut h = Harness::start(ServerConfig {

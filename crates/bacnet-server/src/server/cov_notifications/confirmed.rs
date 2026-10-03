@@ -146,7 +146,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .fetch_add(buf.len() as u64, Ordering::Relaxed);
 
         let id = operation.invoke_id();
+        let (counted, buf_len) = (Arc::clone(counters), buf.len() as u64);
         let network = Arc::clone(ctx.network);
+        let comm_state = Arc::clone(ctx.comm_state);
         let cov_table = Arc::clone(ctx.cov_table);
         let apdu_timeout = Duration::from_millis(ctx.config.cov_retry_timeout_ms);
         let apdu_retries = DEFAULT_APDU_RETRIES;
@@ -162,12 +164,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 claim,
                 ..
             } = report;
-            let delivery = run_notification_worker(
+            // Whether an attempt got past the DCC check, so went to the link.
+            let attempted = std::sync::atomic::AtomicBool::new(false);
+            let delivery = run_notification_under_dcc(
                 operation,
                 result_rx,
                 apdu_timeout,
                 apdu_retries,
+                &comm_state,
                 |attempt| {
+                    attempted.store(true, Ordering::Relaxed);
                     let network = Arc::clone(&network);
                     let buf = buf.clone();
                     let route = route.clone();
@@ -196,7 +202,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             };
             let revisit = match result {
-                NotificationWorkerResult::Ack => {
+                Ok(NotificationWorkerResult::Ack) => {
                     debug!(invoke_id = id, "{label} acknowledged");
                     let mut table = cov_table.write().await;
                     if let Some(claim) = claim {
@@ -221,8 +227,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         None => completed,
                     }
                 }
-                NotificationWorkerResult::Error(_) | NotificationWorkerResult::Exhausted => {
-                    if matches!(result, NotificationWorkerResult::Error(_)) {
+                Ok(NotificationWorkerResult::Error(_) | NotificationWorkerResult::Exhausted) => {
+                    if matches!(result, Ok(NotificationWorkerResult::Error(_))) {
                         warn!(invoke_id = id, "{label} rejected by subscriber");
                     } else {
                         warn!(
@@ -241,7 +247,35 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                     Vec::new()
                 }
-                NotificationWorkerResult::Closed => {
+                Ok(NotificationWorkerResult::Closed) => {
+                    drop(claim);
+                    drop(flight);
+                    Vec::new()
+                }
+                // DCC ended the report at an attempt. The subscriber did not
+                // fail, so there is no hold-off: the report is owed as one DCC
+                // held back before its first send. Its history returns to the
+                // queue before the mark clears, the backstop sends it once
+                // initiation is enabled again, and the next fanout reports
+                // untimestamped values still away from their baselines. A
+                // change the report began sending value by value stays in
+                // delivery (#1163), as after a report whose sends all failed.
+                Err(InitiationRestricted) => {
+                    debug!(
+                        invoke_id = id,
+                        "{label} withdrawn: DCC restricts initiation"
+                    );
+                    if !attempted.load(Ordering::Relaxed) {
+                        // DCC took effect after the fanout counted the report
+                        // but before its first attempt: nothing went out.
+                        counted.notifications_sent.fetch_sub(1, Ordering::Relaxed);
+                        counted
+                            .notifications_confirmed
+                            .fetch_sub(1, Ordering::Relaxed);
+                        counted
+                            .notification_bytes_sent
+                            .fetch_sub(buf_len, Ordering::Relaxed);
+                    }
                     drop(claim);
                     drop(flight);
                     Vec::new()

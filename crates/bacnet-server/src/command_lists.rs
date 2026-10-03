@@ -7,7 +7,10 @@
 //! leaves a [`CommandRun`] on the object (#1150, #1151). Whatever commits that
 //! write takes the run under the same guard and owns it from then on: it has
 //! to finish the run, or the object stays busy and every later Present_Value
-//! write is refused BUSY (#1178). Each owner finishes it in the way it can:
+//! write is refused BUSY (#1178). The run is taken into a [`TakenRuns`], which
+//! ends it if dropped before it reaches its owner (#1324), so a writer's
+//! future cancelled between its commit and that hand-over leaves nothing busy.
+//! Each owner finishes it in the way it can:
 //!
 //! - the bundled server runs it as a task beside the request that wrote it
 //!   (`server::command_runs`);
@@ -49,10 +52,12 @@ use crate::server::RemoteWriteError;
 
 mod chain;
 mod channel;
+mod taken;
 mod target;
 mod unattached;
 
 pub(crate) use chain::admit;
+pub(crate) use taken::TakenRuns;
 pub(crate) use unattached::run_unattached;
 
 /// What a runner needs from the component that owns its runs.
@@ -247,8 +252,8 @@ fn end_ownerless_object(object: &mut dyn BACnetObject) -> bool {
 
 /// Take the runs that Present_Value writes queued on Command and Channel
 /// objects among `oids`, under the guard that committed those writes. The
-/// caller owns them.
-pub(crate) fn take_runs(db: &mut ObjectDatabase, oids: &[ObjectIdentifier]) -> Vec<CommandRun> {
+/// caller owns them; [`TakenRuns::take`] holds them so a drop ends them.
+fn take_queued(db: &mut ObjectDatabase, oids: &[ObjectIdentifier]) -> Vec<CommandRun> {
     oids.iter()
         .filter_map(|oid| {
             db.get_mut(oid)
@@ -262,7 +267,7 @@ pub(crate) fn take_runs(db: &mut ObjectDatabase, oids: &[ObjectIdentifier]) -> V
 /// that can't run them. Each ends at once as unsuccessful, so none is left
 /// busy.
 pub(crate) fn end_unmade(db: &mut ObjectDatabase, oids: &[ObjectIdentifier]) {
-    for run in take_runs(db, oids) {
+    for run in take_queued(db, oids) {
         debug!(
             source = %run.source,
             "Ending a run without its writes: this path can't make them"

@@ -32,7 +32,8 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// after encoding succeeds, immediately before calling/polling the transport
     /// send. Constructing this future does not call it. Encoding failure never
     /// calls it; later transport failure does not undo issuance. This boundary
-    /// does not establish physical emission or remote receipt.
+    /// does not establish physical emission or remote receipt. A `destination`
+    /// on network 0, or on 0xFFFF with a DADR, is an encoding failure.
     ///
     /// Used by server transaction owners whose lifetime ends at local issuance,
     /// independently of the transport future's eventual Result.

@@ -60,7 +60,7 @@ pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>) {
         let mut db_w = db.write().await;
         let schedules = db_w.find_by_type(ObjectType::SCHEDULE);
         let commit = evaluate(&mut db_w, schedules);
-        commit.take_command_runs(&mut db_w)
+        commit.take_command_runs(db, &mut db_w)
     };
     crate::command_lists::run_unattached(db, runs).await;
 }
@@ -75,18 +75,19 @@ pub(crate) async fn tick_schedules_committed(
     let mut db_w = db.write().await;
     let schedules = db_w.find_by_type(ObjectType::SCHEDULE);
     let commit = evaluate(&mut db_w, schedules);
-    commit.finish(&mut db_w, cov_table).await
+    commit.finish(db, &mut db_w, cov_table).await
 }
 
 /// Evaluate the Schedules among `written`, objects a write just committed to,
-/// under the guard that committed it; returns the COV fanout owed for the
-/// objects they wrote, and any Command runs those writes started, once that
-/// guard is dropped.
+/// under `db_w`, the guard on `db` that committed it; returns the COV fanout
+/// owed for the objects they wrote, and any Command runs those writes
+/// started, once that guard is dropped.
 ///
 /// This is the pass [`tick_schedules_committed`] runs, limited to those
 /// Schedules, so the new contents take effect without waiting for the next
 /// tick. Lock order: the caller's database guard, then the COV table.
 pub(crate) async fn reevaluate_written(
+    db: &Arc<RwLock<ObjectDatabase>>,
     db_w: &mut ObjectDatabase,
     written: &[ObjectIdentifier],
     cov_table: &RwLock<CovSubscriptionTable>,
@@ -100,7 +101,7 @@ pub(crate) async fn reevaluate_written(
         return CommittedCov::default();
     }
     let commit = evaluate(db_w, schedules);
-    commit.finish(db_w, cov_table).await
+    commit.finish(db, db_w, cov_table).await
 }
 
 /// Whether each Calendar is TRUE on `today`, resolved once per pass so every
