@@ -110,7 +110,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let flight = match flight {
             Ok(flight) => {
                 // The coordinate is marked busy: the later parts can queue,
-                // and their untimestamped references are owed (#1038).
+                // and their untimestamped references are owed (#1038). A
+                // change this part sends only some values of keeps the rest
+                // queued until it is delivered (#1163).
+                if let Some(claim) = &report.claim {
+                    claim.going_out();
+                }
                 for deferred in std::mem::take(&mut report.deferred) {
                     drop(deferred.owing());
                 }

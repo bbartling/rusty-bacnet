@@ -1738,7 +1738,22 @@ entry after slow synchronous work yields for 1 ms instead of spinning. These are
 local scheduling policies, not hard real-time guarantees. Custom polling callers
 must bind the database's monotonic clock as well as its Device clock. The bundled
 server binds both. Existing disabled/count-only accepted outcomes still advance
-the schedule; remote/indexed reference execution is not added.
+the schedule. The poll reads only this database. A `Log_DeviceObjectProperty`
+naming another device logs a failure record, PROPERTY /
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and never a same-numbered local object;
+one naming this device reads locally, as one without a Device does. A local
+read that fails logs a failure record carrying its error (OBJECT /
+UNKNOWN_OBJECT for a missing object) where it used to log a null value (#1183).
+Indexed reference execution is not added.
+
+`ObjectDatabase::selected_device` is the Device the database represents (the
+lowest instance when it holds several). `ObjectDatabase::local_device` returns
+a `LocalDevice`, whose `is_local` tells whether a reference's optional Device
+member keeps it inside this device: no member, or the selected Device when its
+instance isn't the wildcard. The Trend Log poller and the server's Event
+Enrollment evaluation (monitored, setpoint and fault references) both resolve
+references through it, so a FLOATING_LIMIT setpoint naming this device is read
+and reported like an unqualified one (#1184).
 
 ### Object Types (62)
 
@@ -2757,7 +2772,12 @@ its values, so many tiny changes cannot outgrow the estimate. The context also
 keeps room, at most one notification's worth, for the most its untimestamped
 values have taken in one report since it was last admitted or lost a reference.
 Only on overflow, the last resort, is a change dropped: the oldest of the same
-reference first, then the oldest in the context, never a reference's latest. Parts
+reference first, then the oldest in the context, never a reference's latest.
+Nor is a reference's change in delivery dropped: once a change sent one value per
+notification has a part delivered, or sent as a confirmed report's first part,
+the rest of it stays queued until its last value is delivered, however small the
+subscriber's maximum APDU (#1163). Beyond the bound, a context therefore holds at
+most two changes per reference. Parts
 a confirmed report defers return to the queue without that check, so the bound
 never drops what the report just planned to send. Changes returned by a failed
 notification wait while a newer change of the same reference is in flight; once a

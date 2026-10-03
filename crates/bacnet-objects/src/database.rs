@@ -12,8 +12,10 @@ use crate::event_enrollment::EventEnrollmentMonitoredSource;
 use crate::traits::{BACnetObject, MonotonicClock};
 
 mod averaging_sampling;
+mod local_device;
 mod network_port;
 mod trend_poll;
+pub use local_device::LocalDevice;
 use trend_poll::TrendPollSchedule;
 
 /// A collection of BACnet objects, keyed by ObjectIdentifier.
