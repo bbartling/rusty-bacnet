@@ -2078,8 +2078,11 @@ the Command's Present_Value, over the network or with `write_property_local`,
 makes list N's writes in order as the Rust server does (see
 [Building Control](rust-api.md#building-control-7)): In_Process reads True
 until the list ends, and All_Writes_Successful then reads True only if every
-write succeeded. Zero, or an empty list, writes nothing. The server writes only
-to its own objects, so a command naming another Device fails.
+write succeeded. Zero, or an empty list, writes nothing. A command whose
+`device_identifier` names another device is sent there as a confirmed
+WriteProperty when the server has a binding for it, from `add_device_binding`
+or an I-Am heard in the last ten minutes; with none it fails and nothing is
+sent. `stop()` ends a run it cuts short with In_Process False.
 
 `add_staging` validates the complete ladder and target mapping atomically; it
 does not invent stage limits, deadbands, names, priorities, or targets. Each

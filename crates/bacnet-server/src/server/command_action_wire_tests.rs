@@ -9,8 +9,8 @@
 //! 3. AO-9, which doesn't exist, quitting on failure; then AO-1 and AO-2 to
 //!    10.0, never reached.
 //! 4. AO-9 again without quitting, then AO-1 to 60.0.
-//! 5. AO-1 to 80.0 in Device 9, which this server isn't, then AO-2 to 80.0
-//!    naming Device 856.
+//! 5. AO-1 to 80.0 in Device 9, which this server isn't and has no binding
+//!    for, then AO-2 to 80.0 naming Device 856.
 //! 6. Nothing.
 //! 7. CMD-1's own Present_Value to 6.
 //!
@@ -396,6 +396,13 @@ async fn command_naming_another_device_fails_and_naming_this_device_is_local() {
     let mut h = start().await;
     write_pv(&mut h, 1, 5).await.unwrap();
     idle(&h, 1).await;
+    // With no binding for Device 9, nothing is sent there.
+    assert!(!h
+        .frames
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|apdu| matches!(apdu, Apdu::ConfirmedRequest(_))));
     assert_eq!(flags(&mut h, 5).await, [false, true]);
     assert_eq!(slot8(&h, ao(1)).await, PropertyValue::Null);
     assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
