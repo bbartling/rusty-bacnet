@@ -82,15 +82,16 @@ fn rpm_command_action_serves_one_action_list_per_index() {
                     None,
                 )
                 .unwrap();
+            object.set_action(action_lists()).unwrap();
+            // List 2 is empty, so the write completes at once.
             object
                 .write_property(
                     P::PRESENT_VALUE,
                     None,
-                    bacnet_types::primitives::PropertyValue::Unsigned(3),
+                    bacnet_types::primitives::PropertyValue::Unsigned(2),
                     None,
                 )
                 .unwrap();
-            object.set_action(action_lists()).unwrap();
         }
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
@@ -126,7 +127,7 @@ fn rpm_command_action_serves_one_action_list_per_index() {
             (
                 P::PRESENT_VALUE,
                 None,
-                Ok(if configured { &[0x21, 3] } else { &[0x21, 0] }),
+                Ok(if configured { &[0x21, 2] } else { &[0x21, 0] }),
             ),
             (
                 P::PRESENT_VALUE,
@@ -200,12 +201,9 @@ fn rpm_command_action_serves_one_action_list_per_index() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
+            // Action_Text is an array on Command, absent until configured.
             (P::ACTION_TEXT, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-            (
-                P::ACTION_TEXT,
-                Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
+            (P::ACTION_TEXT, Some(1), Err(ErrorCode::UNKNOWN_PROPERTY)),
             (P::EVENT_STATE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::EVENT_STATE,

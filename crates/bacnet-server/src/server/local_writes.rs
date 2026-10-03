@@ -1,6 +1,7 @@
 use super::cov_notify_context::CovNotifyContext;
 use super::*;
 use crate::handlers::{WriteCommitObserver, WriteTarget};
+use bacnet_objects::command::CommandRun;
 use bacnet_objects::staging::StagingWritePlan;
 
 #[cfg(test)]
@@ -16,7 +17,7 @@ mod staging_local_writes_tests;
 /// Inputs and noncommandable Values distinguish application updates from
 /// network-equivalent writes, including their Out_Of_Service ownership checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LocalWrite {
+pub(super) enum LocalWrite {
     /// A trusted local program performing a network-equivalent property write.
     Property {
         property: PropertyIdentifier,
@@ -280,224 +281,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         source: Option<crate::LocalCommandSource>,
     ) -> Result<(), Error> {
         self.active_network()?;
-        // Only a property write can carry OBJECT_NAME, so only it needs the name
-        // index kept in step.
-        let renaming = matches!(
-            write,
-            LocalWrite::Property { property, .. } if property == PropertyIdentifier::OBJECT_NAME
-        );
-        let life_safety = crate::life_safety_cov::is_life_safety_object(*oid);
-        let (exact_changes, staging_plans, schedule_cov) = {
-            let mut db = self.db.write().await;
-            let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_oid(&db, *oid);
-            if db.get(oid).is_none() {
-                return Err(Error::Protocol {
-                    class: ErrorClass::OBJECT.to_raw() as u32,
-                    code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-                });
-            }
-            if renaming {
-                if let PropertyValue::CharacterString(ref new_name) = value {
-                    db.check_name_available(oid, new_name)?;
-                }
-            }
-            let mut audit = match write {
-                LocalWrite::Property {
-                    property,
-                    array_index,
-                    priority,
-                } => {
-                    // Device's recipient sink exclusively owns the old/new pair.
-                    let recipient_sink = property
-                        == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT
-                        && db
-                            .get_mut(oid)
-                            .and_then(|object| object.device_authority_internal())
-                            .is_some();
-                    if recipient_sink {
-                        None
-                    } else {
-                        let mut audit = audit_reporter::WriteAudit::local(
-                            &self.config,
-                            self.network
-                                .as_ref()
-                                .expect("running local mutation owns network"),
-                            &self.notification_transactions,
-                            &self.comm_state,
-                            &db,
-                        );
-                        let encoded = audit_reporter::small_value(&value).unwrap_or_default();
-                        if let Some(audit) = &mut audit {
-                            audit.before(
-                                &db,
-                                WriteTarget {
-                                    oid: *oid,
-                                    property,
-                                    array_index,
-                                    priority,
-                                    value: &encoded,
-                                },
-                            );
-                        }
-                        audit
-                    }
-                }
-                LocalWrite::ApplicationPresentValue
-                | LocalWrite::ApplicationControlledVariableValue
-                | LocalWrite::ApplicationAveragingSample
-                | LocalWrite::ApplicationAveragingMiss
-                | LocalWrite::ApplicationTrackingValue => None,
-            };
-            let value = match write {
-                LocalWrite::Property { property, .. } => {
-                    crate::local_references::localize(&db, *oid, property, value)
-                }
-                _ => value,
-            };
-            let prepared = match write {
-                LocalWrite::Property {
-                    property,
-                    array_index,
-                    priority,
-                } => {
-                    let encoded = audit_reporter::small_value(&value).unwrap_or_default();
-                    audit.as_mut().and_then(|audit| {
-                        audit.commit_policy(
-                            &mut db,
-                            WriteTarget {
-                                oid: *oid,
-                                property,
-                                array_index,
-                                priority,
-                                value: &encoded,
-                            },
-                            &value,
-                        )
-                    })
-                }
-                LocalWrite::ApplicationPresentValue
-                | LocalWrite::ApplicationControlledVariableValue
-                | LocalWrite::ApplicationAveragingSample
-                | LocalWrite::ApplicationAveragingMiss
-                | LocalWrite::ApplicationTrackingValue => None,
-            };
-            let command_origin =
-                source.and_then(|source| crate::command_source::resolve_local(&db, source).ok());
-            let result = prepared.unwrap_or_else(|| {
-                let object = db.get_mut(oid).expect("existence checked above");
-                match write {
-                    LocalWrite::Property {
-                        property,
-                        array_index,
-                        priority,
-                    } => {
-                        crate::device_view::check_executor_owned_write(*oid, property)?;
-                        crate::command_source::write_target(
-                            object,
-                            property,
-                            array_index,
-                            value,
-                            priority,
-                            command_origin.as_ref(),
-                        )
-                    }
-                    LocalWrite::ApplicationPresentValue => object.set_present_value_internal(value),
-                    LocalWrite::ApplicationControlledVariableValue => {
-                        object.set_controlled_variable_value_internal(value)
-                    }
-                    LocalWrite::ApplicationAveragingSample => {
-                        object.add_averaging_sample_internal(Some(value))
-                    }
-                    LocalWrite::ApplicationAveragingMiss => {
-                        object.add_averaging_sample_internal(None)
-                    }
-                    LocalWrite::ApplicationTrackingValue => {
-                        object.set_tracking_value_internal(value)
-                    }
-                }
-            });
-            if let Err(error) = result {
-                if let Some(audit) = &mut audit {
-                    audit.failed(&mut db, &error);
-                }
-                return Err(error);
-            }
-            if let Some(audit) = &mut audit {
-                audit.committed(&mut db);
-            }
-            if renaming {
-                db.update_name_index(oid);
-            }
-            let staging_plans = Self::take_staging_plans(&mut db, std::slice::from_ref(oid));
-            let changes = snapshots.changes(&db, std::slice::from_ref(oid));
-            let capture = {
-                let table = self.cov_table.read().await;
-                if life_safety {
-                    table.timed_capture_exact(&changes)
-                } else {
-                    table.timed_capture(*oid)
-                }
-            };
-            capture.run(&db);
-            let schedule_cov = crate::schedule::reevaluate_written(
-                &mut db,
-                std::slice::from_ref(oid),
-                &self.cov_table,
-            )
-            .await;
-            (changes, staging_plans, schedule_cov)
-        };
-
-        Self::fire_event_notifications_with_bindings(
-            &EventDelivery {
-                db: &self.db,
-                network: self
-                    .network
-                    .as_ref()
-                    .expect("running local mutation owns network"),
-                comm_state: &self.comm_state,
-                learned_routers: &self.learned_routers,
-                notification_transactions: &self.notification_transactions,
-                device_bindings: &self.device_bindings,
-                suppressions: &self.event_suppressions,
-                retry_timeout_ms: self.config.cov_retry_timeout_ms,
-                local_apdu_capacity: self.config.max_apdu_length,
-            },
-            &self.cov_table,
-            oid,
-        )
-        .await;
-        if life_safety {
-            for change in exact_changes {
-                Self::fire_life_safety_cov_notifications(
-                    &self.local_cov_context(),
-                    &change.object_identifier,
-                    &change.changed_properties,
-                )
-                .await;
-            }
-        } else {
-            Self::fire_cov_notifications(&self.local_cov_context(), oid).await;
+        let runs = self.local_writer().write(oid, write, value, source).await?;
+        if !runs.is_empty() {
+            super::command_runs::CommandRunner::for_server(self).start(runs);
         }
-        // Targets a written Schedule commanded on re-evaluation.
-        Self::fire_post_write_cov_notifications(
-            &self.local_cov_context(),
-            &schedule_cov.coarse,
-            &schedule_cov.life_safety,
-        )
-        .await;
-        Self::execute_staging_plans(
-            &self.local_event_delivery(),
-            &self.local_cov_context(),
-            staging_plans,
-        )
-        .await;
         Ok(())
     }
 
-    /// Borrow the COV notification handles for a local mutation.
-    fn local_cov_context(&self) -> CovNotifyContext<'_, T> {
-        CovNotifyContext {
+    /// Borrow the handles a local write uses, once the caller has checked
+    /// that the network is still active.
+    pub(super) fn local_writer(&self) -> LocalWriter<'_, T> {
+        LocalWriter {
             db: &self.db,
             network: self
                 .network
@@ -507,26 +301,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             cov_in_flight: &self.cov_in_flight,
             notification_transactions: &self.notification_transactions,
             comm_state: &self.comm_state,
+            learned_routers: &self.learned_routers,
+            device_bindings: &self.device_bindings,
+            event_suppressions: &self.event_suppressions,
             config: &self.config,
         }
     }
 
+    /// Borrow the COV notification handles for a local mutation.
+    fn local_cov_context(&self) -> CovNotifyContext<'_, T> {
+        self.local_writer().cov_context()
+    }
+
     /// Borrow the EventNotification handles for a local mutation.
     fn local_event_delivery(&self) -> EventDelivery<'_, T> {
-        EventDelivery {
-            db: &self.db,
-            network: self
-                .network
-                .as_ref()
-                .expect("running local mutation owns network"),
-            comm_state: &self.comm_state,
-            learned_routers: &self.learned_routers,
-            notification_transactions: &self.notification_transactions,
-            device_bindings: &self.device_bindings,
-            suppressions: &self.event_suppressions,
-            retry_timeout_ms: self.config.cov_retry_timeout_ms,
-            local_apdu_capacity: self.config.max_apdu_length,
-        }
+        self.local_writer().event_delivery()
     }
 
     pub(super) async fn execute_initial_staging_plans(&self) {
@@ -651,4 +440,278 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         }
     }
+}
+
+/// The handles one local write borrows: the mutation under the database
+/// guard, then the event, COV and Staging work it owes once the guard is
+/// dropped. `write_local` writes through it, and so does each write of a
+/// Command object's run (Clause 12.10).
+pub(super) struct LocalWriter<'a, T: TransportPort + 'static> {
+    pub(super) db: &'a Arc<RwLock<ObjectDatabase>>,
+    pub(super) network: &'a Arc<NetworkLayer<T>>,
+    pub(super) cov_table: &'a Arc<RwLock<CovSubscriptionTable>>,
+    pub(super) cov_in_flight: &'a Arc<Semaphore>,
+    pub(super) notification_transactions: &'a Arc<NotificationTransactions>,
+    pub(super) comm_state: &'a Arc<AtomicU8>,
+    pub(super) learned_routers: &'a Arc<Mutex<LearnedRouterCache>>,
+    pub(super) device_bindings: &'a Arc<RwLock<DeviceBindingTable>>,
+    pub(super) event_suppressions: &'a Arc<super::event_suppression::EventSuppressions>,
+    pub(super) config: &'a ServerConfig,
+}
+
+impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
+    /// The COV notification view of these handles.
+    pub(super) fn cov_context(&self) -> CovNotifyContext<'a, T> {
+        CovNotifyContext {
+            db: self.db,
+            network: self.network,
+            cov_table: self.cov_table,
+            cov_in_flight: self.cov_in_flight,
+            notification_transactions: self.notification_transactions,
+            comm_state: self.comm_state,
+            config: self.config,
+        }
+    }
+
+    /// The EventNotification delivery view of these handles.
+    pub(super) fn event_delivery(&self) -> EventDelivery<'a, T> {
+        EventDelivery {
+            db: self.db,
+            network: self.network,
+            comm_state: self.comm_state,
+            learned_routers: self.learned_routers,
+            notification_transactions: self.notification_transactions,
+            device_bindings: self.device_bindings,
+            suppressions: self.event_suppressions,
+            retry_timeout_ms: self.config.cov_retry_timeout_ms,
+            local_apdu_capacity: self.config.max_apdu_length,
+        }
+    }
+
+    /// Make one local write and the post-write work it owes. Returns the
+    /// Command runs it queued, directly or through a Schedule it changed,
+    /// for the caller to start.
+    pub(super) async fn write(
+        &self,
+        oid: &ObjectIdentifier,
+        write: LocalWrite,
+        value: PropertyValue,
+        source: Option<crate::LocalCommandSource>,
+    ) -> Result<Vec<CommandRun>, Error> {
+        // Only a property write can carry OBJECT_NAME, so only it needs the name
+        // index kept in step.
+        let renaming = matches!(
+            write,
+            LocalWrite::Property { property, .. } if property == PropertyIdentifier::OBJECT_NAME
+        );
+        let life_safety = crate::life_safety_cov::is_life_safety_object(*oid);
+        let (exact_changes, staging_plans, mut command_runs, schedule_cov) = {
+            let mut db = self.db.write().await;
+            let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_oid(&db, *oid);
+            if db.get(oid).is_none() {
+                return Err(Error::Protocol {
+                    class: ErrorClass::OBJECT.to_raw() as u32,
+                    code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+                });
+            }
+            if renaming {
+                if let PropertyValue::CharacterString(ref new_name) = value {
+                    db.check_name_available(oid, new_name)?;
+                }
+            }
+            let mut audit = match write {
+                LocalWrite::Property {
+                    property,
+                    array_index,
+                    priority,
+                } => {
+                    // Device's recipient sink exclusively owns the old/new pair.
+                    let recipient_sink = property
+                        == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT
+                        && db
+                            .get_mut(oid)
+                            .and_then(|object| object.device_authority_internal())
+                            .is_some();
+                    if recipient_sink {
+                        None
+                    } else {
+                        let mut audit = audit_reporter::WriteAudit::local(
+                            self.config,
+                            self.network,
+                            self.notification_transactions,
+                            self.comm_state,
+                            &db,
+                        );
+                        let encoded = audit_reporter::small_value(&value).unwrap_or_default();
+                        if let Some(audit) = &mut audit {
+                            audit.before(
+                                &db,
+                                WriteTarget {
+                                    oid: *oid,
+                                    property,
+                                    array_index,
+                                    priority,
+                                    value: &encoded,
+                                },
+                            );
+                        }
+                        audit
+                    }
+                }
+                LocalWrite::ApplicationPresentValue
+                | LocalWrite::ApplicationControlledVariableValue
+                | LocalWrite::ApplicationAveragingSample
+                | LocalWrite::ApplicationAveragingMiss
+                | LocalWrite::ApplicationTrackingValue => None,
+            };
+            let value = match write {
+                LocalWrite::Property { property, .. } => {
+                    crate::local_references::localize(&db, *oid, property, value)
+                }
+                _ => value,
+            };
+            let prepared = match write {
+                LocalWrite::Property {
+                    property,
+                    array_index,
+                    priority,
+                } => {
+                    let encoded = audit_reporter::small_value(&value).unwrap_or_default();
+                    audit.as_mut().and_then(|audit| {
+                        audit.commit_policy(
+                            &mut db,
+                            WriteTarget {
+                                oid: *oid,
+                                property,
+                                array_index,
+                                priority,
+                                value: &encoded,
+                            },
+                            &value,
+                        )
+                    })
+                }
+                LocalWrite::ApplicationPresentValue
+                | LocalWrite::ApplicationControlledVariableValue
+                | LocalWrite::ApplicationAveragingSample
+                | LocalWrite::ApplicationAveragingMiss
+                | LocalWrite::ApplicationTrackingValue => None,
+            };
+            let command_origin =
+                source.and_then(|source| crate::command_source::resolve_local(&db, source).ok());
+            let result = prepared.unwrap_or_else(|| {
+                let object = db.get_mut(oid).expect("existence checked above");
+                match write {
+                    LocalWrite::Property {
+                        property,
+                        array_index,
+                        priority,
+                    } => {
+                        crate::device_view::check_executor_owned_write(*oid, property)?;
+                        crate::command_source::write_target(
+                            object,
+                            property,
+                            array_index,
+                            value,
+                            priority,
+                            command_origin.as_ref(),
+                        )
+                    }
+                    LocalWrite::ApplicationPresentValue => object.set_present_value_internal(value),
+                    LocalWrite::ApplicationControlledVariableValue => {
+                        object.set_controlled_variable_value_internal(value)
+                    }
+                    LocalWrite::ApplicationAveragingSample => {
+                        object.add_averaging_sample_internal(Some(value))
+                    }
+                    LocalWrite::ApplicationAveragingMiss => {
+                        object.add_averaging_sample_internal(None)
+                    }
+                    LocalWrite::ApplicationTrackingValue => {
+                        object.set_tracking_value_internal(value)
+                    }
+                }
+            });
+            if let Err(error) = result {
+                if let Some(audit) = &mut audit {
+                    audit.failed(&mut db, &error);
+                }
+                return Err(error);
+            }
+            if let Some(audit) = &mut audit {
+                audit.committed(&mut db);
+            }
+            if renaming {
+                db.update_name_index(oid);
+            }
+            let staging_plans =
+                BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(oid));
+            let command_runs = take_command_runs(&mut db, std::slice::from_ref(oid));
+            let changes = snapshots.changes(&db, std::slice::from_ref(oid));
+            let capture = {
+                let table = self.cov_table.read().await;
+                if life_safety {
+                    table.timed_capture_exact(&changes)
+                } else {
+                    table.timed_capture(*oid)
+                }
+            };
+            capture.run(&db);
+            let schedule_cov = crate::schedule::reevaluate_written(
+                &mut db,
+                std::slice::from_ref(oid),
+                self.cov_table,
+            )
+            .await;
+            (changes, staging_plans, command_runs, schedule_cov)
+        };
+
+        BACnetServer::<T>::fire_event_notifications_with_bindings(
+            &self.event_delivery(),
+            self.cov_table,
+            oid,
+        )
+        .await;
+        if life_safety {
+            for change in exact_changes {
+                BACnetServer::<T>::fire_life_safety_cov_notifications(
+                    &self.cov_context(),
+                    &change.object_identifier,
+                    &change.changed_properties,
+                )
+                .await;
+            }
+        } else {
+            BACnetServer::<T>::fire_cov_notifications(&self.cov_context(), oid).await;
+        }
+        // Targets a written Schedule commanded on re-evaluation.
+        BACnetServer::<T>::fire_post_write_cov_notifications(
+            &self.cov_context(),
+            &schedule_cov.coarse,
+            &schedule_cov.life_safety,
+        )
+        .await;
+        command_runs.extend(schedule_cov.command_runs);
+        BACnetServer::<T>::execute_staging_plans(
+            &self.event_delivery(),
+            &self.cov_context(),
+            staging_plans,
+        )
+        .await;
+        Ok(command_runs)
+    }
+}
+
+/// Take the runs that Present_Value writes queued on Command objects among
+/// `oids`, under the guard that committed those writes.
+pub(super) fn take_command_runs(
+    db: &mut ObjectDatabase,
+    oids: &[ObjectIdentifier],
+) -> Vec<CommandRun> {
+    oids.iter()
+        .filter_map(|oid| {
+            db.get_mut(oid)
+                .and_then(|object| object.take_command_run_internal())
+        })
+        .collect()
 }

@@ -584,11 +584,10 @@ fn object_level_classification_matrix() {
     assert!(!ao.is_array_property(PropertyIdentifier::PRESENT_VALUE));
 
     let cmd = CommandObject::new(9, "CMD-9").unwrap();
-    // Command (Table 12-12): ACTION is BACnetARRAY[N]; ACTION_TEXT is an
-    // array in the standard but not modeled in-tree, so it stays rejected
-    // until its object-side modeling lands.
+    // Command (Table 12-12): ACTION and its parallel ACTION_TEXT are both
+    // BACnetARRAY[N] (#1150).
     assert!(cmd.is_array_property(PropertyIdentifier::ACTION));
-    assert!(!cmd.is_array_property(PropertyIdentifier::ACTION_TEXT));
+    assert!(cmd.is_array_property(PropertyIdentifier::ACTION_TEXT));
     assert!(!cmd.is_array_property(PropertyIdentifier::PRESENT_VALUE));
 
     let stg = staging(9, "STG-9");
