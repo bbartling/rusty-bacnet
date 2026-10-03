@@ -2,6 +2,7 @@
 //! (#1092): Default_Ramp_Rate and Default_Step_Increment on Lighting Output,
 //! and Current_Command_Priority on both objects. Lighting Output's
 //! Default_Fade_Time, once a constant 0 below its range, joined them (#1111).
+//! Lighting Output's COV_Increment follows them (#1227).
 
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -217,4 +218,69 @@ fn binary_lighting_output_current_command_priority_holds_through_egress() {
     assert_eq!(read(&blo, ccp), PropertyValue::Unsigned(8));
     assert!(blo.advance_time_internal(Duration::from_secs(5)));
     assert_eq!(read(&blo, ccp), PropertyValue::Null);
+}
+
+#[test]
+fn lighting_output_cov_increment_starts_at_zero_and_takes_writes() {
+    let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
+    assert!(lo.is_writable_property(PropertyIdentifier::COV_INCREMENT));
+    assert_eq!(
+        read(&lo, PropertyIdentifier::COV_INCREMENT),
+        PropertyValue::Real(0.0)
+    );
+    assert_eq!(lo.cov_increment(), Some(0.0));
+    lo.write_property(
+        PropertyIdentifier::COV_INCREMENT,
+        None,
+        PropertyValue::Real(2.5),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        read(&lo, PropertyIdentifier::COV_INCREMENT),
+        PropertyValue::Real(2.5)
+    );
+    assert_eq!(lo.cov_increment(), Some(2.5));
+    assert!(lo
+        .property_list()
+        .contains(&PropertyIdentifier::COV_INCREMENT));
+}
+
+#[test]
+fn lighting_output_cov_increment_refuses_bad_values_and_keeps_the_old_one() {
+    let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
+    lo.write_property(
+        PropertyIdentifier::COV_INCREMENT,
+        None,
+        PropertyValue::Real(1.0),
+        None,
+    )
+    .unwrap();
+    for value in [-0.5, f32::NAN, f32::INFINITY] {
+        assert_error(
+            lo.write_property(
+                PropertyIdentifier::COV_INCREMENT,
+                None,
+                PropertyValue::Real(value),
+                None,
+            ),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        );
+    }
+    assert_error(
+        lo.write_property(
+            PropertyIdentifier::COV_INCREMENT,
+            None,
+            PropertyValue::Unsigned(3),
+            None,
+        ),
+        ErrorCode::INVALID_DATA_TYPE,
+    );
+    assert_eq!(lo.cov_increment(), Some(1.0));
+}
+
+#[test]
+fn binary_lighting_output_has_no_cov_increment() {
+    let blo = BinaryLightingOutputObject::new(1, "BLO-1").unwrap();
+    assert_eq!(blo.cov_increment(), None);
 }

@@ -229,7 +229,7 @@ fn rpm_network_port_configured_profile_wire_bytes_and_dns_indices() {
                 }
             }
         }
-        use crate::handlers::rpm_budget::{handle_rpm_budgeted, RpmFailure};
+        use crate::handlers::{rpm_budget::handle_rpm_budgeted, ReadFailure};
         let budget = crate::server::ReadPropertyMultipleBudget {
             max_result_elements: cases.len(),
             max_service_ack_bytes: legacy.len(),
@@ -248,7 +248,7 @@ fn rpm_network_port_configured_profile_wire_bytes_and_dns_indices() {
                     ..budget
                 }
             ),
-            Err(RpmFailure::Work)
+            Err(ReadFailure::Work)
         ));
         assert_eq!(&prefix[..], b"prefix");
         assert!(matches!(
@@ -261,7 +261,7 @@ fn rpm_network_port_configured_profile_wire_bytes_and_dns_indices() {
                     ..budget
                 }
             ),
-            Err(RpmFailure::Bytes)
+            Err(ReadFailure::Bytes)
         ));
         assert_eq!(&prefix[..], b"prefix");
     }

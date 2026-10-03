@@ -832,7 +832,8 @@
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/npdu/address_bound_tests.rs::{over_long_address_length_is_refused_for_either_field,over_long_length_is_refused_before_the_address_is_read,source_refusal_reports_the_npdu_dnet,destination_refusal_carries_the_source_behind_it,address_too_long_reads_as_out_of_range,encoder_refuses_an_address_past_the_bound_for_either_field}",
-    "crates/bacnet-network/src/address_bound_tests.rs::non_router_drops_and_counts_an_over_long_address_in_either_field"
+    "crates/bacnet-network/src/address_bound_tests.rs::non_router_drops_and_counts_an_over_long_address_in_either_field",
+    "crates/bacnet-network/src/link_source_bound_tests.rs::non_router_drops_and_counts_a_frame_from_an_over_long_source_mac"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -845,7 +846,8 @@
     "Reserved-bit negative tests remain required: reserved control bits still only log a warning. #1141 covers malformed address lengths. The NPDU codec holds DLEN and SLEN to NpduAddress::MAX_MAC_LEN, 18 octets, the same bound as BACnetAddress::MAX_MAC_LEN (#1124).",
     "Table 6-2 (Clause 6.2.2.2) needs at most 7 octets for any standard data link, and the longest MAC this stack serves is the 18-octet B/IPv6 form. decode_npdu refuses a longer length with NpduDecodeError::AddressTooLong before reading the address octets, whether or not they are present, and reports the NPDU's DNET when it has one.",
     "For an over-long DADR it also reports the SNET/SADR behind it, read past the DLEN octets the frame announces, when a complete and valid one is there (#1158), so the router can address its reject; encode_npdu refuses a longer address with Error::Encoding (the limit was 255).",
-    "The non-router NetworkLayer drops such an NPDU before APDU or control admission and counts it in address_length_drops(); a non-router sends no reject. The router side is under BACNET-6-ROUTER-MESSAGES. Tests feed hand-built wire bytes for each address field: 19 and 255 are refused, 1, 6 and 18 decode and re-encode unchanged."
+    "The non-router NetworkLayer drops such an NPDU before APDU or control admission and counts it in address_length_drops(); a non-router sends no reject. The router side is under BACNET-6-ROUTER-MESSAGES. Tests feed hand-built wire bytes for each address field: 19 and 255 are refused, 1, 6 and 18 decode and re-encode unchanged.",
+    "#1198: NetworkLayer drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN before decoding it and counts it in address_length_drops(). No built-in transport reports one (B/IP, BACnet/SC and Ethernet use 6 octets, MS/TP 1, B/IPv6 18), so only a custom TransportPort can, and every address learned off the network fits a BACnetAddress."
    ]
   },
   {
@@ -860,13 +862,15 @@
    ],
    "positive_tests": [
     "crates/bacnet-network/src/address_bound_tests.rs::router_rejects_an_over_long_address_toward_a_dnet_with_reason_6",
-    "crates/bacnet-network/src/reject_route_tests.rs::{router_rejects_a_relayed_npdu_toward_its_snet_sadr,router_rejects_a_local_npdu_with_a_local_unicast,router_rejects_an_npdu_from_its_own_snet_with_a_local_unicast,router_relays_a_received_reject_to_the_node_its_dnet_names,router_hands_a_reject_addressed_to_itself_to_its_control_receiver,chained_routers_carry_a_reject_back_to_the_originating_device}",
-    "crates/bacnet-network/src/router/reject_tests.rs::{send_reject_addresses_the_originator_or_the_local_sender,send_reject_unicasts_an_originator_on_the_arrival_network_to_its_sadr,relay_routes_a_received_reject_by_its_dnet,a_reject_addressed_to_the_router_reaches_its_consumer_and_the_table}"
+    "crates/bacnet-network/src/reject_route_tests.rs::{router_rejects_a_relayed_npdu_toward_its_snet_sadr,router_rejects_a_local_npdu_with_a_local_unicast,router_rejects_an_npdu_from_its_own_snet_with_a_local_unicast,router_rejects_an_npdu_from_its_other_snet_out_that_port,router_relays_a_received_reject_to_the_node_its_dnet_names,router_hands_a_reject_addressed_to_itself_to_its_control_receiver,chained_routers_carry_a_reject_back_to_the_originating_device}",
+    "crates/bacnet-network/src/router/reject_tests.rs::{send_reject_addresses_the_originator_or_the_local_sender,send_reject_unicasts_an_originator_on_the_arrival_network_to_its_sadr,send_reject_sends_an_originator_on_another_direct_network_out_its_port,relay_routes_a_received_reject_by_its_dnet,a_reject_addressed_to_the_router_reaches_its_consumer_and_the_table}",
+    "crates/bacnet-network/src/router/options_tests.rs::{one_start_combines_admission_tracking_a_control_policy_and_the_control_receiver,plain_options_start_a_permissive_router_without_a_control_receiver}"
    ],
    "negative_tests": [
     "crates/bacnet-network/src/address_bound_tests.rs::{router_rejects_an_over_long_address_toward_a_dnet_with_reason_6,router_drops_an_over_long_broadcast_or_local_npdu_without_a_reject}",
-    "crates/bacnet-network/src/reject_route_tests.rs::router_falls_back_to_a_local_unicast_when_the_sadr_is_too_long",
-    "crates/bacnet-network/src/router/reject_tests.rs::{relay_drops_a_received_reject_it_cannot_route,a_reject_for_another_node_or_a_denied_one_skips_the_routers_consumer}"
+    "crates/bacnet-network/src/reject_route_tests.rs::{router_falls_back_to_a_local_unicast_when_the_sadr_is_too_long,router_sends_no_reject_when_the_snet_sadr_is_its_own_port}",
+    "crates/bacnet-network/src/router/reject_tests.rs::{relay_drops_a_received_reject_it_cannot_route,a_reject_for_another_node_or_a_denied_one_skips_the_routers_consumer,send_reject_sends_nothing_when_the_originator_is_the_router}",
+    "crates/bacnet-network/src/link_source_bound_tests.rs::router_drops_and_counts_a_frame_from_an_over_long_source_mac"
    ],
    "benchmarks": [
     "benchmarks/src/bin/bacnet_router.rs"
@@ -875,7 +879,8 @@
     "docs/architecture.md#multi-network-routing router model",
     "docs/rust-api.md#bacnet-network over-long DADR/SADR handling (#1141)",
     "docs/rust-api.md#bacnet-network reject addressing and relay (#1158)",
-    "docs/rust-api.md#bacnet-network rejects addressed to the router and its control receiver (#1174, #1175)"
+    "docs/rust-api.md#bacnet-network rejects addressed to the router and its control receiver (#1174, #1175)",
+    "docs/rust-api.md#bacnet-network rejects for a looped NPDU (#1219) and RouterOptions start-up (#1220)"
    ],
    "notes": [
     "Needs in-memory or Docker multi-network conformance evidence.",
@@ -888,8 +893,12 @@
     "One with no DNET, the global DNET, the arrival network or an unrouted DNET stops at this router, and nothing answers a reject. Before #1158 the relay took the received reject's SNET/SADR for the originator.",
     "Loopback tests compare every reject byte for byte, relayed and local, for each call site that originates one, plus the reason-6 fallback, the relay, and a two-router chain that carries a reject from the far router back to the device.",
     "#1174: a refused NPDU whose SNET is the arrival port's own network gets its reject as a local unicast to the SADR, with no DNET (Clause 6.5.4). A non-router would discard it with a DNET (Clause 6.5.2.1).",
-    "#1175: a received reject with no DNET, or whose DADR is the router's own MAC on the port for its DNET, is addressed to the router. It updates the table, is not relayed, and reaches the receiver from BACnetRouter::start_with_network_control_receiver as a ReceivedNetworkControl.",
-    "No in-tree setup needs that receiver (#1175): a client or server attached through a LoopbackTransport port runs its own NetworkLayer, so rejects for its requests reach its own control receiver."
+    "#1175: a received reject with no DNET, or whose DADR is the router's own MAC on the port for its DNET, is addressed to the router. It updates the table, is not relayed, and reaches the receiver that RouterOptions::network_control_receiver adds as a ReceivedNetworkControl.",
+    "No in-tree setup needs that receiver (#1175): a client or server attached through a LoopbackTransport port runs its own NetworkLayer, so rejects for its requests reach its own control receiver.",
+    "#1219: a refused NPDU whose SNET is another of the router's directly connected networks gets its reject out the port attached to that network, as a local unicast to the SADR with no DNET (Clause 6.5.4).",
+    "#1219: a refused NPDU whose SNET/SADR is the router's own address on one of its networks draws no reject.",
+    "#1220: BACnetRouter::start takes RouterOptions, which turns on the tracked local APDU receiver, the RB-09 control policy and authorizer, and the network-control receiver in any combination. A loopback test starts a router with all three.",
+    "#1198: the router drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN on any port before decoding it, counts it in address_length_drops() and sends nothing back. Such a frame is not delivered or forwarded and teaches no route; a test shows a route announced from a 19-octet MAC is not learned."
    ]
   },
   {
@@ -1033,7 +1042,7 @@
     "crates/bacnet-objects/src/traits.rs::BACnetObject::log_record_identities_internal",
     "crates/bacnet-objects/src/event_log.rs::EventLogObject",
     "crates/bacnet-objects/src/trend/mod.rs::TrendLogObject",
-    "crates/bacnet-objects/src/trend/mod.rs::TrendLogMultipleObject"
+    "crates/bacnet-objects/src/trend/multiple.rs::TrendLogMultipleObject"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/log_buffer.rs::tests::log_buffer_assigns_one_and_wraps_max_without_zero",
@@ -1042,7 +1051,7 @@
     "crates/bacnet-objects/src/event_log/tests.rs::event_log_identities_align_after_eviction_and_differ_from_position",
     "crates/bacnet-objects/src/event_log/tests.rs::event_log_total_record_count_is_u32_and_wraps_max_to_one",
     "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_log_projects_only_present_status_flags_as_fourth_field",
-    "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_multiple_retains_raw_flags_but_projects_three_fields"
+    "crates/bacnet-objects/src/trend/log_record_tests.rs::trend_multiple_projects_each_record_framed"
    ],
     "negative_tests": [
      "crates/bacnet-objects/src/log_buffer.rs::tests::log_buffer_rejections_do_not_consume_sequence"
@@ -1050,8 +1059,9 @@
    "benchmarks": [],
    "public_claims": [],
     "notes": [
-     "In-memory storage/model foundation only; this row makes no public support claim. Sequence identity is object metadata and is never serialized in LOG_BUFFER. Trend Log alone projects a present legacy BACnetLogRecord.status_flags value as its formal optional fourth StatusFlags bitstring; Event Log and Trend Log Multiple retain that raw shared-Rust field for source compatibility but always project only Date, Time, and datum.",
+     "In-memory storage/model foundation only; this row makes no public support claim. Sequence identity is object metadata and is never serialized in LOG_BUFFER. Trend Log alone projects a present legacy BACnetLogRecord.status_flags value as its formal optional fourth StatusFlags bitstring; Event Log retains that raw shared-Rust field for source compatibility but always projects only Date, Time, and datum.",
      "Mandatory purge/status lifecycle behavior is tracked separately by BACNET-12-LOG-STATUS-LIFECYCLE, and the server's qualified By Sequence and By Time consumers are tracked by BACNET-15-READ-RANGE-LOG-BUFFER. Restart durability/persistence and formal EventLog notification-record modeling remain deferred.",
+     "Trend Log Multiple holds BACnetLogMultipleRecord values: one LogValue per Log_DeviceObjectProperty member, a log status, or a time change. Its LOG_BUFFER serves each record framed as the Clause 21 production, with no status flags (#1203).",
      "LogRecordIdentity holds a u64 sequence number. These three families still count in Unsigned32 and wrap at u32::MAX; an Audit Log's identities come from its record store and wrap at u64::MAX (BACNET-12-AUDIT-LOG-BUFFER, #1092)."
     ]
   },
@@ -1068,8 +1078,9 @@
     "crates/bacnet-objects/src/log_buffer.rs::OrdinaryAdmission",
     "crates/bacnet-objects/src/event_log.rs::EventLogObject",
     "crates/bacnet-objects/src/trend/mod.rs::TrendLogObject",
-    "crates/bacnet-objects/src/trend/mod.rs::TrendLogMultipleObject",
+    "crates/bacnet-objects/src/trend/multiple.rs::TrendLogMultipleObject",
     "crates/bacnet-objects/src/traits.rs::BACnetObject::add_trend_record",
+    "crates/bacnet-objects/src/traits.rs::BACnetObject::add_trend_multiple_record",
     "crates/bacnet-server/src/trend_log.rs::poll_trend_logs"
    ],
    "positive_tests": [
@@ -1086,7 +1097,12 @@
     "crates/bacnet-server/src/pics/truth_source_tests.rs::pics_log_family_writability_comes_from_runtime_routes",
     "crates/bacnet-objects/src/database/trend_poll/tests.rs::a_reference_naming_this_device_logs_the_local_value",
     "crates/bacnet-objects/src/database/trend_poll/tests.rs::a_reference_without_a_device_logs_the_local_value",
-    "crates/bacnet-objects/src/database/trend_poll/tests.rs::a_failed_local_read_logs_the_read_error"
+    "crates/bacnet-objects/src/database/trend_poll/tests.rs::a_failed_local_read_logs_the_read_error",
+    "crates/bacnet-objects/src/database/trend_poll/member_tests.rs::an_indexed_reference_logs_the_array_element",
+    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::every_local_member_is_sampled_into_one_record_in_member_order",
+    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::an_indexed_member_reads_its_element",
+    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::polled_records_follow_the_buffer_size_and_stop_when_full",
+    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::a_disabled_log_accepts_the_poll_without_a_record"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/trend_log_clock_tests.rs::unusable_acquisition_clock_preserves_records_and_schedule_then_retries",
@@ -1097,7 +1113,14 @@
     "crates/bacnet-objects/src/log_insertion_tests.rs::fallible_insertion_keeps_count_only_success_and_rejects_unsupported_objects",
     "crates/bacnet-endpoint/src/source_reporter_trait_tests.rs::every_method_reaches_the_wrapped_object",
     "crates/bacnet-objects/src/database/trend_poll/tests.rs::a_reference_naming_another_device_logs_a_failure_never_the_local_object",
-    "crates/bacnet-objects/src/database/trend_poll/tests.rs::a_device_member_that_is_not_an_identifier_is_not_polled"
+    "crates/bacnet-objects/src/database/trend_poll/tests.rs::a_device_member_that_is_not_an_identifier_is_not_polled",
+    "crates/bacnet-objects/src/database/trend_poll/member_tests.rs::an_index_past_the_end_logs_invalid_array_index",
+    "crates/bacnet-objects/src/database/trend_poll/member_tests.rs::an_index_on_a_scalar_logs_property_is_not_an_array",
+    "crates/bacnet-objects/src/database/trend_poll/member_tests.rs::an_index_that_is_not_unsigned_leaves_the_log_unpolled",
+    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::a_failing_member_logs_its_error_beside_the_other_values",
+    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::a_member_naming_another_device_logs_a_failure_for_that_member",
+    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::an_empty_member_logs_no_property_specified",
+    "crates/bacnet-objects/src/database/trend_poll/multiple_tests.rs::only_polled_logs_with_an_interval_and_members_are_sampled"
    ],
    "benchmarks": [],
    "public_claims": [],
@@ -1110,17 +1133,21 @@
      "Refs #748/#753: database-owned schedules compare the complete selection configuration, retire on structural access, and use exact hundredths under one exclusive selection/acquisition/append guard. The former external TrendLogState and mutable Box getter are removed.",
      "Successful next intervals start at actual completion without catch-up; configuration reconciliation and failed-attempt retries use a local 100 ms bound, and slow passes yield 1 ms when another entry is already due.",
      "Poller insertion failures preserve last success and retry after clock repair; SourceReporter forwards results. Constructors, records() and raw clear() retain their behavior. ReadRange By Sequence and By Time can select the resident purge status identity under BACNET-15-READ-RANGE-LOG-BUFFER.",
-     "Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, writable Log_DeviceObjectProperty purge paths, formal EventLog notification records, Trend Log Multiple polling, persistence/restart, and complete log conformance remain deferred.",
+     "Time-window Start_Time/Stop_Time transitions, LOG_INTERRUPTED, writable Log_DeviceObjectProperty purge paths, formal EventLog notification records, persistence/restart, and complete log conformance remain deferred.",
      "#1183: the poller reads only its own database. A Log_DeviceObjectProperty whose Device member names another device (ObjectDatabase::local_device, the rule the server's Event Enrollment evaluation shares) logs a failure record, PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, at the configured interval and is never read from a same-numbered local object; one naming this device reads locally, as one without a Device does.",
      "A failed local read now logs a failure record carrying its error (OBJECT / UNKNOWN_OBJECT for a missing object, the read's own class and code otherwise, SERVICES / OTHER for an error without one) instead of a null value, the failure choice of the Clause 12.25 Log_Buffer datum.",
-     "A Device member that is not an object identifier leaves the log unpolled. Trend Log Multiple still has no poller, so the rule has no Trend Log Multiple read path to apply to yet; indexed reference execution also remains deferred."
+     "A Device member that is not an object identifier leaves the log unpolled.",
+     "Trend Log Multiple: the same poller samples every Log_DeviceObjectProperty member each interval into one record, values in member order, under the shared Enable, Buffer_Size and Stop_When_Full lifecycle (#1203).",
+     "Each Trend Log Multiple member resolves through ObjectDatabase::local_device as a Trend Log reference does. A member naming another device, or whose read fails, logs its own failure value; one naming instance 4194303 logs PROPERTY / NO_PROPERTY_SPECIFIED.",
+     "A reference with an array index reads that element behind the ReadProperty gate the Averaging sampler shares: an index on a non-array logs PROPERTY / PROPERTY_IS_NOT_AN_ARRAY, one past the end logs INVALID_ARRAY_INDEX. An index that isn't Unsigned leaves the log unpolled (#1205).",
+     "Only POLLED logs with a nonzero Log_Interval and at least one member are polled. Trend Log Multiple triggered acquisition, Align_Intervals, Interval_Offset and intrinsic reporting are not modeled."
     ]
   },
   {
    "id": "BACNET-15-READ-RANGE-LOG-BUFFER",
     "standard_anchor": "Clause 12.1.5.2 (PDF p. 164 / printed p. 162); Clause 12.27 (PDF pp. 337-340 / printed pp. 335-338); Clause 15.8 and Clause 15.8.1.1.4-15.8.1.3 (PDF pp. 747-753 / printed pp. 745-751); Clause 21.6 BACnetEventLogRecord, BACnetLogRecord, and BACnetLogMultipleRecord (PDF pp. 906, 916)",
    "priority": "P1",
-    "requirement_summary": "The bundled server serves ReadRange only on a BACnetLIST target (BACNET-15-READ-RANGE-TARGET-KIND) and rejects an array index when the object classifies the property as a BACnetLIST or scalar, then selects By Position around an exact one-based list position and By Sequence or By Time through aligned resident identities for Event Log, Trend Log, and Trend Log Multiple LOG_BUFFER properties. By Time anchors positive Count at the first resident timestamp strictly newer than the specific reference and negative Count at the last resident timestamp strictly older, preserves oldest-to-newest resident order across duplicate or nonmonotonic clock-rollback timestamps, and never sorts by time. Empty misses carry no endpoint flags or First Sequence Number; nonempty identity-based results report included resident endpoints and the oldest returned record's nonzero sequence. Trend alone projects its optional top-level StatusFlags; Event and Trend Log Multiple project Date, Time, and datum only. The client validates the required nonzero First Sequence Number on every nonempty By Sequence or By Time ACK.",
+    "requirement_summary": "The bundled server serves ReadRange only on a BACnetLIST target (BACNET-15-READ-RANGE-TARGET-KIND) and rejects an array index when the object classifies the property as a BACnetLIST or scalar, then selects By Position around an exact one-based list position and By Sequence or By Time through aligned resident identities for Event Log, Trend Log, and Trend Log Multiple LOG_BUFFER properties. By Time anchors positive Count at the first resident timestamp strictly newer than the specific reference and negative Count at the last resident timestamp strictly older, preserves oldest-to-newest resident order across duplicate or nonmonotonic clock-rollback timestamps, and never sorts by time. Empty misses carry no endpoint flags or First Sequence Number; nonempty identity-based results report included resident endpoints and the oldest returned record's nonzero sequence. Trend alone projects its optional top-level StatusFlags; Event projects Date, Time, and datum only, and Trend Log Multiple serves each record framed as BACnetLogMultipleRecord. The client validates the required nonzero First Sequence Number on every nonempty By Sequence or By Time ACK.",
    "status": "in-progress",
     "code_anchors": [
      "crates/bacnet-server/src/handlers/read_range.rs::select_signed_range",
@@ -1129,6 +1156,8 @@
      "crates/bacnet-objects/src/traits.rs::BACnetObject::is_array_property",
      "crates/bacnet-objects/src/traits.rs::BACnetObject::is_list_property",
      "crates/bacnet-objects/src/traits.rs::BACnetObject::log_record_identities_internal",
+     "crates/bacnet-encoding/src/constructed/log_multiple_record.rs::encode_log_multiple_record",
+     "crates/bacnet-encoding/src/constructed/log_multiple_record.rs::decode_log_multiple_record",
      "crates/bacnet-client/src/read_range.rs::validate_ack",
      "crates/bacnet-server/src/handlers/read_range_audit.rs::RangeItems",
      "crates/bacnet-services/src/read_range.rs::RangeSpec"
@@ -1143,6 +1172,11 @@
      "crates/bacnet-server/src/handlers/tests/read_range_time.rs::by_time_empty_and_no_match_are_success_without_metadata",
      "crates/bacnet-server/src/handlers/tests/read_range_time.rs::every_log_family_reads_by_time_after_fifo_eviction",
      "crates/bacnet-server/src/handlers/tests/read_range_time.rs::read_range_preserves_family_specific_status_projection_bytes",
+     "crates/bacnet-server/src/handlers/tests/read_range_multiple.rs::polled_multiple_records_read_range_with_exact_bytes",
+     "crates/bacnet-server/src/handlers/tests/read_range_multiple.rs::read_range_multiple_records_decode_back_to_the_polled_values",
+     "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::log_multiple_record_values_have_exact_bytes_and_round_trip",
+     "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::log_multiple_record_every_alternative_round_trips",
+     "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::consecutive_log_multiple_records_decode_by_returned_offset",
      "crates/bacnet-server/src/handlers/tests/read_range_time.rs::client_accepts_by_time_ack_and_continues_by_returned_sequence",
      "crates/bacnet-client/src/client/file_list.rs::tests::first_sequence_number_must_match_the_requested_range",
      "crates/bacnet-services/src/read_range_width_tests.rs::{request_unsigned_fields_accept_their_widest_values,ack_unsigned_fields_enforce_their_widths_without_rejecting_leading_zero}",
@@ -1153,6 +1187,8 @@
      "crates/bacnet-server/src/handlers/tests/read_range.rs::item_encoding_error_keeps_response_byte_for_byte_unchanged",
      "crates/bacnet-server/src/handlers/tests/read_range_time.rs::by_time_rejects_invalid_absent_or_misaligned_timestamp_identities",
      "crates/bacnet-server/src/handlers/tests/read_range_time.rs::indexed_log_buffer_is_rejected_for_every_log_family",
+     "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::log_multiple_record_rejects_unencodable_values_without_writing",
+     "crates/bacnet-encoding/src/constructed/tests/log_multiple_record.rs::log_multiple_record_decoder_rejects_malformed_records",
      "crates/bacnet-server/src/handlers/tests/read_range_time.rs::zero_array_index_is_rejected_by_request_decoder",
      "crates/bacnet-services/src/read_range_width_tests.rs::request_unsigned_fields_reject_overflow"
    ],
@@ -1164,6 +1200,7 @@
      "ReadRange applies the object-owned BACnetARRAY classification after a whole-property read, so an unknown property keeps UNKNOWN_PROPERTY and every index on these BACnetLIST LOG_BUFFER properties fails PROPERTY / PROPERTY_IS_NOT_AN_ARRAY.",
      "A target that is not a BACnetLIST fails SERVICES / PROPERTY_IS_NOT_A_LIST before either identity check (#1025). The shared raw Rust record retains status flags for source compatibility, but Clause 21.6 serializes top-level optional StatusFlags only for Trend Log, not Event Log or Trend Log Multiple.",
      "This implementation fully encodes every selected item without a separate response/PDU cap, so MORE_ITEMS remains FALSE. Response-size pagination/segmentation, persistence/restart, formal Event Log notification records, and complete ReadRange/log conformance remain deferred. No runtime PICS/service bit is changed.",
+     "Trend Log Multiple LOG_BUFFER items are BACnetLogMultipleRecord encodings: a context-tagged timestamp and log data, each member value under its own tag 0 to 8. All three range forms return them byte for byte (#1203).",
      "Reference Index and Reference Sequence Number decode as Unsigned64, and First Sequence Number encodes and decodes as Unsigned64, because the stack hosts Audit Log (Clauses 15.8.1.1.4.1.1, 15.8.1.1.4.2.1 and 15.8.1.2.7, #1092). An Event or Trend log holds no sequence above 2^32 - 1, so such a reference reads empty instead of failing to decode.",
      "An Audit Log's LOG_BUFFER uses the same selection and page budget over identities built from its record store (BACNET-12-AUDIT-LOG-BUFFER). Its items are encoded only as a page reaches them."
     ]
@@ -1790,7 +1827,8 @@
     "Secured_Status is not in the Access Door row of Table 13-1 (#1061), so no COV path needed a change. Local policies, recorded on AccessDoorObject::secured_status: each input is met, failed or undetermined, a failed input gives UNSECURED even when another is undetermined (a door commanded UNLOCK is not secure whatever its contact reports), and UNKNOWN needs every input met or undetermined.",
     "The only undetermined inputs are Door_Status UNKNOWN or DOOR_FAULT and Lock_Status UNKNOWN or LOCK_FAULT: the door's own monitor saying it can't tell. The option of keying UNKNOWN on Reliability was not taken, because this door applies no fault algorithm and nothing moves its Reliability off NO_FAULT_DETECTED; a new door starts CLOSED and LOCKED, so a never-reported Door_Status reads CLOSED, not UNKNOWN.",
     "Door_Status values the clause does not describe for a door (NONE, CLOSING, OPENING, SAFETY_LOCKED, LIMITED_OPENED) and proprietary ones count as not closed. IN_ALARM comes from Event_State (Clause 12.26.6); the door now serves Status_Flags from its own Event_State field so the flag and Secured_Status read the same source, which stays NORMAL until intrinsic reporting is modelled (no wire change).",
-    "Masked_Alarm_Values is not served, so that input is treated as met; #1149 adds the list and its input next to the others in secured_status. Door_Alarm_State is not an input: it reaches Secured_Status only through Event_State once an event algorithm runs."
+    "Masked_Alarm_Values is not served, so that input is treated as met; #1149 adds the list and its input next to the others in secured_status. Door_Alarm_State is not an input: it reaches Secured_Status only through Event_State once an event algorithm runs.",
+    "Door_Members is a BACnetARRAY of BACnetDeviceObjectReference, set by AccessDoorObject::set_door_members (BACNET-12-ACCESS-CONTROL-ARRAYS)."
    ]
   },
   {
@@ -2098,9 +2136,11 @@
     "crates/bacnet-server/src/handlers/group_present_value.rs",
     "crates/bacnet-server/src/handlers/rpm_budget.rs::plan",
     "crates/bacnet-server/src/handlers/rpm_budget.rs::plan_specs",
-    "crates/bacnet-server/src/handlers/rpm_budget.rs::Work",
-    "crates/bacnet-server/src/handlers/read_property.rs::active_cov_device",
-    "crates/bacnet-server/src/handlers/read_property.rs::active_cov_device_for_rpm"
+    "crates/bacnet-server/src/handlers/read_budget.rs::Work",
+    "crates/bacnet-server/src/handlers/rpm_budget.rs::RpmPlan",
+    "crates/bacnet-server/src/handlers/rpm_budget.rs::live_cov_selection",
+    "crates/bacnet-server/src/handlers/read_property.rs::PropertyPlan",
+    "crates/bacnet-endpoint/src/session.rs::SessionConfig"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{property_references_encode_and_decode_with_and_without_an_index,read_access_specifications_decode_one_element_at_an_offset}",
@@ -2109,20 +2149,24 @@
     "crates/bacnet-server/src/handlers/tests/read_rpm/group_present_value.rs::{group_present_value_holds_one_read_access_result_per_member,each_member_reads_as_read_property_multiple_reads_its_specification,group_present_value_is_rebuilt_on_each_read,read_range_pages_the_rebuilt_present_value}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/group.rs::rpm_group_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/server/group_present_value_wire_tests.rs::group_present_value_bip_wire_rebuilds_from_members",
-    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::{group_members_read_the_live_device_cov_lists_through_rp_readrange_and_local_reads,group_members_read_the_live_device_cov_lists_through_rpm}"
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::{group_members_read_the_live_device_cov_lists_through_rp_readrange_and_local_reads,group_members_read_the_live_device_cov_lists_through_rpm}",
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/snapshot_plan.rs::{reads_whose_plan_names_no_device_cov_list_take_no_snapshot,a_read_whose_plan_names_a_device_cov_list_takes_one_snapshot}"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/read_access.rs::{malformed_property_references_are_refused,malformed_read_access_specifications_are_refused}",
     "crates/bacnet-objects/src/group/group_members_tests.rs::{add_member_refuses_a_member_that_reports_a_group_present_value,add_member_refuses_a_member_without_properties,group_lists_refuse_an_array_index}",
     "crates/bacnet-objects/src/group/metadata.rs::tests::property_metadata_group_trio_write_capabilities_match_dispatch",
     "crates/bacnet-server/src/handlers/tests/read_rpm/group_present_value.rs::member_rows_are_charged_to_the_rpm_work_budget_and_shared_between_groups",
-    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::group_present_value_past_the_work_limit_aborts_as_any_rpm_does"
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/group_present_value.rs::group_present_value_past_the_work_limit_aborts_as_any_rpm_does",
+    "crates/bacnet-server/src/server/active_cov_subscriptions_tests/snapshot_plan.rs::a_read_past_its_work_limit_aborts_before_sampling_the_cov_table",
+    "crates/bacnet-endpoint/src/read_work_limit_tests.rs::{endpoint_group_read_past_the_read_work_limit_aborts_out_of_resources,endpoint_read_work_limit_defaults_to_256_and_refuses_zero}"
    ],
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Fixed entry for #1134 (Group List_Of_Group_Members and Present_Value), from changelog.d/1134-group-datatypes.md",
     "CHANGELOG.md Unreleased Fixed entry for #1171 (Group members read the live Device COV lists), from changelog.d/1171-group-member-cov-lists.md",
     "CHANGELOG.md Unreleased Changed entry for #1172 (Group Present_Value charged to the request's work limit), from changelog.d/1172-group-present-value-work-limit.md",
+    "CHANGELOG.md Unreleased Added entry for #1215 (endpoint read work limit), from changelog.d/1215-endpoint-read-work-limit.md",
     "docs/rust-api.md#constructed-property-framing Group List_Of_Group_Members and Present_Value"
    ],
    "notes": [
@@ -2133,7 +2177,9 @@
     "Member rows use each object's own reader, so a custom Group object that lists a group's Present_Value gets that object's own answer instead of a recursive rebuild, and a custom Group whose List_Of_Group_Members doesn't decode as ReadAccessSpecifications fails the Present_Value read with PROPERTY / OTHER.",
     "Work policy (#1172): a Group may list any number of members, and the request that reads its Present_Value pays for them. Each member row, after ALL, REQUIRED and OPTIONAL expand, counts against the ReadPropertyMultiple work limit (ReadPropertyMultipleBudget::max_result_elements) together with the request's own rows, and is charged before any member is read.",
     "Several Groups in one ReadPropertyMultiple share that limit, and an RPM that would pass it is aborted with OUT_OF_RESOURCES before reading anything, as any RPM over its work limit is. ReadProperty and ReadRange have no work limit of their own, so a read of a Group's Present_Value through either gets the limit of an RPM that names only that property, its own row plus the member rows, and draws the same abort; BACnetServer::read_local uses the same limit and fails with Error::Abort (OUT_OF_RESOURCES).",
-    "The low-level handlers with no executor view have no limit. The rebuilt octets still count toward the RPM byte budget. The request pre-scan looks through the members of every Group whose Present_Value a request may read, by name or through ALL, REQUIRED or OPTIONAL on the Group, so a member naming the Device's Active_COV_Subscriptions or Active_COV_Multiple_Subscriptions, directly or through ALL on the Device or the Device wildcard, reads the request's one live snapshot, taken under the database guard and before the COV table guard (#1171).",
+    "The low-level handlers with no executor view have no limit. The rebuilt octets still count toward the RPM byte budget.",
+    "Every read plans its rows, a Group's member rows included and ALL, REQUIRED and OPTIONAL expanded, before it reads a value. A request samples the COV table once, under the database guard and before the COV table guard, only when a planned row names the Device's Active_COV_Subscriptions or Active_COV_Multiple_Subscriptions, directly or through the Device wildcard; a request past its work limit samples nothing (#1171, #1213).",
+    "The shared endpoint has no ReadPropertyMultiple budget: its ReadProperty charges a Group's Present_Value to SessionConfig::read_work_limit (default 256, zero refused), also set with the endpoint builders' read_work_limit, and aborts with OUT_OF_RESOURCES past it (#1215).",
     "PropertyReference and ReadAccessSpecification moved from bacnet-services into bacnet_types::constructed, with their codecs as free functions in bacnet_encoding::constructed, so the Group stores them the way other objects store their Clause 21 types; the ReadPropertyMultiple, COV and Audit codecs call the same functions. Not covered: writable List_Of_Group_Members; the Audit_Level, Auditable_Operations, Tags and profile rows."
    ]
   },
@@ -2192,24 +2238,43 @@
     "crates/bacnet-server/src/server/requests/mutations.rs",
     "crates/bacnet-server/src/committed_cov.rs",
     "crates/bacnet-server/src/device_view.rs",
-    "crates/bacnet-endpoint/src/source_reporter.rs"
+    "crates/bacnet-endpoint/src/source_reporter.rs",
+    "crates/bacnet-server/src/command_lists.rs",
+    "crates/bacnet-server/src/command_lists/unattached.rs",
+    "crates/bacnet-server/src/schedule.rs",
+    "crates/bacnet-server/src/handlers/write_property.rs",
+    "crates/rusty-bacnet/src/types/action_list.rs",
+    "crates/rusty-bacnet/src/server/server_methods/registration.rs",
+    "crates/rusty-bacnet/rusty_bacnet.pyi"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/command_action_wire_tests.rs::{command_present_value_write_runs_the_selected_list_on_local_targets,command_write_during_a_run_is_busy_and_the_post_delay_holds_the_next_write,command_rewriting_the_same_value_runs_the_list_again,command_zero_or_an_empty_list_writes_nothing_and_succeeds_at_once}",
     "crates/bacnet-server/src/server/command_action_run_tests.rs::{command_run_starts_from_write_local_and_write_property_multiple,command_run_writing_another_command_starts_its_list,command_property_subscribers_see_in_process_rise_and_fall,command_run_starts_when_a_schedule_writes_present_value}",
     "crates/bacnet-objects/src/command/tests.rs::{command_present_value_write_queues_the_selected_list_and_busies_the_object,command_zero_and_an_empty_list_complete_at_once,command_action_text_serves_one_text_per_list_and_follows_the_action_size,command_takes_property_subscriptions_but_not_subscribe_cov}",
     "crates/bacnet-objects/src/command/metadata.rs::tests::property_metadata_command_action_text_row_follows_action_once_set",
-    "crates/bacnet-endpoint/src/source_reporter_command_run_tests.rs::command_run_hooks_and_property_cov_admission_survive_wrapping"
+    "crates/bacnet-endpoint/src/source_reporter_command_run_tests.rs::command_run_hooks_and_property_cov_admission_survive_wrapping",
+    "crates/bacnet-server/src/schedule_command_tests.rs::tick_schedules_runs_the_command_lists_its_writes_start",
+    "crates/bacnet-server/src/handlers/tests/command_present_value_writes.rs::{bare_write_property_ends_a_command_run_it_cannot_make,bare_write_property_multiple_ends_the_runs_its_committed_prefix_started}",
+    "crates/rusty-bacnet/src/types/action_list_tests.rs::action_command_mappings_fill_every_field_and_default_the_optional_ones",
+    "crates/rusty-bacnet/src/server/server_methods/registration_tests.rs::command_builder_applies_action_then_action_text_through_the_object_setters",
+    "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_present_value_write_runs_the_configured_list"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/command_action_wire_tests.rs::{command_quit_on_failure_stops_the_list_and_action_reads_back_the_flags,command_present_value_above_the_action_size_is_value_out_of_range,command_naming_another_device_fails_and_naming_this_device_is_local,command_writing_its_own_present_value_is_refused_busy}",
     "crates/bacnet-server/src/server/command_action_run_tests.rs::command_replaced_during_a_post_delay_leaves_the_rest_of_the_run_unmade",
-    "crates/bacnet-objects/src/command/tests.rs::{command_quit_on_failure_marks_the_commands_after_it_unsuccessful,command_present_value_above_the_action_size_is_out_of_range,command_set_action_abandons_a_run_and_its_reports_go_stale}"
+    "crates/bacnet-objects/src/command/tests.rs::{command_quit_on_failure_marks_the_commands_after_it_unsuccessful,command_present_value_above_the_action_size_is_out_of_range,command_set_action_abandons_a_run_and_its_reports_go_stale}",
+    "crates/bacnet-server/src/schedule_command_tests.rs::tick_schedules_dropped_mid_run_ends_the_command_run_unsuccessful",
+    "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_refuses_a_command_present_value_write_and_starts_no_run",
+    "crates/rusty-bacnet/src/types/action_list_tests.rs::action_command_mappings_refuse_bad_shapes_and_types",
+    "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_invalid_actions_are_refused_and_add_nothing"
    ],
    "benchmarks": [],
    "public_claims": [
     "CHANGELOG.md Unreleased Added entry for #1150 (Command action lists run), from changelog.d/1150-command-action-execution.md",
-    "docs/rust-api.md#building-control-7 Command object"
+    "docs/rust-api.md#building-control-7 Command object",
+    "CHANGELOG.md Unreleased Fixed entry for #1178 (Command runs outside the bundled server), from changelog.d/1178-command-runs-outside-server.md",
+    "CHANGELOG.md Unreleased Added entry for #1179 (Python Command action lists), from changelog.d/1179-python-command-actions.md",
+    "docs/python-api.md#building-control Python add_command action and action_text"
    ],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1150, found in #1135). Breaking pre-1.0 wire change: Present_Value used to store any Unsigned and run nothing. Clause 12.10 and Table 12-12 were read as page images.",
@@ -2218,7 +2283,12 @@
     "Every report back is guarded by a per-object generation, so a Command replaced or deleted mid-run stops the run without completing it. No database guard is held across a write's notifications or a post delay; lock order stays database, then COV table.",
     "Runs start from WriteProperty, WritePropertyMultiple, write_local, a Schedule tick or a written Schedule's own pass (background commits collect queued runs), and from a run's write to another Command.",
     "Local policies: a command naming another Device fails like a refused write (Clause 12.10.8 makes remote writes optional), and one naming this Device is local; a post delay follows every attempt, a quitting failure included, before the run ends; failed writes leave Reliability alone (Clause 12.10.13); Command opts into SubscribeCOVProperty under Table 13-1a (SubscribeCOV stays refused, no Table 13-1 row), and the server fans COV out for the Command at the start, after each command and at the end; Action_Text is absent until CommandObject::set_action_text supplies one text per list, read-only on the network, and set_action resizes it (empty texts added, trailing texts dropped) and abandons a run in progress.",
-    "Not covered: writes to other devices; network writes of Action or Action_Text; Python bindings configuring Action or Action_Text; resuming a run that stop() cut short (In_Process stays TRUE on the stopped server); the bare handlers, tick_schedules without a server and the endpoint runtime don't run lists, so a Command written there keeps its queued run and In_Process TRUE until code takes it; intrinsic reporting on Command."
+    "Not covered: writes to other devices; network writes of Action or Action_Text; resuming a run that stop() cut short (In_Process stays TRUE on the stopped server); intrinsic reporting on Command.",
+    "Run ownership (#1178): whatever commits a Present_Value write takes the run under that guard and finishes it, so no path leaves a Command in process.",
+    "tick_schedules without a server runs the lists its writes start before it returns, post delays included: each command goes through the bare WriteProperty handler path with the Command as initiator, and a list that writes another Command starts that one beside it. Dropping the future ends each unfinished run as unsuccessful, with its unmade commands FALSE.",
+    "The synchronous handle_write_property and handle_write_property_multiple make no writes for a Command: the run ends at once with In_Process FALSE, All_Writes_Successful FALSE and every Write_Successful FALSE. A second Present_Value write in the same WritePropertyMultiple still finds the Command busy.",
+    "The endpoint responder refuses a Command Present_Value write with WRITE_ACCESS_DENIED (it writes only the Device's Description and Audit recipient), so it never starts a run.",
+    "Python (#1179): BACnetServer.add_command takes keyword-only action (lists of ActionCommand mappings) and action_text. The binding checks shapes and Python types (TypeError, ValueError); CommandObject::set_action and set_action_text refuse a priority outside 1 to 16, an unencodable value or a text count mismatch (VALUE_OUT_OF_RANGE). Write_Successful starts FALSE."
    ]
   },
   {
@@ -2259,7 +2329,87 @@
     "Split child of BACNET-12-OBJECT-MODEL (#1133, found in #1061). Breaking pre-1.0 wire and Rust API changes. Tables 12-32, 12-33, 12-36 and 12-43 and the Clause 21 productions were read as page images. Before, the shed levels went out as an application-tagged Unsigned or REAL, so a client's WriteProperty in the CHOICE form failed with INVALID_DATA_TYPE, and they started at percent 0, the deepest shed rather than none; the two time stamps went out as an application Date followed by a Time; and Present_Value was a placeholder Enumerated.",
     "Rust API: BACnetShedLevel's percent and level hold a u64 like any Unsigned; LoadControlObject::set_requested_shed_level and set_actual_shed_level return Result, the second refusing a choice other than the requested one (Clause 12.28.17 keeps the units the same); AccessPointObject::set_access_event takes a BACnetTimeStamp; CredentialDataInputObject::set_present_value records a factor with its Update_Time and replaces set_update_time.",
     "Local policies: a percent above 100 or a negative amount is refused, since under Table 12-33 either sets a power target above the baseline; Expected_Shed_Level and Actual_Shed_Level follow the requested choice's default because nothing moves Present_Value off SHED_INACTIVE; a malformed CHOICE is INVALID_DATA_TYPE like any other wrong form.",
-    "Not covered: Shed_Levels, which Table 12-32 types as an array of Unsigned rather than BACnetShedLevel, and Enable, Duty_Window and Shed_Level_Descriptions (#1092); the shed state machine and a Start_Time write route; Credential Data Input Present_Value and Reliability writes while Out_Of_Service (Table 12-43 footnote 1); Supported_Formats as an array of BACnetAuthenticationFactorFormat; Access Point Access_Doors as an array of BACnetDeviceObjectReference."
+    "Not covered: Shed_Levels, which Table 12-32 types as an array of Unsigned rather than BACnetShedLevel, and Enable, Duty_Window and Shed_Level_Descriptions (#1092); the shed state machine and a Start_Time write route; Credential Data Input Present_Value and Reliability writes while Out_Of_Service (Table 12-43 footnote 1); Supported_Formats as an array of BACnetAuthenticationFactorFormat; Access Point Access_Doors as an array of BACnetDeviceObjectReference.",
+    "Credential Data Input out-of-service writes are BACNET-12-CREDENTIAL-DATA-INPUT-OUT-OF-SERVICE-SIMULATION; Supported_Formats, Supported_Format_Classes and Access_Doors as arrays are BACNET-12-ACCESS-CONTROL-ARRAYS."
+   ]
+  },
+  {
+   "id": "BACNET-12-CREDENTIAL-DATA-INPUT-OUT-OF-SERVICE-SIMULATION",
+   "standard_anchor": "Clause 12.36, Table 12-43 footnote 1 and Clauses 12.36.4 (Present_Value), 12.36.7 (Reliability), 12.36.8 (Out_Of_Service) and 12.36.11 (Update_Time); Clause 13.1 Table 13-1 (Credential Data Input row); Clause 15.9.1.3 WriteProperty errors; Clause 21 BACnetAuthenticationFactor, BACnetAuthenticationFactorType and BACnetReliability",
+   "priority": "P1",
+   "requirement_summary": "While Out_Of_Service is TRUE, a Credential Data Input takes WriteProperty and WritePropertyMultiple of Present_Value and Reliability; in service each fails with PROPERTY / WRITE_ACCESS_DENIED. A Present_Value write must be one BACnetAuthenticationFactor, else INVALID_DATA_TYPE. Its format type must be a named BACnetAuthenticationFactorType, and the format type and class must match a Supported_Formats element and the Supported_Format_Classes element at the same position, or be UNDEFINED or ERROR with class 0; else VALUE_OUT_OF_RANGE. A Reliability write must be an Enumerated in the BACnetReliability production, its proprietary range included. A refused write changes nothing. An accepted Present_Value write stamps Update_Time from the Device clock. Entering out of service sets the reader's Present_Value, Update_Time and Reliability aside and the return to service serves them again. Both rows are WhenOutOfService in the property metadata and writable in the PICS. A simulated value, and a restore that changes the row, sends the Credential Data Input SubscribeCOV report.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/credential_data_input_out_of_service.rs",
+    "crates/bacnet-objects/src/access_control/credential_data_input.rs::CredentialDataInputObject",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs",
+    "crates/bacnet-objects/src/common.rs"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/credential_data_input_out_of_service_tests.rs::{credential_data_input_takes_simulated_rows_out_of_service,credential_data_input_simulated_present_value_without_a_clock_stamps_unspecified,credential_data_input_return_to_service_serves_the_reader_again,credential_data_input_null_out_of_service_write_keeps_the_simulation}",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::{property_metadata_access_identity_write_capabilities_match_dispatch,property_metadata_access_identity_writes_store_verbatim_and_deny}",
+    "crates/bacnet-objects/src/reliability_writability_tests.rs::credential_data_input_reliability_requires_out_of_service",
+    "crates/bacnet-server/src/handlers/tests/credential_data_input_oos_writes.rs::{write_property_takes_reader_rows_only_out_of_service,write_property_multiple_takes_reader_rows_only_out_of_service}",
+    "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::credential_data_input_simulated_rows_report_and_restore",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_identity.rs::pics_access_identity_property_metadata_is_exact"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/credential_data_input_out_of_service_tests.rs::{credential_data_input_refuses_simulated_rows_in_service,credential_data_input_simulated_rows_outside_their_datatypes_are_refused_unchanged,credential_data_input_set_reliability_internal_checks_the_production}",
+    "crates/bacnet-server/src/handlers/tests/credential_data_input_oos_writes.rs::reader_row_writes_outside_their_datatypes_are_refused_unchanged"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Fixed entry for #1168 (Credential Data Input out-of-service writes), from changelog.d/1168-credential-data-input-oos-writes.md",
+    "docs/rust-api.md#access-control-7 out-of-service Present_Value and Reliability"
+   ],
+   "notes": [
+    "Split child of BACNET-12-OBJECT-MODEL (#1168, found in #1133). Breaking pre-1.0 wire change. Table 12-43 was read as a page image; footnote 1 marks Present_Value and Reliability.",
+    "Local policies, recorded in access_control/credential_data_input_out_of_service.rs: a malformed factor is INVALID_DATA_TYPE, as for the Load Control shed levels; UNDEFINED and ERROR need no declared format; the value octets are not checked against Annex P.",
+    "A simulated Present_Value stamps Update_Time from the Device clock, with every field unspecified when there is none, as the Pulse Converter stamps Count; a Reliability write leaves Update_Time alone.",
+    "set_present_value updates the values set aside while out of service. The new set_reliability_internal is refused with WRITE_ACCESS_DENIED while out of service, as on the other Reliability carriers (BACNET-12-OOS-RELIABILITY-WRITABILITY).",
+    "The server treats Present_Value as a COV trigger on this object as on every type but Access Point, so a simulated Present_Value reports even when Update_Time does not move.",
+    "Not covered: setting Present_Value to UNDEFINED when Supported_Formats stops listing its format; intrinsic and fault reporting; a Python route to declare formats."
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-CONTROL-ARRAYS",
+   "standard_anchor": "Clause 12.26, Table 12-30 and Clause 12.26.15 (Access Door Door_Members); Clause 12.31, Table 12-36 and Clause 12.31.32 (Access Point Access_Doors); Clause 12.36, Table 12-43 and Clauses 12.36.9 and 12.36.10 (Credential Data Input Supported_Formats and Supported_Format_Classes); Clause 12.1.5.1 array properties; Clause 21 BACnetAuthenticationFactorFormat and BACnetDeviceObjectReference; Clause 15.5 ReadProperty and Clause 15.7 ReadPropertyMultiple",
+   "priority": "P1",
+   "requirement_summary": "Credential Data Input serves Supported_Formats as a BACnetARRAY of BACnetAuthenticationFactorFormat (format type [0], optional vendor id [1] and vendor format [2]) and Supported_Format_Classes as a BACnetARRAY of Unsigned of the same size. Access Door serves Door_Members and Access Point serves Access_Doors as BACnetARRAYs of BACnetDeviceObjectReference. Index 0 of each reads the array size, indexes 1 to N one element in the octets the whole-array read concatenates, and a larger index PROPERTY / INVALID_ARRAY_INDEX, through ReadProperty and ReadPropertyMultiple. All four are array identifiers in the default classification and stay read-only on the network. The application sets them through CredentialDataInputObject::set_supported_formats (format and class pairs), AccessDoorObject::set_door_members and AccessPointObject::set_access_doors.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-types/src/constructed/access.rs",
+    "crates/bacnet-encoding/src/constructed/access_credential.rs",
+    "crates/bacnet-objects/src/traits/defaults.rs",
+    "crates/bacnet-objects/src/access_control/credential_data_input.rs::CredentialDataInputObject",
+    "crates/bacnet-objects/src/access_control/door.rs::AccessDoorObject",
+    "crates/bacnet-objects/src/access_control/point.rs::AccessPointObject",
+    "crates/bacnet-objects/src/common.rs::read_array"
+   ],
+   "positive_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/authentication_factor_format.rs::{authentication_factor_format_golden_bytes_and_round_trip,authentication_factor_formats_decode_one_element_at_a_time}",
+    "crates/bacnet-objects/src/access_control/array_tests.rs::{credential_data_input_supported_formats_read_as_arrays,access_door_door_members_read_as_an_array,access_point_access_doors_read_as_an_array}",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_credential_data_input_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs::tests::{property_metadata_access_door_exact_sets_readable_rows_and_indexed_list,property_metadata_access_point_exact_sets_readable_rows_and_indexed_list}",
+    "crates/bacnet-server/src/handlers/tests/access_control_arrays.rs::{credential_data_input_format_arrays_read_per_index,access_door_door_members_read_per_index,access_point_access_doors_read_per_index}",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_identity.rs::rpm_credential_data_input_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::{rpm_access_door_indexed_reads_and_bytes_are_unchanged,rpm_access_point_indexed_reads_and_bytes_are_unchanged,rpm_access_zone_indexed_reads_and_bytes_are_unchanged}"
+   ],
+   "negative_tests": [
+    "crates/bacnet-encoding/src/constructed/tests/authentication_factor_format.rs::authentication_factor_format_rejects_malformed_elements",
+    "crates/bacnet-objects/src/access_control/array_tests.rs::credential_data_input_set_supported_formats_refuses_ill_formed_formats"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "CHANGELOG.md Unreleased Fixed entry for #1169 (access-control arrays), from changelog.d/1169-access-control-arrays.md",
+    "docs/rust-api.md#constructed-property-framing access-control arrays"
+   ],
+   "notes": [
+    "Split child of BACNET-12-OBJECT-MODEL (#1169, found in #1133). Breaking pre-1.0 wire change. Tables 12-30, 12-36 and 12-43 and the Clause 21 production were read as page images.",
+    "The object keeps Supported_Formats and Supported_Format_Classes as one list of pairs, so the two arrays always have one size. set_supported_formats refuses with VALUE_OUT_OF_RANGE a format outside the closed BACnetAuthenticationFactorType production, a CUSTOM format without both vendor members, and another format with a nonzero vendor member.",
+    "set_access_doors refuses with VALUE_OUT_OF_RANGE a reference to anything but an Access Door object; Door_Members takes any reference, its contents being the device's choice.",
+    "Access Zone has no Access_Doors row, so an indexed read of it fails with UNKNOWN_PROPERTY rather than PROPERTY_IS_NOT_AN_ARRAY, as for the other array identifiers on objects that lack them.",
+    "Not covered: network writes and resizing of Supported_Formats and Supported_Format_Classes, which Table 12-43 does not require; Python routes for the four setters."
    ]
   },
   {
@@ -2422,12 +2572,16 @@
     "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_default_fade_time_starts_at_100_ms_and_takes_writes_within_its_range",
     "crates/bacnet-server/src/handlers/tests/lighting_required_rows.rs::lighting_output_default_fade_time_over_write_property",
     "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_duo_write_capabilities_match_dispatch",
-    "crates/bacnet-server/src/pics/property_metadata_tests/lighting.rs::pics_lighting_property_metadata_is_exact"
+    "crates/bacnet-server/src/pics/property_metadata_tests/lighting.rs::pics_lighting_property_metadata_is_exact",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_cov_increment_starts_at_zero_and_takes_writes",
+    "crates/bacnet-server/src/server/value_cov_increment_tests.rs::lighting_output_cov_notifies_at_and_above_its_increment_only"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/value_types/tests/required_rows.rs::non_numeric_value_types_have_no_cov_increment",
     "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_default_fade_time_setter_refuses_values_outside_its_range",
-    "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_output_writes_store_verbatim_with_range_gates"
+    "crates/bacnet-objects/src/lighting/metadata.rs::tests::property_metadata_lighting_output_writes_store_verbatim_with_range_gates",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::lighting_output_cov_increment_refuses_bad_values_and_keeps_the_old_one",
+    "crates/bacnet-objects/src/lighting/required_rows_tests.rs::binary_lighting_output_has_no_cov_increment"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2438,7 +2592,8 @@
     "Current_Command_Priority comes from the value macro through `common::current_command_priority`, as on the analog, binary, multi-state and lighting objects. Its metadata matches Priority_Array: Optional with the Commandable presence condition, read-only.",
     "The value macro takes an optional `cov_increment` entry naming the table's datatype (`u64` for Unsigned, `f64` for Double), so only the three numeric types serve the row, with a validated `set_cov_increment` setter. Its metadata is the Analog Value shape: Optional, no presence condition, writable.",
     "`BACnetObject::cov_increment` returns an `f64` so a Double increment is compared without rounding through a REAL; a subscription's own REAL increment widens exactly. Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions report the increment in use as a REAL, so a Large Analog Value increment is narrowed there.",
-    "Default_Fade_Time starts at 100 ms, the shortest fade the range allows, as Default_Ramp_Rate starts at its fastest rate; `set_default_fade_time` applies the same range as WriteProperty. No fade operation runs: Lighting_Command is stored as opaque bytes."
+    "Default_Fade_Time starts at 100 ms, the shortest fade the range allows, as Default_Ramp_Rate starts at its fastest rate; `set_default_fade_time` applies the same range as WriteProperty. No fade operation runs: Lighting_Command is stored as opaque bytes.",
+    "Lighting Output serves a writable REAL COV_Increment, starting at 0, through `common::write_cov_increment`: a negative or non-finite value is VALUE_OUT_OF_RANGE and another datatype INVALID_DATA_TYPE. It is an optional row in Property_List, the metadata (writable) and the PICS, and a SubscribeCOV notification goes out when Present_Value moves by at least the increment. Binary Lighting Output has no COV_Increment."
    ]
   },
   {
@@ -2544,7 +2699,7 @@
     "crates/bacnet-server/src/cov/prepare.rs::effective_increment",
     "crates/bacnet-server/src/server/requests/confirmed_response.rs::active_cov_snapshot",
     "crates/bacnet-server/src/handlers/read_property.rs::read_property_value",
-    "crates/bacnet-server/src/handlers/rpm_budget.rs::rpm_budgeted_request_observed",
+    "crates/bacnet-server/src/handlers/rpm_budget.rs::RpmPlan::read_observed",
     "crates/bacnet-server/src/server/requests/read_range.rs::response",
     "crates/bacnet-server/src/server/handles.rs::BACnetServer::read_local",
     "crates/bacnet-server/src/local_device.rs::selected_device",
@@ -2651,7 +2806,7 @@
      "crates/bacnet-server/src/cov/active/multiple.rs::ActiveCovMultipleSubscriptions::project",
      "crates/bacnet-server/src/cov/active.rs::LiveDeviceCov::resolve",
      "crates/bacnet-server/src/server/requests/confirmed_response.rs::active_cov_snapshot",
-     "crates/bacnet-server/src/handlers/read_property.rs::active_cov_device_for_rpm",
+     "crates/bacnet-server/src/handlers/rpm_budget.rs::live_cov_selection",
      "crates/bacnet-server/src/server/requests/read_range.rs::response",
      "crates/bacnet-server/src/handlers/cov.rs::handle_subscribe_cov_property_multiple_request_endpoint",
      "crates/bacnet-server/src/server/handles.rs::BACnetServer::read_local",
@@ -2787,6 +2942,8 @@
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_bound_clock_drives_reads_and_expiry",
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::entries_naming_the_same_recipient_and_process_are_one_entry",
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_rewrite_keeps_the_deadline_of_each_entry_it_leaves_alone",
+    "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_rewrite_restarts_an_entry_written_two_minutes_or_more_off",
+    "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_rewrite_keeps_a_deadline_when_a_minute_boundary_falls_between_read_and_write",
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_rewrite_with_other_members_restarts_the_lifetime",
     "crates/bacnet-objects/src/subscribed_recipients_tests.rs::a_full_list_of_the_longest_entries_reads_in_1184_octets",
     "crates/bacnet-server/src/handlers/tests/list_element_subscriptions.rs::add_list_element_appends_new_entries_and_renews_named_ones",
@@ -2826,7 +2983,8 @@
     "Deadlines sit on the database's monotonic clock. Reads serve the whole minutes left, rounded up, and skip a lapsed entry. The server's monotonic operation task drops each entry at its deadline through advance_monotonic_time_internal.",
     "A whole-list write restarts each entry's lifetime from its Time Remaining, except an entry written exactly as it reads, which keeps its deadline. The list services write the whole list back, so an edit leaves the other entries' deadlines alone.",
     "The handler keys entries by the encoding of recipient and process identifier. A later element naming the same entry wins, and a refusal the store names on a renewed entry maps back to the request element that renewed it.",
-    "Recipients decode with decode_configured_recipient, so an address MAC over 18 octets is a malformed element (PROPERTY / INVALID_DATA_TYPE)."
+    "Recipients decode with decode_configured_recipient, so an address MAC over 18 octets is a malformed element (PROPERTY / INVALID_DATA_TYPE).",
+    "An entry written with the same recipient, process and confirmation flag, and with the minutes it reads now or one more, keeps its deadline; the one more covers a minute boundary between the handler's read and its write. Any other Time Remaining restarts the lifetime."
    ]
   },
   {
@@ -2907,8 +3065,6 @@
     "crates/bacnet-objects/src/notification_class/tests/recipient_list.rs",
     "crates/bacnet-objects/src/notification_class/tests/recipient_list_cap.rs",
     "crates/bacnet-server/src/server/requests/mutation_list_element_number_tests.rs::write_property_of_a_recipient_list_past_the_cap_is_no_space",
-    "crates/bacnet-encoding/src/constructed/tests/recipient.rs::recipient_mac_bound_holds_in_both_directions",
-    "crates/bacnet-services/src/enrollment_summary_width_tests.rs::enrollment_filter_recipient_mac_holds_to_the_bacnet_address_bound",
     "crates/bacnet-objects/src/notification_class/tests/recipient_list.rs::recipient_list_flat_form_write_refused",
     "crates/bacnet-objects/src/notification_class/tests/recipient_list_cap.rs::recipient_list_mac_past_the_bound_is_refused",
     "crates/bacnet-objects/src/notification_class/tests/routed_list.rs::custom_class_past_the_cap_routes_none_of_its_list",
@@ -2919,7 +3075,12 @@
     "crates/bacnet-server/src/server/event_recipient_routing_tests/suppression_counters.rs::each_failed_closed_lookup_moves_only_its_own_counter",
     "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::each_route_skip_moves_only_its_own_counter_once",
     "crates/bacnet-server/src/server/event_recipient_routing_tests/route_skip_counters.rs::one_transition_counts_each_skipped_destination_and_serves_the_rest",
-    "crates/bacnet-server/src/server/event_confirmed_routing_tests/suppression_counters.rs::confirmed_route_skips_reserve_no_invoke_id"
+    "crates/bacnet-server/src/server/event_confirmed_routing_tests/suppression_counters.rs::confirmed_route_skips_reserve_no_invoke_id",
+    "crates/bacnet-server/src/server/event_recipient_routing_tests/post_route_counters.rs::failed_unicasts_count_once_each_and_the_rest_are_still_sent",
+    "crates/bacnet-server/src/server/event_recipient_routing_tests/post_route_counters.rs::failed_broadcast_forms_count_once_each",
+    "crates/rusty-bacnet/tests/test_event_notification_counters.py::EventNotificationCountersTests::test_a_failed_unconfirmed_send_is_counted_once_per_destination",
+    "crates/bacnet-encoding/src/constructed/tests/recipient.rs::recipient_mac_bound_holds_in_both_directions",
+    "crates/bacnet-services/src/enrollment_summary_width_tests.rs::enrollment_filter_recipient_mac_holds_to_the_bacnet_address_bound"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2933,11 +3094,12 @@
      "#1098: Recipient_List is capped at 32 destinations (MAX_RECIPIENT_LIST_DESTINATIONS), four times the AE-CRL-B minimum of 8 (Annex K.2.25). A device destination encodes in at most 27 octets and an address destination with a MAC of up to 6 octets in at most 35, so a full list is at most 1,120 octets and a ReadProperty of it fits one 1476-octet B/IP APDU; each event transition fans out to at most 32 notifications per class.",
      "A write checks destinations in order and refuses the first past the cap before decoding it, as Date_List does. The recipient_list field is private: recipient_list() reads it and add_destination returns Result, so nothing local grows the list past the cap. Before, the list was unbounded up to the 10,000-item framed decoder limit, past which a write failed with INVALID_DATA_TYPE.",
      "#1124: an address MAC is at most 18 octets (BACnetAddress::MAX_MAC_LEN). Clause 21 leaves the OCTET STRING unbounded; the longest network-layer address in Table 6-2 is 7 octets (LonTalk Neuron_ID), and the longest link address this stack uses is the 18-octet B/IPv6 form (IPv6 address and UDP port).",
+     "#1160: a destination that matches but is skipped while its route is resolved now also counts, once per destination, in EventNotificationCounters: device_recipient_unbound (a Device with no configured or unexpired observed binding), recipient_unroutable (a Device identifier that is not a Device, a binding unusable on the link, or a MAC on network 65535) and confirmed_broadcast_recipient (confirmed notifications asked for at a broadcast address, skipped before an invoke ID is reserved). The transition's other destinations are still served.",
+     "An unconfirmed notification whose send returns a transport error counts once per destination in EventNotificationCounters::unconfirmed_send_failed, and the other destinations are still served. A confirmed send that fails locally counts in confirmed_unanswered. No counter exists for an encode failure: the committed payload and message text are validated before the destinations are walked, so a well-formed transition always encodes.",
      "A destination's recipient decodes through decode_recipient, which refuses a longer MAC, so a WriteProperty or WritePropertyMultiple fails with PROPERTY / INVALID_DATA_TYPE and an AddListElement with a ChangeList-Error naming the element; add_destination refuses with the same code so a stored list stays decodable.",
      "A destination is then at most 47 octets and a full list at most 1,504. Routing applies MAX_RECIPIENT_LIST_DESTINATIONS to every class: a custom NOTIFICATION_CLASS object serving a longer list yields RecipientListTooLong, the server logs a warning, counts the transition in EventNotificationCounters::recipient_list_too_long (#1142) and sends nothing for that transition (never a prefix), and decoding stops at the first destination past the cap. GetEnrollmentSummary membership still reads the list as configured.",
      "#1156: decode_recipient itself holds to the bound, so the separate decode_configured_recipient is gone. COV subscription lists, audit notifications and records, and the GetEnrollmentSummary enrollment filter decode through it, and every recipient encoder (encode_recipient, encode_destination and its list form, the COV subscription encoders, the audit notification encoder) refuses a longer MAC before writing anything.",
-     "The ValueSource and AuditLogQuery address codecs share the same check (check_decoded_mac_len, check_encoded_mac_len). Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, and COV admission and remote command origins refuse a longer direct MAC, so nothing the stack stores fails to encode.",
-     "#1160: a destination that matches but is skipped while its route is resolved now also counts, once per destination, in EventNotificationCounters: device_recipient_unbound (a Device with no configured or unexpired observed binding), recipient_unroutable (a Device identifier that is not a Device, a binding unusable on the link, or a MAC on network 65535) and confirmed_broadcast_recipient (confirmed notifications asked for at a broadcast address, skipped before an invoke ID is reserved). The transition's other destinations are still served."
+     "The ValueSource and AuditLogQuery address codecs share the same check (check_decoded_mac_len, check_encoded_mac_len). Since #1141 the NPDU codec refuses a DLEN or SLEN past the same 18 octets, and COV admission and remote command origins refuse a longer direct MAC, so nothing the stack stores fails to encode."
     ]
   },
   {
@@ -3011,7 +3173,8 @@
     "crates/bacnet-objects/src/computed_status_flags_tests.rs::trend_log_multiple_flags_match_its_fixed_state",
     "crates/bacnet-server/src/server/loop_cov_tests.rs::loop_fault_and_out_of_service_notify_cov_subscribers",
     "crates/bacnet-objects/src/loop_obj/tests.rs::loop_present_value_is_writable_only_out_of_service",
-    "crates/bacnet-server/src/server/loop_cov_tests.rs::loop_present_value_write_property_follows_out_of_service"
+    "crates/bacnet-server/src/server/loop_cov_tests.rs::loop_present_value_write_property_follows_out_of_service",
+    "crates/bacnet-objects/src/reliability_writability_tests.rs::credential_data_input_reliability_requires_out_of_service"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/trend/tests.rs::trendlog_reliability_is_not_network_writable",
@@ -3030,7 +3193,8 @@
     "Trend Log and Trend Log Multiple derive only FAULT and IN_ALARM and hold OVERRIDDEN and OUT_OF_SERVICE FALSE per Clauses 12.25.30 and 12.30.5, so Trend Log's then non-standard compatibility Out_Of_Service never reached its flags.",
     "#978 also gave Calendar an always-clear Status_Flags; #984 then removed it, with Event_State and Out_Of_Service, because Table 12-11 defines none of them (see BACNET-12-CALENDAR-PROPERTY-SET). #997 likewise removed Status_Flags, Out_Of_Service and Reliability from Elevator Group, whose Table 12-76 has none of them (see BACNET-12-ELEVATOR-GROUP-PROPERTY-SET).",
     "#985: Loop Present_Value joined the footnote 7 gate (metadata WhenOutOfService, so the PICS marks it writable), and set_present_value_local now accepts a Loop in service. Trend Log lost its writable compatibility Out_Of_Service and Trend Log Multiple its fixed-FALSE read-only one, as #984 did for Calendar: both are absent from Property_List, the metadata, RPM ALL and OPTIONAL and the PICS, and ReadProperty or WriteProperty on them fails with PROPERTY / UNKNOWN_PROPERTY.",
-    "#1064 likewise removed Event Log's writable Out_Of_Service, which Table 12-31 doesn't define (BACNET-12-UNDEFINED-PROPERTY-ROWS). #1108 added Life Safety Point and Zone as the twelfth and thirteenth reliability_gate_test! carriers: footnote 1 of Tables 12-18 and 12-19 covers Reliability and Tracking_Value, both objects gained set_reliability_internal with the complementary guard, and the entry save and exit restore go through write_out_of_service_with_reliability_restore (Tracking_Value handling is BACNET-12-LIFE-SAFETY-OUT-OF-SERVICE-SIMULATION)."
+    "#1064 likewise removed Event Log's writable Out_Of_Service, which Table 12-31 doesn't define (BACNET-12-UNDEFINED-PROPERTY-ROWS). #1108 added Life Safety Point and Zone as the twelfth and thirteenth reliability_gate_test! carriers: footnote 1 of Tables 12-18 and 12-19 covers Reliability and Tracking_Value, both objects gained set_reliability_internal with the complementary guard, and the entry save and exit restore go through write_out_of_service_with_reliability_restore (Tracking_Value handling is BACNET-12-LIFE-SAFETY-OUT-OF-SERVICE-SIMULATION).",
+    "Credential Data Input is the fourteenth reliability_gate_test! carrier (#1168): footnote 1 of Table 12-43 covers Reliability and Present_Value, and set_reliability_internal carries the complementary guard (Present_Value handling is BACNET-12-CREDENTIAL-DATA-INPUT-OUT-OF-SERVICE-SIMULATION)."
    ]
   },
   {
@@ -4335,7 +4499,7 @@
    "code_anchors": [
     "crates/bacnet-server/src/handlers/read_property.rs::handle_read_property_multiple",
     "crates/bacnet-server/src/handlers/read_property.rs::resolve_read_target",
-    "crates/bacnet-server/src/handlers/rpm_budget.rs::rpm_budgeted_request_observed"
+    "crates/bacnet-server/src/handlers/rpm_budget.rs::RpmPlan::read_observed"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/rpm_wire_tests.rs::rpm_device_wildcard_bip_wire_returns_concrete_wrapper_and_value",
@@ -5009,8 +5173,12 @@
     "crates/bacnet-encoding/src/apdu/mod.rs",
     "crates/bacnet-services/src"
    ],
-   "positive_tests": [],
-   "negative_tests": [],
+   "positive_tests": [
+    "crates/bacnet-services/src/who_am_i_tests.rs::you_are_mac_address_holds_to_the_bacnet_address_bound"
+   ],
+   "negative_tests": [
+    "crates/bacnet-services/src/who_am_i_tests.rs::you_are_mac_address_holds_to_the_bacnet_address_bound"
+   ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
    ],
@@ -5019,7 +5187,8 @@
     "docs/python-api.md#bacnetclient service APIs"
    ],
    "notes": [
-    "Needs service-by-service fixture coverage in later PRs."
+    "Needs service-by-service fixture coverage in later PRs.",
+    "#1200: the You-Are device MAC is the MAC the matching device takes on the port the request arrived on (Clauses 16.11.3.1.5, 16.11.4 and 19.7.2), so YouAreRequest holds it to BACnetAddress::MAX_MAC_LEN: decode refuses a longer one and encode returns Error::Encoding with the buffer unchanged."
    ]
   },
   {
@@ -5235,7 +5404,8 @@
     "#1063 gave Controlled_Variable_Value an application route through the BACnetObject::set_controlled_variable_value_internal hook and the existing local-write path, which runs the COV capture under the database lock and fires after the guard drops; the server doesn't follow Controlled_Variable_Reference.",
     "Loop's other required rows are BACNET-12-LOOP-PROPERTY-SET (#1062). #1083 gave the Averaging object an application route through the BACnetObject::add_averaging_sample_internal hook and the same local-write path.",
     "Since #1144 the server also samples Object_Property_Reference itself (BACNET-12-AVERAGING-WINDOW), and those samples fan out to property subscribers as a background commit. Local reading of Clause 13.1: Averaging has no Present_Value and no Table 13-1 row, so it has no whole-object COV criteria and SubscribeCOV stays refused, while Table 13-1a covers its properties.",
-    "BACnetObject::supports_subscribe_cov_property (default supports_cov) admits the property forms, and the default supports_cov_property follows it. AveragingObject::add_sample now refuses NaN and infinities. The sliding window, its empty-window INF / NaN / -INF values (#1092) and the server's own sampling (#1144) are BACNET-12-AVERAGING-WINDOW. Not claimed: Variance_Value and the timestamps."
+    "BACnetObject::supports_subscribe_cov_property (default supports_cov) admits the property forms, and the default supports_cov_property follows it. AveragingObject::add_sample now refuses NaN and infinities. The sliding window, its empty-window INF / NaN / -INF values (#1092) and the server's own sampling (#1144) are BACNET-12-AVERAGING-WINDOW. Not claimed: Variance_Value and the timestamps.",
+    "A Credential Data Input simulated Present_Value (#1168) stamps Update_Time from the Device clock, so it moves both values; with the clock unchanged the Present_Value trigger still reports."
    ]
   },
   {

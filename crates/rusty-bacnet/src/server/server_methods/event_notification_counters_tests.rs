@@ -19,6 +19,7 @@ fn every_event_notification_counter_reaches_python_under_its_rust_name() {
         confirmed_no_invoke_id: 8,
         confirmed_rejected: 9,
         confirmed_unanswered: 10,
+        unconfirmed_send_failed: 11,
     };
     assert_eq!(
         event_notification_counter_entries(counters),
@@ -33,6 +34,7 @@ fn every_event_notification_counter_reaches_python_under_its_rust_name() {
             ("confirmed_no_invoke_id", 8),
             ("confirmed_rejected", 9),
             ("confirmed_unanswered", 10),
+            ("unconfirmed_send_failed", 11),
         ])
     );
 }

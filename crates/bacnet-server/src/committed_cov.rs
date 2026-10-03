@@ -60,6 +60,12 @@ impl BackgroundCommit {
         }
     }
 
+    /// Take the Command runs the pass's writes queued, under its guard. The
+    /// caller owns them (#1178).
+    pub(crate) fn take_command_runs(&self, db: &mut ObjectDatabase) -> Vec<CommandRun> {
+        crate::command_lists::take_runs(db, &self.changed)
+    }
+
     /// Finish under the same guard: record timestamped COV-multiple history at
     /// commit time, take the Command runs the pass queued, then split the
     /// fanout owed once the guard is dropped.
@@ -71,14 +77,7 @@ impl BackgroundCommit {
         if self.changed.is_empty() {
             return CommittedCov::default();
         }
-        let command_runs = self
-            .changed
-            .iter()
-            .filter_map(|oid| {
-                db.get_mut(oid)
-                    .and_then(|object| object.take_command_run_internal())
-            })
-            .collect();
+        let command_runs = self.take_command_runs(db);
         let (life_safety, coarse): (Vec<_>, Vec<_>) = self
             .changed
             .into_iter()

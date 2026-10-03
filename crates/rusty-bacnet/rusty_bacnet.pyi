@@ -1070,6 +1070,27 @@ class BACnetTimeStamp:
     def __eq__(self, other: object) -> bool: ...
 
 
+class ActionCommand(TypedDict):
+    """One write in a Command object's action list (``BACnetActionCommand``).
+
+    Unknown keys raise ValueError and wrong types raise TypeError. The server
+    makes local writes only, so a ``device_identifier`` naming another Device
+    makes that command fail when the list runs.
+    """
+
+    object_identifier: ObjectIdentifier
+    property_identifier: PropertyIdentifier
+    property_value: PropertyValue
+    property_array_index: NotRequired[int | None]
+    # 1..=16; other values raise BacnetProtocolError (VALUE_OUT_OF_RANGE).
+    priority: NotRequired[int | None]
+    # Seconds to wait after this write, before the next one or the end.
+    post_delay: NotRequired[int | None]
+    # A failed write with this set stops the rest of the list. Default False.
+    quit_on_failure: NotRequired[bool]
+    device_identifier: NotRequired[ObjectIdentifier | None]
+
+
 class AuditReporterConfiguration(TypedDict):
     """Owned pre-start target Reporter settings; no Python callbacks."""
     instance: int
@@ -2401,6 +2422,7 @@ class EventNotificationCounters(TypedDict):
     confirmed_no_invoke_id: int
     confirmed_rejected: int
     confirmed_unanswered: int
+    unconfirmed_send_failed: int
 
 class DccOutcomeCounters(TypedDict):
     """Independent u64 lifetime totals, saturating at 2**64-1; not an audit log."""
@@ -2641,7 +2663,22 @@ class BACnetServer:
         VALUE_OUT_OF_RANGE. Peers can write Action (DIRECT until written).
         """
         ...
-    def add_command(self, instance: int, name: str) -> None: ...
+    def add_command(
+        self,
+        instance: int,
+        name: str,
+        *,
+        action: Optional[list[list[ActionCommand]]] = None,
+        action_text: Optional[list[str]] = None,
+    ) -> None:
+        """Add a Command object; writing N to its Present_Value runs action[N-1].
+
+        ``action_text`` serves Action_Text and needs one text per list. A
+        priority outside 1..=16, a value with no encoding, or a text count
+        that differs from the list count raises BacnetProtocolError with
+        VALUE_OUT_OF_RANGE.
+        """
+        ...
     def add_timer(self, instance: int, name: str) -> None: ...
     def add_load_control(self, instance: int, name: str) -> None: ...
     def add_program(self, instance: int, name: str) -> None: ...
@@ -2935,7 +2972,9 @@ class BACnetServer:
         recipient at a broadcast address. The confirmed fields count
         notifications to one recipient that found no free invoke ID, were
         answered with an Error, Reject or Abort, or drew no acknowledgment
-        after the last retry. Fields are sampled independently. Raises
+        after the last retry. unconfirmed_send_failed counts unconfirmed
+        notifications the transport refused to send, once per destination.
+        Fields are sampled independently. Raises
         RuntimeError before start and after stop.
         """
         ...

@@ -212,15 +212,20 @@ async fn received_apdu_preserves_raw_and_effective_group_matrix() {
 
 #[tokio::test]
 async fn router_preserves_link_group_for_ultimate_network_unicast() {
-    use crate::router::{BACnetRouter, RouterPort};
+    use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 
     let (transport, mut peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
-    let (mut router, mut local) = BACnetRouter::start(vec![RouterPort {
+    let port = RouterPort {
         transport,
         network_number: 200,
-    }])
-    .await
-    .unwrap();
+    };
+    let StartedRouter {
+        mut router,
+        apdus: mut local,
+        ..
+    } = BACnetRouter::start(vec![port], RouterOptions::new())
+        .await
+        .unwrap();
     peer.send_broadcast(&encoded_npdu(Some(NpduAddress {
         network: 200,
         mac_address: MacAddr::from_slice(&[0x01]),

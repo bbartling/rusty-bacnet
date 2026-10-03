@@ -17,7 +17,8 @@ mod action;
 pub use action::{BACnetActionCommand, BACnetActionList};
 mod access;
 pub use access::{
-    BACnetAssignedAccessRights, BACnetAuthenticationFactor, BACnetCredentialAuthenticationFactor,
+    BACnetAssignedAccessRights, BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat,
+    BACnetCredentialAuthenticationFactor,
 };
 mod audit;
 pub use audit::{
@@ -30,6 +31,8 @@ pub use lift::{
     AssignedLandingCall, BACnetAssignedLandingCalls, BACnetLandingCallStatus,
     BACnetLandingDoorStatus, BACnetLiftCarCallList, LandingCallCommand, LandingDoor,
 };
+mod log;
+pub use log::{BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue};
 mod property_access;
 pub use property_access::{AccessResult, BACnetPropertyAccessResult};
 mod read_access;
@@ -308,9 +311,11 @@ impl BACnetAddress {
     /// configured recipient (a Recipient_List destination or the
     /// Audit_Notification_Recipient) refuse one too, so a stored recipient
     /// always decodes again. The NPDU codec refuses a longer DLEN or SLEN
-    /// (`NpduAddress::MAX_MAC_LEN` in bacnet-encoding), so the source addresses
-    /// the stack learns off the network, which COV subscription lists and audit
-    /// records report, fit the bound as well.
+    /// (`NpduAddress::MAX_MAC_LEN` in bacnet-encoding), and bacnet-network's
+    /// `NetworkLayer` and `BACnetRouter` drop a frame whose link-layer source
+    /// MAC is longer (#1198), so the source addresses the stack learns off the
+    /// network, which COV subscription lists and audit records report, fit the
+    /// bound as well. So does the device MAC a You-Are request assigns (#1200).
     pub const MAX_MAC_LEN: usize = 18;
 
     /// Create a local-broadcast address.
@@ -395,83 +400,6 @@ pub struct BACnetEventNotificationSubscription {
     /// Minutes left before the entry lapses (`[3]`). Unlike COV subscription
     /// lifetimes this counts minutes, not seconds.
     pub time_remaining: u32,
-}
-
-// ---------------------------------------------------------------------------
-// LogDatum (Clause 12.25 -- TrendLog Log_Buffer; Clause 21.6)
-// ---------------------------------------------------------------------------
-
-/// The datum field of a BACnetLogRecord: a CHOICE covering all possible
-/// logged value types.
-///
-/// Context tags per spec:
-/// - `[0]` log-status (BACnetLogStatus, 8-bit flags)
-/// - `[1]` boolean-value
-/// - `[2]` real-value
-/// - `[3]` enum-value (unsigned)
-/// - `[4]` unsigned-value
-/// - `[5]` signed-value
-/// - `[6]` bitstring-value
-/// - `[7]` null-value
-/// - `[8]` failure (BACnetError)
-/// - `[9]` time-change (REAL, clock-adjustment seconds)
-/// - `[10]` any-value (raw application-tagged bytes)
-#[derive(Debug, Clone, PartialEq)]
-pub enum LogDatum {
-    /// Log-status flags (context tag 0).  Bit 0=log-disabled, bit 1=buffer-purged,
-    /// bit 2=log-interrupted.
-    LogStatus(u8),
-    /// Boolean value (context tag 1).
-    BooleanValue(bool),
-    /// Real (f32) value (context tag 2).
-    RealValue(f32),
-    /// Enumerated value (context tag 3).
-    EnumValue(u32),
-    /// Unsigned integer value (context tag 4).
-    UnsignedValue(u64),
-    /// Signed integer value (context tag 5).
-    SignedValue(i64),
-    /// Bit-string value (context tag 6).
-    BitstringValue {
-        /// Number of unused bits in the last byte.
-        unused_bits: u8,
-        /// The bit data.
-        data: Vec<u8>,
-    },
-    /// Null value (context tag 7).
-    NullValue,
-    /// Error (context tag 8): error class + error code.
-    Failure {
-        /// Raw BACnet error class value.
-        error_class: u32,
-        /// Raw BACnet error code value.
-        error_code: u32,
-    },
-    /// Time-change: clock-adjustment amount in seconds (context tag 9).
-    TimeChange(f32),
-    /// Any-value: raw application-tagged bytes for types not enumerated above
-    /// (context tag 10).
-    AnyValue(Vec<u8>),
-}
-
-// ---------------------------------------------------------------------------
-// BACnetLogRecord (Clause 12.25 -- TrendLog Log_Buffer; Clause 21.6)
-// ---------------------------------------------------------------------------
-
-/// A single record stored in a TrendLog object's log buffer.
-///
-/// Contains a timestamp (date + time), the logged datum, and optional
-/// status flags that were in effect at logging time.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BACnetLogRecord {
-    /// The date at which this record was logged.
-    pub date: Date,
-    /// The time at which this record was logged.
-    pub time: Time,
-    /// The logged datum.
-    pub log_datum: LogDatum,
-    /// Optional status flags at time of logging (4-bit BACnet StatusFlags).
-    pub status_flags: Option<u8>,
 }
 
 // ---------------------------------------------------------------------------

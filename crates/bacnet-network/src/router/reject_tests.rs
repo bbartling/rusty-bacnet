@@ -1,12 +1,12 @@
 //! Reject addressing and relay at the send-queue level (#1158), where the
-//! link MAC each reject goes to is visible, and the rejects that stop at the
-//! router's own network-control consumer (#1175). The loopback tests in
-//! `crate::reject_route_tests` cover the same paths on the wire.
+//! port and link MAC each reject goes to are visible, and the rejects that
+//! stop at the router's own network-control consumer (#1175). The loopback
+//! tests in `crate::reject_route_tests` cover the same paths on the wire.
 
 use std::sync::Arc;
 
 use super::super::control_policy::ControlGate;
-use super::super::envelope_harness::{attributes, Harness, PORT_MACS};
+use super::super::envelope_harness::{attributes, own_addresses, Harness, PORT_MACS};
 use super::*;
 use bytes::Bytes;
 
@@ -24,12 +24,46 @@ fn unicast(request: SendRequest) -> (Vec<u8>, MacAddr, Vec<DataAttribute>) {
     }
 }
 
+/// The link sender of every NPDU refused below.
+const SENDER: [u8; 4] = [0x0A, 0x00, 0x01, 0x01];
+
+fn address(network: u16, mac: &[u8]) -> NpduAddress {
+    NpduAddress {
+        network,
+        mac_address: MacAddr::from_slice(mac),
+    }
+}
+
+/// Refuse an NPDU from [`SENDER`] on port 0 (network 1000) whose SNET/SADR is
+/// `origin` with reason 1 for 5000, and return what each port's send queue
+/// then holds. The harness router is [01] on 1000 and [02] on 2000.
+fn reject_for(origin: Option<&NpduAddress>) -> [Vec<SendRequest>; 2] {
+    let (txs, mut rxs): (Vec<_>, Vec<_>) = (0..2).map(|_| mpsc::channel(4)).unzip();
+    let own = own_addresses();
+    let data_attributes = attributes();
+    let refused = Refused {
+        send_txs: &txs,
+        own: &own,
+        port_idx: 0,
+        sender_mac: &SENDER,
+        origin,
+        data_attributes: &data_attributes,
+    };
+    send_reject(&refused, 5000, RejectMessageReason::NOT_DIRECTLY_CONNECTED);
+    [0, 1].map(|port| std::iter::from_fn(|| rxs[port].try_recv().ok()).collect())
+}
+
+/// The one unicast in `sent`, which must carry the ingress attributes.
+fn only_unicast(mut sent: Vec<SendRequest>) -> (Vec<u8>, MacAddr) {
+    assert_eq!(sent.len(), 1, "exactly one reject");
+    let (npdu, mac, data_attributes) = unicast(sent.pop().unwrap());
+    assert_eq!(data_attributes, attributes());
+    (npdu, mac)
+}
+
 #[test]
 fn send_reject_addresses_the_originator_or_the_local_sender() {
-    let origin = NpduAddress {
-        network: 4000,
-        mac_address: MacAddr::from_slice(&[0x50, 0x51]),
-    };
+    let origin = address(4000, &[0x50, 0x51]);
     let cases: [(Option<&NpduAddress>, &[u8]); 2] = [
         // A relayed NPDU: DNET 4000, DLEN 2, DADR 50 51, hop count 255.
         (
@@ -42,23 +76,11 @@ fn send_reject_addresses_the_originator_or_the_local_sender() {
         (None, &[0x01, 0x80, 0x03, 0x01, 0x13, 0x88]),
     ];
     for (origin, expected) in cases {
-        let (tx, mut rx) = mpsc::channel(4);
-        let sender_mac = [0x0A, 0x00, 0x01, 0x01];
-        let data_attributes = attributes();
-        let refused = Refused {
-            send_tx: &tx,
-            port_network: 1000,
-            sender_mac: &sender_mac,
-            origin,
-            data_attributes: &data_attributes,
-        };
-        send_reject(&refused, 5000, RejectMessageReason::NOT_DIRECTLY_CONNECTED);
-
-        let (npdu, mac, sent_attributes) = unicast(rx.try_recv().unwrap());
+        let [arrival, other] = reject_for(origin);
+        let (npdu, mac) = only_unicast(arrival);
         assert_eq!(npdu, expected, "{origin:?}");
-        assert_eq!(mac.as_slice(), sender_mac, "goes to the link sender");
-        assert_eq!(sent_attributes, data_attributes);
-        assert!(rx.try_recv().is_err());
+        assert_eq!(mac.as_slice(), SENDER, "goes to the link sender");
+        assert!(other.is_empty(), "{origin:?}");
     }
 }
 
@@ -67,26 +89,44 @@ fn send_reject_unicasts_an_originator_on_the_arrival_network_to_its_sadr() {
     // SNET 1000 is the arrival port's own network (#1174): the originator is
     // on this link, so the reject carries no DNET and goes to the SADR, not
     // to the link sender.
-    let origin = NpduAddress {
-        network: 1000,
-        mac_address: MacAddr::from_slice(&[0x50, 0x51]),
-    };
-    let (tx, mut rx) = mpsc::channel(4);
-    let data_attributes = attributes();
-    let refused = Refused {
-        send_tx: &tx,
-        port_network: 1000,
-        sender_mac: &[0x0A, 0x00, 0x01, 0x01],
-        origin: Some(&origin),
-        data_attributes: &data_attributes,
-    };
-    send_reject(&refused, 5000, RejectMessageReason::NOT_DIRECTLY_CONNECTED);
-
-    let (npdu, mac, sent_attributes) = unicast(rx.try_recv().unwrap());
+    let origin = address(1000, &[0x50, 0x51]);
+    let [arrival, other] = reject_for(Some(&origin));
+    let (npdu, mac) = only_unicast(arrival);
     assert_eq!(npdu, [0x01, 0x80, 0x03, 0x01, 0x13, 0x88]);
     assert_eq!(mac, origin.mac_address);
-    assert_eq!(sent_attributes, data_attributes);
-    assert!(rx.try_recv().is_err());
+    assert!(other.is_empty());
+}
+
+#[test]
+fn send_reject_sends_an_originator_on_another_direct_network_out_its_port() {
+    // SNET 2000 is the network on port 1, so the NPDU looped round to port 0
+    // (#1219). The reject leaves by port 1 as a local unicast to the SADR.
+    let origin = address(2000, &[0x50, 0x51]);
+    let [arrival, other] = reject_for(Some(&origin));
+    assert!(arrival.is_empty(), "nothing goes back to the link sender");
+    let (npdu, mac) = only_unicast(other);
+    assert_eq!(npdu, [0x01, 0x80, 0x03, 0x01, 0x13, 0x88]);
+    assert_eq!(mac, origin.mac_address);
+}
+
+#[test]
+fn send_reject_sends_nothing_when_the_originator_is_the_router() {
+    // The router's own MAC on the arrival network, and on the other one: no
+    // reject goes out on either port (#1219).
+    for origin in [
+        address(1000, &[PORT_MACS[0]]),
+        address(2000, &[PORT_MACS[1]]),
+    ] {
+        let [arrival, other] = reject_for(Some(&origin));
+        assert!(arrival.is_empty(), "{origin:?}");
+        assert!(other.is_empty(), "{origin:?}");
+    }
+
+    // Port 1's MAC paired with network 1000 is some other node on that link.
+    let origin = address(1000, &[PORT_MACS[1]]);
+    let [arrival, other] = reject_for(Some(&origin));
+    assert_eq!(only_unicast(arrival).1, origin.mac_address);
+    assert!(other.is_empty());
 }
 
 /// Direct 1000/0 and 2000/1, and 3000 learned behind [9] on port 0.

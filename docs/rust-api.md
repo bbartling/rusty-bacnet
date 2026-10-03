@@ -481,6 +481,10 @@ use bacnet_services::who_am_i::{WhoAmIRequest, YouAreRequest};
 `device_identifier` (which must name a Device object) and `device_mac_address`; at
 least one of those two must be present. Both `encode` methods are fallible and both
 `decode` methods reject missing fields, context-tagged layouts and trailing data.
+`device_mac_address` is the MAC the matching device takes on the port the request
+arrived on (Clauses 16.11.3.1.5 and 16.11.4), so it is held to
+`BACnetAddress::MAX_MAC_LEN` (18 octets) in both directions (#1200): `decode`
+refuses a longer one and `encode` returns `Error::Encoding` without writing.
 
 ### Virtual Terminal
 
@@ -1488,6 +1492,23 @@ use bacnet_network::layer::NetworkLayer;
 use bacnet_network::router::BACnetRouter;
 ```
 
+`BACnetRouter::start` takes the ports and a `RouterOptions` (#1220).
+`RouterOptions::new()` is the plain router: a raw `mpsc::Receiver` for local
+APDUs, the permissive wire-control policy and no network-control receiver.
+The builder methods turn options on, in any combination: `track_admission()`
+makes the local receiver an `AdmissionReceiver` with queue snapshots and a
+per-source quota, `control_policy()` and `control_authorizer()` set the RB-09
+gate for routing controls, and `network_control_receiver()` adds the receiver
+described below. The start returns a `StartedRouter` holding the router, the
+local APDU receiver and, when asked for, the network-control receiver.
+
+```rust
+use bacnet_network::router::{BACnetRouter, RouterOptions, StartedRouter};
+
+let StartedRouter { router, apdus, network_control } =
+    BACnetRouter::start(ports, RouterOptions::new().track_admission()).await?;
+```
+
 An inbound NPDU whose DLEN or SLEN is past `NpduAddress::MAX_MAC_LEN` is
 refused before anything else happens to it (#1141). `NetworkLayer` discards it
 and counts it in `address_length_drops()`; a non-router has no reject message
@@ -1497,22 +1518,35 @@ with Reject-Message-To-Network reason 6 (`ADDRESSING_ERROR`, Clause 6.4.4) for
 that DNET, as it does a DNET it cannot reach. A global broadcast or an NPDU
 without a DNET is dropped without a reject.
 
+Both also drop a frame whose link-layer source MAC, as the transport reports
+it, is longer than `NpduAddress::MAX_MAC_LEN`, before decoding it, and count it
+in the same `address_length_drops()` (#1198). Nothing answers such a frame, and
+a router learns no route from it. No built-in transport reports a MAC that long
+(B/IP, BACnet/SC and Ethernet use 6 octets, MS/TP 1, B/IPv6 18), so only a
+custom `TransportPort` can, and every address the stack learns off the network
+fits a `BACnetAddress`.
+
 `BACnetRouter` sends each Reject-Message-To-Network it originates to whoever
 first sent the refused NPDU (Clause 6.4.4, #1158). An NPDU that arrived
 with SNET/SADR came through another router: the reject carries that SNET/SADR
 as its DNET/DADR, with a hop count of 255, and goes back out the arrival port
 to the router that relayed the NPDU. An NPDU without SNET/SADR draws a local
-unicast to its sender. An SNET equal to the arrival port's own network puts
-the originator on that link, so the reject is a local unicast to the SADR,
-with no DNET (Clause 6.5.4, #1174). A reason 6 reject for an over-long SADR
-has no originator to name, so it falls back to that local unicast. A received
-reject is relayed by its DNET/DADR like any routed NPDU (Clause 6.6.3.5).
+unicast to its sender. An SNET equal to one of the router's own networks puts
+the originator on a directly connected link, so the reject leaves by the port
+attached to that network as a local unicast to the SADR, with no DNET (Clause
+6.5.4). That is the arrival port when SNET is the arrival network (#1174), and
+another port when the NPDU looped back to the router through some other path
+(#1219). An SNET/SADR that is the router's own address on that network means
+the NPDU came back to the router that sent it, and no reject goes out
+(#1219). A reason 6 reject for an over-long SADR has no originator to name, so
+it falls back to that local unicast. A received reject is relayed by its
+DNET/DADR like any routed NPDU (Clause 6.6.3.5).
 
 A received reject with no DNET, or whose DADR is the router's own MAC on the
 port attached to its DNET, is addressed to the router itself (#1175). It
 updates the routing table and goes no further. Start the router with
-`BACnetRouter::start_with_network_control_receiver` to also get these rejects
-as `ReceivedNetworkControl` records, the same type a non-router
+`RouterOptions::network_control_receiver()` to also get these rejects as
+`ReceivedNetworkControl` records, the same type a non-router
 `NetworkLayer` control receiver yields. A client or server attached to a
 router through a `LoopbackTransport` port does not need this: it is an
 ordinary node on that port's network, and rejects for its requests reach its
@@ -1744,8 +1778,10 @@ framing, through the shared `bacnet-encoding` codecs.
   `ReadPropertyMultipleBudget::max_result_elements` along with the request's
   own rows, so several Groups in one request share it; ReadProperty, ReadRange
   and `read_local` get the limit of a ReadPropertyMultiple naming only that
-  Present_Value. A request that would pass the limit is aborted with
-  OUT_OF_RESOURCES (`read_local` returns `Error::Abort`).
+  Present_Value. The shared endpoint's ReadProperty uses
+  `SessionConfig::read_work_limit` (default 256) instead. A request that would
+  pass the limit is aborted with OUT_OF_RESOURCES (`read_local` returns
+  `Error::Abort`).
 - **Structured View `Subordinate_List` and Command `Action`** (Clauses 12.29
   and 12.10) are arrays too, with the same per-index reads, as is
   `Subordinate_Annotations`. A Subordinate_List element is a
@@ -1776,6 +1812,19 @@ framing, through the shared `bacnet-encoding` codecs.
   `BACnetAuthenticationFactor`, the UNDEFINED factor until the first read.
   `CredentialDataInputObject::set_present_value(factor, update_time)` records
   a read and its time together.
+- **Access-control arrays**: Credential Data Input `Supported_Formats` (each
+  element a `BACnetAuthenticationFactorFormat`: format type `[0]`, optional
+  vendor id `[1]` and vendor format `[2]`) and `Supported_Format_Classes`
+  (Unsigned), Access Door `Door_Members` and Access Point `Access_Doors` (each
+  element a `BACnetDeviceObjectReference`) are BACnetARRAYs: index 0 reads the
+  size, 1 to N one element, and past N fails with INVALID_ARRAY_INDEX. All four
+  are read-only on the network. The application sets them with
+  `CredentialDataInputObject::set_supported_formats` (format and class pairs,
+  so both arrays keep one size; a format outside the closed production, a
+  CUSTOM format without both vendor members or another format with a nonzero
+  one is VALUE_OUT_OF_RANGE), `AccessDoorObject::set_door_members` and
+  `AccessPointObject::set_access_doors` (Access Door references only, else
+  VALUE_OUT_OF_RANGE).
 
 ### ObjectDatabase
 
@@ -2021,13 +2070,22 @@ means the operation was accepted; disabled logging can ignore the ordinary
 record, zero-capacity logging can count without storing it, and a status
 transition can replace it.
 
-The pre-1.0 `BACnetObject` contract now has one fallible `add_trend_record` hook.
-The void hook and `try_add_trend_record_internal` adapter have been replaced.
-Custom implementations return their insertion result directly; the default
-returns `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`. The server poller
-retries failed insertions without advancing its last-log time. Bounded evidence
-is recorded in `BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family conformance
-is not claimed.
+A Trend Log Multiple record is a `BACnetLogMultipleRecord`: a timestamp and a
+`LogData` holding one `LogValue` per Log_DeviceObjectProperty member, a log
+status, or a time change. `TrendLogMultipleObject::add_record` takes one and
+`records()` returns them; Log_Buffer serves each one framed as Clause 21's
+BACnetLogMultipleRecord (`bacnet_encoding::constructed::encode_log_multiple_record`
+and `decode_log_multiple_record`).
+
+The pre-1.0 `BACnetObject` contract has two fallible trend hooks:
+`add_trend_record` for Trend Log records and `add_trend_multiple_record` for
+Trend Log Multiple records. The void hook and `try_add_trend_record_internal`
+adapter have been replaced. Custom implementations return their insertion result
+directly; the default returns `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
+The server poller (`ObjectDatabase::poll_trend_logs`) samples both object types
+and retries failed insertions without advancing its last-log time. Bounded
+evidence is recorded in `BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family
+conformance is not claimed.
 
 #### Audit Reporter configuration and send delay
 
@@ -2099,9 +2157,20 @@ returns to FALSE, with All_Writes_Successful TRUE only if every write
 succeeded. The server writes to its own objects only, so a command naming
 another Device fails. A Schedule writing a Command's Present_Value starts the
 run as well. Command takes SubscribeCOVProperty but not SubscribeCOV, so a
-client can follow In_Process. A run that `stop()` cuts short isn't resumed,
-and a Command used without the server keeps its queued run, and In_Process
-TRUE, until something takes it.
+client can follow In_Process. A run that `stop()` cuts short isn't resumed.
+
+Whatever commits a Present_Value write owns the run it starts and finishes it,
+so no path leaves a Command in process (#1178). Without a server,
+`tick_schedules` runs the lists its Schedule writes start before it returns,
+post delays included, making each command as the bare WriteProperty handler
+would with the Command as the initiating object; dropping its future first
+ends each unfinished run as unsuccessful. The bare `handle_write_property` and
+`handle_write_property_multiple` handlers are synchronous and make no writes
+for a Command: the run a Present_Value write starts ends at once, with
+In_Process FALSE, All_Writes_Successful FALSE and every command's
+`write_successful` FALSE. The endpoint responder refuses a Command's
+Present_Value write with WRITE_ACCESS_DENIED, as it does every write other
+than the Device's Description and Audit recipient.
 
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
 Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and
@@ -2286,8 +2355,19 @@ adding the object with `AccessDoorObject::set_door_alarm_state`,
 Update_Time), and a door's Door_Status and Lock_Status with `set_door_status`
 and `set_lock_status`.
 
-Over the network the Access Point and Credential Data Input values stay
-read-only. A door's Door_Status, Lock_Status and Door_Alarm_State, the rows
+Over the network the Access Point values stay read-only. A Credential Data
+Input's Present_Value and Reliability, the rows footnote 1 of Table 12-43
+marks, take WriteProperty and WritePropertyMultiple while Out_Of_Service is
+TRUE and refuse them in service with WRITE_ACCESS_DENIED. A Present_Value
+write must be one `BACnetAuthenticationFactor` (else INVALID_DATA_TYPE) whose
+format type and class match a declared Supported_Formats element and its
+class, or the UNDEFINED or ERROR factor with class 0 (else
+VALUE_OUT_OF_RANGE); it stamps Update_Time from the Device clock. A
+Reliability write must be a BACnetReliability value. Entering out of service
+puts the reader's Present_Value, Update_Time and Reliability aside,
+`set_present_value` updates the values put aside, `set_reliability_internal`
+is refused until the return to service, and the return to service serves the
+reader's values again. A door's Door_Status, Lock_Status and Door_Alarm_State, the rows
 footnote 1 of Table 12-30 marks, take WriteProperty and WritePropertyMultiple
 while Out_Of_Service is TRUE, so a client can simulate the door; in service
 they refuse writes with WRITE_ACCESS_DENIED. A write must be an Enumerated in
@@ -3773,6 +3853,7 @@ counters.confirmed_broadcast_recipient; // confirmed requested at a broadcast ad
 counters.confirmed_no_invoke_id;        // no invoke ID free for a confirmed notification
 counters.confirmed_rejected;            // the recipient answered Error, Reject or Abort
 counters.confirmed_unanswered;          // no acknowledgment after the last retry
+counters.unconfirmed_send_failed;       // an unconfirmed send the transport refused
 ```
 
 The four recipient-list fields count transitions, event and acknowledgment
@@ -3783,6 +3864,13 @@ configured behaviour and are not counted, nor are notifications held back by
 DCC or Event_Enable. The three confirmed fields count notifications to one
 recipient; a reservation refused because the server is stopping is not
 counted.
+
+`unconfirmed_send_failed` (#1196) counts unconfirmed notifications whose send
+returned a transport error, once per destination, and the transition's other
+destinations are still served. A confirmed send that fails locally counts in
+`confirmed_unanswered`. No field counts an encode failure: the committed
+payload and message text are validated before the destinations are walked, so
+a well-formed transition always encodes.
 
 The three route fields (#1160) count destinations that matched the transition
 but were skipped while their route was resolved, once per destination; the

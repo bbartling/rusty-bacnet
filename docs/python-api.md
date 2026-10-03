@@ -1884,7 +1884,32 @@ server.add_loop(
     controlled_variable_units=62,  # degrees Celsius
     priority_for_writing=10,
 )
-server.add_command(instance=1, name="Command")
+server.add_command(
+    instance=1,
+    name="Occupancy",
+    # Writing N to Present_Value runs action[N - 1]; each command is an
+    # ActionCommand mapping.
+    action=[
+        [
+            {
+                "object_identifier": ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 1),
+                "property_identifier": PropertyIdentifier.PRESENT_VALUE,
+                "property_value": PropertyValue.real(21.0),
+                "priority": 8,
+                "post_delay": 5,  # seconds before the next write
+            },
+            {
+                "object_identifier": ObjectIdentifier(ObjectType.BINARY_OUTPUT, 1),
+                "property_identifier": PropertyIdentifier.PRESENT_VALUE,
+                "property_value": PropertyValue.enumerated(1),
+                "priority": 8,
+                "quit_on_failure": True,
+            },
+        ],
+        [],  # Present_Value 2 writes nothing
+    ],
+    action_text=["Occupied", "Unoccupied"],  # one text per list
+)
 server.add_timer(instance=1, name="Timer")
 server.add_load_control(instance=1, name="Load Control")
 server.add_program(instance=1, name="Program")
@@ -1908,6 +1933,23 @@ server.add_staging(
     stage_names=["Off", "On"],
 )
 ```
+
+`add_command`'s keyword-only `action` sets the Command's Action array: one list
+per element, each a list of `ActionCommand` mappings with
+`object_identifier`, `property_identifier` and `property_value`, and optionally
+`property_array_index`, `priority`, `post_delay` (seconds), `quit_on_failure`
+(False when omitted) and `device_identifier`. `action_text` serves Action_Text,
+one text per list. Both are read-only over the network. A wrong shape or Python
+type raises TypeError, and an unknown or missing key raises ValueError. The
+object's own setters refuse a priority outside 1 to 16, a value with no
+encoding, or a text count that differs from the list count, raising
+BacnetProtocolError with VALUE_OUT_OF_RANGE. Once the server runs, writing N to
+the Command's Present_Value, over the network or with `write_property_local`,
+makes list N's writes in order as the Rust server does (see
+[Building Control](rust-api.md#building-control-7)): In_Process reads True
+until the list ends, and All_Writes_Successful then reads True only if every
+write succeeded. Zero, or an empty list, writes nothing. The server writes only
+to its own objects, so a command naming another Device fails.
 
 `add_staging` validates the complete ladder and target mapping atomically; it
 does not invent stage limits, deadbands, names, priorities, or targets. Each
@@ -2027,7 +2069,12 @@ on a Load Control. While a door's Out_Of_Service is TRUE, clients can write
 its Door_Status, Lock_Status and Door_Alarm_State to simulate it (Table 12-30
 footnote 1); returning it to service brings back the door's own values. A
 door's Secured_Status follows its command, Door_Status and Lock_Status,
-simulated or not (Clause 12.26.14).
+simulated or not (Clause 12.26.14). A Credential Data Input's Present_Value
+and Reliability take writes the same way (Table 12-43 footnote 1); a
+simulated Present_Value must name a format the reader declares, and the Python
+API declares none yet, so only the UNDEFINED and ERROR factors are accepted.
+Supported_Formats, Supported_Format_Classes, Door_Members and Access_Doors
+read as arrays (index 0 is the size).
 
 #### Transportation
 
@@ -2306,8 +2353,8 @@ server = BACnetServer(
 | `max_subscriptions_global` | 1024 | subscriptions | Positive. Subscriptions held across all peers | `subscriptions_rejected_capacity` |
 | `max_subscriptions_per_peer` | 64 | subscriptions | Positive. Subscriptions one peer may hold | `subscriptions_rejected_quota` |
 | `reserved_capacity` | 64 | subscriptions | Slots of the global cap kept for reserved peers, clamped to it. Has no effect while both reserved lists are empty; 0 keeps none | `subscriptions_rejected_capacity` |
-| `reserved_peers` | `[]` | MAC `bytes` | Directly attached peers that may use the reserved slots; each MAC is 1 to 255 octets | |
-| `reserved_recipients` | `[]` | `(network, bytes)` | As `dcc_source_restriction`: `None` for a local peer, otherwise its routed source network (1 to 65534) and MAC (1 to 255 octets) | |
+| `reserved_peers` | `[]` | MAC `bytes` | Directly attached peers that may use the reserved slots; each MAC is 1 to 18 octets, the longest source the network layer delivers | |
+| `reserved_recipients` | `[]` | `(network, bytes)` | As `dcc_source_restriction`: `None` for a local peer, otherwise its routed source network (1 to 65534), and a MAC of 1 to 18 octets | |
 | `allow_indefinite_subscriptions` | `True` | `bool` | Whether a subscription without a lifetime is admitted | `subscriptions_rejected_indefinite` |
 | `max_indefinite_per_peer` | 16 | subscriptions | Indefinite subscriptions one peer may hold, clamped to its per-peer cap; 0 admits none | `subscriptions_rejected_indefinite` |
 | `max_notifications_per_event` | 64 | notifications | Positive. Notifications one change of a monitored object may send | `notifications_throttled_fanout` |
@@ -2355,6 +2402,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `confirmed_no_invoke_id` | Confirmed notifications to one recipient not sent because no invoke ID was free |
 | `confirmed_rejected` | Confirmed notifications the recipient answered with an Error, Reject or Abort |
 | `confirmed_unanswered` | Confirmed notifications with no acknowledgment after the last retry |
+| `unconfirmed_send_failed` | Unconfirmed notifications the transport refused to send, once per destination; the other destinations are still served |
 
 The first four count event and acknowledgment notifications alike, once per
 transition. A class whose list is empty, or whose destinations all filter the
@@ -2363,7 +2411,9 @@ counted. Neither are notifications held back by DeviceCommunicationControl or
 Event_Enable, nor confirmed reservations refused while the server stops. The
 three route fields (#1160) count once per skipped destination, and the
 transition's other destinations are still served; the warning logged with each
-skip gives the finer reason. The binding builds the dict from an exhaustive
+skip gives the finer reason. `unconfirmed_send_failed` (#1196) counts once
+per destination whose send fails; no field counts an encode failure, since a
+well-formed transition always encodes. The binding builds the dict from an exhaustive
 pattern over the Rust struct, like `cov_counters()`.
 
 #### `local_address() -> str`

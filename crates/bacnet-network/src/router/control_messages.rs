@@ -801,7 +801,7 @@ pub(super) async fn handle_network_message(
             "Router rejecting unknown network message type"
         );
         send_reject(
-            &Refused::control(send_txs, ctx),
+            &Refused::control(send_txs, local.addresses(), ctx),
             0,
             RejectMessageReason::UNKNOWN_MESSAGE_TYPE,
         );

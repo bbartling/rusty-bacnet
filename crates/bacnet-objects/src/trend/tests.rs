@@ -1,6 +1,7 @@
 use super::*;
 use crate::clock::{ClockFrame, ClockReader};
-use bacnet_types::constructed::LogDatum;
+use bacnet_encoding::constructed::decode_log_multiple_record;
+use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogDatum, LogValue};
 use bacnet_types::primitives::{Date, Time};
 use std::sync::Arc;
 
@@ -37,6 +38,16 @@ fn make_record(hour: u8, value: f32) -> BACnetLogRecord {
         },
         log_datum: LogDatum::RealValue(value),
         status_flags: None,
+    }
+}
+
+/// [`make_record`]'s sample as a one-member Trend Log Multiple record.
+fn make_multiple(hour: u8, value: f32) -> BACnetLogMultipleRecord {
+    let single = make_record(hour, value);
+    BACnetLogMultipleRecord {
+        date: single.date,
+        time: single.time,
+        log_data: LogData::Values(vec![LogValue::RealValue(value)]),
     }
 }
 
@@ -406,8 +417,8 @@ fn trendlog_multiple_create() {
 #[test]
 fn trendlog_multiple_add_records() {
     let mut tlm = TrendLogMultipleObject::new(1, "TLM-1", 100).unwrap();
-    tlm.add_record(make_record(10, 72.5)).unwrap();
-    tlm.add_record(make_record(11, 73.0)).unwrap();
+    tlm.add_record(make_multiple(10, 72.5)).unwrap();
+    tlm.add_record(make_multiple(11, 73.0)).unwrap();
     assert_eq!(tlm.records().len(), 2);
     assert_eq!(
         tlm.read_property(PropertyIdentifier::RECORD_COUNT, None)
@@ -425,21 +436,9 @@ fn trendlog_multiple_add_records() {
 fn trendlog_multiple_ring_buffer() {
     let mut tlm = TrendLogMultipleObject::new(1, "TLM-1", 3).unwrap();
     for i in 0..5u8 {
-        tlm.add_record(BACnetLogRecord {
-            date: Date {
-                year: 124,
-                month: 3,
-                day: 15,
-                day_of_week: 5,
-            },
-            time: Time {
-                hour: i,
-                minute: 0,
-                second: 0,
-                hundredths: 0,
-            },
-            log_datum: LogDatum::UnsignedValue(i as u64),
-            status_flags: None,
+        tlm.add_record(BACnetLogMultipleRecord {
+            log_data: LogData::Values(vec![LogValue::UnsignedValue(i as u64)]),
+            ..make_multiple(i, 0.0)
         })
         .unwrap();
     }
@@ -455,20 +454,22 @@ fn trendlog_multiple_ring_buffer() {
 #[test]
 fn trendlog_multiple_read_log_buffer() {
     let mut tlm = TrendLogMultipleObject::new(1, "TLM-1", 100).unwrap();
-    tlm.add_record(make_record(10, 72.5)).unwrap();
+    tlm.add_record(make_multiple(10, 72.5)).unwrap();
     let val = tlm
         .read_property(PropertyIdentifier::LOG_BUFFER, None)
         .unwrap();
-    if let PropertyValue::List(records) = val {
-        assert_eq!(records.len(), 1);
-        if let PropertyValue::List(fields) = &records[0] {
-            assert_eq!(fields[2], PropertyValue::Real(72.5));
-        } else {
-            panic!("Expected List for log record");
-        }
-    } else {
+    // Each record is framed as Clause 21's BACnetLogMultipleRecord (#1203).
+    let PropertyValue::List(records) = val else {
         panic!("Expected List for LOG_BUFFER");
-    }
+    };
+    assert_eq!(records.len(), 1);
+    let PropertyValue::ApplicationData(bytes) = &records[0] else {
+        panic!("Expected framed log record");
+    };
+    assert_eq!(
+        decode_log_multiple_record(bytes, 0).unwrap(),
+        (make_multiple(10, 72.5), bytes.len())
+    );
 }
 
 #[test]
@@ -557,9 +558,9 @@ fn trendlog_multiple_write_log_enable() {
         PropertyValue::Boolean(false)
     );
     // Records should not be added when disabled
-    tlm.add_record(make_record(10, 72.5)).unwrap();
+    tlm.add_record(make_multiple(10, 72.5)).unwrap();
     assert_eq!(tlm.records().len(), 1);
-    assert_eq!(tlm.records()[0].log_datum, LogDatum::LogStatus(0b001));
+    assert_eq!(tlm.records()[0].log_data, LogData::LogStatus(0b001));
 }
 
 // ──────────────────────────────────────────────────────────────────────────

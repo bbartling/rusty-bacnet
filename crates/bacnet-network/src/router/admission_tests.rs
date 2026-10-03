@@ -100,6 +100,15 @@ fn fixture(count: usize) -> (Vec<RouterPort<IngressTransport>>, Vec<Peer>) {
         .unzip()
 }
 
+/// Start a router on `ports`, set up as `options` asks.
+async fn launch<A: LocalApduReceiver>(
+    ports: Vec<RouterPort<IngressTransport>>,
+    options: RouterOptions<A>,
+) -> (BACnetRouter, A) {
+    let started = BACnetRouter::start(ports, options).await.unwrap();
+    (started.router, started.apdus)
+}
+
 #[derive(Clone, Copy, Debug)]
 enum LocalBranch {
     GlobalBroadcast,
@@ -353,7 +362,7 @@ async fn dropped_arrival(peers: &mut [Peer], branch: LocalBranch, port: usize) {
 async fn full_shared_local_queue_drops_arrivals_in_all_four_branches_and_keeps_forwarding() {
     for branch in BRANCHES {
         let (ports, mut peers) = fixture(2);
-        let (mut router, mut apdus) = BACnetRouter::start_with_admission(ports).await.unwrap();
+        let (mut router, mut apdus) = launch(ports, RouterOptions::new().track_admission()).await;
         let counters = apdus.counters();
         drain_announcements(&mut peers).await;
         let mut accepted_reply = fill(&mut peers).await;
@@ -411,7 +420,7 @@ async fn full_shared_local_queue_drops_arrivals_in_all_four_branches_and_keeps_f
 #[tokio::test(start_paused = true)]
 async fn admitted_local_branches_preserve_metadata_and_reply_ownership() {
     let (ports, mut peers) = fixture(2);
-    let (mut router, mut apdus) = BACnetRouter::start_with_admission(ports).await.unwrap();
+    let (mut router, mut apdus) = launch(ports, RouterOptions::new().track_admission()).await;
     drain_announcements(&mut peers).await;
     for branch in BRANCHES {
         let (reply_tx, mut reply_rx) = oneshot::channel();
@@ -453,7 +462,7 @@ async fn admitted_local_branches_preserve_metadata_and_reply_ownership() {
 #[tokio::test(start_paused = true)]
 async fn closing_full_local_queue_counts_each_closed_arrival_and_preserves_drain() {
     let (ports, mut peers) = fixture(2);
-    let (mut router, mut apdus) = BACnetRouter::start_with_admission(ports).await.unwrap();
+    let (mut router, mut apdus) = launch(ports, RouterOptions::new().track_admission()).await;
     let counters = apdus.counters();
     drain_announcements(&mut peers).await;
     let mut accepted_reply = fill(&mut peers).await;
@@ -506,7 +515,7 @@ async fn closing_full_local_queue_counts_each_closed_arrival_and_preserves_drain
 #[tokio::test(start_paused = true)]
 async fn dropping_local_receiver_releases_queued_replies_and_keeps_dispatch_alive() {
     let (ports, mut peers) = fixture(2);
-    let (mut router, apdus) = BACnetRouter::start_with_admission(ports).await.unwrap();
+    let (mut router, apdus) = launch(ports, RouterOptions::new().track_admission()).await;
     let counters = apdus.counters();
     drain_announcements(&mut peers).await;
     let accepted_reply = fill(&mut peers).await;
@@ -531,7 +540,7 @@ async fn dropping_local_receiver_releases_queued_replies_and_keeps_dispatch_aliv
 #[tokio::test(start_paused = true)]
 async fn stop_with_full_local_queue_is_bounded_and_leaves_items_drainable() {
     let (ports, mut peers) = fixture(2);
-    let (mut router, mut apdus) = BACnetRouter::start_with_admission(ports).await.unwrap();
+    let (mut router, mut apdus) = launch(ports, RouterOptions::new().track_admission()).await;
     let counters = apdus.counters();
     drain_announcements(&mut peers).await;
     let mut accepted_reply = fill(&mut peers).await;
@@ -567,7 +576,7 @@ async fn stop_with_full_local_queue_is_bounded_and_leaves_items_drainable() {
 async fn legacy_local_receiver_retains_type_and_nonblocking_full_closed_policy() {
     let (ports, mut peers) = fixture(2);
     let (mut router, mut apdus): (_, mpsc::Receiver<ReceivedApdu>) =
-        BACnetRouter::start(ports).await.unwrap();
+        launch(ports, RouterOptions::new()).await;
     drain_announcements(&mut peers).await;
     let accepted_reply = fill(&mut peers).await;
     for branch in BRANCHES {
@@ -594,7 +603,7 @@ async fn legacy_local_receiver_retains_type_and_nonblocking_full_closed_policy()
 #[tokio::test]
 async fn concurrent_ports_share_one_capacity_and_exact_depth_during_receive() {
     let (ports, mut peers) = fixture(4);
-    let (mut router, mut apdus) = BACnetRouter::start_with_admission(ports).await.unwrap();
+    let (mut router, mut apdus) = launch(ports, RouterOptions::new().track_admission()).await;
     let counters = apdus.counters();
     drain_announcements(&mut peers).await;
     let start = Arc::new(tokio::sync::Barrier::new(4));

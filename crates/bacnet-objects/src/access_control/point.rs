@@ -15,7 +15,7 @@ pub struct AccessPointObject {
     access_event: AccessEvent,
     access_event_tag: u64,
     access_event_time: BACnetTimeStamp,
-    access_doors: Vec<ObjectIdentifier>,
+    access_doors: Vec<BACnetDeviceObjectReference>,
     event_state: EventState,
     status_flags: StatusFlags,
     out_of_service: bool,
@@ -53,6 +53,29 @@ impl AccessPointObject {
         self.access_event_tag = tag;
         self.access_event_time = time;
     }
+
+    /// Set Access_Doors, the Access Door objects whose Present_Value this
+    /// point commands once access is granted (Clause 12.31.32). A point that
+    /// commands no door keeps the array empty. A reference with no Device
+    /// identifier names an object in this device.
+    ///
+    /// Every reference must name an Access Door object; a list holding any
+    /// other object type is refused with VALUE_OUT_OF_RANGE and the doors set
+    /// before are kept. The array is read-only over the network.
+    pub fn set_access_doors(
+        &mut self,
+        doors: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
+    ) -> Result<(), Error> {
+        let doors: Vec<BACnetDeviceObjectReference> = doors.into_iter().map(Into::into).collect();
+        if doors
+            .iter()
+            .any(|door| door.object_identifier.object_type() != ObjectType::ACCESS_DOOR)
+        {
+            return Err(common::value_out_of_range_error());
+        }
+        self.access_doors = doors;
+        Ok(())
+    }
 }
 
 impl BACnetObject for AccessPointObject {
@@ -85,12 +108,9 @@ impl BACnetObject for AccessPointObject {
             p if p == PropertyIdentifier::ACCESS_EVENT_TIME => {
                 timestamp_value(&self.access_event_time)
             }
-            p if p == PropertyIdentifier::ACCESS_DOORS => Ok(PropertyValue::List(
-                self.access_doors
-                    .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                    .collect(),
-            )),
+            p if p == PropertyIdentifier::ACCESS_DOORS => {
+                common::read_array(device_object_references(&self.access_doors), array_index)
+            }
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }

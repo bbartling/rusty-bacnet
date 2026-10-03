@@ -19,9 +19,9 @@
 //!
 //! | Receiver kind | Entry points | Capacity | Per-source quota | Accounting |
 //! | --- | --- | --- | --- | --- |
-//! | Raw APDU | [`NetworkLayer::start`], [`BACnetRouter::start`](crate::router::BACnetRouter::start) | 256 | None | Full/Closed counted internally; no admission snapshot or depth/high-water tracking |
-//! | Tracked APDU | [`NetworkLayer::start_with_admission`], [`BACnetRouter::start_with_admission`](crate::router::BACnetRouter::start_with_admission) | 256 | 16 queued APDUs per key, defined below | Exact depth/high-water and Full/fairness/Closed totals via [`AdmissionReceiver::counters`] |
-//! | Raw control | [`NetworkLayer::enable_network_control_receiver`], [`BACnetRouter::start_with_network_control_receiver`](crate::router::BACnetRouter::start_with_network_control_receiver) | 256, separate from APDUs | None | Full/Closed counted internally; no admission snapshot or depth/high-water tracking |
+//! | Raw APDU | [`NetworkLayer::start`], [`BACnetRouter::start`](crate::router::BACnetRouter::start) with [`RouterOptions::new`](crate::router::RouterOptions::new) | 256 | None | Full/Closed counted internally; no admission snapshot or depth/high-water tracking |
+//! | Tracked APDU | [`NetworkLayer::start_with_admission`], [`RouterOptions::track_admission`](crate::router::RouterOptions::track_admission) | 256 | 16 queued APDUs per key, defined below | Exact depth/high-water and Full/fairness/Closed totals via [`AdmissionReceiver::counters`] |
+//! | Raw control | [`NetworkLayer::enable_network_control_receiver`], [`RouterOptions::network_control_receiver`](crate::router::RouterOptions::network_control_receiver) | 256, separate from APDUs | None | Full/Closed counted internally; no admission snapshot or depth/high-water tracking |
 //! | Tracked control | [`NetworkLayer::enable_network_control_receiver_with_admission`] | 256, separate from APDUs | None | Exact depth/high-water and Full/Closed totals; fairness always zero |
 //!
 //! Raw receivers remain `tokio::sync::mpsc::Receiver`; tracked receivers are the
@@ -101,7 +101,7 @@ pub use issuance::IssuedApdu;
 
 #[path = "layer_admission.rs"]
 mod admission;
-pub(crate) use admission::AdmissionSender;
+pub(crate) use admission::{link_source_fits, AdmissionSender};
 pub use admission::{AdmissionReceiver, QueueAdmissionCounters, QueueAdmissionSnapshot};
 
 /// A received APDU with source addressing information.
@@ -118,7 +118,7 @@ pub struct ReceivedApdu {
     /// address. Non-router [`NetworkLayer`] deliveries use `None` because the
     /// layer owns one transport without an assigned ingress network number.
     /// Both raw and tracked deliveries carry this metadata. For
-    /// [`BACnetRouter::start_with_admission`](crate::router::BACnetRouter::start_with_admission),
+    /// [`RouterOptions::track_admission`](crate::router::RouterOptions::track_admission),
     /// it scopes [`source_mac`](Self::source_mac) to the ingress port for the
     /// 16-queued-APDU quota; [`source_network`](Self::source_network) is not part
     /// of that key. See the [receive-queue contract](self#receive-queue-admission).
@@ -158,7 +158,7 @@ pub struct ReceivedApdu {
 /// Non-router users opt in to this stream before [`NetworkLayer::start`].
 /// Without that opt-in, network messages retain their historical discard/log
 /// behavior. A router opts in with
-/// [`BACnetRouter::start_with_network_control_receiver`](crate::router::BACnetRouter::start_with_network_control_receiver),
+/// [`RouterOptions::network_control_receiver`](crate::router::RouterOptions::network_control_receiver),
 /// and its stream carries only the rejects addressed to the router itself.
 #[derive(Clone)]
 pub struct ReceivedNetworkControl {
@@ -262,8 +262,9 @@ pub struct RoutedTarget<'a> {
 /// local routers using NPDU destination addressing.
 /// See the [receive-queue contract](self#receive-queue-admission) for raw/tracked
 /// receiver choices, admission limits, drop attribution and lifecycle.
-/// An inbound NPDU whose DLEN or SLEN is past [`NpduAddress::MAX_MAC_LEN`] is
-/// dropped before admission and counted by [`Self::address_length_drops`].
+/// An inbound frame from a link-layer source MAC longer than
+/// [`NpduAddress::MAX_MAC_LEN`], or whose DLEN or SLEN is past it, is dropped
+/// before admission and counted by [`Self::address_length_drops`].
 pub struct NetworkLayer<T: TransportPort> {
     transport: T,
     response_scope: bacnet_transport::port::DirectResponseScope,
@@ -587,14 +588,17 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         self.network_control_ingress_sequence.load(Ordering::SeqCst)
     }
 
-    /// Inbound NPDUs dropped since this layer was created because their DLEN
-    /// or SLEN was past [`NpduAddress::MAX_MAC_LEN`] (#1141). Saturates at
-    /// `u64::MAX`.
+    /// Inbound NPDUs dropped since this layer was created because an address
+    /// in them was past [`NpduAddress::MAX_MAC_LEN`]: their DLEN or SLEN
+    /// (#1141), or the link-layer source MAC the transport reported (#1198).
+    /// Saturates at `u64::MAX`.
     ///
     /// Only routers answer an NPDU with Reject-Message-To-Network (Clause
     /// 6.6.3.5), so this non-router layer discards the NPDU and counts it.
     /// The NPDU reaches neither the APDU nor the control receiver, so it
-    /// never shows up in their admission counters.
+    /// never shows up in their admission counters. No built-in transport
+    /// reports a source MAC that long, so a nonzero count with well-formed
+    /// traffic points at a custom transport.
     pub fn address_length_drops(&self) -> u64 {
         self.address_length_drops.load(Ordering::Relaxed)
     }

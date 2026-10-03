@@ -131,7 +131,7 @@ impl QueueAdmissionCounters {
 ///
 /// Created by [`NetworkLayer::start_with_admission`] or
 /// [`NetworkLayer::enable_network_control_receiver_with_admission`], or by
-/// [`BACnetRouter::start_with_admission`](crate::router::BACnetRouter::start_with_admission). The queue
+/// [`RouterOptions::track_admission`](crate::router::RouterOptions::track_admission). The queue
 /// holds 256 items; tracked APDUs additionally have a quota of 16 queued items per
 /// source MAC (NetworkLayer) or (ingress port network number, source MAC) (router).
 /// Controls have no per-source quota. **Closed > fairness > Full** determines
@@ -145,7 +145,8 @@ impl QueueAdmissionCounters {
 /// High-water/drop totals survive through an owned [`Self::counters`] handle.
 ///
 /// This wrapper deliberately does not expose the underlying receiver: all
-/// dequeues must update the snapshot. Use the existing layer/router `start` methods
+/// dequeues must update the snapshot. Use [`NetworkLayer::start`], or a router
+/// started without [`RouterOptions::track_admission`](crate::router::RouterOptions::track_admission),
 /// when a plain `mpsc::Receiver` is required instead, or
 /// [`NetworkLayer::enable_network_control_receiver`] for raw controls.
 #[derive(Debug)]
@@ -159,7 +160,7 @@ pub struct AdmissionReceiver<T> {
 
 impl<T> AdmissionReceiver<T> {
     // Crate-internal construction keeps the generic sender and accounting in
-    // this module while allowing the router to retain its legacy receiver API.
+    // this module while letting the router hand out a raw receiver as well.
     pub(crate) fn channel(
         track_depth: bool,
     ) -> (
@@ -536,6 +537,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
 
         let dispatch_task = tokio::spawn(async move {
             while let Some(received) = npdu_rx.recv().await {
+                if !link_source_fits(&received.source_mac, &address_length_drops) {
+                    continue;
+                }
                 match decode_npdu(received.npdu.clone()) {
                     Ok(npdu) => {
                         if npdu.is_network_message {
@@ -614,6 +618,26 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         self.dispatch_task = Some(dispatch_task);
         Ok((apdu_rx, counters))
     }
+}
+
+/// Whether a frame's link-layer source MAC fits [`NpduAddress::MAX_MAC_LEN`]
+/// (#1198). [`NetworkLayer`] and the router ask before decoding anything else
+/// in the frame. A longer MAC is counted in `drops` and its frame goes no
+/// further, so neither an APDU consumer nor the routing table ever learns an
+/// address that a `BACnetAddress` cannot hold. No built-in transport makes
+/// one: B/IP, BACnet/SC and Ethernet MACs are 6 octets, MS/TP 1 and B/IPv6
+/// 18; only a custom [`TransportPort`] can.
+pub(crate) fn link_source_fits(source_mac: &[u8], drops: &AtomicU64) -> bool {
+    if source_mac.len() <= NpduAddress::MAX_MAC_LEN {
+        return true;
+    }
+    count_address_length_drop(drops);
+    warn!(
+        octets = source_mac.len(),
+        limit = NpduAddress::MAX_MAC_LEN,
+        "Dropping a frame whose link-layer source MAC is over the limit"
+    );
+    false
 }
 
 #[cfg(test)]

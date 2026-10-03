@@ -14,31 +14,22 @@ fn fallible_trend_hook_preserves_state_on_clock_error_and_retries() {
                     PropertyValue::Boolean(true),
                 )
                 .unwrap();
-            object
-                .object_mut()
-                .add_trend_record(ordinary(1, 10))
-                .unwrap();
-            let records = object.records().clone();
+            object.add_trend_record(ordinary(1, 10)).unwrap();
+            let records = object.records();
             let identities = object.identities();
             let total = object.total();
             assert_protocol(
-                object
-                    .object_mut()
-                    .add_trend_record(ordinary(2, 20))
-                    .unwrap_err(),
+                object.add_trend_record(ordinary(2, 20)).unwrap_err(),
                 ErrorClass::DEVICE,
                 ErrorCode::OPERATIONAL_PROBLEM,
             );
-            assert_eq!(object.records(), &records);
+            assert_eq!(object.records(), records);
             assert_eq!(object.identities(), identities);
             assert_eq!(object.total(), total);
             assert!(object.enabled());
 
             object.bind_clock(TestClock::valid());
-            object
-                .object_mut()
-                .add_trend_record(ordinary(2, 20))
-                .unwrap();
+            object.add_trend_record(ordinary(2, 20)).unwrap();
             assert!(!object.enabled());
             assert_eq!(object.total(), total + 1);
             assert_eq!(object.records().len(), 2);
@@ -47,15 +38,12 @@ fn fallible_trend_hook_preserves_state_on_clock_error_and_retries() {
             assert_status(&object, LOG_DISABLED);
 
             object.object_mut().bind_clock_internal(None);
-            let before = object.records().clone();
+            let before = object.records();
             let identities = object.identities();
-            object
-                .object_mut()
-                .add_trend_record(ordinary(3, 30))
-                .unwrap();
+            object.add_trend_record(ordinary(3, 30)).unwrap();
             assert_eq!(
                 object.records(),
-                &before,
+                before,
                 "disabled insertion succeeds unchanged"
             );
             assert_eq!(object.identities(), identities);
@@ -73,10 +61,7 @@ fn fallible_insertion_keeps_count_only_success_and_rejects_unsupported_objects()
         assert!(object.identities().is_empty());
         assert_eq!(object.total(), 1);
         if !matches!(kind, FamilyKind::Event) {
-            object
-                .object_mut()
-                .add_trend_record(ordinary(2, 20))
-                .unwrap();
+            object.add_trend_record(ordinary(2, 20)).unwrap();
             assert!(object.records().is_empty());
             assert!(object.identities().is_empty());
             assert_eq!(object.total(), 2);

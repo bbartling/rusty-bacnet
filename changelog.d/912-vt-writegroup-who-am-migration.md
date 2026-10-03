@@ -1,5 +1,6 @@
 ---
 section: Migration notes
+commit: 5ffc8a1a00c718762246839cba088b8c813d7f6e
 ---
 - **VT, WriteGroup and device identity services (#912):** `VTOpenRequest`
   needs a local session ID and a `VTClass`, WriteGroup takes `u16` channels

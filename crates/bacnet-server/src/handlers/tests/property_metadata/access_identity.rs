@@ -75,11 +75,10 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
         P::OBJECT_TYPE,
     ];
     // PICS corrections vs the historical heuristic: Object_Name is required
-    // and read-only (the heuristic called it writable); CDI Present_Value is
-    // required and read-only (the heuristic called every Present_Value
-    // writable); User_Type and the rights and credential Global_Identifier
-    // are required and writable (the heuristic called only
-    // Description/Out_Of_Service/Present_Value writable).
+    // and read-only (the heuristic called it writable); User_Type and the
+    // rights and credential Global_Identifier are required and writable (the
+    // heuristic called only Description/Out_Of_Service/Present_Value
+    // writable).
     let middle: &[P] = match kind {
         // Table 12-40 has no Present_Value row (#979).
         ObjectType::ACCESS_CREDENTIAL => &[

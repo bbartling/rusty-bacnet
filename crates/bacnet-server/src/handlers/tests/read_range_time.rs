@@ -268,7 +268,7 @@ fn every_log_family_reads_by_time_after_fifo_eviction() {
             .unwrap();
             let expected = expected
                 .into_iter()
-                .map(projected_record)
+                .map(|value| projected(family, value))
                 .collect::<Vec<_>>();
             assert_ack(&ack, &expected, flags, Some(sequence));
         }
@@ -297,8 +297,12 @@ fn log_with_record(family: LogFamily, record: BACnetLogRecord) -> Box<dyn BACnet
             Box::new(object)
         }
         LogFamily::TrendMultiple => {
+            // A Trend Log Multiple record has no status flags to carry.
+            let LogDatum::UnsignedValue(value) = record.log_datum else {
+                panic!("an unsigned sample");
+            };
             let mut object = TrendLogMultipleObject::new(1, "TLM-1", 1).unwrap();
-            object.add_record(record).unwrap();
+            object.add_record(multiple_record(value)).unwrap();
             Box::new(object)
         }
     }
@@ -332,12 +336,11 @@ fn read_range_preserves_family_specific_status_projection_bytes() {
                 data: vec![0b0100_0000],
             });
         }
-        assert_ack(
-            &ack,
-            &[PropertyValue::List(fields)],
-            (true, true, false),
-            Some(1),
-        );
+        let expected = match family {
+            LogFamily::TrendMultiple => projected(family, 1),
+            _ => PropertyValue::List(fields),
+        };
+        assert_ack(&ack, &[expected], (true, true, false), Some(1));
     }
 }
 

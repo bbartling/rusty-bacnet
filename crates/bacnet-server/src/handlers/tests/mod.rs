@@ -96,6 +96,7 @@ fn list_refusal(result: Result<(), Error>) -> (ErrorClass, ErrorCode, u32) {
     )
 }
 
+mod access_control_arrays;
 mod access_door_oos_writes;
 mod access_required_rows;
 mod access_typed_values;
@@ -113,10 +114,12 @@ mod averaging_window_writes;
 mod binary_lighting_operations;
 mod binary_lighting_relinquish_default;
 mod calendar_date_list;
+mod command_present_value_writes;
 mod cov_multiple_admission;
 mod cov_multiple_parameters;
 mod cov_property_parameters;
 mod cov_request_parameters;
+mod credential_data_input_oos_writes;
 mod detection_enable_summary;
 mod device_description_writes;
 mod device_event;

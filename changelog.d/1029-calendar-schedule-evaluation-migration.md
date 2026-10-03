@@ -1,5 +1,6 @@
 ---
 section: Migration notes
+commit: 5dc2537d6cd70588f76f74e85bfd459c94cf1f55
 ---
 - **Calendar and Schedule (Rust API, #1029):** the Calendar's
   `set_present_value` is gone and `add_date_entry` returns `Result`.

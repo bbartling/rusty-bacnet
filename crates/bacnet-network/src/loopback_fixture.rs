@@ -1,5 +1,5 @@
 //! Wire-level router fixtures shared by the loopback test modules
-//! (`address_bound_tests`, `reject_route_tests`).
+//! (`address_bound_tests`, `link_source_bound_tests`, `reject_route_tests`).
 //!
 //! Raw NPDU bytes go in through [`LoopbackTransport`] peers, and the frames
 //! the router sends come back out of them, so a test sees exactly what a
@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 
 use crate::layer::{ReceivedApdu, ReceivedNetworkControl};
-use crate::router::{BACnetRouter, RouterPort};
+use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 
 pub(crate) const APDU: [u8; 2] = [0x10, 0x08];
 pub(crate) const TOO_LONG: u8 = NpduAddress::MAX_MAC_LEN as u8 + 1;
@@ -112,16 +112,15 @@ impl RouterFixture {
                 network_number: 2000,
             },
         ];
-        let (router, local, controls) = if network_control {
-            let (router, local, controls) =
-                BACnetRouter::start_with_network_control_receiver(ports)
-                    .await
-                    .unwrap();
-            (router, local, Some(controls))
-        } else {
-            let (router, local) = BACnetRouter::start(ports).await.unwrap();
-            (router, local, None)
-        };
+        let mut options = RouterOptions::new();
+        if network_control {
+            options = options.network_control_receiver();
+        }
+        let StartedRouter {
+            router,
+            apdus: local,
+            network_control: controls,
+        } = BACnetRouter::start(ports, options).await.unwrap();
         let mut fixture = Self {
             router,
             local,

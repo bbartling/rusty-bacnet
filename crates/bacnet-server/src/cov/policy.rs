@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -78,9 +79,10 @@ impl CovPolicy {
     /// and `max_indefinite_per_peer` may be zero, and a value larger than the
     /// cap it shares is clamped by [`sanitized`](Self::sanitized), not
     /// refused. Reserved entries follow the DCC source restriction rule: a
-    /// MAC of 1..=255 octets, and for a routed recipient a network in
-    /// 1..=65534. NPDU decoding drops any other routed source, so such an
-    /// entry could never match a subscriber.
+    /// MAC of 1 to [`BACnetAddress::MAX_MAC_LEN`] (18) octets, and for a
+    /// routed recipient a network in 1..=65534. The network layer drops any
+    /// other source, direct or routed (#1141, #1198), so such an entry could
+    /// never match a subscriber (#1199).
     pub fn validate(&self) -> Result<(), Error> {
         for (name, value) in [
             ("max_subscriptions_global", self.max_subscriptions_global),
@@ -108,11 +110,12 @@ impl CovPolicy {
             }
         }
         let mac_length = |field: &str, mac: &MacAddr| {
-            if (1..=255).contains(&mac.len()) {
+            if (1..=BACnetAddress::MAX_MAC_LEN).contains(&mac.len()) {
                 Ok(())
             } else {
                 Err(Error::Encoding(format!(
-                    "COV policy {field} entries need a MAC of 1..=255 octets"
+                    "COV policy {field} entries need a MAC of 1..={} octets",
+                    BACnetAddress::MAX_MAC_LEN
                 )))
             }
         };
