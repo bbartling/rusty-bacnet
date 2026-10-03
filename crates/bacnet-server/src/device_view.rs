@@ -308,9 +308,9 @@ impl BACnetObject for DeviceReadView<'_> {
     }
 
     // Every other read-only query is the wrapped object's own answer (#1076);
-    // `tests::every_read_query_has_a_forwarding_check` fails when the trait
-    // gains one this list lacks. The mutating hooks keep their trait defaults:
-    // the view borrows the object shared and serves reads only.
+    // `tests::the_view_forwards_every_read_query` runs each query the trait
+    // declares and fails on one this list lacks. The mutating hooks keep their
+    // trait defaults: the view borrows the object shared and serves reads only.
     fn audit_object_policy_internal(&self) -> ObjectAuditPolicy {
         self.object.audit_object_policy_internal()
     }
