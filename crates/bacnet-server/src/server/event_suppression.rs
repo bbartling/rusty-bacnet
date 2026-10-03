@@ -15,7 +15,8 @@ use std::sync::atomic::AtomicU64;
 /// them. A class whose list is empty, or whose destinations all filter the
 /// transition out by day, time or transition, is configured behaviour and is
 /// not counted. Neither are notifications held back by DeviceCommunicationControl
-/// or Event_Enable.
+/// or Event_Enable; DCC holds a confirmed one back at a retry too, ending it
+/// there uncounted.
 ///
 /// The next three count destinations that matched the transition but were
 /// skipped while their route was resolved, once per destination: the rest of

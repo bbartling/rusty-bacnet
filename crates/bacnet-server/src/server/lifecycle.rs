@@ -662,7 +662,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             );
                             commit.changed(change.object_id);
                         }
-                        commit.finish(&mut db_guard, &fanout.cov_table).await
+                        commit
+                            .finish(&fanout.db, &mut db_guard, &fanout.cov_table)
+                            .await
                     };
                     fanout.fire(&committed).await;
                 }

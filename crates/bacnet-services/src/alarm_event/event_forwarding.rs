@@ -1,5 +1,8 @@
 use super::*;
-use crate::common::{decode_context, decode_context_bool, decode_context_enum, decode_context_u32};
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_boolean, decode_ctx_object_id, decode_ctx_primitive, decode_ctx_unsigned,
+    next_is_context,
+};
 use bacnet_encoding::constructed::{encode_event_notification, validate_tlv_sequence};
 use bytes::Bytes;
 
@@ -50,54 +53,43 @@ impl ForwardedEventNotification {
         const WHAT: &str = "EventNotification";
         validate_tlv_sequence(data, WHAT)?;
         let (process_identifier, tail_start) =
-            decode_context_u32(data, 0, 0, "EventNotification processIdentifier")?;
-        let (content, offset) = decode_context(
+            decode_ctx_unsigned::<u32>(data, 0, 0, "EventNotification processIdentifier")?;
+        let (initiating_device_identifier, offset) = decode_ctx_object_id(
             data,
             tail_start,
             1,
             "EventNotification initiatingDeviceIdentifier",
         )?;
-        let initiating_device_identifier = ObjectIdentifier::decode(content)?;
-        let (content, offset) =
-            decode_context(data, offset, 2, "EventNotification eventObjectIdentifier")?;
-        let event_object_identifier = ObjectIdentifier::decode(content)?;
+        let (event_object_identifier, offset) =
+            decode_ctx_object_id(data, offset, 2, "EventNotification eventObjectIdentifier")?;
         let (_, offset) = primitives::decode_timestamp(data, offset, 3)?;
         let (notification_class, offset) =
-            decode_context_u32(data, offset, 4, "EventNotification notificationClass")?;
-        let priority_offset = offset;
-        let (priority, offset) = decode_context_u32(data, offset, 5, "EventNotification priority")?;
-        let priority = u8::try_from(priority).map_err(|_| {
-            Error::decoding(priority_offset, "EventNotification priority exceeds u8")
-        })?;
-        let (_, mut offset) = decode_context_u32(data, offset, 6, "EventNotification eventType")?;
+            decode_ctx_unsigned::<u32>(data, offset, 4, "EventNotification notificationClass")?;
+        let (priority, offset) =
+            decode_ctx_unsigned::<u8>(data, offset, 5, "EventNotification priority")?;
+        let (_, mut offset) =
+            decode_ctx_unsigned::<u32>(data, offset, 6, "EventNotification eventType")?;
         if next_is_context(data, offset, 7)? {
-            (_, offset) = decode_context(data, offset, 7, "EventNotification messageText")?;
+            (_, offset) = decode_ctx_primitive(data, offset, 7, "EventNotification messageText")?;
         }
-        let (notify_type, mut offset) = decode_context_enum(
-            data,
-            offset,
-            8,
-            "EventNotification notifyType",
-            NotifyType::from_raw,
-        )?;
+        let (notify_type, mut offset) =
+            decode_ctx_unsigned::<u32>(data, offset, 8, "EventNotification notifyType")?;
+        let notify_type = NotifyType::from_raw(notify_type);
         if next_is_context(data, offset, 9)? {
-            (_, offset) = decode_context_bool(data, offset, 9, "EventNotification ackRequired")?;
+            (_, offset) = decode_ctx_boolean(data, offset, 9, "EventNotification ackRequired")?;
         }
         if next_is_context(data, offset, 10)? {
-            (_, offset) = decode_context_u32(data, offset, 10, "EventNotification fromState")?;
+            (_, offset) =
+                decode_ctx_unsigned::<u32>(data, offset, 10, "EventNotification fromState")?;
         } else if notify_type != NotifyType::ACK_NOTIFICATION {
             return Err(Error::decoding(
                 offset,
                 "EventNotification missing fromState",
             ));
         }
-        let (to_state, offset) = decode_context_enum(
-            data,
-            offset,
-            11,
-            "EventNotification toState",
-            EventState::from_raw,
-        )?;
+        let (to_state, offset) =
+            decode_ctx_unsigned::<u32>(data, offset, 11, "EventNotification toState")?;
+        let to_state = EventState::from_raw(to_state);
         if offset < data.len() {
             // The event values are one non-empty constructed [12] member, and
             // the request ends at the closing tag that matches its opening one.
@@ -152,14 +144,4 @@ impl ForwardedEventNotification {
         buf.extend_from_slice(&self.tail);
         buf.freeze()
     }
-}
-
-/// Whether a primitive or constructed context tag `tag` starts at `offset`;
-/// `false` at the end of the data.
-fn next_is_context(data: &[u8], offset: usize, tag: u8) -> Result<bool, Error> {
-    if offset >= data.len() {
-        return Ok(false);
-    }
-    let (peek, _) = tags::decode_tag(data, offset)?;
-    Ok(peek.is_context(tag))
 }

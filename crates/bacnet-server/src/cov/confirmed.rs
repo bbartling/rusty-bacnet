@@ -22,7 +22,9 @@
 //! subscriber that stopped answering, or keeps refusing, therefore costs at most
 //! one delivery attempt per hold-off however often its objects change, and
 //! cannot keep the in-flight slots to itself. Shutdown and cancellation clear
-//! the mark without a hold-off.
+//! the mark without a hold-off, and so does a report DeviceCommunicationControl
+//! ends at a retry (Clause 16.1): the subscriber did not fail, so its coordinate
+//! is free to report again as soon as initiation is enabled.
 //!
 //! The standard delivers a confirmed notification with the usual APDU timeout and
 //! retries (Clause 5.4.4) and asks nothing further once they end. Reporting again
@@ -174,7 +176,8 @@ pub(crate) enum BeginRefusal {
 /// coordinate: a subscription or a whole context.
 ///
 /// Dropping it ends the report without a hold-off: after the Ack has completed
-/// the baselines, on shutdown and cancellation, or once it is fenced.
+/// the baselines, on shutdown and cancellation, once it is fenced, or when DCC
+/// withdraws it.
 #[derive(Debug)]
 #[must_use = "dropping a flight ends the outstanding report"]
 pub(crate) struct ConfirmedFlight {

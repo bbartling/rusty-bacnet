@@ -8,41 +8,13 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 
-use crate::common::{decode_context, decode_context_u32};
-
-fn decode_application<'a>(
-    data: &'a [u8],
-    offset: usize,
-    expected_tag: u8,
-    field: &str,
-) -> Result<(&'a [u8], usize), Error> {
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if tag.class != tags::TagClass::Application || tag.number != expected_tag {
-        return Err(Error::decoding(
-            offset,
-            format!("{field} expected application tag {expected_tag}"),
-        ));
-    }
-    let end = pos
-        .checked_add(tag.length as usize)
-        .ok_or_else(|| Error::decoding(pos, format!("{field} length overflow")))?;
-    if end > data.len() {
-        return Err(Error::decoding(pos, format!("{field} truncated")));
-    }
-    Ok((&data[pos..end], end))
-}
-
-fn decode_application_unsigned(
-    data: &[u8],
-    offset: usize,
-    field: &str,
-) -> Result<(u64, usize), Error> {
-    let (content, end) = decode_application(data, offset, tags::app_tag::UNSIGNED, field)?;
-    Ok((primitives::decode_unsigned(content)?, end))
-}
+use bacnet_encoding::constructed::tagged::{
+    decode_app_primitive, decode_app_unsigned, decode_ctx_object_id, decode_ctx_primitive,
+    decode_ctx_unsigned, next_is_context,
+};
 
 fn decode_count(data: &[u8], offset: usize, field: &str) -> Result<(i32, usize), Error> {
-    let (content, end) = decode_application(data, offset, tags::app_tag::SIGNED, field)?;
+    let (content, end) = decode_app_primitive(data, offset, tags::app_tag::SIGNED, field)?;
     let value = primitives::decode_signed(content)?;
     let value = i16::try_from(value)
         .map_err(|_| Error::decoding(offset, format!("{field} exceeds INTEGER16")))?;
@@ -204,13 +176,13 @@ impl ReadRangeRequest {
         let mut offset = 0;
 
         // [0] objectIdentifier
-        let (content, end) = decode_context(data, offset, 0, "ReadRange request object-id")?;
-        let object_identifier = ObjectIdentifier::decode(content)?;
+        let (object_identifier, end) =
+            decode_ctx_object_id(data, offset, 0, "ReadRange request object-id")?;
         offset = end;
 
         // [1] propertyIdentifier
         let (property_identifier, end) =
-            decode_context_u32(data, offset, 1, "ReadRange request property-id")?;
+            decode_ctx_unsigned::<u32>(data, offset, 1, "ReadRange request property-id")?;
         let property_identifier = PropertyIdentifier::from_raw(property_identifier);
         if matches!(
             property_identifier,
@@ -225,20 +197,17 @@ impl ReadRangeRequest {
 
         // [2] propertyArrayIndex (optional)
         let mut property_array_index = None;
-        if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(2) {
-                let (index, end) =
-                    decode_context_u32(data, offset, 2, "ReadRange request array-index")?;
-                if index == 0 {
-                    return Err(Error::decoding(
-                        offset,
-                        "ReadRange request array-index may not be zero",
-                    ));
-                }
-                property_array_index = Some(index);
-                offset = end;
+        if next_is_context(data, offset, 2)? {
+            let (index, end) =
+                decode_ctx_unsigned::<u32>(data, offset, 2, "ReadRange request array-index")?;
+            if index == 0 {
+                return Err(Error::decoding(
+                    offset,
+                    "ReadRange request array-index may not be zero",
+                ));
             }
+            property_array_index = Some(index);
+            offset = end;
         }
 
         // Range specification (optional)
@@ -248,11 +217,8 @@ impl ReadRangeRequest {
             if tag.is_opening_tag(3) {
                 // byPosition
                 let (content, new_offset) = tags::extract_context_value(data, tag_end, 3)?;
-                let (reference_index, inner_offset) = decode_application_unsigned(
-                    content,
-                    0,
-                    "ReadRange byPosition reference-index",
-                )?;
+                let (reference_index, inner_offset) =
+                    decode_app_unsigned::<u64>(content, 0, "ReadRange byPosition reference-index")?;
                 let (count, inner_offset) =
                     decode_count(content, inner_offset, "ReadRange byPosition count")?;
                 if inner_offset != content.len() {
@@ -269,7 +235,7 @@ impl ReadRangeRequest {
             } else if tag.is_opening_tag(6) {
                 // bySequenceNumber
                 let (content, new_offset) = tags::extract_context_value(data, tag_end, 6)?;
-                let (reference_seq, inner_offset) = decode_application_unsigned(
+                let (reference_seq, inner_offset) = decode_app_unsigned::<u64>(
                     content,
                     0,
                     "ReadRange bySequenceNumber reference-seq",
@@ -291,9 +257,9 @@ impl ReadRangeRequest {
                 // byTime
                 let (content, new_offset) = tags::extract_context_value(data, tag_end, 7)?;
                 let (date, inner_offset) =
-                    decode_application(content, 0, tags::app_tag::DATE, "ReadRange byTime date")?;
+                    decode_app_primitive(content, 0, tags::app_tag::DATE, "ReadRange byTime date")?;
                 let date = Date::decode(date)?;
-                let (time, inner_offset) = decode_application(
+                let (time, inner_offset) = decode_app_primitive(
                     content,
                     inner_offset,
                     tags::app_tag::TIME,
@@ -403,30 +369,27 @@ impl ReadRangeAck {
         let mut offset = 0;
 
         // [0] objectIdentifier
-        let (content, end) = decode_context(data, offset, 0, "ReadRange ACK object-id")?;
-        let object_identifier = ObjectIdentifier::decode(content)?;
+        let (object_identifier, end) =
+            decode_ctx_object_id(data, offset, 0, "ReadRange ACK object-id")?;
         offset = end;
 
         // [1] propertyIdentifier
         let (property_identifier, end) =
-            decode_context_u32(data, offset, 1, "ReadRange ACK property-id")?;
+            decode_ctx_unsigned::<u32>(data, offset, 1, "ReadRange ACK property-id")?;
         let property_identifier = PropertyIdentifier::from_raw(property_identifier);
         offset = end;
 
         // [2] propertyArrayIndex (optional)
         let mut property_array_index = None;
-        if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if tag.is_context(2) {
-                let (index, end) =
-                    decode_context_u32(data, offset, 2, "ReadRange ACK array-index")?;
-                property_array_index = Some(index);
-                offset = end;
-            }
+        if next_is_context(data, offset, 2)? {
+            let (index, end) =
+                decode_ctx_unsigned::<u32>(data, offset, 2, "ReadRange ACK array-index")?;
+            property_array_index = Some(index);
+            offset = end;
         }
 
         // [3] resultFlags
-        let (content, end) = decode_context(data, offset, 3, "ReadRange ACK result-flags")?;
+        let (content, end) = decode_ctx_primitive(data, offset, 3, "ReadRange ACK result-flags")?;
         let (unused_bits, bits) = primitives::decode_bit_string(content)?;
         if unused_bits != 5 || bits.len() != 1 || bits[0] & 0x1f != 0 {
             return Err(Error::decoding(
@@ -439,7 +402,8 @@ impl ReadRangeAck {
         offset = end;
 
         // [4] itemCount
-        let (item_count, end) = decode_context_u32(data, offset, 4, "ReadRange ACK item-count")?;
+        let (item_count, end) =
+            decode_ctx_unsigned::<u32>(data, offset, 4, "ReadRange ACK item-count")?;
         offset = end;
 
         // [5] itemData
@@ -476,9 +440,9 @@ impl ReadRangeAck {
                     "ReadRange ACK first-sequence-number requires a nonzero item-count",
                 ));
             }
-            let (content, end) =
-                decode_context(data, offset, 6, "ReadRange ACK first-sequence-number")?;
-            first_sequence_number = Some(primitives::decode_unsigned(content)?);
+            let (sequence_number, end) =
+                decode_ctx_unsigned::<u64>(data, offset, 6, "ReadRange ACK first-sequence-number")?;
+            first_sequence_number = Some(sequence_number);
             offset = end;
         }
         if offset != data.len() {

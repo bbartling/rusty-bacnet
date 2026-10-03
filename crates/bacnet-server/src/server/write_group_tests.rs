@@ -433,6 +433,32 @@ async fn write_group_reads_allow_group_delay_inhibit_at_the_write() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn write_group_dropped_after_a_channel_took_its_value_ends_that_distribution_failed() {
+    let h = start(ServerConfig::default()).await;
+    let write = request(27, 9, vec![entry(13, None, real(4.0))]);
+    let writes = plan(&*h.server.database().read().await, &write);
+    let runner = CommandRunner::for_server(&h.server);
+    // Holding the COV table parks the first write, CH-4's, once it has
+    // committed and let go of the database; the request is dropped there
+    // (#1324).
+    let table = Arc::clone(&h.server.cov_table).read_owned().await;
+    let mut applying = Box::pin(apply(&runner, &write, &writes));
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(std::future::Future::poll(applying.as_mut(), &mut cx).is_pending());
+    assert_eq!(status(&h, 4).await, WriteStatus::IN_PROGRESS);
+
+    drop(applying);
+    // CH-4's distribution ended unstarted; CH-5 was never written.
+    assert_eq!(status(&h, 4).await, WriteStatus::FAILED);
+    assert_eq!(status(&h, 5).await, WriteStatus::IDLE);
+    assert!(h.server.request_tasks.is_empty());
+    drop(table);
+    h.settle().await;
+    assert_eq!(slot(&h, ao(4), 9).await, PropertyValue::Null);
+    assert_silent(&h);
+}
+
+#[tokio::test(start_paused = true)]
 async fn write_group_lighting_command_reaches_a_lighting_output() {
     use crate::server::lighting_command_member_tests::{lighting_command, objects, FRAMED};
     // CH-1 (channel 11, group 27) passes its value to LO-1's Lighting_Command.
