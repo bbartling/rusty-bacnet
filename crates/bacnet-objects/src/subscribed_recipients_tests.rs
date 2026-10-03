@@ -113,6 +113,33 @@ fn a_bound_clock_drives_reads_and_expiry() {
 }
 
 #[test]
+fn unbinding_the_clock_keeps_the_time_each_entry_has_left() {
+    let nanos = Arc::new(AtomicU64::new(0));
+    let clock = Arc::clone(&nanos);
+    let mut store = SubscribedRecipients::new();
+    store.bind_monotonic_clock(Some(Arc::new(move || {
+        Duration::from_nanos(clock.load(Ordering::SeqCst))
+    })));
+    nanos.store(
+        u64::try_from((10 * MINUTE).as_nanos()).unwrap(),
+        Ordering::SeqCst,
+    );
+    store.write(framed(&[device(1, 5)])).unwrap();
+    nanos.store(
+        u64::try_from((12 * MINUTE).as_nanos()).unwrap(),
+        Ordering::SeqCst,
+    );
+    assert_eq!(minutes(&store), [3]);
+    // Back on counted time, the entry still has three minutes left.
+    store.bind_monotonic_clock(None);
+    assert_eq!(minutes(&store), [3]);
+    assert!(!store.advance_by(3 * MINUTE - NANO));
+    assert_eq!(minutes(&store), [1]);
+    assert!(store.advance_by(NANO));
+    assert_eq!(store.subscriptions(), []);
+}
+
+#[test]
 fn time_remaining_must_be_one_minute_to_a_day() {
     let mut store = stored(&[device(1, 5)]);
     for refused in [0, MAX_SUBSCRIPTION_MINUTES + 1, u32::MAX] {

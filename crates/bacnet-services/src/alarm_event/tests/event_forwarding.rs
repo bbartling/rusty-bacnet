@@ -109,10 +109,23 @@ fn forwarded_notification_refuses_malformed_requests() {
             "{len} octets must not decode"
         );
     }
-    // Something after the event values.
-    let mut trailing = whole.clone();
-    primitives::encode_ctx_unsigned(&mut trailing, 13, 1);
-    assert!(ForwardedEventNotification::decode(&trailing).is_err());
+    // Something after the event values: a context tag, a second empty
+    // event-values member, and a context-0 primitive whose value octet reads
+    // as a closing tag 12.
+    for extra in [&[0xD9, 0x01][..], &[0xCE, 0xCF][..], &[0x09, 0xCF][..]] {
+        let mut trailing = whole.clone();
+        trailing.extend_from_slice(extra);
+        assert!(
+            ForwardedEventNotification::decode(&trailing).is_err(),
+            "{extra:02X?} after the event values must not decode"
+        );
+    }
+    // Empty event values.
+    let mut request = alarm();
+    request.event_values = None;
+    let mut empty = encoded(&request);
+    empty.extend_from_slice(&[0xCE, 0xCF]);
+    assert!(ForwardedEventNotification::decode(&empty).is_err());
 
     // An alarm with no fromState.
     let mut request = alarm();

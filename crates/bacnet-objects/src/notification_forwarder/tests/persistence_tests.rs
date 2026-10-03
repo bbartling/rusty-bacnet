@@ -123,6 +123,7 @@ fn subscribed_recipients_write_that_cannot_be_saved_is_refused() {
     )
     .unwrap();
     write(&mut nf, &[subscription(device(7), 1, 10)]);
+    let counters = nf.save_counters();
     storage.fail.store(true, Ordering::SeqCst);
     assert_refused(
         nf.write_property(
@@ -136,6 +137,133 @@ fn subscribed_recipients_write_that_cannot_be_saved_is_refused() {
     );
     assert_eq!(nf.subscriptions(), [subscription(device(7), 1, 10)]);
     assert_eq!(storage.saved(), [subscription(device(7), 1, 10)]);
+    assert_eq!(counters.failed_saves(), 1);
+}
+
+/// One boot of a forwarder on `storage`: a fresh monotonic clock from zero,
+/// the operation task's calls every ten seconds for `run`, then a stop.
+/// Returns the minutes the entry served when the forwarder was built.
+fn boot(
+    storage: &Arc<MemoryPersistence>,
+    first_write: Option<&[BACnetEventNotificationSubscription]>,
+    run: Duration,
+) -> u32 {
+    let (clock, set) = manual_clock();
+    let mut nf = NotificationForwarderObject::with_persistence(
+        1,
+        "NF",
+        Arc::clone(storage) as Arc<dyn SubscribedRecipientsPersistence>,
+    )
+    .unwrap();
+    nf.bind_monotonic_clock_internal(Some(clock));
+    if let Some(list) = first_write {
+        write(&mut nf, list);
+    }
+    let restored = minutes(&nf)[0];
+    let mut at = Duration::ZERO;
+    while at < run {
+        at += Duration::from_secs(10);
+        set(at);
+        nf.advance_monotonic_time_internal(at);
+    }
+    restored
+}
+
+#[test]
+fn subscribed_recipients_keep_running_out_across_repeated_restarts() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let entry = [subscription(device(7), 1, 1440)];
+    // Each boot runs ten minutes. The saved copy follows the falling
+    // minutes, so every restart restores less than the one before.
+    let restored = [
+        boot(&storage, Some(&entry), 10 * MINUTE),
+        boot(&storage, None, 10 * MINUTE),
+        boot(&storage, None, 10 * MINUTE),
+    ];
+    assert_eq!(restored, [1440, 1430, 1420]);
+    assert_eq!(storage.saved(), [subscription(device(7), 1, 1410)]);
+}
+
+#[test]
+fn subscribed_recipients_minute_saves_come_at_most_once_a_minute() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let (clock, set) = manual_clock();
+    let mut nf = NotificationForwarderObject::with_persistence(
+        1,
+        "NF",
+        Arc::clone(&storage) as Arc<dyn SubscribedRecipientsPersistence>,
+    )
+    .unwrap();
+    nf.bind_monotonic_clock_internal(Some(clock));
+    // Two entries whose minutes fall half a minute apart.
+    write(&mut nf, &[subscription(device(7), 1, 10)]);
+    set(MINUTE / 2);
+    write(
+        &mut nf,
+        &[
+            subscription(device(7), 1, 10),
+            subscription(device(8), 1, 10),
+        ],
+    );
+    let saves = |storage: &MemoryPersistence| storage.saved();
+    set(MINUTE);
+    nf.advance_monotonic_time_internal(MINUTE);
+    assert_eq!(
+        saves(&storage),
+        [
+            subscription(device(7), 1, 9),
+            subscription(device(8), 1, 10)
+        ]
+    );
+    // The second entry's minute falls at 90 s, inside the minute since the
+    // last save: nothing is saved until 120 s.
+    let ninety = MINUTE + MINUTE / 2;
+    set(ninety);
+    nf.advance_monotonic_time_internal(ninety);
+    assert_eq!(
+        saves(&storage),
+        [
+            subscription(device(7), 1, 9),
+            subscription(device(8), 1, 10)
+        ]
+    );
+    set(2 * MINUTE);
+    nf.advance_monotonic_time_internal(2 * MINUTE);
+    assert_eq!(
+        saves(&storage),
+        [subscription(device(7), 1, 8), subscription(device(8), 1, 9)]
+    );
+}
+
+#[test]
+fn a_failed_save_is_counted_and_retried_a_minute_later() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let (clock, set) = manual_clock();
+    let mut nf = NotificationForwarderObject::with_persistence(
+        1,
+        "NF",
+        Arc::clone(&storage) as Arc<dyn SubscribedRecipientsPersistence>,
+    )
+    .unwrap();
+    let counters = nf.save_counters();
+    nf.bind_monotonic_clock_internal(Some(clock));
+    write(&mut nf, &[subscription(device(7), 1, 10)]);
+    storage.fail.store(true, Ordering::SeqCst);
+    set(MINUTE);
+    nf.advance_monotonic_time_internal(MINUTE);
+    assert_eq!(counters.failed_saves(), 1);
+    assert_eq!(storage.saved(), [subscription(device(7), 1, 10)]);
+
+    // Storage is back; the retry waits for the minute to pass.
+    storage.fail.store(false, Ordering::SeqCst);
+    let ninety = MINUTE + MINUTE / 2;
+    set(ninety);
+    nf.advance_monotonic_time_internal(ninety);
+    assert_eq!(storage.saved(), [subscription(device(7), 1, 10)]);
+    set(2 * MINUTE);
+    nf.advance_monotonic_time_internal(2 * MINUTE);
+    assert_eq!(storage.saved(), [subscription(device(7), 1, 8)]);
+    assert_eq!(counters.failed_saves(), 1);
 }
 
 #[test]

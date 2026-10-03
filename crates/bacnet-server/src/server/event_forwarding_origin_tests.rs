@@ -109,18 +109,22 @@ async fn confirmed_notification_is_acknowledged_while_its_copy_is_still_sending(
 
 #[tokio::test]
 async fn confirmed_notification_is_acknowledged_whatever_forwarding_finds() {
-    // No forwarder at all.
+    // No forwarder at all: acknowledged, and counted as not forwarded.
     let (reply, answered) = oneshot::channel();
     let transport = forwarding_transport();
     let sent = transport.sent();
-    dispatch(
-        confirmed_services(database(Vec::new()), transport),
-        encoded(&notification(5)),
-        reply,
-    )
-    .await;
+    let services = confirmed_services(database(Vec::new()), transport);
+    let suppressions = Arc::clone(&services.event_suppressions);
+    dispatch(services, encoded(&notification(5)), reply).await;
     assert!(is_simple_ack(&reply_apdu(answered.await.unwrap())));
     assert!(sent.is_empty());
+    assert_eq!(
+        suppressions.snapshot(),
+        EventNotificationCounters {
+            received_not_forwarded: 1,
+            ..Default::default()
+        }
+    );
 
     // A forwarder whose only destination cannot be routed: the skip is
     // counted, and the sender's answer does not change.

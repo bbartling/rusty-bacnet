@@ -10,6 +10,12 @@ use super::notification_transactions::NotificationReserveError;
 use super::*;
 use bacnet_types::constructed::BACnetRecipient;
 
+/// APDU header octets before the service request of an unsegmented
+/// Confirmed-Request (type, segmentation limits, invoke ID, service choice)
+/// and of an Unconfirmed-Request (type, service choice).
+const CONFIRMED_HEADER_LEN: usize = 4;
+const UNCONFIRMED_HEADER_LEN: usize = 2;
+
 /// The service request a notification sends to one process identifier.
 pub(super) type EncodeFor<'a> = &'a (dyn Fn(u32) -> Result<Bytes, Error> + Send + Sync);
 
@@ -105,6 +111,26 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     continue;
                 }
             };
+            // Notifications go unsegmented, so one longer than the local APDU
+            // capacity is not sent; a forwarded copy of a notification that
+            // arrived segmented is the usual case. It is checked before an
+            // invoke ID is reserved.
+            let header = if *confirmed {
+                CONFIRMED_HEADER_LEN
+            } else {
+                UNCONFIRMED_HEADER_LEN
+            };
+            let capacity = usize::try_from(local_apdu_capacity).unwrap_or(usize::MAX);
+            if header + service_bytes.len() > capacity {
+                suppressions.record(EventSuppression::ApduTooLarge);
+                warn!(
+                    notification_class,
+                    length = header + service_bytes.len(),
+                    capacity,
+                    "EventNotification is longer than the local APDU capacity; not sent"
+                );
+                continue;
+            }
 
             if *confirmed {
                 // Convert only the unicast route shapes admitted above and

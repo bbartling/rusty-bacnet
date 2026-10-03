@@ -149,6 +149,12 @@ impl SubscribedRecipients {
             .map_or(self.logical_now, |clock| clock())
     }
 
+    /// The store's current time: the bound clock's reading, or the time
+    /// [`advance_by`](Self::advance_by) has counted.
+    pub(crate) fn current_time(&self) -> Duration {
+        self.now()
+    }
+
     /// The live entries in list order, each with the whole minutes it has
     /// left, rounded up.
     pub fn subscriptions(&self) -> Vec<BACnetEventNotificationSubscription> {

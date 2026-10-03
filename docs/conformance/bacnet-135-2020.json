@@ -2945,7 +2945,10 @@
     "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::file_persistence_keeps_a_forwarder_list_across_a_rebuild",
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::a_lapsed_subscription_is_not_a_destination",
     "crates/bacnet-server/src/server/event_forwarding_tests.rs::a_lapsed_subscription_is_not_forwarded_to",
-    "crates/bacnet-integration-tests/tests/server/notification_forwarder.rs::forwarder_relays_a_notification_between_clients_over_the_wire"
+    "crates/bacnet-integration-tests/tests/server/notification_forwarder.rs::forwarder_relays_a_notification_between_clients_over_the_wire",
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::subscribed_recipients_keep_running_out_across_repeated_restarts",
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::subscribed_recipients_minute_saves_come_at_most_once_a_minute",
+    "crates/bacnet-objects/src/subscribed_recipients_tests.rs::unbinding_the_clock_keeps_the_time_each_entry_has_left"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/event_notification_subscription.rs::event_notification_subscription_refuses_truncated_and_malformed_elements",
@@ -2960,7 +2963,8 @@
     "crates/bacnet-server/src/server/requests/subscribed_recipients_wire_tests.rs::a_full_subscribed_recipients_refuses_the_entry_past_the_cap_on_the_wire",
     "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::subscribed_recipients_write_that_cannot_be_saved_is_refused",
     "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::subscribed_recipients_saved_out_of_range_refuses_the_forwarder",
-    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::file_persistence_round_trips_and_refuses_another_objects_file"
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::file_persistence_round_trips_and_refuses_another_objects_file",
+    "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::a_failed_save_is_counted_and_retried_a_minute_later"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2982,7 +2986,9 @@
     "A write that cannot be saved fails with DEVICE / OPERATIONAL_PROBLEM and leaves the list as it was. A failed save after a lapse keeps the older copy.",
     "FileSubscribedRecipientsPersistence keeps one forwarder's list in one file, replaced through a synchronized temporary file and rename; a file for another object, or one that does not decode, refuses the forwarder.",
     "Binding a monotonic clock keeps the time each entry has left, so a list restored before the object joins a database lapses on time.",
-    "An entry written with the same recipient, process and confirmation flag, and with the minutes it reads now or one more, keeps its deadline; the one more covers a minute boundary between the handler's read and its write. Any other Time Remaining restarts the lifetime."
+    "An entry written with the same recipient, process and confirmation flag, and with the minutes it reads now or one more, keeps its deadline; the one more covers a minute boundary between the handler's read and its write. Any other Time Remaining restarts the lifetime.",
+    "Between writes the operation task, which calls the object each second, saves the list when an entry lapses and at most once a minute while the served minutes differ from the saved copy. A saved entry so carries at most about a minute more than it had left, and repeated restarts still run it out.",
+    "A failed save logs a warning, counts in ForwarderSaveCounters::failed_saves (a handle shared with the object, from save_counters) and is retried a minute later."
    ]
   },
   {
@@ -3018,7 +3024,10 @@
     "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_filter_and_service_rows_take_writes",
     "crates/bacnet-objects/src/notification_forwarder/tests/properties.rs::notification_forwarder_port_filter_writes_change_only_enabled_members",
     "crates/bacnet-encoding/src/constructed/tests/port_permission.rs::port_permission_round_trips_golden_elements",
-    "crates/bacnet-integration-tests/tests/server/notification_forwarder.rs::forwarder_relays_a_notification_between_clients_over_the_wire"
+    "crates/bacnet-integration-tests/tests/server/notification_forwarder.rs::forwarder_relays_a_notification_between_clients_over_the_wire",
+    "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_destination_two_chained_forwarders_name_gets_one_copy",
+    "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_bound_device_on_the_receiving_network_gets_no_copy_of_a_broadcast",
+    "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_broadcast_notification_goes_confirmed_only_off_the_receiving_network"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/notification_forwarder/tests/selection_tests.rs::out_of_service_forwarder_takes_nothing",
@@ -3031,7 +3040,9 @@
     "crates/bacnet-server/src/server/event_forwarding_origin_tests.rs::confirmed_notification_is_acknowledged_whatever_forwarding_finds",
     "crates/bacnet-services/src/alarm_event/tests/event_forwarding.rs::forwarded_notification_refuses_malformed_requests",
     "crates/bacnet-encoding/src/constructed/tests/port_permission.rs::port_permission_refuses_malformed_elements",
-    "crates/bacnet-server/src/server/event_forwarding_tests.rs::a_forwarded_copy_whose_send_fails_is_counted_once"
+    "crates/bacnet-server/src/server/event_forwarding_tests.rs::a_forwarded_copy_whose_send_fails_is_counted_once",
+    "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_received_notification_no_forwarder_takes_is_counted",
+    "crates/bacnet-server/src/server/event_forwarding_rule_tests.rs::a_copy_longer_than_the_local_apdu_capacity_is_dropped_and_counted"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3053,7 +3064,11 @@
     "The confirmed sender gets its SimpleACK once the request decodes and before any copy is sent. A request that does not decode draws Reject INVALID_PARAMETER_DATA_TYPE.",
     "Copies go through the server's one EventNotification send path, with its route skips, invoke-ID reservation, retries and EventNotificationCounters. Loop-rule skips are not counted. DCC DISABLE_INITIATION stops copies.",
     "Recipient_List writes are kept in memory only, as a Notification Class's are; Clause 12.51.8 asks for the list to survive a restart.",
-    "A forwarded unconfirmed copy whose send fails counts in EventNotificationCounters::unconfirmed_send_failed, as the server's own notifications do."
+    "A forwarded unconfirmed copy whose send fails counts in EventNotificationCounters::unconfirmed_send_failed, as the server's own notifications do.",
+    "Across a chain inside the device each destination (recipient, process identifier and confirmation) gets one copy, however many forwarders name it.",
+    "A received notification that decodes but that no forwarder takes counts in EventNotificationCounters::received_not_forwarded; a confirmed one is still acknowledged.",
+    "Notifications are never sent segmented: a copy longer than the local APDU capacity is not sent to that destination and counts in EventNotificationCounters::apdu_too_large, and the other destinations are still served.",
+    "ForwardedEventNotification ends the request at the closing tag that matches the event-values opening tag: anything after it, or empty event values, does not decode."
    ]
   },
   {

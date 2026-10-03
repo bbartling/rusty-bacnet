@@ -1506,9 +1506,11 @@ The Notification Forwarder sends each event notification the server
 receives, and each one its own objects address to its Device, on to the
 destinations its Recipient_List and Subscribed_Recipients name. Clients
 configure both lists over the network. `storage_path` keeps
-Subscribed_Recipients in one file, replaced whole on each change, so the
-list and each entry's remaining minutes survive a restart; without it the
-list lives in memory only.
+Subscribed_Recipients in one file, replaced whole when the list changes and
+at most once a minute while its entries count down, so the list and each
+entry's remaining minutes survive a restart; without it the list lives in
+memory only. Every well-formed ConfirmedEventNotification is acknowledged,
+whether or not a forwarder takes it.
 
 `initial_source` is required and becomes the Alert Enrollment object's
 read-only `Present_Value`. This is an intentional breaking correction; there
@@ -2376,6 +2378,8 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `confirmed_rejected` | Confirmed notifications the recipient answered with an Error, Reject or Abort |
 | `confirmed_unanswered` | Confirmed notifications with no acknowledgment after the last retry |
 | `unconfirmed_send_failed` | Unconfirmed notifications the transport refused to send, once per destination; the other destinations are still served |
+| `apdu_too_large` | Notifications not sent to one destination because they exceed the local APDU size (notifications are never segmented); usually a forwarded copy of one that arrived segmented |
+| `received_not_forwarded` | Received event notifications that decoded but that no Notification Forwarder took; a confirmed one is still acknowledged |
 
 The first four count event and acknowledgment notifications alike, once per
 transition. A class whose list is empty, or whose destinations all filter the

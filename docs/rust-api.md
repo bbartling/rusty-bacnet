@@ -3833,23 +3833,36 @@ notification and to each live `Subscribed_Recipients` entry, confirmed or not
 as the destination asks. A copy differs from the received notification only in
 its process identifier: the rest goes on octet for octet, whatever the
 character set of its message text. Copies go through the same send path, route
-skips and counters as the server's own notifications.
+skips and counters as the server's own notifications. Notifications are never
+sent segmented, so a copy longer than the local APDU capacity, such as one of a
+notification that arrived segmented, is not sent to that destination and counts
+in `apdu_too_large`; the other destinations are still served.
 
 No copy goes by global broadcast, a notification received by global broadcast
 is not forwarded, a received notification is not broadcast back onto the local
 network, and one received by broadcast goes to no node on the local network.
 A destination naming the server's own Device object hands the copy to the
-forwarders that have not yet taken it. A ConfirmedEventNotification is
-acknowledged once it decodes, before any copy is sent, whatever forwarding
-then finds. One that does not decode is rejected with
-INVALID_PARAMETER_DATA_TYPE.
+forwarders that have not yet taken it, and across such a chain each
+destination (recipient, process identifier and confirmation) gets one copy.
+
+The server executes ConfirmedEventNotification, so it acknowledges every
+well-formed one once it decodes, before any copy is sent and whatever
+forwarding then finds, including one no forwarder takes. A received
+notification that no forwarder takes counts in `received_not_forwarded`. One
+that does not decode is rejected with INVALID_PARAMETER_DATA_TYPE.
 
 `with_persistence` keeps `Subscribed_Recipients` in an application-owned
 `SubscribedRecipientsPersistence`, saving the list, each entry with the minutes
-it has left, whenever it changes or an entry lapses, and restoring it when the
-forwarder is built again (Clause 12.51.9). `FileSubscribedRecipientsPersistence`
-keeps it in one file, replaced whole through a synchronized temporary file. A
-write that cannot be saved fails with DEVICE / OPERATIONAL_PROBLEM.
+it has left, when a write changes it, when an entry lapses, and at most once a
+minute while the entries' minutes fall, and restoring it when the forwarder is
+built again (Clause 12.51.9). A restored entry so carries at most about a
+minute more than it had left, and repeated restarts still run it out.
+`FileSubscribedRecipientsPersistence` keeps it in one file, replaced whole
+through a synchronized temporary file. A write that cannot be saved fails with
+DEVICE / OPERATIONAL_PROBLEM. A save the operation task makes that fails is
+logged and retried a minute later. `save_counters()` returns a
+`ForwarderSaveCounters` handle, shared with the object, whose `failed_saves()`
+counts every refused save; take it before adding the object to the database.
 `Recipient_List` writes stay in memory, as a Notification Class's do.
 
 ### Undelivered event notification counters
@@ -3872,6 +3885,8 @@ counters.confirmed_no_invoke_id;        // no invoke ID free for a confirmed not
 counters.confirmed_rejected;            // the recipient answered Error, Reject or Abort
 counters.confirmed_unanswered;          // no acknowledgment after the last retry
 counters.unconfirmed_send_failed;       // an unconfirmed send the transport refused
+counters.apdu_too_large;                // a notification longer than the local APDU size
+counters.received_not_forwarded;        // a received notification no forwarder took
 ```
 
 The four recipient-list fields count transitions, event and acknowledgment
@@ -3889,6 +3904,14 @@ destinations are still served. A confirmed send that fails locally counts in
 `confirmed_unanswered`. No field counts an encode failure: the committed
 payload and message text are validated before the destinations are walked, so
 a well-formed transition always encodes.
+
+`apdu_too_large` (#1225) counts notifications not sent to one destination
+because their APDU is longer than the local APDU capacity; notifications are
+never sent segmented, and the other destinations are still served. It is
+mostly a forwarded copy of a notification that arrived segmented.
+`received_not_forwarded` counts received event notifications that decoded but
+that no Notification Forwarder took (see
+[Notification forwarding](#notification-forwarding)).
 
 The three route fields (#1160) count destinations that matched the transition
 but were skipped while their route was resolved, once per destination; the

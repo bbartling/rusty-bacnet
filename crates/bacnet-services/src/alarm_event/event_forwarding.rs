@@ -99,11 +99,17 @@ impl ForwardedEventNotification {
             EventState::from_raw,
         )?;
         if offset < data.len() {
-            // The event values are one constructed [12] member that runs to
-            // the end; the TLV walk above already proved its nesting.
-            let (opening, _) = tags::decode_tag(data, offset)?;
-            let (closing, end) = tags::decode_tag(data, data.len() - 1)?;
-            if !opening.is_opening_tag(12) || !closing.is_closing_tag(12) || end != data.len() {
+            // The event values are one non-empty constructed [12] member, and
+            // the request ends at the closing tag that matches its opening one.
+            let (opening, inner) = tags::decode_tag(data, offset)?;
+            if !opening.is_opening_tag(12) {
+                return Err(Error::decoding(
+                    offset,
+                    "EventNotification expected eventValues after toState",
+                ));
+            }
+            let (values, end) = tags::extract_context_value(data, inner, 12)?;
+            if values.is_empty() || end != data.len() {
                 return Err(Error::decoding(
                     offset,
                     "EventNotification expected eventValues to close the request",

@@ -262,6 +262,17 @@ impl Forwarding {
     pub(super) fn counters(&self) -> EventNotificationCounters {
         self.services.event_suppressions.snapshot()
     }
+
+    /// Configure Device `instance` as the local node at `mac`.
+    pub(super) async fn bind_device(&self, instance: u32, mac: &[u8]) {
+        let device = ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
+        self.services
+            .device_bindings
+            .write()
+            .await
+            .insert_configured(DeviceBinding::local(device, mac).unwrap(), |_| false)
+            .unwrap();
+    }
 }
 
 /// A forwarder with one destination of each address shape: a local unicast,

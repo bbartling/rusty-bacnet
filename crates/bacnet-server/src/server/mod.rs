@@ -723,6 +723,8 @@ mod event_enrollment_task_tests;
 #[cfg(test)]
 mod event_forwarding_origin_tests;
 #[cfg(test)]
+mod event_forwarding_rule_tests;
+#[cfg(test)]
 mod event_forwarding_tests;
 #[cfg(test)]
 mod event_network_priority_tests;

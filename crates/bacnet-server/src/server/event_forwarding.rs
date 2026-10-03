@@ -12,7 +12,13 @@
 //!
 //! A destination that names this device again hands the copy to the
 //! forwarders that have not yet taken this notification, so forwarders can
-//! chain within the device without a copy going round twice.
+//! chain within the device without a copy going round twice. Across such a
+//! chain each destination (recipient, process identifier and confirmation)
+//! gets one copy, however many forwarders name it.
+//!
+//! A received notification that no forwarder takes is still acknowledged
+//! when it came confirmed; it counts in
+//! [`EventNotificationCounters::received_not_forwarded`].
 //!
 //! The loop rules that need a destination's route are applied as each copy is
 //! sent ([`ForwardOrigin::admits`]). The server is one node on one network, so a
@@ -171,6 +177,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
         let mut taken = Vec::new();
+        let mut sent: Vec<(BACnetRecipient, u32, bool)> = Vec::new();
         let mut pending = vec![notification];
         while let Some(notification) = pending.pop() {
             let (local_device, mut recipients) = {
@@ -196,6 +203,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     current_time: &current_time,
                 };
                 let targets = forwarding_targets(&db, &input, &taken);
+                if taken.is_empty()
+                    && targets.forwarders.is_empty()
+                    && matches!(origin, ForwardOrigin::Received(_))
+                {
+                    debug!(
+                        process_identifier = notification.process_identifier,
+                        "No Notification Forwarder takes the received event notification"
+                    );
+                    ctx.suppressions
+                        .record(super::event_suppression::EventSuppression::ReceivedNotForwarded);
+                }
                 taken.extend(targets.forwarders);
                 (
                     crate::local_device::selected_device(&db),
@@ -207,9 +225,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     pending.push(notification.retargeted(process_identifier));
                 }
             }
+            recipients.retain(|destination| !sent.contains(destination));
             if recipients.is_empty() {
                 continue;
             }
+            sent.extend(recipients.iter().cloned());
             let encode_for = |process_identifier| Ok(notification.encode_for(process_identifier));
             let admits = |route: &RecipientRoute| origin.admits(route);
             let outbound = OutboundNotification {

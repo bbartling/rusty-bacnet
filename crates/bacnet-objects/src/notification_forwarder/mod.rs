@@ -28,11 +28,15 @@
 //!
 //! Clause 12.51.9 asks for Subscribed_Recipients to survive a restart. A
 //! forwarder built with [`NotificationForwarderObject::with_persistence`]
-//! saves the list, each entry with the minutes it has left, every time the
-//! list changes, and restores it when built again. A restored entry counts
-//! down from its saved minutes: no fewer than it had left when the device
-//! stopped, and no more than its last subscription gave it. A forwarder built
-//! with [`NotificationForwarderObject::new`] keeps the list in memory only.
+//! saves the list, each entry with the minutes it has left, when a write
+//! changes it, when an entry lapses, and at most once a minute while the
+//! minutes the entries serve fall; it restores the list when built again. A
+//! restored entry counts down from its saved minutes: no fewer than it had
+//! left when the device stopped, about a minute more at most, and never more
+//! than its last subscription gave it, so restarts do not keep an entry
+//! alive. A failed save is logged and counted ([`ForwarderSaveCounters`]),
+//! and retried a minute later. A forwarder built with
+//! [`NotificationForwarderObject::new`] keeps the list in memory only.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -54,10 +58,12 @@ use crate::traits::{BACnetObject, MonotonicClock};
 mod metadata;
 mod persistence;
 mod port_filter;
+mod saving;
 mod selection;
 
 pub use crate::notification_class::MAX_RECIPIENT_LIST_DESTINATIONS;
 pub use persistence::{FileSubscribedRecipientsPersistence, SubscribedRecipientsPersistence};
+pub use saving::ForwarderSaveCounters;
 pub use selection::{forwarding_targets, ForwardingInput, ForwardingTargets};
 
 /// BACnet Notification Forwarder object (type 51). See the
@@ -74,7 +80,8 @@ pub struct NotificationForwarderObject {
     process_identifier_filter: Option<u32>,
     local_forwarding_only: bool,
     port_filter: Option<Vec<BACnetPortPermission>>,
-    persistence: Option<Arc<dyn SubscribedRecipientsPersistence>>,
+    saved_copy: Option<saving::SavedCopy>,
+    save_counters: ForwarderSaveCounters,
 }
 
 impl NotificationForwarderObject {
@@ -93,7 +100,8 @@ impl NotificationForwarderObject {
             process_identifier_filter: None,
             local_forwarding_only: false,
             port_filter: None,
-            persistence: None,
+            saved_copy: None,
+            save_counters: ForwarderSaveCounters::default(),
         })
     }
 
@@ -109,11 +117,23 @@ impl NotificationForwarderObject {
         persistence: Arc<dyn SubscribedRecipientsPersistence>,
     ) -> Result<Self, Error> {
         let mut forwarder = Self::new(instance, name)?;
-        if let Some(saved) = persistence.load(forwarder.oid)? {
+        let saved = persistence.load(forwarder.oid)?.unwrap_or_default();
+        if !saved.is_empty() {
             forwarder.subscribed_recipients.write(framed(&saved)?)?;
         }
-        forwarder.persistence = Some(persistence);
+        forwarder.saved_copy = Some(saving::SavedCopy::new(
+            persistence,
+            forwarder.subscribed_recipients.subscriptions(),
+            forwarder.save_counters.clone(),
+        ));
         Ok(forwarder)
+    }
+
+    /// This forwarder's save counters, shared with the object, so they stay
+    /// readable after it joins a database. They stay zero without
+    /// persistence.
+    pub fn save_counters(&self) -> ForwarderSaveCounters {
+        self.save_counters.clone()
     }
 
     /// Set the description string.
@@ -178,38 +198,30 @@ impl NotificationForwarderObject {
         self.port_filter.as_deref()
     }
 
-    /// Save the list as it stands, when the forwarder has persistence.
-    fn save(&self, store: &SubscribedRecipients) -> Result<(), Error> {
-        match &self.persistence {
-            Some(persistence) => persistence.save(self.oid, &store.subscriptions()),
-            None => Ok(()),
-        }
-    }
-
     /// Replace Subscribed_Recipients with a written list, saving it before
     /// the forwarder serves it. A list that cannot be saved is refused with
     /// DEVICE / OPERATIONAL_PROBLEM and the old list stays.
     fn write_subscribed_recipients(&mut self, value: PropertyValue) -> Result<(), Error> {
         let mut next = self.subscribed_recipients.clone();
         next.write(value)?;
-        self.save(&next).map_err(|_| {
-            common::protocol_error(
-                bacnet_types::enums::ErrorClass::DEVICE,
-                bacnet_types::enums::ErrorCode::OPERATIONAL_PROBLEM,
-            )
-        })?;
+        if let Some(saved_copy) = &mut self.saved_copy {
+            saved_copy.save_written(self.oid, &next).map_err(|_| {
+                common::protocol_error(
+                    bacnet_types::enums::ErrorClass::DEVICE,
+                    bacnet_types::enums::ErrorCode::OPERATIONAL_PROBLEM,
+                )
+            })?;
+        }
         self.subscribed_recipients = next;
         Ok(())
     }
 
-    /// After entries lapse, save what is left. A failed save keeps the
-    /// earlier copy, whose entries a restart would restore with no more than
-    /// their last subscribed time.
-    fn after_lapse(&self, dropped: bool) -> bool {
-        if dropped {
-            let _ = self.save(&self.subscribed_recipients);
+    /// After time passes, keep the saved copy current (see the module docs).
+    fn after_time_passed(&mut self, lapsed: bool) -> bool {
+        if let Some(saved_copy) = &mut self.saved_copy {
+            saved_copy.keep_current(self.oid, &self.subscribed_recipients, lapsed);
         }
-        dropped
+        lapsed
     }
 }
 
@@ -346,17 +358,20 @@ impl BACnetObject for NotificationForwarderObject {
     }
 
     fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
-        let dropped = self.subscribed_recipients.advance_by(elapsed);
-        self.after_lapse(dropped)
+        let lapsed = self.subscribed_recipients.advance_by(elapsed);
+        self.after_time_passed(lapsed)
     }
 
     fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
         self.subscribed_recipients.bind_monotonic_clock(clock);
+        if let Some(saved_copy) = &mut self.saved_copy {
+            saved_copy.clock_changed();
+        }
     }
 
     fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
-        let dropped = self.subscribed_recipients.advance_to(now);
-        self.after_lapse(dropped)
+        let lapsed = self.subscribed_recipients.advance_to(now);
+        self.after_time_passed(lapsed)
     }
 
     fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
