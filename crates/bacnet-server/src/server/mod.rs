@@ -685,6 +685,8 @@ mod command_action_wire_tests;
 #[cfg(test)]
 mod command_remote_write_tests;
 #[cfg(test)]
+mod command_run_cancel_tests;
+#[cfg(test)]
 mod command_run_stop_tests;
 #[cfg(test)]
 mod confirmed_broadcast_tests;

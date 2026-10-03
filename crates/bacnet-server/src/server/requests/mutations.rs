@@ -1,10 +1,10 @@
 use super::*;
+use crate::command_lists::TakenRuns;
 use crate::life_safety_cov::LifeSafetyCovChange;
 use crate::mutation::{
     MutationAuthorizationContext, MutationDecision, MutationDecisions, MutationPolicy,
     MutationTarget, MutationTrust,
 };
-use bacnet_objects::command::CommandRun;
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
 use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
@@ -27,8 +27,9 @@ pub(super) struct MutationEffects {
     pub(super) coarse_cov_oids: Vec<ObjectIdentifier>,
     pub(super) life_safety_cov_changes: Vec<LifeSafetyCovChange>,
     pub(super) staging_plans: Vec<StagingWritePlan>,
-    /// Command lists a Present_Value write started (#1150).
-    pub(super) command_runs: Vec<CommandRun>,
+    /// Command lists and Channel distributions a Present_Value write
+    /// started (#1150), ended if dropped before they start (#1324).
+    pub(super) command_runs: TakenRuns,
     /// Timestamped references to evaluate again after the post-write fanout,
     /// which may not have selected them (#856).
     pub(super) timed_revisits: Vec<crate::cov::CovSubscriptionKey>,
@@ -139,6 +140,7 @@ impl Request<'_> {
             durable_writes::DurableTarget::write_property(&self.req.service_request),
         )
         .await;
+        let database = db;
         let (result, exact_changes, plans, schedule_cov) = {
             let mut db = db.write().await;
             let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_write_property(
@@ -163,7 +165,8 @@ impl Request<'_> {
                 |oid| BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(oid)),
             );
             if let Ok(oid) = &result {
-                command_runs.extend(crate::command_lists::take_runs(
+                command_runs.extend(TakenRuns::take(
+                    database,
                     &mut db,
                     std::slice::from_ref(oid),
                 ));
@@ -180,6 +183,7 @@ impl Request<'_> {
             let schedule_cov = match &result {
                 Ok(oid) => {
                     crate::schedule::reevaluate_written(
+                        database,
                         &mut db,
                         std::slice::from_ref(oid),
                         cov_table,
@@ -235,6 +239,7 @@ impl Request<'_> {
             Vec::new()
         };
         let staged = durable_writes::stage(db, targets).await;
+        let database = db;
         let (outcome, exact_changes, plans, schedule_cov) = {
             let mut db = db.write().await;
             // Lock order: database, then a short table read. Each attempt is
@@ -266,9 +271,10 @@ impl Request<'_> {
             let changes = snapshots.changes(&db, committed_oids);
             timed_revisits.extend_from_slice(observer.life_safety_queued());
             let plans = BACnetServer::<T>::take_staging_plans(&mut db, committed_oids);
-            command_runs.extend(crate::command_lists::take_runs(&mut db, committed_oids));
+            command_runs.extend(TakenRuns::take(database, &mut db, committed_oids));
             let schedule_cov =
-                crate::schedule::reevaluate_written(&mut db, committed_oids, cov_table).await;
+                crate::schedule::reevaluate_written(database, &mut db, committed_oids, cov_table)
+                    .await;
             (outcome, changes, plans, schedule_cov)
         };
         staging_plans.extend(plans);
@@ -543,6 +549,7 @@ impl Request<'_> {
             durable_writes::DurableTarget::list_element(&self.req.service_request, remove),
         )
         .await;
+        let database = db;
         let (result, schedule_cov) = {
             let mut db = db.write().await;
             let (result, written) = match handlers::handle_list_element_observed(
@@ -557,7 +564,9 @@ impl Request<'_> {
             staged.release(&mut db);
             audit.lifecycle_completed(&mut db, &result);
             let schedule_cov = match written {
-                Some(oid) => crate::schedule::reevaluate_written(&mut db, &[oid], cov_table).await,
+                Some(oid) => {
+                    crate::schedule::reevaluate_written(database, &mut db, &[oid], cov_table).await
+                }
                 None => Default::default(),
             };
             (result, schedule_cov)
