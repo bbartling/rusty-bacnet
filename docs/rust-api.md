@@ -2587,6 +2587,12 @@ client
 client.clear_routed_path_limit(&router_mac, dnet).await?;
 ```
 
+Every MAC on a routed path holds to `NpduAddress::MAX_MAC_LEN` (18 octets), the
+longest address the NPDU codec carries and the network layer delivers (#1267).
+A routed request refuses a longer DADR or local source MAC, and a router MAC
+that is empty or longer, with `Error::Encoding` before it reserves or waits on
+the path, and both configuration methods refuse such a router MAC too.
+
 State is keyed by the immediate router MAC together with DNET. One confirmed
 request at a time owns that path; requests through a different router or to a
 different DNET remain independent, and direct requests bypass this state. A
