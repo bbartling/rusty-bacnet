@@ -304,10 +304,12 @@ fn averaging_reference_write_rejects_bad_shapes_and_preserves_state() {
     ]);
 
     // A framed device-qualified write ([3] device-identifier): the
-    // Clause 12.5 typing is BACnetDeviceObjectPropertyReference but the
-    // remote-sample path is the standard's OPTIONAL branch, unmodeled
-    // here — refused INVALID_DATA_ENCODING rather than silently
-    // local-izing.
+    // Clause 12.5 typing is BACnetDeviceObjectPropertyReference, so the
+    // encoding is valid, but the remote-sample path is the standard's
+    // OPTIONAL branch, unmodeled here. The object can't tell which Device
+    // holds it, so any Device member is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED
+    // rather than silently local-ized (#1153; the server drops one naming
+    // its own Device first).
     let mut framed_device = bytes::BytesMut::new();
     bacnet_encoding::constructed::encode_object_property_reference(
         &mut framed_device,
@@ -357,8 +359,20 @@ fn averaging_reference_write_rejects_bad_shapes_and_preserves_state() {
         ),
         (
             PropertyValue::ApplicationData(framed_device.to_vec()),
-            bacnet_types::enums::ErrorCode::INVALID_DATA_ENCODING,
+            bacnet_types::enums::ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
             "device-qualified framed reference",
+        ),
+        (
+            PropertyValue::ApplicationData(
+                [framed_device.to_vec(), framed_device.to_vec()].concat(),
+            ),
+            bacnet_types::enums::ErrorCode::INVALID_DATA_ENCODING,
+            "two framed references",
+        ),
+        (
+            PropertyValue::ApplicationData(framed_device[..framed_device.len() - 1].to_vec()),
+            bacnet_types::enums::ErrorCode::INVALID_DATA_ENCODING,
+            "truncated device member",
         ),
     ];
 

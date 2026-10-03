@@ -2107,8 +2107,8 @@ window (below) starts the spacing over. The spacing never drops below
 so that window spans more than Window_Interval. A referenced object or property
 that doesn't exist, an array index on a property that isn't an array, a failed
 read, or a value of a datatype the object can't average counts as a missed
-attempt. References are always local: a device-qualified write is refused. The
-server's monotonic operation task does this through
+attempt. References are always local: a written reference naming another
+device is refused (see below). The server's monotonic operation task does this through
 `ObjectDatabase::sample_due_averaging_objects`, which an application driving
 its own database can call as well.
 
@@ -2148,6 +2148,15 @@ when it moves by the subscription's COV increment, or on any change if the
 subscription gives none, and the report carries no Status_Flags because the
 object has none. A move to or from the NaN or an infinity of an empty window is
 always reported, whatever the increment, and staying at one never is.
+
+An Averaging object samples only properties in its own device. A written
+Object_Property_Reference naming another device is refused with
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. One naming the Device the server answers
+for is the local reference it stands for: the server drops that Device member
+before the object decodes the value, on WriteProperty, WritePropertyMultiple
+and `write_local`, and it reads back without it (#1153). `AveragingObject`
+itself can't tell which Device holds it, so written directly it refuses every
+Device member.
 
 Staging uses an explicit atomic configuration; the former stage-count-only
 constructor is intentionally removed because it could not create a valid
