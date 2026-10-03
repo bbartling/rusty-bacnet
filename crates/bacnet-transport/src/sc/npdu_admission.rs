@@ -12,7 +12,7 @@
 //! hub path, the peer VMAC on the direct path (listener and hub merge). The
 //! VMAC is a **scheduling key, never identity**: it carries no authentication
 //! semantics and must not be treated as a principal (see
-//! [`TransportProvenance`](crate::port::TransportProvenance) for the actual
+//! [`TransportProvenance`] for the actual
 //! relay/peer assertions). Only `Encapsulated-NPDU` admissions are charged:
 //! unicast- and broadcast-shaped NPDUs share one per-origin quota, while
 //! heartbeat, disconnect, advertisement, address-resolution, control,
