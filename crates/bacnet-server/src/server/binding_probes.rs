@@ -169,7 +169,10 @@ mod tests {
             probes.begin(device(10), joined, WAIT),
             ProbeStep::Send(_)
         ));
-        for held in [start + WAIT, start + WHO_IS_HOLD_OFF - Duration::from_millis(1)] {
+        for held in [
+            start + WAIT,
+            start + WHO_IS_HOLD_OFF - Duration::from_millis(1),
+        ] {
             assert!(matches!(
                 probes.begin(device(9), held, WAIT),
                 ProbeStep::HeldOff
