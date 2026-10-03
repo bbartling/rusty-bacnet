@@ -326,3 +326,49 @@ fn reference_mappings_refuse_bad_shapes_and_types() {
         }
     });
 }
+
+#[test]
+fn own_device_follows_the_database_rule_and_skips_the_wildcard() {
+    assert_eq!(local_device(1262), Some(oid(ObjectType::DEVICE, 1262)));
+    assert_eq!(local_device(0), Some(oid(ObjectType::DEVICE, 0)));
+    // The wildcard instance names no particular device, and past it there's
+    // no identifier at all.
+    assert_eq!(local_device(ObjectIdentifier::WILDCARD_INSTANCE), None);
+    assert_eq!(local_device(ObjectIdentifier::WILDCARD_INSTANCE + 1), None);
+}
+
+#[test]
+fn localize_drops_only_the_own_device() {
+    let pv = PropertyIdentifier::PRESENT_VALUE.to_raw();
+    let local =
+        BACnetDeviceObjectPropertyReference::new_local(oid(ObjectType::ANALOG_VALUE, 1), pv);
+    let naming = |device: ObjectIdentifier| BACnetDeviceObjectPropertyReference {
+        device_identifier: Some(device),
+        ..local.clone()
+    };
+    let own = oid(ObjectType::DEVICE, 1262);
+    let other = oid(ObjectType::DEVICE, 99);
+    let wildcard = oid(ObjectType::DEVICE, ObjectIdentifier::WILDCARD_INSTANCE);
+    let given = vec![naming(own), naming(other), local.clone(), naming(wildcard)];
+
+    let mut references = given.clone();
+    localize(&mut references, local_device(1262));
+    assert_eq!(
+        references,
+        vec![
+            local.clone(),
+            naming(other),
+            local.clone(),
+            naming(wildcard)
+        ]
+    );
+
+    // A server whose Device is the wildcard has no own Device to drop, so
+    // even a member naming instance 4194303 keeps it.
+    let mut references = given.clone();
+    localize(
+        &mut references,
+        local_device(ObjectIdentifier::WILDCARD_INSTANCE),
+    );
+    assert_eq!(references, given);
+}

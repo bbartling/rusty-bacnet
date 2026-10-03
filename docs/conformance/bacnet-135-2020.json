@@ -1202,7 +1202,8 @@
     "crates/bacnet-objects/src/trend/acquisition.rs::Acquisition",
     "crates/bacnet-objects/src/database/trend_poll/alignment.rs::Alignment",
     "crates/bacnet-objects/src/traits.rs::BACnetObject::refresh_log_window_internal",
-    "crates/rusty-bacnet/src/server/server_methods/trend_log_methods.rs::trend_log_multiple"
+    "crates/rusty-bacnet/src/server/server_methods/trend_log_methods.rs::trend_log_multiple",
+    "crates/rusty-bacnet/src/types/property_reference.rs::localize"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/database/trend_poll/tests.rs (exact hundredths, lifecycle/configuration ownership, bounded failure retries, completion anchoring and width boundaries)",
@@ -1251,7 +1252,9 @@
     "crates/bacnet-server/src/handlers/tests/trend_log_multiple_options.rs::start_and_stop_time_take_a_date_and_time_and_alignment_reads_back",
     "crates/rusty-bacnet/src/server/server_methods/trend_log_methods_tests.rs::python_add_trend_log_multiple_settings_reach_every_row",
     "crates/rusty-bacnet/src/types/property_reference_tests.rs::reference_mappings_fill_every_field_and_default_the_optional_ones",
-    "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleLiveServerTests::test_polled_and_triggered_logs_configured_from_python"
+    "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleLiveServerTests::test_polled_and_triggered_logs_configured_from_python",
+    "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleMemberFormTests::test_tuple_and_mapping_members_and_the_own_device",
+    "crates/rusty-bacnet/src/types/property_reference_tests.rs::localize_drops_only_the_own_device"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/trend_log_clock_tests.rs::unusable_acquisition_clock_preserves_records_and_schedule_then_retries",
@@ -1307,7 +1310,8 @@
      "Trend Log Multiple Start_Time / Stop_Time gate records, each judged at its own timestamp; an opening or closing while Enable is TRUE is logged. Unspecified seconds or hundredths count as zero; other partial ends are VALUE_OUT_OF_RANGE.",
      "An aligned POLLED Trend Log Multiple whose Log_Interval divides a day acquires when the Device clock's time of day is Interval_Offset, modulo the interval, past a multiple of it.",
      "An aligned log is checked against the Device clock on every pass, so after a clock change it waits for the next boundary the clock reaches; a skipped boundary is not logged off the grid.",
-     "Python's add_trend_log_multiple takes the members, Log_Interval, Logging_Type, window and alignment as keyword arguments."
+     "Python's add_trend_log_multiple takes the members, Log_Interval, Logging_Type, window and alignment as keyword arguments.",
+     "A Python member is an (object, property[, array_index]) tuple or a mapping, as add_channel takes; one naming the server's own Device is stored without it."
     ]
   },
   {
@@ -3810,6 +3814,7 @@
     "crates/bacnet-objects/src/channel/metadata.rs",
     "crates/rusty-bacnet/src/server/server_methods/channel_methods.rs::channel",
     "crates/rusty-bacnet/src/types/property_reference.rs::property_references_from_py",
+    "crates/rusty-bacnet/src/types/property_reference.rs::local_device",
     "crates/bacnet-objects/src/command.rs::RunPlan",
     "crates/bacnet-objects/src/traits/defaults.rs::array_property_default",
     "crates/bacnet-objects/src/device/mod.rs::DeviceObject::new",
@@ -3838,6 +3843,8 @@
     "crates/rusty-bacnet/src/types/property_reference_tests.rs::property_reference_tuples_and_mappings_convert",
     "crates/rusty-bacnet/tests/test_channel.py::ChannelMembersTests::{test_present_value_write_reaches_both_members,test_member_in_another_device_is_written_there,test_execution_delay_holds_back_the_second_member}",
     "crates/rusty-bacnet/tests/test_channel.py::ChannelStubContractTests::test_runtime_and_stub_take_the_same_arguments",
+    "crates/rusty-bacnet/tests/test_channel.py::ChannelWildcardDeviceTests::test_a_wildcard_device_server_keeps_every_device_member",
+    "crates/rusty-bacnet/src/types/property_reference_tests.rs::{own_device_follows_the_database_rule_and_skips_the_wildcard,localize_drops_only_the_own_device}",
     "crates/bacnet-server/src/local_references.rs::tests::channel_members_naming_the_local_device_lose_their_device",
     "crates/bacnet-objects/src/device/tests.rs::read_protocol_object_types_supported",
     "crates/bacnet-encoding/src/constructed/tests/channel_value.rs::{primitives_and_a_lighting_command_are_channel_values,malformed_lighting_commands_are_refused}",

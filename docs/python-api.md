@@ -1690,8 +1690,8 @@ server.add_trend_log_multiple(
     name="Multi Log",
     buffer_size=1000,
     members=[
-        {"object_identifier": ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
-         "property_identifier": PropertyIdentifier.PRESENT_VALUE},
+        # A tuple for a property here, or a mapping, which can name a device.
+        (ObjectIdentifier(ObjectType.ANALOG_INPUT, 1), PropertyIdentifier.PRESENT_VALUE),
         {"object_identifier": ObjectIdentifier(ObjectType.ANALOG_INPUT, 2),
          "property_identifier": PropertyIdentifier.PRESENT_VALUE},
     ],
@@ -1713,12 +1713,14 @@ The server's poller samples every `add_trend_log_multiple` member into one
 record, one value per member in order; a client reads the records with
 `read_range` on Log_Buffer. The keyword arguments are all optional:
 
-- `members` is a list of `DeviceObjectPropertyReference` mappings
-  (`object_identifier`, `property_identifier`, and optionally
-  `property_array_index` and `device_identifier`), at most 64. A
-  `device_identifier` that isn't a Device raises ValueError; a member naming
-  another Device logs a failure for its slot, since the server reads only its
-  own objects.
+- `members` is a list of at most 64 members, each an `(object, property)` or
+  `(object, property, array_index)` tuple for a property in this device, or a
+  `DeviceObjectPropertyReference` mapping (`object_identifier`,
+  `property_identifier`, and optionally `property_array_index` and
+  `device_identifier`), as `add_channel` takes them. A `device_identifier`
+  that isn't a Device raises ValueError. A member naming the server's own
+  Device is stored in its local form; one naming another Device logs a
+  failure for its slot, since the server reads only its own objects.
 - `log_interval` is in hundredths of a second. `logging_type` is `"polled"`
   or `"triggered"`. POLLED with no `log_interval` takes a one-minute interval;
   TRIGGERED sets Log_Interval to 0 and makes it read-only, so passing both
@@ -2300,7 +2302,10 @@ server.add_channel(
     members=[
         (dimmer, PropertyIdentifier.PRESENT_VALUE),
         # The mapping form; it can carry a device_identifier too.
-        {"object_identifier": fan, "property_identifier": PropertyIdentifier.PRESENT_VALUE},
+        {
+            "object_identifier": fan,
+            "property_identifier": PropertyIdentifier.PRESENT_VALUE,
+        },
     ],
     execution_delay=[0, 500],  # milliseconds, one per member
     control_groups=[5, 7],  # WriteGroup groups; [0] (none) when omitted
@@ -2332,8 +2337,9 @@ priority once that member's delay has passed, converted to a local member
 property's datatype, as the Rust server does. Write_Status reads IN_PROGRESS
 until every member is done and then SUCCESSFUL or FAILED, and Reliability
 reports what kind of failure the first failed member had; another
-Present_Value write meanwhile is refused with BUSY. A [WriteGroup](#write-group) naming one of the Channel's
-groups and its number writes the value the same way.
+Present_Value write meanwhile is refused with BUSY. A
+[WriteGroup](#write-group) naming one of the Channel's groups and its number
+writes the value the same way.
 
 A wrong shape or Python type raises `TypeError`. An unknown or missing mapping
 key, a device that isn't a Device, or a mapping's index outside unsigned32

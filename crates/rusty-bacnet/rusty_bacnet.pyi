@@ -1100,7 +1100,10 @@ class DeviceObjectPropertyReference(TypedDict):
     """A property (``BACnetDeviceObjectPropertyReference``), in this device or
     the one ``device_identifier`` names: a Channel or Trend Log Multiple
     member, or the property whose value decides when an access rule applies,
-    such as a Schedule's Present_Value.
+    such as a Schedule's Present_Value. A member list also takes an
+    ``(object, property)`` or ``(object, property, array_index)`` tuple for a
+    property in this device, and stores a member naming the server's own
+    Device in its local form.
 
     Unknown or missing keys, a ``device_identifier`` that isn't a Device and a
     ``property_array_index`` outside unsigned32 raise ValueError; wrong types
@@ -1113,10 +1116,6 @@ class DeviceObjectPropertyReference(TypedDict):
     # 0..=4294967295; one element of an array property.
     property_array_index: NotRequired[int | None]
     device_identifier: NotRequired[ObjectIdentifier | None]
-
-
-# An access rule's time range is read as any other property reference.
-AccessRuleTimeRange = DeviceObjectPropertyReference
 
 
 class AccessRule(TypedDict):
@@ -2739,7 +2738,13 @@ class BACnetServer:
         name: str,
         buffer_size: int = 100,
         *,
-        members: list[DeviceObjectPropertyReference] | None = None,
+        members: Optional[
+            list[
+                tuple[ObjectIdentifier, PropertyIdentifier]
+                | tuple[ObjectIdentifier, PropertyIdentifier, Optional[int]]
+                | DeviceObjectPropertyReference
+            ]
+        ] = None,
         log_interval: int | None = None,
         logging_type: Literal["polled", "triggered"] | None = None,
         start_time: tuple[tuple[int, int, int, int], tuple[int, int, int, int]] | None = None,
@@ -2750,8 +2755,11 @@ class BACnetServer:
         """Add a Trend Log Multiple (Clause 12.30) that the server polls or
         triggers, logging one value per member in each record.
 
-        ``members`` fills Log_DeviceObjectProperty in order; more than 64
-        raises BacnetProtocolError (NO_SPACE_TO_WRITE_PROPERTY), and a
+        ``members`` fills Log_DeviceObjectProperty in order, each an
+        ``(object, property)`` or ``(object, property, array_index)`` tuple
+        or a ``DeviceObjectPropertyReference`` mapping; one naming this
+        server's Device is kept in its local form. More than 64 raises
+        BacnetProtocolError (NO_SPACE_TO_WRITE_PROPERTY), and a
         ``device_identifier`` that isn't a Device raises ValueError.
         ``log_interval`` is in hundredths of a second. ``logging_type``
         ``"polled"`` with no ``log_interval`` takes a one-minute interval;
@@ -2921,15 +2929,18 @@ class BACnetServer:
         ``DeviceObjectPropertyReference`` mapping; one naming this server's
         Device is kept in its local form, and one naming another Device is
         written there through the server's device bindings
-        (``add_device_binding`` or a heard I-Am). ``execution_delay`` holds one delay
-        in milliseconds per member (zeros when omitted), ``control_groups``
-        the WriteGroup groups the Channel is in (``[0]``, none, when omitted),
-        and ``allow_group_delay_inhibit`` lets a WriteGroup that asks for no
-        delays skip them. All of them are writable over the network too.
+        (``add_device_binding`` or a heard I-Am). ``execution_delay`` holds
+        one delay in milliseconds per member (zeros when omitted),
+        ``control_groups`` the WriteGroup groups the Channel is in (``[0]``,
+        none, when omitted), and ``allow_group_delay_inhibit`` lets a
+        WriteGroup that asks for no delays skip them. All of them are
+        writable over the network too.
 
-        A wrong shape or type raises TypeError, an unknown or missing mapping
-        key or a device that isn't a Device raises ValueError, and an integer
-        outside unsigned32 raises OverflowError. A channel number above 65535,
+        A wrong shape or type raises TypeError. An unknown or missing mapping
+        key, a device that isn't a Device, or a mapping's
+        ``property_array_index`` outside unsigned32 raises ValueError; a
+        channel number, a tuple's index, a delay or a group outside
+        unsigned32 raises OverflowError. A channel number above 65535,
         a delay count that differs from the member count or an empty group
         list raises BacnetProtocolError with VALUE_OUT_OF_RANGE; more than
         1024 members or 64 groups, NO_SPACE_TO_WRITE_PROPERTY. Nothing is

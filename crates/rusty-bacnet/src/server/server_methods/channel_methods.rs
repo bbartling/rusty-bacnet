@@ -5,9 +5,8 @@
 use super::super::*;
 use bacnet_objects::channel::ChannelObject;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
 
 #[pymethods]
 impl BACnetServer {
@@ -57,7 +56,7 @@ impl BACnetServer {
         allow_group_delay_inhibit: bool,
     ) -> PyResult<()> {
         let members = members
-            .map(|members| crate::types::property_references_from_py(&members, "members"))
+            .map(|members| self.members_from_py(&members, "members"))
             .transpose()?;
         let settings = ChannelSettings {
             members,
@@ -65,8 +64,7 @@ impl BACnetServer {
             control_groups,
             allow_group_delay_inhibit,
         };
-        let device = ObjectIdentifier::new(ObjectType::DEVICE, self.device_instance).ok();
-        let obj = channel(instance, name, channel_number, settings, device).map_err(to_py_err)?;
+        let obj = channel(instance, name, channel_number, settings).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 }
@@ -81,27 +79,19 @@ struct ChannelSettings {
 }
 
 /// Build a Channel through its validating setters, members before their
-/// delays. A member naming `device`, the server's own Device, loses that
-/// identifier first, as the server's handling of a network write of the list
-/// drops it.
+/// delays.
 fn channel(
     instance: u32,
     name: &str,
     channel_number: u32,
     settings: ChannelSettings,
-    device: Option<ObjectIdentifier>,
 ) -> Result<ChannelObject, Error> {
     let channel_number = u16::try_from(channel_number).map_err(|_| Error::Protocol {
         class: ErrorClass::PROPERTY.to_raw() as u32,
         code: ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32,
     })?;
     let mut obj = ChannelObject::new(instance, name, channel_number)?;
-    if let Some(mut members) = settings.members {
-        for member in &mut members {
-            if device.is_some() && member.device_identifier == device {
-                member.device_identifier = None;
-            }
-        }
+    if let Some(members) = settings.members {
         obj.set_members(members)?;
     }
     if let Some(delays) = settings.execution_delay {

@@ -49,7 +49,9 @@ use bacnet_server::server;
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::bip6::Bip6Transport;
-use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference, BACnetStageLimitValue,
+};
 use bacnet_types::enums::EventType;
 use bacnet_types::primitives::PropertyValue;
 
@@ -171,6 +173,23 @@ impl BACnetServer {
         }
         guard.push(obj);
         Ok(())
+    }
+
+    /// Read a member list given to an `add_*` method, a reference tuple or
+    /// mapping per element. A member naming this server's own Device is
+    /// stored in its local form, as the server stores the same member written
+    /// over the network.
+    fn members_from_py(
+        &self,
+        members: &Bound<'_, PyAny>,
+        name: &str,
+    ) -> PyResult<Vec<BACnetDeviceObjectPropertyReference>> {
+        let mut members = crate::types::property_references_from_py(members, name)?;
+        crate::types::localize(
+            &mut members,
+            crate::types::local_device(self.device_instance),
+        );
+        Ok(members)
     }
 }
 

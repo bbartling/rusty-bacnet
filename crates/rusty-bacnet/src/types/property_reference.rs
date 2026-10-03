@@ -11,6 +11,7 @@
 //! rest, such as how many it holds.
 
 use bacnet_types::constructed::{device_identifier_is_device, BACnetDeviceObjectPropertyReference};
+use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::exceptions::{PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -137,6 +138,33 @@ pub(crate) fn check_device(device: Option<ObjectIdentifier>, name: &str) -> PyRe
         Err(PyValueError::new_err(format!(
             "{name}: the device must be a Device object identifier"
         )))
+    }
+}
+
+/// The Device identifier a reference names to stay inside a server whose
+/// Device is `instance`. The rule is `ObjectDatabase::local_device`'s: the
+/// wildcard instance 4194303 names no particular device, so it has none.
+pub(crate) fn local_device(instance: u32) -> Option<ObjectIdentifier> {
+    ObjectIdentifier::new(ObjectType::DEVICE, instance)
+        .ok()
+        .filter(|device| device.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE)
+}
+
+/// Drop the Device member of each reference that names `local`, so a member
+/// pointing inside the server is stored in the local form the server gives
+/// the same member written over the network. Other references are left as
+/// they are, for the object to judge.
+pub(crate) fn localize(
+    references: &mut [BACnetDeviceObjectPropertyReference],
+    local: Option<ObjectIdentifier>,
+) {
+    let Some(local) = local else {
+        return;
+    };
+    for reference in references {
+        if reference.device_identifier == Some(local) {
+            reference.device_identifier = None;
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::primitives::ObjectIdentifier;
 
 const LIST: PropertyIdentifier = PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES;
 
@@ -24,29 +25,20 @@ fn is_error(error: &Error, class: ErrorClass, code: ErrorCode) -> bool {
         if *c == class.to_raw() as u32 && *e == code.to_raw() as u32)
 }
 
-fn own_device() -> Option<ObjectIdentifier> {
-    Some(oid(ObjectType::DEVICE, 1262))
-}
-
 #[test]
 fn python_add_channel_settings_reach_the_channel() {
-    let mut own = member(ObjectType::ANALOG_VALUE, 1).with_index(3);
-    own.device_identifier = own_device();
+    let indexed = member(ObjectType::ANALOG_VALUE, 1).with_index(3);
     let settings = ChannelSettings {
-        members: Some(vec![member(ObjectType::ANALOG_OUTPUT, 1), own]),
+        members: Some(vec![member(ObjectType::ANALOG_OUTPUT, 1), indexed.clone()]),
         execution_delay: Some(vec![0, 250]),
         control_groups: Some(vec![5, 7]),
         allow_group_delay_inhibit: true,
     };
-    let configured = channel(1, "CH-1", 65_535, settings, own_device()).unwrap();
+    let configured = channel(1, "CH-1", 65_535, settings).unwrap();
 
-    // The member naming this Device is kept in its local form.
     let mut expected = ChannelObject::new(1, "CH-1", 65_535).unwrap();
     expected
-        .set_members(vec![
-            member(ObjectType::ANALOG_OUTPUT, 1),
-            member(ObjectType::ANALOG_VALUE, 1).with_index(3),
-        ])
+        .set_members(vec![member(ObjectType::ANALOG_OUTPUT, 1), indexed])
         .unwrap();
     assert_eq!(read(&configured, LIST), read(&expected, LIST));
     assert_eq!(
@@ -75,7 +67,7 @@ fn python_add_channel_settings_reach_the_channel() {
         members: Some(vec![member(ObjectType::ANALOG_OUTPUT, 2)]),
         ..ChannelSettings::default()
     };
-    let defaults = channel(2, "CH-2", 0, settings, own_device()).unwrap();
+    let defaults = channel(2, "CH-2", 0, settings).unwrap();
     assert_eq!(
         read(&defaults, PropertyIdentifier::EXECUTION_DELAY),
         PropertyValue::List(vec![PropertyValue::Unsigned(0)])
@@ -96,7 +88,7 @@ fn python_add_channel_settings_reach_the_channel() {
         members: Some(vec![remote.clone()]),
         ..ChannelSettings::default()
     };
-    let elsewhere = channel(3, "CH-3", 0, settings, own_device()).unwrap();
+    let elsewhere = channel(3, "CH-3", 0, settings).unwrap();
     let mut expected = ChannelObject::new(3, "CH-3", 0).unwrap();
     expected.set_members(vec![remote]).unwrap();
     assert_eq!(read(&elsewhere, LIST), read(&expected, LIST));
@@ -110,9 +102,7 @@ fn python_add_channel_settings_reach_the_channel() {
 #[test]
 fn python_add_channel_refusals_come_from_the_channel() {
     let out_of_range = |settings: ChannelSettings, number: u32| {
-        let error = channel(3, "CH-3", number, settings, own_device())
-            .err()
-            .unwrap();
+        let error = channel(3, "CH-3", number, settings).err().unwrap();
         assert!(
             is_error(&error, ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE),
             "{error:?}"
@@ -153,7 +143,6 @@ fn python_add_channel_refusals_come_from_the_channel() {
             control_groups: Some((1..=65).collect()),
             ..ChannelSettings::default()
         },
-        own_device(),
     )
     .err()
     .unwrap();

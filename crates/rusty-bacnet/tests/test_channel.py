@@ -286,6 +286,35 @@ class ChannelMembersTests(unittest.IsolatedAsyncioTestCase):
         await self.run_with_client(check)
 
 
+class ChannelWildcardDeviceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_wildcard_device_server_keeps_every_device_member(self) -> None:
+        # Instance 4194303 names no particular device, so the server has no
+        # own Device: a member naming Device 4194303 keeps it, as the
+        # database's local-device rule says.
+        wildcard = ObjectIdentifier(ObjectType.DEVICE, 4_194_303)
+        server = make_server(4_194_303)
+        server.add_analog_value(1, "AV-1")
+        server.add_channel(
+            1,
+            "CH-1",
+            11,
+            [
+                {
+                    "object_identifier": AV1,
+                    "property_identifier": PV,
+                    "device_identifier": wildcard,
+                }
+            ],
+        )
+        await server.start()
+        try:
+            element = (await server.read_property(CH1, LIST, 1)).value
+            device = bytes([0x3C]) + ((8 << 22) | 4_194_303).to_bytes(4, "big")
+            self.assertEqual(element, AV1_PV_REFERENCE + device)
+        finally:
+            await server.stop()
+
+
 class ChannelArgumentTests(unittest.IsolatedAsyncioTestCase):
     async def test_bad_arguments_raise_and_register_nothing(self) -> None:
         server = make_server()
