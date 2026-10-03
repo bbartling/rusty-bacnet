@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 import changelog as cl
+import changelog_pin_commits as pin_commits
 
 sys.path.insert(0, str(Path(__file__).with_name("release")))
 import changelog_notes  # noqa: E402  (the release notes extractor reads what assemble writes)
@@ -136,8 +137,8 @@ class ParseFragmentTests(unittest.TestCase):
     def test_front_matter_shape(self):
         self.assert_rejected("1-x.md", "- Entry.\n", "start with front matter")
         self.assert_rejected("1-x.md", "---\nsection: Fixed\n- Entry.\n", "no closing")
-        self.assert_rejected("1-x.md", "---\nsection: Fixed\nissue: 1\n---\n- Entry.\n", "exactly one key")
-        self.assert_rejected("1-x.md", "---\n---\n- Entry.\n", "exactly one key")
+        self.assert_rejected("1-x.md", "---\nsection: Fixed\nissue: 1\n---\n- Entry.\n", "optionally 'commit: <sha>'")
+        self.assert_rejected("1-x.md", "---\n---\n- Entry.\n", "optionally 'commit: <sha>'")
 
     def test_one_bullet_only(self):
         self.assert_rejected("1-x.md", fragment("Fixed", "- One.", "- Two."), r"1-x.md:5: indent continuation")
@@ -503,6 +504,150 @@ class CommitLinkTests(unittest.TestCase):
     def test_outside_git_there_are_no_links(self):
         with Repo(fragments={"5-a.md": fragment("Fixed", "- A.")}) as repo:
             self.assertEqual(cl.commit_links(repo.root, cl.load_fragments(repo.dir)), {})
+
+
+class CommitPinTests(unittest.TestCase):
+    def pin_text(self, pin, entry="- Fix 5."):
+        return f"---\nsection: Fixed\ncommit: {pin}\n---\n{entry}\n"
+
+    def test_pin_is_parsed_and_must_be_lowercase_hex_of_7_to_40(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "5-a.md")
+            for pin, ok in (("abcdef0", True), ("a" * 40, True), ("abcdef", False), ("a" * 41, False), ("ABCDEF0", False), ("xyzxyzx", False)):
+                with self.subTest(pin=pin):
+                    path.write_text(self.pin_text(pin), encoding="utf-8")
+                    if ok:
+                        self.assertEqual(cl.parse_fragment(path).commit, pin)
+                    else:
+                        with self.assertRaisesRegex(cl.ChangelogError, "5-a.md:3: commit .* is not 7 to 40"):
+                            cl.parse_fragment(path)
+            path.write_text("---\nsection: Fixed\nfoo: bar\n---\n- Fix 5.\n", encoding="utf-8")
+            with self.assertRaisesRegex(cl.ChangelogError, "optionally 'commit: <sha>'"):
+                cl.parse_fragment(path)
+
+    def test_a_pin_wins_over_history(self):
+        with GitRepo() as repo:
+            merge = repo.merge_fragment("5-a.md", fragment("Fixed", "- Fix 5."), "fix-5")
+            added = repo.commit_fragment("6-b.md", fragment("Fixed", "- Fix 6."), "adds 6")
+            (repo.dir / "5-a.md").write_text(self.pin_text(added[:10]), encoding="utf-8")
+            (repo.dir / "6-b.md").write_text(self.pin_text(merge, "- Fix 6."), encoding="utf-8")
+            out = repo.run("preview")[1]
+            self.assertIn(f"- Fix 5. {link(added)}\n", out)  # an abbreviated pin links the full SHA
+            self.assertIn(f"- Fix 6. {link(merge)}\n", out)  # not the commit that added the fragment
+            self.assertEqual(repo.run("check")[0], 0)
+
+    def test_a_pin_names_an_entry_in_a_bulk_move(self):
+        with GitRepo() as repo:
+            for i in range(cl.BULK_ADDS + 1):
+                (repo.dir / f"{100 + i}-moved.md").write_text(fragment("Changed", f"- Moved {i}."), encoding="utf-8")
+            repo.git("add", "-A")
+            repo.git("commit", "-q", "-m", "bulk")
+            sha = repo.git("rev-parse", "HEAD")
+            self.assertEqual(repo.run("preview")[1].count("commit/"), 0)
+            (repo.dir / "100-moved.md").write_text(self.pin_text(sha, "- Moved 0.").replace("Fixed", "Changed"), encoding="utf-8")
+            self.assertIn(f"- Moved 0. {link(sha)}\n", repo.run("preview")[1])
+
+    def test_a_pin_naming_an_unknown_commit_fails_check(self):
+        with GitRepo() as repo:
+            start = repo.git("rev-parse", "HEAD")
+            repo.git("checkout", "-q", "-b", "side")
+            side = repo.commit_fragment("9-z.md", fragment("Fixed", "- Z."), "side commit")
+            repo.git("checkout", "-q", "dev")
+            repo.git("merge", "-q", "--no-ff", "-m", "Merge side", "side")
+            for pin in ("1234567", side):  # unknown, and a commit off the first-parent line
+                with self.subTest(pin=pin):
+                    (repo.dir / "5-a.md").write_text(self.pin_text(pin), encoding="utf-8")
+                    code, _, err = repo.run("check")
+                    self.assertEqual(code, 1)
+                    self.assertIn(f"5-a.md: commit {pin} is not on HEAD's first-parent history", err)
+            (repo.dir / "5-a.md").write_text(self.pin_text(start), encoding="utf-8")
+            self.assertEqual(repo.run("check")[0], 0)
+
+    def test_a_shallow_clone_skips_the_pin_check(self):
+        with GitRepo() as repo:
+            repo.commit_fragment("5-a.md", self.pin_text("1234567"), "add 5")
+            self.assertEqual(repo.run("check")[0], 1)
+            clone = Path(repo.root, "clone")
+            repo.git("clone", "-q", "--depth", "1", f"file://{repo.root}", str(clone))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(cl.main(["--root", str(clone), "check"]), 0)
+            self.assertIn("OK", out.getvalue())
+
+
+class BackfillTests(unittest.TestCase):
+    def backfill(self, repo, *args, root=None):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = pin_commits.main(["--root", str(root or repo.root), *args])
+        return code, out.getvalue(), err.getvalue()
+
+    def merge_pr(self, repo, issue, name, pr):
+        """Merge a branch adding a fragment, with a Forgejo-style subject naming issue; return the merge."""
+        repo.git("checkout", "-q", "-b", f"b{pr}")
+        repo.commit_fragment(name, fragment("Fixed", f"- Fix {issue}."), f"work {pr}")
+        repo.git("checkout", "-q", "dev")
+        subject = f"Merge pull request 'fix: thing (#{issue}, #99)' (#{pr}) from b{pr} into dev"
+        repo.git("merge", "-q", "--no-ff", "-m", subject, f"b{pr}")
+        return repo.git("rev-parse", "HEAD")
+
+    def commit_all(self, repo, message):
+        repo.git("add", "-A")
+        repo.git("commit", "-q", "-m", message)
+
+    def test_pins_the_one_merge_and_is_idempotent(self):
+        with GitRepo() as repo:
+            for i in range(cl.BULK_ADDS + 1):
+                (repo.dir / f"{100 + i}-moved.md").write_text(fragment("Changed", f"- Moved {i}."), encoding="utf-8")
+            for name in ("7-solo.md", "8-twice.md", "nonum.md"):
+                (repo.dir / name).write_text(fragment("Fixed", f"- {name}."), encoding="utf-8")
+            self.commit_all(repo, "bulk")
+            first = self.merge_pr(repo, 100, "999-other.md", 11)
+            self.merge_pr(repo, 8, "998-x.md", 12)
+            self.merge_pr(repo, 8, "997-y.md", 13)
+            seven = self.merge_pr(repo, 7, "996-z.md", 14)
+            code, out, _ = self.backfill(repo)
+            self.assertEqual(code, 0)
+            self.assertIn("pinned 2 fragment(s); 1 ambiguous and 21 unmatched", out)
+            self.assertIn("ambiguous: changelog.d/8-twice.md", out)
+            self.assertEqual(
+                (repo.dir / "7-solo.md").read_text(encoding="utf-8"),
+                f"---\nsection: Fixed\ncommit: {seven}\n---\n- 7-solo.md.\n",
+            )
+            self.assertIn(f"commit: {first}\n", (repo.dir / "100-moved.md").read_text(encoding="utf-8"))
+            for name in ("8-twice.md", "nonum.md"):
+                self.assertNotIn("commit:", (repo.dir / name).read_text(encoding="utf-8"))
+            self.assertEqual(repo.run("check")[0], 0)
+            self.commit_all(repo, "pins")
+            before = {p.name: p.read_text(encoding="utf-8") for p in repo.dir.iterdir()}
+            code, out, _ = self.backfill(repo)
+            self.assertEqual(code, 0)
+            self.assertIn("pinned 0 fragment(s)", out)
+            self.assertEqual(before, {p.name: p.read_text(encoding="utf-8") for p in repo.dir.iterdir()})
+
+    def test_a_pull_request_number_is_not_an_issue(self):
+        with GitRepo() as repo:
+            for i in range(cl.BULK_ADDS):
+                (repo.dir / f"{100 + i}-moved.md").write_text(fragment("Changed", f"- Moved {i}."), encoding="utf-8")
+            (repo.dir / "11-pr-number.md").write_text(fragment("Fixed", "- Fix 11."), encoding="utf-8")
+            self.commit_all(repo, "bulk, so no fragment links")
+            self.merge_pr(repo, 5, "5-a.md", 11)
+            self.assertIn("pinned 0 fragment(s)", self.backfill(repo)[1])
+
+    def test_dry_run_writes_nothing_and_a_shallow_clone_is_refused(self):
+        with GitRepo() as repo:
+            for i in range(cl.BULK_ADDS):  # with 7-solo.md, one more than a commit may add and still link
+                (repo.dir / f"{100 + i}-moved.md").write_text(fragment("Changed", f"- Moved {i}."), encoding="utf-8")
+            (repo.dir / "7-solo.md").write_text(fragment("Fixed", "- Fix 7."), encoding="utf-8")
+            self.commit_all(repo, "bulk")
+            self.merge_pr(repo, 7, "996-z.md", 14)
+            self.assertIn("would pin 1 fragment(s)", self.backfill(repo, "--dry-run")[1])
+            self.assertNotIn("commit:", (repo.dir / "7-solo.md").read_text(encoding="utf-8"))
+            clone = Path(repo.root, "clone")
+            repo.git("clone", "-q", "--depth", "1", f"file://{repo.root}", str(clone))
+            code, _, err = self.backfill(repo, root=clone)
+            self.assertEqual(code, 1)
+            self.assertIn("shallow", err)
 
 
 if __name__ == "__main__":

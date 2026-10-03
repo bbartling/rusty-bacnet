@@ -182,11 +182,13 @@ impl SubscribedRecipients {
     /// written list.
     ///
     /// Each entry's Time Remaining starts its lifetime over, except that an
-    /// entry written exactly as it reads now keeps its deadline. A list read
-    /// and written back, or edited by the list services, so leaves the
-    /// entries it doesn't change alone, rather than stretching each to its
-    /// rounded-up minute. Two entries naming the same recipient and process
-    /// are one entry, which takes the later one's members.
+    /// entry written as it reads now keeps its deadline, and so does one
+    /// written with a minute more, which is how it read if a minute boundary
+    /// fell between the read and this write. A list read and written back, or
+    /// edited by the list services, so leaves the entries it doesn't change
+    /// alone, rather than stretching each to its rounded-up minute. Two
+    /// entries naming the same recipient and process are one entry, which
+    /// takes the later one's members.
     pub fn write(&mut self, value: PropertyValue) -> Result<(), Error> {
         let PropertyValue::ApplicationData(bytes) = value else {
             return Err(common::invalid_data_type_error());
@@ -225,14 +227,26 @@ impl SubscribedRecipients {
         Ok(())
     }
 
-    /// The entry a written `subscription` becomes at `now`. A live entry that
-    /// serves exactly this value keeps its deadline.
+    /// The entry a written `subscription` becomes at `now`. A live entry with
+    /// the same recipient, process and confirmation flag keeps its deadline
+    /// when the written minutes equal what it serves now or one more.
     fn entry_for(&self, subscription: BACnetEventNotificationSubscription, now: Duration) -> Entry {
         let lifetime = Duration::from_secs(u64::from(subscription.time_remaining) * 60);
         let expires_at = self
             .entries
             .iter()
-            .find(|entry| entry.is_live(now) && entry.served(now) == subscription)
+            .find(|entry| {
+                if !entry.is_live(now) {
+                    return false;
+                }
+                let served = entry.served(now);
+                served.recipient == subscription.recipient
+                    && served.process_identifier == subscription.process_identifier
+                    && served.issue_confirmed_notifications
+                        == subscription.issue_confirmed_notifications
+                    && (served.time_remaining..=served.time_remaining.saturating_add(1))
+                        .contains(&subscription.time_remaining)
+            })
             .map_or_else(|| now.saturating_add(lifetime), |entry| entry.expires_at);
         Entry {
             recipient: subscription.recipient,

@@ -11,6 +11,7 @@ CHANGELOG.md, so parallel PRs don't conflict there. The file is named
 
     ---
     section: Fixed
+    commit: 0123abc   (optional, see below)
     ---
     - The entry: one short Markdown bullet as it will read in CHANGELOG.md,
       with continuation lines indented two spaces (#1188).
@@ -31,8 +32,13 @@ order and sorted by issue number, then slug, within each. Each entry ends
 with a link to the GitHub commit that brought its fragment in along HEAD's
 first-parent history: dev's merge commit, when run on a branch cut from dev.
 A fragment that history doesn't add, or that a bulk move of more than
-BULK_ADDS fragments added, gets no link, and neither does any entry in a
-shallow clone. It deletes the fragments it wrote and updates the compare
+BULK_ADDS fragments added, gets no link, and neither does any unpinned entry in
+a shallow clone. A fragment can pin its commit with `commit: <sha>` (7 to 40
+lowercase hex digits) in the front matter; assemble and preview use that
+ahead of the history lookup, and check fails when the repository has full
+history and the pin is not on HEAD's first-parent history (a shallow clone
+skips that check). scripts/changelog_pin_commits.py adds pins for fragments
+a bulk move left without a link. assemble deletes the fragments it wrote and updates the compare
 links at the bottom of the file if there are any. With --output it writes the
 result to that file instead and leaves CHANGELOG.md and the fragments alone
 (release dry runs). preview shows the same links.
@@ -70,6 +76,7 @@ BULK_ADDS = 20
 
 NAME = re.compile(r"^(?:(\d+)-)?([a-z0-9]+(?:-[a-z0-9]+)*)\.md$")
 VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
+COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 UNRELEASED = re.compile(r"^## \[Unreleased\]", re.IGNORECASE)
 FENCE = re.compile(r"^\s*(```|~~~)")
@@ -92,6 +99,7 @@ class Fragment:
     slug: str
     section: str
     text: str  # the bullet, ending with a newline
+    commit: str | None = None  # the pinned commit, as written
 
     def sort_key(self):
         """Issue number first, fragments without one last, then the slug."""
@@ -131,11 +139,18 @@ def parse_fragment(path):
     except ValueError:
         fail("the front matter has no closing '---' line")
     meta = lines[1:close]
-    if len(meta) != 1 or not meta[0].startswith("section:"):
-        fail("the front matter holds exactly one key, 'section: <heading>'", 2)
+    if not meta or not meta[0].startswith("section:") or len(meta) > 2:
+        fail("the front matter holds 'section: <heading>' and optionally 'commit: <sha>' after it", 2)
     section = meta[0].removeprefix("section:").strip()
     if section not in SECTIONS:
         fail(f"section {section!r} is not one of: {', '.join(SECTIONS)}", 2)
+    commit = None
+    if len(meta) == 2:
+        if not meta[1].startswith("commit:"):
+            fail("the front matter holds 'section: <heading>' and optionally 'commit: <sha>' after it", 3)
+        commit = meta[1].removeprefix("commit:").strip()
+        if not COMMIT.match(commit):
+            fail(f"commit {commit!r} is not 7 to 40 lowercase hex digits", 3)
 
     first = close + 1
     while first < len(lines) and lines[first] == "":
@@ -159,7 +174,7 @@ def parse_fragment(path):
         fail(f"the entry is {length} characters; keep it to {cap} (see {FRAGMENT_DIR}/{README})", first + 1)
 
     issue = int(m.group(1)) if m.group(1) else None
-    return Fragment(path, issue, m.group(2), section, entry + "\n")
+    return Fragment(path, issue, m.group(2), section, entry + "\n", commit)
 
 
 def entry_length(entry):
@@ -223,31 +238,56 @@ def unreleased_problems(body, offset):
     return problems
 
 
+def git_out(root, *args):
+    """Stdout of `git -C root args`, stripped; raises OSError or CalledProcessError."""
+    cmd = ["git", "-C", str(root), *args]
+    return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def full_history(root):
+    """HEAD's first-parent commits, newest first, or None without full history.
+
+    None when root isn't the top of a git work tree, in a shallow clone (whose
+    oldest commit seems to add every file), or without git.
+    """
+    root = Path(root)
+    try:
+        if Path(git_out(root, "rev-parse", "--show-toplevel")).resolve() != root.resolve():
+            return None
+        if git_out(root, "rev-parse", "--is-shallow-repository") != "false":
+            return None
+        return git_out(root, "rev-list", "--first-parent", "HEAD").split()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def pinned_sha(pin, history):
+    """The full SHA a pin names in history, or the pin as written when history can't say."""
+    if history is None:
+        return pin
+    hits = [sha for sha in history if sha.startswith(pin)]
+    return hits[0] if len(hits) == 1 else pin
+
+
 def commit_links(root, fragments):
     """{fragment path: SHA} of the commit that added each fragment along HEAD's first-parent history.
 
     On dev, or a branch cut from it, that is the merge commit that brought the
     fragment in. A commit that added more than BULK_ADDS fragments links none.
-    Empty when root isn't the top of a git work tree, in a shallow clone (whose
-    oldest commit seems to add every file), or without git.
+    A fragment's `commit:` pin wins over all of that, and works without history.
+    Otherwise empty when root has no full git history (see full_history).
     """
-    root = Path(root)
-
-    def git(*args):
-        cmd = ["git", "-C", str(root), *args]
-        return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
-
+    history = full_history(root)
+    links = {f.path: pinned_sha(f.commit, history) for f in fragments if f.commit}
+    if history is None:
+        return links
     try:
-        if Path(git("rev-parse", "--show-toplevel")).resolve() != root.resolve():
-            return {}
-        if git("rev-parse", "--is-shallow-repository") != "false":
-            return {}
-        log = git(
-            "log", "--first-parent", "--diff-merges=first-parent", "--diff-filter=A", "--no-renames",
+        log = git_out(
+            root, "log", "--first-parent", "--diff-merges=first-parent", "--diff-filter=A", "--no-renames",
             "--name-only", "--format=%x00%H", "--", FRAGMENT_DIR,
         )
     except (OSError, subprocess.CalledProcessError):
-        return {}
+        return links
     added, adds, sha = {}, {}, None
     for line in log.splitlines():
         if line.startswith("\0"):
@@ -255,8 +295,28 @@ def commit_links(root, fragments):
         elif line and sha:
             added.setdefault(line, sha)  # newest first, so a fragment added again keeps its latest commit
             adds[sha] = adds.get(sha, 0) + 1
-    by_name = {f"{FRAGMENT_DIR}/{f.path.name}": f.path for f in fragments}
-    return {path: added[name] for name, path in by_name.items() if name in added and adds[added[name]] <= BULK_ADDS}
+    for f in fragments:
+        name = f"{FRAGMENT_DIR}/{f.path.name}"
+        if f.path not in links and name in added and adds[added[name]] <= BULK_ADDS:
+            links[f.path] = added[name]
+    return links
+
+
+def pin_problems(root, fragments):
+    """One message per `commit:` pin that isn't on HEAD's first-parent history; none without full history."""
+    pinned = [f for f in fragments if f.commit]
+    history = full_history(root) if pinned else None
+    if history is None:
+        return []
+    problems = []
+    for f in pinned:
+        hits = [sha for sha in history if sha.startswith(f.commit)]
+        where = f"{FRAGMENT_DIR}/{f.path.name}"
+        if not hits:
+            problems.append(f"{where}: commit {f.commit} is not on HEAD's first-parent history")
+        elif len(hits) > 1:
+            problems.append(f"{where}: commit {f.commit} is ambiguous; write more of the SHA")
+    return problems
 
 
 def linked(fragment, sha):
@@ -326,6 +386,7 @@ class Changelog:
             self.read()
         except ChangelogError as err:
             problems.append(str(err))
+        problems.extend(pin_problems(self.root, fragments))
         if no_fragments and fragments:
             problems.append(
                 f"{len(fragments)} fragment(s) in {FRAGMENT_DIR}/ are not in a release section; "

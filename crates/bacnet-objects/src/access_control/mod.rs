@@ -9,7 +9,9 @@
 //! - AccessZone (type 36)
 //! - CredentialDataInput (type 37)
 
+use bacnet_encoding::constructed::encode_device_object_reference;
 use bacnet_encoding::primitives::encode_timestamp_choice;
+use bacnet_types::constructed::BACnetDeviceObjectReference;
 use bacnet_types::enums::{
     AccessEvent, AccessUserType, BinaryPV, DoorAlarmState, DoorSecuredStatus, DoorStatus,
     DoorValue, EventState, LockStatus, ObjectType, PropertyIdentifier, Reliability,
@@ -51,10 +53,25 @@ fn timestamp_value(stamp: &BACnetTimeStamp) -> Result<PropertyValue, Error> {
     Ok(PropertyValue::ApplicationData(buf.to_vec()))
 }
 
+/// The elements of a BACnetARRAY of BACnetDeviceObjectReference (an Access
+/// Door's Door_Members, an Access Point's Access_Doors), each in its Clause 21
+/// form, for `common::read_array`.
+fn device_object_references(references: &[BACnetDeviceObjectReference]) -> Vec<PropertyValue> {
+    references
+        .iter()
+        .map(|reference| {
+            let mut buf = BytesMut::new();
+            encode_device_object_reference(&mut buf, reference);
+            PropertyValue::ApplicationData(buf.to_vec())
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 
 mod credential;
 mod credential_data_input;
+mod credential_data_input_out_of_service;
 mod credential_rules;
 mod door;
 mod door_out_of_service;
@@ -73,7 +90,11 @@ pub use user::*;
 pub use zone::*;
 
 #[cfg(test)]
+mod array_tests;
+#[cfg(test)]
 mod constructed_value_tests;
+#[cfg(test)]
+mod credential_data_input_out_of_service_tests;
 #[cfg(test)]
 mod credential_tests;
 #[cfg(test)]
