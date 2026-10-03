@@ -1,15 +1,19 @@
 use super::*;
 use bacnet_encoding::constructed::{
     decode_calendar_entry, decode_calendar_entry_list, decode_destination, decode_destination_list,
-    decode_device_object_property_reference, encode_calendar_entry, encode_calendar_entry_list,
-    encode_destination, encode_destination_list, encode_device_object_property_reference,
+    decode_device_object_property_reference, decode_event_notification_subscription,
+    encode_calendar_entry, encode_calendar_entry_list, encode_destination, encode_destination_list,
+    encode_device_object_property_reference, encode_event_notification_subscription_list,
+    encode_recipient,
 };
 use bacnet_encoding::primitives::decode_application_value;
 use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_types::constructed::{
     BACnetCalendarEntry, BACnetDestination, BACnetDeviceObjectPropertyReference,
+    BACnetEventNotificationSubscription,
 };
 use bytes::Bytes;
+use std::collections::hash_map::{Entry, HashMap};
 use std::mem::{discriminant, Discriminant};
 
 fn protocol_error(class: ErrorClass, code: ErrorCode) -> Error {
@@ -44,9 +48,11 @@ fn position(index: usize) -> u32 {
 /// Handle an AddListElement request.
 ///
 /// Adds every element not already in the list. An element already present is
-/// the same whole element, so it is left as it is. Nothing changes when any
-/// element is refused. A refusal of one element is `Error::Structured` naming
-/// its position; a refusal of the request or its target is `Error::Protocol`.
+/// the same whole element, so it is left as it is, except in a Notification
+/// Forwarder's Subscribed_Recipients, where an element naming an entry already
+/// present renews that entry. Nothing changes when any element is refused. A
+/// refusal of one element is `Error::Structured` naming its position; a
+/// refusal of the request or its target is `Error::Protocol`.
 pub fn handle_add_list_element(db: &mut ObjectDatabase, service_data: &[u8]) -> Result<(), Error> {
     handle_list_element_observed(db, service_data, false, |_, _, _| {}).map(|_| ())
 }
@@ -76,6 +82,9 @@ enum ElementCodec {
     /// BACnetDeviceObjectPropertyReference members, held as their encodings
     /// back to back in `ApplicationData` (#1121).
     References,
+    /// BACnetEventNotificationSubscription entries, held as their encodings
+    /// back to back in `ApplicationData` (#1049).
+    Subscriptions,
 }
 
 impl ElementCodec {
@@ -84,9 +93,11 @@ impl ElementCodec {
     /// of Notification Class and Notification Forwarder (Tables 12-24 and
     /// 12-58), takes the destination codec, only Calendar's Date_List, a
     /// BACnetLIST of BACnetCalendarEntry (Table 12-11), the calendar codec,
-    /// and only the Schedule's List_Of_Object_Property_References, a BACnetLIST
+    /// only the Schedule's List_Of_Object_Property_References, a BACnetLIST
     /// of BACnetDeviceObjectPropertyReference (Table 12-28), the reference
-    /// codec.
+    /// codec, and only the Notification Forwarder's Subscribed_Recipients, a
+    /// BACnetLIST of BACnetEventNotificationSubscription (Table 12-58), the
+    /// subscription codec.
     fn for_datatype(object_type: ObjectType, property: PropertyIdentifier) -> Self {
         match property {
             PropertyIdentifier::RECIPIENT_LIST
@@ -105,6 +116,11 @@ impl ElementCodec {
             {
                 Self::References
             }
+            PropertyIdentifier::SUBSCRIBED_RECIPIENTS
+                if object_type == ObjectType::NOTIFICATION_FORWARDER =>
+            {
+                Self::Subscriptions
+            }
             _ => Self::Values,
         }
     }
@@ -113,7 +129,7 @@ impl ElementCodec {
     fn holds(self, stored: &PropertyValue) -> bool {
         match self {
             Self::Values | Self::CalendarEntries => matches!(stored, PropertyValue::List(_)),
-            Self::Destinations | Self::References => {
+            Self::Destinations | Self::References | Self::Subscriptions => {
                 matches!(stored, PropertyValue::ApplicationData(_))
             }
         }
@@ -132,6 +148,8 @@ impl ElementCodec {
             }
             Self::References => decode_each(elements, decode_device_object_property_reference)
                 .map(Elements::References),
+            Self::Subscriptions => decode_each(elements, decode_event_notification_subscription)
+                .map(Elements::Subscriptions),
         }
     }
 
@@ -163,6 +181,11 @@ impl ElementCodec {
                     .map(Elements::References)
                     .map_err(|_| invalid_data_type())
             }
+            (Self::Subscriptions, PropertyValue::ApplicationData(bytes)) => {
+                decode_each(bytes, decode_event_notification_subscription)
+                    .map(Elements::Subscriptions)
+                    .map_err(|_| invalid_data_type())
+            }
             _ => unreachable!("list_target admits only the form the codec edits"),
         }
     }
@@ -190,26 +213,46 @@ enum Elements {
     Destinations(Vec<BACnetDestination>),
     CalendarEntries(Vec<BACnetCalendarEntry>),
     References(Vec<BACnetDeviceObjectPropertyReference>),
+    Subscriptions(Vec<BACnetEventNotificationSubscription>),
 }
 
 /// Where the elements an AddListElement adds sit in the edited list: after
 /// the `kept` elements already stored, in request order, each with its
 /// position in the request. Empty for a removal, which adds nothing.
+///
+/// `renewed` records the Subscribed_Recipients entries an element replaced in
+/// place, by index in the edited list, with the request position of the
+/// element whose members the entry now holds; a later renewal of an index
+/// supersedes an earlier one.
 #[derive(Default)]
 struct Added {
     kept: usize,
     positions: Vec<u32>,
+    renewed: Vec<(usize, u32)>,
 }
 
 impl Added {
     /// The request position of the element at `named` (from 1) in the edited
-    /// list. None for an element the list already held, or a position past
-    /// its end: no element of the request.
+    /// list. None for an element the list already held and no request
+    /// element renewed, or a position past its end: no element of the
+    /// request.
     fn request_position(&self, named: u32) -> Option<u32> {
-        usize::try_from(named)
-            .ok()?
-            .checked_sub(self.kept + 1)
+        let index = usize::try_from(named).ok()?.checked_sub(1)?;
+        if let Some(&(_, position)) = self.renewed.iter().rev().find(|(at, _)| *at == index) {
+            return Some(position);
+        }
+        index
+            .checked_sub(self.kept)
             .and_then(|index| self.positions.get(index).copied())
+    }
+
+    /// The first request element the edit added or renewed an entry with.
+    fn first_position(&self) -> Option<u32> {
+        let renewed = self.renewed.iter().map(|&(_, position)| position).min();
+        match (self.positions.first().copied(), renewed) {
+            (Some(added), Some(renewed)) => Some(added.min(renewed)),
+            (added, renewed) => added.or(renewed),
+        }
     }
 }
 
@@ -238,18 +281,9 @@ impl Elements {
                 })
             }
             (Self::Destinations(stored), Self::Destinations(edits)) => {
-                let (list, added) = edit(
-                    stored,
-                    edits,
-                    remove,
-                    |buf, destination| {
-                        encode_destination(buf, destination);
-                        Ok(())
-                    },
-                    |_| true,
-                )?;
+                let (list, added) = edit(stored, edits, remove, encode_destination, |_| true)?;
                 let mut bytes = BytesMut::new();
-                encode_destination_list(&mut bytes, &list);
+                encode_destination_list(&mut bytes, &list)?;
                 Ok(Edited {
                     value: PropertyValue::ApplicationData(bytes.to_vec()),
                     added,
@@ -302,17 +336,31 @@ impl Elements {
                     added,
                 })
             }
+            (Self::Subscriptions(stored), Self::Subscriptions(edits)) => {
+                // The forwarder takes the result through its whole-list
+                // write, which refuses a Time Remaining out of its range or
+                // an entry past its cap and names it.
+                let (list, added) = edit_subscriptions(stored, edits, remove)?;
+                let mut bytes = BytesMut::new();
+                encode_event_notification_subscription_list(&mut bytes, &list)?;
+                Ok(Edited {
+                    value: PropertyValue::ApplicationData(bytes.to_vec()),
+                    added,
+                })
+            }
             _ => unreachable!("one codec decodes both lists"),
         }
     }
 }
 
 /// Apply the service procedures of Clauses 15.1.2 and 15.2.2 to one list, all
-/// or nothing. Elements compare whole, since no property served here narrows
+/// or nothing. Elements compare whole, since none of these properties narrows
 /// the comparison in its description (Recipient_List, Date_List,
 /// List_Of_Object_Property_References and the Values lists all compare
-/// whole). Two elements are the same exactly when their canonical encodings
-/// are, which also keeps the work linear in the list sizes.
+/// whole); Subscribed_Recipients, whose description does, has
+/// [`edit_subscriptions`]. Two elements are the same exactly when their
+/// canonical encodings are, which also keeps the work linear in the list
+/// sizes.
 ///
 /// AddListElement appends each element not yet present, a repeat within the
 /// request once; an element already present is identical, so updating it in
@@ -378,7 +426,7 @@ fn edit<T>(
     }
     let mut added = Added {
         kept: stored.len(),
-        positions: Vec::new(),
+        ..Added::default()
     };
     let mut present: HashSet<Bytes> = keys.into_iter().collect();
     for (index, element) in edits.into_iter().enumerate() {
@@ -390,18 +438,86 @@ fn edit<T>(
     Ok((stored, added))
 }
 
+/// Apply the service procedures to a Notification Forwarder's
+/// Subscribed_Recipients, all or nothing. Clause 12.51.9 narrows the
+/// comparison: an element names the entry with the same recipient and process
+/// identifier, whatever its other members.
+///
+/// AddListElement renews a named entry in place with the element's members, a
+/// later element naming the same entry winning, and appends the others.
+/// RemoveListElement refuses the request at the first element naming no entry
+/// (LIST_ELEMENT_NOT_FOUND) and otherwise removes every named entry. Entries
+/// are keyed by the canonical encoding of the two identifying members, so the
+/// work stays linear in the list sizes.
+fn edit_subscriptions(
+    mut stored: Vec<BACnetEventNotificationSubscription>,
+    edits: Vec<BACnetEventNotificationSubscription>,
+    remove: bool,
+) -> Result<(Vec<BACnetEventNotificationSubscription>, Added), Error> {
+    let key = |subscription: &BACnetEventNotificationSubscription| {
+        let mut buf = BytesMut::new();
+        // Stored entries and request elements both decode through the bounded
+        // recipient decoder (#1156), so each one encodes.
+        encode_recipient(&mut buf, &subscription.recipient)
+            .expect("decoded recipients fit BACnetAddress::MAX_MAC_LEN");
+        buf.extend_from_slice(&subscription.process_identifier.to_be_bytes());
+        buf.freeze()
+    };
+    let mut named: HashMap<Bytes, usize> = stored
+        .iter()
+        .enumerate()
+        .map(|(index, subscription)| (key(subscription), index))
+        .collect();
+    if remove {
+        let mut removed = HashSet::with_capacity(edits.len());
+        for (index, element) in edits.iter().enumerate() {
+            let element_key = key(element);
+            if !named.contains_key(&element_key) {
+                return Err(element_error(
+                    ErrorClass::SERVICES,
+                    ErrorCode::LIST_ELEMENT_NOT_FOUND,
+                    position(index),
+                ));
+            }
+            removed.insert(element_key);
+        }
+        stored.retain(|subscription| !removed.contains(&key(subscription)));
+        return Ok((stored, Added::default()));
+    }
+    let mut added = Added {
+        kept: stored.len(),
+        ..Added::default()
+    };
+    for (index, element) in edits.into_iter().enumerate() {
+        match named.entry(key(&element)) {
+            Entry::Occupied(entry) => {
+                let at = *entry.get();
+                stored[at] = element;
+                added.renewed.push((at, position(index)));
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(stored.len());
+                added.positions.push(position(index));
+                stored.push(element);
+            }
+        }
+    }
+    Ok((stored, added))
+}
+
 /// Map the object's refusal of the edited list. AddListElement reports a lack
 /// of space with its own code (Clause 15.1.1.3.1).
 ///
 /// An object that names the element it refused (#1048) names a position in
 /// the edited list; the error carries the request position of that element,
 /// as Clause 15.1.1.3.2 counts it. An element the list already held came from
-/// no request element, so then the number is 0. A refusal naming no element
-/// keeps an estimate: for the elements' datatype, encoding, range or space,
-/// the first element the list would have gained, exact when the request adds
-/// one; for anything else, such as WRITE_ACCESS_DENIED, 0, since it concerns
-/// the target. A removal's refusals keep 0 too: the object judges what
-/// remains, which holds no element of the request.
+/// no request element, so then the number is 0, unless a request element
+/// renewed it in place. A refusal naming no element keeps an estimate: for
+/// the elements' datatype, encoding, range or space, the first element the
+/// list would have gained or renewed an entry with, exact when the request
+/// carries one; for anything else, such as WRITE_ACCESS_DENIED, 0, since it
+/// concerns the target. A removal's refusals keep 0 too: the object judges
+/// what remains, which holds no element of the request.
 fn object_refusal(error: Error, remove: bool, added: &Added) -> Error {
     let (class, code, named) = match error {
         Error::Protocol { class, code } => (class, code, None),
@@ -435,7 +551,7 @@ fn object_refusal(error: Error, remove: bool, added: &Added) -> Error {
     let element = match named {
         _ if remove => None,
         Some(named) => added.request_position(named),
-        None => added.positions.first().copied().filter(|_| about_elements),
+        None => added.first_position().filter(|_| about_elements),
     };
     Error::protocol(
         class,

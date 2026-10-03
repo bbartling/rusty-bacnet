@@ -13,6 +13,7 @@ mod assigned_landing_calls;
 mod authentication_factor_format;
 mod calendar;
 mod cov_subscription;
+mod event_notification_subscription;
 mod event_parameter;
 mod fault_parameter;
 mod landing_call_status;

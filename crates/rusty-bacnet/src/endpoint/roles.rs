@@ -171,8 +171,8 @@ impl PyEndpointClient {
         property_id: PyPropertyIdentifier,
         array_index: Option<u32>,
         range_type: Option<String>,
-        reference_index: Option<u32>,
-        reference_seq: Option<u32>,
+        reference_index: Option<u64>,
+        reference_seq: Option<u64>,
         count: Option<i32>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let request = crate::read_range::request(

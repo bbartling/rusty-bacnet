@@ -529,14 +529,19 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// COV increment for this object (objects with a COV_Increment property).
     ///
     /// Returns `Some(increment)` for objects that use COV_Increment filtering
-    /// (e.g., AnalogInput, AnalogOutput, AnalogValue, Loop, Staging). A
-    /// notification fires only when the numeric Present_Value delta reaches the
-    /// increment. Property COV inherits this increment only for numeric
-    /// Present_Value; other selected properties use their own supplied
-    /// increment or typed change reporting.
+    /// (e.g., AnalogInput, AnalogOutput, AnalogValue, Loop, Staging, and the
+    /// Integer, Positive Integer and Large Analog Value types). A notification
+    /// fires only when the numeric Present_Value delta reaches the increment.
+    /// Property COV inherits this increment only for numeric Present_Value;
+    /// other selected properties use their own supplied increment or typed
+    /// change reporting.
+    ///
+    /// The increment is an `f64` so every COV_Increment datatype fits without
+    /// rounding: a REAL widens exactly, a Large Analog Value's Double is kept
+    /// as is, and an Unsigned increment is exact up to 2^53.
     ///
     /// Returns `None` for objects that notify on any state change (binary, multi-state).
-    fn cov_increment(&self) -> Option<f32> {
+    fn cov_increment(&self) -> Option<f64> {
         None
     }
 

@@ -42,6 +42,8 @@ mod read_range;
 mod recipient_mac_bound_tests;
 #[cfg(test)]
 mod structured_error_wire_tests;
+#[cfg(test)]
+mod subscribed_recipients_wire_tests;
 mod unconfirmed;
 #[cfg(test)]
 mod unconfirmed_tests;

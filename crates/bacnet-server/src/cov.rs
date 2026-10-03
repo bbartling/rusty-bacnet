@@ -352,7 +352,7 @@ impl CovSubscriptionTable {
     pub fn should_notify(
         sub: &CovSubscription,
         current_value: Option<&CovSample>,
-        cov_increment: Option<f32>,
+        cov_increment: Option<f64>,
     ) -> bool {
         let Some(current) = current_value else {
             return true;

@@ -406,7 +406,8 @@ async fn source_post_start_broadcast_fact_invalidates_device_route_without_callb
                     mac_address: bacnet_types::MacAddr::from_slice(&[127, 0, 0, 1, 0xBA, 0xC0]),
                 },
             ),
-        );
+        )
+        .unwrap();
         assert!(db
             .get_mut(&oid(ObjectType::DEVICE, 123))
             .unwrap()

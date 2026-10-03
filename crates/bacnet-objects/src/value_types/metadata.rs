@@ -26,7 +26,14 @@ use crate::property_metadata::{
 // Only implemented rows are described. Integer, Positive Integer and Large
 // Analog Value also serve Units, which Tables 12-50, 12-51 and 12-46 code R
 // (#1092): RequiredRead/ReadOnly, set locally through `set_units`, as on the
-// analog objects. Bit_Text, Alarm_Value, Fault/High/Low_Limit,
+// analog objects. Every type serves Current_Command_Priority, which footnote
+// 2 ties to a commandable Present_Value exactly as it does Priority_Array, so
+// it carries the same Optional/Commandable shape, read-only since it is
+// derived from Priority_Array (#1111). The three numeric types also serve
+// COV_Increment: footnote 3 requires it on an object that reports COV, and
+// every value type here does. It is Optional/None/Always, the Analog Value
+// shape, with the table's datatype (Unsigned, or Double on Large Analog
+// Value). Bit_Text, Alarm_Value, Fault/High/Low_Limit,
 // event/intrinsic, value-source, and audit rows stay absent until dispatch
 // exists. Value types are not createable at
 // runtime (the network factory builds only the eight analog/binary/
@@ -44,6 +51,13 @@ pub(crate) const INTEGER_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::UNITS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::COV_INCREMENT, Optional, None, Always),
+    PropertyMetadata::new(
+        P::CURRENT_COMMAND_PRIORITY,
+        Optional,
+        Some(Commandable),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -59,6 +73,13 @@ pub(crate) const POSITIVE_INTEGER_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::UNITS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::COV_INCREMENT, Optional, None, Always),
+    PropertyMetadata::new(
+        P::CURRENT_COMMAND_PRIORITY,
+        Optional,
+        Some(Commandable),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -74,6 +95,13 @@ pub(crate) const LARGE_ANALOG_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::UNITS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(P::COV_INCREMENT, Optional, None, Always),
+    PropertyMetadata::new(
+        P::CURRENT_COMMAND_PRIORITY,
+        Optional,
+        Some(Commandable),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -88,6 +116,12 @@ pub(crate) const CHARACTERSTRING_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(
+        P::CURRENT_COMMAND_PRIORITY,
+        Optional,
+        Some(Commandable),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -102,6 +136,12 @@ pub(crate) const OCTETSTRING_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(
+        P::CURRENT_COMMAND_PRIORITY,
+        Optional,
+        Some(Commandable),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -116,6 +156,12 @@ pub(crate) const BITSTRING_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(
+        P::CURRENT_COMMAND_PRIORITY,
+        Optional,
+        Some(Commandable),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -130,6 +176,12 @@ pub(crate) const DATE_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(
+        P::CURRENT_COMMAND_PRIORITY,
+        Optional,
+        Some(Commandable),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -144,6 +196,12 @@ pub(crate) const DATETIME_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(
+        P::CURRENT_COMMAND_PRIORITY,
+        Optional,
+        Some(Commandable),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -158,6 +216,12 @@ pub(crate) const DATEPATTERN_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(
+        P::CURRENT_COMMAND_PRIORITY,
+        Optional,
+        Some(Commandable),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -172,6 +236,12 @@ pub(crate) const TIMEPATTERN_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(
+        P::CURRENT_COMMAND_PRIORITY,
+        Optional,
+        Some(Commandable),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -186,5 +256,11 @@ pub(crate) const DATETIMEPATTERN_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(
+        P::CURRENT_COMMAND_PRIORITY,
+        Optional,
+        Some(Commandable),
+        ReadOnly,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];

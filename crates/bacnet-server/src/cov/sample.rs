@@ -25,7 +25,7 @@ impl CovSample {
     pub(crate) fn reports(
         &self,
         previous: Option<&Self>,
-        increment: Option<f32>,
+        increment: Option<f64>,
         numeric: bool,
     ) -> bool {
         let Some(previous) = previous else {
@@ -62,20 +62,20 @@ impl PartialEq for CovSample {
     }
 }
 impl Eq for CovSample {}
-fn integer_delta(delta: u64, increment: Option<f32>) -> bool {
+fn integer_delta(delta: u64, increment: Option<f64>) -> bool {
     match increment {
         None => delta != 0,
         Some(i) if i <= 0.0 => delta != 0,
         Some(i) if i.is_nan() || i >= 18_446_744_073_709_551_616.0 => false,
-        Some(i) => delta >= f64::from(i).ceil() as u64,
+        Some(i) => delta >= i.ceil() as u64,
     }
 }
-fn float_delta(delta: f64, increment: Option<f32>) -> bool {
+fn float_delta(delta: f64, increment: Option<f64>) -> bool {
     match increment {
         None => delta != 0.0,
         Some(i) if i <= 0.0 => delta != 0.0,
         Some(i) if !i.is_finite() => false,
-        Some(i) => delta >= f64::from(i),
+        Some(i) => delta >= i,
     }
 }
 fn capacity_error() -> Error {

@@ -184,3 +184,44 @@ fn value_source_rejects_malformed_choices_members_and_framing() {
     let error = decode_value_source(&[0xff, 0xff, 0x00], 2).unwrap_err();
     assert!(matches!(error, Error::Decoding { offset: 2, .. }));
 }
+
+#[test]
+fn value_source_address_mac_holds_to_the_bacnet_address_bound() {
+    // #1156: the address [2] alternative is a BACnetAddress, whose MAC is at
+    // most BACnetAddress::MAX_MAC_LEN (18) octets in both directions.
+    let wire = |len: usize| {
+        let mut wire = vec![0x2e, 0x21, 0x07, 0x65, len as u8];
+        wire.extend(std::iter::repeat_n(0xA5, len));
+        wire.push(0x2f);
+        wire
+    };
+    let address = |len: usize| {
+        BACnetValueSource::Address(BACnetAddress {
+            network_number: 7,
+            mac_address: MacAddr::from_slice(&vec![0xA5; len]),
+        })
+    };
+    let longest = BACnetAddress::MAX_MAC_LEN;
+    let mut encoded = BytesMut::new();
+    encode_value_source(&mut encoded, &address(longest)).unwrap();
+    assert_eq!(&encoded[..], &wire(longest)[..]);
+    assert_eq!(
+        decode_value_source(&wire(longest), 0).unwrap(),
+        (address(longest), wire(longest).len())
+    );
+    for len in [longest + 1, 255] {
+        assert!(
+            matches!(
+                decode_value_source(&wire(len), 0),
+                Err(Error::Decoding { offset: 3, .. })
+            ),
+            "{len}-octet MAC"
+        );
+        let mut encoded = BytesMut::from(&[0xaa][..]);
+        assert!(matches!(
+            encode_value_source(&mut encoded, &address(len)),
+            Err(Error::Encoding(_))
+        ));
+        assert_eq!(&encoded[..], &[0xaa], "{len}-octet MAC left output behind");
+    }
+}

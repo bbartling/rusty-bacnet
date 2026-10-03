@@ -182,7 +182,8 @@ async fn delayed_target_audit_last_reporter_context_failure_rolls_back_whole_dev
     bacnet_encoding::constructed::encode_recipient(
         &mut raw,
         &BACnetRecipient::Device(oid(ObjectType::DEVICE, 21)),
-    );
+    )
+    .unwrap();
     let count = f.transport.sent.lock().unwrap().len();
     let denied = dispatch(
         &f.server,

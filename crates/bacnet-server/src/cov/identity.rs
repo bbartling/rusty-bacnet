@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::constructed::BACnetAddress;
 
 /// Delivery endpoint, including the immediate router for routed traffic.
 /// All COV family keys use the original client recipient as identity.
@@ -40,12 +41,27 @@ impl CovRecipient {
             None => Self::Direct(MacAddr::from_slice(mac)),
         }
     }
-    /// Table admission requires the same nonempty routed source MAC as NPDU decoding.
+    /// Table admission requires the same nonempty routed source MAC as NPDU
+    /// decoding. The address either form reports in the Device's COV lists
+    /// must also fit [`BACnetAddress::MAX_MAC_LEN`] octets, so every admitted
+    /// subscription encodes there (#1156). A routed source always does since
+    /// #1141; this keeps out a direct MAC that a custom transport makes longer.
     pub(crate) fn validate(&self) -> Result<(), Error> {
         if matches!(self, Self::Routed(source) if source.mac_address.is_empty()) {
             return Err(Error::Encoding(
                 "COV routed recipient requires a nonempty source MAC".into(),
             ));
+        }
+        let mac = match self {
+            Self::Direct(mac) => mac,
+            Self::Routed(source) => &source.mac_address,
+        };
+        if mac.len() > BACnetAddress::MAX_MAC_LEN {
+            return Err(Error::Encoding(format!(
+                "COV recipient MAC of {} octets exceeds the {}-octet BACnetAddress limit",
+                mac.len(),
+                BACnetAddress::MAX_MAC_LEN
+            )));
         }
         Ok(())
     }

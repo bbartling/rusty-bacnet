@@ -31,6 +31,7 @@ fn pics_audit_log_property_metadata_is_exact() {
         (P::OBJECT_TYPE, false, false),
         (P::LOG_ENABLE, false, true),
         (P::BUFFER_SIZE, false, false),
+        (P::LOG_BUFFER, false, false),
         (P::RECORD_COUNT, false, false),
         (P::TOTAL_RECORD_COUNT, false, false),
         (P::STATUS_FLAGS, false, false),

@@ -412,8 +412,8 @@ impl BACnetObject for AnalogValueObject {
         true
     }
 
-    fn cov_increment(&self) -> Option<f32> {
-        Some(self.cov_increment)
+    fn cov_increment(&self) -> Option<f64> {
+        Some(f64::from(self.cov_increment))
     }
 
     crate::event::impl_builtin_intrinsic_reporting!(

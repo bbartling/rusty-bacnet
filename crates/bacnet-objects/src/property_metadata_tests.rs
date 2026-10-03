@@ -26,6 +26,23 @@ use crate::value_types::{
 
 mod analog;
 
+/// Whether `property` reads the way its metadata row promises: with a value,
+/// or, for an Audit Log's Log_Buffer, with the PROPERTY / READ_ACCESS_DENIED
+/// that marks a present row only ReadRange and AuditLogQuery serve
+/// (Clause 12.64.10).
+pub(crate) fn metadata_row_reads(object: &dyn BACnetObject, property: PropertyIdentifier) -> bool {
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
+    let result = object.read_property(property, None);
+    if object.object_identifier().object_type() == ObjectType::AUDIT_LOG
+        && property == PropertyIdentifier::LOG_BUFFER
+    {
+        return matches!(result, Err(Error::Protocol { class, code })
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::READ_ACCESS_DENIED.to_raw() as u32);
+    }
+    result.is_ok()
+}
+
 struct InstanceMetadataObject {
     oid: ObjectIdentifier,
     include_description: bool,
@@ -169,7 +186,7 @@ fn assert_unique_and_canonical(object: &dyn BACnetObject) {
 fn property_metadata_contract_time_value() {
     let object = TimeValueObject::new(1, "TV-1").unwrap();
     assert_unique_and_canonical(&object);
-    assert_eq!(object.property_metadata().len(), 11);
+    assert_eq!(object.property_metadata().len(), 12);
 
     let present_value = metadata_row(&object, PropertyIdentifier::PRESENT_VALUE);
     assert_eq!(present_value.conformance, PropertyConformance::RequiredRead);
@@ -322,7 +339,7 @@ fn property_metadata_contract_all_migrated_rows_are_readable() {
         let metadata = object.property_metadata();
         for row in metadata.iter() {
             assert!(
-                object.read_property(row.property_identifier, None).is_ok(),
+                metadata_row_reads(object.as_ref(), row.property_identifier),
                 "{:?} must read {:?} without an array index",
                 object.object_identifier().object_type(),
                 row.property_identifier
@@ -347,6 +364,7 @@ fn property_metadata_contract_property_list_projection_excludes_property_list() 
                 PropertyIdentifier::RELIABILITY,
                 PropertyIdentifier::PRIORITY_ARRAY,
                 PropertyIdentifier::RELINQUISH_DEFAULT,
+                PropertyIdentifier::CURRENT_COMMAND_PRIORITY,
             ],
         ),
         (
@@ -547,7 +565,7 @@ fn property_metadata_migrated_date_value_exact_required_set() {
     let object = DateValueObject::new(1, "DV-1").unwrap();
     let metadata = object.property_metadata();
     assert!(matches!(metadata, Cow::Borrowed(_)));
-    assert_eq!(metadata.len(), 11);
+    assert_eq!(metadata.len(), 12);
     let required = object.required_properties();
     assert_eq!(
         required.as_ref(),
