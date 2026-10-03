@@ -30,11 +30,12 @@
 //!
 //! The loop rules that need a destination's route are applied as each copy is
 //! sent ([`ForwardOrigin::admits`]). The server is one node on one network, so a
-//! received notification always arrives through Port_ID 0. Its network is the
-//! local one, and when the registered Network Port knows that network's number
-//! ([`local_network_number`]), a recipient address naming the number is local
-//! to the loop rules. A copy the rules let through is sent as its recipient's
-//! address is written either way.
+//! received notification always arrives through Port_ID 0, and its network is
+//! the local one. Once the server knows that network's number, configured on
+//! the registered Network Port or learned from Network-Number-Is with or
+//! without one, the send path reads it from the network layer and turns a
+//! route naming it into a local route ([`RecipientRoute::localize`]). The loop
+//! rules see that local route, and the copy goes with no DNET.
 
 use super::event_recipient_route::{system_utc_recipient_filter_time, RecipientRoute};
 use super::event_send::OutboundNotification;
@@ -181,26 +182,14 @@ enum Reach {
 }
 
 impl Reach {
-    /// Classify `route`, taking a network numbered `local_network` as the
-    /// local network and, on it, a link broadcast MAC as a broadcast.
-    fn of(
-        route: &RecipientRoute,
-        local_network: Option<u16>,
-        is_link_broadcast: impl Fn(&[u8]) -> bool,
-    ) -> Self {
-        let here = |network: &u16| Some(*network) == local_network;
+    /// Classify `route`. The send path has already turned a route naming
+    /// the local network's number into a local one
+    /// ([`RecipientRoute::localize`]), so a route that still names a network
+    /// names a remote one.
+    fn of(route: &RecipientRoute) -> Self {
         match route {
             RecipientRoute::GlobalBroadcast => Self::Everywhere,
             RecipientRoute::LocalBroadcast => Self::LocalBroadcast,
-            RecipientRoute::RemoteBroadcast(network) if here(network) => Self::LocalBroadcast,
-            RecipientRoute::RemoteUnicast { network, mac } if here(network) => {
-                if is_link_broadcast(mac) {
-                    Self::LocalBroadcast
-                } else {
-                    Self::LocalNode
-                }
-            }
-            RecipientRoute::BoundRoutedUnicast { network, .. } if here(network) => Self::LocalNode,
             RecipientRoute::LocalUnicast(_) | RecipientRoute::BoundLocalUnicast { .. } => {
                 Self::LocalNode
             }
@@ -230,23 +219,6 @@ impl ForwardOrigin {
             ForwardOrigin::Local => None,
             ForwardOrigin::Received(_) => Some(RECEIVING_PORT),
         }
-    }
-}
-
-/// The local network's number, from the registered Network Port's
-/// Network_Number, which holds a configured number or one learned from a
-/// router. `None` when no port is registered or its number is unknown (zero);
-/// the loop rules then take every network number as remote.
-fn local_network_number(db: &ObjectDatabase) -> Option<u16> {
-    let port = db.registered_bip_port_internal()?;
-    match db
-        .get(&port)?
-        .read_property(PropertyIdentifier::NETWORK_NUMBER, None)
-    {
-        Ok(PropertyValue::Unsigned(number)) => u16::try_from(number)
-            .ok()
-            .filter(|number| (1..u16::MAX).contains(number)),
-        _ => None,
     }
 }
 
@@ -340,7 +312,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut pending = offered;
         pending.reverse();
         while let Some(notification) = pending.pop() {
-            let (local_device, local_network, mut recipients) = {
+            let (local_device, mut recipients) = {
                 let db = ctx.db.read().await;
                 let system_utc = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -375,11 +347,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         .record(EventSuppression::ReceivedNotForwarded);
                 }
                 taken.extend(targets.forwarders);
-                (
-                    db.selected_device(),
-                    local_network_number(&db),
-                    targets.recipients,
-                )
+                (db.selected_device(), targets.recipients)
             };
             if let Some(local_device) = local_device {
                 for process_identifier in take_local(&mut recipients, local_device) {
@@ -392,12 +360,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             sent.extend(recipients.iter().cloned());
             let encode_for = |process_identifier| Ok(notification.encode_for(process_identifier));
-            let network = ctx.network;
-            let admits = |route: &RecipientRoute| {
-                origin.admits(Reach::of(route, local_network, |mac| {
-                    network.transport().is_broadcast_mac(mac)
-                }))
-            };
+            let admits = |route: &RecipientRoute| origin.admits(Reach::of(route));
             let outbound = OutboundNotification {
                 notification_class: notification.notification_class,
                 priority: notification.priority,

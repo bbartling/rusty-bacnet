@@ -24,6 +24,7 @@ pub(super) fn system_utc_recipient_filter_time(now: Duration) -> (DaysOfWeek, Ti
 }
 
 /// The transport action selected for one matched Notification Class recipient.
+#[derive(Debug, PartialEq, Eq)]
 pub(super) enum RecipientRoute {
     LocalUnicast(MacAddr),
     BoundLocalUnicast {
@@ -76,6 +77,47 @@ impl RecipientRoute {
                 network,
                 mac: address.mac_address.clone(),
             },
+        }
+    }
+
+    /// Take a route that names the network numbered `local_network`, the one
+    /// this device's port is attached to, as the local route it is: the
+    /// destination is on this network, so the NPDU goes with no DNET, as a
+    /// local broadcast or a unicast to the MAC (Clause 6.5.1). A non-routing
+    /// node drops an NPDU whose DNET names a network (Clause 6.5.2.1), so a
+    /// routed form might never arrive. A link broadcast MAC is a local
+    /// broadcast for an address. For a Device binding it names no single
+    /// device, so the binding is unusable ([`Self::InvalidDevice`], skipped
+    /// as unroutable), as a local binding at that MAC is. With the number
+    /// unknown every route stays as it is.
+    pub(super) fn localize(
+        self,
+        local_network: Option<u16>,
+        is_link_broadcast: impl Fn(&[u8]) -> bool,
+    ) -> Self {
+        let here = |network: u16| Some(network) == local_network;
+        match self {
+            Self::RemoteBroadcast(network) if here(network) => Self::LocalBroadcast,
+            Self::RemoteUnicast { network, mac } if here(network) => {
+                if is_link_broadcast(&mac) {
+                    Self::LocalBroadcast
+                } else {
+                    Self::LocalUnicast(mac)
+                }
+            }
+            Self::BoundRoutedUnicast {
+                network,
+                mac,
+                freshness,
+                ..
+            } if here(network) => {
+                if is_link_broadcast(&mac) {
+                    Self::InvalidDevice
+                } else {
+                    Self::BoundLocalUnicast { mac, freshness }
+                }
+            }
+            route => route,
         }
     }
 
