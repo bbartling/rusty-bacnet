@@ -8,12 +8,26 @@
 //! for the I-Am. The I-Am lands in the binding table like any other and wakes
 //! every write waiting on the probe; with none by the deadline, they fail.
 //!
+//! Where the Who-Is goes is a [`WhoIsScope`]: the network the device's last
+//! I-Am came from while the table still holds that stale observation, or the
+//! whole internetwork for a device it has never heard from. A write whose
+//! probe drew nothing drops the stale observation, so the device's next
+//! Who-Is goes global rather than to the old network again.
+//!
 //! The probes bound that traffic. A device gets at most one Who-Is per
-//! [`WHO_IS_HOLD_OFF`], counted from when it went out: a write that misses
-//! while a probe is out waits on that probe, and one that misses after the
-//! probe drew nothing fails at once. At most [`MAX_PROBES`] devices are
-//! tracked at a time, which also caps the server's Who-Is traffic at that
-//! many per hold-off; a write that would need one more fails unsent.
+//! [`WHO_IS_HOLD_OFF`]: a write that misses while a probe is out waits on
+//! that probe, and one that misses after the probe drew nothing fails at
+//! once. At most [`MAX_PROBES`] devices are tracked at a time. A device that
+//! answers frees its place at once and then stays bound for the binding
+//! lifetime, so the cap limits the Who-Is requests that go unanswered: at
+//! most that many per hold-off. A write that would need one more fails
+//! unsent.
+//!
+//! A probe's wait and hold-off count from when its Who-Is went out: the
+//! write that starts it records the send ([`BindingProbes::sent`]), which
+//! moves the deadline every waiting write shares. Until then both count from
+//! the probe's start, so a write cancelled before it sends still leaves a
+//! bounded probe.
 //!
 //! The probes live inside the binding table, under its lock, so finding no
 //! binding and starting a probe are one step an I-Am can't fall between.
@@ -30,22 +44,56 @@ pub(super) const MAX_PROBES: usize = 256;
 /// Stands in for a wait too long to add to an instant: about 30 years.
 const FAR_FUTURE: Duration = Duration::from_secs(86_400 * 365 * 30);
 
+/// Where a targeted Who-Is goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WhoIsScope {
+    /// A broadcast on this network.
+    Local,
+    /// A broadcast on this remote network (DNET with no DADR).
+    Remote(u16),
+    /// A broadcast on every network (DNET 65535).
+    Global,
+}
+
+impl WhoIsScope {
+    /// A remote network numbered `local_network`, the one this device is
+    /// attached to, is this network: the Who-Is goes with no DNET, as
+    /// `RecipientRoute::localize` sends event recipients there (#1365). A
+    /// non-routing device drops an NPDU whose DNET names its own network.
+    pub(super) fn localize(self, local_network: Option<u16>) -> Self {
+        match self {
+            Self::Remote(network) if Some(network) == local_network => Self::Local,
+            scope => scope,
+        }
+    }
+}
+
+/// What the writes waiting on a probe watch.
+#[derive(Debug, Clone, Copy)]
+struct ProbeState {
+    /// When they give up.
+    deadline: TokioInstant,
+    /// Whether the device's I-Am was heard.
+    answered: bool,
+}
+
 /// One device's Who-Is.
 #[derive(Debug)]
 struct Probe {
-    /// When it went out.
+    /// Tells this probe from a later one for the same device.
+    id: u64,
+    /// When the Who-Is went out, or the probe started until it does.
     sent: TokioInstant,
     /// When the writes waiting on it give up.
     deadline: TokioInstant,
-    /// Turns true when the device's I-Am is heard.
-    answered: watch::Sender<bool>,
+    state: watch::Sender<ProbeState>,
 }
 
 impl Probe {
     fn wait(&self) -> ProbeWait {
         ProbeWait {
-            deadline: self.deadline,
-            answered: self.answered.subscribe(),
+            id: self.id,
+            state: self.state.subscribe(),
         }
     }
 
@@ -72,19 +120,32 @@ pub(super) enum ProbeStep {
 /// A write's wait on a probe.
 #[derive(Debug)]
 pub(super) struct ProbeWait {
-    deadline: TokioInstant,
-    answered: watch::Receiver<bool>,
+    id: u64,
+    state: watch::Receiver<ProbeState>,
 }
 
 impl ProbeWait {
-    /// Wait for the device's I-Am until the probe's deadline, and say whether
-    /// it came.
+    /// The probe this waits on, for [`BindingProbes::sent`] and
+    /// [`BindingProbes::withdraw`].
+    pub(super) fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Wait for the device's I-Am until the probe's deadline, following the
+    /// deadline as the send moves it, and say whether the I-Am came. A probe
+    /// withdrawn before its Who-Is went out ends the wait at once.
     pub(super) async fn answered(mut self) -> bool {
-        let heard = self.answered.wait_for(|answered| *answered);
-        matches!(
-            tokio::time::timeout_at(self.deadline, heard).await,
-            Ok(Ok(_))
-        )
+        loop {
+            let ProbeState { deadline, answered } = *self.state.borrow_and_update();
+            if answered {
+                return true;
+            }
+            match tokio::time::timeout_at(deadline, self.state.changed()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => return self.state.borrow().answered,
+                Err(_) => return false,
+            }
+        }
     }
 }
 
@@ -92,12 +153,13 @@ impl ProbeWait {
 #[derive(Debug, Default)]
 pub(super) struct BindingProbes {
     probes: HashMap<ObjectIdentifier, Probe>,
+    next_id: u64,
 }
 
 impl BindingProbes {
     /// Join `device`'s probe, or start one whose writes wait `wait` from
     /// `now`, unless the hold-off or the cap stops it. The caller sends the
-    /// Who-Is for [`ProbeStep::Send`].
+    /// Who-Is for [`ProbeStep::Send`], then reports it with [`Self::sent`].
     pub(super) fn begin(
         &mut self,
         device: ObjectIdentifier,
@@ -116,22 +178,54 @@ impl BindingProbes {
         if self.probes.len() >= MAX_PROBES {
             return ProbeStep::Full;
         }
-        let (answered, _) = watch::channel(false);
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        let deadline = after(now, wait);
+        let (state, _) = watch::channel(ProbeState {
+            deadline,
+            answered: false,
+        });
         let probe = Probe {
+            id,
             sent: now,
-            deadline: now.checked_add(wait).unwrap_or(now + FAR_FUTURE),
-            answered,
+            deadline,
+            state,
         };
         let wait = probe.wait();
         self.probes.insert(device, probe);
         ProbeStep::Send(wait)
     }
 
+    /// The Who-Is of `device`'s probe `id` went out at `now`: its wait of
+    /// `wait` and its hold-off count from here.
+    pub(super) fn sent(
+        &mut self,
+        device: &ObjectIdentifier,
+        id: u64,
+        now: TokioInstant,
+        wait: Duration,
+    ) {
+        if let Some(probe) = self.probes.get_mut(device).filter(|probe| probe.id == id) {
+            probe.sent = now;
+            probe.deadline = after(now, wait);
+            let deadline = probe.deadline;
+            probe.state.send_modify(|state| state.deadline = deadline);
+        }
+    }
+
+    /// Drop `device`'s probe `id`, whose Who-Is never went out: the writes
+    /// waiting on it stop at once, and the device isn't held off.
+    pub(super) fn withdraw(&mut self, device: &ObjectIdentifier, id: u64) {
+        if self.probes.get(device).is_some_and(|probe| probe.id == id) {
+            self.probes.remove(device);
+        }
+    }
+
     /// `device`'s I-Am was heard: wake the writes waiting on its probe and
     /// drop it, since the device is bound again.
     pub(super) fn answer(&mut self, device: &ObjectIdentifier) {
         if let Some(probe) = self.probes.remove(device) {
-            probe.answered.send_replace(true);
+            probe.state.send_modify(|state| state.answered = true);
         }
     }
 
@@ -141,107 +235,11 @@ impl BindingProbes {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const WAIT: Duration = Duration::from_secs(3);
-
-    fn device(instance: u32) -> ObjectIdentifier {
-        ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap()
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_probe_is_joined_while_out_then_holds_off_its_device_for_a_minute() {
-        let mut probes = BindingProbes::default();
-        let start = TokioInstant::now();
-        assert!(matches!(
-            probes.begin(device(9), start, WAIT),
-            ProbeStep::Send(_)
-        ));
-        let joined = start + WAIT - Duration::from_millis(1);
-        assert!(matches!(
-            probes.begin(device(9), joined, WAIT),
-            ProbeStep::Join(_)
-        ));
-        // Another device has its own probe.
-        assert!(matches!(
-            probes.begin(device(10), joined, WAIT),
-            ProbeStep::Send(_)
-        ));
-        for held in [
-            start + WAIT,
-            start + WHO_IS_HOLD_OFF - Duration::from_millis(1),
-        ] {
-            assert!(matches!(
-                probes.begin(device(9), held, WAIT),
-                ProbeStep::HeldOff
-            ));
-        }
-        assert!(matches!(
-            probes.begin(device(9), start + WHO_IS_HOLD_OFF, WAIT),
-            ProbeStep::Send(_)
-        ));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn an_answer_wakes_every_wait_and_frees_the_device() {
-        let mut probes = BindingProbes::default();
-        let start = TokioInstant::now();
-        let ProbeStep::Send(first) = probes.begin(device(9), start, WAIT) else {
-            panic!("a new probe");
-        };
-        let ProbeStep::Join(second) = probes.begin(device(9), start, WAIT) else {
-            panic!("the probe joined");
-        };
-        probes.answer(&device(9));
-        assert!(first.answered().await);
-        assert!(second.answered().await);
-        assert_eq!(TokioInstant::now(), start);
-        assert_eq!(probes.len(), 0);
-        // An answer for a device with no probe changes nothing.
-        probes.answer(&device(11));
-        let ProbeStep::Send(unanswered) = probes.begin(device(9), start, WAIT) else {
-            panic!("a new probe once answered");
-        };
-        assert!(!unanswered.answered().await);
-        assert_eq!(TokioInstant::now(), start + WAIT);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn probes_are_capped_until_their_hold_off_ends() {
-        let mut probes = BindingProbes::default();
-        let start = TokioInstant::now();
-        for instance in 0..u32::try_from(MAX_PROBES).unwrap() {
-            assert!(matches!(
-                probes.begin(device(instance), start, WAIT),
-                ProbeStep::Send(_)
-            ));
-        }
-        let extra = device(5_000);
-        let late = start + WHO_IS_HOLD_OFF - Duration::from_millis(1);
-        assert!(matches!(probes.begin(extra, late, WAIT), ProbeStep::Full));
-        assert_eq!(probes.len(), MAX_PROBES);
-        // Once the others' hold-off ends, they make room.
-        let after = start + WHO_IS_HOLD_OFF;
-        assert!(matches!(
-            probes.begin(extra, after, WAIT),
-            ProbeStep::Send(_)
-        ));
-        assert_eq!(probes.len(), 1);
-    }
-
-    #[test]
-    fn a_wait_too_long_to_add_still_starts_a_probe() {
-        let mut probes = BindingProbes::default();
-        let now = TokioInstant::now();
-        assert!(matches!(
-            probes.begin(device(9), now, Duration::MAX),
-            ProbeStep::Send(_)
-        ));
-        assert!(matches!(
-            probes.begin(device(9), now + WHO_IS_HOLD_OFF, Duration::MAX),
-            ProbeStep::Join(_)
-        ));
-    }
+/// `wait` after `now`, or far in the future for a wait too long to add.
+fn after(now: TokioInstant, wait: Duration) -> TokioInstant {
+    now.checked_add(wait).unwrap_or(now + FAR_FUTURE)
 }
+
+#[cfg(test)]
+#[path = "binding_probes_tests.rs"]
+mod tests;

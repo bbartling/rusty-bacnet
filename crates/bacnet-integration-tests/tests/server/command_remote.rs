@@ -187,8 +187,8 @@ async fn command_finds_an_unbound_target_with_a_who_is_over_bip() {
     // The commander has no binding for Device 20. On loopback each server has
     // its own port, so a local broadcast reaches only the sender; making the
     // commander a BBMD whose table lists the target carries its broadcasts,
-    // the Who-Is included, to the target as Forwarded-NPDUs. The target
-    // answers with a directed I-Am.
+    // the global Who-Is included, to the target as Forwarded-NPDUs. The
+    // target answers with a directed I-Am.
     let (ip, port) = decode_bip_mac(target.local_mac()).unwrap();
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
     transport.enable_bbmd(vec![BdtEntry {

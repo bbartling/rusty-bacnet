@@ -2545,8 +2545,9 @@
     "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_present_value_write_runs_the_configured_list",
     "crates/bacnet-server/src/server/command_remote_write_tests.rs::{command_writes_another_device_and_its_ack_marks_the_command_successful,command_write_through_a_routed_binding_completes_on_the_routed_ack}",
     "crates/bacnet-integration-tests/tests/server/command_remote.rs::{command_writes_a_target_in_another_device_over_bip,command_finds_an_unbound_target_with_a_who_is_over_bip}",
-    "crates/bacnet-server/src/server/remote_write_discovery_tests.rs::{unbound_command_target_answers_a_targeted_who_is_and_the_write_is_made,concurrent_writes_to_an_unbound_device_share_one_who_is,who_is_for_a_stale_routed_binding_goes_to_its_network}",
-    "crates/bacnet-server/src/server/binding_probes.rs::tests::an_answer_wakes_every_wait_and_frees_the_device",
+    "crates/bacnet-server/src/server/remote_write_discovery_tests.rs::{unbound_command_target_answers_a_global_who_is_and_the_write_is_made,concurrent_writes_to_an_unbound_device_share_one_who_is,who_is_for_a_stale_routed_binding_goes_to_its_network,stale_binding_on_this_network_by_number_is_asked_with_no_dnet}",
+    "crates/bacnet-server/src/server/binding_probes_tests.rs::{an_answer_wakes_every_wait_and_frees_the_device,the_send_moves_the_deadline_every_waiting_write_shares,a_remote_scope_on_this_network_by_number_is_local}",
+    "crates/bacnet-server/src/server/device_bindings_tests.rs::who_is_scope_follows_the_last_observation_and_a_fruitless_probe_drops_it",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_command_action_reads_as_the_action_commands_written",
     "crates/rusty-bacnet/src/types/constructed_read_tests.rs::command_actions_read_as_the_action_commands_written"
    ],
@@ -2564,8 +2565,8 @@
     "crates/bacnet-server/src/server/command_remote_write_tests.rs::{command_write_another_device_refuses_busy_fails_at_once_and_quits,command_write_another_device_never_answers_is_retried_then_fails,command_write_another_device_fails_unsent_while_dcc_restricts_initiation,command_write_another_device_ends_at_the_first_retry_dcc_blocks,stop_during_an_outstanding_remote_write_ends_the_run_and_frees_its_invoke_id}",
     "crates/bacnet-server/src/server/command_run_stop_tests.rs::{stop_during_a_post_delay_ends_the_run_with_what_it_made,stop_while_the_database_is_busy_ends_the_run_where_it_stood,run_no_task_starts_ends_at_once_as_unsuccessful,stop_during_a_channel_member_delay_ends_the_distribution_failed,stop_while_the_database_is_busy_ends_a_channel_distribution_failed,channel_run_no_task_starts_ends_at_once_failed,stop_ends_a_run_nothing_took,run_whose_write_panics_ends_with_its_unmade_commands_unsuccessful,stop_during_the_last_post_delay_ends_the_run_successful,run_whose_write_panics_while_the_database_is_busy_ends_where_it_stood}",
     "crates/bacnet-server/src/server/remote_write_answer_tests.rs::{remote_write_ignores_answers_from_another_peer_or_for_another_service,remote_write_error_reject_or_abort_ends_it_at_once_saying_why,remote_write_blocked_by_dcc_at_a_retry_ends_there_as_disabled}",
-    "crates/bacnet-server/src/server/remote_write_discovery_tests.rs::{silent_unbound_target_fails_after_the_apdu_timeout_with_one_who_is,silent_unbound_command_target_fails_and_the_rest_of_the_list_runs,no_who_is_while_dcc_restricts_initiation_or_for_the_wildcard_device,absent_device_gets_one_who_is_per_hold_off}",
-    "crates/bacnet-server/src/server/binding_probes.rs::tests::{a_probe_is_joined_while_out_then_holds_off_its_device_for_a_minute,probes_are_capped_until_their_hold_off_ends,a_wait_too_long_to_add_still_starts_a_probe}"
+    "crates/bacnet-server/src/server/remote_write_discovery_tests.rs::{silent_unbound_target_fails_after_the_apdu_timeout_with_one_who_is,silent_unbound_command_target_fails_and_the_rest_of_the_list_runs,no_who_is_while_dcc_restricts_initiation_or_for_the_wildcard_device,absent_device_gets_one_who_is_per_hold_off,the_wait_for_an_i_am_counts_from_the_who_is_send,a_fruitless_who_is_on_the_last_network_drops_it_and_the_next_asks_everywhere,stop_during_a_who_is_wait_ends_the_run_with_nothing_made}",
+    "crates/bacnet-server/src/server/binding_probes_tests.rs::{a_probe_is_joined_while_out_then_holds_off_its_device_for_a_minute,probes_are_capped_until_their_hold_off_ends,a_wait_too_long_to_add_still_starts_a_probe,a_withdrawn_probe_ends_its_waits_and_holds_nothing_off}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2601,8 +2602,10 @@
     "A run whose write panics ends the same way, its unmade commands FALSE, and its property subscribers hear of the end.",
     "A remote write's refusal reaches the run host with what the device said: the Error class and code, or the Reject or Abort reason. A Command keeps only pass or fail; a Channel member in another device goes through the same remote write path.",
     "Python reads Action as lists of ActionCommand mappings with every key, Write_Successful included; add_command takes those mappings back and ignores write_successful, so a command starts FALSE.",
-    "A remote target with no fresh binding gets one Who-Is with both limits set to its instance, broadcast locally or to the network of its stale routed binding; the write waits cov_retry_timeout_ms for the I-Am and fails unsent without one.",
-    "Who-Is bounds: one per device per 60 s from its send, shared by writes that miss while it is out; a miss inside that minute fails at once; at most 256 devices tracked; none for instance 4194303 or while DCC restricts initiation."
+    "A remote target with no fresh binding gets one Who-Is with both limits set to its instance: global for a device never heard from, else where its stale I-Am came from (local if that network is numbered as this one).",
+    "The write waits cov_retry_timeout_ms from the Who-Is send for the I-Am and fails unsent without one. A Who-Is that draws nothing drops the stale I-Am, so the device's next Who-Is is global.",
+    "Who-Is bounds: one per device per 60 s from its send, shared by writes that miss while it is out; a miss inside that minute fails at once; none for instance 4194303 or while DCC restricts initiation.",
+    "At most 256 devices with a Who-Is out or held off; an answered device frees its place and stays bound ten minutes, so the cap holds unanswered Who-Is requests to 256 a minute."
    ],
    "gaps": [
     "#1324: runs a cancelled write_local took but never started stay in progress until stop()"
@@ -3890,7 +3893,7 @@
    ],
    "notes": [
     "A local member's datatype is that of its property's value; NULL, constructed values and remote members count as unknown and pass unchanged, `Lighting_Command` as a BACnetLightingCommand. Rule 3 bounds Unsigned and ENUMERATED at 2147483647.",
-    "Members in other Devices get confirmed WriteProperty, one at a time, after a targeted Who-Is when unbound; a device silent to one write or its Who-Is fails its later members unsent. This Device's identifier is dropped.",
+    "Remote members get WriteProperty one at a time, after a Who-Is if unbound; a device silent to a write or Who-Is fails its later members unsent (one Who-Is and one write's retries per silent device). This Device's identifier is dropped.",
     "A whole `Execution_Delay` write takes exactly one delay per member (VALUE_OUT_OF_RANGE otherwise); index-0 and whole member-list writes resize both arrays. Caps are 1024 members and 64 control groups.",
     "A run that would start its own object again, or with more than eight runs above it, ends failed and its writer gets OBJECT / BUSY. `tick_schedules` runs a distribution; the bare handlers and `stop()` end it FAILED.",
     "Reliability names the first failed member: CONFIGURATION_ERROR for a value the Channel can't coerce (type or rule range) or an unknown-target or datatype refusal, COMMUNICATION_FAILURE for no binding, DCC or silence, else PROCESS_ERROR."

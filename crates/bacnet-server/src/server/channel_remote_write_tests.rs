@@ -17,7 +17,7 @@ use super::command_remote_write_tests::{
     ack, deliver, device, disable_initiation, remote_write, sent_writes,
 };
 use super::cov_wire_test_support::*;
-use super::remote_write_discovery_tests::{i_am, next_who_is, targeted, who_is_sent};
+use super::remote_write_discovery_tests::{everywhere, i_am, next_who_is, targeted, who_is_sent};
 use super::*;
 use bacnet_encoding::npdu::{encode_npdu, Npdu};
 use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
@@ -384,7 +384,7 @@ async fn channel_member_in_an_unbound_device_is_written_once_its_who_is_is_answe
     write_channel(&mut h, 6, &PropertyValue::Real(80.0), Some(8))
         .await
         .unwrap();
-    assert_eq!(next_who_is(&h).await, (None, targeted(10)));
+    assert_eq!(next_who_is(&h).await, (everywhere(), targeted(10)));
     assert_eq!(write_status(&mut h, 6).await, WriteStatus::IN_PROGRESS);
     assert!(sent_writes(&h).is_empty());
     deliver(&h, &i_am(10), &PEER, None).await;
@@ -401,7 +401,7 @@ async fn channel_skips_the_rest_of_an_unbound_device_its_who_is_finds_silent() {
     write_channel(&mut h, 8, &PropertyValue::Real(80.0), Some(8))
         .await
         .unwrap();
-    assert_eq!(next_who_is(&h).await, (None, targeted(10)));
+    assert_eq!(next_who_is(&h).await, (everywhere(), targeted(10)));
     // No I-Am comes. AO-3 shares the silent device, so it fails unsent with
     // no second Who-Is, and the local AO-2 is still written: the
     // distribution waits out one Who-Is in all.

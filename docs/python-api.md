@@ -2202,9 +2202,11 @@ write succeeded. Zero, or an empty list, writes nothing. A command whose
 `device_identifier` names another device is sent there as a confirmed
 WriteProperty when the server has a binding for it, from `add_device_binding`
 or an I-Am heard in the last ten minutes. With neither, the server first
-broadcasts one Who-Is for that device's instance alone and waits the APDU
-timeout (3 seconds) for its I-Am, which binds it; with no I-Am the command
-fails and no WriteProperty is sent. A device gets at most one Who-Is a
+broadcasts one Who-Is for that device's instance alone, on every network or,
+for a device whose old I-Am it still holds, on the network that I-Am came
+from, and waits the APDU timeout (3 seconds) from the send for its I-Am,
+which binds it; with no I-Am the command fails and no WriteProperty is sent.
+A device gets at most one Who-Is a
 minute, so a command naming it within a minute of one that drew nothing
 fails at once, and nothing at all is sent while DeviceCommunicationControl
 restricts initiation. `stop()` ends a run it cuts short with In_Process

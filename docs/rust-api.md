@@ -2458,16 +2458,24 @@ confirmed WriteProperty (#1180). The address comes from the server's device
 bindings: a `DeviceBinding` registered on the builder, or an I-Am the server
 heard in the last ten minutes. For a device with neither, the server first
 broadcasts one Who-Is whose low and high limits are both that device's
-instance (#1322), on the local network, or on the remote network the
-device's last I-Am came from when it had one. It then waits
-`ServerConfig::cov_retry_timeout_ms` for the I-Am, which binds the device as
-any I-Am does, and the write goes ahead; with no I-Am by then the command
-fails and no WriteProperty is sent. Writes that miss while that Who-Is is out
-share it and its wait. A device gets at most one Who-Is a minute, counted
-from when it went out, so a command naming it within a minute of one that
-drew nothing fails at once; at most 256 devices are tracked this way, and a
-command needing another fails unsent. The wildcard instance 4194303 is never
-looked for. Each attempt waits `ServerConfig::cov_retry_timeout_ms` (3
+instance (#1322). A device it has never heard from is asked on every network
+(a global broadcast, DNET 65535). One whose stale I-Am is still held is asked
+where that I-Am came from: the local network, or the remote network it was
+routed from, where a remote network numbered as this device's own counts as
+local. If that Who-Is draws nothing, the stale I-Am is dropped, so the
+device's next Who-Is goes global. The server then waits
+`ServerConfig::cov_retry_timeout_ms`, counted from the send, for the I-Am,
+which binds the device as any I-Am does, and the write goes ahead; with no
+I-Am by then the command fails and no WriteProperty is sent. Writes that miss
+while that Who-Is is out share it and its wait. A device gets at most one
+Who-Is a minute, counted from when it went out, so a command naming it within
+a minute of one that drew nothing fails at once. At most 256 devices with a
+Who-Is out or held off are tracked, and a command needing another fails
+unsent; a device that answers frees its place at once and stays bound for
+ten minutes, so the cap limits unanswered Who-Is requests to 256 a minute.
+The wildcard instance 4194303 is never looked for. The write itself, to a
+binding routed through the local network's own number, still carries that
+DNET (#1358). Each attempt waits `ServerConfig::cov_retry_timeout_ms` (3
 seconds by default) for the answer, and only silence earns another attempt,
 up to three retries under the one invoke ID. An Error (BUSY included), Reject
 or Abort fails the command at once. Nothing is sent while
@@ -2701,8 +2709,8 @@ on.
 A member in another device goes there as a confirmed WriteProperty, the way a
 Command's remote action does (#1264): addressed from the device bindings,
 with one targeted Who-Is and a wait of `cov_retry_timeout_ms` for the I-Am
-when the device has no fresh binding (#1322, under the same one-a-minute
-limit per device), each attempt waiting `cov_retry_timeout_ms`, up to three
+when the device has no fresh binding (#1322, sent and limited as for a
+Command), each attempt waiting `cov_retry_timeout_ms`, up to three
 retries for silence, nothing sent while DeviceCommunicationControl restricts
 initiation.
 The server can't read that property's datatype first, so the value goes as

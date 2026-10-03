@@ -12,8 +12,8 @@
 //! A device that answers none of a write's attempts, or none of the Who-Is
 //! sent to find it when it had no binding (#1322), is taken to be offline
 //! for the rest of the distribution: its later members fail at once as
-//! communication failures, with nothing sent, so a distribution waits out
-//! one write's retries, or one Who-Is, per silent device rather than per
+//! communication failures, with nothing sent, so a distribution waits out at
+//! most one Who-Is and one write's retries per silent device rather than per
 //! member. Members in other devices, and local ones, are still written.
 //!
 //! For a member in this device the runner looks up the datatype of the
