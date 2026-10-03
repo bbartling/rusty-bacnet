@@ -251,14 +251,24 @@ pub(crate) fn is_global_broadcast(destination: Option<&NpduAddress>) -> bool {
     destination.is_some_and(|destination| destination.network == 0xFFFF)
 }
 
-/// Refuse a caller-supplied destination network that no NPDU may name.
+/// Refuse a caller-supplied NPDU destination that no NPDU may name.
 /// Network numbers start at 1 (Clause 6.2.2.1); the local network is reached
 /// with no DNET at all, and `local_form` tells the caller how to do that.
-pub(crate) fn check_destination_network(network: u16, local_form: &str) -> Result<(), Error> {
-    if network == 0 {
+/// DNET 0xFFFF selects every device on every network (Clauses 6.1 and
+/// 6.3.2), so it goes out with DLEN 0; a DADR naming one device beside it
+/// contradicts it, and such a send is refused too.
+pub(crate) fn check_destination(destination: &NpduAddress, local_form: &str) -> Result<(), Error> {
+    if destination.network == 0 {
         return Err(Error::Encoding(format!(
             "dest_network 0 is not a network number; {local_form}"
         )));
+    }
+    if destination.network == 0xFFFF && !destination.mac_address.is_empty() {
+        return Err(Error::Encoding(
+            "dest_network 0xFFFF is the global broadcast and takes no device address; \
+             use broadcast_global_apdu for a global broadcast"
+                .into(),
+        ));
     }
     Ok(())
 }
@@ -466,7 +476,11 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
-        check_destination_network(dest_network, "use broadcast_apdu for the local network")?;
+        let destination = NpduAddress {
+            network: dest_network,
+            mac_address: MacAddr::new(),
+        };
+        check_destination(&destination, "use broadcast_apdu for the local network")?;
         if dest_network == 0xFFFF {
             return Err(Error::Encoding(
                 "dest_network 0xFFFF is reserved for global broadcasts; use broadcast_global_apdu instead".into(),
@@ -476,10 +490,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             is_network_message: false,
             expecting_reply,
             priority,
-            destination: Some(NpduAddress {
-                network: dest_network,
-                mac_address: MacAddr::new(),
-            }),
+            destination: Some(destination),
             source: None,
             hop_count: 255,
             payload: Bytes::copy_from_slice(apdu),
@@ -497,7 +508,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     ///
     /// The NPDU is sent via unicast to `router_mac` (the next-hop router on
     /// the local network), but the NPDU header addresses the final destination
-    /// with `dest_network` / `dest_mac`.
+    /// with `dest_network` / `dest_mac`. Refuses `dest_network` 0, and 0xFFFF
+    /// with a non-empty `dest_mac`, without sending anything; this form and
+    /// [`Self::send_apdu_routed_via_local_broadcast`] share that check.
     pub async fn send_apdu_routed(
         &self,
         apdu: &[u8],
@@ -652,15 +665,16 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         expecting_reply: bool,
         priority: NetworkPriority,
     ) -> Result<BytesMut, Error> {
-        check_destination_network(dest_network, "use send_apdu for a local device")?;
+        let destination = NpduAddress {
+            network: dest_network,
+            mac_address: MacAddr::from_slice(dest_mac),
+        };
+        check_destination(&destination, "use send_apdu for a local device")?;
         let npdu = Npdu {
             is_network_message: false,
             expecting_reply,
             priority,
-            destination: Some(NpduAddress {
-                network: dest_network,
-                mac_address: MacAddr::from_slice(dest_mac),
-            }),
+            destination: Some(destination),
             source: None,
             hop_count: 255,
             payload: Bytes::copy_from_slice(apdu),
