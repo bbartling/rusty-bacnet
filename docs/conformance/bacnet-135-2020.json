@@ -1204,7 +1204,8 @@
     "crates/bacnet-objects/src/trend/acquisition.rs::Acquisition",
     "crates/bacnet-objects/src/database/trend_poll/alignment.rs::Alignment",
     "crates/bacnet-objects/src/traits.rs::BACnetObject::refresh_log_window_internal",
-    "crates/rusty-bacnet/src/server/server_methods/trend_log_methods.rs::trend_log_multiple"
+    "crates/rusty-bacnet/src/server/server_methods/trend_log_methods.rs::trend_log_multiple",
+    "crates/rusty-bacnet/src/types/property_reference.rs::localize"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/database/trend_poll/tests.rs (exact hundredths, lifecycle/configuration ownership, bounded failure retries, completion anchoring and width boundaries)",
@@ -1253,7 +1254,9 @@
     "crates/bacnet-server/src/handlers/tests/trend_log_multiple_options.rs::start_and_stop_time_take_a_date_and_time_and_alignment_reads_back",
     "crates/rusty-bacnet/src/server/server_methods/trend_log_methods_tests.rs::python_add_trend_log_multiple_settings_reach_every_row",
     "crates/rusty-bacnet/src/types/property_reference_tests.rs::reference_mappings_fill_every_field_and_default_the_optional_ones",
-    "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleLiveServerTests::test_polled_and_triggered_logs_configured_from_python"
+    "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleLiveServerTests::test_polled_and_triggered_logs_configured_from_python",
+    "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleMemberFormTests::test_tuple_and_mapping_members_and_the_own_device",
+    "crates/rusty-bacnet/src/types/property_reference_tests.rs::localize_drops_only_the_own_device"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/trend_log_clock_tests.rs::unusable_acquisition_clock_preserves_records_and_schedule_then_retries",
@@ -1309,7 +1312,8 @@
      "Trend Log Multiple Start_Time / Stop_Time gate records, each judged at its own timestamp; an opening or closing while Enable is TRUE is logged. Unspecified seconds or hundredths count as zero; other partial ends are VALUE_OUT_OF_RANGE.",
      "An aligned POLLED Trend Log Multiple whose Log_Interval divides a day acquires when the Device clock's time of day is Interval_Offset, modulo the interval, past a multiple of it.",
      "An aligned log is checked against the Device clock on every pass, so after a clock change it waits for the next boundary the clock reaches; a skipped boundary is not logged off the grid.",
-     "Python's add_trend_log_multiple takes the members, Log_Interval, Logging_Type, window and alignment as keyword arguments."
+     "Python's add_trend_log_multiple takes the members, Log_Interval, Logging_Type, window and alignment as keyword arguments.",
+     "A Python member is an (object, property[, array_index]) tuple or a mapping, as add_channel takes; one naming the server's own Device is stored without it."
     ]
   },
   {
@@ -2892,7 +2896,7 @@
     "crates/bacnet-objects/src/access_control/point.rs::set_access_doors",
     "crates/bacnet-objects/src/staging.rs",
     "crates/bacnet-objects/src/access_control/rights.rs::check_access_rule",
-    "crates/rusty-bacnet/src/types/access_rule.rs::check_device",
+    "crates/rusty-bacnet/src/types/property_reference.rs::check_device",
     "crates/bacnet-objects/src/group.rs::add_subordinate",
     "crates/bacnet-objects/src/channel/arrays.rs::check_member",
     "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs"
@@ -2907,6 +2911,7 @@
     "crates/bacnet-objects/src/staging/tests.rs::target_references_refuse_a_non_device_device_identifier",
     "crates/bacnet-objects/src/access_control/rights_tests.rs::access_rights_rules_refuse_a_non_device_device_identifier",
     "crates/rusty-bacnet/src/types/access_rule_tests.rs::access_rule_mappings_refuse_wrong_shapes_and_non_device_devices",
+    "crates/rusty-bacnet/src/types/property_reference_tests.rs::property_reference_errors_follow_the_neighbouring_conversions",
     "crates/bacnet-objects/src/elevator/tests/energy_meter_ref.rs::set_energy_meter_ref_refuses_objects_that_are_not_meters_atomically",
     "crates/bacnet-server/src/server/staging_reference_write_tests.rs::a_target_whose_device_member_is_not_a_device_is_out_of_range",
     "crates/bacnet-objects/src/channel/array_tests.rs::channel_members_refuse_a_non_device_device_identifier",
@@ -3815,6 +3820,9 @@
     "crates/bacnet-objects/src/channel/arrays.rs",
     "crates/bacnet-objects/src/channel/coercion.rs",
     "crates/bacnet-objects/src/channel/metadata.rs",
+    "crates/rusty-bacnet/src/server/server_methods/channel_methods.rs::channel",
+    "crates/rusty-bacnet/src/types/property_reference.rs::property_references_from_py",
+    "crates/rusty-bacnet/src/types/property_reference.rs::local_device",
     "crates/bacnet-objects/src/command.rs::RunPlan",
     "crates/bacnet-objects/src/traits/defaults.rs::array_property_default",
     "crates/bacnet-objects/src/device/mod.rs::DeviceObject::new",
@@ -3839,6 +3847,12 @@
     "crates/bacnet-server/src/handlers/tests/property_metadata/channel.rs::rpm_channel_metadata_selectors_preserve_bytes_and_budgets",
     "crates/bacnet-server/src/pics/property_metadata_tests/channel.rs::pics_channel_property_metadata_is_exact",
     "crates/bacnet-endpoint/src/source_reporter_command_run_tests.rs::channel_run_hooks_survive_wrapping",
+    "crates/rusty-bacnet/src/server/server_methods/channel_methods_tests.rs::python_add_channel_settings_reach_the_channel",
+    "crates/rusty-bacnet/src/types/property_reference_tests.rs::property_reference_tuples_and_mappings_convert",
+    "crates/rusty-bacnet/tests/test_channel.py::ChannelMembersTests::{test_present_value_write_reaches_both_members,test_member_in_another_device_is_written_there,test_execution_delay_holds_back_the_second_member}",
+    "crates/rusty-bacnet/tests/test_channel.py::ChannelStubContractTests::test_runtime_and_stub_take_the_same_arguments",
+    "crates/rusty-bacnet/tests/test_channel.py::ChannelWildcardDeviceTests::test_a_wildcard_device_server_keeps_every_device_member",
+    "crates/rusty-bacnet/src/types/property_reference_tests.rs::{own_device_follows_the_database_rule_and_skips_the_wildcard,localize_drops_only_the_own_device}",
     "crates/bacnet-server/src/local_references.rs::tests::channel_members_naming_the_local_device_lose_their_device",
     "crates/bacnet-objects/src/device/tests.rs::read_protocol_object_types_supported",
     "crates/bacnet-encoding/src/constructed/tests/channel_value.rs::{primitives_and_a_lighting_command_are_channel_values,malformed_lighting_commands_are_refused}",
@@ -3866,6 +3880,9 @@
     "crates/bacnet-server/src/schedule_channel_tests.rs::{tick_schedules_dropped_mid_distribution_ends_it_failed,tick_schedules_stops_two_channels_naming_each_other}",
     "crates/bacnet-server/src/handlers/tests/channel_present_value_writes.rs::{bare_write_property_ends_a_channel_distribution_it_cannot_make,bare_write_property_multiple_ends_the_distributions_its_writes_started}",
     "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_refuses_a_channel_present_value_write_and_starts_no_distribution",
+    "crates/rusty-bacnet/src/server/server_methods/channel_methods_tests.rs::python_add_channel_refusals_come_from_the_channel",
+    "crates/rusty-bacnet/src/types/property_reference_tests.rs::property_reference_errors_follow_the_neighbouring_conversions",
+    "crates/rusty-bacnet/tests/test_channel.py::ChannelArgumentTests::test_bad_arguments_raise_and_register_nothing",
     "crates/bacnet-server/src/command_lists/unattached_tests.rs::refused_run_dropped_while_waiting_for_the_database_still_ends",
     "crates/bacnet-server/src/schedule_channel_tests.rs::tick_schedules_dropped_with_a_run_queued_but_not_started_ends_it",
     "crates/bacnet-objects/src/channel/coercion_tests.rs::nan_and_infinities_fail_every_conversion_with_a_range",
@@ -3876,6 +3893,8 @@
    ],
    "benchmarks": [],
    "public_claims": [
+    "CHANGELOG.md Unreleased Added entry for #1262 (Python add_channel), from changelog.d/1262-python-add-channel.md",
+    "docs/python-api.md#channels",
     "CHANGELOG.md Unreleased Added entry for #1151 (Channel object), from changelog.d/1151-channel-object.md",
     "CHANGELOG.md Unreleased Added entry for #1264 (Channel remote members and Reliability), from changelog.d/1264-channel-remote-members-reliability.md",
     "docs/rust-api.md#lighting--color-5 Channel object"
@@ -3892,7 +3911,6 @@
     "#1322: a remote member with no fresh binding fails unsent; no targeted Who-Is is sent",
     "#1342: a remote member's datatype isn't read first, so its value goes uncoerced",
     "#1343: members are written one at a time, so an outstanding remote write delays members due after it",
-    "Python configuration of a Channel's members, delays and groups (no issue)",
     "A Lighting Output keeps `Lighting_Command` as opaque octets, so a lighting-command value sent to it is refused (no issue)"
    ]
   },
@@ -3919,6 +3937,7 @@
     "crates/bacnet-client/src/client/write_group_tests.rs::write_group_sends_the_request_to_a_device_or_a_broadcast",
     "crates/bacnet-objects/src/channel/tests.rs::channel_allow_group_delay_inhibit_starts_false_and_takes_boolean_writes",
     "crates/bacnet-objects/src/device/tests.rs::read_protocol_services_supported",
+    "crates/rusty-bacnet/tests/test_channel.py::ChannelMembersTests::test_write_group_reaches_the_channel_through_its_control_groups",
     "crates/bacnet-server/src/pics/tests.rs::{executed_services_match_dispatch_table,services_match_implementation}",
     "crates/rusty-bacnet/tests/test_write_group_who_am_i.py::WriteGroupTests::{test_exact_wire_bytes,test_broadcasts_are_sent}",
     "crates/rusty-bacnet/src/client/client_methods/enrollment_alarm_covmulti_who_writegroup.rs::write_group_address_and_network_pick_the_destination"
@@ -3935,7 +3954,8 @@
    "public_claims": [
     "docs/rust-api.md#write-group",
     "docs/rust-api.md#write-group-and-who-am-i",
-    "docs/python-api.md#write-group"
+    "docs/python-api.md#write-group",
+    "docs/python-api.md#channels"
    ],
    "notes": [
     "Group membership is each Channel's own `Control_Groups`: a Channel outside the group keeps its value even when another Channel in the device is in it. Group and number are checked again under each write's guard.",
