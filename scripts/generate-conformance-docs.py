@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Generate draft BACnet conformance support documents from the ledger.
 
+Rows may use the lean schema or the old one; ledger_schema.py reads both.
+--check also runs the row style check (check_ledger_style.py) and the
+conformance link check (check_ledger_links.py).
+
 With --check this also verifies that every test anchor in the ledger resolves
 (see check_ledger_anchors.py). A row's notes may be one string or an array of
 entries, which the docs print joined with single spaces (see
-ledger_notes_split.py). --check also runs the row style check
-(check_ledger_style.py) and the conformance link check (check_ledger_links.py).
-Rows may use the lean schema or the old one; ledger_schema.py reads both."""
+ledger_notes_split.py)."""
 
 from __future__ import annotations
 
