@@ -1,6 +1,6 @@
 //! Claims on drained timestamped changes and prepared untimestamped values,
 //! and the one report an unconfirmed context sends at a time (#986, #1008,
-//! #1038).
+//! #1038, #1090).
 
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
@@ -23,8 +23,10 @@ use crate::cov::CovRevisits;
 /// history or as a reference's current state, is decided by the report that
 /// builds it; [`TimedClaim::split_oldest`] moves the oldest of them into a
 /// claim of their own, for a notification that goes out first (#986, #1008),
-/// and [`TimedClaim::split_untimed`] does the same for untimestamped
-/// references.
+/// [`TimedClaim::split_values`] parts a change too large for any
+/// notification into one claim per value (#1090), and
+/// [`TimedClaim::split_untimed`] moves untimestamped references into a claim
+/// of their own.
 #[derive(Debug)]
 pub(crate) struct TimedClaim {
     store: TimedStore,
@@ -108,16 +110,6 @@ impl TimedClaim {
         self
     }
 
-    /// Give these changes up, counting each as dropped: one of them alone
-    /// does not fit a notification, so every attempt to send it would fail.
-    /// The context warns about this once until it is admitted afresh (#1039).
-    pub(crate) fn discard(mut self) {
-        let mut store = self.store.lock();
-        for (key, _, changes) in self.changes.drain(..) {
-            store.dropped(&key, changes.len(), DropReason::TooLarge);
-        }
-    }
-
     pub(crate) fn add(
         &mut self,
         key: CovSubscriptionKey,
@@ -159,6 +151,65 @@ impl TimedClaim {
         part
     }
 
+    /// Part this claim's changes, each too large for one notification even
+    /// alone, into claims of one value each, for notifications that go out in
+    /// the order returned: capture order, and each change's values in the
+    /// order they were captured (§13.1 lets several notifications convey the
+    /// changes; #1090). `fit` judges the notification of one part alone.
+    ///
+    /// A value too large even then is given up, since every attempt to send
+    /// it would fail; each change that loses one counts once as dropped, and
+    /// the context warns once until it is admitted afresh (#1039). A value
+    /// that would carry nothing is left out. Of the parts kept, only the one
+    /// with a change's last value delivers the change when it is delivered.
+    pub(crate) fn split_values(
+        mut self,
+        fit: impl Fn(&CovSubscriptionKey, &TimedChange) -> ValueFit,
+    ) -> Vec<Self> {
+        let mut all: Vec<_> = std::mem::take(&mut self.changes)
+            .into_iter()
+            .flat_map(|(key, incarnation, changes)| {
+                changes
+                    .into_iter()
+                    .map(move |change| (key.clone(), incarnation, change))
+            })
+            .collect();
+        all.sort_by_key(|(_, _, change)| change.seq);
+        let mut parts = Vec::new();
+        let mut lost = Vec::new();
+        for (key, incarnation, change) in all {
+            let mut kept = Vec::new();
+            let mut too_large = false;
+            for value in change.into_values() {
+                match fit(&key, &value) {
+                    ValueFit::Fits => kept.push(value),
+                    ValueFit::TooLarge => too_large = true,
+                    ValueFit::Empty => {}
+                }
+            }
+            if too_large {
+                lost.push(key.clone());
+            }
+            if let Some(last) = kept.last_mut() {
+                last.continues = false;
+            }
+            parts.extend(kept.into_iter().map(|value| Self {
+                store: self.store.clone(),
+                changes: vec![(key.clone(), incarnation, vec![value])],
+                untimed: Vec::new(),
+                evict: self.evict,
+                owing: self.owing,
+            }));
+        }
+        if !lost.is_empty() {
+            let mut store = self.store.lock();
+            for key in lost {
+                store.dropped(&key, 1, DropReason::TooLarge);
+            }
+        }
+        parts
+    }
+
     /// Every claimed change, in capture order.
     pub(crate) fn in_order(&self) -> Vec<(&CovSubscriptionKey, &TimedChange)> {
         let mut all: Vec<_> = self
@@ -178,12 +229,13 @@ impl TimedClaim {
     }
 
     /// The notification carrying these changes and values was delivered:
-    /// retire them.
+    /// retire them. A part whose change continues in a later notification
+    /// delivers nothing of that change by itself (#1090).
     pub(crate) fn commit(mut self) {
         self.untimed.clear();
         let mut store = self.store.lock();
         for (key, incarnation, changes) in self.changes.drain(..) {
-            if let Some(last) = changes.last() {
+            if let Some(last) = changes.iter().rev().find(|change| !change.continues) {
                 store.commit(&key, incarnation, last.seq);
             }
         }
@@ -205,6 +257,18 @@ impl Drop for TimedClaim {
             }
         }
     }
+}
+
+/// How the notification of one value of an oversized change would go out
+/// (#1090).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ValueFit {
+    /// Within the subscriber's limit.
+    Fits,
+    /// Over the limit even with that value alone.
+    TooLarge,
+    /// With nothing in it: the context reports that coordinate untimestamped.
+    Empty,
 }
 
 /// The one report an unconfirmed context is sending (#986, #1038).

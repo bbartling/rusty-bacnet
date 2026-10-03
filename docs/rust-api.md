@@ -2618,7 +2618,13 @@ so splitting a confirmed report is local policy: it sends only its oldest part a
 returns the rest to the queue once it holds the context, the Ack's follow-up sends
 the next part, and a part that fails goes out again first after the hold-off. A
 change that does not fit a notification even alone, a reference's latest
-included, is dropped and counted, since every attempt to send it would fail.
+included, goes out one value per notification instead, in the order its values
+were captured, each with the change's `Time_Of_Change` and an envelope naming
+the change (#1090). Only the notification with its last value completes the
+reference; values whose notification fails or is deferred return as one
+change, and once what is left of it fits, it goes out like any other change.
+A value that does not fit even alone is dropped, and its change counted, since
+every attempt to send it would fail; the change's other values still go out.
 
 Untimestamped values that alone exceed one notification, as in the initial report
 of a SubscribeCOVPropertyMultiple request over many objects, go out after every
@@ -2652,12 +2658,14 @@ a confirmed report defers return to the queue without that check, so the bound
 never drops what the report just planned to send. Changes returned by a failed
 notification wait while a newer change of the same reference is in flight; once a
 newer change is delivered, older ones are dropped rather than delivered as stale
-state. Every one of these drops increments `CovCounters::timed_changes_dropped`;
+state. Every one of these drops increments `CovCounters::timed_changes_dropped`,
+as does each change that loses a value too large for any notification;
 splitting is not counted. The log gets one warning per context for each cause
-(bound overflow, too large for any notification, superseded), and later drops for
-that cause are logged at debug level only, until the context is admitted afresh: a
-timestamped reference of it is subscribed again, or an admission changes the
-maximum APDU its notifications must fit (#1039). The counter is therefore the
+(bound overflow, a value too large for any notification, superseded), and later
+drops for that cause are logged at debug level only, until the context is
+admitted afresh: a timestamped reference of it is subscribed again, or an
+admission changes the maximum APDU its notifications must fit (#1039). The
+counter is therefore the
 running signal. Untimestamped references left out as too large
 are counted apart, in `CovCounters::untimed_references_oversized`: nothing of
 theirs is lost, since the next fanout reads their values again, and the count is
@@ -2665,16 +2673,20 @@ per report rather than per change. `CovSubscriptionTable::with_max_apdu_length`
 sets the local maximum (the full server uses its configured capacity).
 
 A subscriber whose maximum APDU cannot hold one timestamped change of its
-references receives no timestamped changes at all: the subscription is accepted,
-and each change is dropped and counted as above (#1039). The standard defines no
-error for refusing a subscription because the subscriber's APDU is too small, so
-the server does not refuse it. Measured with this encoder, one timestamped change
-of a REAL Present_Value with its Status_Flags takes 58 to 64 octets in an
-unconfirmed notification and 60 to 66 in a confirmed one (more for larger
-subscriber process identifiers and lifetimes), and a Binary Present_Value with its
-Status_Flags 55 to 63. Both are over the 50 octets of the smallest maximum APDU a
-request can advertise, and well within the next size, 128. The same values
-without timestamps take 36 to 44 octets, so a 50-octet subscriber should subscribe
+references gets each such change one value per notification, as above (#1090).
+Measured with this encoder, one timestamped change of a REAL Present_Value with
+its Status_Flags takes 58 to 64 octets in an unconfirmed notification and 60 to
+66 in a confirmed one (more for larger subscriber process identifiers and
+lifetimes), and a Binary Present_Value with its Status_Flags 55 to 63: both over
+the 50 octets of the smallest maximum APDU a request can advertise, and well
+within the next size, 128. Each of those values alone takes 44 to 52 octets
+unconfirmed and 46 to 54 confirmed, so a 50-octet subscriber typically gets
+Present_Value and Status_Flags in two notifications, but not with the largest
+process identifiers and lifetimes. A value that fits no notification even alone
+is dropped and counted (#1039): the subscription is still accepted, since the
+standard defines no error for refusing one because the subscriber's APDU is too
+small. Without timestamps the same change takes 36 to 44 octets in one
+notification, so a 50-octet subscriber that needs no change times is better off
 with Timestamped=FALSE. At 128 or 206 octets, only large values such as long
 character strings or lists can exceed one notification.
 

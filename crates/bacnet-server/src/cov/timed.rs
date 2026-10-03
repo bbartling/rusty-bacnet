@@ -39,10 +39,14 @@
 //! Changes that one notification cannot carry go out in several (§13.1,
 //! §13.18.1.1), strictly in capture order: [`TimedClaim::split_oldest`] moves
 //! the oldest changes, a reference's latest included, into earlier
-//! notifications (#1008). An unconfirmed context sends one such report at a
-//! time ([`SendTurn`]), so a later report cannot overtake the parts of an
-//! earlier one. Untimestamped values that one notification cannot carry go
-//! out after every timestamped change, split by object item (#1038).
+//! notifications (#1008). A change too large for a notification even alone
+//! goes out one value per notification instead, in its captured order
+//! ([`TimedClaim::split_values`]); only the part with its last value delivers
+//! the change, and parts that come back undelivered rejoin as one change
+//! (#1090). An unconfirmed context sends one such report at a time
+//! ([`SendTurn`]), so a later report cannot overtake the parts of an earlier
+//! one. Untimestamped values that one notification cannot carry go out after
+//! every timestamped change, split by object item (#1038).
 //!
 //! Local bound policy: the pending changes of one COV-multiple context are
 //! limited to an estimate of what [`HISTORY_NOTIFICATIONS`] notifications can
@@ -59,7 +63,7 @@
 //! the bound never hides a reference's current state. Each discarded change
 //! is counted in [`AtomicCovCounters::timed_changes_dropped`]; the log gets
 //! one warning per context and cause until the context is admitted afresh
-//! (#1039), so a subscriber too small for any timestamped change does not
+//! (#1039), so a subscriber too small for any timestamped value does not
 //! flood it.
 
 use std::collections::{HashMap, VecDeque};
@@ -103,6 +107,14 @@ pub(crate) struct TimedChange {
     /// Octets the change counts against its context's bound: its encoding,
     /// one item's framing and [`CHANGE_OVERHEAD`].
     cost: usize,
+    /// Position of the first of `values` among those the change was captured
+    /// with. Only a part of a change sent one value per notification starts
+    /// past zero, so returned parts rejoin in order (#1090).
+    first_value: usize,
+    /// Whether later values of this change go out in later notifications of
+    /// the same report, so delivering this part alone does not deliver the
+    /// change (#1090).
+    continues: bool,
 }
 
 /// Octets of a context-tagged unsigned value: its tag and the minimal
@@ -126,6 +138,11 @@ pub(crate) fn value_len(value: &COVNotificationValue) -> usize {
         + if value.time_of_change.is_some() { 5 } else { 0 }
 }
 
+/// Octets a change of `values` counts against its context's bound.
+fn change_cost(values: &[COVNotificationValue]) -> usize {
+    ITEM_FRAMING + CHANGE_OVERHEAD + values.iter().map(value_len).sum::<usize>()
+}
+
 impl TimedChange {
     /// Pair prepared values with the Device clock frame of the change. Every
     /// value carries the frame's local time as its Time_Of_Change.
@@ -134,19 +151,52 @@ impl TimedChange {
         mut values: Vec<COVNotificationValue>,
         observation: CovObservation,
     ) -> Self {
-        let mut cost = ITEM_FRAMING + CHANGE_OVERHEAD;
         for value in &mut values {
             value.time_of_change = Some(frame.local_time);
-            cost += value_len(value);
         }
         Self {
             seq: 0,
             frame,
             captured_at: Instant::now(),
+            cost: change_cost(&values),
             values,
             observation,
-            cost,
+            first_value: 0,
+            continues: false,
         }
+    }
+
+    /// The change as one part per value, in order, each a change of its own
+    /// with this one's sequence, time and observation, and each marked as
+    /// continued: the caller unmarks the last part it keeps (#1090).
+    fn into_values(self) -> impl Iterator<Item = TimedChange> {
+        self.values
+            .into_iter()
+            .enumerate()
+            .map(move |(at, value)| TimedChange {
+                seq: self.seq,
+                frame: self.frame,
+                captured_at: self.captured_at,
+                cost: change_cost(std::slice::from_ref(&value)),
+                values: vec![value],
+                observation: self.observation.clone(),
+                first_value: self.first_value + at,
+                continues: true,
+            })
+    }
+
+    /// Take back `other`, another part of this change, so the values are in
+    /// their captured order again. Returns the octets this adds to the
+    /// context's bound.
+    fn rejoin(&mut self, mut other: TimedChange) -> usize {
+        if other.first_value < self.first_value {
+            std::mem::swap(&mut self.values, &mut other.values);
+            self.first_value = other.first_value;
+        }
+        self.values.append(&mut other.values);
+        let before = self.cost;
+        self.cost = change_cost(&self.values);
+        self.cost - before
     }
 
     /// Capture sequence of the change: its place in capture order across the
@@ -757,11 +807,19 @@ impl TimedHistories {
         let mut added = 0;
         // A new oldest pending change can bring its context's deadline forward.
         let mut new_front = false;
-        for change in changes {
-            added += change.cost;
+        for mut change in changes {
+            change.continues = false;
             let at = history.entries.partition_point(|e| e.seq < change.seq);
-            new_front |= at == 0;
-            history.entries.insert(at, change);
+            match history.entries.get_mut(at).filter(|e| e.seq == change.seq) {
+                // A change sent one value per notification comes back in
+                // parts, which rejoin as one change (#1090).
+                Some(entry) => added += entry.rejoin(change),
+                None => {
+                    added += change.cost;
+                    new_front |= at == 0;
+                    history.entries.insert(at, change);
+                }
+            }
         }
         if let Some(context) = key.multiple_context() {
             *self.context_bytes.entry(context.clone()).or_default() += added;
@@ -908,7 +966,7 @@ impl TimedStore {
 mod claim;
 mod drops;
 mod owed;
-pub(crate) use claim::{SendTurn, TimedClaim};
+pub(crate) use claim::{SendTurn, TimedClaim, ValueFit};
 #[cfg(test)]
 pub(crate) use drops::DropWarningCount;
 use drops::{DropReason, DropWarnings};

@@ -686,6 +686,8 @@ mod cov_timed_multiple_tests;
 #[cfg(test)]
 mod cov_timed_producer_tests;
 #[cfg(test)]
+mod cov_timed_value_split_tests;
+#[cfg(test)]
 mod cov_untimed_split_tests;
 #[cfg(test)]
 mod cov_wire_test_support;

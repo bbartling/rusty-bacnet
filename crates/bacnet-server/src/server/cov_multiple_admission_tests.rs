@@ -402,47 +402,86 @@ async fn a_cancellation_removes_every_listed_reference_whatever_precedes_it() {
     h.server.stop().await.unwrap();
 }
 
+/// `notification` carries Status_Flags alone: the Present_Value of its
+/// change fit no notification and was dropped (#1090).
+fn flags_only(notification: &COVNotificationMultipleRequest) {
+    let properties: Vec<_> = notification
+        .list_of_cov_notifications
+        .iter()
+        .flat_map(|item| &item.list_of_values)
+        .map(|value| value.property_identifier)
+        .collect();
+    assert_eq!(properties, [SF]);
+}
+
+async fn write_text(h: &Harness, object: ObjectIdentifier, text: String) {
+    h.server
+        .write_local(
+            &object,
+            PV,
+            None,
+            PropertyValue::CharacterString(text),
+            Some(8),
+            crate::LocalCommandSource::ServerDevice,
+        )
+        .await
+        .unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_partly_admitted_request_warns_afresh_about_dropped_changes() {
-    // As in the #1039 test: one timestamped Present_Value change of AV-1
-    // fits no notification of this size, so each is dropped.
-    const TINY_APDU: u16 = 50;
+    // As in the #1039 and #1090 tests: CSV-1's long Present_Value fits no
+    // 206-octet notification even alone, so each timestamped change drops it,
+    // and only the change's Status_Flags go out.
+    use bacnet_objects::value_types::CharacterStringValueObject;
+    let csv = ObjectIdentifier::new(ObjectType::CHARACTERSTRING_VALUE, 1).unwrap();
     let warnings = crate::cov::timed::DropWarningCount::default();
     let _guard = warnings.install();
-    let mut h = Harness::start(ServerConfig::default()).await;
-    h.request_max_apdu = TINY_APDU;
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        db.add(Box::new(
+            CharacterStringValueObject::new(1, "CSV-1").unwrap(),
+        ))
+        .unwrap();
+    })
+    .await;
+    h.request_max_apdu = 206;
+    write_text(&h, csv, "x".repeat(200)).await;
     let seen = |h: &Harness| {
         (
             h.server.cov_counters().timed_changes_dropped,
             warnings.get(),
         )
     };
-    h.subscribe(false).await;
+    h.subscribe_specs(false, vec![(csv, vec![(PV, true)])])
+        .await;
     assert!(matches!(answer(&h).await, Apdu::SimpleAck(_)));
+    flags_only(&h.notification().await);
     h.no_notification().await;
     assert_eq!(seen(&h), (1, 1));
 
     // Re-admitting the reference ahead of a refused one counts as an
-    // admission: its initial change is dropped and warned about afresh.
+    // admission: its initial change drops the value and warns afresh.
     h.subscribe_specs(
         false,
-        vec![(av1(), vec![(PV, true)]), (av(99), vec![(PV, false)])],
+        vec![(csv, vec![(PV, true)]), (av(99), vec![(PV, false)])],
     )
     .await;
     assert_eq!(refusal(answer(&h).await).1, ErrorCode::UNKNOWN_OBJECT);
+    flags_only(&h.notification().await);
     h.no_notification().await;
     assert_eq!(seen(&h), (2, 2));
 
     // A request refused at its first reference admits nothing, so the next
-    // dropped change does not warn again.
+    // dropped value does not warn again.
     h.subscribe_specs(
         false,
-        vec![(av(99), vec![(PV, false)]), (av1(), vec![(PV, true)])],
+        vec![(av(99), vec![(PV, false)]), (csv, vec![(PV, true)])],
     )
     .await;
     assert_eq!(refusal(answer(&h).await).1, ErrorCode::UNKNOWN_OBJECT);
     h.set_clock(1);
-    h.write_local(1.0).await;
+    write_text(&h, csv, "y".repeat(200)).await;
+    flags_only(&h.notification().await);
     h.no_notification().await;
     assert_eq!(seen(&h), (3, 2));
     h.server.stop().await.unwrap();

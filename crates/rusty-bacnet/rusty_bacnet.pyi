@@ -2891,8 +2891,9 @@ class BACnetServer:
         Every field of the Rust CovCounters under the same name.
         subscriptions_active is a gauge; the rest are running totals.
         timed_changes_dropped counts timestamped COV-multiple changes lost for
-        good, the running signal for a subscriber whose maximum APDU can't hold
-        one. untimed_references_oversized counts each report that left out an
+        good, in whole or in part, the running signal for a subscriber whose
+        maximum APDU can't hold one timestamped value.
+        untimed_references_oversized counts each report that left out an
         untimestamped reference too large for one notification. Raises
         RuntimeError before start and after stop.
         """
