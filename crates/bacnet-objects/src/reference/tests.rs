@@ -250,6 +250,71 @@ fn framed_malformed_is_invalid_data_encoding() {
 }
 
 #[test]
+fn device_frame_takes_a_local_reference_and_refuses_a_device_member() {
+    let reference =
+        BACnetObjectPropertyReference::new_indexed(ai_ref(7, 85).object_identifier, 85, 3);
+    // Without a Device member the bytes are the bare members: whole or split.
+    for value in [
+        PropertyValue::ApplicationData(framed(&reference)),
+        framed_split(&reference),
+    ] {
+        assert_eq!(
+            decode_reference_write(&value, ReferenceFrame::Device).unwrap(),
+            Some(reference.clone())
+        );
+    }
+    // The flat form and Null keep their meaning.
+    let flat = PropertyValue::List(vec![
+        PropertyValue::ObjectIdentifier(reference.object_identifier),
+        PropertyValue::Unsigned(85),
+        PropertyValue::Unsigned(3),
+    ]);
+    assert_eq!(
+        decode_reference_write(&flat, ReferenceFrame::Device).unwrap(),
+        Some(reference.clone())
+    );
+    assert_eq!(
+        decode_reference_write(&PropertyValue::Null, ReferenceFrame::Device).unwrap(),
+        None
+    );
+    // A Device member [3] is valid encoding, so its refusal names the
+    // missing remote support; malformed bytes stay INVALID_DATA_ENCODING.
+    let good = framed(&reference);
+    let with_device = [good.clone(), vec![0x3C, 0x02, 0x00, 0x00, 0x4D]].concat();
+    expect_protocol(
+        decode_reference_write(
+            &PropertyValue::ApplicationData(with_device.clone()),
+            ReferenceFrame::Device,
+        ),
+        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+        "device-qualified member [3]",
+    );
+    let cases: Vec<(Vec<u8>, &str)> = vec![
+        (Vec::new(), "empty frame"),
+        (good[..5].to_vec(), "object id only"),
+        (
+            with_device[..with_device.len() - 1].to_vec(),
+            "truncated [3]",
+        ),
+        (
+            [good.clone(), vec![0x49, 0x01]].concat(),
+            "trailing context tag [4]",
+        ),
+        ([good.clone(), good].concat(), "two references"),
+    ];
+    for (bytes, context) in cases {
+        expect_protocol(
+            decode_reference_write(
+                &PropertyValue::ApplicationData(bytes),
+                ReferenceFrame::Device,
+            ),
+            ErrorCode::INVALID_DATA_ENCODING,
+            context,
+        );
+    }
+}
+
+#[test]
 fn mixed_flat_and_framed_list_is_invalid_data_encoding() {
     let value = PropertyValue::List(vec![
         PropertyValue::ApplicationData(framed(&ai_ref(5, 85))[..5].to_vec()),

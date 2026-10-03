@@ -227,19 +227,21 @@ impl BACnetObject for AveragingObject {
         // window alone.
         match property {
             // Clause 12.5 Table 12-5 types Object_Property_Reference as
-            // BACnetDeviceObjectPropertyReference, and the object text leaves
-            // support for sampling a property on another BACnet device
-            // optional. This implementation samples local objects only, so the
-            // shared arm helper decodes with the local-only
-            // BACnetObjectPropertyReference framing: a device-qualified member
-            // [3] refuses INVALID_DATA_ENCODING instead of silently dropping
-            // the device, and the flat form keeps its historical Unsigned
-            // members (both Unsigned and Enumerated are accepted there; see
-            // reference.rs).
+            // BACnetDeviceObjectPropertyReference, and 12.5.13 leaves
+            // sampling a property on another BACnet device optional. This
+            // implementation samples local objects only, so the shared arm
+            // helper decodes the device-qualified members and refuses one
+            // carrying a Device member [3] with
+            // OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, rather than silently
+            // dropping the device. The object can't tell which Device holds
+            // it; the bundled server drops a Device member naming its own
+            // Device before the value gets here (#1153). The flat form keeps
+            // its historical Unsigned members (both Unsigned and Enumerated
+            // are accepted there; see reference.rs).
             p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => {
                 let reference = crate::reference::decode_reference_write(
                     &value,
-                    crate::reference::ReferenceFrame::Bare,
+                    crate::reference::ReferenceFrame::Device,
                 )?;
                 self.set_object_property_reference(reference);
                 Ok(())

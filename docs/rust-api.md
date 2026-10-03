@@ -2015,6 +2015,15 @@ subscription gives none, and the report carries no Status_Flags because the
 object has none. A move to or from the NaN or an infinity of an empty window is
 always reported, whatever the increment, and staying at one never is.
 
+An Averaging object samples only properties in its own device. A written
+Object_Property_Reference naming another device is refused with
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. One naming the Device the server answers
+for is the local reference it stands for: the server drops that Device member
+before the object decodes the value, on WriteProperty, WritePropertyMultiple
+and `write_local`, and it reads back without it (#1153). `AveragingObject`
+itself can't tell which Device holds it, so written directly it refuses every
+Device member.
+
 Staging uses an explicit atomic configuration; the former stage-count-only
 constructor is intentionally removed because it could not create a valid
 ladder or target mapping. To migrate to 0.11.0, replace that argument with a
