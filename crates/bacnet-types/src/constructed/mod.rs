@@ -13,6 +13,8 @@ use crate::error::Error;
 use crate::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 use crate::MacAddr;
 
+mod action;
+pub use action::{BACnetActionCommand, BACnetActionList};
 mod access;
 pub use access::{
     BACnetAssignedAccessRights, BACnetAuthenticationFactor, BACnetCredentialAuthenticationFactor,
@@ -525,6 +527,16 @@ pub struct BACnetDeviceObjectReference {
     pub device_identifier: Option<ObjectIdentifier>,
     /// The object being referenced.
     pub object_identifier: ObjectIdentifier,
+}
+
+impl From<ObjectIdentifier> for BACnetDeviceObjectReference {
+    /// A reference to an object in this device: no device identifier.
+    fn from(object_identifier: ObjectIdentifier) -> Self {
+        Self {
+            device_identifier: None,
+            object_identifier,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

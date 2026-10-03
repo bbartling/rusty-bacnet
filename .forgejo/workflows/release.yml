@@ -112,7 +112,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Release script tests
-        run: python3 -m unittest discover -s scripts/release
+        run: |
+          python3 -m unittest discover -s scripts/release
+          python3 -m unittest discover -s scripts -p 'test_changelog.py'
       - name: Version, tag and mode
         id: release
         env:
@@ -187,14 +189,19 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           mkdir notes
-          # A tag needs its version's section. A dry run uses that section if it
-          # exists, otherwise [Unreleased], which may be empty.
+          # A tag needs its version's section, assembled from changelog.d/ with
+          # no fragment left over. A dry run uses that section if it exists,
+          # otherwise the section the waiting fragments would make (maybe none),
+          # assembled into a copy so CHANGELOG.md and changelog.d/ stay as they are.
           if [ -n "$TAG" ]; then
+            python3 scripts/changelog.py check --no-fragments
             section=(--version "$VERSION")
           elif python3 scripts/release/changelog_notes.py --version "$VERSION" >/dev/null 2>&1; then
             section=(--version "$VERSION")
           else
-            section=(--unreleased --allow-empty)
+            assembled="$(mktemp -d)/CHANGELOG.md"
+            python3 scripts/changelog.py assemble --version "$VERSION" --allow-empty --output "$assembled"
+            section=(--version "$VERSION" --allow-empty --changelog "$assembled")
           fi
           echo "notes: changelog_notes.py ${section[*]}"
           python3 scripts/release/changelog_notes.py "${section[@]}" >notes/notes.md

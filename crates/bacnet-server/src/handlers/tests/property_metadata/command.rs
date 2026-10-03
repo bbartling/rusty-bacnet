@@ -17,7 +17,12 @@ fn command_object(configured: bool) -> CommandObject {
         object
             .write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(3), None)
             .unwrap();
-        object.set_action(vec![vec![1, 2, 3], vec![4, 5]]);
+        object
+            .set_action(vec![
+                bacnet_types::constructed::BACnetActionList::default();
+                2
+            ])
+            .unwrap();
     }
     object
 }

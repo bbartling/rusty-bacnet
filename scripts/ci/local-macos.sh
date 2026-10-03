@@ -34,6 +34,7 @@ step "rustfmt";          cargo fmt --all --check
 step "file-size cap";    bash scripts/ci/check-file-size.sh
 step "no-secret scan";   bash scripts/ci/test-check-no-secrets.sh && bash scripts/ci/check-no-secrets.sh
 step "MSRV script regressions"; python3 scripts/ci/test-check-msrv.py
+step "changelog fragments"; python3 -m unittest discover -s scripts -p 'test_changelog.py' && python3 scripts/changelog.py check
 features=bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-cli/sc-tls,bacnet-cli/pcap
 step "clippy (every macOS feature)"
 cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$features" -- -D warnings

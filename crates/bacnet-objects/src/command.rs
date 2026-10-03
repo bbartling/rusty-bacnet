@@ -1,11 +1,14 @@
 //! Command object (type 7) per ASHRAE 135-2020 Clause 12.
 //!
 //! The Command object triggers a set of actions when its present value
-//! is written. Actions are stored as opaque byte vectors.
+//! is written. Each Action element is a typed [`BACnetActionList`].
 
+use bacnet_encoding::constructed::encode_action_list;
+use bacnet_types::constructed::BACnetActionList;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
+use bytes::BytesMut;
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
@@ -21,7 +24,7 @@ pub struct CommandObject {
     present_value: u64,
     in_process: bool,
     all_writes_successful: bool,
-    action: Vec<Vec<u8>>,
+    action: Vec<BACnetActionList>,
     status_flags: StatusFlags,
     reliability: Reliability,
 }
@@ -43,9 +46,21 @@ impl CommandObject {
         })
     }
 
-    /// Set the action list (opaque byte sequences).
-    pub fn set_action(&mut self, action: Vec<Vec<u8>>) {
+    /// Replace the Action array: element N is the list Present_Value N
+    /// selects (Clause 12.10.8).
+    ///
+    /// Refused with PROPERTY / VALUE_OUT_OF_RANGE, leaving Action as it was,
+    /// when a command can't be encoded: a priority outside 1..=16, or a value
+    /// with no encoding.
+    pub fn set_action(&mut self, action: Vec<BACnetActionList>) -> Result<(), Error> {
+        let mut scratch = BytesMut::new();
+        for list in &action {
+            encode_action_list(&mut scratch, list)
+                .map_err(|_| common::value_out_of_range_error())?;
+            scratch.clear();
+        }
         self.action = action;
+        Ok(())
     }
 }
 
@@ -81,13 +96,20 @@ impl BACnetObject for CommandObject {
             p if p == PropertyIdentifier::ALL_WRITES_SUCCESSFUL => {
                 Ok(PropertyValue::Boolean(self.all_writes_successful))
             }
+            // BACnetARRAY[N] of BACnetActionList (Table 12-12): each element
+            // goes out framed in its own [0] pair, so one read alone carries
+            // the same octets the whole-array read concatenates.
             p if p == PropertyIdentifier::ACTION => {
-                let items: Vec<PropertyValue> = self
+                let lists = self
                     .action
                     .iter()
-                    .map(|a| PropertyValue::OctetString(a.clone()))
-                    .collect();
-                Ok(PropertyValue::List(items))
+                    .map(|list| {
+                        let mut encoded = BytesMut::new();
+                        encode_action_list(&mut encoded, list)?;
+                        Ok(PropertyValue::ApplicationData(encoded.to_vec()))
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+                common::read_array(lists, array_index)
             }
             _ => Err(common::unknown_property_error()),
         }
@@ -141,6 +163,17 @@ impl BACnetObject for CommandObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_types::constructed::BACnetActionCommand;
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
+
+    fn assert_property_error<T: std::fmt::Debug>(result: Result<T, Error>, expected: ErrorCode) {
+        assert!(
+            matches!(result, Err(Error::Protocol { class, code })
+                if class == ErrorClass::PROPERTY.to_raw() as u32
+                    && code == expected.to_raw() as u32),
+            "expected {expected:?}, got {result:?}"
+        );
+    }
 
     #[test]
     fn command_create_and_read_defaults() {
@@ -205,13 +238,20 @@ mod tests {
     #[test]
     fn command_action_read_only() {
         let mut cmd = CommandObject::new(1, "CMD-1").unwrap();
-        let result = cmd.write_property(
-            PropertyIdentifier::ACTION,
-            None,
-            PropertyValue::OctetString(vec![1, 2, 3]),
-            None,
+        cmd.set_action(vec![BACnetActionList::default()]).unwrap();
+        // Whole or one element, Action has no write route.
+        for index in [None, Some(0), Some(1)] {
+            let value = PropertyValue::ApplicationData(vec![0x0E, 0x0F]);
+            assert_property_error(
+                cmd.write_property(PropertyIdentifier::ACTION, index, value, None),
+                ErrorCode::WRITE_ACCESS_DENIED,
+            );
+        }
+        assert_eq!(
+            cmd.read_property(PropertyIdentifier::ACTION, Some(0))
+                .unwrap(),
+            PropertyValue::Unsigned(1)
         );
-        assert!(result.is_err());
     }
 
     #[test]
@@ -223,17 +263,85 @@ mod tests {
         );
     }
 
+    fn write_ao1(priority: Option<u8>) -> BACnetActionCommand {
+        BACnetActionCommand {
+            device_identifier: None,
+            object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap(),
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+            property_value: PropertyValue::Real(50.0),
+            priority,
+            post_delay: None,
+            quit_on_failure: false,
+            write_successful: true,
+        }
+    }
+
     #[test]
-    fn command_read_action_with_data() {
+    fn command_read_action_serves_one_framed_action_list_per_index() {
         let mut cmd = CommandObject::new(1, "CMD-1").unwrap();
-        cmd.set_action(vec![vec![1, 2, 3], vec![4, 5]]);
+        let lists = vec![
+            BACnetActionList {
+                commands: vec![write_ao1(Some(8))],
+            },
+            BACnetActionList::default(),
+        ];
+        cmd.set_action(lists.clone()).unwrap();
+        let elements: Vec<PropertyValue> = lists
+            .iter()
+            .map(|list| {
+                let mut encoded = BytesMut::new();
+                encode_action_list(&mut encoded, list).unwrap();
+                PropertyValue::ApplicationData(encoded.to_vec())
+            })
+            .collect();
         assert_eq!(
             cmd.read_property(PropertyIdentifier::ACTION, None).unwrap(),
-            PropertyValue::List(vec![
-                PropertyValue::OctetString(vec![1, 2, 3]),
-                PropertyValue::OctetString(vec![4, 5]),
-            ])
+            PropertyValue::List(elements.clone())
         );
+        assert_eq!(
+            cmd.read_property(PropertyIdentifier::ACTION, Some(0))
+                .unwrap(),
+            PropertyValue::Unsigned(2)
+        );
+        for (index, element) in (1..).zip(&elements) {
+            assert_eq!(
+                &cmd.read_property(PropertyIdentifier::ACTION, Some(index))
+                    .unwrap(),
+                element
+            );
+        }
+        // The empty list is its [0] frame alone.
+        assert_eq!(
+            elements[1],
+            PropertyValue::ApplicationData(vec![0x0E, 0x0F])
+        );
+        for index in [3, u32::MAX] {
+            assert_property_error(
+                cmd.read_property(PropertyIdentifier::ACTION, Some(index)),
+                ErrorCode::INVALID_ARRAY_INDEX,
+            );
+        }
+    }
+
+    #[test]
+    fn command_set_action_refuses_a_priority_outside_one_to_sixteen() {
+        let mut cmd = CommandObject::new(1, "CMD-1").unwrap();
+        let kept = vec![BACnetActionList {
+            commands: vec![write_ao1(Some(16))],
+        }];
+        cmd.set_action(kept).unwrap();
+        let before = cmd.read_property(PropertyIdentifier::ACTION, None).unwrap();
+        for priority in [0, 17] {
+            let refused = vec![BACnetActionList {
+                commands: vec![write_ao1(Some(1)), write_ao1(Some(priority))],
+            }];
+            assert_property_error(cmd.set_action(refused), ErrorCode::VALUE_OUT_OF_RANGE);
+            assert_eq!(
+                cmd.read_property(PropertyIdentifier::ACTION, None).unwrap(),
+                before
+            );
+        }
     }
 
     #[test]

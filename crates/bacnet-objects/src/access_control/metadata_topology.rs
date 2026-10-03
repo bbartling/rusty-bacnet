@@ -6,7 +6,7 @@ use bacnet_types::enums::PropertyIdentifier as P;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
-    PropertyWriteCapability::{Always, ReadOnly},
+    PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
 // Canonical effective rows for the Access Topology trio (ASHRAE 135-2020; PDF = printed + 2):
@@ -36,9 +36,11 @@ use crate::property_metadata::{
 // priority-slot write arm, so RequiredWrite/Always. Relinquish_Default
 // carries the table R code with the LOCK/UNLOCK setter arm, so
 // RequiredRead/Always. Priority_Array and Event_State are served readable
-// rows with no write arm, so RequiredRead/ReadOnly. Door_Status, Lock_Status,
-// Secured_Status, Door_Alarm_State, and Door_Members carry the table O code
-// with no write arm, so Optional/ReadOnly.
+// rows with no write arm, so RequiredRead/ReadOnly. Door_Status, Lock_Status
+// and Door_Alarm_State carry the table O code with footnote 1, writable while
+// Out_Of_Service is TRUE, and dispatch takes their writes only then (#1131),
+// so Optional/WhenOutOfService. Secured_Status and Door_Members carry the
+// table O code with no write arm, so Optional/ReadOnly.
 // Table 12-36 has no Present_Value row, so the point serves none (#1064
 // removed the implementation-extra row the 0.1.0 import carried).
 // Access_Event, Access_Event_Tag, Access_Event_Time, Access_Doors, and
@@ -52,10 +54,11 @@ use crate::property_metadata::{
 // Optional/ReadOnly; Entry_Points and Exit_Points carry the table R code
 // with no arm, so RequiredRead/ReadOnly. Status_Flags and Reliability carry
 // the table R code with no network write route, so RequiredRead/ReadOnly.
-// Writability is Always, never WhenOutOfService: dispatch routes every write
-// arm unconditionally and the suites pin in-service writes, so the metadata
-// mirrors dispatch. Presence is None throughout: the implementation models
-// no commandable, intrinsic-reporting, or paired-text gating on this family.
+// Apart from the door's three footnote-1 rows, every write arm is routed
+// unconditionally and the suites pin in-service writes, so those rows are
+// Always and the metadata mirrors dispatch. Presence is None throughout: the
+// implementation models no commandable, intrinsic-reporting, or paired-text
+// gating on this family.
 // The trio is not createable at runtime (the network factory builds only the
 // eight analog/binary/multi-state input/output/value types, so the
 // is_createable=false default holds) and remains deleteable (delete denies
@@ -72,10 +75,10 @@ const ACCESS_DOOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PRESENT_VALUE, RequiredWrite, None, Always),
-    PropertyMetadata::new(P::DOOR_STATUS, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::LOCK_STATUS, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::DOOR_STATUS, Optional, None, WhenOutOfService),
+    PropertyMetadata::new(P::LOCK_STATUS, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::SECURED_STATUS, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::DOOR_ALARM_STATE, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::DOOR_ALARM_STATE, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::DOOR_MEMBERS, Optional, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
@@ -445,8 +448,9 @@ mod tests {
 
     #[test]
     fn property_metadata_access_trio_write_capabilities_match_dispatch() {
-        // Constructor paired with the properties it must accept writes for.
-        type WriteCase = (fn() -> Box<dyn BACnetObject>, &'static [P]);
+        // Constructor paired with the properties it must always accept writes
+        // for, and those it must accept only while Out_Of_Service is TRUE.
+        type WriteCase = (fn() -> Box<dyn BACnetObject>, &'static [P], &'static [P]);
         let cases: [WriteCase; 3] = [
             (
                 || Box::new(AccessDoorObject::new(1, "DOOR-1").unwrap()),
@@ -459,17 +463,21 @@ mod tests {
                     P::DOOR_EXTENDED_PULSE_TIME,
                     P::DOOR_OPEN_TOO_LONG_TIME,
                 ],
+                // Table 12-30 footnote 1 (#1131).
+                &[P::DOOR_STATUS, P::LOCK_STATUS, P::DOOR_ALARM_STATE],
             ),
             (
                 || Box::new(AccessPointObject::new(1, "AP-1").unwrap()),
                 &[P::DESCRIPTION, P::OUT_OF_SERVICE],
+                &[],
             ),
             (
                 || Box::new(AccessZoneObject::new(1, "ZONE-1").unwrap()),
                 &[P::DESCRIPTION, P::OUT_OF_SERVICE, P::GLOBAL_IDENTIFIER],
+                &[],
             ),
         ];
-        for (make, writable) in cases {
+        for (make, writable, when_out_of_service) in cases {
             for out_of_service in [false, true] {
                 let mut object = make();
                 object
@@ -485,6 +493,8 @@ mod tests {
                     let p = row.property_identifier;
                     let capability = if writable.contains(&p) {
                         PropertyWriteCapability::Always
+                    } else if when_out_of_service.contains(&p) {
+                        PropertyWriteCapability::WhenOutOfService
                     } else {
                         PropertyWriteCapability::ReadOnly
                     };
@@ -496,7 +506,10 @@ mod tests {
                     );
                     let value = object.read_property(p, None).unwrap();
                     let result = object.write_property(p, None, value, None);
-                    if capability.is_writable() {
+                    if capability == PropertyWriteCapability::Always
+                        || (capability == PropertyWriteCapability::WhenOutOfService
+                            && out_of_service)
+                    {
                         result.unwrap();
                     } else {
                         assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
@@ -620,13 +633,22 @@ mod tests {
                 object.read_property(P::PRESENT_VALUE, None).unwrap(),
                 PropertyValue::Enumerated(1)
             );
-            // Table-O status rows and the readable-only rows deny even their
-            // own readback on write.
+            // The footnote-1 status rows take their own readback only while
+            // out of service (#1131).
+            for p in [P::DOOR_STATUS, P::LOCK_STATUS, P::DOOR_ALARM_STATE] {
+                let value = object.read_property(p, None).unwrap();
+                let result = object.write_property(p, None, value, None);
+                if out_of_service {
+                    result.unwrap();
+                } else {
+                    assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
+                }
+                assert!(object.is_writable_property(p));
+            }
+            // The other Table-O status rows and the readable-only rows deny
+            // even their own readback on write.
             for p in [
-                P::DOOR_STATUS,
-                P::LOCK_STATUS,
                 P::SECURED_STATUS,
-                P::DOOR_ALARM_STATE,
                 P::DOOR_MEMBERS,
                 P::PRIORITY_ARRAY,
                 P::EVENT_STATE,

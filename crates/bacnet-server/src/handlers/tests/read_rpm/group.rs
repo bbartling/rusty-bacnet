@@ -501,33 +501,88 @@ fn rp_and_rpm_global_group_member_status_flags_combine_status_flags_members() {
     assert_cases(&db, oid, cases);
 }
 
+/// The configured Structured View's Subordinate_List elements, each a
+/// BACnetDeviceObjectReference (Table 12-34): the object under [1], after
+/// the device under [0] for a subordinate in another device.
+const SV_SUBORDINATE_1: &[u8] = &[0x1C, 0, 0, 0, 1];
+const SV_SUBORDINATE_2: &[u8] = &[0x0C, 0x02, 0, 0, 9, 0x1C, 0, 0xC0, 0, 1];
+const SV_SUBORDINATE_3: &[u8] = &[0x1C, 0, 0x80, 0, 2];
+const SV_SUBORDINATES: &[u8] = &[
+    0x1C, 0, 0, 0, 1, 0x0C, 0x02, 0, 0, 9, 0x1C, 0, 0xC0, 0, 1, 0x1C, 0, 0x80, 0, 2,
+];
+const SV_ANNOTATIONS: &[u8] = &[0x72, 0, b'a', 0x72, 0, b'b', 0x72, 0, b'c'];
+
+/// Index 0 is the size, 1..=N one element, and past N is
+/// INVALID_ARRAY_INDEX; no index is the elements back to back.
+fn array_cases(
+    property: P,
+    whole: &'static [u8],
+    elements: &[&'static [u8]],
+) -> Vec<(P, Option<u32>, ExpectedRead)> {
+    let size: &'static [u8] = match elements.len() {
+        0 => &[0x21, 0],
+        3 => &[0x21, 3],
+        n => panic!("no size octets for {n} elements"),
+    };
+    let mut cases = vec![(property, None, Ok(whole)), (property, Some(0), Ok(size))];
+    cases.extend(
+        (1..)
+            .zip(elements)
+            .map(|(i, &e)| (property, Some(i), Ok(e))),
+    );
+    for index in [elements.len() as u32 + 1, u32::MAX] {
+        cases.push((property, Some(index), Err(ErrorCode::INVALID_ARRAY_INDEX)));
+    }
+    cases
+}
+
 #[test]
-fn rpm_structured_view_indexed_reads_and_bytes_are_unchanged() {
+fn rpm_structured_view_arrays_serve_one_element_per_index() {
+    assert_eq!(
+        SV_SUBORDINATES,
+        [SV_SUBORDINATE_1, SV_SUBORDINATE_2, SV_SUBORDINATE_3].concat()
+    );
     for configured in [false, true] {
         let mut object = StructuredViewObject::new(7, "SV-7").unwrap();
         if configured {
             let ai1 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+            let bi1 = ObjectIdentifier::new(ObjectType::BINARY_INPUT, 1).unwrap();
+            let av2 = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap();
             object.add_subordinate(ai1, "a");
+            object.add_subordinate(
+                bacnet_types::constructed::BACnetDeviceObjectReference {
+                    device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap()),
+                    object_identifier: bi1,
+                },
+                "b",
+            );
+            object.add_subordinate(av2, "c");
         }
         write_common(&mut object, configured);
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
-        // Independent application-value bytes pin the existing projection.
+        // Independent application-value bytes pin the projection.
         // Subordinate_List and Subordinate_Annotations are BACnetARRAY
-        // (Table 12-34), so the gate admits an index and the arms return the
-        // whole value; the scalar Node_Type/Node_Subtype reject one.
-        let subordinates: &[u8] = if configured {
-            &[0xC4, 0, 0, 0, 1]
+        // (Table 12-34); the scalar Node_Type/Node_Subtype reject an index.
+        let mut cases = if configured {
+            let mut cases = array_cases(
+                P::SUBORDINATE_LIST,
+                SV_SUBORDINATES,
+                &[SV_SUBORDINATE_1, SV_SUBORDINATE_2, SV_SUBORDINATE_3],
+            );
+            cases.extend(array_cases(
+                P::SUBORDINATE_ANNOTATIONS,
+                SV_ANNOTATIONS,
+                &[&[0x72, 0, b'a'], &[0x72, 0, b'b'], &[0x72, 0, b'c']],
+            ));
+            cases
         } else {
-            EMPTY
+            let mut cases = array_cases(P::SUBORDINATE_LIST, EMPTY, &[]);
+            cases.extend(array_cases(P::SUBORDINATE_ANNOTATIONS, EMPTY, &[]));
+            cases
         };
-        let annotations: &[u8] = if configured {
-            &[0x72, 0x00, b'a']
-        } else {
-            EMPTY
-        };
-        let cases: &[(P, Option<u32>, ExpectedRead)] = &[
+        cases.extend_from_slice(&[
             (P::NODE_TYPE, None, Ok(&[0x91, 0])),
             (
                 P::NODE_TYPE,
@@ -542,11 +597,6 @@ fn rpm_structured_view_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::SUBORDINATE_LIST, None, Ok(subordinates)),
-            (P::SUBORDINATE_LIST, Some(0), Ok(subordinates)),
-            (P::SUBORDINATE_LIST, Some(1), Ok(subordinates)),
-            (P::SUBORDINATE_ANNOTATIONS, None, Ok(annotations)),
-            (P::SUBORDINATE_ANNOTATIONS, Some(0), Ok(annotations)),
             // Table 12-34 has no Status_Flags, Out_Of_Service or Reliability
             // (#1064).
             (P::STATUS_FLAGS, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
@@ -595,7 +645,7 @@ fn rpm_structured_view_indexed_reads_and_bytes_are_unchanged() {
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-        ];
-        assert_cases(&db, oid, cases);
+        ]);
+        assert_cases(&db, oid, &cases);
     }
 }
