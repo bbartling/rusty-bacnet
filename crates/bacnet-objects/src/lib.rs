@@ -35,6 +35,7 @@ pub(crate) mod reference;
 pub(crate) mod reliability_inhibit;
 pub mod schedule;
 pub mod staging;
+pub mod subscribed_recipients;
 pub mod timer;
 pub mod traits;
 pub mod trend;
