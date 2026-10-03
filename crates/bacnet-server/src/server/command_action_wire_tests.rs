@@ -396,7 +396,8 @@ async fn command_naming_another_device_fails_and_naming_this_device_is_local() {
     let mut h = start().await;
     write_pv(&mut h, 1, 5).await.unwrap();
     idle(&h, 1).await;
-    // With no binding for Device 9, nothing is sent there.
+    // Device 9 has no binding and answers no Who-Is, so no request is sent
+    // there.
     assert!(!h
         .frames
         .lock()

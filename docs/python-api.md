@@ -2231,8 +2231,16 @@ until the list ends, and All_Writes_Successful then reads True only if every
 write succeeded. Zero, or an empty list, writes nothing. A command whose
 `device_identifier` names another device is sent there as a confirmed
 WriteProperty when the server has a binding for it, from `add_device_binding`
-or an I-Am heard in the last ten minutes; with none it fails and nothing is
-sent. `stop()` ends a run it cuts short with In_Process False.
+or an I-Am heard in the last ten minutes. With neither, the server first
+broadcasts one Who-Is for that device's instance alone, on every network or,
+for a device whose old I-Am it still holds, on the network that I-Am came
+from, and waits the APDU timeout (3 seconds) from the send for its I-Am,
+which binds it; with no I-Am the command fails and no WriteProperty is sent.
+A device gets at most one Who-Is a
+minute, so a command naming it within a minute of one that drew nothing
+fails at once, and nothing at all is sent while DeviceCommunicationControl
+restricts initiation. `stop()` ends a run it cuts short with In_Process
+False.
 
 `add_staging` validates the complete ladder and target mapping atomically; it
 does not invent stage limits, deadbands, names, priorities, or targets. Each
@@ -2351,7 +2359,9 @@ registers a Channel. A member is an `(object, property)` or
 own Device is stored as the local reference it stands for, as it is when a
 peer writes the list. A member in another device keeps its Device and is
 written there with a confirmed WriteProperty when the server has a binding for
-it, from `add_device_binding` or an I-Am it has heard; the value goes as
+it, from `add_device_binding` or an I-Am heard in the last ten minutes, or
+finds one with a Who-Is first, as for a Command's remote action (see
+[Building Control](#building-control)); the value goes as
 written, without the datatype conversion local members get (see the Channel
 paragraphs under [Lighting & Color](rust-api.md#lighting--color-5)).
 `execution_delay` holds one delay in milliseconds per member (zeros when
