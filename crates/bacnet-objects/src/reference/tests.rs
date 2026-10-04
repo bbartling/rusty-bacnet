@@ -1,6 +1,6 @@
 //! The read values and the write decode of the reference properties: the
 //! served bytes, the values that clear, and the error each refused value
-//! carries (#182, #1312).
+//! carries (#182, #1312, #1395).
 
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
@@ -134,16 +134,25 @@ fn null_clears_except_on_setpoint_reference() {
 
 #[test]
 fn empty_value_clears_only_setpoint_reference() {
-    let empty = PropertyValue::ApplicationData(Vec::new());
-    assert_eq!(
-        decode_reference_write(&empty, ReferenceFrame::Setpoint).unwrap(),
-        None
-    );
-    expect_protocol(
-        decode_reference_write(&empty, ReferenceFrame::Bare),
-        ErrorCode::INVALID_DATA_ENCODING,
-        "empty value on a bare reference",
-    );
+    // No octets, as raw octets or as a list of chunks that join into none
+    // (#1395): the setpoint frame's empty value, and no reference at all for
+    // the bare members.
+    for empty in [
+        PropertyValue::ApplicationData(Vec::new()),
+        PropertyValue::List(Vec::new()),
+        PropertyValue::List(vec![PropertyValue::ApplicationData(Vec::new())]),
+    ] {
+        assert_eq!(
+            decode_reference_write(&empty, ReferenceFrame::Setpoint).unwrap(),
+            None,
+            "{empty:?}"
+        );
+        expect_protocol(
+            decode_reference_write(&empty, ReferenceFrame::Bare),
+            ErrorCode::INVALID_DATA_ENCODING,
+            &format!("{empty:?} on a bare reference"),
+        );
+    }
 }
 
 #[test]
@@ -307,7 +316,9 @@ fn setpoint_frame_must_hold_one_whole_reference() {
 }
 
 #[test]
-fn mixed_flat_and_framed_list_is_invalid_data_encoding() {
+fn list_mixing_chunks_and_decoded_values_is_invalid_data_type() {
+    // A chunk then a decoded member: the list isn't octets to join, so the
+    // value is another datatype, as for the device references (#1395).
     let value = PropertyValue::List(vec![
         PropertyValue::ApplicationData(framed(&ai_ref(5, 85))[..5].to_vec()),
         PropertyValue::Enumerated(85),
@@ -315,7 +326,7 @@ fn mixed_flat_and_framed_list_is_invalid_data_encoding() {
     for frame in FRAMES {
         expect_protocol(
             decode_reference_write(&value, frame),
-            ErrorCode::INVALID_DATA_ENCODING,
+            ErrorCode::INVALID_DATA_TYPE,
             &format!("mixed framed + flat members under {frame:?}"),
         );
     }
@@ -329,7 +340,6 @@ fn wrong_value_datatypes_are_invalid_data_type() {
             PropertyValue::Real(1.0),
             PropertyValue::ObjectIdentifier(ai_ref(5, 85).object_identifier),
             PropertyValue::List(vec![PropertyValue::Unsigned(1), PropertyValue::Unsigned(2)]),
-            PropertyValue::List(Vec::new()),
         ] {
             expect_protocol(
                 decode_reference_write(&value, frame),

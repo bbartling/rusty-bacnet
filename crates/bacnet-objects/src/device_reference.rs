@@ -40,6 +40,11 @@
 //! - The Device member is judged after the decode, by
 //!   [`check_device_member`] (VALUE_OUT_OF_RANGE), and on properties held to
 //!   this device then by [`check_local_member`].
+//!
+//! The single-reference rule lives in `common::decode_single_element`, which
+//! the Loop and Pulse Converter references in [`crate::reference`] use too
+//! (#1395). Those hold a `BACnetObjectPropertyReference`, which has no Device
+//! member, so the same octets get the same code there as well.
 
 use bacnet_encoding::constructed::{
     decode_device_object_property_reference, decode_device_object_reference,
@@ -207,7 +212,8 @@ pub(crate) fn decode_references_at<R: DeviceReference>(
     })
 }
 
-/// The one reference a written single-reference value holds.
+/// The one reference a written single-reference value holds, decoded by
+/// `common::decode_single_element`.
 ///
 /// A list of chunks is joined first: a value read back is one chunk, and a
 /// caller that split the octets at each member's tag hands over the same
@@ -217,15 +223,7 @@ pub(crate) fn decode_references_at<R: DeviceReference>(
 /// all after it) are PROPERTY / INVALID_DATA_ENCODING; see the module
 /// documentation.
 pub(crate) fn decode_reference<R: DeviceReference>(value: &PropertyValue) -> Result<R, Error> {
-    let bytes = common::chunks(value)?.concat();
-    if bytes.is_empty() {
-        return Err(common::invalid_data_encoding_error());
-    }
-    let (reference, end) = common::decode_element(&bytes, 0, R::starts, R::decode)?;
-    if end != bytes.len() {
-        return Err(common::invalid_data_encoding_error());
-    }
-    Ok(reference)
+    common::decode_single_element(value, R::starts, R::decode)
 }
 
 /// Refuse a Device member that isn't a Device object identifier with
