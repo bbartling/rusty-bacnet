@@ -29,7 +29,7 @@ async fn dcc_disable_rejected_without_changing_comm_state() {
     );
     assert_eq!(server.comm_state(), DccState::Enable);
 
-    // Re-enable should work (DCC is allowed even when disabled)
+    // The refusal left the server enabled, and an ENABLE is still accepted.
     let result = client
         .device_communication_control(&server_mac, EnableDisable::ENABLE, None, None)
         .await;

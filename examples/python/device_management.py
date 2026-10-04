@@ -53,18 +53,21 @@ async def main():
             print(f"General BACnet error: {e}")
 
         # --- Create an object remotely ---
+        # Only some object types can be created over the network; Analog
+        # Output is one of them. The server refuses a Units initial value
+        # (WRITE_ACCESS_DENIED), so only the name is given.
         print("\n=== CreateObject ===")
+        created = ObjectIdentifier(ObjectType.ANALOG_OUTPUT, 100)
         raw = await client.create_object(
             addr,
-            ObjectType.ANALOG_VALUE,
+            created,
             initial_values=[
                 (
                     PropertyIdentifier.OBJECT_NAME,
-                    PropertyValue.character_string("Dynamic AV"),
+                    PropertyValue.character_string("Dynamic AO"),
                     None,
                     None,
                 ),
-                (PropertyIdentifier.UNITS, PropertyValue.enumerated(62), None, None),
             ],
         )
         print(f"Created object (raw ACK: {len(raw)} bytes)")
@@ -93,9 +96,7 @@ async def main():
         # --- Delete the object we created ---
         print("\n=== DeleteObject ===")
         try:
-            await client.delete_object(
-                addr, ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
-            )
+            await client.delete_object(addr, created)
             print("Object deleted")
         except BacnetError as e:
             print(f"Delete failed: {e}")
