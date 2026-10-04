@@ -139,7 +139,7 @@ fn dcc(mode: EnableDisable, minutes: Option<u16>, tail: &[u8]) -> Vec<u8> {
 }
 
 /// The server's DCC state and whether a DCC timer is running.
-async fn dcc_state(h: &Harness) -> (u8, bool) {
+async fn dcc_state(h: &Harness) -> (DccState, bool) {
     (
         h.server.comm_state(),
         !h.server.dcc_timer.lock().await.is_none(),
@@ -156,7 +156,7 @@ async fn dcc_with_trailing_octets_draws_services_other_and_changes_nothing() {
     .await;
     let service = ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL;
     let restrict = EnableDisable::DISABLE_INITIATION;
-    let restricted = restrict.to_raw() as u8;
+    let (enabled, restricted) = (DccState::Enable, DccState::DisableInitiation);
     // Five minutes of DISABLE_INITIATION with the right password, then an
     // octet or a `[3]`; and the password under its application tag, which
     // leaves it unread.
@@ -177,7 +177,7 @@ async fn dcc_with_trailing_octets_draws_services_other_and_changes_nothing() {
     for (what, body) in &cases {
         let error = error_for(&mut h, service, body).await;
         assert!(error.error_data.is_empty(), "{what}");
-        assert_eq!(dcc_state(&h).await, (0, false), "{what}");
+        assert_eq!(dcc_state(&h).await, (enabled, false), "{what}");
     }
     let answer = answer_to(&mut h, service, &dcc(restrict, Some(5), &[])).await;
     assert!(matches!(answer, Apdu::SimpleAck(_)), "{answer:?}");
@@ -189,7 +189,7 @@ async fn dcc_with_trailing_octets_draws_services_other_and_changes_nothing() {
     assert_eq!(dcc_state(&h).await, (restricted, true));
     let answer = answer_to(&mut h, service, &dcc(enable, None, &[])).await;
     assert!(matches!(answer, Apdu::SimpleAck(_)), "{answer:?}");
-    assert_eq!(dcc_state(&h).await, (0, false));
+    assert_eq!(dcc_state(&h).await, (enabled, false));
     h.server.stop().await.unwrap();
 }
 
@@ -243,7 +243,7 @@ async fn reinitialize_device_with_trailing_octets_draws_services_other() {
     for (what, body) in &cases {
         let error = error_for(&mut h, service, body).await;
         assert!(error.error_data.is_empty(), "{what}");
-        assert_eq!(dcc_state(&h).await, (0, false), "{what}");
+        assert_eq!(dcc_state(&h).await, (DccState::Enable, false), "{what}");
     }
     h.server.stop().await.unwrap();
 }
