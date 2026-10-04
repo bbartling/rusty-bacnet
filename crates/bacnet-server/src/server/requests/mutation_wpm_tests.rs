@@ -242,3 +242,65 @@ async fn wpm_empty_request_never_calls_policy() {
     assert!(matches!(apdu(response), Apdu::SimpleAck(_)));
     assert_eq!(calls.load(Ordering::Relaxed), 0);
 }
+
+/// A NULL Recipient_List leaves the list as it was and succeeds (#1396). It
+/// commits no object, but it is a successful write, so a syntax error after
+/// it gets the Error PDU with SERVICES / INVALID_TAG, as after any other
+/// successful write, not a Reject (Clause 15.10.2).
+#[tokio::test]
+async fn wpm_syntax_error_after_a_null_left_unchanged_is_an_error_not_a_reject() {
+    let class = oid(ObjectType::NOTIFICATION_CLASS, 1);
+    let witness = oid(ObjectType::BINARY_VALUE, 1);
+    let null = WriteAccessSpecification {
+        object_identifier: class,
+        list_of_properties: vec![BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::RECIPIENT_LIST,
+            property_array_index: None,
+            value: vec![0x00],
+            priority: None,
+        }],
+    };
+    // A second specification, cut short.
+    let suffix = wpm(vec![description(witness, "unreached")]);
+    let truncated = &suffix[..suffix.len() - 2];
+    for first in [null, description(witness, "prefix")] {
+        let fixture = Fixture::new(None);
+        fixture
+            .db
+            .write()
+            .await
+            .add(Box::new(
+                bacnet_objects::notification_class::NotificationClass::new(1, "NC-1").unwrap(),
+            ))
+            .unwrap();
+        let before = fixture
+            .read(class, PropertyIdentifier::RECIPIENT_LIST)
+            .await;
+        let mut bytes = BytesMut::from(wpm(vec![first]).as_ref());
+        bytes.extend_from_slice(truncated);
+        let response = fixture
+            .dispatch(
+                ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+                bytes.freeze(),
+                1,
+            )
+            .await
+            .unwrap();
+        let Apdu::Error(error) = apdu(response) else {
+            panic!("a successful write before the syntax error requires Error, not Reject")
+        };
+        let detailed = WritePropertyMultipleError::from_error_pdu(&error).unwrap();
+        assert_eq!(detailed.error_class, ErrorClass::SERVICES);
+        assert_eq!(detailed.error_code, ErrorCode::INVALID_TAG);
+        assert_eq!(
+            fixture
+                .read(class, PropertyIdentifier::RECIPIENT_LIST)
+                .await,
+            before
+        );
+        assert_ne!(
+            fixture.read(witness, PropertyIdentifier::DESCRIPTION).await,
+            PropertyValue::CharacterString("unreached".into())
+        );
+    }
+}

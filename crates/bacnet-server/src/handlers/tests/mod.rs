@@ -163,6 +163,7 @@ mod log_reference_writes;
 mod loop_properties;
 mod loop_reference_follow;
 mod multi_element_writes;
+mod noncommandable_null_writes;
 mod passwords;
 mod property_metadata;
 mod pulse_converter_writes;
@@ -193,6 +194,7 @@ fn sourced_wp(db: &mut ObjectDatabase, data: &[u8]) -> Result<ObjectIdentifier, 
         None,
         Some(&crate::command_source::test_origin()),
     )
+    .map(|(oid, _)| oid)
 }
 fn sourced_wpm(db: &mut ObjectDatabase, data: &[u8]) -> Result<Vec<ObjectIdentifier>, Error> {
     let mut snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::default();

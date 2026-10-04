@@ -223,6 +223,15 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// The server's AddListElement handler then reports the request element
     /// at that position in its ChangeList-Error (#1048); a plain
     /// `Error::Protocol` there names the first element the list would gain.
+    ///
+    /// Make the checks that don't depend on the value (the property exists,
+    /// it is writable now, the array index is in range) before judging the
+    /// value's datatype, and refuse a value of the wrong datatype with
+    /// PROPERTY / INVALID_DATA_TYPE. The bundled server reads that refusal of
+    /// a NULL, on a property that isn't commandable and has no NULL in its
+    /// datatype, as a success that leaves the property as it is (Clauses
+    /// 15.9.2 and 19.2.1, #1396), so an access check made after the datatype
+    /// check would never be seen for a NULL.
     fn write_property(
         &mut self,
         property: PropertyIdentifier,

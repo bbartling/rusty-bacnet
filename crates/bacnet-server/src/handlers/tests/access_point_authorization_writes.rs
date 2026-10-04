@@ -206,16 +206,6 @@ fn write_property_refuses_other_policy_mode_and_read_only_writes() {
             ),
             ErrorCode::INVALID_DATA_TYPE,
         ),
-        // Neither row is commandable, so NULL is no relinquish, with or
-        // without a priority.
-        (
-            plain(P::ACTIVE_AUTHENTICATION_POLICY, null()),
-            ErrorCode::INVALID_DATA_TYPE,
-        ),
-        (
-            (P::ACTIVE_AUTHENTICATION_POLICY, None, null(), Some(8)),
-            ErrorCode::INVALID_DATA_TYPE,
-        ),
         (
             (
                 P::ACTIVE_AUTHENTICATION_POLICY,
@@ -244,10 +234,6 @@ fn write_property_refuses_other_policy_mode_and_read_only_writes() {
             ErrorCode::INVALID_DATA_TYPE,
         ),
         (
-            plain(P::AUTHORIZATION_MODE, null()),
-            ErrorCode::INVALID_DATA_TYPE,
-        ),
-        (
             (
                 P::AUTHORIZATION_MODE,
                 Some(1),
@@ -268,10 +254,25 @@ fn write_property_refuses_other_policy_mode_and_read_only_writes() {
             plain(P::PRIORITY_FOR_WRITING, PropertyValue::Unsigned(8)),
             ErrorCode::WRITE_ACCESS_DENIED,
         ),
+        (
+            plain(P::PRIORITY_FOR_WRITING, null()),
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ),
     ];
     for (write, expected) in refusals {
         let property = write.0;
         assert_property_error(write_property(&mut db, oid, write), expected);
+        assert_eq!(served(&db, oid), unchanged, "{property:?}");
+    }
+    // Neither writable row is commandable or takes a NULL, so a NULL, with
+    // or without a priority, succeeds and changes nothing (#1396).
+    for write in [
+        plain(P::ACTIVE_AUTHENTICATION_POLICY, null()),
+        (P::ACTIVE_AUTHENTICATION_POLICY, None, null(), Some(8)),
+        plain(P::AUTHORIZATION_MODE, null()),
+    ] {
+        let property = write.0;
+        write_property(&mut db, oid, write).unwrap();
         assert_eq!(served(&db, oid), unchanged, "{property:?}");
     }
 }
@@ -283,13 +284,9 @@ fn write_property_multiple_refuses_other_policy_mode_values() {
     let mode_bytes = |db: &ObjectDatabase| read_bytes(db, oid, P::AUTHORIZATION_MODE);
     // Each request stops at its refused write; the writes before it stand.
     let refusals = [
-        // Another datatype, and NULL.
+        // Another datatype.
         (
             plain(P::AUTHORIZATION_MODE, PropertyValue::Unsigned(1)),
-            ErrorCode::INVALID_DATA_TYPE,
-        ),
-        (
-            plain(P::ACTIVE_AUTHENTICATION_POLICY, PropertyValue::Null),
             ErrorCode::INVALID_DATA_TYPE,
         ),
         // An array index on either row.
@@ -332,6 +329,22 @@ fn write_property_multiple_refuses_other_policy_mode_values() {
         );
         assert_eq!(mode_bytes(&db), vec![0x91, 5], "{property:?}");
     }
+    assert_eq!(
+        served(&db, oid),
+        [vec![0x21, 1], vec![0x21, 3], vec![0x91, 5], vec![0x21, 16]]
+    );
+    // A NULL leaves the policy as it is and the request goes on to the
+    // mode (#1396).
+    write_property_multiple(&mut db, oid, vec![mode(AuthorizationMode::DENY_ALL)]).unwrap();
+    write_property_multiple(
+        &mut db,
+        oid,
+        vec![
+            plain(P::ACTIVE_AUTHENTICATION_POLICY, PropertyValue::Null),
+            mode(AuthorizationMode::NONE),
+        ],
+    )
+    .unwrap();
     assert_eq!(
         served(&db, oid),
         [vec![0x21, 1], vec![0x21, 3], vec![0x91, 5], vec![0x21, 16]]

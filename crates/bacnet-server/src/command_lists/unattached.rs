@@ -102,7 +102,7 @@ impl RunHost for Unattached<'_> {
                 crate::LocalCommandSource::Object(run.source),
             )
             .ok();
-            let target = crate::handlers::handle_write_property_observed(
+            let (target, _) = crate::handlers::handle_write_property_observed(
                 &mut db,
                 &request,
                 None,

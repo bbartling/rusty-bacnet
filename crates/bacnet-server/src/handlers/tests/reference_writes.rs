@@ -291,15 +291,8 @@ fn reference_write_rejections_over_the_wire_preserve_state() {
             ErrorCode::INVALID_DATA_TYPE,
             "setpoint frame on a plain reference",
         ),
-        // BACnetSetpointReference: Null and the bare members are other
-        // datatypes; a frame holding no reference, or more than one, is
-        // malformed.
-        (
-            SR,
-            vec![0x00],
-            ErrorCode::INVALID_DATA_TYPE,
-            "Null on Setpoint_Reference",
-        ),
+        // BACnetSetpointReference: the bare members are another datatype; a
+        // frame holding no reference, or more than one, is malformed.
         (
             SR,
             framed_reference(&r),
@@ -327,6 +320,11 @@ fn reference_write_rejections_over_the_wire_preserve_state() {
     for (property, bytes, code, context) in cases {
         assert_refused(&mut db, oid, property, bytes, code, context);
     }
+    // NULL isn't a BACnetSetpointReference and the property isn't
+    // commandable, so a NULL succeeds and leaves it as it is (#1396).
+    let before = read_raw(&db, oid, SR);
+    write_raw(&mut db, oid, SR, vec![0x00]).unwrap();
+    assert_eq!(read_raw(&db, oid, SR), before);
 }
 
 #[test]

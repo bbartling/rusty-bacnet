@@ -260,7 +260,11 @@ fn door_status_row_writes_outside_their_datatypes_are_refused_unchanged() {
         // BACnetLockStatus has no proprietary range.
         (ROWS[1], enumerated(5), ErrorCode::VALUE_OUT_OF_RANGE),
         (ROWS[1], enumerated(1_024), ErrorCode::VALUE_OUT_OF_RANGE),
-        (ROWS[1], PropertyValue::Null, ErrorCode::INVALID_DATA_TYPE),
+        (
+            ROWS[1],
+            PropertyValue::Unsigned(1),
+            ErrorCode::INVALID_DATA_TYPE,
+        ),
         // 9 is reserved for ASHRAE.
         (ROWS[2], enumerated(9), ErrorCode::VALUE_OUT_OF_RANGE),
         (ROWS[2], enumerated(65_536), ErrorCode::VALUE_OUT_OF_RANGE),
@@ -300,6 +304,13 @@ fn door_status_row_writes_outside_their_datatypes_are_refused_unchanged() {
             enumerated(DoorStatus::OPENED.to_raw()),
         )
         .unwrap();
+    }
+    // Out of service the rows are writable but not commandable, so a NULL
+    // succeeds and leaves each as it is (#1396).
+    let before = served(&db, oid);
+    for property in ROWS {
+        write_property(&mut db, oid, property, PropertyValue::Null).unwrap();
+        assert_eq!(served(&db, oid), before, "{property:?}");
     }
     // The proprietary ranges go through and read back.
     for (property, raw, bytes) in [

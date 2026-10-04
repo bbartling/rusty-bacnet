@@ -416,7 +416,7 @@ fn trend_log_multiple_reference_write_refusals_change_nothing() {
     wp(&mut db, tlm1(), None, &[AV1_PV, AV2_PV].concat()).unwrap();
     let held = [AV1_PV, AV2_PV].concat();
     let too_many = AV1_PV.repeat(65);
-    let cases: [IndexedRefusal; 9] = [
+    let cases: [IndexedRefusal; 8] = [
         (
             None,
             [&AV1_PV[..], &REMOTE_DEVICE].concat(),
@@ -437,13 +437,6 @@ fn trend_log_multiple_reference_write_refusals_change_nothing() {
             ErrorClass::PROPERTY,
             ErrorCode::VALUE_OUT_OF_RANGE,
             "an element whose [3] is no Device",
-        ),
-        (
-            Some(1),
-            vec![0x00],
-            ErrorClass::PROPERTY,
-            ErrorCode::INVALID_DATA_TYPE,
-            "Null as an element",
         ),
         (
             Some(1),
@@ -486,6 +479,11 @@ fn trend_log_multiple_reference_write_refusals_change_nothing() {
         assert_eq!(rp(&db, tlm1(), None).unwrap(), held, "{what}");
         assert_eq!(record_count(&db, tlm1()), 1, "{what}");
     }
+    // An element has no NULL in its datatype and the array isn't
+    // commandable, so a NULL there succeeds and changes nothing (#1396).
+    wp(&mut db, tlm1(), Some(1), &[0x00]).unwrap();
+    assert_eq!(rp(&db, tlm1(), None).unwrap(), held);
+    assert_eq!(record_count(&db, tlm1()), 1);
 }
 
 #[test]

@@ -108,6 +108,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// properties preserve their behavior without a usable command origin.
     /// Low-level object setters deliberately bypass this notification owner.
     ///
+    /// A NULL to a property that isn't commandable and has no NULL in its
+    /// datatype succeeds and changes nothing, as over the network (#1396):
+    /// Audit records it, and no COV, event or Schedule work follows it.
+    ///
     /// # Cancellation
     ///
     /// Dropping the future once the write has committed keeps the write but
@@ -632,6 +636,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 }
                 _ => value,
             };
+            let null = crate::handlers::relinquish::is_null_value(&value);
             let prepared = match write {
                 LocalWrite::Property {
                     property,
@@ -702,6 +707,33 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 }
             });
             staged.release(&mut db);
+            // A NULL the property left as it was succeeds unchanged
+            // (`handlers::relinquish`): audited as the write it is, with no
+            // post-write work, since nothing changed.
+            if let (
+                Err(error),
+                LocalWrite::Property {
+                    property,
+                    array_index,
+                    ..
+                },
+            ) = (&result, write)
+            {
+                let object = db.get(oid).expect("existence checked above");
+                if null
+                    && crate::handlers::relinquish::leaves_unchanged(
+                        object,
+                        property,
+                        array_index,
+                        error,
+                    )
+                {
+                    if let Some(audit) = &mut audit {
+                        audit.committed(&mut db);
+                    }
+                    return Ok(TakenRuns::default());
+                }
+            }
             if let Err(error) = result {
                 if let Some(audit) = &mut audit {
                     audit.failed(&mut db, &error);

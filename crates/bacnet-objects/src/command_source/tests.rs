@@ -10,7 +10,7 @@ use bacnet_encoding::{
     primitives::decode_timestamp_choice,
 };
 use bacnet_types::{
-    enums::PropertyIdentifier as P,
+    enums::{ErrorCode, PropertyIdentifier as P},
     primitives::{BACnetTimeStamp, PropertyValue},
     MacAddr,
 };
@@ -408,6 +408,51 @@ fn command_source_owner_matrix_retains_original_token() {
         &remote(3, Unique(device(9))),
     )
     .unwrap();
+}
+
+/// Only the command's owner may correct a slot's source, and it is told so
+/// before its value is looked at: the server reads a refusal of a NULL as
+/// the wrong datatype as a success that changes nothing (#1396), which must
+/// not reach a requester with no right to the slot.
+#[test]
+fn command_source_correction_refuses_a_stranger_before_its_value() {
+    let code = |result: Result<(), Error>| match result {
+        Err(Error::Protocol { code, .. }) => ErrorCode::from_raw(code as u16),
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    for (mut o, value) in objects() {
+        let owner = local(1, None);
+        o.write_property_from(P::PRESENT_VALUE, None, value, Some(8), &owner)
+            .unwrap();
+        let before = snapshot(&*o);
+        // A lone NULL, as the server hands it over, and a value of no source
+        // datatype at all.
+        for written in [
+            PropertyValue::ApplicationData(vec![0x00]),
+            PropertyValue::Real(1.0),
+        ] {
+            // A stranger at the owned slot, and the owner at a slot no one
+            // commands.
+            for (origin, priority) in [(local(2, None), 8), (owner.clone(), 9)] {
+                assert_eq!(
+                    code(o.write_property_from(
+                        P::VALUE_SOURCE,
+                        None,
+                        written.clone(),
+                        Some(priority),
+                        &origin,
+                    )),
+                    ErrorCode::WRITE_ACCESS_DENIED,
+                    "{written:?} at {priority}"
+                );
+            }
+            assert_eq!(
+                code(o.write_property_from(P::VALUE_SOURCE, None, written, Some(8), &owner)),
+                ErrorCode::INVALID_DATA_TYPE
+            );
+        }
+        assert_eq!(snapshot(&*o), before);
+    }
 }
 
 #[test]

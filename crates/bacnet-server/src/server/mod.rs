@@ -790,6 +790,8 @@ mod loop_cov_tests;
 #[cfg(test)]
 mod mistagged_request_wire_tests;
 #[cfg(test)]
+mod noncommandable_null_cov_tests;
+#[cfg(test)]
 mod notification_dcc_tests;
 #[cfg(test)]
 mod notification_transactions_tests;

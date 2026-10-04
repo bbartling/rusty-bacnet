@@ -611,3 +611,74 @@ async fn a_staged_write_whose_request_vanished_is_put_back_within_its_lifetime_a
     drop(db);
     stop(server).await;
 }
+
+/// Recipient_List isn't commandable and has no NULL in its datatype, so a
+/// NULL written to it succeeds and leaves the list as it was (#1396). The
+/// class stages and saves nothing for it, over WriteProperty,
+/// WritePropertyMultiple or `write_local_encoded`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_null_recipient_list_succeeds_unchanged_and_saves_nothing() {
+    let storage = Arc::new(ClassStorage::default());
+    let kept = [destination(1)];
+    let (fixture, nc) = served_by(&storage, &[]).await;
+    let write = ConfirmedServiceChoice::WRITE_PROPERTY;
+    assert_eq!(
+        wire(&fixture, write, write_property(nc, &kept)).await,
+        SIMPLE_ACK_WRITE
+    );
+    let saves = storage.saves.load(Ordering::SeqCst);
+    let mut null = BytesMut::new();
+    WritePropertyRequest {
+        object_identifier: nc,
+        property_identifier: RECIPIENT_LIST,
+        property_array_index: None,
+        property_value: vec![0x00],
+        priority: None,
+    }
+    .encode(&mut null)
+    .unwrap();
+    assert_eq!(wire(&fixture, write, null.freeze()).await, SIMPLE_ACK_WRITE);
+    let null_attempt = BACnetPropertyValue {
+        property_identifier: RECIPIENT_LIST,
+        property_array_index: None,
+        value: vec![0x00],
+        priority: None,
+    };
+    assert_eq!(
+        wire(
+            &fixture,
+            ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+            write_property_multiple(nc, vec![null_attempt]),
+        )
+        .await,
+        SIMPLE_ACK_WPM
+    );
+    assert_eq!(fixture.read(nc, RECIPIENT_LIST).await, framed(&kept));
+    assert_eq!(storage.saves.load(Ordering::SeqCst), saves);
+    drop(fixture);
+
+    // A server rebuilt on the same storage serves the list saved above.
+    let (server, nc) = local_server(&storage).await;
+    server
+        .write_local_encoded(
+            &nc,
+            RECIPIENT_LIST,
+            None,
+            &[0x00],
+            None,
+            crate::LocalCommandSource::ServerDevice,
+        )
+        .await
+        .unwrap();
+    let served = server
+        .database()
+        .read()
+        .await
+        .get(&nc)
+        .unwrap()
+        .read_property(RECIPIENT_LIST, None)
+        .unwrap();
+    assert_eq!(served, framed(&kept));
+    assert_eq!(storage.saves.load(Ordering::SeqCst), saves);
+    stop(server).await;
+}
