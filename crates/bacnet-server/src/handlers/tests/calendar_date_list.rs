@@ -112,16 +112,6 @@ fn edit(
     }
 }
 
-fn assert_property_error(result: Result<(), Error>, expected: ErrorCode, context: &str) {
-    match result {
-        Err(Error::Protocol { class, code }) => {
-            assert_eq!(class, ErrorClass::PROPERTY.to_raw() as u32, "{context}");
-            assert_eq!(code, expected.to_raw() as u32, "{context}: {expected:?}");
-        }
-        other => panic!("{context}: expected PROPERTY/{expected:?}, got {other:?}"),
-    }
-}
-
 #[test]
 fn date_list_reads_each_entry_under_its_choice_tag() {
     let (db, oid) = calendar_db(&typed());
@@ -151,20 +141,20 @@ fn date_list_write_property_refuses_other_datatypes_and_bad_encodings() {
     let (mut db, oid) = calendar_db(&typed());
     let before = read_wire(&db, oid);
     // The Calendar names the entry it refuses (#1048). A lone application
-    // value decodes as itself, holding no entry, so it names none.
+    // value reaches it as a list of one, so it is entry 1 (#1328).
     for (what, value, expected, entry) in [
         // The application-tagged forms Date_List used to read as.
         (
             "application Date",
             &[0xA4, 126, 9, 14, 1][..],
             ErrorCode::INVALID_DATA_TYPE,
-            0,
+            1,
         ),
         (
             "application Octet String",
             &[0x63, 0xFF, 0xFF, 1],
             ErrorCode::INVALID_DATA_TYPE,
-            0,
+            1,
         ),
         (
             "a good entry, then unknown alternative [3]",
@@ -221,10 +211,10 @@ fn date_list_write_property_multiple_takes_entries_and_keeps_the_prefix() {
     }
     .encode(&mut request)
     .unwrap();
-    assert_property_error(
-        handle_write_property_multiple(&mut db, &request).map(|_| ()),
-        ErrorCode::INVALID_DATA_TYPE,
-        "second write carries an application Date",
+    assert_eq!(
+        list_refusal(handle_write_property_multiple(&mut db, &request).map(|_| ())),
+        (ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE, 1),
+        "second write carries an application Date"
     );
     assert_eq!(read_wire(&db, oid), [RANGE, MONDAYS].concat());
 }

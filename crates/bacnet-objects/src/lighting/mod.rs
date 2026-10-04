@@ -1,7 +1,8 @@
 //! Lighting Output (type 54) and Binary Lighting Output (type 55) objects per
 //! ASHRAE 135-2020 Clauses 12.54 and 12.55.
 
-use bacnet_types::enums::{ObjectType, PropertyIdentifier, Reliability};
+use bacnet_types::constructed::BACnetLightingCommand;
+use bacnet_types::enums::{LightingOperation, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
@@ -17,14 +18,20 @@ use crate::traits::BACnetObject;
 ///
 /// Commandable output with a 16-level priority array controlling a
 /// floating-point present-value (0.0 to 100.0 percent).
+///
+/// Lighting_Command takes a [`BACnetLightingCommand`] checked against its
+/// operation (see [`set_lighting_command`](Self::set_lighting_command)) and
+/// serves the last one taken. The object doesn't carry commands out: a
+/// command leaves Present_Value, Tracking_Value, In_Progress and the
+/// priority array as they are.
 pub struct LightingOutputObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
     present_value: f32,
     tracking_value: f32,
-    /// Stored as opaque OctetString for now (BACnetLightingCommand encoding).
-    lighting_command: Vec<u8>,
+    /// The last command written; operation NONE until then.
+    lighting_command: BACnetLightingCommand,
     lighting_command_default_priority: u32,
     /// LightingInProgress enumeration: 0=idle, 1=fade-active, 2=ramp-active, 3=not-controlled, etc.
     in_progress: u32,
@@ -57,7 +64,7 @@ impl LightingOutputObject {
             description: String::new(),
             present_value: 0.0,
             tracking_value: 0.0,
-            lighting_command: Vec::new(),
+            lighting_command: BACnetLightingCommand::new(LightingOperation::NONE),
             lighting_command_default_priority: 16,
             in_progress: 0, // idle
             blink_warn_enable: false,
@@ -101,6 +108,28 @@ impl LightingOutputObject {
         Ok(())
     }
 
+    /// The last command written to Lighting_Command, or operation NONE with no
+    /// other field before any write.
+    pub fn lighting_command(&self) -> BACnetLightingCommand {
+        self.lighting_command
+    }
+
+    /// Set Lighting_Command, as a WriteProperty of the encoded command would.
+    ///
+    /// The command is checked against its operation (Clause 12.54, Table
+    /// 12-67). NONE, a reserved operation (11 to 255) and anything past
+    /// 65,535 are refused; FADE_TO and RAMP_TO need a target level. A field
+    /// the operation uses must be in range: target level 0.0 to 100.0, fade
+    /// time 100 to 86,400,000 ms, ramp rate and step increment 0.1 to 100.0,
+    /// priority 1 to 16. Fields it doesn't use are kept unchecked, and a
+    /// proprietary operation (256 to 65,535) has only its priority checked. A
+    /// refusal is VALUE_OUT_OF_RANGE and leaves the property unchanged.
+    pub fn set_lighting_command(&mut self, command: BACnetLightingCommand) -> Result<(), Error> {
+        command::check(&command)?;
+        self.lighting_command = command;
+        Ok(())
+    }
+
     /// Set Default_Fade_Time, the milliseconds a fade request without its own
     /// fade time takes. A new object uses 100, the shortest fade the clause
     /// allows, as Default_Ramp_Rate starts at its fastest rate.
@@ -139,11 +168,12 @@ impl LightingOutputObject {
     }
 }
 
-/// The Default_Fade_Time range of Clause 12.54.16, in milliseconds.
+/// The Default_Fade_Time range of Clause 12.54.16, in milliseconds, which a
+/// lighting command's fade time shares (Table 12-66).
 const DEFAULT_FADE_TIME_MS: std::ops::RangeInclusive<u32> = 100..=86_400_000;
 
-/// Check a Default_Ramp_Rate or Default_Step_Increment value, which share the
-/// 0.1..=100.0 range.
+/// Check a Default_Ramp_Rate or Default_Step_Increment value, or a lighting
+/// command's ramp rate or step increment, which share the 0.1..=100.0 range.
 fn lighting_percent(value: f32) -> Result<f32, Error> {
     if (0.1..=100.0).contains(&value) {
         Ok(value)
@@ -180,7 +210,7 @@ impl BACnetObject for LightingOutputObject {
                 Ok(PropertyValue::Real(self.tracking_value))
             }
             p if p == PropertyIdentifier::LIGHTING_COMMAND => {
-                Ok(PropertyValue::OctetString(self.lighting_command.clone()))
+                Ok(command::encode(&self.lighting_command))
             }
             p if p == PropertyIdentifier::LIGHTING_COMMAND_DEFAULT_PRIORITY => Ok(
                 PropertyValue::Unsigned(self.lighting_command_default_priority as u64),
@@ -245,13 +275,11 @@ impl BACnetObject for LightingOutputObject {
             });
         }
 
-        // LIGHTING_COMMAND — stored as opaque bytes
+        // LIGHTING_COMMAND: a BACnetLightingCommand, checked against its
+        // operation.
         if property == PropertyIdentifier::LIGHTING_COMMAND {
-            if let PropertyValue::OctetString(data) = value {
-                self.lighting_command = data;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+            self.lighting_command = command::decode_write(value)?;
+            return Ok(());
         }
 
         // LIGHTING_COMMAND_DEFAULT_PRIORITY
@@ -353,6 +381,7 @@ impl BACnetObject for LightingOutputObject {
 }
 
 mod binary;
+mod command;
 mod metadata;
 pub use binary::BinaryLightingOutputObject;
 
@@ -365,3 +394,6 @@ mod tests;
 
 #[cfg(test)]
 mod required_rows_tests;
+
+#[cfg(test)]
+mod command_tests;
