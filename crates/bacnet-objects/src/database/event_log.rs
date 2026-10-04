@@ -1,14 +1,17 @@
 //! The device's own event notifications into its Event Log objects
 //! (Clause 12.27). The caller owns synchronization.
 
-use bacnet_types::constructed::{BACnetEventLogRecord, EventLogDatum, EventNotificationRequest};
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetEventLogRecord, EventLogDatum,
+    EventNotificationRequest,
+};
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use tracing::{debug, warn};
 
 use super::ObjectDatabase;
-use crate::device_reference::decode_property_reference;
+use crate::device_reference::decode_reference;
 
 impl ObjectDatabase {
     /// Record an event notification this device generated in each of its
@@ -90,7 +93,9 @@ impl ObjectDatabase {
                         .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
                         .ok()
                 })
-                .and_then(|value| decode_property_reference(&value).ok())
+                .and_then(|value| {
+                    decode_reference::<BACnetDeviceObjectPropertyReference>(&value).ok()
+                })
                 .is_some_and(|reference| {
                     reference.object_identifier.object_type() == ObjectType::EVENT_LOG
                         && self.local_device().is_local(reference.device_identifier)

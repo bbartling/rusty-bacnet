@@ -131,6 +131,28 @@ class CommandActionTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await server.stop()
 
+    async def test_device_identifier_names_a_device_or_nothing(self) -> None:
+        """An action command's device_identifier is a Device or absent (#1308)."""
+        server = make_server()
+        remote = write(AO1, 1.0, 8, device_identifier=ObjectIdentifier(ObjectType.DEVICE, 9))
+        not_a_device = write(AO1, 1.0, 8, device_identifier=AV1)
+        with self.assertRaisesRegex(
+            ValueError, r"action\[0\]\[1\]: the device must be a Device object identifier"
+        ):
+            server.add_command(41, "Not a device", action=[[remote, not_a_device]])
+        server.add_command(40, "Remote", action=[[write(AO1, 1.0, 8), remote]])
+        await server.start()
+        try:
+            remote_command = ObjectIdentifier(ObjectType.COMMAND, 40)
+            self.assertEqual(await self.read(server, remote_command, P.ACTION, 0), 1)
+            with self.assertRaises(BacnetProtocolError) as raised:
+                await server.read_property(
+                    ObjectIdentifier(ObjectType.COMMAND, 41), P.PRESENT_VALUE
+                )
+            self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
+        finally:
+            await server.stop()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -272,7 +272,8 @@
     "crates/bacnet-server/src/server/schedule_reference_list_tests.rs::add_list_element_names_the_member_that_does_not_fit",
     "crates/bacnet-server/src/server/schedule_reference_list_tests.rs::a_member_in_another_device_is_refused_in_a_mixed_list",
     "crates/bacnet-server/src/local_references.rs::tests::a_malformed_member_and_what_follows_pass_on_as_written",
-    "crates/bacnet-server/src/local_references.rs::tests::other_targets_and_devices_are_left_alone"
+    "crates/bacnet-server/src/local_references.rs::tests::other_targets_and_devices_are_left_alone",
+    "crates/bacnet-server/src/handlers/tests/device_reference_writes.rs::schedule_add_list_element_refuses_a_non_device_member_by_position"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -295,7 +296,8 @@
     "Local choices: an element that does not decode is INVALID_DATA_TYPE for both services, as for every list codec (BACNET-15-LIST-ELEMENT-SEMANTICS), though the whole-list write tells a foreign datatype from a malformed member; a remote member is never stored, so removing one is LIST_ELEMENT_NOT_FOUND; a pure-duplicate add still writes the list back, and the pass resends the current value, harmlessly.",
     "#1122: 12.24.10 only lets a Schedule limited to its own device refuse references to objects outside it. The Schedule object cannot tell which Device holds it, so the server, which selects the local Device under the write's database guard, drops a Device identifier naming that Device from each member before the object decodes the value (WriteProperty, WritePropertyMultiple, write_local and both list services); teaching the object the identifier would have needed a new BACnetObject hook and keeping every Schedule in step with the Device set.",
     "A Device at the wildcard instance names no device and is never local. A read returns the stored local form, so a member written with and without the identifier is one member to the list services. Direct callers of ScheduleObject::write_property still get every Device member refused. Staging's Target_References gets the same rewrite since #1136 (BACNET-12-STAGING-TARGET-REFERENCES).",
-    "A local write of an encoded value (BACnetServer::write_local_encoded, Python write_property_local) decodes it as WriteProperty does, so an Effective_Period read locally writes back."
+    "A local write of an encoded value (BACnetServer::write_local_encoded, Python write_property_local) decodes it as WriteProperty does, so an Effective_Period read locally writes back.",
+    "A written List_Of_Object_Property_References member whose device identifier isn't a Device is VALUE_OUT_OF_RANGE, named by position, ahead of OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED for another device. The list is decoded whole and capped before any Device check, so a malformed member or the cap answers first."
    ]
   },
   {
@@ -320,7 +322,9 @@
    "negative_tests": [
     "crates/bacnet-server/src/server/staging_reference_write_tests.rs::a_target_in_another_device_is_refused_alone_or_in_a_mixed_array",
     "crates/bacnet-server/src/local_references.rs::tests::other_targets_and_devices_are_left_alone",
-    "crates/bacnet-objects/src/staging/tests.rs::supported_configuration_writes_revalidate_atomically_and_reevaluate"
+    "crates/bacnet-objects/src/staging/tests.rs::supported_configuration_writes_revalidate_atomically_and_reevaluate",
+    "crates/bacnet-server/src/handlers/tests/staging_writes.rs::staging_targets_reach_the_object_as_raw_reference_bytes",
+    "crates/bacnet-server/src/handlers/tests/device_reference_writes.rs::every_writable_device_reference_answers_the_same_octets_the_same_way"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -331,7 +335,8 @@
     "Refs #1136. Before, every element carrying a Device identifier was refused, even one naming this device, which 12.62.14 does not permit: like 12.24.10 for the Schedule, it lets a property limited to its own device refuse only references outside it.",
     "The rewrite is the Schedule's (BACNET-12-SCHEDULE-WRITES), generalized in local_references.rs over both reference types: the server, which selects the local Device under the write's database guard, drops a Device member naming that Device from each element before the object decodes the value.",
     "A Device at the wildcard instance names no device and is never local. StagingObject written directly, or configured through StagingConfig, still refuses every Device member, since it cannot tell which Device holds it. Target_References is an array, so the list services do not apply. Not covered: targets in other devices (refused; the object issues no remote writes).",
-    "Python reads Stages as (limit, values, deadband) triples and Target_References as ObjectIdentifiers, the forms add_staging takes, or as a (device, object) pair for a reference that keeps its Device member, which add_staging refuses as it takes local targets only."
+    "Python reads Stages as (limit, values, deadband) triples and Target_References as ObjectIdentifiers, the forms add_staging takes, or as a (device, object) pair for a reference that keeps its Device member, which add_staging refuses as it takes local targets only.",
+    "The server hands Target_References writes over as the written octets, decoded by the shared device_reference.rs helpers: an element of another datatype is INVALID_DATA_TYPE, and anything after an element written by index INVALID_DATA_ENCODING."
    ]
   },
   {
@@ -349,12 +354,13 @@
     "crates/bacnet-server/src/server/averaging_reference_write_tests.rs::write_property_takes_a_reference_naming_this_device_as_a_local_reference",
     "crates/bacnet-server/src/server/averaging_reference_write_tests.rs::write_property_multiple_and_write_local_take_a_reference_naming_this_device",
     "crates/bacnet-server/src/local_references.rs::tests::an_averaging_reference_naming_the_local_device_loses_its_device",
-    "crates/bacnet-objects/src/reference/tests.rs::device_frame_takes_a_local_reference_and_refuses_a_device_member"
+    "crates/bacnet-objects/src/device_reference_users_tests.rs::every_writable_device_reference_answers_the_same_value_the_same_way"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/averaging_reference_write_tests.rs::a_reference_in_another_device_is_refused_and_changes_nothing",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::averaging_object_property_reference_over_the_wire",
-    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_rejects_bad_shapes_and_preserves_state"
+    "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_rejects_bad_shapes_and_preserves_state",
+    "crates/bacnet-server/src/handlers/tests/device_reference_writes.rs::every_writable_device_reference_answers_the_same_octets_the_same_way"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -367,7 +373,8 @@
     "The rewrite is the one the Schedule and Staging rows use (BACNET-12-SCHEDULE-WRITES, BACNET-12-STAGING-TARGET-REFERENCES), from the table in local_references.rs. The service decode hands the reference over as one chunk per context-tagged member, so the server joins the chunks; when they are exactly one reference whose Device member names the local Device (selected under the write's database guard, never the wildcard instance), the object gets that reference without its Device member, and anything else reaches the object as written.",
     "Local choice: a reference naming another device is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the code the Schedule, Staging, Event Enrollment, Timer, Trend Log Multiple and Life Safety clauses give for the same restriction; 12.5.13 names none, and the encoding is valid for this production, so INVALID_DATA_ENCODING no longer fit.",
     "AveragingObject written directly still refuses every Device member, since it cannot tell which Device holds it. The property holds one reference, so array indexes and the list services do not apply; the mixed case is a value with two references, refused whole.",
-    "The object stores only local references, so the server's sampler (#1144) reads only local properties; the WriteProperty wire test has it sample a reference written with this device's identifier. Log_DeviceObjectProperty on a Trend Log (12.25.8) or a Trend Log Multiple (12.30.11) is writable and takes the same local-Device rewrite. Event Enrollment Object_Property_Reference (12.12.8), Life Safety Point and Zone Member_Of and Zone_Members (12.15.29, 12.16.26, 12.16.27) and Global Group Group_Members (12.50.5) are read-only here, and a writable Group_Members would have to accept members in other devices under 12.50.5 in any case; Timer List_Of_Object_Property_References (12.57.21) and the Channel object are not implemented. Not covered: sampling a property in another device (refused)."
+    "The object stores only local references, so the server's sampler (#1144) reads only local properties; the WriteProperty wire test has it sample a reference written with this device's identifier. Log_DeviceObjectProperty on a Trend Log (12.25.8) or a Trend Log Multiple (12.30.11) is writable and takes the same local-Device rewrite. Event Enrollment Object_Property_Reference (12.12.8), Life Safety Point and Zone Member_Of and Zone_Members (12.15.29, 12.16.26, 12.16.27) and Global Group Group_Members (12.50.5) are read-only here, and a writable Group_Members would have to accept members in other devices under 12.50.5 in any case; Timer List_Of_Object_Property_References (12.57.21) and the Channel object are not implemented. Not covered: sampling a property in another device (refused).",
+    "The server hands Object_Property_Reference writes over as the written octets, as for a Trend Log, and the shared device_reference.rs helpers decode them: anything after the one reference is INVALID_DATA_ENCODING, whatever its tag."
    ]
   },
   {
@@ -608,6 +615,8 @@
     "crates/bacnet-server/src/server/cov_notifications/confirmed.rs::send_confirmed_cov",
     "crates/bacnet-server/src/server/event_send.rs::send_event_notification",
     "crates/bacnet-server/src/server/audit_delivery.rs::deliver_observed",
+    "crates/bacnet-server/src/server/requests/unconfirmed.rs::handle_unconfirmed_request",
+    "crates/bacnet-server/src/server/discovery.rs::broadcast_i_am_from",
     "crates/bacnet-server/src/handlers/device_mgmt.rs::validate_dcc"
    ],
    "positive_tests": [
@@ -619,9 +628,11 @@
     "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_goes_out_under_disable_initiation",
     "crates/bacnet-server/src/server/notification_transactions_tests.rs::an_answer_ahead_of_a_withdrawn_retry_still_ends_the_transaction",
     "crates/bacnet-server/src/server/cov_timed_deadline_tests.rs::history_of_a_report_dcc_ends_at_a_retry_goes_out_once_enabled",
+    "crates/bacnet-server/src/server/discovery_dcc_tests.rs::{a_who_has_held_back_by_dcc_is_answered_once_the_timer_enables_initiation,a_who_has_held_back_by_dcc_is_answered_after_enable_inside_the_coalescing_window}",
     "crates/bacnet-server/src/server/cov_timed_value_split_tests.rs::a_value_dcc_withdraws_goes_out_again_with_the_rest_of_its_change"
    ],
    "negative_tests": [
+    "crates/bacnet-server/src/server/discovery_dcc_tests.rs::{disable_initiation_holds_back_i_have_and_still_answers_who_is,broadcast_i_am_fails_under_disable_initiation_and_sends_once_enabled,an_i_am_broadcaster_handle_is_refused_under_disable_initiation}",
     "crates/bacnet-server/src/server/notification_dcc_tests.rs::{dcc_ends_an_outstanding_notification_at_its_next_retry_and_frees_its_lease,dcc_in_force_at_the_first_attempt_sends_nothing_and_frees_the_lease_at_once}",
     "crates/bacnet-server/src/server/cov_confirmed_baseline_tests.rs::{confirmed_report_dcc_stops_at_a_retry_ends_there_without_a_hold_off,confirmed_follow_up_under_dcc_is_dropped_not_deferred}",
     "crates/bacnet-server/src/server/event_confirmed_routing_tests/dcc_retry.rs::dcc_ends_an_outstanding_confirmed_event_notification_at_its_next_retry",
@@ -631,6 +642,7 @@
    ],
    "benchmarks": [],
    "public_claims": [
+    "docs/rust-api.md#discovery-under-devicecommunicationcontrol",
     "docs/rust-api.md#confirmed-notifications-under-devicecommunicationcontrol"
    ],
    "notes": [
@@ -638,7 +650,7 @@
     "A COV report ended this way takes no hold-off and keeps its baselines. Its timestamped history goes back to the queue for the backstop to send once initiation is enabled; untimestamped values go out at the next fanout.",
     "An event notification ended this way moves no `EventNotificationCounters` field and is not sent again once initiation is enabled. `Acked_Transitions` keeps what the transition committed.",
     "Audit notifications, AUDITING_FAILURE summaries and Audit Log forwards go out under DISABLE_INITIATION, and one already outstanding waits for its answer; DCC never counts against a Reporter's health or as a dropped record.",
-    "DISABLE is refused with `SERVICES` / `SERVICE_REQUEST_DENIED`, so DISABLE_INITIATION is the state that restricts initiation. Command and Channel writes to other devices follow the same per-attempt rule."
+    "DISABLE is refused, so DISABLE_INITIATION restricts initiation: Who-Is still gets its I-Am, but Who-Has gets no I-Have and `broadcast_i_am` fails. Command and Channel writes to other devices follow the same per-attempt rule."
    ],
    "gaps": []
   },
@@ -2453,7 +2465,8 @@
     "crates/bacnet-encoding/src/constructed/tests/property_access_result.rs::malformed_access_results_are_refused",
     "crates/bacnet-objects/src/group/array_tests.rs::results_past_the_last_member_are_not_served",
     "crates/bacnet-objects/src/group/member_status_flags_tests.rs::{a_status_flags_member_whose_read_failed_adds_nothing,values_that_are_not_status_flags_bit_strings_add_nothing}",
-    "crates/bacnet-objects/src/group/metadata.rs::tests::property_metadata_group_trio_write_capabilities_match_dispatch"
+    "crates/bacnet-objects/src/group/metadata.rs::tests::property_metadata_group_trio_write_capabilities_match_dispatch",
+    "crates/bacnet-objects/src/device_reference_setter_tests.rs::every_device_reference_setter_refuses_a_non_device_and_takes_a_device"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2466,7 +2479,8 @@
     "Local policies: the application still acquires the member values (polling, COV or both is a local matter in Clause 12.50.7) and stores an AccessResult per member by position in GlobalGroupObject::present_value.",
     "Present_Value is built on each read from Group_Members, so it always has one element per member and each element carries that member's current reference; a member with no stored result reads PROPERTY / VALUE_NOT_INITIALIZED, the result Clause 12.50.7.1 gives an element added by a resize, and stored results past the last member are not served.",
     "Group_Members and Group_Member_Names stay read-only, so no network resize exists, and they are sized by the application. Group_Member_Names gets the same per-index reads. Member_Status_Flags reads the same store: a Status_Flags member counts only when its stored result is a bit-string value.",
-    "The decoder returns a one-element value as itself and any other count as a list, and keeps context-tagged content as ApplicationData, so a decoded element re-encodes to the same octets. Not covered: the Global Group intrinsic reporting, COVU and Update_Interval rows; writable Group_Members (with the Clause 12.50.5.1 resizing); acquisition of member values by the server itself."
+    "The decoder returns a one-element value as itself and any other count as a list, and keeps context-tagged content as ApplicationData, so a decoded element re-encodes to the same octets. Not covered: the Global Group intrinsic reporting, COVU and Update_Interval rows; writable Group_Members (with the Clause 12.50.5.1 resizing); acquisition of member values by the server itself.",
+    "Group_Members is set through GlobalGroupObject::set_group_members or add_group_member, which refuse a device identifier that isn't a Device with VALUE_OUT_OF_RANGE and keep the members."
    ]
   },
   {
@@ -2582,7 +2596,10 @@
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/action_list.rs::{action_command_priority_outside_one_to_sixteen_is_refused_both_ways,action_command_rejects_missing_members_and_bad_forms}",
-    "crates/bacnet-objects/src/command/tests.rs::{command_set_action_refuses_a_priority_outside_one_to_sixteen,command_action_read_only}"
+    "crates/bacnet-objects/src/command/tests.rs::{command_set_action_refuses_a_priority_outside_one_to_sixteen,command_action_read_only}",
+    "crates/bacnet-objects/src/device_reference_setter_tests.rs::every_device_reference_setter_refuses_a_non_device_and_takes_a_device",
+    "crates/rusty-bacnet/src/types/action_list_tests.rs::action_command_mappings_refuse_bad_shapes_and_types",
+    "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_device_identifier_names_a_device_or_nothing"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2594,7 +2611,8 @@
     "A command's members are context tags [0] to [8] in order, with the value framed in [4]; the decoder returns a one-element value as itself and any other count as a list, and keeps context-tagged content as ApplicationData, so a decoded command re-encodes to the same octets.",
     "Local policies: CommandObject::set_action takes typed BACnetActionList values and refuses, with PROPERTY / VALUE_OUT_OF_RANGE and Action unchanged, a command whose priority is outside 1..=16 or whose value has no encoding; the codec refuses the same priorities both ways.",
     "StructuredViewObject::add_subordinate takes anything that converts into a BACnetDeviceObjectReference, so an ObjectIdentifier alone still adds a subordinate in this device. The application adds subordinates with add_subordinate or replaces them all with set_subordinates (reference and annotation pairs), so the two arrays keep one size; both refuse a device identifier that is not a Device.",
-    "Running the action lists and Action_Text are BACNET-12-COMMAND-ACTION-EXECUTION (#1150). Not covered: Subordinate_Tags, Subordinate_Node_Types and Subordinate_Relationships aren't served; writable Subordinate_List with the Clause 12.29.7 resizing of its sibling arrays."
+    "Running the action lists and Action_Text are BACNET-12-COMMAND-ACTION-EXECUTION (#1150). Not covered: Subordinate_Tags, Subordinate_Node_Types and Subordinate_Relationships aren't served; writable Subordinate_List with the Clause 12.29.7 resizing of its sibling arrays.",
+    "CommandObject::set_action also refuses, with VALUE_OUT_OF_RANGE and Action unchanged, a command whose device identifier isn't a Device; Python add_command raises ValueError for one."
    ]
   },
   {
@@ -2960,7 +2978,7 @@
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/access_control/zone.rs::AccessZoneObject",
-    "crates/bacnet-objects/src/device_reference.rs::object_reference_list",
+    "crates/bacnet-objects/src/device_reference.rs::reference_list",
     "crates/bacnet-objects/src/device_reference.rs::check_device_member",
     "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs"
    ],
@@ -3066,7 +3084,7 @@
    "id": "BACNET-21-DEVICE-OBJECT-REFERENCE-DEVICE-MEMBER",
    "standard_anchor": "Clause 21 BACnetDeviceObjectReference and BACnetDeviceObjectPropertyReference, Clause 15.9.1.3",
    "priority": "P1",
-   "summary": "Setters and write paths that store a device object reference, or a Channel member, refuse a device identifier that is not a Device object with VALUE_OUT_OF_RANGE.",
+   "summary": "Setters and write paths that store a device object reference, a device object property reference or an action command refuse a device identifier that is not a Device with VALUE_OUT_OF_RANGE.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-types/src/constructed/mod.rs::device_identifier_is_device",
@@ -3078,8 +3096,14 @@
     "crates/bacnet-objects/src/access_control/rights.rs::check_access_rule",
     "crates/rusty-bacnet/src/types/property_reference.rs::check_device",
     "crates/bacnet-objects/src/group.rs::add_subordinate",
-    "crates/bacnet-objects/src/channel/arrays.rs::check_member",
-    "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs"
+    "crates/bacnet-objects/src/device_reference.rs::check_device_members",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs",
+    "crates/bacnet-objects/src/device_reference.rs::check_local_member",
+    "crates/bacnet-objects/src/group.rs::set_group_members",
+    "crates/bacnet-objects/src/command.rs::set_action",
+    "crates/bacnet-objects/src/event_enrollment/mod.rs::set_object_property_reference",
+    "crates/bacnet-objects/src/schedule/targets.rs",
+    "crates/rusty-bacnet/src/types/action_list.rs"
    ],
    "positive_tests": [
     "crates/bacnet-types/src/constructed/tests.rs::{device_object_reference_device_identifier_must_be_a_device,device_object_property_reference_device_identifier_must_be_a_device}",
@@ -3098,7 +3122,14 @@
     "crates/bacnet-objects/src/channel/array_tests.rs::channel_members_refuse_a_non_device_device_identifier",
     "crates/bacnet-server/src/server/channel_wire_tests.rs::channel_member_list_refuses_a_non_device_device_identifier_over_the_wire",
     "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_device_reference_pairs_name_a_device",
-    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_device_reference_pairs_name_a_device"
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_device_reference_pairs_name_a_device",
+    "crates/bacnet-objects/src/device_reference_setter_tests.rs::every_device_reference_setter_refuses_a_non_device_and_takes_a_device",
+    "crates/bacnet-objects/src/device_reference_users_tests.rs::every_writable_device_reference_answers_the_same_value_the_same_way",
+    "crates/bacnet-server/src/handlers/tests/device_reference_writes.rs::every_writable_device_reference_answers_the_same_octets_the_same_way",
+    "crates/bacnet-server/src/handlers/tests/device_reference_writes.rs::schedule_add_list_element_refuses_a_non_device_member_by_position",
+    "crates/bacnet-objects/src/schedule/targets_tests.rs::reference_list_refusals_leave_it_unchanged",
+    "crates/rusty-bacnet/src/types/action_list_tests.rs::action_command_mappings_refuse_bad_shapes_and_types",
+    "crates/rusty-bacnet/tests/test_command_actions.py::CommandActionTests::test_device_identifier_names_a_device_or_nothing"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3106,15 +3137,13 @@
     "docs/python-api.md#access-control"
    ],
    "notes": [
-    "One check, `check_device_member` on the bacnet-types rule, covers Door_Members, Access_Doors, Access_Event_Credential, Assigned_Access_Rights, Subordinate_List, Energy_Meter_Ref, Target_References and the log and averaging references.",
-    "A Staging Target_References member gets this answer ahead of the remote-device refusal, and one naming another object type at the local Device's instance is not localized.",
-    "Python raises ValueError for a `(device, object)` pair whose device is not a Device, before any object is built.",
+    "One check, `check_device_member` on the bacnet-types rule, covers every device reference setter and network write path in bacnet-objects except Audit Log Member_Of, and the device identifier of each Command action command.",
+    "On Averaging, Trend Log, Schedule and Staging writes, held to this device, the answer comes ahead of the remote-device refusal; a member naming another object type at the local Device's instance is not localized.",
+    "Python raises ValueError for a non-Device device in a `(device, object)` pair, a reference mapping or an `ActionCommand`, naming the element, before any object is built.",
     "Audit Log Member_Of keeps any parent and reports an unusable one as CONFIGURATION_ERROR, outside this check.",
-    "Channel List_Of_Object_Property_References members get the same check from `set_members` and from network writes, ahead of the remote-device refusal and the empty-member test."
+    "A Device at instance 4194303 passes; another object type at that instance is refused too, ahead of the Channel and Trend Log Multiple empty-element rules."
    ],
-   "gaps": [
-    "#1308: Schedule List_Of_Object_Property_References, Global Group members, Command action lists and the Event Enrollment setter don't run this check"
-   ]
+   "gaps": []
   },
   {
    "id": "BACNET-12-ACCESS-CONTROL-ARRAYS",
@@ -4660,7 +4689,7 @@
    "id": "BACNET-12-DEVICE-REFERENCE-PROPERTIES",
    "standard_anchor": "Clauses 12.5.13, 12.12.8, 12.15.29, 12.16.26, 12.16.27, 12.25.8 and 12.30.11; Clause 21",
    "priority": "P1",
-   "summary": "Averaging, Event Enrollment, Trend Log, Trend Log Multiple and Life Safety reference properties read, and take writes where writable, in their context-tagged Clause 21 encodings.",
+   "summary": "Every device reference property reads, and takes writes where writable, in its context-tagged Clause 21 encoding through one shared module, with one set of write errors.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/device_reference.rs",
@@ -4668,7 +4697,10 @@
     "crates/bacnet-objects/src/life_safety/membership.rs",
     "crates/bacnet-objects/src/database/trend_poll.rs",
     "crates/bacnet-server/src/local_references.rs",
-    "crates/bacnet-server/src/event_enrollment/reference.rs::decode_reference_value"
+    "crates/bacnet-server/src/event_enrollment/reference.rs::decode_reference_value",
+    "crates/bacnet-objects/src/device_reference.rs::decode_references",
+    "crates/bacnet-objects/src/device_reference.rs::decode_reference",
+    "crates/bacnet-objects/src/device_reference.rs::reference_elements"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/device_reference_tests.rs::property_reference_value_is_the_context_tagged_members",
@@ -4696,7 +4728,10 @@
     "crates/bacnet-objects/src/life_safety/membership_tests.rs::membership_refuses_other_object_types_and_device_members",
     "crates/bacnet-objects/src/life_safety/membership_tests.rs::member_lists_stay_read_only_over_the_network",
     "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_reference_write_refusals_change_nothing",
-    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_multiple_reference_write_refusals_change_nothing"
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_multiple_reference_write_refusals_change_nothing",
+    "crates/bacnet-objects/src/device_reference_users_tests.rs::every_writable_device_reference_answers_the_same_value_the_same_way",
+    "crates/bacnet-server/src/handlers/tests/device_reference_writes.rs::every_writable_device_reference_answers_the_same_octets_the_same_way",
+    "crates/bacnet-server/src/handlers/tests/staging_writes.rs::staging_targets_reach_the_object_as_raw_reference_bytes"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -4705,7 +4740,7 @@
    ],
    "notes": [
     "An unset Averaging, Event Enrollment or Trend Log reference reads Null, since the production has no empty form.",
-    "Writes decode with the shared codec: another datatype is INVALID_DATA_TYPE, a malformed or second reference INVALID_DATA_ENCODING, and a Device member naming no Device VALUE_OUT_OF_RANGE.",
+    "Writable references reach the object as the written octets: another datatype, or a list element that can't open a reference, is INVALID_DATA_TYPE; a malformed reference, or anything after a single one, INVALID_DATA_ENCODING.",
     "Averaging and both trend objects keep their references inside this device: the server drops a Device member naming its own Device, and any other is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.",
     "A Trend Log Multiple holds at most 64 references; an index 0 write resizes it, padding with empty elements, ones naming instance 4194303. A client's change to either trend reference purges the log.",
     "Event Enrollment Object_Property_Reference and the Life Safety member lists are read-only over the network; the application sets them."

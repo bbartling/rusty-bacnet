@@ -67,7 +67,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
-use crate::device_reference::object_reference_list;
+use crate::device_reference::reference_list;
 use crate::traits::{BACnetObject, LifeSafetyOperationEffect, LifeSafetyOperationOutcome};
 
 mod application;
@@ -415,7 +415,7 @@ impl BACnetObject for LifeSafetyPointObject {
             p if p == PropertyIdentifier::TRACKING_VALUE => {
                 Ok(PropertyValue::Enumerated(self.tracking_value.to_raw()))
             }
-            p if p == PropertyIdentifier::MEMBER_OF => Ok(object_reference_list(&self.member_of)),
+            p if p == PropertyIdentifier::MEMBER_OF => Ok(reference_list(&self.member_of)),
             p if p == PropertyIdentifier::DIRECT_READING => {
                 Ok(PropertyValue::Real(self.direct_reading))
             }
@@ -739,10 +739,8 @@ impl BACnetObject for LifeSafetyZoneObject {
             p if p == PropertyIdentifier::TRACKING_VALUE => {
                 Ok(PropertyValue::Enumerated(self.tracking_value.to_raw()))
             }
-            p if p == PropertyIdentifier::ZONE_MEMBERS => {
-                Ok(object_reference_list(&self.zone_members))
-            }
-            p if p == PropertyIdentifier::MEMBER_OF => Ok(object_reference_list(&self.member_of)),
+            p if p == PropertyIdentifier::ZONE_MEMBERS => Ok(reference_list(&self.zone_members)),
+            p if p == PropertyIdentifier::MEMBER_OF => Ok(reference_list(&self.member_of)),
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }

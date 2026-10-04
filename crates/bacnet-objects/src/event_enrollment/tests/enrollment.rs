@@ -133,7 +133,8 @@ fn read_object_property_reference_some() {
         property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
         property_array_index: None,
         device_identifier: None,
-    }));
+    }))
+    .unwrap();
     // [0] analog-input 5, [1] present-value; the absent index and Device
     // members are left out rather than sent as Null (#1182).
     assert_eq!(
@@ -151,7 +152,8 @@ fn read_object_property_reference_serves_every_member() {
         property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
         property_array_index: Some(1),
         device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 260).unwrap()),
-    }));
+    }))
+    .unwrap();
     assert_eq!(
         ee.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
             .unwrap(),

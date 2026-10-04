@@ -136,9 +136,7 @@ impl AccessDoorObject {
     ) -> Result<(), Error> {
         let members: Vec<BACnetDeviceObjectReference> =
             members.into_iter().map(Into::into).collect();
-        members.iter().try_for_each(|member| {
-            crate::device_reference::check_device_member(member.device_identifier)
-        })?;
+        crate::device_reference::check_device_members(&members)?;
         self.door_members = members;
         Ok(())
     }
@@ -388,9 +386,10 @@ impl BACnetObject for AccessDoorObject {
             p if p == PropertyIdentifier::DOOR_ALARM_STATE => Ok(PropertyValue::Enumerated(
                 self.state.door_alarm_state.to_raw(),
             )),
-            p if p == PropertyIdentifier::DOOR_MEMBERS => {
-                common::read_array(device_object_references(&self.door_members), array_index)
-            }
+            p if p == PropertyIdentifier::DOOR_MEMBERS => common::read_array(
+                crate::device_reference::reference_elements(&self.door_members),
+                array_index,
+            ),
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }

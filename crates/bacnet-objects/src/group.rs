@@ -5,7 +5,6 @@
 //! - StructuredViewObject (type 29) — Clause 12.29
 
 use bacnet_encoding::constructed::{
-    encode_device_object_property_reference, encode_device_object_reference,
     encode_property_access_result, encode_read_access_specification,
 };
 use bacnet_types::bitstring::status_flags_from_bacnet;
@@ -20,6 +19,7 @@ use bytes::BytesMut;
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties, read_identity_properties};
+use crate::device_reference;
 use crate::traits::BACnetObject;
 
 mod metadata;
@@ -237,9 +237,10 @@ impl BACnetObject for GroupObject {
 /// allowing references to properties on remote devices. GROUP_MEMBER_NAMES
 /// provides human-readable names for each member.
 ///
-/// The application acquires the members' values and stores what each read
-/// produced in `present_value`, by position in `group_members`: the value,
-/// or the error the read failed with. Present_Value goes out as one
+/// The application sets the members with
+/// [`set_group_members`](Self::set_group_members), acquires their values and
+/// stores what each read produced in `present_value`, by position in the
+/// members: the value, or the error the read failed with. Present_Value goes out as one
 /// `BACnetPropertyAccessResult` per member, the member's reference followed
 /// by that result (Clause 12.50.7), so the array always has one element per
 /// member. A member with no stored result reads as PROPERTY /
@@ -256,10 +257,11 @@ pub struct GlobalGroupObject {
     status_flags: StatusFlags,
     out_of_service: bool,
     reliability: Reliability,
-    /// The group member references (device, object, property).
-    pub group_members: Vec<BACnetDeviceObjectPropertyReference>,
+    /// The group member references (device, object, property). Only
+    /// `set_group_members` changes them, so each Device member is a Device.
+    group_members: Vec<BACnetDeviceObjectPropertyReference>,
     /// What the last read of each member produced, by position in
-    /// `group_members` (populated externally).
+    /// Group_Members (populated externally).
     pub present_value: Vec<AccessResult>,
     /// Human-readable names for each member.
     pub group_member_names: Vec<String>,
@@ -280,6 +282,40 @@ impl GlobalGroupObject {
             present_value: Vec::new(),
             group_member_names: Vec::new(),
         })
+    }
+
+    /// Replace Group_Members, the references whose values the group reports,
+    /// each naming an object in this device or, through its device
+    /// identifier, in another. The array is read-only over the network.
+    ///
+    /// A reference whose device identifier isn't a Device object is refused
+    /// with PROPERTY / VALUE_OUT_OF_RANGE and the members set before are kept
+    /// (#1308). `present_value` and `group_member_names` stay as they are:
+    /// they follow the members by position.
+    pub fn set_group_members(
+        &mut self,
+        members: Vec<BACnetDeviceObjectPropertyReference>,
+    ) -> Result<(), Error> {
+        device_reference::check_device_members(&members)?;
+        self.group_members = members;
+        Ok(())
+    }
+
+    /// Append one reference to Group_Members, refused like
+    /// [`set_group_members`](Self::set_group_members): a device identifier
+    /// that isn't a Device object is VALUE_OUT_OF_RANGE and adds nothing.
+    pub fn add_group_member(
+        &mut self,
+        member: BACnetDeviceObjectPropertyReference,
+    ) -> Result<(), Error> {
+        device_reference::check_device_member(member.device_identifier)?;
+        self.group_members.push(member);
+        Ok(())
+    }
+
+    /// The Group_Members references, in order.
+    pub fn group_members(&self) -> &[BACnetDeviceObjectPropertyReference] {
+        &self.group_members
     }
 
     /// Member_Status_Flags (Clause 12.50.10): the OR of every Status_Flags
@@ -352,14 +388,7 @@ impl BACnetObject for GlobalGroupObject {
             // reference for Group_Members, a reference and its access result
             // for Present_Value (Table 12-57).
             p if p == PropertyIdentifier::GROUP_MEMBERS => common::read_array(
-                self.group_members
-                    .iter()
-                    .map(|reference| {
-                        let mut encoded = BytesMut::new();
-                        encode_device_object_property_reference(&mut encoded, reference);
-                        PropertyValue::ApplicationData(encoded.to_vec())
-                    })
-                    .collect(),
+                device_reference::reference_elements(&self.group_members),
                 array_index,
             ),
             p if p == PropertyIdentifier::PRESENT_VALUE => {
@@ -466,7 +495,7 @@ impl StructuredViewObject {
         annotation: impl Into<String>,
     ) -> Result<(), Error> {
         let reference = reference.into();
-        crate::device_reference::check_device_member(reference.device_identifier)?;
+        device_reference::check_device_member(reference.device_identifier)?;
         self.subordinate_list.push(reference);
         self.subordinate_annotations.push(annotation.into());
         Ok(())
@@ -483,7 +512,7 @@ impl StructuredViewObject {
         subordinates: Vec<(BACnetDeviceObjectReference, String)>,
     ) -> Result<(), Error> {
         for (reference, _) in &subordinates {
-            crate::device_reference::check_device_member(reference.device_identifier)?;
+            device_reference::check_device_member(reference.device_identifier)?;
         }
         (self.subordinate_list, self.subordinate_annotations) = subordinates.into_iter().unzip();
         Ok(())
@@ -526,14 +555,7 @@ impl BACnetObject for StructuredViewObject {
                 Ok(PropertyValue::CharacterString(self.node_subtype.clone()))
             }
             p if p == PropertyIdentifier::SUBORDINATE_LIST => common::read_array(
-                self.subordinate_list
-                    .iter()
-                    .map(|reference| {
-                        let mut encoded = BytesMut::new();
-                        encode_device_object_reference(&mut encoded, reference);
-                        PropertyValue::ApplicationData(encoded.to_vec())
-                    })
-                    .collect(),
+                device_reference::reference_elements(&self.subordinate_list),
                 array_index,
             ),
             p if p == PropertyIdentifier::SUBORDINATE_ANNOTATIONS => common::read_array(

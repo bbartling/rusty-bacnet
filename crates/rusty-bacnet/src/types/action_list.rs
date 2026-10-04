@@ -1,8 +1,9 @@
 //! Python mapping boundary for a Command object's Action lists (#1179).
 //!
-//! Each command is an `ActionCommand` mapping. This layer checks shapes and
-//! Python types only; `CommandObject::set_action` decides what BACnet allows,
-//! such as a priority from 1 to 16.
+//! Each command is an `ActionCommand` mapping. This layer checks shapes,
+//! Python types and the device identifier (a non-Device raises ValueError,
+//! as for any other device reference, #1308); `CommandObject::set_action`
+//! decides what else BACnet allows, such as a priority from 1 to 16.
 
 use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
 use pyo3::exceptions::PyTypeError;
@@ -81,10 +82,12 @@ fn action_command(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetAction
             field(key)
         ))),
     };
+    let device_identifier = optional_item(value, "device_identifier")?
+        .map(|item| object_identifier(&item, &field("device_identifier")))
+        .transpose()?;
+    super::check_device(device_identifier, name)?;
     Ok(BACnetActionCommand {
-        device_identifier: optional_item(value, "device_identifier")?
-            .map(|item| object_identifier(&item, &field("device_identifier")))
-            .transpose()?,
+        device_identifier,
         object_identifier: object_identifier(
             &required_item(value, name, "object_identifier")?,
             &field("object_identifier"),
