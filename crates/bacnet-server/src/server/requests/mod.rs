@@ -3,6 +3,8 @@ use super::event_forwarding::{ForwardOrigin, Reception};
 use super::*;
 use bacnet_services::alarm_event::ForwardedEventNotification;
 
+#[cfg(test)]
+mod access_rights_mutation_tests;
 mod acknowledge_alarm;
 mod alarm_summary;
 mod atomic_read_file;
@@ -179,7 +181,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             network,
             notification_transactions,
             device_bindings,
-            comm_state,
             super::audit_reporter::RequestSource {
                 mac: source_mac,
                 network: source_network.as_ref(),
@@ -413,7 +414,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 network,
                                 notification_transactions,
                                 device_bindings,
-                                comm_state,
                                 config.max_apdu_length,
                             );
                         }

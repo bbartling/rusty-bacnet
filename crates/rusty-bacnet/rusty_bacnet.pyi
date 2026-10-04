@@ -2920,7 +2920,17 @@ class BACnetServer:
     def add_program(self, instance: int, name: str) -> None: ...
 
     # --- Lighting ---
-    def add_lighting_output(self, instance: int, name: str) -> None: ...
+    def add_lighting_output(self, instance: int, name: str) -> None:
+        """Add a Lighting Output object.
+
+        Its Lighting_Command reads and writes as ``application_data`` holding
+        the context-tagged BACnetLightingCommand, operation NONE
+        (``b"\\x09\\x00"``) until written. An ``octet_string`` or any other
+        datatype is refused with INVALID_DATA_TYPE, and a command its operation
+        can't take with VALUE_OUT_OF_RANGE. The object stores a command
+        without carrying it out.
+        """
+        ...
     def add_binary_lighting_output(self, instance: int, name: str) -> None: ...
     def add_channel(
         self,
@@ -3065,16 +3075,21 @@ class BACnetServer:
         *,
         positive_access_rules: Optional[list[AccessRule]] = None,
         negative_access_rules: Optional[list[AccessRule]] = None,
+        enable: bool = True,
     ) -> None:
         """Add an Access Rights object to the server (before starting).
 
         ``positive_access_rules`` and ``negative_access_rules`` set the two
-        rule arrays (read-only over the network) as ``AccessRule`` mappings.
-        A wrong shape or type raises TypeError, an unknown or missing key or a
+        rule arrays as ``AccessRule`` mappings, and ``enable`` sets Enable
+        (``PropertyIdentifier.LOG_ENABLE``, property 133), whose FALSE
+        disables every rule. Peers can write all three over the network. A
+        wrong shape or type raises TypeError, an unknown or missing key or a
         device that isn't a Device raises ValueError, and a location naming
         anything but an Access Point or Access Zone raises BacnetProtocolError
-        with VALUE_OUT_OF_RANGE; nothing is registered after any of them. The
-        server stores and serves the rules but doesn't evaluate them.
+        with VALUE_OUT_OF_RANGE, and so does a list of more than 1024 rules
+        (NO_SPACE_TO_WRITE_PROPERTY). Nothing is registered after any of
+        them. The server stores and serves the rules but doesn't evaluate
+        them.
         """
         ...
     def add_access_user(self, instance: int, name: str) -> None: ...

@@ -124,7 +124,6 @@ async fn audit_reporter_list_optional_values_are_validated_independently() {
         fixture.server.test_network(),
         &fixture.server.notification_transactions,
         &fixture.server.device_bindings,
-        &fixture.server.comm_state,
         audit_reporter::RequestSource {
             mac: SOURCE,
             network: None,
@@ -681,6 +680,9 @@ mod batch_history;
 
 #[path = "audit_reporter_empty_tests.rs"]
 mod empty_values;
+
+#[path = "audit_dcc_tests.rs"]
+mod dcc;
 
 #[tokio::test(start_paused = true)]
 async fn immediate_and_delayed_reporter_raw_1474_emit_header_1024() {

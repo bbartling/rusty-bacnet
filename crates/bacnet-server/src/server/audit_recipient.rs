@@ -22,7 +22,6 @@ pub(super) struct TargetAudit<T: TransportPort> {
     pub(super) sequence: Arc<EventSequence>,
     pub(super) network: Arc<NetworkLayer<T>>,
     pub(super) transactions: Arc<NotificationTransactions>,
-    pub(super) comm_state: Arc<AtomicU8>,
     pub(super) max_apdu: u32,
 }
 
@@ -110,7 +109,6 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
         routes: Arc<super::audit_recipient_routes::AuditRoutes>,
         network: &Arc<NetworkLayer<T>>,
         transactions: &Arc<NotificationTransactions>,
-        comm_state: &Arc<AtomicU8>,
     ) -> Result<Option<Arc<Self>>, Error> {
         let Some(profile) = &config.audit_reporters else {
             return Ok(None);
@@ -153,7 +151,6 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
             sequence: db.event_sequence_internal(),
             network: Arc::clone(network),
             transactions: Arc::clone(transactions),
-            comm_state: Arc::clone(comm_state),
             max_apdu: config.max_apdu_length,
         });
         let sink: Arc<dyn AuditRecipientChangeSink> = runtime.clone();
@@ -182,7 +179,6 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
             Arc::clone(&runtime.batches),
             Arc::clone(network),
             transactions,
-            Arc::clone(comm_state),
         );
         Ok(Some(runtime))
     }
@@ -217,7 +213,7 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
         let selected = self.association.select_recipient_change(self.device);
         let status = selected.status;
         self.transactions.commit_audit(|| {
-            if !self.owner.is_active() || self.comm_state.load(Ordering::Acquire) != 0 {
+            if !self.owner.is_active() {
                 return Err(denied());
             }
             let old_route = self.routes.resolve(current).ok_or_else(denied)?;
@@ -306,7 +302,6 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
                     }
                 }
                 let network = Arc::clone(&self.network);
-                let comm_state = Arc::clone(&self.comm_state);
                 let status = Arc::clone(&status);
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
                 let mut attempts = attempts.into_iter();
@@ -331,18 +326,10 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
                     ),
                                completion: DeliveryCompletion| {
                         let network = Arc::clone(&network);
-                        let comm_state = Arc::clone(&comm_state);
                         async move {
                             let _permit = _permit;
-                            let delivered = deliver(
-                                &network,
-                                &comm_state,
-                                &route,
-                                &bytes,
-                                reservation,
-                                deadline,
-                            )
-                            .await;
+                            let delivered =
+                                deliver(&network, &route, &bytes, reservation, deadline).await;
                             completion.finish(delivered);
                         }
                     };

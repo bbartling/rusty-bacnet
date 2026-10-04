@@ -471,6 +471,8 @@ use bacnet_services::write_group::{GroupChannelValue, WriteGroupRequest};
 Each `GroupChannelValue` carries a `u16` channel number, an optional override priority
 (1 to 16) and the already-encoded BACnetChannelValue in `value`: one
 application-tagged primitive, or a context-0 lighting command, with no wrapper tag.
+A lighting command is the `encode_lighting_command` octets between an opening and
+a closing context tag 0; its priority, when present, must be 1 to 16.
 `encode` is fallible: it rejects priorities outside 1 to 16, an empty change list and
 a value that is not a single BACnetChannelValue with `Error::Encoding`, leaving the
 buffer unchanged. `decode` enforces the same rules and rejects trailing data.
@@ -1637,6 +1639,21 @@ Audit record; present read-only arrays and unindexed absence retain their existi
 Audit handling. The outer WP authorization check and direct object writes are
 unchanged.
 
+WriteProperty and WritePropertyMultiple give a property that
+`BACnetObject::is_list_property` reports as a BACnetLIST, written whole, to the
+object as a `PropertyValue::List` of any length: a value with no octets is the
+empty list (Clause 20.2.17), so Alarm_Values can be cleared, and one element is
+a list of one. The object judges the list, so an empty value on a read-only list
+is its `PROPERTY/WRITE_ACCESS_DENIED`, and on a list it doesn't serve
+`PROPERTY/UNKNOWN_PROPERTY`. A few properties the server decodes for the object
+arrive as their raw octets in `PropertyValue::ApplicationData` instead, lists
+among them: Recipient_List, Subscribed_Recipients,
+List_Of_Object_Property_References, and the Loop and Pulse Converter references.
+The object decides what an empty value means there (an empty
+Setpoint_Reference holds no reference). For any other property, no octets is
+`PROPERTY/INVALID_DATA_ENCODING` and one element arrives alone.
+`write_local_encoded` and a Command's writes decode the same way (#1328).
+
 AddListElement and RemoveListElement edit only properties that
 `BACnetObject::is_list_property` reports as a BACnetLIST. The default follows the
 Clause 12 datatypes, including identifiers whose type depends on the object type
@@ -1880,16 +1897,27 @@ framing, through the shared `bacnet-encoding` codecs.
 - **Access Rights rules**: `Positive_Access_Rules` and `Negative_Access_Rules`
   are BACnetARRAYs of `bacnet_types::constructed::BACnetAccessRule` (codec
   `bacnet_encoding::constructed::{encode_access_rule, decode_access_rule}`),
-  read whole, by index and at index 0 for the size like the arrays above, and
-  read-only on the network. `BACnetAccessRule::new(time_range, location,
-  enable)` sets each specifier from its reference: SPECIFIED when given,
-  ALWAYS or ALL when `None`. `AccessRightsObject::set_positive_access_rules`
-  and `set_negative_access_rules` return `Result` and keep the old rules on
+  read whole, by index and at index 0 for the size like the arrays above.
+  `BACnetAccessRule::new(time_range, location, enable)` sets each specifier
+  from its reference: SPECIFIED when given, ALWAYS or ALL when `None`.
+  `AccessRightsObject::set_positive_access_rules` and
+  `set_negative_access_rules` return `Result` and keep the old rules on
   VALUE_OUT_OF_RANGE: a device member that isn't a Device, a specifier
   outside its two values, SPECIFIED without its reference, ALWAYS or ALL with
   a reference that isn't unspecified (instance 4194303), or a location that is
-  neither an Access Point, an Access Zone nor unspecified. The object stores
-  and serves the rules; nothing in the stack evaluates them.
+  neither an Access Point, an Access Zone nor unspecified. A list longer than
+  `MAX_ACCESS_RULES` (1024) is NO_SPACE_TO_WRITE_PROPERTY. Peers write both
+  arrays with WriteProperty and WritePropertyMultiple: the whole array (the
+  rules' octets back to back), one rule at an index, or the size at index 0.
+  Each write gets the setters' checks, and a refused one leaves the array
+  as it was. Growing at index 0 appends SPECIFIED rules with unspecified
+  references (Schedule 4194303's Present_Value, Access Point 4194303) and
+  the enable flag FALSE (Clause 12.34.9.3); shrinking drops rules from the
+  end. Enable (property 133, `PropertyIdentifier::LOG_ENABLE`) is a BOOLEAN,
+  TRUE by default, set with `set_enable` or written by peers; FALSE disables
+  every rule in both arrays (Clause 12.34.8) without touching each rule's own
+  flag. The object stores and serves the rules and the flag; nothing in the
+  stack evaluates them.
 - **Device references**: a
   `BACnetDeviceObjectReference` whose device identifier is present must name
   a Device object (Clause 21);
@@ -2727,6 +2755,33 @@ A fade time outside 100 to 86,400,000 ms, or a rate or increment outside 0.1
 to 100.0, is refused with VALUE_OUT_OF_RANGE (Clauses 12.54.16 to 12.54.18).
 Both lighting objects serve `Current_Command_Priority`.
 
+Lighting Output's `Lighting_Command` holds a `BACnetLightingCommand`
+(`bacnet_types::constructed`): an operation plus an optional target level, ramp
+rate, step increment, fade time and priority (#1263). It reads operation NONE
+until written. Over the network it travels as the command's context-tagged
+fields, which `bacnet_encoding::constructed::encode_lighting_command` writes and
+`decode_lighting_command_value` reads (`decode_lighting_command` reads one at
+an offset inside a larger value); locally the object reads as
+`PropertyValue::ApplicationData` holding those octets, and
+`set_lighting_command` and `lighting_command` take and return the typed value.
+Each command is checked against its operation (Clause 12.54, Table 12-67):
+
+- NONE, the reserved operations 11 to 255 and anything past 65,535 are refused.
+- FADE_TO and RAMP_TO need a target level.
+- A field the operation uses must be in range: target level 0.0 to 100.0, fade
+  time (FADE_TO) 100 to 86,400,000 ms, ramp rate (RAMP_TO) and step increment
+  (the four step operations) 0.1 to 100.0, and priority 1 to 16.
+- A field the operation doesn't use is kept as written without a check. A
+  proprietary operation (256 to 65,535) has only its priority checked, the
+  same check a Channel makes of a lighting command written to it.
+
+A refused command is VALUE_OUT_OF_RANGE. Any other datatype, an OCTET STRING
+included, is INVALID_DATA_TYPE, and octets that aren't exactly one command are
+INVALID_DATA_ENCODING, even when a field is also too wide for its type. An
+Unsigned or ENUMERATED field may open with zero octets only up to four contents
+octets. The object stores the command without carrying it out: Present_Value,
+Tracking_Value, In_Progress and the priority array stay as they are (#1384).
+
 A Channel passes each value written to its Present_Value on to its members
 (Clause 12.53, #1151). Give it the members with `ChannelObject::set_members`,
 each a `BACnetDeviceObjectPropertyReference` to an object in this device or
@@ -2749,6 +2804,8 @@ object, at the priority the write carried, once that member's delay has passed;
 every delay counts from the same start. The value is first converted to the
 datatype of the member property's current value by the Table 12-63 rules (a
 REAL 1.0 reaches a Binary Output as ACTIVE, a Multi-state Output as state 1).
+A lighting command goes only to a `Lighting_Command` member, as the command
+without its context-0 framing, which a Lighting Output takes.
 Readings of the rules: an Unsigned or ENUMERATED value above 2147483647
 fails for INTEGER, REAL and Double members. A REAL or Double going to an
 integer type keeps its integer part if it lies in 0 to 2147483000 (Unsigned,
@@ -4618,6 +4675,7 @@ The server automatically dispatches:
 **Outgoing (server-initiated):**
 - COV notifications (confirmed and unconfirmed, with `NotificationTransactions` retries for confirmed)
 - Event notifications (confirmed and unconfirmed, routed via NotificationClass recipients, and the copies Notification Forwarder objects send on)
+- Audit notifications (confirmed and unconfirmed, from Audit Reporters and Audit Log forwarding; one attempt each, and they keep going out under DISABLE_INITIATION, see [Confirmed notifications under DeviceCommunicationControl](#confirmed-notifications-under-devicecommunicationcontrol))
 
 Confirmed notification invoke IDs, terminal admission and retries belong to
 `NotificationTransactions`. A separate private learned-router cache stores up to
@@ -4681,12 +4739,18 @@ the notification:
   notification is not sent again once communication is enabled, the same as a
   transition DCC stops before its first send. `Acked_Transitions` keeps what
   the transition set; delivery never changes it.
-- **Audit.** Not withdrawn. Clause 16.1 exempts Confirmed- and
-  UnconfirmedAuditNotification from DISABLE_INITIATION, and an audit
-  notification makes a single attempt with no retries, so one already sent
-  waits for its answer, and the reporter's health and backlog are untouched.
-  The server still holds back audit notifications that are due to start while
-  initiation is disabled, a known gap against that exemption (#1370).
+- **Audit.** Not withdrawn, and not held back. Clause 16.1 exempts Confirmed-
+  and UnconfirmedAuditNotification from DISABLE_INITIATION, so no audit sender
+  reads the communication state (#1370). An audit notification makes a single
+  attempt with no retries: one already sent waits for its answer, and one due
+  while initiation is disabled goes out as usual. That covers Audit Reporter
+  records, immediate or batched by `Maximum_Send_Delay`, their
+  AUDITING_FAILURE summaries and Audit Log forwarding. Only real delivery
+  moves a Reporter's health, and a record dropped for want of a send slot is
+  summarized as usual. Writes whose commit owes a notification, such as a
+  Device's `Audit_Notification_Recipient`, a Reporter's own properties or
+  `Send_Now`, and an object's mandatory audit policy, are accepted under
+  DISABLE_INITIATION and report like any other.
 
 A write a Command or Channel makes in another device follows the same rule
 (see [Building Control](#building-control-7)).

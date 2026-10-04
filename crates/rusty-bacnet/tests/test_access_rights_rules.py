@@ -1,8 +1,8 @@
-"""Installed-artifact tests for add_access_rights' rule keyword arguments.
+"""Installed-artifact tests for add_access_rights' keyword arguments.
 
 positive_access_rules=... and negative_access_rules=... set Access Rights'
-Positive_Access_Rules and Negative_Access_Rules, which are read-only over the
-network (#1316).
+Positive_Access_Rules and Negative_Access_Rules (#1316), and enable=... its
+Enable row, property 133 (#1332). Peers can write all three (#1330).
 """
 
 from __future__ import annotations
@@ -44,7 +44,15 @@ REMOTE_LOCKDOWN = bytes(
     + [0x1C, 0x09, 0x00, 0x00, 0x03, 0x3F, 0x49, 0x01]
 )
 
+# The rule an index-0 write appends: SPECIFIED with an unspecified Schedule
+# Present_Value, SPECIFIED with an unspecified Access Point, disabled.
+GROWN = bytes(
+    [0x09, 0x00, 0x1E, 0x0C, 0x04, 0x7F, 0xFF, 0xFF, 0x19, 0x55, 0x1F]
+    + [0x29, 0x00, 0x3E, 0x1C, 0x08, 0x7F, 0xFF, 0xFF, 0x3F, 0x49, 0x00]
+)
+
 RULE_KEYWORDS = ["positive_access_rules", "negative_access_rules"]
+KEYWORDS = [*RULE_KEYWORDS, "enable"]
 
 
 def installed_stub_method(name: str) -> ast.FunctionDef:
@@ -84,21 +92,22 @@ def business_hours() -> dict:
 
 
 class AccessRightsStubContractTests(unittest.TestCase):
-    def test_runtime_and_stub_expose_the_rule_keywords(self) -> None:
+    def test_runtime_and_stub_expose_the_keywords(self) -> None:
         parameters = inspect.signature(BACnetServer.add_access_rights).parameters
-        self.assertEqual(list(parameters), ["self", "instance", "name", *RULE_KEYWORDS])
-        for keyword in RULE_KEYWORDS:
+        self.assertEqual(list(parameters), ["self", "instance", "name", *KEYWORDS])
+        defaults = {"positive_access_rules": None, "negative_access_rules": None, "enable": True}
+        for keyword in KEYWORDS:
             with self.subTest(keyword=keyword):
                 self.assertIs(parameters[keyword].kind, inspect.Parameter.KEYWORD_ONLY)
-                self.assertIsNone(parameters[keyword].default)
+                self.assertIs(parameters[keyword].default, defaults[keyword])
         method = installed_stub_method("add_access_rights")
         self.assertEqual(
             [argument.arg for argument in method.args.args], ["self", "instance", "name"]
         )
-        self.assertEqual([argument.arg for argument in method.args.kwonlyargs], RULE_KEYWORDS)
-        for default in method.args.kw_defaults:
+        self.assertEqual([argument.arg for argument in method.args.kwonlyargs], KEYWORDS)
+        for argument, default in zip(method.args.kwonlyargs, method.args.kw_defaults):
             self.assertIsInstance(default, ast.Constant)
-            self.assertIsNone(default.value)
+            self.assertIs(default.value, defaults[argument.arg])
 
 
 class AccessRightsRulesTests(unittest.TestCase):
@@ -153,18 +162,83 @@ class AccessRightsRulesTests(unittest.TestCase):
         bare = ObjectIdentifier(ObjectType.ACCESS_RIGHTS, 2)
         for prop in (positive, negative):
             self.assertEqual(await read(bare, prop, 0), 0)
+        # Enable defaults to TRUE.
+        self.assertIs(await read(rights, PropertyIdentifier.LOG_ENABLE), True)
 
-        # The arrays are read-only over the network.
+    def test_network_writes_reach_the_arrays_and_enable(self) -> None:
+        asyncio.run(self._network_writes())
+
+    async def _network_writes(self) -> None:
+        server = make_server()
+        server.add_access_rights(1, "Employee Access", enable=False)
+        await server.start()
+        try:
+            address = await server.local_address()
+            async with BACnetClient(
+                interface="127.0.0.1", port=0, apdu_timeout_ms=2000
+            ) as client:
+                await self._write_back(server, client, address)
+        finally:
+            await server.stop()
+
+    async def _write_back(
+        self, server: BACnetServer, client: BACnetClient, address: str
+    ) -> None:
+        rights = ObjectIdentifier(ObjectType.ACCESS_RIGHTS, 1)
+        positive = PropertyIdentifier.POSITIVE_ACCESS_RULES
+        negative = PropertyIdentifier.NEGATIVE_ACCESS_RULES
+        enable = PropertyIdentifier.LOG_ENABLE
+
+        async def read(prop: PropertyIdentifier, index=None):
+            value = await client.read_property(address, rights, prop, index)
+            self.assertEqual(await server.read_property(rights, prop, index), value)
+            return value.value
+
+        async def write(prop: PropertyIdentifier, value: PropertyValue, index=None):
+            await client.write_property(address, rights, prop, value, array_index=index)
+
+        self.assertIs(await read(enable), False)
+        await write(enable, PropertyValue.boolean(True))
+        self.assertIs(await read(enable), True)
+
+        # A whole array, one element, then a resize at index 0.
+        await write(positive, PropertyValue.application_data(BUSINESS_HOURS + ANYWHERE_OFF))
+        self.assertEqual(await read(positive), BUSINESS_HOURS + ANYWHERE_OFF)
+        await write(positive, PropertyValue.application_data(REMOTE_LOCKDOWN), 2)
+        self.assertEqual(await read(positive, 2), REMOTE_LOCKDOWN)
+        await write(negative, PropertyValue.unsigned(2), 0)
+        self.assertEqual(await read(negative, 0), 2)
+        self.assertEqual(await read(negative), GROWN + GROWN)
+        await write(positive, PropertyValue.unsigned(1), 0)
+        self.assertEqual(await read(positive), BUSINESS_HOURS)
+
+        # WritePropertyMultiple writes both arrays and Enable in one request.
+        await client.write_property_multiple(
+            address,
+            [
+                (
+                    rights,
+                    [
+                        (negative, PropertyValue.application_data(ANYWHERE_OFF), None, 1),
+                        (positive, PropertyValue.application_data(REMOTE_LOCKDOWN), None, None),
+                        (enable, PropertyValue.boolean(False), None, None),
+                    ],
+                )
+            ],
+        )
+        self.assertEqual(await read(negative), ANYWHERE_OFF + GROWN)
+        self.assertEqual(await read(positive), REMOTE_LOCKDOWN)
+        self.assertIs(await read(enable), False)
+
+        # A rule whose location is an Access Door is refused, and the array
+        # keeps its rules.
+        door_rule = bytes(
+            [0x09, 0x01, 0x29, 0x00, 0x3E, 0x1C, 0x07, 0x80, 0x00, 0x04, 0x3F, 0x49, 0x01]
+        )
         with self.assertRaises(BacnetProtocolError) as raised:
-            await client.write_property(
-                address,
-                rights,
-                positive,
-                PropertyValue.application_data(ANYWHERE_OFF),
-                array_index=1,
-            )
-        self.assertEqual(raised.exception.error_code, ErrorCode.WRITE_ACCESS_DENIED.to_raw())
-        self.assertEqual(await read(rights, positive, 0), 2)
+            await write(positive, PropertyValue.application_data(door_rule), 1)
+        self.assertEqual(raised.exception.error_code, ErrorCode.VALUE_OUT_OF_RANGE.to_raw())
+        self.assertEqual(await read(positive), REMOTE_LOCKDOWN)
 
     def test_ill_formed_rules_register_nothing(self) -> None:
         asyncio.run(self._ill_formed_rules())
@@ -200,9 +274,12 @@ class AccessRightsRulesTests(unittest.TestCase):
         ):
             with self.subTest(rules=rules), self.assertRaises(TypeError):
                 server.add_access_rights(5, "Wrong", positive_access_rules=rules)
+        # enable takes a bool.
+        with self.assertRaises(TypeError):
+            server.add_access_rights(6, "Wrong", enable="no")
         await server.start()
         try:
-            for instance in (3, 4, 5):
+            for instance in (3, 4, 5, 6):
                 with self.assertRaises(BacnetProtocolError) as raised:
                     await server.read_property(
                         ObjectIdentifier(ObjectType.ACCESS_RIGHTS, instance),

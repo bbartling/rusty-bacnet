@@ -154,9 +154,11 @@ async fn write_channel<T: TransportPort + 'static>(
     request: &WriteGroupRequest,
     write: &GroupWrite<'_>,
 ) -> Result<TakenRuns, Error> {
+    // A Channel's Present_Value is one value, never a list.
     let value = handlers::decode_write_property_value(
         PropertyIdentifier::PRESENT_VALUE,
         None,
+        false,
         write.value,
     )?;
     let write_group = LocalWrite::WriteGroup {

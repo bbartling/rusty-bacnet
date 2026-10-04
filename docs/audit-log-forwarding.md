@@ -69,11 +69,14 @@ upgrade observed I-Am information into configured authority.
 
 Admission shares the existing server-wide 64-active Audit delivery permits.
 There is no waiting queue or per-peer forwarding history. Saturation, binding
-lock contention, DCC initiation suppression, an oversized outbound APDU,
-transport failure, missing ACK, rejected worker admission, and cancellation
-are failed best-effort attempts. After admission, one absolute three-second
-deadline covers scheduling, transport send, and ACK wait. There are no retries,
-outbound segmentation, fanout, detached workers, or recursive audit reports.
+lock contention, an oversized outbound APDU, transport failure, missing ACK,
+rejected worker admission, and cancellation are failed best-effort attempts.
+DeviceCommunicationControl is not among them: a forward is a
+ConfirmedAuditNotification, which Clause 16.1 leaves running under
+DISABLE_INITIATION, so forwarding goes on while initiation is disabled.
+After admission, one absolute three-second deadline covers scheduling,
+transport send, and ACK wait. There are no retries, outbound segmentation,
+fanout, detached workers, or recursive audit reports.
 Workers are cancelled and joined through NotificationTransactions at shutdown.
 No ObjectDatabase guard is retained during network I/O.
 

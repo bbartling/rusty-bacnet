@@ -219,8 +219,8 @@ impl ChangeOfStateReporting {
 
 /// The values a written list of enumerated values holds, such as
 /// Alarm_Values: a list of Enumerated, where a value that isn't a list is its
-/// one element, which is how WriteProperty hands over a one-element list. An
-/// index is PROPERTY_IS_NOT_AN_ARRAY; more than
+/// one element (WriteProperty hands over a list, but a local write may pass
+/// one value alone). An index is PROPERTY_IS_NOT_AN_ARRAY; more than
 /// [`MAX_ALARM_VALUES`](crate::multistate::MAX_ALARM_VALUES) elements is
 /// NO_SPACE_TO_WRITE_PROPERTY; an element of another datatype is
 /// INVALID_DATA_TYPE and one `in_range` refuses VALUE_OUT_OF_RANGE, each
