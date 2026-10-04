@@ -133,6 +133,7 @@ fn decode_setpoint(
 ) -> Result<(BACnetObjectPropertyReference, usize), Error> {
     match decode_setpoint_reference(&bytes[offset..])? {
         Some(reference) => Ok((reference, bytes.len())),
+        // Unreachable: `opens_setpoint` only lets a value with octets here.
         None => Err(Error::decoding(offset, "BACnetSetpointReference: no frame")),
     }
 }

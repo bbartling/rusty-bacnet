@@ -2528,9 +2528,10 @@ empty frame `0E 0F`, are INVALID_DATA_ENCODING. These refusals are the device
 references' single-reference codes (#1395): anything after the one reference
 is INVALID_DATA_ENCODING whatever its tag, and a value passed to
 `write_property` as a list mixing raw chunks with decoded values is
-INVALID_DATA_TYPE. The `set_*_reference` setters
-still take a `BACnetObjectPropertyReference`. An application that follows the
-references decodes what it reads with
+INVALID_DATA_TYPE. An empty list passed that way is the empty value: it is
+INVALID_DATA_ENCODING on a variable reference and clears Setpoint_Reference.
+The `set_*_reference` setters still take a `BACnetObjectPropertyReference`.
+An application that follows the references decodes what it reads with
 `bacnet_encoding::constructed::decode_object_property_reference`, or
 `decode_setpoint_reference`, which gives `None` for the empty value.
 
