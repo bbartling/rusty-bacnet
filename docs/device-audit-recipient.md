@@ -35,7 +35,13 @@ may start with CONFIGURATION_ERROR; it emits no ordinary records. A live change
 must resolve both old and new destinations, so an unavailable old binding requires
 restart with corrected configuration. Address recipients require an explicit
 IPv4 B/IP transport and network zero, a six-octet unicast IPv4/port address, and a
-nonzero port. Broadcast, multicast, unspecified, routed Address, IPv6, SC and
+nonzero port. The endpoint source also takes an Address naming its session's
+own network number, once the session knows it: that address is on this link, so
+it resolves as network zero would and its records go to that MAC with no DNET
+(#1403). Such a recipient resolves against the number in force at each send:
+if the session's number later changes, it no longer resolves, so ordinary
+records stop and a later recipient write is refused until a restart with
+corrected configuration (#1461). Broadcast, multicast, unspecified, routed Address, IPv6, SC and
 MS/TP Address choices are outside this runtime subset. The generic BACnetRecipient
 codec continues to represent the wider protocol grammar.
 

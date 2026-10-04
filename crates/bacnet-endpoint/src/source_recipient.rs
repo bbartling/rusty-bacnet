@@ -1,5 +1,6 @@
 //! Source runtime's Device mutation owner and immutable direct B/IP route facts.
 use super::*;
+use bacnet_network::network_number::LocalNetworkNumber;
 use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::database::{AuditOwnership, EventSequence};
 use bacnet_objects::device::{AuditRecipientChangeSink, AuditWriteSource};
@@ -10,6 +11,7 @@ use std::net::SocketAddrV4;
 pub(crate) struct SourceRoutes {
     devices: HashMap<ObjectIdentifier, MacAddr>,
     broadcast: SocketAddrV4,
+    local_network: LocalNetworkNumber,
 }
 impl SourceRoutes {
     pub(crate) fn new(
@@ -19,6 +21,7 @@ impl SourceRoutes {
         let mut routes = Self {
             devices: HashMap::new(),
             broadcast,
+            local_network: LocalNetworkNumber::default(),
         };
         for (device, address) in bindings {
             if device.object_type() != ObjectType::DEVICE
@@ -43,8 +46,11 @@ impl SourceRoutes {
         }
         Ok(routes)
     }
-    pub(crate) fn finalize(&mut self, broadcast: SocketAddrV4) {
+    /// Take the started link's broadcast endpoint and the layer's number
+    /// slot, which the session's Number owner publishes into.
+    pub(crate) fn finalize(&mut self, broadcast: SocketAddrV4, local_network: LocalNetworkNumber) {
         self.broadcast = broadcast;
+        self.local_network = local_network;
     }
     fn valid_address(&self, mac: &[u8]) -> bool {
         bacnet_server::server::valid_bip_audit_address(&BACnetAddress {
@@ -53,10 +59,17 @@ impl SourceRoutes {
         }) && !(mac[..4] == self.broadcast.ip().octets()
             && mac[4..] == self.broadcast.port().to_be_bytes())
     }
+    /// The direct B/IP MAC a recipient is sent to, if it has one. An address
+    /// naming this network by its number, once the number is known, is a
+    /// station on this link like a local address (#1403), so its records go
+    /// there with no DNET. Each call reads the number as it is then, so a
+    /// number learned after startup applies from the next record. An address
+    /// on any other network has no route.
     pub(crate) fn resolve(&self, recipient: &BACnetRecipient) -> Option<MacAddr> {
+        let here = |network: u16| network == 0 || Some(network) == self.local_network.get();
         let mac = match recipient {
             BACnetRecipient::Device(device) => self.devices.get(device)?,
-            BACnetRecipient::Address(address) if address.network_number == 0 => {
+            BACnetRecipient::Address(address) if here(address.network_number) => {
                 &address.mac_address
             }
             _ => return None,

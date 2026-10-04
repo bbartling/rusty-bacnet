@@ -263,7 +263,10 @@ impl ClientRoleHandle {
     /// [`read_property`](Self::read_property). A routed destination names one
     /// device: a network outside 1..=65534, or a MAC that is empty or longer
     /// than 18 octets, fails with [`Error::Encoding`] before a transaction
-    /// is reserved, as does a broadcast destination.
+    /// is reserved, as does a broadcast destination. Once the session knows
+    /// its own network's number, a routed destination naming it goes to its
+    /// MAC with no DNET, and only the answer from that MAC completes the read
+    /// (#1403).
     pub async fn read_property_with_destination(
         &self,
         destination: EndpointApduDestination,
@@ -325,7 +328,9 @@ impl ClientRoleHandle {
     }
 
     /// Explicit RPM destination and pass-through attributes. Audited operations
-    /// require direct B/IP IPv4 unicast; all responses remain unsegmented.
+    /// require direct B/IP IPv4 unicast, which includes a routed destination
+    /// naming the session's own network number once it is known (#1403); all
+    /// responses remain unsegmented.
     pub async fn read_property_multiple_with_destination(
         &self,
         destination: EndpointApduDestination,
@@ -385,7 +390,9 @@ impl ClientRoleHandle {
     /// Routed destinations are available when source reporting is not selected
     /// for the operation, under the same one-device rule as
     /// [`read_property_with_destination`](Self::read_property_with_destination).
-    /// Responses remain unsegmented.
+    /// A routed destination naming the session's own network number, once it
+    /// is known, goes direct and can be audited (#1403). Responses remain
+    /// unsegmented.
     pub async fn read_range_with_destination(
         &self,
         destination: EndpointApduDestination,

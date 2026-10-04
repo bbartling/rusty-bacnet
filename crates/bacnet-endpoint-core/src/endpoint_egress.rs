@@ -1,6 +1,7 @@
 //! Bounded endpoint send admission and explicit completion ownership.
 use super::*;
 use bacnet_encoding::npdu::NpduAddress;
+use bacnet_network::network_number::LocalNetworkNumber;
 use bacnet_network::response_route::ResponseRoute;
 
 pub(super) enum NetworkServicePayload {
@@ -86,9 +87,53 @@ impl From<EndpointEgressAdmissionError> for Error {
 pub struct EndpointEgress {
     pub(super) commands: mpsc::Sender<NetworkServiceCommand>,
     pub(super) open: Arc<AtomicBool>,
+    pub(super) local_network: LocalNetworkNumber,
+}
+
+impl EndpointApduDestination {
+    /// This destination as sent once the endpoint knows `local_network`, the
+    /// number of the network its link is attached to (#1403). A routed
+    /// destination on that network is a station on this link, so it goes to
+    /// the station's MAC with no DNET and not through the router (Clause
+    /// 6.5.1): a non-routing peer discards an APDU whose DNET names a network
+    /// (Clause 6.5.2.1). A broadcast to that network is a local broadcast.
+    /// Every other destination, and every one while the number is unknown,
+    /// is unchanged. It checks nothing itself: the requester checks a routed
+    /// unicast's DADR before calling it, and source Audit applies its stricter
+    /// B/IP unicast check after.
+    #[doc(hidden)]
+    pub fn localized(self, local_network: Option<u16>) -> Self {
+        let here = |network: u16| Some(network) == local_network;
+        match self {
+            Self::Routed {
+                destination_network,
+                destination_mac,
+                ..
+            }
+            | Self::RoutedViaLocalBroadcast {
+                destination_network,
+                destination_mac,
+            } if here(destination_network) => Self::Direct { destination_mac },
+            Self::RemoteBroadcast {
+                destination_network,
+            } if here(destination_network) => Self::LocalBroadcast,
+            destination => destination,
+        }
+    }
 }
 
 impl EndpointEgress {
+    /// The number of the network this endpoint's link is attached to: the
+    /// layer's own [`LocalNetworkNumber`], which the endpoint's Number owner
+    /// publishes. Senders read it to send traffic for that network as local
+    /// traffic ([`EndpointApduDestination::localized`]); the egress itself
+    /// sends every destination as its caller names it, so answers keep the
+    /// route their request arrived by.
+    #[doc(hidden)]
+    pub fn local_network_number(&self) -> &LocalNetworkNumber {
+        &self.local_network
+    }
+
     /// Whether this ingress still admits transport work.
     #[doc(hidden)]
     pub fn is_open(&self) -> bool {

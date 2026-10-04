@@ -328,6 +328,12 @@ impl EndpointRequester {
         {
             check_routed_unicast(*destination_network, destination_mac.len())?;
         }
+        // Once those checks pass on the destination as named, one routed on
+        // the endpoint's own network goes as the local destination it is
+        // (#1403). The transaction is keyed to the MAC it goes to, where its
+        // answer comes from with no SNET; one relayed back with this network
+        // as its SNET matches nothing.
+        let destination = destination.localized(self.inner.egress.local_network_number().get());
 
         let service_data = self.encode_operation(&request)?;
         let service = request.service();

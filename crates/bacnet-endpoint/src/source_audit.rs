@@ -296,6 +296,9 @@ impl SourceAudit {
                 .await
                 .result;
         };
+        // A routed destination on this network goes to the station directly
+        // (#1403), so it is audited as the direct operation it is.
+        let destination = destination.localized(self.egress.local_network_number().get());
         let EndpointApduDestination::Direct { destination_mac } = &destination else {
             return Err(Error::Encoding(
                 "audited operation requires direct B/IP IPv4 unicast".into(),
