@@ -29,3 +29,44 @@ bip-broadcast-observers = { max-threads = 1 }
 [[profile.default.overrides]]
 filter = 'binary(bip_network_numbers) | binary(client_bip_network_numbers)'
 test-group = 'bip-broadcast-observers'
+
+# Start the slowest tests first. nextest otherwise starts tests in binary and
+# name order, so a long test in a binary that sorts late, such as
+# bacnet-transport, starts near the end and keeps the run going alone for most
+# of its length. Started first, they finish while short tests fill the other
+# threads. Custom profiles such as `ci` apply these default-profile overrides
+# too.
+#
+# The list names every test that took 3.5 s or more in recent Forgejo Test jobs,
+# exactly, so no new test joins it by accident. A slow test missing from it, or
+# one renamed, costs wall time only. To refresh it, take the slow PASS lines
+# from a Test job log and update the names below:
+#
+#   grep -E 'PASS \[ +([0-9]{2,}\.|[4-9]\.|3\.[5-9])' test-job.log
+[[profile.default.overrides]]
+filter = '''
+    (binary_id(bacnet-client) & (
+        test(=client::tests::confirmed_request_timeout)
+      | test(=client::routed_path_limit_tests::routed_sizing_uses_conservative_and_configured_forwarded_envelopes)
+    ))
+  | (binary_id(bacnet-server) & (
+        test(=server::segmentation_tests::request_progress::request_progress_new_in_order_saves_sustain_transfer_beyond_16_seconds)
+      | test(=server::segmentation_tests::request_progress::request_progress_reclaims_128_stalled_slots_before_admission)
+      | test(=server::audit_reporter_tests::lifecycle::audit_reporter_unassigned_create_failures_never_invent_an_oid)
+      | test(=server::audit_reporter_tests::read::range_file::boundary::audit_reporter_range_file_guard_release_precedes_admission_not_delivery)
+      | test(=server::audit_reporter_tests::read::boundary::audit_reporter_read_admission_waits_for_read_guard_release_not_delivery)
+    ))
+  | (binary_id(bacnet-transport) & (
+        test(=sc_tls::node_tls_tests::rejection_deadline_tests::rejection_deadline_tls_write_lock_cancels_control_nak_without_later_flush)
+      | test(=sc_tls::node_tls_tests::rejection_deadline_tests::rejection_deadline_tls_write_lock_cancels_source_nak_without_later_flush)
+      | test(=sc_tls::node_tls_tests::rejection_deadline_tests::rejection_deadline_tls_write_lock_cancels_must_understand_nak_without_later_flush)
+      | test(=sc_tls::node_tls_tests::rejection_deadline_tests::rejection_deadline_tls_write_lock_cancels_empty_npdu_nak_without_later_flush)
+      | test(=sc_tls::node_tls_tests::rejection_deadline_tests::rejection_deadline_tls_write_lock_cancels_unknown_function_nak_without_later_flush)
+      | test(=sc_hub::graceful_tests::graceful_does_not_block_on_held_sink)
+      | test(=sc_hub::retirement_capacity_tests::terminal_relays_and_peer_close_each_recover_beyond_512_connections)
+      | test(=sc_hub::retirement_capacity_tests::replacement_and_heartbeat_retirement_each_recover_beyond_512_blocked_relays)
+      | test(=sc::rejection_deadline_tests::rejection_deadline_timely_completion_and_immediate_error_preserve_pending_ack)
+    ))
+  | (binary_id(bacnet-transport::sc_hub_tls) & test(=typed_hub_honors_each_timeout_and_preserves_established_peers))
+'''
+priority = 100

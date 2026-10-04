@@ -55,13 +55,16 @@ too.
 
 Rust caches are keyed per job on the toolchain, `Cargo.lock`, the manifests,
 and, for Clippy and Test, `LINUX_FEATURES` (Clippy also on
-`DEFAULT_FEATURES_TARGETS`). They're saved even when a job fails.
+`DEFAULT_FEATURES_TARGETS` and the [standalone samples'](#standalone-samples)
+`Cargo.lock` files). They're saved even when a job fails.
 A new push to a PR cancels its superseded run.
 
 Tests run with [cargo-nextest](https://nexte.st), which gives each test its
 own process. Its settings live in [`.config/nextest.toml`](../.config/nextest.toml);
 CI uses the `ci` profile, and nextest does not run doctests, so a separate
-`cargo test --doc` step covers them. The Linux test commands are below, with
+`cargo test --doc` step covers them. The tests that take 3.5 s or more have a
+`priority` there, so they start first instead of running alone at the end; the
+file says how to refresh that list. The Linux test commands are below, with
 `$LINUX_FEATURES` as set in `ci.yml`: every optional feature that builds on
 Linux, including per-crate ones such as `bacnet-endpoint/sc-tls` and
 `bacnet-cli/pcap`. The last steps run the `bacnet-cli` tests with default
@@ -121,6 +124,14 @@ compiled. The step runs on every PR: the workflow has no path filters, and the
 samples depend on `crates/`, which nearly every PR changes. On the runner it
 took about 18 s from cold (October 2026). `target/samples` is inside
 `target/`, so the job's Rust cache keeps it whenever the cache is saved.
+rust-cache saves only when its key misses, so the Clippy job's key also hashes
+the samples' `Cargo.lock` files: a lock refresh saves a new cache with the
+samples' dependencies built, and later runs check only the samples and their
+`bacnet-*` crates. rust-cache's cleanup keeps a dependency's build there only
+if the workspace depends on a crate of the same name, which holds for every
+crate the samples lock (October 2026). A new key restores nothing, so the
+first Clippy runs on it, the PR's and then the `dev` merge's, start cold and
+take about 3 minutes longer.
 
 ### Runner
 

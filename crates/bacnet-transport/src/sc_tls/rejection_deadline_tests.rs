@@ -56,24 +56,43 @@ impl WebSocketPort for ObservedTls {
     }
 }
 
+// One test per rejection path. Each waits out the production heartbeat timeout
+// (over 3.3 s), so as separate tests nextest runs them side by side.
+
 #[tokio::test]
-async fn rejection_deadline_tls_production_write_lock_is_cancelled_without_later_flush() {
+async fn rejection_deadline_tls_write_lock_cancels_control_nak_without_later_flush() {
+    within_deadline(vec![0x0A, 0, 0x22, 0x33, 0x42]).await; // heartbeat with a payload
+}
+
+#[tokio::test]
+async fn rejection_deadline_tls_write_lock_cancels_source_nak_without_later_flush() {
+    within_deadline(vec![1, 0, 0x22, 0x33, 1, 0, 0x30]).await; // no originating VMAC
+}
+
+#[tokio::test]
+async fn rejection_deadline_tls_write_lock_cancels_must_understand_nak_without_later_flush() {
     let mut mu = vec![1, 10, 0x22, 0x33];
     mu.extend_from_slice(&[0x22; 6]);
     mu.extend_from_slice(&[0xE2, 0, 0, 0x1F, 1, 0, 0x30]);
+    within_deadline(mu).await;
+}
+
+#[tokio::test]
+async fn rejection_deadline_tls_write_lock_cancels_empty_npdu_nak_without_later_flush() {
     let mut empty = vec![1, 8, 0x22, 0x33];
     empty.extend_from_slice(&[0x22; 6]);
-    for wire in [
-        vec![0x0A, 0, 0x22, 0x33, 0x42],
-        vec![1, 0, 0x22, 0x33, 1, 0, 0x30],
-        mu,
-        empty,
-        vec![0x42, 3, 0x22, 0x33, 0xE2, 0, 0, 0x1F, 0x7E, 0, 0],
-    ] {
-        tokio::time::timeout(Duration::from_secs(6), exercise(wire))
-            .await
-            .unwrap();
-    }
+    within_deadline(empty).await;
+}
+
+#[tokio::test]
+async fn rejection_deadline_tls_write_lock_cancels_unknown_function_nak_without_later_flush() {
+    within_deadline(vec![0x42, 3, 0x22, 0x33, 0xE2, 0, 0, 0x1F, 0x7E, 0, 0]).await;
+}
+
+async fn within_deadline(wire: Vec<u8>) {
+    tokio::time::timeout(Duration::from_secs(6), exercise(wire))
+        .await
+        .unwrap();
 }
 
 async fn exercise(wire: Vec<u8>) {
