@@ -142,6 +142,11 @@ pub(crate) fn handle_write_property_multiple_observed(
 ) -> WritePropertyMultipleOutcome {
     let mut cursor = WritePropertyMultipleCursor::new(service_data);
     let mut committed_oids = Vec::new();
+    // Whether any attempt has succeeded. A NULL the property left as it was
+    // commits no object but is a successful write all the same, so a later
+    // syntax error is an Error with INVALID_TAG, not a Reject (Clause
+    // 15.10.2).
+    let mut wrote = false;
 
     loop {
         let event = match cursor.next_event() {
@@ -155,9 +160,7 @@ pub(crate) fn handle_write_property_multiple_observed(
                     WritePropertyMultipleFailureKind::PriorityOutOfRange => {
                         ErrorCode::PARAMETER_OUT_OF_RANGE
                     }
-                    WritePropertyMultipleFailureKind::Syntax(reason)
-                        if committed_oids.is_empty() =>
-                    {
+                    WritePropertyMultipleFailureKind::Syntax(reason) if !wrote => {
                         return WritePropertyMultipleOutcome::Reject { reason };
                     }
                     WritePropertyMultipleFailureKind::Syntax(_) => ErrorCode::INVALID_TAG,
@@ -227,6 +230,7 @@ pub(crate) fn handle_write_property_multiple_observed(
                     if let Some(observer) = observer.as_deref_mut() {
                         observer.applied(db, oid);
                     }
+                    wrote = true;
                     if !committed_oids.contains(&oid) {
                         committed_oids.push(oid);
                     }
@@ -251,8 +255,9 @@ pub(crate) fn handle_write_property_multiple_observed(
             command_origin,
         ) {
             // A NULL the property left as it was commits nothing.
-            Ok(Applied::Unchanged) => {}
+            Ok(Applied::Unchanged) => wrote = true,
             Ok(Applied::Written) => {
+                wrote = true;
                 if !committed_oids.contains(&oid) {
                     committed_oids.push(oid);
                 }

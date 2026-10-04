@@ -1,6 +1,7 @@
 ---
 section: Fixed
 ---
-- **Wire:** a NULL written to a property that isn't commandable and has no NULL
-  in its datatype now succeeds and leaves it unchanged, over WriteProperty,
-  WritePropertyMultiple and local writes, instead of INVALID_DATA_TYPE (#1396).
+- **Wire:** a NULL to a non-commandable property with no NULL in its datatype
+  now succeeds unchanged over WP, WPM and local writes, not INVALID_DATA_TYPE.
+  A Value_Source correction by a non-owner is WRITE_ACCESS_DENIED even when
+  its value is malformed (#1396).

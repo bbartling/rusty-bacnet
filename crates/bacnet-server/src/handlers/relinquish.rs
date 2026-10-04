@@ -110,6 +110,12 @@ fn commandable(object: &dyn BACnetObject, property: PropertyIdentifier) -> bool 
 /// (Clause 12.24). A CHOICE whose NULL member is context-tagged, such as
 /// BACnetValueSource or BACnetFaultParameter, has no application NULL.
 /// Index 0 of an array is its size, an Unsigned.
+///
+/// Most entries match on the property alone, whatever the object type, on
+/// purpose: a property this names keeps its NULL away from the rule, so the
+/// object's own answer stands. Naming too many is the safe direction; naming
+/// too few would turn a refusal of a NULL the datatype allows into a
+/// success that discards it.
 pub(crate) fn null_in_datatype(
     object_type: ObjectType,
     property: PropertyIdentifier,

@@ -6668,7 +6668,8 @@
     "crates/bacnet-services/src/wpm/priority_tests.rs::wpm_priority_range_failure_keeps_kind_stage_offset_and_indexed_reference",
     "crates/bacnet-services/src/wpm/priority_tests.rs::wpm_priority_malformed_unsigned_is_syntax_not_numeric_range",
     "crates/bacnet-server/src/server/requests/mutation_wpm_priority_tests.rs::wpm_priority_range_wire_error_is_semantic_before_and_after_prefix",
-    "crates/bacnet-server/src/server/requests/mutation_wpm_priority_tests.rs::wpm_priority_syntax_wire_result_retains_reject_and_prefix_invalid_tag"
+    "crates/bacnet-server/src/server/requests/mutation_wpm_priority_tests.rs::wpm_priority_syntax_wire_result_retains_reject_and_prefix_invalid_tag",
+    "crates/bacnet-server/src/server/requests/mutation_wpm_tests.rs::wpm_syntax_error_after_a_null_left_unchanged_is_an_error_not_a_reject"
    ],
    "benchmarks": [],
    "public_claims": [],
@@ -6678,7 +6679,8 @@
     "The public cursor error kind replaces its former reject-only field; whole-request decode still returns Error::Decoding. Bounded service-procedure correction (Refs #242), not full BACnet, object, PICS, or BIBB conformance.",
     "The post-success undecodable-coordinate policy uses DEVICE instance 4194303, PropertyIdentifier ALL, and no array index; only the instance is normative. Inbound empty requests and empty property lists retain the existing SimpleACK/no-op behavior; outbound typed requests reject them before encoding (#793).",
     "Existing ErrorPdu, TsmResponse, client, and Python shapes are unchanged: low-level ErrorPdu.error_data retains the complete formal body while high-level clients continue exposing class/code. Legacy generic WPM Error PDUs remain decodable.",
-    "The unused public object write rollback API was removed before 1.0 (Refs #743). Observable File, NetworkPort, multistate and AccessDoor tests prove committed prefix state survives a later failure, including command priority and fallback ownership."
+    "The unused public object write rollback API was removed before 1.0 (Refs #743). Observable File, NetworkPort, multistate and AccessDoor tests prove committed prefix state survives a later failure, including command priority and fallback ownership.",
+    "A NULL the property leaves unchanged commits no object but counts as a successful write, so malformed syntax after it gets SERVICES / INVALID_TAG rather than a Reject."
    ]
   },
   {
