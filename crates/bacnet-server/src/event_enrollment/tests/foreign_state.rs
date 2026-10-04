@@ -51,7 +51,8 @@ fn setup_on_notification_class(
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::NOTIFICATION_CLASS.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(params);
     ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
@@ -260,7 +261,8 @@ fn foreign_high_limit_recovers_under_cobs_params() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         target_oid,
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::ChangeOfBitstring {
         time_delay: 0,
         bitmask: (5, vec![0x80]), // significant: TO_OFFNORMAL bit
@@ -302,7 +304,8 @@ fn cobs_mask_wider_than_monitored_value_is_not_a_match() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         target_oid,
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::ChangeOfBitstring {
         time_delay: 0,
         bitmask: (0, vec![0xFF, 0xFF]), // two significant BYTES

@@ -25,7 +25,8 @@ fn change_of_bitstring_normal() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         target_oid,
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
-    )));
+    )))
+    .unwrap();
     // mask=0xFF, alarm_pattern=0xE0 (all 3 high bits set)
     ee.set_event_parameters(BACnetEventParameter::ChangeOfBitstring {
         time_delay: 0,
@@ -54,7 +55,8 @@ fn change_of_bitstring_offnormal() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         target_oid,
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
-    )));
+    )))
+    .unwrap();
     // mask=0xE0, alarm_pattern=0xE0 (all 3 high bits)
     ee.set_event_parameters(BACnetEventParameter::ChangeOfBitstring {
         time_delay: 0,

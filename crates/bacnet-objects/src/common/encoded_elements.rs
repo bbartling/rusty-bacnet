@@ -10,13 +10,13 @@ pub(crate) type ElementDecoder<T> = fn(&[u8], usize) -> Result<(T, usize), Error
 
 /// The byte chunks of a written value: the raw payload, or the elements of a
 /// value as a read returns it.
-pub(crate) fn chunks(value: PropertyValue) -> Result<Vec<Vec<u8>>, Error> {
+pub(crate) fn chunks(value: &PropertyValue) -> Result<Vec<&[u8]>, Error> {
     match value {
         PropertyValue::ApplicationData(bytes) => Ok(vec![bytes]),
         PropertyValue::List(elements) => elements
-            .into_iter()
+            .iter()
             .map(|element| match element {
-                PropertyValue::ApplicationData(bytes) => Ok(bytes),
+                PropertyValue::ApplicationData(bytes) => Ok(bytes.as_slice()),
                 _ => Err(super::invalid_data_type_error()),
             })
             .collect(),
@@ -31,7 +31,7 @@ pub(crate) fn chunks(value: PropertyValue) -> Result<Vec<Vec<u8>>, Error> {
 /// starts with any other tag is INVALID_DATA_TYPE, one that doesn't decode
 /// INVALID_DATA_ENCODING.
 pub(crate) fn decode_elements<T>(
-    value: PropertyValue,
+    value: &PropertyValue,
     starts: fn(&Tag) -> bool,
     decode: ElementDecoder<T>,
 ) -> Result<Vec<T>, Error> {
@@ -39,7 +39,7 @@ pub(crate) fn decode_elements<T>(
     for bytes in chunks(value)? {
         let mut offset = 0;
         while offset < bytes.len() {
-            let (element, end) = decode_element(&bytes, offset, starts, decode)?;
+            let (element, end) = decode_element(bytes, offset, starts, decode)?;
             elements.push(element);
             offset = end;
         }

@@ -295,17 +295,16 @@ impl BACnetObject for AccessPointObject {
             p if p == PropertyIdentifier::ACCESS_EVENT_TIME => {
                 timestamp_value(&self.access_event_time)
             }
-            p if p == PropertyIdentifier::ACCESS_EVENT_CREDENTIAL => {
-                let mut buf = BytesMut::new();
-                encode_device_object_reference(&mut buf, &self.access_event_credential);
-                Ok(PropertyValue::ApplicationData(buf.to_vec()))
-            }
+            p if p == PropertyIdentifier::ACCESS_EVENT_CREDENTIAL => Ok(
+                crate::device_reference::reference_value(&self.access_event_credential),
+            ),
             p if p == PropertyIdentifier::AUTHENTICATION_STATUS => Ok(PropertyValue::Enumerated(
                 self.authentication_status().to_raw(),
             )),
-            p if p == PropertyIdentifier::ACCESS_DOORS => {
-                common::read_array(device_object_references(&self.access_doors), array_index)
-            }
+            p if p == PropertyIdentifier::ACCESS_DOORS => common::read_array(
+                crate::device_reference::reference_elements(&self.access_doors),
+                array_index,
+            ),
             p if p == PropertyIdentifier::EVENT_STATE => {
                 Ok(PropertyValue::Enumerated(self.event_state.to_raw()))
             }

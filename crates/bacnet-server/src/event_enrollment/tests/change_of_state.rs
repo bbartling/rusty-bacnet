@@ -27,10 +27,12 @@ fn setup_integer_change_of_state(
 
     let mut enrollment =
         EventEnrollmentObject::new(3, "EE-COS-IV", EventType::CHANGE_OF_STATE).unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        value_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    enrollment
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            value_oid,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::ChangeOfState {
         time_delay: 0,
         list_of_values: vec![BACnetPropertyStates::IntegerValue(alarm_value)],
@@ -108,10 +110,12 @@ fn change_of_state_large_unsigned_is_a_delayed_nonmatch() {
 
     let mut enrollment =
         EventEnrollmentObject::new(3, "EE-COS-U", EventType::CHANGE_OF_STATE).unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        accumulator_oid,
-        PropertyIdentifier::MAX_PRES_VALUE.to_raw(),
-    )));
+    enrollment
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            accumulator_oid,
+            PropertyIdentifier::MAX_PRES_VALUE.to_raw(),
+        )))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::ChangeOfState {
         time_delay: 0,
         list_of_values: vec![BACnetPropertyStates::UnsignedValue(1)],

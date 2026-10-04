@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_encoding::constructed::encode_device_object_reference;
 
 fn reference(object_type: ObjectType, instance: u32) -> BACnetDeviceObjectReference {
     BACnetDeviceObjectReference {

@@ -26,7 +26,8 @@ fn extended_algorithm_produces_no_transition() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     // Extended [9] is preserved but not evaluated — no transition.
     ee.set_event_parameters(BACnetEventParameter::Extended {
         vendor_id: 42,
@@ -59,7 +60,8 @@ fn legacy_le_out_of_range_fallback_round_trip() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     // Simulate an old client writing raw little-endian octets.
     ee.write_property(
         PropertyIdentifier::EVENT_PARAMETERS,
@@ -91,7 +93,8 @@ fn legacy_le_change_of_state_fallback() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         bi_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::Opaque {
         tag: 0xFF,
         data: encode_change_of_state_params(&[1]),
@@ -122,7 +125,8 @@ fn framed_unmodeled_alternative_is_never_le_evaluated() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_enable(EventTransitionBits::all());
     let ee_oid = ee.object_identifier();
     db.add(Box::new(ee)).unwrap();
@@ -182,10 +186,12 @@ fn change_of_value_bitmask_criteria() {
     let target_oid = target.object_identifier();
     // Keep this Event Enrollment target itself healthy now that Reliability
     // evaluation applies to every Event Enrollment object in the database.
-    target.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        target_oid,
-        PropertyIdentifier::EVENT_ENABLE.to_raw(),
-    )));
+    target
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            target_oid,
+            PropertyIdentifier::EVENT_ENABLE.to_raw(),
+        )))
+        .unwrap();
     target.set_event_parameters(BACnetEventParameter::Extended {
         vendor_id: 42,
         extended_event_type: 1,
@@ -197,7 +203,8 @@ fn change_of_value_bitmask_criteria() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         target_oid,
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
-    )));
+    )))
+    .unwrap();
     // Bitmask criterion: bit 0x80 is the significant one.
     ee.set_event_parameters(BACnetEventParameter::ChangeOfValue {
         time_delay: 0,
@@ -277,7 +284,8 @@ fn change_of_value_wrong_type_monitored_value_skips() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         target_oid,
         PropertyIdentifier::EVENT_ENABLE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::ChangeOfValue {
         time_delay: 0,
         criteria: ChangeOfValueCriteria::ReferencedPropertyIncrement(5.0),
@@ -321,7 +329,8 @@ fn empty_parameters_is_skipped() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     // No parameters set — should remain at current state
     ee.set_event_enable(EventTransitionBits::all());
     db.add(Box::new(ee)).unwrap();
@@ -351,7 +360,8 @@ fn evaluation_does_not_use_network_write_route() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,

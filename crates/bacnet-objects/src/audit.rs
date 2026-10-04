@@ -506,12 +506,9 @@ impl BACnetObject for AuditLogObject {
                 })
             }
             p if self.forwarding.is_some() && p == PropertyIdentifier::MEMBER_OF => {
-                let mut encoded = bytes::BytesMut::new();
-                bacnet_encoding::constructed::encode_device_object_reference(
-                    &mut encoded,
+                Ok(crate::device_reference::reference_value(
                     self.forwarding.as_ref().unwrap().parent(),
-                );
-                Ok(PropertyValue::ApplicationData(encoded.to_vec()))
+                ))
             }
             p if self.forwarding.is_some() && p == PropertyIdentifier::DELETE_ON_FORWARD => {
                 Ok(PropertyValue::Boolean(false))

@@ -142,6 +142,19 @@ fn action_command_mappings_refuse_bad_shapes_and_types() {
         let wide = minimal(py);
         wide.set_item("priority", 256).unwrap();
         value_error(lists(py, &[wide]).as_any(), "action[0][0].priority");
+        // A device identifier names a Device or nothing (#1308), wherever the
+        // command sits.
+        let remote = minimal(py);
+        remote
+            .set_item(
+                "device_identifier",
+                PyObjectIdentifier::from_rust(oid(ObjectType::ANALOG_VALUE, 9)),
+            )
+            .unwrap();
+        value_error(
+            lists(py, &[minimal(py), remote]).as_any(),
+            "action[0][1]: the device must be a Device object identifier",
+        );
         for (key, bad) in [
             (
                 "quit_on_failure",

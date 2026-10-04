@@ -133,8 +133,9 @@ pub(crate) fn localize(
 
 /// A list or array value with each member naming `local` in its local form.
 /// Each chunk holds whole members and is rewritten on its own: a whole value
-/// comes as one chunk per element (the shape a read returns, and a whole
-/// array as the handler splits it), or as one chunk of members back to back.
+/// comes as one chunk of members back to back (what the handler passes on),
+/// or as one chunk per element (the shape a read returns, which a
+/// `write_local` caller may hand back).
 fn localize_members<R: DeviceQualified>(
     value: PropertyValue,
     local: ObjectIdentifier,
@@ -154,10 +155,11 @@ fn localize_members<R: DeviceQualified>(
 }
 
 /// A value holding one reference, as a single chunk in its local form if the
-/// reference names `local`. The service decode splits a reference into one
-/// chunk per context-tagged member, so the chunks are joined before the
-/// decode. Unless the joined bytes are exactly one reference naming `local`,
-/// the value passes on as written, for the object to judge.
+/// reference names `local`. The service decode hands the reference over as
+/// one chunk; a caller of `write_local` may split it into one chunk per
+/// context-tagged member, so the chunks are joined before the decode. Unless
+/// the joined bytes are exactly one reference naming `local`, the value
+/// passes on as written, for the object to judge.
 fn localize_single<R: DeviceQualified>(
     value: PropertyValue,
     local: ObjectIdentifier,
@@ -325,7 +327,7 @@ mod tests {
     fn staging_targets_naming_the_local_device_lose_their_device() {
         // Device 7 has no Staging object; the rewrite keys on the identifier.
         let db = database(7);
-        // A whole array, one element per chunk, as the handler splits it.
+        // A whole array, one element per chunk, as a read returns it.
         assert_eq!(
             localize(
                 &db,
@@ -365,8 +367,8 @@ mod tests {
         ObjectIdentifier::new(ObjectType::AVERAGING, 1).unwrap()
     }
 
-    /// One reference split into a chunk per context-tagged member, as the
-    /// service decode hands a WriteProperty value over.
+    /// One reference split into a chunk per context-tagged member, as a
+    /// `write_local` caller may hand it over.
     fn split(reference: BACnetDeviceObjectPropertyReference) -> PropertyValue {
         let bytes = encoded(&[reference]);
         let mut chunks = Vec::new();
@@ -385,7 +387,7 @@ mod tests {
         // Device 7 has no Averaging object; the rewrite keys on the identifier.
         let db = database(7);
         let local = PropertyValue::ApplicationData(encoded(&[member(1, None)]));
-        // Split, as the handler passes it, and whole, as write_local may.
+        // Whole, as the handler passes it, and split, as write_local may.
         assert_eq!(
             localize(
                 &db,

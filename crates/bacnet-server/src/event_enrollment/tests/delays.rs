@@ -51,7 +51,8 @@ fn setup_oor(
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay,
         low_limit,
@@ -381,7 +382,8 @@ fn change_of_state_delays_both_directions() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         bi_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::ChangeOfState {
         time_delay: 2,
         list_of_values: vec![BACnetPropertyStates::BinaryValue(1)],
@@ -670,7 +672,8 @@ fn retarget_mid_pending_cancels_and_regates() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai2_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 3,
         low_limit: 20.0,

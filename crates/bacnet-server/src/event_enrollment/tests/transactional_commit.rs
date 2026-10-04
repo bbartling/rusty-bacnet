@@ -163,10 +163,12 @@ fn same_state_transition_still_commits_ack_and_history() {
 
     let mut enrollment =
         EventEnrollmentObject::new(31, "EE-COV", EventType::CHANGE_OF_VALUE).unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        monitored_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    enrollment
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            monitored_oid,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::ChangeOfValue {
         time_delay: 0,
         criteria: ChangeOfValueCriteria::ReferencedPropertyIncrement(5.0),

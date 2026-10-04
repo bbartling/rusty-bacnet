@@ -327,7 +327,7 @@ fn full_reference_and_logging_mode_changes_retire_previous_selection() {
     .into_iter()
     .enumerate()
     {
-        *reference.lock().unwrap() = crate::device_reference::property_reference_value(&changed);
+        *reference.lock().unwrap() = crate::device_reference::reference_value(&changed);
         db.poll_trend_logs();
         assert_eq!(count(&db, oid), number as u64 + 2);
     }

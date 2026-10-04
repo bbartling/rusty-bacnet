@@ -6,9 +6,7 @@
 //! when a sample falls due (`ObjectDatabase::sample_due_averaging_objects`),
 //! and the application can feed samples of its own.
 
-use bacnet_types::constructed::{
-    BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
-};
+use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -17,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{self, read_identity_properties};
+use crate::device_reference;
 use crate::traits::{BACnetObject, MonotonicClock};
 
 mod metadata;
@@ -211,15 +210,10 @@ impl BACnetObject for AveragingObject {
             p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => Ok(self
                 .object_property_reference
                 .as_ref()
-                .map_or(PropertyValue::Null, |r| {
-                    crate::device_reference::property_reference_value(
-                        &BACnetDeviceObjectPropertyReference {
-                            object_identifier: r.object_identifier,
-                            property_identifier: r.property_identifier,
-                            property_array_index: r.property_array_index,
-                            device_identifier: None,
-                        },
-                    )
+                .map_or(PropertyValue::Null, |reference| {
+                    device_reference::reference_value(&device_reference::local_property_reference(
+                        reference,
+                    ))
                 })),
             _ => Err(common::unknown_property_error()),
         }
@@ -243,20 +237,22 @@ impl BACnetObject for AveragingObject {
             // Clause 12.5 Table 12-5 types Object_Property_Reference as
             // BACnetDeviceObjectPropertyReference, and 12.5.13 leaves
             // sampling a property on another BACnet device optional. This
-            // implementation samples local objects only, so the shared arm
-            // helper decodes the device-qualified members and refuses one
-            // carrying a Device member [3] with
-            // OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, rather than silently
-            // dropping the device. The object can't tell which Device holds
-            // it; the bundled server drops a Device member naming its own
-            // Device before the value gets here (#1153). A Device member that
-            // isn't a Device identifier is VALUE_OUT_OF_RANGE (#1182), and the
-            // flat application-tagged list is INVALID_DATA_TYPE.
+            // implementation samples local objects only, so the shared
+            // helpers decode the reference and refuse a Device member: one
+            // that isn't a Device identifier with VALUE_OUT_OF_RANGE (#1182),
+            // any other with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED rather than
+            // silently dropping the device. The object can't tell which
+            // Device holds it; the bundled server drops a Device member naming
+            // its own Device before the value gets here (#1153). Null clears
+            // the reference, and the flat application-tagged list is
+            // INVALID_DATA_TYPE.
             p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => {
-                let reference = crate::reference::decode_reference_write(
-                    &value,
-                    crate::reference::ReferenceFrame::Device,
-                )?;
+                let reference = match value {
+                    PropertyValue::Null => None,
+                    value => Some(device_reference::into_local_property_reference(
+                        device_reference::decode_reference(&value)?,
+                    )?),
+                };
                 self.set_object_property_reference(reference);
                 Ok(())
             }
