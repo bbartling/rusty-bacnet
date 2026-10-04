@@ -1,7 +1,8 @@
 //! An object's save writer together with the one write staged on it (#1270).
 //!
-//! The Notification Forwarder and the Notification Class share this part of
-//! the pattern the [module documentation](super) describes: a write staged
+//! The Notification Forwarder, the Notification Class and the Access Rights
+//! object share this part of the pattern the [module documentation](super)
+//! describes: a write staged
 //! for a request keeps the state it leaves aside while its save runs, the
 //! write then takes that state or the save's error, and a staged write its
 //! request never makes is dropped and corrected.
@@ -42,6 +43,9 @@ use super::{Event, SaveTicket, SaveWait, SaveWriter, StageStep, STAGED_WRITE_LIF
 /// writer, and the snapshot `S` of the state the object serves meanwhile.
 struct StagedWrite<S, N> {
     property: PropertyIdentifier,
+    /// The array index written, so a write of the same value to another
+    /// element of an array can't take this one's state.
+    array_index: Option<u32>,
     value: PropertyValue,
     /// The object's write count when staged. The write takes the staged
     /// state only if no other write came between.
@@ -106,13 +110,16 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         None
     }
 
-    /// Queue a save of `snapshot` for a write of `value` to `property` made
-    /// at write count `base` that leaves `next`, and keep `next` aside until
-    /// the write arrives. `served` is the state the object serves now, which
-    /// storage goes back to should the staged write be dropped.
+    /// Queue a save of `snapshot` for a write of `value` to `property` (at
+    /// `array_index`) made at write count `base` that leaves `next`, and keep
+    /// `next` aside until the write arrives. `served` is the state the object
+    /// serves now, which storage goes back to should the staged write be
+    /// dropped.
+    #[allow(clippy::too_many_arguments, reason = "the parts of one staged write")]
     pub(crate) fn stage(
         &mut self,
         property: PropertyIdentifier,
+        array_index: Option<u32>,
         value: PropertyValue,
         base: u64,
         next: N,
@@ -130,6 +137,7 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         let wait = ticket.wait();
         self.staged = Some(StagedWrite {
             property,
+            array_index,
             value,
             base,
             next,
@@ -164,18 +172,24 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         }
     }
 
-    /// Take the staged state for a write of `value` to `property` made at
-    /// write count `base`: the state if its save succeeded, the save's error
-    /// if not. `None` when no staged write matches; a staged write that does
-    /// not match is dropped, since the write about to be saved supersedes it.
+    /// Take the staged state for a write of `value` to `property` (at
+    /// `array_index`) made at write count `base`: the state if its save
+    /// succeeded, the save's error if not. `None` when no staged write
+    /// matches; a staged write that does not match is dropped, since the
+    /// write about to be saved supersedes it.
     pub(crate) fn claim(
         &mut self,
         property: PropertyIdentifier,
+        array_index: Option<u32>,
         value: &PropertyValue,
         base: u64,
     ) -> Option<Result<N, Error>> {
         let staged = self.staged.as_ref()?;
-        if staged.property != property || staged.base != base || staged.value != *value {
+        if staged.property != property
+            || staged.array_index != array_index
+            || staged.base != base
+            || staged.value != *value
+        {
             self.drop_staged();
             return None;
         }

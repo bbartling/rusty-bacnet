@@ -1,8 +1,9 @@
 //! Saving object state off the object database lock (#1270).
 //!
-//! The Audit Log, the Notification Forwarder and the Notification Class keep
-//! state in storage the application provides ([`AuditLogPersistence`],
-//! [`NotificationForwarderPersistence`] and [`NotificationClassPersistence`]).
+//! The Audit Log, the Notification Forwarder, the Notification Class and the
+//! Access Rights object keep state in storage the application provides
+//! ([`AuditLogPersistence`], [`NotificationForwarderPersistence`],
+//! [`NotificationClassPersistence`] and [`AccessRightsPersistence`]).
 //! A storage call can be slow, since the file backends write, synchronize and
 //! rename, so none of these objects makes one while its caller holds the
 //! database's write guard. They all follow the pattern this module provides.
@@ -48,8 +49,9 @@
 //!   configured, since the authorizer sees each attempt only as the handler
 //!   reaches it under the guard;
 //! - a request's second write to an object that stages one write per request,
-//!   as a Notification Forwarder or Class does (an Audit Log folds a request's
-//!   Log_Enable and Buffer_Size writes into one staged commit instead);
+//!   as a Notification Forwarder or Class or an Access Rights object does (an
+//!   Audit Log folds a request's Log_Enable and Buffer_Size writes into one
+//!   staged commit instead);
 //! - an in-place change to an Audit Log, such as `add_record`, which first
 //!   lets a staged commit land, waiting for it if it is still running.
 //!
@@ -95,11 +97,13 @@
 //! The Notification Forwarder's `saving` module is the full example: a list
 //! write stages, and the operation task's saves coalesce. The Notification
 //! Class's is the smallest: a Recipient_List write stages, and nothing else
-//! saves.
+//! saves. The Access Rights object's stages indexed array writes too, keyed
+//! by the index as well as the value.
 //!
 //! [`AuditLogPersistence`]: crate::audit::AuditLogPersistence
 //! [`NotificationForwarderPersistence`]: crate::notification_forwarder::NotificationForwarderPersistence
 //! [`NotificationClassPersistence`]: crate::notification_class::NotificationClassPersistence
+//! [`AccessRightsPersistence`]: crate::access_control::AccessRightsPersistence
 
 use std::collections::VecDeque;
 use std::future::Future;

@@ -4,6 +4,8 @@ use super::*;
 use bacnet_services::alarm_event::ForwardedEventNotification;
 
 #[cfg(test)]
+mod access_rights_durable_tests;
+#[cfg(test)]
 mod access_rights_mutation_tests;
 mod acknowledge_alarm;
 mod alarm_summary;

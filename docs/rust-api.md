@@ -1652,7 +1652,8 @@ unchanged.
 A NULL written to a property that isn't commandable and has no NULL in its
 datatype succeeds and leaves the property as it is (Clauses 15.9.2 and 15.10.2,
 #1396). The server applies this once, for WriteProperty, WritePropertyMultiple,
-`write_local`, `write_local_encoded` and a Command's local writes: the write goes
+`write_local`, `write_local_encoded`, a Command's local writes, CreateObject's
+initial values and a Schedule's writes to its targets (#1416): the write goes
 to the object as usual, and when the object refuses the NULL with
 `PROPERTY/INVALID_DATA_TYPE` the server answers success instead. Every check the
 object makes first still answers, so an unknown property, a read-only one, one
@@ -1660,9 +1661,13 @@ not writable in the object's state, or an array index out of range is refused as
 before. An object's own Present_Value relinquish, and a property that stores a
 NULL, never reach the rule. The rule covers an array element too, judged against
 the element's datatype once the index checks out. Nothing follows such a write as
-a change (no COV report, event pass or save); an Audit Reporter records it as a
-successful write. A custom object should therefore check access and state before
-the value's datatype, as the built-in objects do.
+a change (no COV report, event pass or save). Over WriteProperty and
+WritePropertyMultiple an Audit Reporter records it as a successful write; a
+CreateObject is audited once, as its CREATE, and a Schedule's target writes
+aren't audited. A CreateObject goes on to its next initial value, and a
+Schedule counts the target as one that took its write. A custom object should
+therefore check access and state before the value's datatype, as the built-in
+objects do.
 
 WriteProperty and WritePropertyMultiple give a property that
 `BACnetObject::is_list_property` reports as a BACnetLIST, written whole, to the
@@ -1677,7 +1682,11 @@ List_Of_Object_Property_References, and the Loop and Pulse Converter references.
 The object decides what an empty value means there (an empty
 Setpoint_Reference holds no reference). For any other property, no octets is
 `PROPERTY/INVALID_DATA_ENCODING` and one element arrives alone.
-`write_local_encoded` and a Command's writes decode the same way (#1328).
+`write_local_encoded`, a Command's writes and CreateObject's initial values
+decode the same way (#1328, #1389). CreateObject checks an initial value's array
+index against the new object first, as WriteProperty does, and names the first
+initial value it can't apply by its position; one that doesn't decode is
+`PROPERTY/INVALID_DATA_ENCODING` there.
 
 AddListElement and RemoveListElement edit only properties that
 `BACnetObject::is_list_property` reports as a BACnetLIST. The default follows the
@@ -1945,7 +1954,9 @@ framing, through the shared `bacnet-encoding` codecs.
   TRUE by default, set with `set_enable` or written by peers; FALSE disables
   every rule in both arrays (Clause 12.34.8) without touching each rule's own
   flag. The object stores and serves the rules and the flag; nothing in the
-  stack evaluates them.
+  stack evaluates them. An object built with `with_persistence` keeps what
+  peers write to the arrays and Enable across a restart (see
+  [Access Control](#access-control-7)).
 - **Device references**: a `BACnetDeviceObjectReference` or
   `BACnetDeviceObjectPropertyReference` whose device identifier is present
   must name a Device object (Clause 21); each type's
@@ -2188,7 +2199,9 @@ time, calendar_active)` hook returns `Option<ScheduleWrite>` (value, priority,
 references): a changed value, or any value on entering the Effective_Period
 (start-up included). The server writes it to every reference at
 `Priority_For_Writing`, set with `set_priority_for_writing` (1 to 16, default
-16); a NULL relinquishes that slot. A failed target write
+16); a NULL relinquishes that slot, and leaves a target property that isn't
+commandable and has no NULL in its datatype as it is, the target counting as
+one that took the write (#1416). A failed target write
 does not prevent subsequent target writes. `set_weekly_schedule`,
 `add_exception` and `set_effective_period` return `Result` and refuse
 non-primitive values, non-specific or repeated times, out-of-range priorities
@@ -2992,9 +3005,47 @@ that started it fails with OBJECT / BUSY, so such a loop stops after one round.
 | `AccessPointObject` | `::new(instance, name)` |
 | `AccessCredentialObject` | `::new(instance, name)` |
 | `AccessUserObject` | `::new(instance, name)` |
-| `AccessRightsObject` | `::new(instance, name)` |
+| `AccessRightsObject` | `::new(instance, name)`, `::with_persistence(instance, name, persistence)` |
 | `AccessZoneObject` | `::new(instance, name)` |
 | `CredentialDataInputObject` | `::new(instance, name)` |
+
+An `AccessRightsObject` built with `with_persistence` keeps the
+`Positive_Access_Rules`, `Negative_Access_Rules` and Enable that peers write
+across a restart (#1392). Clause 12.34 doesn't ask for this; the stack does it
+because head ends provision access rules over the network. The storage is an
+application-owned `AccessRightsPersistence` that loads and saves an
+`AccessRightsSnapshot`, whose three members stay `None` until a write sets
+them. `FileAccessRightsPersistence` keeps it in one file, replaced whole the
+same way as the Notification Class's. The file is tagged `RBNACR01` and holds
+the object identifier, then the BACnet encodings of each member a write has
+set, in order: the positive rules between opening and closing context tag 0,
+the negative rules between tag 1, and Enable as a BOOLEAN with context tag 2.
+Loading refuses a file past 128 KiB, an array of more than 1024 rules, members
+out of order, trailing octets, and another object's file. `with_persistence`
+then puts each saved array through the setters' checks, so a file holding a
+rule they refuse fails it. An object built with `new` keeps written values in
+memory only.
+
+Saves follow the Notification Class's rules (see
+[Schedule & Notification](#schedule--notification-6)): the save runs on the
+object's own writer thread, and the bundled server stages each WriteProperty,
+WritePropertyMultiple or `write_local` write of the arrays (whole, one
+element, or the size at index 0) or of Enable, and waits for its save with
+the database guard dropped. A request stages only its first such write to an
+object; a WritePropertyMultiple's later writes to the same object save in
+place. A state that cannot be saved is refused with DEVICE /
+OPERATIONAL_PROBLEM, and nothing changes. A staged write that is never made
+puts storage back to the served state on release, after its lifetime, at
+`stop()`, or when the object drops. A saved value wins over the
+configuration: once a write has set a property and it was saved,
+`property_saved(property)` is true, and that property's setter
+(`set_positive_access_rules`, `set_negative_access_rules` or `set_enable`)
+checks its argument without storing it. Configuration alone is never saved,
+but a write saves the whole array it leaves: an element or index-0 write to
+an array no write has set yet saves the configured rules it didn't touch too.
+`wait_for_saves()` blocks until queued saves have run. Like a
+`NotificationClass`, an `AccessRightsObject` is not `UnwindSafe` or
+`RefUnwindSafe`.
 
 Access Door, Access Point and Credential Data Input support COV (Table 13-1).
 A door's SubscribeCOV report carries Present_Value, Status_Flags and

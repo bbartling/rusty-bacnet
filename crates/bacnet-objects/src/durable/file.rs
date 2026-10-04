@@ -1,6 +1,6 @@
-//! The file plumbing the Notification Forwarder and Notification Class
-//! backends share: one object's state in one file, replaced whole on each
-//! save.
+//! The file plumbing the Notification Forwarder, Notification Class and
+//! Access Rights backends share: one object's state in one file, replaced
+//! whole on each save.
 //!
 //! Each file starts with an eight-octet magic tag naming its format and
 //! version, then the four-octet object identifier it belongs to. What
