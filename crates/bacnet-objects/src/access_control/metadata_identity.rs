@@ -47,8 +47,10 @@ use crate::property_metadata::{
 // User_Type arm makes it RequiredRead/Always while Credentials stays
 // RequiredRead/ReadOnly. Rights Global_Identifier carries the table W code
 // with the routed Unsigned arm, so RequiredWrite/Always; the ±rules rows
-// carry the table R code with no arm (counts only), so
-// RequiredRead/ReadOnly. CDI Present_Value and Reliability carry the table R
+// carry the table R code with routed array arms (#1330), so
+// RequiredRead/Always, and Enable (#1332) follows the status rows, before
+// Property_List, with the table R code and a routed Boolean arm, so
+// RequiredRead/Always too. CDI Present_Value and Reliability carry the table R
 // code with footnote 1, and dispatch takes their writes only while
 // Out_Of_Service is TRUE (#1168), so RequiredRead/WhenOutOfService.
 // Update_Time and Supported_Formats carry the table R code with no arm, so
@@ -90,10 +92,11 @@ const ACCESS_RIGHTS_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::GLOBAL_IDENTIFIER, RequiredWrite, None, Always),
-    PropertyMetadata::new(P::POSITIVE_ACCESS_RULES, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::NEGATIVE_ACCESS_RULES, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::POSITIVE_ACCESS_RULES, RequiredRead, None, Always),
+    PropertyMetadata::new(P::NEGATIVE_ACCESS_RULES, RequiredRead, None, Always),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::LOG_ENABLE, RequiredRead, None, Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -350,6 +353,7 @@ mod tests {
             P::NEGATIVE_ACCESS_RULES,
             P::STATUS_FLAGS,
             P::RELIABILITY,
+            P::LOG_ENABLE,
         ];
         let required = [
             P::OBJECT_IDENTIFIER,
@@ -360,6 +364,7 @@ mod tests {
             P::NEGATIVE_ACCESS_RULES,
             P::STATUS_FLAGS,
             P::RELIABILITY,
+            P::LOG_ENABLE,
             P::PROPERTY_LIST,
         ];
         assert_exact_sets(&object, &all, &required);
@@ -373,7 +378,13 @@ mod tests {
             object.read_property(P::GLOBAL_IDENTIFIER, None).unwrap(),
             PropertyValue::Unsigned(0)
         );
-        // Both rule properties are arrays, empty: the object models no rules.
+        // Enable (property 133) starts TRUE and is no array (#1332).
+        assert_eq!(
+            object.read_property(P::LOG_ENABLE, None).unwrap(),
+            PropertyValue::Boolean(true)
+        );
+        assert!(!object.is_array_property(P::LOG_ENABLE));
+        // Both rule properties are arrays, empty until rules are set.
         for p in [P::POSITIVE_ACCESS_RULES, P::NEGATIVE_ACCESS_RULES] {
             assert!(object.is_array_property(p));
             assert_eq!(
@@ -471,7 +482,13 @@ mod tests {
             ),
             (
                 || Box::new(AccessRightsObject::new(1, "AR-1").unwrap()),
-                &[P::DESCRIPTION, P::GLOBAL_IDENTIFIER],
+                &[
+                    P::DESCRIPTION,
+                    P::GLOBAL_IDENTIFIER,
+                    P::POSITIVE_ACCESS_RULES,
+                    P::NEGATIVE_ACCESS_RULES,
+                    P::LOG_ENABLE,
+                ],
                 &[],
             ),
             (
@@ -623,21 +640,26 @@ mod tests {
                 rights.read_property(P::GLOBAL_IDENTIFIER, None).unwrap(),
                 PropertyValue::Unsigned(77)
             );
+            rights
+                .write_property(P::LOG_ENABLE, None, PropertyValue::Boolean(false), None)
+                .unwrap();
+            assert_eq!(
+                rights.read_property(P::LOG_ENABLE, None).unwrap(),
+                PropertyValue::Boolean(false)
+            );
             for (p, value) in [
                 (P::GLOBAL_IDENTIFIER, PropertyValue::Enumerated(77)),
                 (P::DESCRIPTION, PropertyValue::Unsigned(1)),
+                (P::LOG_ENABLE, PropertyValue::Enumerated(1)),
+                (P::POSITIVE_ACCESS_RULES, PropertyValue::Boolean(true)),
             ] {
                 assert_error(
                     rights.write_property(p, None, value, None).unwrap_err(),
                     ErrorCode::INVALID_DATA_TYPE,
                 );
             }
-            for p in [
-                P::POSITIVE_ACCESS_RULES,
-                P::NEGATIVE_ACCESS_RULES,
-                P::STATUS_FLAGS,
-                P::RELIABILITY,
-            ] {
+            assert!(!rights.enable());
+            for p in [P::STATUS_FLAGS, P::RELIABILITY] {
                 let value = rights.read_property(p, None).unwrap();
                 assert_error(
                     rights.write_property(p, None, value, None).unwrap_err(),

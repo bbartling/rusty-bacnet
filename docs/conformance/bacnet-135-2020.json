@@ -2278,7 +2278,7 @@
     "None was a documented extension with a purpose of its own, so all go, as #984 did for Calendar, #985 for the Trend Logs, #997 for Elevator Group and #979 for the Access Credential Present_Value. Object types with Status_Flags but no Out_Of_Service read their shared rows through the no_out_of_service form of read_common_properties!, which holds the OUT_OF_SERVICE flag FALSE as each of those types requires; before, a write of the stray Out_Of_Service set that flag.",
     "File, Group, Structured View and Averaging read only read_identity_properties!. The Event Enrollment evaluator used to skip an enrollment whose Out_Of_Service was TRUE; with the property gone the gate goes too, and Event_Detection_Enable still suspends evaluation.",
     "Credential Data Input was a candidate, but Table 12-43 lists Out_Of_Service, so it keeps the row. Color and Color Temperature have no 135-2020 table and were not swept; Lift, Schedule and Loop had no undefined rows. Not covered: the required rows these objects still don't serve, and any datatype review of the rows that remain.",
-    "Access Rights serves Positive_Access_Rules and Negative_Access_Rules as arrays, empty until the application sets rules (BACNET-12-ACCESS-RIGHTS-RULES): no octets for the whole value and a size of 0 at index 0."
+    "Access Rights serves Positive_Access_Rules and Negative_Access_Rules as arrays, empty until rules are set (BACNET-12-ACCESS-RIGHTS-RULES): no octets for the whole value and a size of 0 at index 0."
    ]
   },
   {
@@ -3173,9 +3173,9 @@
   },
   {
    "id": "BACNET-12-ACCESS-RIGHTS-RULES",
-   "standard_anchor": "Clause 12.34, Table 12-39, Clauses 12.34.9 to 12.34.10.1; Clause 21",
+   "standard_anchor": "Clause 12.34, Table 12-39, Clauses 12.34.8 to 12.34.10.1; Clauses 12.1.5.1, 15.9.1.3 and 21",
    "priority": "P1",
-   "summary": "Access Rights serves Positive_Access_Rules and Negative_Access_Rules as BACnetARRAYs of BACnetAccessRule that the application sets and the network reads whole or by index.",
+   "summary": "Access Rights serves Enable and its Positive_Access_Rules and Negative_Access_Rules BACnetARRAYs of BACnetAccessRule, which the application sets and peers read and write.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-types/src/constructed/access.rs::BACnetAccessRule",
@@ -3184,6 +3184,10 @@
     "crates/bacnet-encoding/src/constructed/access_rule.rs",
     "crates/bacnet-objects/src/access_control/rights.rs::AccessRightsObject",
     "crates/bacnet-objects/src/access_control/rights.rs::check_access_rule",
+    "crates/bacnet-objects/src/access_control/rights.rs::MAX_ACCESS_RULES",
+    "crates/bacnet-objects/src/access_control/rights_writes.rs::write_rules",
+    "crates/bacnet-objects/src/access_control/rights_writes.rs::grown_rule",
+    "crates/bacnet-server/src/handlers/write_property.rs::decode_write_property_value",
     "crates/rusty-bacnet/src/types/access_rule.rs::access_rules_from_py",
     "crates/rusty-bacnet/src/server/server_methods/access_rights_methods.rs"
    ],
@@ -3191,17 +3195,24 @@
     "crates/bacnet-types/src/enums/tests/access_production.rs::access_rule_specifier_values_match_clause_21",
     "crates/bacnet-types/src/constructed/tests.rs::access_rule_new_sets_each_specifier_from_its_reference",
     "crates/bacnet-encoding/src/constructed/tests/access_rule.rs::{access_rule_golden_bytes_and_round_trip,access_rule_decoder_keeps_what_the_object_judges,access_rules_decode_one_element_at_a_time,access_rule_all_keeps_an_unspecified_location}",
-    "crates/bacnet-objects/src/access_control/rights_tests.rs::access_rights_rule_arrays_read_whole_and_by_index",
+    "crates/bacnet-objects/src/access_control/rights_tests.rs::{access_rights_rule_arrays_read_whole_and_by_index,access_rights_enable_defaults_true_and_follows_the_setter_and_writes}",
+    "crates/bacnet-objects/src/access_control/rights_writes_tests.rs::{access_rights_rule_arrays_take_whole_and_indexed_writes,access_rights_index_zero_grows_with_the_clause_default_and_shrinks_from_the_end}",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs::property_metadata_access_rights_exact_sets_readable_rows_and_indexed_list",
     "crates/bacnet-server/src/handlers/tests/access_rights_rules.rs::{access_rights_rule_arrays_read_per_index,rpm_all_carries_both_configured_rule_arrays}",
+    "crates/bacnet-server/src/handlers/tests/access_rights_rule_writes.rs::{access_rights_rule_arrays_take_whole_indexed_and_resize_writes,access_rights_wpm_writes_the_arrays_and_enable,access_rights_enable_reads_and_writes_over_the_wire,rpm_all_after_network_writes_carries_the_written_rules_and_enable}",
+    "crates/bacnet-server/src/server/requests/access_rights_mutation_tests.rs::access_rights_rule_writes_pass_the_mutation_authorizer",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_identity.rs::pics_access_identity_property_metadata_is_exact",
     "crates/rusty-bacnet/src/types/access_rule_tests.rs::access_rule_mappings_fill_the_rule_and_default_to_always_and_all",
-    "crates/rusty-bacnet/src/server/server_methods/access_rights_methods_tests.rs::python_access_rules_reach_both_arrays",
+    "crates/rusty-bacnet/src/server/server_methods/access_rights_methods_tests.rs::{python_access_rules_reach_both_arrays,python_enable_reaches_the_enable_row}",
     "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsRulesTests::test_rules_reach_both_arrays_and_read_back",
-    "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsStubContractTests::test_runtime_and_stub_expose_the_rule_keywords"
+    "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsRulesTests::test_network_writes_reach_the_arrays_and_enable",
+    "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsStubContractTests::test_runtime_and_stub_expose_the_keywords"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/access_rule.rs::access_rule_rejects_malformed_elements",
-    "crates/bacnet-objects/src/access_control/rights_tests.rs::{access_rights_setters_refuse_ill_formed_rules_and_keep_the_old_ones,access_rights_rules_refuse_a_non_device_device_identifier,access_rights_rule_arrays_stay_read_only_on_the_network}",
-    "crates/bacnet-server/src/handlers/tests/access_rights_rules.rs::access_rights_rule_arrays_refuse_network_writes",
+    "crates/bacnet-objects/src/access_control/rights_tests.rs::{access_rights_setters_refuse_ill_formed_rules_and_keep_the_old_ones,access_rights_rules_refuse_a_non_device_device_identifier,access_rights_setters_refuse_more_rules_than_the_cap}",
+    "crates/bacnet-objects/src/access_control/rights_writes_tests.rs::access_rights_refused_rule_writes_leave_both_arrays_unchanged",
+    "crates/bacnet-server/src/handlers/tests/access_rights_rule_writes.rs::access_rights_refused_rule_writes_leave_the_arrays_unchanged",
     "crates/rusty-bacnet/src/types/access_rule_tests.rs::access_rule_mappings_refuse_wrong_shapes_and_non_device_devices",
     "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsRulesTests::test_ill_formed_rules_register_nothing"
    ],
@@ -3211,17 +3222,16 @@
     "docs/python-api.md#access-control"
    ],
    "notes": [
-    "Table 12-39 makes both arrays R rows, so they are read-only on the network: WriteProperty of the whole array, one element or index 0 gets WRITE_ACCESS_DENIED.",
-    "`set_positive_access_rules` and `set_negative_access_rules` keep the stored rules and answer VALUE_OUT_OF_RANGE for a non-Device device member, a specifier outside its two values, or a reference whose presence disagrees with its specifier.",
+    "Both arrays take WriteProperty and WritePropertyMultiple whole, by index, or at index 0 to resize. Growth appends SPECIFIED rules with unspecified references and enable FALSE; shrinking drops the last rules.",
+    "Setters and network writes keep stored rules and answer VALUE_OUT_OF_RANGE for a non-Device device member, a specifier outside its two values, or a reference that disagrees with its specifier; the codec leaves these checks to the object.",
     "ALWAYS and ALL take an absent or unspecified reference (instance 4194303). A SPECIFIED location names an Access Point or Access Zone or is unspecified; a time range may name any object's property.",
-    "The codec keeps any specifier value it reads and leaves the specifier checks to the object.",
-    "Python sets both arrays through `add_access_rights(positive_access_rules=..., negative_access_rules=...)`: lists of `AccessRule` mappings, where a missing time range or location means ALWAYS or ALL."
+    "Enable is property 133 (`LOG_ENABLE`), TRUE by default and writable; FALSE leaves each rule's own flag alone. Either array holds at most 1024 rules, past which a write or setter gets NO_SPACE_TO_WRITE_PROPERTY.",
+    "Python sets both arrays and Enable through `add_access_rights(positive_access_rules=..., negative_access_rules=..., enable=...)`: lists of `AccessRule` mappings, where a missing time range or location means ALWAYS or ALL."
    ],
    "gaps": [
-    "#1330: network writes of both arrays, indexed writes and the index 0 resize with Clause 12.34.9.3 defaults",
-    "#1331: nothing evaluates the stored rules; the Clause 12.34.9.2 authorization check isn't modeled",
-    "#1332: Access Rights doesn't serve its required Enable row (Table 12-39)",
-    "#1344: Python reads each rule as application_data octets, not the AccessRule mapping add_access_rights takes"
+    "#1331: nothing evaluates the stored rules or Enable; the Clause 12.34.9.2 authorization check isn't modeled",
+    "#1344: Python reads each rule as application_data octets, not the AccessRule mapping add_access_rights takes",
+    "#1392: rules and Enable written over the network are lost when the server restarts"
    ]
   },
   {

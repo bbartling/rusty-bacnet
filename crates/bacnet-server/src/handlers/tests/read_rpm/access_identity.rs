@@ -437,6 +437,7 @@ fn rpm_access_rights_indexed_reads_and_bytes_are_unchanged() {
                     None,
                 )
                 .unwrap();
+            object.set_enable(false);
         }
         write_common(&mut object, configured);
         let oid = object.object_identifier();
@@ -447,6 +448,17 @@ fn rpm_access_rights_indexed_reads_and_bytes_are_unchanged() {
                 P::GLOBAL_IDENTIFIER,
                 None,
                 Ok(if configured { &[0x21, 77] } else { &[0x21, 0] }),
+            ),
+            // Enable, property 133 (#1332): an application BOOLEAN.
+            (
+                P::LOG_ENABLE,
+                None,
+                Ok(if configured { &[0x10] } else { &[0x11] }),
+            ),
+            (
+                P::LOG_ENABLE,
+                Some(0),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
             (
                 P::GLOBAL_IDENTIFIER,
@@ -487,19 +499,20 @@ fn rpm_access_rights_indexed_reads_and_bytes_are_unchanged() {
                 None,
                 Ok(&[
                     0x91, 28, 0x92, 0x01, 0x43, 0x92, 0x01, 0x2E, 0x92, 0x01, 0x20, 0x91, 111,
-                    0x91, 103,
+                    0x91, 103, 0x91, 133,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 6])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 7])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x92, 0x01, 0x43])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x2E])),
             (P::PROPERTY_LIST, Some(4), Ok(&[0x92, 0x01, 0x20])),
             (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 111])),
             (P::PROPERTY_LIST, Some(6), Ok(&[0x91, 103])),
+            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 133])),
             (
                 P::PROPERTY_LIST,
-                Some(7),
+                Some(8),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
