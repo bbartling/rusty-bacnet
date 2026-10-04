@@ -1,8 +1,9 @@
 //! Local admission classification only; never authorizes or mutates DCC state.
 use super::Class;
-use bacnet_encoding::tags;
+use bacnet_encoding::constructed::tagged::{decode_ctx_primitive, decode_optional_ctx};
 use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
 use bacnet_types::enums::{ConfirmedServiceChoice, EnableDisable};
+use bacnet_types::error::Error;
 
 pub(in crate::server) fn confirmed_class(service: ConfirmedServiceChoice, data: &[u8]) -> Class {
     if service == ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL
@@ -24,41 +25,26 @@ pub(in crate::server) fn confirmed_class(service: ConfirmedServiceChoice, data: 
 // accepted encoding, and the authoritative decode can allocate only bounded
 // password storage. There is deliberately no total-request-length cutoff.
 fn bounded_password(data: &[u8]) -> bool {
-    let Ok((_, offset)) = tags::decode_optional_context(data, 0, 0) else {
-        return false;
+    let read = || -> Result<bool, Error> {
+        let (_, offset) = decode_optional_ctx(data, 0, 0, "", decode_ctx_primitive)?;
+        let (_, end) = decode_ctx_primitive(data, offset, 1, "")?;
+        let (password, _) = decode_optional_ctx(data, end, 2, "", decode_ctx_primitive)?;
+        Ok(match password {
+            None => true,
+            Some(content) => match content.first() {
+                Some(0 | 5) => content.len() <= 21,
+                Some(4) => content.len() <= 41,
+                _ => false,
+            },
+        })
     };
-    let Ok((tag, pos)) = tags::decode_tag(data, offset) else {
-        return false;
-    };
-    if !tag.is_context(1) {
-        return false;
-    }
-    let Some(end) = pos
-        .checked_add(tag.length as usize)
-        .filter(|end| *end <= data.len())
-    else {
-        return false;
-    };
-    if end == data.len() {
-        return true;
-    }
-    let Ok((password, _)) = tags::decode_optional_context(data, end, 2) else {
-        return false;
-    };
-    match password {
-        None => true,
-        Some(content) => match content.first() {
-            Some(0 | 5) => content.len() <= 21,
-            Some(4) => content.len() <= 41,
-            _ => false,
-        },
-    }
+    read().unwrap_or(false)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bacnet_encoding::{primitives, tags::TagClass};
+    use bacnet_encoding::{primitives, tags, tags::TagClass};
     use bytes::BytesMut;
 
     #[test]

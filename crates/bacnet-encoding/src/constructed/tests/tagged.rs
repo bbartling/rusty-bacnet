@@ -324,6 +324,35 @@ fn an_optional_field_is_read_only_under_its_own_tag() {
 }
 
 #[test]
+fn an_optional_primitive_yields_its_contents_or_nothing() {
+    // What tags::decode_optional_context did (#1374): the contents come
+    // back borrowed from the input.
+    fn read(data: &[u8], tag: u8) -> Result<(Option<&[u8]>, usize), Error> {
+        decode_optional_ctx(data, 0, tag, W, decode_ctx_primitive)
+    }
+    assert_eq!(read(&[0x09, 42], 0).unwrap(), (Some(&[42][..]), 2));
+    assert_eq!(read(&[0x19, 42], 0).unwrap(), (None, 0));
+    assert_eq!(read(&[], 0).unwrap(), (None, 0));
+    assert_eq!(short(read(&[0x0C, 0x01, 0x02], 0)), (5, 3));
+}
+
+#[test]
+fn an_application_peek_matches_only_its_own_type() {
+    // An application Unsigned, a context [2] and an application Date.
+    let data = [0x21, 0x05, 0x29, 0x05, 0xA4, 0x7E, 0x0A, 0x03, 0xFF];
+    assert!(next_is_application(&data, 0, 2).unwrap());
+    assert!(!next_is_application(&data, 0, 3).unwrap());
+    assert!(!next_is_application(&data, 2, 2).unwrap());
+    assert!(next_is_application(&data, 4, 10).unwrap());
+    assert!(!next_is_application(&data, data.len(), 10).unwrap());
+    // A reserved application length is a malformed tag, not a mismatch.
+    assert!(matches!(
+        next_is_application(&[0x26, 0x01], 0, 2),
+        Err(Error::Decoding { .. })
+    ));
+}
+
+#[test]
 fn an_input_must_end_where_its_value_does() {
     let data = [0x09, 0x01, 0xAA, 0xBB];
     assert!(expect_end(&data, 4, 4, W).is_ok());
@@ -593,5 +622,63 @@ fn application_enumerated_items_narrow_and_canonical_ones_refuse_padding() {
     assert_eq!(
         short(decode_app_canonical_enumerated::<u16>(&[0x92, 0], 0, W)),
         (3, 2)
+    );
+}
+
+#[test]
+fn fixed_size_application_items_check_their_length_first() {
+    let device_1 = ObjectIdentifier::new(ObjectType::DEVICE, 1).unwrap();
+    assert_eq!(
+        decode_app_object_id(&[0xC4, 0x02, 0x00, 0x00, 0x01], 0, W).unwrap(),
+        (device_1, 5)
+    );
+    // Any other length is malformed, even when the data also stops early.
+    assert_eq!(
+        decoding(decode_app_object_id(&[0xC3, 0x02, 0x00, 0x00], 0, W)),
+        (
+            0,
+            "Thing: BACnetObjectIdentifier has 3 contents octets, expected 4".into()
+        )
+    );
+    assert_eq!(
+        decoding(decode_app_object_id(&[0xC5, 0x05, 0x02, 0x00], 0, W)),
+        (
+            0,
+            "Thing: BACnetObjectIdentifier has 5 contents octets, expected 4".into()
+        )
+    );
+    // Four announced and fewer present is a short buffer.
+    assert_eq!(
+        short(decode_app_object_id(&[0xC4, 0x02, 0x00], 0, W)),
+        (5, 3)
+    );
+    // A context tag, or another application type, is refused at the tag.
+    for wrong in [
+        [0x0C, 0x02, 0x00, 0x00, 0x01],
+        [0x24, 0x02, 0x00, 0x00, 0x01],
+    ] {
+        assert_eq!(
+            decoding(decode_app_object_id(&wrong, 0, W)),
+            (
+                0,
+                "Thing: expected application-tagged BACnetObjectIdentifier".into()
+            )
+        );
+    }
+    // A Date is read the same way.
+    assert_eq!(
+        decode_app_fixed(&[0xA4, 0x7E, 0x0A, 0x03, 0xFF], 0, 10, 4, W).unwrap(),
+        (&[0x7E, 0x0A, 0x03, 0xFF][..], 5)
+    );
+    assert_eq!(
+        decoding(decode_app_fixed(&[0xA3, 0x7E, 0x0A, 0x03], 0, 10, 4, W)),
+        (0, "Thing: Date has 3 contents octets, expected 4".into())
+    );
+    assert_eq!(
+        decoding(decode_app_fixed(&[0x11], 0, 1, 1, W)),
+        (
+            0,
+            "Thing: an application-tagged BOOLEAN has no contents to read".into()
+        )
     );
 }

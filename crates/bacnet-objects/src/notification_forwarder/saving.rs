@@ -11,7 +11,14 @@
 //! A staged write its request never makes, because the request failed first
 //! or is gone, is dropped. Its save may already have put lists in storage
 //! that the forwarder never served, so the forwarder queues a save of the
-//! lists it does serve at once; a restart then serves those.
+//! lists it does serve at once; a restart then serves those. That holds at
+//! the end too (#1363): the server's `stop()` drops a staged write still
+//! held and waits for that save, and a forwarder dropped with one still
+//! held saves the lists it serves before its writer stops. The drop has no
+//! chance to read the lists afresh, so it saves them as they stood at the
+//! forwarder's last storage call, at most one operation-task tick old: with
+//! a bound clock, an entry that lapsed since that tick can come back with a
+//! minute left. `stop()` reads them as they stand.
 //!
 //! Between writes Subscribed_Recipients still changes: entries lapse, and each
 //! entry's served minutes fall by one a minute. The operation task calls the
@@ -137,7 +144,9 @@ impl Storage {
     }
 
     /// Queue a save of `snapshot` for a write of `value` to `property` that
-    /// leaves `next`, and keep `next` aside until the write arrives.
+    /// leaves `next`, and keep `next` aside until the write arrives;
+    /// `served` holds the lists the forwarder serves meanwhile (see
+    /// [`StagedSaves::stage`]).
     pub(super) fn stage(
         &mut self,
         property: PropertyIdentifier,
@@ -145,8 +154,10 @@ impl Storage {
         base: u64,
         next: NextList,
         snapshot: ForwarderSnapshot,
+        served: ForwarderSnapshot,
     ) -> StageStep {
-        self.saves.stage(property, value, base, next, snapshot)
+        self.saves
+            .stage(property, value, base, next, snapshot, served)
     }
 
     /// Take the staged list for a write (see [`StagedSaves::claim`]).
@@ -170,11 +181,19 @@ impl Storage {
         self.saves.release(wait);
     }
 
-    /// After a staged write was dropped, queue a save of `served`, the lists
-    /// the forwarder serves, at once. It lands after the dropped write's
-    /// save, since saves run in order.
+    /// After a storage call, with `served` giving the lists the forwarder
+    /// serves (see [`StagedSaves::correct`]).
     pub(super) fn correct(&mut self, served: impl FnOnce() -> ForwarderSnapshot) {
         self.saves.correct(served);
+    }
+
+    /// No request is left to take or release a staged write (see
+    /// [`StagedSaves::drop_forgotten`]).
+    pub(super) fn drop_forgotten(
+        &mut self,
+        served: impl FnOnce() -> ForwarderSnapshot,
+    ) -> SaveWait {
+        self.saves.drop_forgotten(served)
     }
 
     /// Bring storage up to date from the operation task: at once when an

@@ -21,6 +21,12 @@
 //! `advance_monotonic_time_internal`. The class saves nothing else between
 //! writes.
 //!
+//! Neither runs once the server has stopped. So `stop()`, once it has
+//! joined its requests, drops a staged write that is still held and waits
+//! for the save of the served list, and a class dropped with one still
+//! held saves the served list as it goes, unless the staged save failed
+//! (#1363). Either way a restart serves the list the class served.
+//!
 //! A written list wins over the destinations the application configures:
 //! once a write has set the list and it was saved, a rebuilt class serves the
 //! saved list, and [`add_destination`](NotificationClass::add_destination)
@@ -187,6 +193,7 @@ impl DurableWrites for NotificationClass {
             return StageStep::Skip;
         };
         let snapshot = self.snapshot(Some(&next));
+        let served = self.snapshot(None);
         let base = self.list_writes;
         self.storage.as_mut().expect("checked above").stage(
             property,
@@ -194,10 +201,18 @@ impl DurableWrites for NotificationClass {
             base,
             next,
             snapshot,
+            served,
         )
     }
 
     fn release_staged_write(&mut self, staged: &SaveWait) {
         self.with_storage(|storage| storage.release(staged));
+    }
+
+    fn settle_forgotten_writes(&mut self) -> Option<SaveWait> {
+        let mut storage = self.storage.take()?;
+        let wait = storage.drop_forgotten(|| self.snapshot(None));
+        self.storage = Some(storage);
+        Some(wait)
     }
 }

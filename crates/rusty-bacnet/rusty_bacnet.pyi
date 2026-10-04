@@ -3253,6 +3253,12 @@ class BACnetServer:
         Cancelling the returned Future retains shutdown ownership. Call stop()
         again to join it; a cleanup error also retains the owner for retry.
         Local mutation is rejected once shutdown starts.
+
+        A Notification Forwarder, Notification Class or Audit Log write staged
+        for a request that stop() cut short is dropped, and stop() waits, with
+        no limit, until every save those objects queued has run, so storage
+        holds what they serve. While storage holds it up, a warning naming the
+        objects still saving is logged after 5 s and every 30 s after that.
         """
         ...
 

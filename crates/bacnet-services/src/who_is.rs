@@ -1,7 +1,10 @@
 //! Who-Is and I-Am services per ASHRAE 135-2020 Clause 16.10.
 
+use bacnet_encoding::constructed::tagged::{
+    decode_app_enumerated, decode_app_object_id, decode_app_unsigned, decode_ctx_unsigned,
+    decode_optional_ctx,
+};
 use bacnet_encoding::primitives;
-use bacnet_encoding::tags::{self};
 use bacnet_types::enums::Segmentation;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -55,41 +58,16 @@ impl WhoIsRequest {
             return Ok(Self::all());
         }
 
-        let mut offset = 0;
-        let mut low_limit = None;
-        let mut high_limit = None;
-
-        // [0] device-instance-range-low-limit
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.is_context(0) {
-            let end = pos + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(pos, "WhoIs truncated at low-limit"));
-            }
-            let low_limit_raw = primitives::decode_unsigned(&data[pos..end])?;
-            low_limit = Some(u32::try_from(low_limit_raw).map_err(|_| {
-                Error::decoding(pos, format!("WhoIs low-limit {low_limit_raw} exceeds u32"))
-            })?);
-            offset = end;
-        }
-
-        // [1] device-instance-range-high-limit
-        if offset < data.len() {
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            if tag.is_context(1) {
-                let end = pos + tag.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(pos, "WhoIs truncated at high-limit"));
-                }
-                let high_limit_raw = primitives::decode_unsigned(&data[pos..end])?;
-                high_limit = Some(u32::try_from(high_limit_raw).map_err(|_| {
-                    Error::decoding(
-                        pos,
-                        format!("WhoIs high-limit {high_limit_raw} exceeds u32"),
-                    )
-                })?);
-            }
-        }
+        // [0] low-limit and [1] high-limit
+        let (low_limit, offset) =
+            decode_optional_ctx(data, 0, 0, "WhoIs low-limit", decode_ctx_unsigned::<u32>)?;
+        let (high_limit, _) = decode_optional_ctx(
+            data,
+            offset,
+            1,
+            "WhoIs high-limit",
+            decode_ctx_unsigned::<u32>,
+        )?;
 
         // Both present or both absent
         if low_limit.is_some() != high_limit.is_some() {
@@ -140,88 +118,12 @@ impl IAmRequest {
 
     /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        // Application L/V/T values 6 and 7 are reserved, but decode_tag treats
-        // them as extended lengths because they mark context opening/closing tags.
-        if tag.class != tags::TagClass::Application
-            || tag.number != tags::app_tag::OBJECT_IDENTIFIER
-            || data[offset] & 0x07 > 5
-        {
-            return Err(Error::decoding(
-                offset,
-                "IAm object identifier: expected application-tagged object identifier",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IAm truncated at object-identifier"));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.class != tags::TagClass::Application
-            || tag.number != tags::app_tag::UNSIGNED
-            || data[offset] & 0x07 > 5
-        {
-            return Err(Error::decoding(
-                offset,
-                "IAm max APDU length: expected application-tagged unsigned",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IAm truncated at max-apdu-length"));
-        }
-        let max_apdu_length_raw = primitives::decode_unsigned(&data[pos..end])?;
-        let max_apdu_length = u32::try_from(max_apdu_length_raw).map_err(|_| {
-            Error::decoding(
-                pos,
-                format!("IAm max APDU length {max_apdu_length_raw} exceeds u32"),
-            )
-        })?;
-        offset = end;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.class != tags::TagClass::Application
-            || tag.number != tags::app_tag::ENUMERATED
-            || data[offset] & 0x07 > 5
-        {
-            return Err(Error::decoding(
-                offset,
-                "IAm segmentation: expected application-tagged enumerated",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IAm truncated at segmentation"));
-        }
-        let seg_raw = primitives::decode_unsigned(&data[pos..end])?;
-        let seg_raw = u8::try_from(seg_raw)
-            .map_err(|_| Error::decoding(pos, format!("IAm segmentation {seg_raw} exceeds u8")))?;
-        let segmentation_supported = Segmentation::from_raw(seg_raw);
-        offset = end;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.class != tags::TagClass::Application
-            || tag.number != tags::app_tag::UNSIGNED
-            || data[offset] & 0x07 > 5
-        {
-            return Err(Error::decoding(
-                offset,
-                "IAm vendor ID: expected application-tagged unsigned",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IAm truncated at vendor-id"));
-        }
-        let vendor_id_raw = primitives::decode_unsigned(&data[pos..end])?;
-        let vendor_id = u16::try_from(vendor_id_raw).map_err(|_| {
-            Error::decoding(pos, format!("IAm vendor ID {vendor_id_raw} exceeds u16"))
-        })?;
+        let (object_identifier, offset) = decode_app_object_id(data, 0, "IAm object identifier")?;
+        let (max_apdu_length, offset) =
+            decode_app_unsigned::<u32>(data, offset, "IAm max APDU length")?;
+        let (segmentation, offset) = decode_app_enumerated::<u8>(data, offset, "IAm segmentation")?;
+        let segmentation_supported = Segmentation::from_raw(segmentation);
+        let (vendor_id, _) = decode_app_unsigned::<u16>(data, offset, "IAm vendor ID")?;
 
         Ok(Self {
             object_identifier,
@@ -235,6 +137,7 @@ impl IAmRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_encoding::tags;
     use bacnet_types::enums::ObjectType;
 
     #[test]
@@ -341,16 +244,22 @@ mod tests {
             buf
         };
 
+        // The shared readers' wording names the member, its tag and the value.
         for (low, high, field, value) in [
-            (4_294_967_297, 4_294_967_297, "low-limit", 4_294_967_297_u64),
-            (1, 4_294_967_297, "high-limit", 4_294_967_297),
+            (
+                4_294_967_297,
+                4_294_967_297,
+                "low-limit: [0]",
+                4_294_967_297_u64,
+            ),
+            (1, 4_294_967_297, "high-limit: [1]", 4_294_967_297),
         ] {
             let encoded = encode_range(low, high);
             let error = WhoIsRequest::decode(&encoded).unwrap_err();
             assert!(
                 error
                     .to_string()
-                    .contains(&format!("WhoIs {field} {value}")),
+                    .contains(&format!("WhoIs {field} value {value} exceeds u32")),
                 "unexpected error for {field} {value}: {error}"
             );
         }
@@ -377,16 +286,18 @@ mod tests {
             buf
         };
 
-        for (max_apdu_length, segmentation, vendor_id, field, value) in [
-            (4_294_967_296, 0, 0, "max APDU length", 4_294_967_296_u64),
-            (1, 256, 0, "segmentation", 256),
-            (1, 0, 65_536, "vendor ID", 65_536),
+        // The shared application readers name the member, its type and the
+        // width it must fit.
+        for (max_apdu_length, segmentation, vendor_id, refusal) in [
+            (4_294_967_296, 0, 0, "max APDU length: Unsigned exceeds u32"),
+            (1, 256, 0, "segmentation: ENUMERATED exceeds u8"),
+            (1, 0, 65_536, "vendor ID: Unsigned exceeds u16"),
         ] {
             let encoded = encode_request(max_apdu_length, segmentation, vendor_id);
             let error = IAmRequest::decode(&encoded).unwrap_err();
             assert!(
-                error.to_string().contains(&format!("IAm {field} {value}")),
-                "unexpected error for {field} {value}: {error}"
+                error.to_string().contains(&format!("IAm {refusal}")),
+                "unexpected error for {refusal}: {error}"
             );
         }
 

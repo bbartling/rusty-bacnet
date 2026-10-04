@@ -370,6 +370,151 @@ pub(super) async fn saved(wait: SaveWait) {
     }
 }
 
+/// How long `stop()` waits for durable saves before it warns that storage
+/// is holding it up.
+pub(super) const SLOW_SAVE_WARNING: Duration = Duration::from_secs(5);
+/// How often it warns again while it keeps waiting.
+pub(super) const SLOW_SAVE_REPEAT: Duration = Duration::from_secs(30);
+
+/// Settle every staged write in `db` once no request is left to take or
+/// release one: `stop()` calls this after joining its requests (#1363).
+/// Each object drops what it holds staged and puts storage back to the state
+/// it serves, and every save the objects have queued is awaited off the
+/// guard, so storage matches what the objects serve when `stop()` returns.
+/// The wait has no limit: storage that stalls holds `stop()` up, which is
+/// where the objects' drop would block otherwise. A warning names the
+/// objects still saving after [`SLOW_SAVE_WARNING`], and again every
+/// [`SLOW_SAVE_REPEAT`].
+///
+/// A second pass takes what the first waited for: an Audit Log batch whose
+/// commit was still running, which the log takes once it has landed.
+///
+/// `stop()` does not join an application's `write_local`. One that staged
+/// its save before the stop finds its stage dropped here when it comes back
+/// for the guard, and saves in place under the guard instead; storage still
+/// leads what the object serves.
+///
+/// An application holding the database is not waited for, as with the
+/// Command runs `stop()` ends: the objects then settle from a task once it
+/// lets go, and in any case put storage back when they are dropped.
+pub(super) async fn settle_forgotten(db: &Arc<RwLock<ObjectDatabase>>) {
+    for _ in 0..2 {
+        let waits = match db.try_write() {
+            Ok(mut db) => settle_all(&mut db),
+            Err(_) => {
+                settle_when_free(db);
+                return;
+            }
+        };
+        if waits.is_empty() {
+            return;
+        }
+        wait_for_saves(db, &waits).await;
+    }
+}
+
+/// Settle `db`'s objects from a task once the application lets go of it.
+/// Nothing waits for their saves; a runtime that shuts down first drops the
+/// task, which is logged, and the objects then put storage back as they drop.
+fn settle_when_free(db: &Arc<RwLock<ObjectDatabase>>) {
+    tracing::info!("The database is held at stop(); staged writes settle once it is free");
+    let db = Arc::clone(db);
+    tokio::spawn(async move {
+        let mut waiting = crate::command_lists::Waiting(Some(
+            "runtime dropped the task settling staged writes after stop(); \
+             each object puts storage back when it is dropped",
+        ));
+        settle_all(&mut *db.write().await);
+        waiting.0 = None;
+    });
+}
+
+/// Settle every object's forgotten staged writes: each object that keeps
+/// state in storage, with the wait for the saves it still has to run.
+fn settle_all(db: &mut ObjectDatabase) -> Vec<(ObjectIdentifier, SaveWait)> {
+    let mut waits = Vec::new();
+    db.for_each_object_mut(|oid, object| {
+        if let Some(wait) = object
+            .durable_writes_internal()
+            .and_then(|writes| writes.settle_forgotten_writes())
+            .filter(|wait| !wait.is_ready())
+        {
+            waits.push((oid, wait));
+        }
+    });
+    waits
+}
+
+/// Wait for `waits` on the blocking pool, as [`saved`] waits for one, so a
+/// paused clock stands still. While storage holds the wait up, warn which
+/// objects are still saving.
+async fn wait_for_saves(db: &Arc<RwLock<ObjectDatabase>>, waits: &[(ObjectIdentifier, SaveWait)]) {
+    let blocking: Vec<SaveWait> = waits.iter().map(|(_, wait)| wait.clone()).collect();
+    let mut all = tokio::task::spawn_blocking(move || blocking.iter().for_each(SaveWait::block));
+    let started = tokio::time::Instant::now();
+    let mut warn_at = started + SLOW_SAVE_WARNING;
+    loop {
+        match tokio::time::timeout_at(warn_at, &mut all).await {
+            Ok(Ok(())) => return,
+            Ok(Err(_)) => break,
+            Err(_) => {
+                let saving: Vec<String> = waits
+                    .iter()
+                    .filter(|(_, wait)| !wait.is_ready())
+                    .map(|(oid, _)| oid.to_string())
+                    .collect();
+                tracing::warn!(
+                    objects = %saving.join(", "),
+                    waited_secs = started.elapsed().as_secs(),
+                    "stop() is still waiting for storage to finish these objects' saves"
+                );
+                note_slow_saves(db);
+                warn_at += SLOW_SAVE_REPEAT;
+            }
+        }
+    }
+    // The blocking pool is gone, as when the runtime shuts down: wait here.
+    for (_, wait) in waits {
+        wait.clone().await;
+    }
+}
+
+/// Times `stop()` warned that storage held it up, per database (by
+/// address), so a test can see the warning.
+#[cfg(test)]
+static SLOW_SAVE_WARNINGS: std::sync::Mutex<Vec<(usize, usize)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Note a slow-save warning on `db`. Only tests count it; otherwise this
+/// does nothing.
+fn note_slow_saves(db: &Arc<RwLock<ObjectDatabase>>) {
+    #[cfg(test)]
+    {
+        let key = Arc::as_ptr(db) as usize;
+        let mut counts = SLOW_SAVE_WARNINGS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match counts.iter_mut().find(|(at, _)| *at == key) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((key, 1)),
+        }
+    }
+    #[cfg(not(test))]
+    let _ = db;
+}
+
+/// How many times `stop()` warned that storage held it up on `db`.
+#[cfg(test)]
+pub(super) fn slow_save_warnings(db: &Arc<RwLock<ObjectDatabase>>) -> usize {
+    let key = Arc::as_ptr(db) as usize;
+    SLOW_SAVE_WARNINGS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(at, _)| *at == key)
+        .map_or(0, |(_, count)| *count)
+}
+
 /// Stage `targets` and wait for their saves without holding the database
 /// guard. `targets` come in object order, so two requests never wait on each
 /// other.

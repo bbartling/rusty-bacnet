@@ -12,7 +12,8 @@ use bytes::BytesMut;
 
 use crate::common::MAX_DECODED_ITEMS;
 use bacnet_encoding::constructed::tagged::{
-    decode_app_enumerated, decode_app_primitive, decode_app_unsigned, expect_end,
+    decode_app_enumerated, decode_app_primitive, decode_app_unsigned, decode_ctx_boolean,
+    decode_ctx_unsigned, decode_optional_ctx, expect_end, next_is_context,
 };
 
 #[path = "virtual_terminal_error.rs"]
@@ -239,34 +240,27 @@ impl VTDataAck {
     /// Decode the acknowledgment from its service-ack octets; fails when `[0]` is missing or
     /// malformed, when the count is absent for FALSE or present for TRUE, and on trailing data.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (flag, offset) = tags::decode_optional_context(data, 0, 0)?;
-        let flag =
-            flag.ok_or_else(|| Error::decoding(0, "VTDataAck missing all-new-data-accepted [0]"))?;
-        let all_accepted = match flag {
-            [0] => false,
-            [1] => true,
-            _ => {
-                return Err(Error::decoding(
-                    0,
-                    "VTDataAck all-new-data-accepted must be one octet, 0 or 1",
-                ))
-            }
-        };
+        if !next_is_context(data, 0, 0)? {
+            return Err(Error::decoding(
+                0,
+                "VTDataAck missing all-new-data-accepted [0]",
+            ));
+        }
+        let (all_accepted, offset) =
+            decode_ctx_boolean(data, 0, 0, "VTDataAck all-new-data-accepted")?;
         let count_offset = offset;
-        let (count, offset) = tags::decode_optional_context(data, offset, 1)?;
+        let (count, offset) = decode_optional_ctx(
+            data,
+            offset,
+            1,
+            "VTDataAck accepted-octet-count",
+            decode_ctx_unsigned::<u32>,
+        )?;
         let ack = match (all_accepted, count) {
             (true, None) => Self::AllAccepted,
-            (false, Some(content)) => {
-                let raw = primitives::decode_unsigned(content)?;
-                Self::Partial {
-                    accepted_octet_count: u32::try_from(raw).map_err(|_| {
-                        Error::decoding(
-                            count_offset,
-                            format!("VTDataAck accepted-octet-count {raw} exceeds u32"),
-                        )
-                    })?,
-                }
-            }
+            (false, Some(accepted_octet_count)) => Self::Partial {
+                accepted_octet_count,
+            },
             (true, Some(_)) => {
                 return Err(Error::decoding(
                     count_offset,

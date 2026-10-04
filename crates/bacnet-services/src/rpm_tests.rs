@@ -199,16 +199,15 @@ fn error_pair_values_must_be_enumerated_and_fit_u16() {
         buf
     };
 
-    for (error_class, error_code, field, value) in
-        [(65_536, 0, "class", 65_536), (0, 65_537, "code", 65_537)]
-    {
+    // The shared application reader names the member and the width.
+    for (error_class, error_code, field) in [(65_536, 0, "class"), (0, 65_537, "code")] {
         let encoded = encode_pair(error_class, error_code);
         let error = decode_error_pair(&encoded, 0).unwrap_err();
         assert!(
             error
                 .to_string()
-                .contains(&format!("RPM error {field} {value}")),
-            "unexpected error for error {field} {value}: {error}"
+                .contains(&format!("RPM error {field}: ENUMERATED exceeds u16")),
+            "unexpected error for error {field}: {error}"
         );
     }
 
@@ -231,7 +230,7 @@ fn error_pair_values_must_be_enumerated_and_fit_u16() {
         let error = decode_error_pair(&encoded, 0).unwrap_err();
         assert!(
             error.to_string().contains(&format!(
-                "RPM error {field}: expected application-tagged enumerated"
+                "RPM error {field}: expected application-tagged ENUMERATED"
             )),
             "unexpected error for error {field} tag: {error}"
         );

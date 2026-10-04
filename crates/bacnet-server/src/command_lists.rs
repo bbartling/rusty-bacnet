@@ -198,22 +198,26 @@ fn when_free(
         Ok(runtime) => {
             let db = Arc::clone(db);
             runtime.spawn(async move {
-                let mut waiting = Waiting(true);
+                let mut waiting = Waiting(Some(
+                    "runtime dropped the task ending runs let go of; their objects stay busy",
+                ));
                 end(&mut *db.write().await);
-                waiting.0 = false;
+                waiting.0 = None;
             });
         }
         Err(_) => warn!("runs let go of outside a runtime; their objects stay busy"),
     }
 }
 
-/// Logs a [`when_free`] task dropped before it could end its runs.
-struct Waiting(bool);
+/// Logs a task waiting for the database, such as a [`when_free`] task,
+/// dropped before it could do its work: the message says what that leaves
+/// undone. Clear it once the work is done.
+pub(crate) struct Waiting(pub(crate) Option<&'static str>);
 
 impl Drop for Waiting {
     fn drop(&mut self) {
-        if self.0 {
-            warn!("runtime dropped the task ending runs let go of; their objects stay busy");
+        if let Some(undone) = self.0 {
+            warn!("{undone}");
         }
     }
 }

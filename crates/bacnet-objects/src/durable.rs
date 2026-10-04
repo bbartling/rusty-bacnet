@@ -55,8 +55,14 @@
 //!
 //! Dropping an object waits for the saves it has queued. The server's
 //! DeleteObject therefore drops a removed object on a blocking thread after
-//! releasing the guard; application code that removes one should do the
-//! same.
+//! releasing the guard; application code that removes one, or drops the
+//! database, should do the same. An object dropped with a write still
+//! staged for a request that never came back first saves the state it
+//! serves, so storage never keeps a state no client was told about, and
+//! waits for that save too (#1363). The server's `stop()` settles such
+//! writes once it has joined its requests
+//! ([`DurableWrites::settle_forgotten_writes`]) and waits for their saves,
+//! so a database dropped after a stop has nothing more to save.
 //!
 //! The writer's thread is a plain `std` thread with no Tokio runtime, so a
 //! storage implementation that needs one brings its own handle. A storage
@@ -73,11 +79,12 @@
 //!    state to keep. It stages a write's save, hands the write the saved
 //!    state or the save's error, and drops a staged write its request never
 //!    made, leaving the object to save its served state at once
-//!    (`StagedSaves::correct`). A write nobody staged saves with
-//!    `StagedSaves::save_now`, and a save nobody waits for coalesces through
-//!    `StagedSaves::submit_coalescing`.
-//! 2. Implement [`DurableWrites`] for the object and return it from
-//!    `BACnetObject::durable_writes_internal`.
+//!    (`StagedSaves::correct`), or as the object drops. A write nobody
+//!    staged saves with `StagedSaves::save_now`, and a save nobody waits
+//!    for coalesces through `StagedSaves::submit_coalescing`.
+//! 2. Implement [`DurableWrites`] for the object, including
+//!    `settle_forgotten_writes` (`StagedSaves::drop_forgotten`), and return
+//!    it from `BACnetObject::durable_writes_internal`.
 //! 3. Add the object type, and the properties it saves, to `may_save` in the
 //!    server's `durable_writes` module. The server stages only the writes
 //!    listed there; any other write saves in place.
@@ -334,8 +341,6 @@ struct Shared<S> {
     queue: Mutex<Queue<S>>,
     /// The thread has a job to run, or the writer is closing.
     work: Condvar,
-    /// The queue has emptied and no job is running.
-    idle: Condvar,
     save: Box<SaveFn<S>>,
     done: Box<DoneFn<S>>,
 }
@@ -344,6 +349,9 @@ struct Queue<S> {
     jobs: VecDeque<Job<S>>,
     running: bool,
     closed: bool,
+    /// Waits [`SaveWriter::idle`] handed out, set once the queue next
+    /// empties with no job running.
+    idle_waits: Vec<Arc<Event>>,
 }
 
 struct Job<S> {
@@ -365,9 +373,9 @@ impl<S: Send + 'static> SaveWriter<S> {
                     jobs: VecDeque::new(),
                     running: false,
                     closed: false,
+                    idle_waits: Vec::new(),
                 }),
                 work: Condvar::new(),
-                idle: Condvar::new(),
                 save: Box::new(save),
                 done: Box::new(done),
             }),
@@ -402,15 +410,38 @@ impl<S: Send + 'static> SaveWriter<S> {
         });
     }
 
+    /// A wait that ends once every save queued so far has run.
+    pub(crate) fn idle(&self) -> SaveWait {
+        let event = Arc::new(Event::default());
+        let mut queue = lock(&self.shared.queue);
+        if queue.running || !queue.jobs.is_empty() {
+            queue.idle_waits.push(Arc::clone(&event));
+        } else {
+            drop(queue);
+            event.set();
+        }
+        SaveWait::new(event)
+    }
+
     /// Block until every queued save has run.
     pub(crate) fn wait_idle(&self) {
-        let mut queue = lock(&self.shared.queue);
-        while queue.running || !queue.jobs.is_empty() {
-            queue = self
-                .shared
-                .idle
-                .wait(queue)
-                .unwrap_or_else(PoisonError::into_inner);
+        self.idle().block();
+    }
+
+    /// The object is going away while storage may hold a staged state it
+    /// never served: save `served`, the state it does serve, and wait for
+    /// the save. The writer's own drop, which follows, would wait for it
+    /// anyway, so this blocks no longer than that drop does. A save that
+    /// fails is logged twice, by the done hook and here: storage then keeps
+    /// the staged state, and the next start serves it.
+    pub(crate) fn put_back(&mut self, served: S) {
+        if let Err(error) = self.submit(served).take_outcome() {
+            tracing::warn!(
+                writer = %self.name,
+                %error,
+                "Could not put storage back to the served state as the object closed; \
+                 the next start serves the state staged for a request that never finished"
+            );
         }
     }
 
@@ -465,10 +496,17 @@ fn run<S>(shared: &Shared<S>) {
             }
         };
         run_job(shared, job);
-        let mut queue = lock(&shared.queue);
-        queue.running = false;
-        if queue.jobs.is_empty() {
-            shared.idle.notify_all();
+        let idle = {
+            let mut queue = lock(&shared.queue);
+            queue.running = false;
+            if queue.jobs.is_empty() {
+                std::mem::take(&mut queue.idle_waits)
+            } else {
+                Vec::new()
+            }
+        };
+        for event in idle {
+            event.set();
         }
     }
 }
@@ -628,6 +666,17 @@ pub trait DurableWrites {
     /// the object serves is queued at once, so storage follows the object
     /// again.
     fn release_staged_write(&mut self, staged: &SaveWait);
+
+    /// No request is left to take or release what is staged, as once the
+    /// server's `stop()` has joined its requests (#1363). Settle it: a
+    /// staged write goes as a release would drop it, so storage goes back
+    /// to the served state. Returns a wait that ends once every save the
+    /// object has queued so far has run, to await off the guard, or `None`
+    /// when the object keeps nothing in storage. The default has nothing
+    /// staged.
+    fn settle_forgotten_writes(&mut self) -> Option<SaveWait> {
+        None
+    }
 }
 
 #[cfg(test)]
