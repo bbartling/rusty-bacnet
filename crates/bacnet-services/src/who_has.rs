@@ -2,7 +2,7 @@
 
 use bacnet_encoding::constructed::tagged::{
     decode_app_character_string, decode_app_object_id, decode_ctx_character_string,
-    decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx, next_is_context,
+    decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx, expect_end, next_is_context,
 };
 use bacnet_encoding::primitives;
 use bacnet_types::error::Error;
@@ -58,7 +58,8 @@ impl WhoHasRequest {
         Ok(())
     }
 
-    /// Decode the request from service-request octets; fails on malformed or truncated input.
+    /// Decode the request from service-request octets; fails on malformed or truncated input
+    /// and on octets after the object.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         // [0] low-limit and [1] high-limit (optional)
         let (low_limit, offset) =
@@ -72,18 +73,19 @@ impl WhoHasRequest {
         )?;
 
         // CHOICE: [2] object-identifier OR [3] object-name
-        let object = if next_is_context(data, offset, 2)? {
-            let (oid, _) = decode_ctx_object_id(data, offset, 2, "WhoHas object-identifier")?;
-            WhoHasObject::Identifier(oid)
+        let (object, end) = if next_is_context(data, offset, 2)? {
+            let (oid, end) = decode_ctx_object_id(data, offset, 2, "WhoHas object-identifier")?;
+            (WhoHasObject::Identifier(oid), end)
         } else if next_is_context(data, offset, 3)? {
-            let (name, _) = decode_ctx_character_string(data, offset, 3, "WhoHas object-name")?;
-            WhoHasObject::Name(name)
+            let (name, end) = decode_ctx_character_string(data, offset, 3, "WhoHas object-name")?;
+            (WhoHasObject::Name(name), end)
         } else {
             return Err(Error::decoding(
                 offset,
                 "WhoHas expected context tag 2 or 3",
             ));
         };
+        expect_end(data, end, end, "WhoHas")?;
 
         Ok(Self {
             low_limit,
@@ -118,12 +120,13 @@ impl IHaveRequest {
     }
 
     /// Decode the request from service-request octets; fails on malformed or truncated input,
-    /// and on a member under any tag but its application tag.
+    /// on a member under any tag but its application tag, and on octets after the name.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let (device_identifier, offset) = decode_app_object_id(data, 0, "IHave device-identifier")?;
         let (object_identifier, offset) =
             decode_app_object_id(data, offset, "IHave object-identifier")?;
-        let (object_name, _) = decode_app_character_string(data, offset, "IHave object-name")?;
+        let (object_name, end) = decode_app_character_string(data, offset, "IHave object-name")?;
+        expect_end(data, end, end, "IHave")?;
 
         Ok(Self {
             device_identifier,

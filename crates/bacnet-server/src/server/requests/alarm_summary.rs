@@ -1,12 +1,23 @@
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Answer a GetAlarmSummary. The request carries no parameters (Clause
+    /// 13.10.1), so any octet in it is refused as a malformed request is.
     pub(super) fn alarm_summary_response(
         db: &ObjectDatabase,
         invoke_id: u8,
+        service_request: &[u8],
         budget: GetAlarmSummaryBudget,
     ) -> Apdu {
         let service_choice = ConfirmedServiceChoice::GET_ALARM_SUMMARY;
+        if let Err(error) = bacnet_encoding::constructed::tagged::expect_end(
+            service_request,
+            0,
+            0,
+            "GetAlarmSummary",
+        ) {
+            return Self::error_apdu_from_error(invoke_id, service_choice, &error);
+        }
         let mut buf = BytesMut::new();
         match handlers::handle_get_alarm_summary_budgeted(db, &mut buf, budget) {
             Ok(()) => Apdu::ComplexAck(ComplexAck {

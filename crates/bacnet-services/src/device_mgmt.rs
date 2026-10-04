@@ -47,8 +47,8 @@ impl DeviceCommunicationControlRequest {
         Ok(())
     }
 
-    /// Decode the request from `data`; errors on malformed input, an out-of-range duration or a
-    /// password longer than 20 characters.
+    /// Decode the request from `data`; errors on malformed input, octets after the members, an
+    /// out-of-range duration or a password longer than 20 characters.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         // [0] time-duration (optional)
         let (time_duration, offset) =
@@ -59,10 +59,10 @@ impl DeviceCommunicationControlRequest {
             decode_ctx_unsigned::<u32>(data, offset, 1, "DCC enable-disable")?;
         let enable_disable = EnableDisable::from_raw(enable_disable);
 
-        // [2] password (optional, max 20 characters); octets after the
-        // members that aren't a [2] are left unread
-        let (password, _) =
+        // [2] password (optional, max 20 characters), then nothing
+        let (password, end) =
             decode_optional_ctx(data, offset, 2, "DCC password", decode_ctx_character_string)?;
+        expect_end(data, end, end, "DCC")?;
         if password.as_ref().is_some_and(|s| s.len() > 20) {
             return Err(Error::Encoding("DCC password exceeds 20 characters".into()));
         }
@@ -100,20 +100,22 @@ impl ReinitializeDeviceRequest {
         Ok(())
     }
 
-    /// Decode the request from `data`; errors on missing or malformed fields.
+    /// Decode the request from `data`; errors on missing or malformed fields and on octets after
+    /// them.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         // [0] reinitialized-state
         let (state, offset) = decode_ctx_unsigned::<u32>(data, 0, 0, "Reinitialize state")?;
         let reinitialized_state = ReinitializedState::from_raw(state);
 
-        // [1] password (optional, max 20 characters)
-        let (password, _) = decode_optional_ctx(
+        // [1] password (optional, max 20 characters), then nothing
+        let (password, end) = decode_optional_ctx(
             data,
             offset,
             1,
             "ReinitializeDevice password",
             decode_ctx_character_string,
         )?;
+        expect_end(data, end, end, "ReinitializeDevice")?;
         if password.as_ref().is_some_and(|s| s.len() > 20) {
             return Err(Error::decoding(
                 offset,

@@ -19,7 +19,7 @@ pub(in crate::server) fn confirmed_class(service: ConfirmedServiceChoice, data: 
 
 // Mirror only the decoder's borrowed field traversal, not its accepted language.
 // Its final decode remains authoritative, including optional duration, charset
-// validity and trailing-data tolerance. Every accepted password has <=20 UTF-8
+// validity and the refusal of trailing data. Every accepted password has <=20 UTF-8
 // bytes: UTF-8/Latin-1 need <=20 wire payload bytes, UCS-2 <=40 (each code point
 // produces at least one UTF-8 byte). Thus rejecting larger content loses no
 // accepted encoding, and the authoritative decode can allocate only bounded
@@ -106,7 +106,7 @@ mod tests {
                     .encode(&mut data)
                     .unwrap();
                     assert_matches_decoder(&data);
-                    data.extend_from_slice(&[0x39, 7, 0xff]); // Existing unrelated trailing tag tolerance.
+                    data.extend_from_slice(&[0x39, 7, 0xff]); // Trailing octets: never recovery.
                     assert_matches_decoder(&data);
                 }
             }
@@ -159,6 +159,8 @@ mod tests {
                 Class::Confirmed
             ));
         }
+        // The preflight has no total-length cutoff; the decoder refuses the
+        // trailing octets (#1411), so the request is not recovery.
         let mut trailing = vec![0x19, 0, 0x39, 1];
         trailing.resize(1_000_000, 0xff);
         assert!(bounded_password(&trailing));
@@ -168,7 +170,7 @@ mod tests {
                 ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL,
                 &trailing
             ),
-            Class::Recovery
+            Class::Confirmed
         ));
     }
 }

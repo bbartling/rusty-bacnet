@@ -79,10 +79,9 @@ mod policy_precommit;
 /// list services ignore priority filtering and reuse ordinary target selection.
 /// AtomicWriteFile uses WRITE and the known target OID, with no property,
 /// priority, or values (Table 19-5). AUDIT_CONFIG and AUDIT_ALL admit file writes;
-/// priority filtering is irrelevant. Admission follows the existing service
-/// decoder acceptance boundary, including tolerated trailing bytes, not strict
-/// input consumption. Decoder rejections and configured payload/count budget
-/// Aborts remain silent. The Channel writes an inbound WriteGroup makes are
+/// priority filtering is irrelevant. Admission follows the service decoder's
+/// acceptance boundary, which refuses octets after the request's last member.
+/// Decoder rejections and configured payload/count budget Aborts remain silent. The Channel writes an inbound WriteGroup makes are
 /// not recorded, so complete WRITE coverage is not claimed.
 ///
 /// READ covers completed, unsegmented RP/RPM responses, one record per
