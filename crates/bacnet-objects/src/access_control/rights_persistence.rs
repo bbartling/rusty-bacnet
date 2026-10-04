@@ -8,19 +8,22 @@
 //! ([`NotificationClassPersistence`](crate::notification_class::NotificationClassPersistence)),
 //! the storage belongs to the application. The object loads it once, when it
 //! is built, and saves on its own writer thread each time a write changes
-//! Positive_Access_Rules, Negative_Access_Rules or Enable. The bundled server
-//! waits for that save with the database guard dropped; a write nobody staged
-//! waits where it is ([`crate::durable`] lists those paths).
+//! Positive_Access_Rules, Negative_Access_Rules, Enable or Accompaniment
+//! (#1393). The bundled server waits for that save with the database guard
+//! dropped; a write nobody staged waits where it is ([`crate::durable`] lists
+//! those paths).
 
 use std::path::Path;
 
-use bacnet_encoding::constructed::decode_access_rule;
-use bacnet_encoding::constructed::encode_access_rule;
 use bacnet_encoding::constructed::tagged::{
-    decode_ctx_boolean, expect_opening, next_is_context, next_is_opening,
+    decode_ctx_boolean, expect_closing, expect_opening, next_is_context, next_is_opening,
+};
+use bacnet_encoding::constructed::{
+    decode_access_rule, decode_device_object_reference, encode_access_rule,
+    encode_device_object_reference,
 };
 use bacnet_encoding::{primitives, tags};
-use bacnet_types::constructed::BACnetAccessRule;
+use bacnet_types::constructed::{BACnetAccessRule, BACnetDeviceObjectReference};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
@@ -39,10 +42,12 @@ pub struct AccessRightsSnapshot {
     pub negative_access_rules: Option<Vec<BACnetAccessRule>>,
     /// Enable, once a write has set it.
     pub enable: Option<bool>,
+    /// Accompaniment, once a write has set it (#1393).
+    pub accompaniment: Option<BACnetDeviceObjectReference>,
 }
 
-/// Application-owned storage for one Access Rights object's rule arrays and
-/// Enable.
+/// Application-owned storage for one Access Rights object's rule arrays,
+/// Enable and Accompaniment.
 ///
 /// The object calls it from its writer thread, one call at a time. A written
 /// value lands in storage a moment before the object serves it: see [storage
@@ -57,38 +62,43 @@ pub trait AccessRightsPersistence: Send + Sync {
 
 /// The format's tag. A Notification Class's `RBNNCL01` and a forwarder's
 /// `RBNFWD01` files are siblings with the same header; a new layout gets a
-/// new tag.
+/// new tag. Accompaniment (#1393) is an optional member after the others,
+/// so a file written before it existed is one with that member absent.
 const MAGIC: &[u8; 8] = b"RBNACR01";
 /// A rule this object accepts encodes in at most 40 octets, so two full
-/// arrays of [`MAX_ACCESS_RULES`] take about 80 KiB. Anything much larger is
-/// not a file this backend wrote.
+/// arrays of [`MAX_ACCESS_RULES`] take about 80 KiB, and Accompaniment at
+/// most 12 octets more. Anything much larger is not a file this backend
+/// wrote.
 pub(super) const MAX_FILE_BYTES: u64 = 128 * 1024;
-/// The context tags of the three members, in file order.
+/// The context tags of the four members, in file order.
 const POSITIVE_TAG: u8 = 0;
 const NEGATIVE_TAG: u8 = 1;
 const ENABLE_TAG: u8 = 2;
+const ACCOMPANIMENT_TAG: u8 = 3;
 /// The label decoding errors carry.
 const WHAT: &str = "Access Rights file";
 
-/// A file holding one Access Rights object's written rule arrays and Enable,
-/// replaced whole on each save, the same way as
+/// A file holding one Access Rights object's written rule arrays, Enable and
+/// Accompaniment, replaced whole on each save, the same way as
 /// [`FileNotificationClassPersistence`]: a failed save leaves the previous
 /// state in place, and a completed one survives a power loss.
 ///
 /// After the magic tag `RBNACR01` and the object's identifier, the file
-/// holds BACnet encodings of up to three members, in this order, each only
+/// holds BACnet encodings of up to four members, in this order, each only
 /// once a write has set it:
 ///
 /// - context tag 0, opening, then each Positive_Access_Rules rule in its
 ///   Clause 21 `BACnetAccessRule` encoding, then context tag 0, closing;
 /// - the same for Negative_Access_Rules under context tag 1;
-/// - Enable as a context-tagged BOOLEAN with tag 2.
+/// - Enable as a context-tagged BOOLEAN with tag 2;
+/// - context tag 3, opening, then Accompaniment in its Clause 21
+///   `BACnetDeviceObjectReference` encoding, then context tag 3, closing.
 ///
 /// Loading refuses a file past 128 KiB, an array of more than
-/// [`MAX_ACCESS_RULES`] rules, members out of order or repeated, a rule that
-/// does not decode, and octets after the last member. It does not check the
-/// rules themselves; the object does, as it loads them. It does not
-/// coordinate between processes.
+/// [`MAX_ACCESS_RULES`] rules, members out of order or repeated, a rule or
+/// reference that does not decode, and octets after the last member. It
+/// does not check the rules or the reference themselves; the object does,
+/// as it loads them. It does not coordinate between processes.
 ///
 /// [`FileNotificationClassPersistence`]: crate::notification_class::FileNotificationClassPersistence
 #[derive(Clone, Debug)]
@@ -97,14 +107,14 @@ pub struct FileAccessRightsPersistence {
 }
 
 impl FileAccessRightsPersistence {
-    /// Keep the rule arrays and Enable in the file at `path`.
+    /// Keep the rule arrays, Enable and Accompaniment in the file at `path`.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
         Ok(Self {
             file: ObjectFile::new(path.as_ref(), MAGIC, MAX_FILE_BYTES, "Access Rights")?,
         })
     }
 
-    /// The file the rule arrays and Enable are kept in.
+    /// The file the rule arrays, Enable and Accompaniment are kept in.
     pub fn path(&self) -> &Path {
         self.file.path()
     }
@@ -141,6 +151,26 @@ impl FileAccessRightsPersistence {
             at = end;
         }
     }
+
+    /// The Accompaniment framed by context tag 3 at `*pos`, if one is there,
+    /// moving `*pos` past it.
+    fn decode_accompaniment(
+        &self,
+        body: &[u8],
+        pos: &mut usize,
+    ) -> Result<Option<BACnetDeviceObjectReference>, Error> {
+        if !next_is_opening(body, *pos, ACCOMPANIMENT_TAG).map_err(|_| self.undecodable())? {
+            return Ok(None);
+        }
+        let decoded = expect_opening(body, *pos, ACCOMPANIMENT_TAG, WHAT)
+            .and_then(|at| decode_device_object_reference(body, at))
+            .and_then(|(reference, at)| {
+                expect_closing(body, at, ACCOMPANIMENT_TAG, WHAT).map(|end| (reference, end))
+            });
+        let (reference, end) = decoded.map_err(|_| self.undecodable())?;
+        *pos = end;
+        Ok(Some(reference))
+    }
 }
 
 impl AccessRightsPersistence for FileAccessRightsPersistence {
@@ -159,6 +189,7 @@ impl AccessRightsPersistence for FileAccessRightsPersistence {
         } else {
             None
         };
+        let accompaniment = self.decode_accompaniment(&body, &mut pos)?;
         if pos != body.len() {
             return Err(self.undecodable());
         }
@@ -166,6 +197,7 @@ impl AccessRightsPersistence for FileAccessRightsPersistence {
             positive_access_rules,
             negative_access_rules,
             enable,
+            accompaniment,
         }))
     }
 
@@ -185,6 +217,11 @@ impl AccessRightsPersistence for FileAccessRightsPersistence {
         }
         if let Some(enable) = snapshot.enable {
             primitives::encode_ctx_boolean(&mut body, ENABLE_TAG, enable);
+        }
+        if let Some(reference) = &snapshot.accompaniment {
+            tags::encode_opening_tag(&mut body, ACCOMPANIMENT_TAG);
+            encode_device_object_reference(&mut body, reference);
+            tags::encode_closing_tag(&mut body, ACCOMPANIMENT_TAG);
         }
         self.file.save(rights, &body)
     }

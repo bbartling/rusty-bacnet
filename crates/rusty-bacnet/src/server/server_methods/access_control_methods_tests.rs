@@ -1,6 +1,7 @@
 use super::*;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::error::ErrorDetail;
 use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::exceptions::PyValueError;
 
@@ -94,13 +95,12 @@ fn python_entry_and_exit_points_reach_the_zone_lists() {
     let remote = || {
         PyDeviceObjectReference::Remote(py(ObjectType::DEVICE, 99), py(ObjectType::ACCESS_POINT, 4))
     };
-    let zone = access_zone(
-        1,
-        "ZONE-1",
-        references(vec![here(), remote()]),
-        references(vec![remote()]),
-    )
-    .unwrap();
+    let settings = ZoneSettings {
+        entry_points: references(vec![here(), remote()]),
+        exit_points: references(vec![remote()]),
+        ..ZoneSettings::default()
+    };
+    let zone = access_zone(1, "ZONE-1", settings).unwrap();
     let remote_point = BACnetDeviceObjectReference {
         device_identifier: Some(oid(ObjectType::DEVICE, 99)),
         object_identifier: oid(ObjectType::ACCESS_POINT, 4),
@@ -126,13 +126,16 @@ fn python_entry_and_exit_points_reach_the_zone_lists() {
     // Both lists name Access Points only (#1306).
     let door = || PyDeviceObjectReference::Local(py(ObjectType::ACCESS_DOOR, 1));
     for (entry, exit) in [(vec![door()], vec![]), (vec![], vec![here(), door()])] {
-        let refused = access_zone(2, "ZONE-2", references(entry), references(exit))
-            .err()
-            .unwrap();
+        let settings = ZoneSettings {
+            entry_points: references(entry),
+            exit_points: references(exit),
+            ..ZoneSettings::default()
+        };
+        let refused = access_zone(2, "ZONE-2", settings).err().unwrap();
         assert!(is_value_out_of_range(&refused), "{refused:?}");
     }
     // Omitted arguments keep the lists empty.
-    let zone = access_zone(3, "ZONE-3", None, None).unwrap();
+    let zone = access_zone(3, "ZONE-3", ZoneSettings::default()).unwrap();
     for property in [
         PropertyIdentifier::ENTRY_POINTS,
         PropertyIdentifier::EXIT_POINTS,
@@ -404,4 +407,53 @@ fn python_door_alarm_lists_reach_the_door() {
             PropertyValue::List(vec![])
         );
     }
+}
+
+#[test]
+fn python_zone_alarm_values_reach_the_zone() {
+    // ABOVE_UPPER_LIMIT (4), NOT_SUPPORTED (6) and a proprietary 64.
+    let settings = ZoneSettings {
+        alarm_values: Some(vec![4, 6, 64]),
+        ..ZoneSettings::default()
+    };
+    let zone = access_zone(1, "ZONE-1", settings).unwrap();
+    assert_eq!(
+        zone.read_property(PropertyIdentifier::ALARM_VALUES, None)
+            .unwrap(),
+        PropertyValue::List(vec![
+            PropertyValue::Enumerated(4),
+            PropertyValue::Enumerated(6),
+            PropertyValue::Enumerated(64),
+        ])
+    );
+
+    // NORMAL (#1401), a reserved state and one past 65535: each refusal
+    // names the element, counting from 1.
+    for (values, position) in [
+        (vec![4, 0], 2),
+        (vec![0], 1),
+        (vec![7], 1),
+        (vec![4, 5, 65_536], 3),
+    ] {
+        let settings = ZoneSettings {
+            alarm_values: Some(values.clone()),
+            ..ZoneSettings::default()
+        };
+        let refused = access_zone(2, "ZONE-2", settings).err().unwrap();
+        assert!(
+            matches!(&refused, Error::Structured { class, code, detail }
+                if *class == ErrorClass::PROPERTY.to_raw() as u32
+                    && *code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32
+                    && **detail == ErrorDetail::FirstFailedElementNumber(position)),
+            "{values:?}: {refused:?}"
+        );
+    }
+
+    // Omitted, the list starts empty.
+    let zone = access_zone(3, "ZONE-3", ZoneSettings::default()).unwrap();
+    assert_eq!(
+        zone.read_property(PropertyIdentifier::ALARM_VALUES, None)
+            .unwrap(),
+        PropertyValue::List(vec![])
+    );
 }

@@ -93,6 +93,7 @@ fn indexed_index_zero_and_enable_writes_stage_too() {
         positive_access_rules: Some(vec![zone_rule(1), zone_rule(5)]),
         negative_access_rules: Some(vec![super::super::rights_writes::grown_rule()]),
         enable: Some(false),
+        accompaniment: None,
     };
     assert_eq!(storage.snapshot(), Some(expected));
     drop(rights);

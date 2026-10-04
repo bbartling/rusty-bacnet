@@ -285,6 +285,7 @@ async fn a_write_property_multiple_with_several_rights_writes_survives_a_rebuild
         positive_access_rules: Some(positive.to_vec()),
         negative_access_rules: Some(vec![grown_rule()]),
         enable: Some(false),
+        accompaniment: None,
     };
     assert_eq!(storage.load_saved(), Some(expected.clone()));
     drop(fixture);
@@ -581,4 +582,57 @@ async fn a_null_succeeds_unchanged_and_saves_nothing() {
     assert_eq!(reads(&fixture, rights).await, expected_reads(&kept));
     assert_eq!(storage.saves.load(Ordering::SeqCst), 0);
     assert_eq!(storage.load_saved(), Some(kept));
+}
+
+/// Accompaniment saves through the server as the rule arrays do (#1393): a
+/// WriteProperty stages its save with the guard dropped, a rebuilt server
+/// serves the saved reference though nothing configures one, and a NULL
+/// succeeds without changing or saving anything (#1396).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_accompaniment_write_saves_off_the_lock_and_survives_a_rebuild() {
+    // Access Credential 5 in Device 99: device [0], then object [1].
+    const REMOTE_CREDENTIAL: [u8; 10] =
+        [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x08, 0x00, 0x00, 0x05];
+    let oid = |object_type, instance| ObjectIdentifier::new(object_type, instance).unwrap();
+    // An earlier start saved Access User 3, so the row is served.
+    let storage = holding(AccessRightsSnapshot {
+        accompaniment: Some(oid(ObjectType::ACCESS_USER, 3).into()),
+        ..AccessRightsSnapshot::default()
+    });
+    let (fixture, rights) = served_by(&storage).await;
+    let request = write_property(rights, P::ACCOMPANIMENT, None, REMOTE_CREDENTIAL.to_vec());
+    let service = ConfirmedServiceChoice::WRITE_PROPERTY;
+    let (response, available) = while_saving(&fixture, &storage, service, request, WAIT).await;
+    assert_eq!(response, SIMPLE_ACK_WRITE);
+    assert!(available, "the database was held while Accompaniment saved");
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 1);
+    let credential = bacnet_types::constructed::BACnetDeviceObjectReference {
+        device_identifier: Some(oid(ObjectType::DEVICE, 99)),
+        object_identifier: oid(ObjectType::ACCESS_CREDENTIAL, 5),
+    };
+    assert_eq!(
+        storage.load_saved().and_then(|saved| saved.accompaniment),
+        Some(credential)
+    );
+    let served = PropertyValue::ApplicationData(REMOTE_CREDENTIAL.to_vec());
+    assert_eq!(fixture.read(rights, P::ACCOMPANIMENT).await, served);
+
+    let null = || value(PropertyValue::Null);
+    let request = write_property(rights, P::ACCOMPANIMENT, None, null());
+    assert_eq!(wire(&fixture, service, request).await, SIMPLE_ACK_WRITE);
+    let request = write_property_multiple(rights, vec![attempt(P::ACCOMPANIMENT, None, null())]);
+    assert_eq!(
+        wire(
+            &fixture,
+            ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+            request
+        )
+        .await,
+        SIMPLE_ACK_WPM
+    );
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.read(rights, P::ACCOMPANIMENT).await, served);
+    drop(fixture);
+    let (rebuilt, rights) = served_by(&storage).await;
+    assert_eq!(rebuilt.read(rights, P::ACCOMPANIMENT).await, served);
 }

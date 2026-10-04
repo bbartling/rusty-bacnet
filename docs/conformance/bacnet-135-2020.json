@@ -3018,7 +3018,8 @@
     "crates/bacnet-objects/src/event/state_reporting.rs",
     "crates/bacnet-objects/src/access_control/zone.rs::AccessZoneObject",
     "crates/bacnet-objects/src/access_control/metadata_topology.rs",
-    "crates/bacnet-server/src/server/event_notification_payload.rs::project_intrinsic_payload"
+    "crates/bacnet-server/src/server/event_notification_payload.rs::project_intrinsic_payload",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs::add_access_zone"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/access_control/zone_event_tests.rs::{access_zone_serves_the_event_rows,access_zone_goes_offnormal_after_time_delay_and_back_to_normal,access_zone_time_delay_normal_governs_only_the_return_to_normal,access_zone_event_enable_gates_distribution_not_the_transition,access_zone_acknowledges_its_latest_offnormal_transition,access_zone_simulated_fault_and_count_drive_the_event_state}",
@@ -3033,7 +3034,10 @@
     "crates/bacnet-server/src/pics/acked_transitions_policy_tests.rs::acked_transitions_network_policy_is_uniform_on_all_supported_types",
     "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list,property_metadata_access_trio_write_capabilities_match_dispatch}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_zone_indexed_reads_and_bytes_are_unchanged",
-    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact"
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_zone_alarm_values_reach_the_zone",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_zone_alarm_values_keyword_sets_the_starting_list",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_keywords"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/access_control/zone_event_tests.rs::{access_zone_alarm_values_take_occupancy_states_only,access_zone_alarm_values_refuse_normal,access_zone_alarm_values_past_the_cap_are_no_space,access_zone_condition_cleared_within_time_delay_reports_nothing,access_zone_event_detection_enable_suspends_and_resets_reporting}",
@@ -3047,7 +3051,7 @@
    ],
    "notes": [
     "Time_Delay, Notification_Class, Alarm_Values, Event_Enable, Notify_Type, Event_Detection_Enable and Time_Delay_Normal are writable; Acked_Transitions, Event_Time_Stamps and Event_Message_Texts are read-only.",
-    "Alarm_Values takes BACnetAccessZoneOccupancyState values other than NORMAL (named, or proprietary from 64 to 65535), else VALUE_OUT_OF_RANGE naming the element; WriteProperty and WritePropertyMultiple take any length, and empty clears it.",
+    "Alarm_Values takes occupancy states but NORMAL (named, or 64 to 65535), else VALUE_OUT_OF_RANGE naming the element; writes take any length, and empty clears it. Python sets the first list with `add_access_zone(alarm_values=...)`.",
     "The algorithm watches the Occupancy_State and Reliability served, so a count or fault simulated out of service raises events as a real one does.",
     "A CHANGE_OF_STATE notification carries Occupancy_State as its `zone-occupancy-state` New_State; a CHANGE_OF_RELIABILITY one lists Occupancy_State.",
     "Moving from one alarm value to another keeps OFFNORMAL and sends nothing, the optional re-indication of Clause 13.3.2 being left out."
@@ -3350,10 +3354,57 @@
    ]
   },
   {
+   "id": "BACNET-12-ACCESS-RIGHTS-ACCOMPANIMENT",
+   "standard_anchor": "Clause 12.34, Table 12-39, Clause 12.34.11; Clauses 12.1.2, 15.9.1.3 and 21",
+   "priority": "P1",
+   "summary": "Access Rights serves the optional Accompaniment BACnetDeviceObjectReference once the application sets it, and peers read and write it.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/rights.rs::AccessRightsObject::set_accompaniment",
+    "crates/bacnet-objects/src/access_control/rights.rs::check_accompaniment",
+    "crates/bacnet-objects/src/access_control/rights_saving.rs::AccessRightsObject::write_saved",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs::for_access_rights_object",
+    "crates/bacnet-objects/src/device_reference.rs::decode_reference",
+    "crates/bacnet-server/src/handlers/write_property.rs::decode_write_property_value",
+    "crates/rusty-bacnet/src/types/access_rule.rs::device_object_reference",
+    "crates/rusty-bacnet/src/server/server_methods/access_rights_methods.rs::add_access_rights"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/rights_accompaniment_tests.rs::{accompaniment_is_left_out_until_the_application_sets_it,a_served_accompaniment_takes_writes}",
+    "crates/bacnet-server/src/handlers/tests/access_rights_accompaniment.rs::{accompaniment_is_absent_until_the_application_sets_it,a_configured_accompaniment_is_served_listed_and_written}",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_identity.rs::pics_access_rights_lists_accompaniment_once_an_object_serves_it",
+    "crates/rusty-bacnet/src/server/server_methods/access_rights_methods_tests.rs::python_accompaniment_reaches_the_optional_row",
+    "crates/rusty-bacnet/tests/test_access_rights_accompaniment.py::AccompanimentTests::test_the_keyword_serves_the_row_and_clients_write_it",
+    "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsStubContractTests::test_runtime_and_stub_expose_the_keywords"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/rights_accompaniment_tests.rs::{set_accompaniment_refuses_other_objects_and_non_device_devices,refused_accompaniment_writes_keep_the_reference}",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_identity_unserved_rows_stay_unknown",
+    "crates/bacnet-server/src/handlers/tests/access_rights_accompaniment.rs::refused_accompaniment_writes_leave_it_unchanged",
+    "crates/rusty-bacnet/tests/test_access_rights_accompaniment.py::AccompanimentTests::test_ill_formed_accompaniments_register_nothing"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#constructed-property-framing",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "Until `set_accompaniment` sets it, and after `set_accompaniment(None)`, Accompaniment is out of Property_List, RPM ALL and OPTIONAL and the PICS, and a read or write gets UNKNOWN_PROPERTY.",
+    "Once served it is an Optional writable row: WriteProperty and WritePropertyMultiple take the reference's octets, an index gets PROPERTY_IS_NOT_AN_ARRAY, and a NULL succeeds without changing it.",
+    "The setter and writes refuse with VALUE_OUT_OF_RANGE a non-Device device member, or an object other than an Access Rights, Access Credential or Access User unless the reference is unspecified (instance 4194303).",
+    "The object stores the reference as written, a member naming this device included; nothing evaluates it.",
+    "Python sets it with `add_access_rights(accompaniment=...)`, an ObjectIdentifier or a (device, object) pair, and reads it back as application_data octets."
+   ],
+   "gaps": [
+    "#1331: no Access Point authorization uses the stored Accompaniment",
+    "#1344: Python reads Accompaniment as application_data octets, not the forms the keyword takes"
+   ]
+  },
+  {
    "id": "BACNET-12-ACCESS-RIGHTS-RESTART",
    "standard_anchor": "Clause 12.34 and Table 12-39",
    "priority": "P1",
-   "summary": "An Access Rights object built with persistence saves each written rule array and Enable before serving it and serves the saved values again after a restart.",
+   "summary": "An Access Rights object built with persistence saves each written rule array, Enable and Accompaniment before serving it and serves the saved values again after a restart.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/access_control/rights_persistence.rs::AccessRightsPersistence",
@@ -3371,6 +3422,9 @@
     "crates/bacnet-server/src/server/requests/access_rights_durable_tests.rs::{each_saved_write_property_saves_off_the_lock_and_survives_a_rebuild,a_write_property_multiple_with_several_rights_writes_survives_a_rebuild,a_write_local_saves_off_the_lock_and_survives_a_rebuild,a_write_property_multiple_stopped_before_its_rules_write_puts_storage_back,a_paused_clock_stands_still_while_a_rights_save_runs,a_server_stopped_mid_save_leaves_storage_with_the_served_rules,a_null_succeeds_unchanged_and_saves_nothing}",
     "crates/rusty-bacnet/src/server/server_methods/access_rights_methods_tests.rs::python_storage_path_keeps_written_values_over_the_keywords",
     "crates/rusty-bacnet/tests/test_access_rights_persistence.py::AccessRightsRestartTests::test_written_rules_and_enable_survive_a_restart",
+    "crates/bacnet-objects/src/access_control/rights_accompaniment_tests.rs::{a_written_accompaniment_survives_a_rebuild_and_wins_over_the_setter,an_accompaniment_write_stages_only_while_the_row_is_served}",
+    "crates/bacnet-server/src/server/requests/access_rights_durable_tests.rs::an_accompaniment_write_saves_off_the_lock_and_survives_a_rebuild",
+    "crates/rusty-bacnet/tests/test_access_rights_accompaniment.py::AccompanimentRestartTests::test_a_written_accompaniment_survives_a_restart",
     "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsStubContractTests::test_runtime_and_stub_expose_the_keywords"
    ],
    "negative_tests": [
@@ -3379,7 +3433,8 @@
     "crates/bacnet-server/src/server/requests/access_rights_durable_tests.rs::a_state_that_cannot_be_saved_is_refused_on_every_path_and_nothing_changes",
     "crates/rusty-bacnet/tests/test_access_rights_persistence.py::AccessRightsRestartTests::test_a_write_that_cannot_be_saved_is_refused_and_the_old_rules_stay",
     "crates/rusty-bacnet/tests/test_access_rights_persistence.py::AccessRightsRegistrationTests::test_an_empty_storage_path_is_refused",
-    "crates/rusty-bacnet/tests/test_access_rights_persistence.py::AccessRightsRegistrationTests::test_storage_path_is_a_str_naming_a_file_this_backend_wrote"
+    "crates/rusty-bacnet/tests/test_access_rights_persistence.py::AccessRightsRegistrationTests::test_storage_path_is_a_str_naming_a_file_this_backend_wrote",
+    "crates/bacnet-objects/src/access_control/rights_accompaniment_tests.rs::{an_accompaniment_write_that_cannot_be_saved_is_refused_and_changes_nothing,a_saved_accompaniment_the_setter_refuses_refuses_the_object}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3388,10 +3443,10 @@
    ],
    "notes": [
     "Clause 12.34 sets no restart rule; the stack keeps written rules because peers provision Access Rights over the network. Configuration alone is never saved; a write saves the whole array it leaves.",
-    "Each array and Enable is saved once a write sets it, whole, by element or by an index-0 resize. From then on the saved value wins at every start, and that property's setter only checks.",
+    "Each array, Enable and Accompaniment is saved once a write sets it, whole, by element or by an index-0 resize. From then on the saved value wins at every start, and that property's setter only checks.",
     "The server stages WriteProperty, WritePropertyMultiple and `write_local` writes and saves with the database guard dropped; a request's later writes to the object, and WritePropertyMultiple under a mutation authorizer, save in place.",
     "A state that cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM and nothing changes. A staged write never made puts storage back on release, after its lifetime, at `stop()`, or on drop.",
-    "`FileAccessRightsPersistence` writes `RBNACR01`: each written member BACnet-encoded, the arrays framed by context tags 0 and 1, Enable a BOOLEAN tagged 2. It refuses a file past 128 KiB, more than 1024 rules per array, or another object's."
+    "`FileAccessRightsPersistence` writes `RBNACR01`: members BACnet-encoded, arrays framed by tags 0 and 1, Enable a BOOLEAN tagged 2, Accompaniment framed by tag 3. It refuses files over 128 KiB, arrays over 1024 rules, or another object's."
    ],
    "gaps": []
   },

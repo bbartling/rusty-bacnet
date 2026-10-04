@@ -41,7 +41,7 @@ mod read_value;
 mod rpm_wpm;
 mod timestamp;
 
-pub(crate) use access_rule::access_rules_from_py;
+pub(crate) use access_rule::{access_rules_from_py, device_object_reference};
 pub(crate) use action_list::action_lists_from_py;
 pub use address::parse_address;
 pub(crate) use audit::recipient as audit_recipient_from_py;

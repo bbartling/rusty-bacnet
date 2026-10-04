@@ -49,7 +49,7 @@ fn access_rule(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetAccessRul
         .map(|item| property_reference(&item, &format!("{name}.time_range")))
         .transpose()?;
     let location = optional_item(value, "location")?
-        .map(|item| location(&item, &format!("{name}.location")))
+        .map(|item| device_object_reference(&item, &format!("{name}.location")))
         .transpose()?;
     Ok(BACnetAccessRule::new(
         time_range,
@@ -58,9 +58,14 @@ fn access_rule(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetAccessRul
     ))
 }
 
-/// An `ObjectIdentifier` in this device or a `(device, object)` pair, the
-/// forms `door_members` takes.
-fn location(value: &Bound<'_, PyAny>, name: &str) -> PyResult<BACnetDeviceObjectReference> {
+/// One BACnetDeviceObjectReference, a rule's location or an Access Rights
+/// object's Accompaniment (#1393): an `ObjectIdentifier` in this device or a
+/// `(device, object)` pair, the forms `door_members` takes. `name` is what
+/// the errors name.
+pub(crate) fn device_object_reference(
+    value: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<BACnetDeviceObjectReference> {
     if let Ok(object) = value.extract::<PyObjectIdentifier>() {
         return Ok(object.to_rust().into());
     }

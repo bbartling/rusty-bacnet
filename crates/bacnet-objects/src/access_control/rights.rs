@@ -31,17 +31,19 @@ pub const MAX_ACCESS_RULES: usize = 1024;
 /// write them whole, one element at a time, or resize them at index 0, with
 /// the setters' checks. Enable (property 133, `LOG_ENABLE` in
 /// `PropertyIdentifier`) switches the whole object: while it is FALSE every
-/// rule in both arrays counts as disabled (Clause 12.34.8). The object stores
-/// the rules and the flag without evaluating them.
+/// rule in both arrays counts as disabled (Clause 12.34.8). The optional
+/// Accompaniment row (#1393) is served once the application sets it with
+/// [`set_accompaniment`](Self::set_accompaniment). The object stores the
+/// rules, the flag and the accompaniment without evaluating them.
 ///
 /// # Restarts
 ///
 /// An object built with [`new`](Self::new) keeps everything in memory, so a
 /// restart brings back what the application configures. One built with
 /// [`with_persistence`](Self::with_persistence) saves each write of the two
-/// arrays and Enable in an [`AccessRightsPersistence`] before serving it, and
-/// serves the saved values when built again (#1392). A saved value wins over
-/// the configured one: the setter for a property a write set
+/// arrays, Enable and Accompaniment in an [`AccessRightsPersistence`] before
+/// serving it, and serves the saved values when built again (#1392). A saved
+/// value wins over the configured one: the setter for a property a write set
 /// ([`property_saved`](Self::property_saved)) checks its argument but leaves
 /// the property alone. To change a saved value, write the property.
 pub struct AccessRightsObject {
@@ -52,9 +54,12 @@ pub struct AccessRightsObject {
     enable: bool,
     positive_access_rules: Vec<BACnetAccessRule>,
     negative_access_rules: Vec<BACnetAccessRule>,
+    /// Accompaniment, served only while it holds a reference.
+    accompaniment: Option<BACnetDeviceObjectReference>,
     status_flags: StatusFlags,
     reliability: Reliability,
-    /// Where written rules and Enable are saved, with persistence.
+    /// Where written rules, Enable and Accompaniment are saved, with
+    /// persistence.
     storage: Option<saving::Storage>,
     /// Saved writes taken, so a staged write can tell whether another came
     /// between.
@@ -77,6 +82,7 @@ impl AccessRightsObject {
             enable: true,
             positive_access_rules: Vec::new(),
             negative_access_rules: Vec::new(),
+            accompaniment: None,
             status_flags: StatusFlags::empty(),
             reliability: Reliability::NO_FAULT_DETECTED,
             storage: None,
@@ -160,6 +166,62 @@ impl AccessRightsObject {
     pub fn negative_access_rules(&self) -> &[BACnetAccessRule] {
         &self.negative_access_rules
     }
+
+    /// Set Accompaniment (Clause 12.34.11), the object a second credential
+    /// presented with the first has to match for these rights to grant
+    /// access: an Access Rights object the second credential holds, the
+    /// Access Credential itself, or the Access User who owns it, here or in
+    /// another device. A reference whose object, and device if it names one,
+    /// carry instance 4194303 asks for no accompaniment. `None` leaves the
+    /// optional property out, as a new object does; once set, the property
+    /// is in Property_List and peers can write it.
+    ///
+    /// Refused with VALUE_OUT_OF_RANGE, keeping the value set before: a
+    /// device member that isn't a Device (#1285), or an object of any other
+    /// type unless the reference asks for no accompaniment.
+    ///
+    /// This configures the object and is not saved. With persistence, once
+    /// a write has set Accompaniment and it was saved, the saved reference
+    /// wins: the one given here is still checked, but not stored, and `None`
+    /// leaves the property in place. To lift a saved requirement, write the
+    /// no-accompaniment reference (instance 4194303), which keeps the row;
+    /// to drop the row itself, remove the storage file, which also drops the
+    /// saved rules and Enable.
+    pub fn set_accompaniment(
+        &mut self,
+        accompaniment: Option<BACnetDeviceObjectReference>,
+    ) -> Result<(), Error> {
+        if let Some(reference) = &accompaniment {
+            check_accompaniment(reference)?;
+        }
+        if !self.keeps_saved(PropertyIdentifier::ACCOMPANIMENT) {
+            self.accompaniment = accompaniment;
+        }
+        Ok(())
+    }
+
+    /// The stored Accompaniment, `None` while the property is left out.
+    pub fn accompaniment(&self) -> Option<&BACnetDeviceObjectReference> {
+        self.accompaniment.as_ref()
+    }
+}
+
+/// Refuse with VALUE_OUT_OF_RANGE an Accompaniment the object can't hold
+/// (see [`AccessRightsObject::set_accompaniment`]). Clause 12.34.11 gives a
+/// meaning to a reference to an Access Rights, Access Credential or Access
+/// User object only, so any other type is refused unless the reference is
+/// unspecified.
+pub(super) fn check_accompaniment(reference: &BACnetDeviceObjectReference) -> Result<(), Error> {
+    crate::device_reference::check_device_member(reference.device_identifier)?;
+    let named = matches!(
+        reference.object_identifier.object_type(),
+        ObjectType::ACCESS_RIGHTS | ObjectType::ACCESS_CREDENTIAL | ObjectType::ACCESS_USER
+    );
+    if named || unspecified(reference.object_identifier, reference.device_identifier) {
+        Ok(())
+    } else {
+        Err(common::value_out_of_range_error())
+    }
 }
 
 /// `rules` collected once they fit [`MAX_ACCESS_RULES`] and every one has
@@ -223,8 +285,9 @@ pub(super) fn check_access_rule(rule: &BACnetAccessRule) -> Result<(), Error> {
     }
 }
 
-/// Whether a rule's reference is unspecified: its object, and its device if
-/// it names one, both carry the reserved instance number 4194303.
+/// Whether a rule's reference, or Accompaniment, is unspecified: its object,
+/// and its device if it names one, both carry the reserved instance number
+/// 4194303.
 fn unspecified(object: ObjectIdentifier, device: Option<ObjectIdentifier>) -> bool {
     let unused = |oid: ObjectIdentifier| oid.instance_number() == ObjectIdentifier::MAX_INSTANCE;
     unused(object) && device.is_none_or(unused)
@@ -280,6 +343,10 @@ impl BACnetObject for AccessRightsObject {
             p if p == PropertyIdentifier::NEGATIVE_ACCESS_RULES => {
                 common::read_array(rule_values(&self.negative_access_rules), array_index)
             }
+            p if p == PropertyIdentifier::ACCOMPANIMENT => match &self.accompaniment {
+                Some(reference) => Ok(crate::device_reference::reference_value(reference)),
+                None => Err(common::unknown_property_error()),
+            },
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -303,14 +370,22 @@ impl BACnetObject for AccessRightsObject {
                     Err(common::invalid_data_type_error())
                 }
             }
-            // Table 12-39 makes Enable and both rule arrays R rows, so taking
-            // their writes is this implementation's choice: a head end
-            // provisions access rights over the network. With persistence,
-            // each is saved before it is served.
+            // Table 12-39 makes Enable and both rule arrays R rows and
+            // Accompaniment an O row, so taking their writes is this
+            // implementation's choice (Clause 12.1.2 leaves it open): a head
+            // end provisions access rights over the network. With
+            // persistence, each is saved before it is served.
             p if p == PropertyIdentifier::LOG_ENABLE
                 || p == PropertyIdentifier::POSITIVE_ACCESS_RULES
                 || p == PropertyIdentifier::NEGATIVE_ACCESS_RULES =>
             {
+                self.write_saved(property, array_index, value)
+            }
+            // A write can't add the optional row; only the application can.
+            p if p == PropertyIdentifier::ACCOMPANIMENT => {
+                if self.accompaniment.is_none() {
+                    return Err(common::unknown_property_error());
+                }
                 self.write_saved(property, array_index, value)
             }
             _ => Err(crate::common::unhandled_write_error(
@@ -354,5 +429,9 @@ mod persistence_tests;
 #[cfg(test)]
 #[path = "rights_staging_tests.rs"]
 mod staging_tests;
+
+#[cfg(test)]
+#[path = "rights_accompaniment_tests.rs"]
+mod accompaniment_tests;
 
 // ---------------------------------------------------------------------------
