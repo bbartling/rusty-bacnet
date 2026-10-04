@@ -309,17 +309,48 @@ fn rpm_access_credential_indexed_reads_and_bytes_are_unchanged() {
 #[test]
 fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
     for configured in [false, true] {
+        use bacnet_types::constructed::BACnetDeviceObjectReference as Reference;
+        // Access Credential 1 and Access User 2 here; Access Credential 4 and
+        // Access User 5 in Device 9 (#1394).
+        const CREDENTIALS: &[u8] = &[
+            0x1C, 0x08, 0x00, 0x00, 0x01, 0x0C, 0x02, 0x00, 0x00, 0x09, 0x1C, 0x08, 0x00, 0x00,
+            0x04,
+        ];
+        const MEMBERS: &[u8] = &[0x1C, 0x08, 0xC0, 0x00, 0x02];
+        const MEMBER_OF: &[u8] = &[0x0C, 0x02, 0x00, 0x00, 0x09, 0x1C, 0x08, 0xC0, 0x00, 0x05];
+        let in_device_9 = |object_type, instance| Reference {
+            device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap()),
+            object_identifier: ObjectIdentifier::new(object_type, instance).unwrap(),
+        };
         let mut object = AccessUserObject::new(7, "USER-7").unwrap();
         if configured {
             object
                 .write_property(P::USER_TYPE, None, PropertyValue::Enumerated(2), None)
                 .unwrap();
+            let here = |object_type, instance| -> Reference {
+                ObjectIdentifier::new(object_type, instance).unwrap().into()
+            };
+            object
+                .set_credentials([
+                    here(ObjectType::ACCESS_CREDENTIAL, 1),
+                    in_device_9(ObjectType::ACCESS_CREDENTIAL, 4),
+                ])
+                .unwrap();
+            object
+                .set_members([here(ObjectType::ACCESS_USER, 2)])
+                .unwrap();
+            object
+                .set_member_of([in_device_9(ObjectType::ACCESS_USER, 5)])
+                .unwrap();
         }
+        let listed =
+            |octets: &'static [u8]| -> ExpectedRead { Ok(if configured { octets } else { EMPTY }) };
         write_common(&mut object, configured);
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
-        // Credentials is BACnetLIST and rejects any index.
+        // Credentials, Members and Member_Of are BACnetLISTs and reject any
+        // index.
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             // Table 12-38 has no Present_Value or Assigned_Access_Rights
             // (#1064).
@@ -339,7 +370,7 @@ fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::CREDENTIALS, None, Ok(EMPTY)),
+            (P::CREDENTIALS, None, listed(CREDENTIALS)),
             (
                 P::CREDENTIALS,
                 Some(0),
@@ -348,6 +379,18 @@ fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
             (
                 P::CREDENTIALS,
                 Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (P::MEMBERS, None, listed(MEMBERS)),
+            (
+                P::MEMBERS,
+                Some(1),
+                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+            ),
+            (P::MEMBER_OF, None, listed(MEMBER_OF)),
+            (
+                P::MEMBER_OF,
+                Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
             // Assigned_Access_Rights is a BACnetARRAY on the one table that
@@ -386,18 +429,22 @@ fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
-                    0x91, 28, 0x92, 0x01, 0x3E, 0x92, 0x01, 0x09, 0x91, 111, 0x91, 103,
+                    0x91, 28, 0x92, 0x01, 0x3E, 0x92, 0x01, 0x09, 0x91, 111, 0x91, 103, 0x92, 0x01,
+                    0x1E, 0x91, 159,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 5])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 7])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x92, 0x01, 0x3E])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x92, 0x01, 0x09])),
             (P::PROPERTY_LIST, Some(4), Ok(&[0x91, 111])),
             (P::PROPERTY_LIST, Some(5), Ok(&[0x91, 103])),
+            // Members (286) and Member_Of (159), the O rows #1394 serves.
+            (P::PROPERTY_LIST, Some(6), Ok(&[0x92, 0x01, 0x1E])),
+            (P::PROPERTY_LIST, Some(7), Ok(&[0x91, 159])),
             (
                 P::PROPERTY_LIST,
-                Some(6),
+                Some(8),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -405,17 +452,10 @@ fn rpm_access_user_indexed_reads_and_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            // Global_Identifier is the Table 12-38 W row with no read arm;
-            // Members is the Table 12-38 O row with no read arm.
+            // Global_Identifier is the Table 12-38 W row with no read arm.
             (P::GLOBAL_IDENTIFIER, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::GLOBAL_IDENTIFIER,
-                Some(1),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
-            (P::MEMBERS, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-            (
-                P::MEMBERS,
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),

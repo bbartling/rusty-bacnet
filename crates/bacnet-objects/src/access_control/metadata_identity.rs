@@ -19,8 +19,8 @@ use crate::property_metadata::{
 // Order preserves each legacy projection; Property_List is appended so the
 // projection helper omits it while required_properties keeps it. Only
 // implemented rows are described: table rows the objects do not serve stay
-// absent until dispatch exists (user Global_Identifier W, user Members R,
-// CDI event/intrinsic rows). Shared
+// absent until dispatch exists (user Global_Identifier W, CDI
+// event/intrinsic rows). Shared
 // conventions match metadata_topology.rs (Slice A): OI/ON/OT
 // RequiredRead/ReadOnly with the explicit Object_Name denial, Description
 // Optional/Always, Out_Of_Service RequiredRead/Always on Credential Data
@@ -45,7 +45,9 @@ use crate::property_metadata::{
 // user serves neither (#1064 removed the implementation-extra rows the 0.1.0
 // import carried). User_Type/Credentials carry the table R code; the
 // User_Type arm makes it RequiredRead/Always while Credentials stays
-// RequiredRead/ReadOnly. Rights Global_Identifier carries the table W code
+// RequiredRead/ReadOnly. User Members and Member_Of (#1394) carry the table O
+// code with no write arm, so Optional/ReadOnly, after the status rows and
+// before Property_List. Rights Global_Identifier carries the table W code
 // with the routed Unsigned arm, so RequiredWrite/Always; the ±rules rows
 // carry the table R code with routed array arms (#1330), so
 // RequiredRead/Always, and Enable (#1332) follows the status rows, before
@@ -86,6 +88,8 @@ const ACCESS_USER_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::CREDENTIALS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::MEMBERS, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::MEMBER_OF, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -318,6 +322,8 @@ mod tests {
             P::CREDENTIALS,
             P::STATUS_FLAGS,
             P::RELIABILITY,
+            P::MEMBERS,
+            P::MEMBER_OF,
         ];
         let required = [
             P::OBJECT_IDENTIFIER,
@@ -346,11 +352,15 @@ mod tests {
             object.read_property(P::USER_TYPE, None).unwrap(),
             PropertyValue::Enumerated(0)
         );
-        assert_eq!(
-            object.read_property(P::CREDENTIALS, None).unwrap(),
-            PropertyValue::List(vec![])
-        );
-        assert!(!object.is_array_property(P::CREDENTIALS));
+        // The three BACnetLISTs start empty (#1394).
+        for p in [P::CREDENTIALS, P::MEMBERS, P::MEMBER_OF] {
+            assert_eq!(
+                object.read_property(p, None).unwrap(),
+                PropertyValue::List(vec![])
+            );
+            assert!(!object.is_array_property(p));
+            assert!(object.is_list_property(p));
+        }
     }
 
     #[test]
@@ -632,7 +642,13 @@ mod tests {
                     ErrorCode::INVALID_DATA_TYPE,
                 );
             }
-            for p in [P::CREDENTIALS, P::STATUS_FLAGS, P::RELIABILITY] {
+            for p in [
+                P::CREDENTIALS,
+                P::MEMBERS,
+                P::MEMBER_OF,
+                P::STATUS_FLAGS,
+                P::RELIABILITY,
+            ] {
                 let value = user.read_property(p, None).unwrap();
                 assert_error(
                     user.write_property(p, None, value, None).unwrap_err(),
@@ -747,12 +763,10 @@ mod tests {
         assert_unserved(&mut credential, P::PRESENT_VALUE);
         assert_unserved(&mut credential, P::OUT_OF_SERVICE);
         // Global_Identifier is the Table 12-38 W row with no read arm;
-        // Members is the Table 12-38 O row with no read arm; Present_Value,
-        // Assigned_Access_Rights and Out_Of_Service are no Table 12-38 rows
-        // (#1064).
+        // Present_Value, Assigned_Access_Rights and Out_Of_Service are no
+        // Table 12-38 rows (#1064).
         let mut user = AccessUserObject::new(1, "USER-1").unwrap();
         assert_unserved(&mut user, P::GLOBAL_IDENTIFIER);
-        assert_unserved(&mut user, P::MEMBERS);
         assert_unserved(&mut user, P::PRESENT_VALUE);
         assert_unserved(&mut user, P::ASSIGNED_ACCESS_RIGHTS);
         assert_unserved(&mut user, P::OUT_OF_SERVICE);

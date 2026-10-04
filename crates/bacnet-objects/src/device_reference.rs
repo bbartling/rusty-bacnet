@@ -15,10 +15,10 @@
 //! View Subordinate_List, Staging Target_References, the Life Safety member
 //! lists, Access Door Door_Members, Access Point Access_Doors and
 //! Access_Event_Credential, Access Zone Entry_Points and Exit_Points, Access
-//! Rights Accompaniment, the elevator family's Energy_Meter_Ref and Audit
-//! Log Member_Of. A Command's action commands and an Access Rights rule
-//! carry a device identifier inside another production, so they share only
-//! [`check_device_member`].
+//! Rights Accompaniment, Access User Credentials, Members and Member_Of, the
+//! elevator family's Energy_Meter_Ref and Audit Log Member_Of. A Command's
+//! action commands and an Access Rights rule carry a device identifier inside
+//! another production, so they share only [`check_device_member`].
 //!
 //! # Refusal codes for a written value
 //!

@@ -148,6 +148,79 @@ fn python_entry_and_exit_points_reach_the_zone_lists() {
 }
 
 #[test]
+fn python_user_references_reach_the_user_lists() {
+    let here = |object_type| PyDeviceObjectReference::Local(py(object_type, 1));
+    let remote = |object_type| {
+        PyDeviceObjectReference::Remote(py(ObjectType::DEVICE, 99), py(object_type, 4))
+    };
+    let in_device_99 = |object_type| BACnetDeviceObjectReference {
+        device_identifier: Some(oid(ObjectType::DEVICE, 99)),
+        object_identifier: oid(object_type, 4),
+    };
+    let settings = UserSettings {
+        credentials: references(vec![
+            here(ObjectType::ACCESS_CREDENTIAL),
+            remote(ObjectType::ACCESS_CREDENTIAL),
+        ]),
+        members: references(vec![here(ObjectType::ACCESS_USER)]),
+        member_of: references(vec![remote(ObjectType::ACCESS_USER)]),
+    };
+    let user = access_user(1, "USER-1", settings).unwrap();
+    let mut expected = AccessUserObject::new(1, "USER-1").unwrap();
+    expected
+        .set_credentials([
+            oid(ObjectType::ACCESS_CREDENTIAL, 1).into(),
+            in_device_99(ObjectType::ACCESS_CREDENTIAL),
+        ])
+        .unwrap();
+    expected
+        .set_members([oid(ObjectType::ACCESS_USER, 1)])
+        .unwrap();
+    expected
+        .set_member_of([in_device_99(ObjectType::ACCESS_USER)])
+        .unwrap();
+    let lists = [
+        PropertyIdentifier::CREDENTIALS,
+        PropertyIdentifier::MEMBERS,
+        PropertyIdentifier::MEMBER_OF,
+    ];
+    for property in lists {
+        assert_eq!(
+            user.read_property(property, None).unwrap(),
+            expected.read_property(property, None).unwrap(),
+            "{property:?}"
+        );
+    }
+    // Credentials names Access Credentials only, and the other two Access
+    // Users only.
+    for settings in [
+        UserSettings {
+            credentials: references(vec![here(ObjectType::ACCESS_USER)]),
+            ..UserSettings::default()
+        },
+        UserSettings {
+            members: references(vec![remote(ObjectType::ACCESS_CREDENTIAL)]),
+            ..UserSettings::default()
+        },
+        UserSettings {
+            member_of: references(vec![here(ObjectType::ACCESS_ZONE)]),
+            ..UserSettings::default()
+        },
+    ] {
+        let refused = access_user(2, "USER-2", settings).err().unwrap();
+        assert!(is_value_out_of_range(&refused), "{refused:?}");
+    }
+    // Omitted arguments keep the lists empty.
+    let user = access_user(3, "USER-3", UserSettings::default()).unwrap();
+    for property in lists {
+        assert_eq!(
+            user.read_property(property, None).unwrap(),
+            PropertyValue::List(vec![])
+        );
+    }
+}
+
+#[test]
 fn python_device_reference_pairs_name_a_device() {
     Python::initialize();
     let door = py(ObjectType::ACCESS_DOOR, 4);

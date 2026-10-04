@@ -2,7 +2,8 @@
 //! ReadProperty and ReadPropertyMultiple serve them: Event Enrollment's and
 //! Averaging's Object_Property_Reference, one
 //! BACnetDeviceObjectPropertyReference each, and the Life Safety Member_Of
-//! and Zone_Members lists of BACnetDeviceObjectReference.
+//! and Zone_Members lists of BACnetDeviceObjectReference. The Access Zone
+//! (#1306) and Access User (#1394) lists followed.
 
 use super::*;
 use bacnet_objects::averaging::AveragingObject;
@@ -207,4 +208,85 @@ fn access_zone_entry_and_exit_points_are_served_framed() {
                 && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
     ));
     assert_eq!(read(&db, az, PropertyIdentifier::ENTRY_POINTS), entry);
+}
+
+#[test]
+fn access_user_reference_lists_are_served_framed() {
+    use bacnet_objects::access_control::AccessUserObject;
+
+    let mut db = ObjectDatabase::new();
+    let mut user = AccessUserObject::new(1, "USER-1").unwrap();
+    user.set_credentials([
+        BACnetDeviceObjectReference::from(oid(ObjectType::ACCESS_CREDENTIAL, 1)),
+        BACnetDeviceObjectReference {
+            device_identifier: Some(oid(ObjectType::DEVICE, 9)),
+            object_identifier: oid(ObjectType::ACCESS_CREDENTIAL, 4),
+        },
+    ])
+    .unwrap();
+    user.set_members([oid(ObjectType::ACCESS_USER, 2)]).unwrap();
+    user.set_member_of([BACnetDeviceObjectReference {
+        device_identifier: Some(oid(ObjectType::DEVICE, 9)),
+        object_identifier: oid(ObjectType::ACCESS_USER, 5),
+    }])
+    .unwrap();
+    let au = user.object_identifier();
+    db.add(Box::new(user)).unwrap();
+
+    // Access Credential 1 here, [1] alone; Access Credential 4 in Device 9,
+    // [0] then [1] (#1394). A bare application-tagged identifier couldn't
+    // carry the device.
+    let credentials = read(&db, au, PropertyIdentifier::CREDENTIALS);
+    assert_eq!(
+        credentials,
+        [
+            0x1C, 0x08, 0x00, 0x00, 0x01, // [1] access-credential 1
+            0x0C, 0x02, 0x00, 0x00, 0x09, // [0] device 9
+            0x1C, 0x08, 0x00, 0x00, 0x04, // [1] access-credential 4
+        ]
+    );
+    assert_eq!(
+        read(&db, au, PropertyIdentifier::MEMBERS),
+        [0x1C, 0x08, 0xC0, 0x00, 0x02] // [1] access-user 2
+    );
+    assert_eq!(
+        read(&db, au, PropertyIdentifier::MEMBER_OF),
+        [
+            0x0C, 0x02, 0x00, 0x00, 0x09, // [0] device 9
+            0x1C, 0x08, 0xC0, 0x00, 0x05, // [1] access-user 5
+        ]
+    );
+    // Credentials is a BACnetLIST, so an index is refused as on the other
+    // lists, and a client's write of the served bytes changes nothing.
+    let mut request = BytesMut::new();
+    ReadPropertyRequest {
+        object_identifier: au,
+        property_identifier: PropertyIdentifier::CREDENTIALS,
+        property_array_index: Some(1),
+    }
+    .encode(&mut request);
+    let mut ack = BytesMut::new();
+    assert!(matches!(
+        handle_read_property(&db, &request, &mut ack),
+        Err(Error::Protocol { class, code })
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32
+    ));
+    let mut request = BytesMut::new();
+    WritePropertyRequest {
+        object_identifier: au,
+        property_identifier: PropertyIdentifier::CREDENTIALS,
+        property_array_index: None,
+        property_value: credentials.clone(),
+        priority: None,
+    }
+    .encode(&mut request)
+    .unwrap();
+    assert!(matches!(
+        sourced_wp(&mut db, &request),
+        Err(Error::Protocol { class, code })
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32
+    ));
+    assert_eq!(read(&db, au, PropertyIdentifier::CREDENTIALS), credentials);
 }

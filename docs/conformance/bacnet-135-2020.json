@@ -3113,6 +3113,52 @@
     "`set_entry_points` and `set_exit_points` refuse a reference to anything but an Access Point, or one whose device identifier is not a Device, with VALUE_OUT_OF_RANGE, keeping the list.",
     "Both lists are read-only on the network: WriteProperty gets WRITE_ACCESS_DENIED.",
     "Python sets them at registration with `add_access_zone(entry_points=..., exit_points=...)`."
+   ],
+   "gaps": [
+    "#1344: Python reads Entry_Points and Exit_Points as octets rather than the ObjectIdentifier and (device, object) forms the keywords take"
+   ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-USER-REFERENCE-LISTS",
+   "standard_anchor": "Clause 12.33, Table 12-38, Clauses 12.33.12, 12.33.13 and 12.33.14; Clause 21",
+   "priority": "P1",
+   "summary": "An Access User serves Credentials, Members and Member_Of as lists of BACnetDeviceObjectReference naming Access Credentials and Access Users, which the application sets.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/user.rs::AccessUserObject",
+    "crates/bacnet-objects/src/access_control/mod.rs::references_to",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs::for_access_user_object",
+    "crates/bacnet-objects/src/device_reference.rs::reference_list",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods.rs::access_user"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/user_references_tests.rs::access_user_lists_serve_device_object_references",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_user_exact_sets_readable_rows_and_indexed_list",
+    "crates/bacnet-server/src/handlers/tests/device_reference_reads.rs::access_user_reference_lists_are_served_framed",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_identity.rs::rpm_access_user_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_identity.rs::pics_access_identity_property_metadata_is_exact",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_user_references_reach_the_user_lists",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_user_lists_reach_the_user_and_name_their_types",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_keywords"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/user_references_tests.rs::access_user_setters_refuse_other_objects_and_non_device_devices",
+    "crates/bacnet-objects/src/device_reference_setter_tests.rs::every_device_reference_setter_refuses_a_non_device_and_takes_a_device",
+    "crates/bacnet-objects/src/access_control/metadata_identity.rs::tests::property_metadata_access_identity_write_capabilities_match_dispatch"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#constructed-property-framing",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "`set_credentials` takes Access Credential references and `set_members` and `set_member_of` Access User references; another object type, or a device identifier that is not a Device, is VALUE_OUT_OF_RANGE and keeps the list.",
+    "All three lists are read-only on the network: WriteProperty gets WRITE_ACCESS_DENIED, and an index gets PROPERTY_IS_NOT_AN_ARRAY.",
+    "Members and Member_Of are optional rows the object always serves, empty until set. Nothing checks that a referenced object exists or that two users list each other consistently.",
+    "Python sets the lists with `add_access_user(credentials=..., members=..., member_of=...)` and reads each back as the references' octets."
+   ],
+   "gaps": [
+    "#1344: Python reads the three lists as octets rather than the ObjectIdentifier and (device, object) forms the keywords take"
    ]
   },
   {
@@ -3204,6 +3250,8 @@
     "crates/bacnet-objects/src/access_control/door.rs::set_door_members",
     "crates/bacnet-objects/src/access_control/point.rs::set_access_doors",
     "crates/bacnet-objects/src/access_control/zone.rs::set_entry_points",
+    "crates/bacnet-objects/src/access_control/user.rs::set_credentials",
+    "crates/bacnet-objects/src/access_control/mod.rs::references_to",
     "crates/bacnet-objects/src/staging.rs",
     "crates/bacnet-objects/src/access_control/rights.rs::check_access_rule",
     "crates/rusty-bacnet/src/types/property_reference.rs::check_device",
@@ -3224,6 +3272,7 @@
    "negative_tests": [
     "crates/bacnet-objects/src/access_control/device_reference_tests.rs::{access_door_door_members_refuse_a_non_device_device_identifier,access_point_access_doors_refuse_a_non_device_device_identifier,access_point_event_credential_refuses_a_non_device_device_identifier,access_credential_assigned_access_rights_refuse_a_non_device_device_identifier}",
     "crates/bacnet-objects/src/access_control/zone_points_tests.rs::access_zone_points_refuse_other_objects_and_non_device_devices",
+    "crates/bacnet-objects/src/access_control/user_references_tests.rs::access_user_setters_refuse_other_objects_and_non_device_devices",
     "crates/bacnet-objects/src/group/tests.rs::{structured_view_add_subordinate_refuses_a_non_device_device_identifier,structured_view_set_subordinates_replaces_both_arrays_or_nothing}",
     "crates/bacnet-objects/src/staging/tests.rs::target_references_refuse_a_non_device_device_identifier",
     "crates/bacnet-objects/src/access_control/rights_tests.rs::access_rights_rules_refuse_a_non_device_device_identifier",

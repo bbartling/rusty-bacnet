@@ -2467,7 +2467,8 @@ door = ObjectIdentifier(ObjectType.ACCESS_DOOR, 1)
 server.add_access_door(instance=1, name="Main Entry", door_members=[lock])
 server.add_access_point(instance=1, name="Lobby Access", access_doors=[door])
 server.add_access_credential(instance=1, name="Badge 001")
-server.add_access_user(instance=1, name="John Doe")
+badge = ObjectIdentifier(ObjectType.ACCESS_CREDENTIAL, 1)
+server.add_access_user(instance=1, name="John Doe", credentials=[badge])
 server.add_access_rights(instance=1, name="Employee Access")
 lobby = ObjectIdentifier(ObjectType.ACCESS_POINT, 1)
 server.add_access_zone(instance=1, name="Building A", entry_points=[lobby])
@@ -2487,8 +2488,14 @@ element that isn't an Access Door raises `BacnetProtocolError`
 (VALUE_OUT_OF_RANGE). `entry_points` and `exit_points` set an Access Zone's
 Entry_Points and Exit_Points lists in the same element forms, and an element
 that isn't an Access Point raises `BacnetProtocolError` (VALUE_OUT_OF_RANGE).
-A whole read of either list returns the references' octets as `bytes`, or
-`[]` while the list is empty. `supported_formats` takes
+`add_access_user` sets an Access User's Credentials, Members and Member_Of
+lists the same way: `credentials` names the user's Access Credentials, and
+`members` and `member_of` the Access Users one level below and above it,
+here or in another device. An element of another object type raises
+`BacnetProtocolError` (VALUE_OUT_OF_RANGE).
+A whole read of Entry_Points, Exit_Points, Credentials, Members or
+Member_Of returns the references' octets as `bytes`, or `[]` while the list
+is empty. `supported_formats` takes
 `(format, format_class)` pairs, a format being a
 BACnetAuthenticationFactorType number or a
 `(format_type, vendor_id, vendor_format)` triple, which a CUSTOM format

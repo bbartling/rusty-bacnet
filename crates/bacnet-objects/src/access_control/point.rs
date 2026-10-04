@@ -185,14 +185,7 @@ impl AccessPointObject {
         &mut self,
         doors: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
     ) -> Result<(), Error> {
-        let doors: Vec<BACnetDeviceObjectReference> = doors.into_iter().map(Into::into).collect();
-        for door in &doors {
-            crate::device_reference::check_device_member(door.device_identifier)?;
-            if door.object_identifier.object_type() != ObjectType::ACCESS_DOOR {
-                return Err(common::value_out_of_range_error());
-            }
-        }
-        self.access_doors = doors;
+        self.access_doors = references_to(ObjectType::ACCESS_DOOR, doors)?;
         Ok(())
     }
 

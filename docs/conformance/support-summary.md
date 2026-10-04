@@ -75,6 +75,7 @@ Row counts by priority and status are not committed, so concurrent ledger PRs me
 | `BACNET-12-ACCESS-DOOR-INTRINSIC-REPORTING` | Table 12-30, Clauses 12.26.20-21, 12.26.23-31, 12.26.33, 12.26.36, 13.3.2 and 13.4.5, Table 13-5 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-ACCESS-ZONE-INTRINSIC-REPORTING` | Clause 12.32, Table 12-37, Clauses 12.32.25 to 12.32.37, Clause 13.3.2, Table 13-5 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-ACCESS-ZONE-ENTRY-EXIT-POINTS` | Clause 12.32, Table 12-37, Clauses 12.32.23 and 12.32.24 | P1 | supported-with-clause-evidence | 2 |
+| `BACNET-12-ACCESS-USER-REFERENCE-LISTS` | Clause 12.33, Table 12-38, Clauses 12.33.12, 12.33.13 and 12.33.14; Clause 21 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-ACCESS-POINT-AUTHENTICATION-AND-CREDENTIAL` | Clause 12.31, Table 12-36, Clauses 12.31.8, 12.31.9, 12.31.27.1 and 12.31.30, Table 13-1 | P1 | supported-with-clause-evidence | 1 |
 | `BACNET-12-ACCESS-POINT-POLICY-AND-AUTHORIZATION` | Clause 12.31, Table 12-36, Clauses 12.31.10, 12.31.11, 12.31.14 and 12.31.33, Table K-10 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-21-DEVICE-OBJECT-REFERENCE-DEVICE-MEMBER` | Clause 21 BACnetDeviceObjectReference and BACnetDeviceObjectPropertyReference, Clause 15.9.1.3 | P1 | supported-with-clause-evidence | 2 |

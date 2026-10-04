@@ -91,7 +91,7 @@ impl AccessZoneObject {
         &mut self,
         points: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
     ) -> Result<(), Error> {
-        self.entry_points = access_points(points)?;
+        self.entry_points = references_to(ObjectType::ACCESS_POINT, points)?;
         Ok(())
     }
 
@@ -101,7 +101,7 @@ impl AccessZoneObject {
         &mut self,
         points: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
     ) -> Result<(), Error> {
-        self.exit_points = access_points(points)?;
+        self.exit_points = references_to(ObjectType::ACCESS_POINT, points)?;
         Ok(())
     }
 
@@ -346,22 +346,6 @@ impl BACnetObject for AccessZoneObject {
         self.state.reliability = checked_reliability(reliability)?;
         Ok(())
     }
-}
-
-/// The references Entry_Points or Exit_Points takes: each one an Access
-/// Point, in this device or in a Device named by its device identifier, else
-/// VALUE_OUT_OF_RANGE.
-fn access_points(
-    points: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
-) -> Result<Vec<BACnetDeviceObjectReference>, Error> {
-    let points: Vec<BACnetDeviceObjectReference> = points.into_iter().map(Into::into).collect();
-    for point in &points {
-        crate::device_reference::check_device_member(point.device_identifier)?;
-        if point.object_identifier.object_type() != ObjectType::ACCESS_POINT {
-            return Err(common::value_out_of_range_error());
-        }
-    }
-    Ok(points)
 }
 
 /// The states Alarm_Values can hold: a BACnetAccessZoneOccupancyState other
