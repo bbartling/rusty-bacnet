@@ -135,12 +135,14 @@ class LoopReferenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             await self.server.read_property(LOOP, P.SETPOINT_REFERENCE), PropertyValue.list([])
         )
-        # Null isn't a BACnetSetpointReference.
-        with self.assertRaises(BacnetProtocolError) as raised:
-            await self.client.write_property(
-                self.address, LOOP, P.SETPOINT_REFERENCE, PropertyValue.null()
-            )
-        self.assertEqual(raised.exception.error_code, ErrorCode.INVALID_DATA_TYPE.to_raw())
+        # Null isn't a BACnetSetpointReference and the property isn't
+        # commandable, so a Null succeeds and leaves it as it is (#1396).
+        await self.client.write_property(
+            self.address, LOOP, P.SETPOINT_REFERENCE, PropertyValue.null()
+        )
+        self.assertEqual(
+            await self.server.read_property(LOOP, P.SETPOINT_REFERENCE), PropertyValue.list([])
+        )
 
 
 if __name__ == "__main__":

@@ -141,6 +141,8 @@ pub struct Fixture {
     pub hub: Option<ScHub>,
     pub server: Option<BACnetServer<ScTransport<TlsWebSocket>>>,
     pub url: String,
+    /// Site credentials for the post-stop probe of the hub.
+    probe: Option<ScNodeTlsConfig>,
 }
 
 impl Fixture {
@@ -158,7 +160,9 @@ impl Fixture {
         );
         self.url = format!("wss://{}", self.hub.as_ref().unwrap().local_addr().unwrap());
         let leaf = site.leaf("server", ExtendedKeyUsagePurpose::ClientAuth, None);
-        let ws = bounded(TlsWebSocket::connect(&self.url, site.client(&leaf)))
+        let tls = site.client(&leaf);
+        self.probe = Some(tls.clone());
+        let ws = bounded(TlsWebSocket::connect(&self.url, tls))
             .await
             .unwrap();
         let transport = ScTransport::new(ws, [2, 0, 0, 0, 0, 1]).with_device_uuid([1; 16]);
@@ -201,18 +205,24 @@ impl Fixture {
             if let Err(error) = tokio::time::timeout(Duration::from_secs(5), hub.stop()).await {
                 errors.push(format!("hub stop: {error}"));
             }
-            // A closed connection can leave the port in TIME_WAIT on macOS,
-            // making immediate rebind fail without any live listener. Require
-            // an actual connection refusal after the joined stop, not a delay
-            // or timeout interpreted as cleanup success.
-            let probe = tokio::time::timeout(
-                Duration::from_secs(5),
-                tokio::net::TcpStream::connect(hub.local_addr().unwrap()),
-            )
-            .await;
-            if !matches!(&probe, Ok(Err(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused)
-            {
-                errors.push(format!("hub listener still reachable: {probe:?}"));
+            // The hub's port is ephemeral, and a parallel test process can
+            // bind it once it is free, so a refused connect can't show the
+            // listener closed (#1398). The accept task owns the listener, and
+            // status reports whether that task has finished. Only this hub
+            // can finish TLS with the site's credentials, so a completed dial
+            // means it still answers, whatever else holds the port now.
+            if hub.status().await.listening {
+                errors.push("hub accept task outlived stop".into());
+            }
+            if let Some(tls) = self.probe.take() {
+                let dial = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    TlsWebSocket::connect(&self.url, tls),
+                )
+                .await;
+                if matches!(dial, Ok(Ok(_))) {
+                    errors.push("stopped hub completed a TLS and WebSocket handshake".into());
+                }
             }
         }
         errors

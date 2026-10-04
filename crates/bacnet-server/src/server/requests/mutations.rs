@@ -156,47 +156,51 @@ impl Request<'_> {
                 self.command_origin,
             );
             staged.release(&mut db);
-            let changes = result
-                .as_ref()
-                .map(|oid| snapshots.changes(&db, std::slice::from_ref(oid)))
+            // Post-write work follows a change. A NULL the property left as
+            // it was (`handlers::relinquish`) is acknowledged with none.
+            let written = match &result {
+                Ok((oid, handlers::Applied::Written)) => Some(*oid),
+                Ok((_, handlers::Applied::Unchanged)) | Err(_) => None,
+            };
+            let changes = written
+                .map(|oid| snapshots.changes(&db, std::slice::from_ref(&oid)))
                 .unwrap_or_default();
-            let plans = result.as_ref().map_or_else(
-                |_| Vec::new(),
-                |oid| BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(oid)),
-            );
-            if let Ok(oid) = &result {
+            let plans = written.map_or_else(Vec::new, |oid| {
+                BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(&oid))
+            });
+            if let Some(oid) = written {
                 command_runs.extend(TakenRuns::take(
                     database,
                     &mut db,
-                    std::slice::from_ref(oid),
+                    std::slice::from_ref(&oid),
                 ));
                 let capture = {
                     let table = cov_table.read().await;
-                    if crate::life_safety_cov::is_life_safety_object(*oid) {
+                    if crate::life_safety_cov::is_life_safety_object(oid) {
                         table.timed_capture_exact(&changes)
                     } else {
-                        table.timed_capture(*oid)
+                        table.timed_capture(oid)
                     }
                 };
                 capture.run(&db);
             }
-            let schedule_cov = match &result {
-                Ok(oid) => {
+            let schedule_cov = match written {
+                Some(oid) => {
                     crate::schedule::reevaluate_written(
                         database,
                         &mut db,
-                        std::slice::from_ref(oid),
+                        std::slice::from_ref(&oid),
                         cov_table,
                     )
                     .await
                 }
-                Err(_) => Default::default(),
+                None => Default::default(),
             };
-            (result, changes, plans, schedule_cov)
+            (result.map(|_| written), changes, plans, schedule_cov)
         };
         staging_plans.extend(plans);
         let response = match result {
-            Ok(oid) => {
+            Ok(Some(oid)) => {
                 written_oids.push(oid);
                 if crate::life_safety_cov::is_life_safety_object(oid) {
                     *life_safety_cov_changes = exact_changes;
@@ -205,6 +209,7 @@ impl Request<'_> {
                 }
                 self.simple_ack()
             }
+            Ok(None) => self.simple_ack(),
             Err(e) => self.error::<T>(&e),
         };
         // Targets a written Schedule commanded on re-evaluation.

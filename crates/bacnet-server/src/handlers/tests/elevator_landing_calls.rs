@@ -138,12 +138,6 @@ fn landing_call_control_wp_refusals_preserve_the_last_call() {
             ErrorCode::INVALID_DATA_TYPE,
         ),
         (
-            "NULL",
-            None,
-            encode_value(PropertyValue::Null),
-            ErrorCode::INVALID_DATA_TYPE,
-        ),
-        (
             "context floor then application direction",
             None,
             vec![0x09, 0x05, 0x91, 0x03],
@@ -211,6 +205,10 @@ fn landing_call_control_wp_refusals_preserve_the_last_call() {
         assert_property_error(write(&mut db, oid, index, &bytes), expected, what);
         assert_eq!(read_wire(&db, oid, LCC), before, "{what}");
     }
+    // The property isn't commandable, so a NULL succeeds and leaves the
+    // call as it was (#1396).
+    write(&mut db, oid, None, &encode_value(PropertyValue::Null)).unwrap();
+    assert_eq!(read_wire(&db, oid, LCC), before);
 }
 
 #[test]

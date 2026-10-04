@@ -76,13 +76,16 @@ fn lighting_command_refuses_other_datatypes_and_broken_encodings() {
         PropertyValue::OctetString(vec![0x09, 0x01]),
         PropertyValue::Real(50.0),
         PropertyValue::Enumerated(1),
-        PropertyValue::Null,
     ] {
         assert_refused(
             write_wire(&mut db, oid, LC, value, None),
             ErrorCode::INVALID_DATA_TYPE,
         );
     }
+    // Lighting_Command isn't commandable and has no NULL in its datatype, so
+    // a NULL succeeds and leaves it as it is (#1396).
+    write_wire(&mut db, oid, LC, PropertyValue::Null, None).unwrap();
+    assert_eq!(read_wire(&db, oid, LC), [0x09, 0x00]);
     // A target level without the operation before it.
     assert_refused(
         write_raw(&mut db, oid, &[0x1C, 0x42, 0x48, 0x00, 0x00]),

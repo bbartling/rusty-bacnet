@@ -657,3 +657,43 @@ fn a_request_that_resizes_before_turning_logging_off_stages_nothing() {
     log.wait_for_commits();
     assert_eq!(storage.commits.load(Ordering::SeqCst), commits);
 }
+
+#[test]
+fn a_request_goes_on_past_a_null_the_log_leaves_unchanged() {
+    let null = |property| pending(property, PropertyValue::Null);
+    // The server leaves a NULL to either property as it is (#1396), so the
+    // writes after one still stage. With logging off, a NULL resize is no
+    // refusal either.
+    let (mut log, storage) = log();
+    let writes = [
+        null(PropertyIdentifier::LOG_ENABLE),
+        pending(
+            PropertyIdentifier::LOG_ENABLE,
+            PropertyValue::Boolean(false),
+        ),
+        null(PropertyIdentifier::BUFFER_SIZE),
+        pending(PropertyIdentifier::BUFFER_SIZE, PropertyValue::Unsigned(2)),
+    ];
+    let wait = staged_write(log.stage_writes(&writes));
+    block_on(wait.clone());
+    let committed = storage.committed();
+    assert!(!committed.log_enable);
+    assert_eq!(committed.capacity, 2);
+    log.release_staged_write(&wait);
+    log.wait_for_commits();
+
+    // With logging on, a resize is refused whatever its value, a NULL too,
+    // so the request ends there.
+    let (mut log, storage) = self::log();
+    let commits = storage.commits.load(Ordering::SeqCst);
+    let writes = [
+        null(PropertyIdentifier::BUFFER_SIZE),
+        pending(
+            PropertyIdentifier::LOG_ENABLE,
+            PropertyValue::Boolean(false),
+        ),
+    ];
+    assert!(matches!(log.stage_writes(&writes), StageStep::Skip));
+    log.wait_for_commits();
+    assert_eq!(storage.commits.load(Ordering::SeqCst), commits);
+}

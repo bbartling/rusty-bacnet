@@ -2285,8 +2285,9 @@ octets inside opening and closing tag 0, or an empty `list` while unset (#1312).
 Peers and `write_property_local` write them in those encodings, so a value
 read writes back unchanged. Null clears the first three and the empty value
 clears Setpoint_Reference. The flat list of object identifier and enumerated
-property these used to read as is refused with INVALID_DATA_TYPE, as is null
-on Setpoint_Reference, and malformed octets with INVALID_DATA_ENCODING.
+property these used to read as is refused with INVALID_DATA_TYPE, and
+malformed octets with INVALID_DATA_ENCODING. Null on Setpoint_Reference, whose
+datatype has no NULL, succeeds and leaves it as it is (#1396).
 
 A running server samples an Averaging object's Object_Property_Reference
 itself, every Window_Interval / Window_Samples seconds but never more often
@@ -2828,6 +2829,9 @@ value a network client could write works locally, and whatever
 Staging's Stages or `Stages[1]`, or `application_data` octets. An array index
 is checked as over the network: a property the object doesn't hold raises
 `UNKNOWN_PROPERTY`, one that isn't an array `PROPERTY_IS_NOT_AN_ARRAY`.
+`PropertyValue.null()` on a property that isn't commandable and has no NULL in
+its datatype succeeds and changes nothing, as it does over the network (#1396);
+a read-only property still raises `WRITE_ACCESS_DENIED`.
 
 ```python
 await server.write_property_local(

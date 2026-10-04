@@ -590,10 +590,53 @@ async fn accept_registered_bit_is_one_while_listening_and_npdu_reaches_transport
     transport.stop().await.unwrap();
 }
 
+/// Binds `addr` until the test ends and closes every connection it accepts,
+/// standing in for the unrelated listener a parallel test process can put on
+/// a freed ephemeral port (#1398). Does nothing if the port is already taken.
+async fn squat(addr: SocketAddr) {
+    if let Ok(squatter) = tokio::net::TcpListener::bind(addr).await {
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = squatter.accept().await {
+                drop(tcp);
+            }
+        });
+    }
+}
+
+/// Shows a stopped or dropped listener is closed without trusting its port,
+/// which another process may have bound since (#1398).
+async fn assert_listener_closed(
+    accept_task: &tokio::task::AbortHandle,
+    addr: SocketAddr,
+    ca: &TestCa,
+) {
+    // The accept task owns the bound TcpListener, so the socket closes
+    // when the task's future is dropped, and only then is it finished.
+    assert!(
+        accept_task.is_finished(),
+        "accept task outlived the listener"
+    );
+    // Only this listener holds a certificate from this test's CA, so a dial
+    // through that trust can't complete against anything else on the port.
+    let dial = tokio::time::timeout(
+        Duration::from_secs(2),
+        super::super::TlsWebSocket::connect_direct(
+            &direct_url(&addr),
+            ca.node_config(vec!["node".into()]),
+        ),
+    )
+    .await;
+    assert!(
+        !matches!(dial, Ok(Ok(_))),
+        "a closed listener completed a direct handshake"
+    );
+}
+
 async fn registered_listener_reverts_to_zero(drop_listener: bool) {
     let ca = TestCa::generate();
     let (mut transport, listener, mut rx, hub) = registered_listener(&ca).await;
     let addr = listener.local_addr();
+    let accept_task = listener.accept_task.as_ref().unwrap().abort_handle();
     let mut listener = Some(listener);
     assert_accept_direct(&hub, 1).await;
     if drop_listener {
@@ -604,7 +647,10 @@ async fn registered_listener_reverts_to_zero(drop_listener: bool) {
     // Preserve the existing one-second solicited-reply gate, not a new timer.
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert_accept_direct(&hub, 0).await;
-    assert!(tokio::net::TcpStream::connect(addr).await.is_err());
+    // Take the freed port as a parallel test can, so the proof below holds
+    // whether or not something else is listening there.
+    squat(addr).await;
+    assert_listener_closed(&accept_task, addr, &ca).await;
     // Closed direct intake must neither terminate nor starve the hub intake.
     hub.send(&[
         1, 8, 0x12, 0x35, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 1, 0, 0x40,

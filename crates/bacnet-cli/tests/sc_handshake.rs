@@ -10,11 +10,6 @@ use std::sync::Arc;
 use support::sc::{cli, read, with_fixture, Leaf, Site};
 use support::{bounded, failure, Files, Process};
 
-// Cleanup probes address a just-closed ephemeral port. Serialize this binary's
-// endpoint fixtures so another test cannot immediately acquire that same port
-// and turn the old hub's post-stop probe into a connection to a different peer.
-static ENDPOINTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 async fn read_value(files: &Files, url: &str, leaf: &Leaf, ca: &std::path::Path, after: bool) {
     let mut cmd = cli(files, url, leaf);
     if after {
@@ -46,7 +41,6 @@ async fn read_value(files: &Files, url: &str, leaf: &Leaf, ca: &std::path::Path,
 
 #[tokio::test]
 async fn explicit_site_ca_read_property_and_untrusted_ca_rejection() {
-    let _serial = ENDPOINTS.lock().await;
     with_fixture(async |fixture| {
         let site = Site::new();
         fixture.start(&site).await;
@@ -98,7 +92,6 @@ async fn explicit_site_ca_read_property_and_untrusted_ca_rejection() {
 
 #[tokio::test]
 async fn hub_rejects_untrusted_expired_and_future_operational_certificates() {
-    let _serial = ENDPOINTS.lock().await;
     with_fixture(async |fixture| {
         let site = Site::new();
         fixture.start(&site).await;
@@ -123,7 +116,6 @@ async fn hub_rejects_untrusted_expired_and_future_operational_certificates() {
 
 #[tokio::test]
 async fn peer_observes_certificate_and_tls_version_errors_not_timeouts() {
-    let _serial = ENDPOINTS.lock().await;
     let site = Site::new();
     let files = Files::new();
     let ca = files.write("site.pem", site.ca.pem());
@@ -170,7 +162,6 @@ async fn peer_observes_certificate_and_tls_version_errors_not_timeouts() {
 
 #[tokio::test]
 async fn hub_tls_verifier_requires_a_client_certificate() {
-    let _serial = ENDPOINTS.lock().await;
     // CLI omission is rejected pre-dial; a raw TLS peer independently verifies
     // that the test hub's verifier really requires client authentication.
     let site = Site::new();
@@ -208,7 +199,6 @@ async fn hub_tls_verifier_requires_a_client_certificate() {
 
 #[tokio::test]
 async fn panic_still_joins_hub_and_server() {
-    let _serial = ENDPOINTS.lock().await;
     let result = AssertUnwindSafe(with_fixture(async |fixture| {
         fixture.start(&Site::new()).await;
         panic!("injected fixture failure");

@@ -175,3 +175,98 @@ async fn an_encoded_local_write_is_refused_as_a_network_write_is() {
         );
     }
 }
+
+async fn write_null(
+    server: &BACnetServer<TestTransport>,
+    object: ObjectIdentifier,
+    property: PropertyIdentifier,
+    index: Option<u32>,
+) -> Result<(), Error> {
+    server
+        .write_local_encoded(
+            &object,
+            property,
+            index,
+            &[0x00],
+            None,
+            crate::LocalCommandSource::ServerDevice,
+        )
+        .await
+}
+
+/// A NULL to a property that isn't commandable and has no NULL in its
+/// datatype succeeds and changes nothing, locally as over the network
+/// (#1396); the checks before the value still answer, and a commandable
+/// Present_Value still relinquishes.
+#[tokio::test]
+async fn an_encoded_local_null_is_judged_as_a_network_null_is() {
+    let server = server().await;
+    let av = oid(ObjectType::ANALOG_VALUE, 1);
+    let bo = oid(ObjectType::BINARY_OUTPUT, 1);
+    let schedule = oid(ObjectType::SCHEDULE, 1);
+    let staging = oid(ObjectType::STAGING, 1);
+    for (object, property, index) in [
+        (av, PropertyIdentifier::OBJECT_NAME, None),
+        (av, PropertyIdentifier::COV_INCREMENT, None),
+        (schedule, PropertyIdentifier::EFFECTIVE_PERIOD, None),
+        (schedule, PropertyIdentifier::WEEKLY_SCHEDULE, Some(3)),
+        (staging, PropertyIdentifier::STAGES, None),
+        (staging, PropertyIdentifier::STAGES, Some(2)),
+        (staging, PropertyIdentifier::TARGET_REFERENCES, None),
+    ] {
+        let before = server.read_local(&object, property, None).await.unwrap();
+        write_null(&server, object, property, index)
+            .await
+            .unwrap_or_else(|error| panic!("{object} {property} {index:?}: {error:?}"));
+        assert_eq!(
+            server.read_local(&object, property, None).await.unwrap(),
+            before,
+            "{object} {property} {index:?}"
+        );
+    }
+    for (object, property, index) in [
+        (av, PropertyIdentifier::STATUS_FLAGS, None),
+        // The number of stages is fixed.
+        (staging, PropertyIdentifier::STAGES, Some(0)),
+    ] {
+        let error = write_null(&server, object, property, index)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, Error::Protocol { class, code }
+                if class == ErrorClass::PROPERTY.to_raw() as u32
+                    && code == ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32),
+            "{property} {index:?}: {error:?}"
+        );
+    }
+    let active = encode(&PropertyValue::Enumerated(1));
+    server
+        .write_local_encoded(
+            &bo,
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            &active,
+            Some(8),
+            crate::LocalCommandSource::ServerDevice,
+        )
+        .await
+        .unwrap();
+    server
+        .write_local_encoded(
+            &bo,
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            &[0x00],
+            Some(8),
+            crate::LocalCommandSource::ServerDevice,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        server
+            .read_local(&bo, PropertyIdentifier::PRESENT_VALUE, None)
+            .await
+            .unwrap(),
+        PropertyValue::Enumerated(0)
+    );
+}
