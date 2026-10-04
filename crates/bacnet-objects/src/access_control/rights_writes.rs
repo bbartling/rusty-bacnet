@@ -64,7 +64,7 @@ fn starts_rule(tag: &Tag) -> bool {
 
 /// The rules a written value holds, in order, before any check.
 fn decode_rules(value: PropertyValue) -> Result<Vec<BACnetAccessRule>, Error> {
-    common::decode_elements(value, starts_rule, decode_access_rule)
+    common::decode_elements(&value, starts_rule, decode_access_rule)
 }
 
 /// Apply a WriteProperty of one rule array: the whole array with no index,

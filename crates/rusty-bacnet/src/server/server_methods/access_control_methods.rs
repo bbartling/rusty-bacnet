@@ -15,7 +15,6 @@ use bacnet_types::enums::{
     AuthenticationFactorType, AuthorizationMode, DoorAlarmState, ErrorClass, ErrorCode,
 };
 use bacnet_types::error::Error;
-use pyo3::exceptions::PyValueError;
 
 /// One element of Door_Members, Access_Doors, Entry_Points or Exit_Points as
 /// Python gives it: an object in this device, or a `(device, object)` pair
@@ -26,35 +25,41 @@ enum PyDeviceObjectReference {
     Remote(PyObjectIdentifier, PyObjectIdentifier),
 }
 
-impl TryFrom<PyDeviceObjectReference> for BACnetDeviceObjectReference {
-    type Error = PyErr;
-
-    /// A pair whose device isn't a Device object identifier is no reference
-    /// (#1285), so it raises ValueError before any setter sees it.
-    fn try_from(reference: PyDeviceObjectReference) -> PyResult<Self> {
-        let reference = match reference {
+impl From<PyDeviceObjectReference> for BACnetDeviceObjectReference {
+    fn from(reference: PyDeviceObjectReference) -> Self {
+        match reference {
             PyDeviceObjectReference::Local(object) => object.to_rust().into(),
             PyDeviceObjectReference::Remote(device, object) => Self {
                 device_identifier: Some(device.to_rust()),
                 object_identifier: object.to_rust(),
             },
-        };
-        if reference.device_identifier_is_device() {
-            Ok(reference)
-        } else {
-            Err(PyValueError::new_err(
-                "the device of a (device, object) pair must be a Device object identifier",
-            ))
         }
     }
 }
 
-/// The references Python gave, each checked as it converts.
+/// The references Python gave for the keyword argument `name`, each checked
+/// as it converts: a pair whose device isn't a Device object identifier is
+/// no reference (#1285), so the shared `check_device` raises ValueError,
+/// naming the element, before any setter sees it.
 fn device_references(
     references: Option<Vec<PyDeviceObjectReference>>,
+    name: &str,
 ) -> PyResult<Option<Vec<BACnetDeviceObjectReference>>> {
     references
-        .map(|references| references.into_iter().map(TryFrom::try_from).collect())
+        .map(|references| {
+            references
+                .into_iter()
+                .enumerate()
+                .map(|(index, reference)| {
+                    let reference = BACnetDeviceObjectReference::from(reference);
+                    crate::types::check_device(
+                        reference.device_identifier,
+                        &format!("{name}[{index}]"),
+                    )?;
+                    Ok(reference)
+                })
+                .collect()
+        })
         .transpose()
 }
 
@@ -127,7 +132,7 @@ impl BACnetServer {
         masked_alarm_values: Option<Vec<u32>>,
     ) -> PyResult<()> {
         let settings = DoorSettings {
-            door_members: device_references(door_members)?,
+            door_members: device_references(door_members, "door_members")?,
             alarm_values,
             fault_values,
             masked_alarm_values,
@@ -170,7 +175,7 @@ impl BACnetServer {
         priority_for_writing: Option<u32>,
     ) -> PyResult<()> {
         let settings = PointSettings {
-            access_doors: device_references(access_doors)?,
+            access_doors: device_references(access_doors, "access_doors")?,
             number_of_authentication_policies,
             supported_authorization_modes,
             priority_for_writing,
@@ -194,8 +199,8 @@ impl BACnetServer {
         entry_points: Option<Vec<PyDeviceObjectReference>>,
         exit_points: Option<Vec<PyDeviceObjectReference>>,
     ) -> PyResult<()> {
-        let entry = device_references(entry_points)?;
-        let exit = device_references(exit_points)?;
+        let entry = device_references(entry_points, "entry_points")?;
+        let exit = device_references(exit_points, "exit_points")?;
         let obj = access_zone(instance, name, entry, exit).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }

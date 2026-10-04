@@ -26,17 +26,16 @@
 //! one, not a remote one. A member whose device identifier isn't a Device
 //! object at all is refused with PROPERTY / VALUE_OUT_OF_RANGE (#1285), so the
 //! server's localizing, which compares the whole identifier, leaves it to that
-//! check.
+//! check. The members are decoded and checked by the shared helpers in
+//! `device_reference.rs` (#1313).
 
-use bacnet_encoding::constructed::decode_device_object_property_reference;
-use bacnet_encoding::tags::Tag;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::ChannelObject;
-use crate::common;
+use crate::{common, device_reference};
 
 /// Resource cap on members, and so on Execution_Delay elements: the bound a
 /// Schedule puts on its reference list.
@@ -68,12 +67,6 @@ pub(super) fn is_empty(member: &BACnetDeviceObjectPropertyReference) -> bool {
             .is_some_and(|device| device.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE)
 }
 
-/// Refuse a member whose device identifier isn't a Device object (#1285),
-/// empty or not.
-pub(super) fn check_member(member: &BACnetDeviceObjectPropertyReference) -> Result<(), Error> {
-    crate::device_reference::check_device_member(member.device_identifier)
-}
-
 fn no_space_error() -> Error {
     common::protocol_error(ErrorClass::RESOURCES, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY)
 }
@@ -97,23 +90,16 @@ fn slot(index: u32, len: usize) -> Result<usize, Error> {
         .ok_or_else(common::invalid_array_index_error)
 }
 
-/// Whether a tag can begin a BACnetDeviceObjectPropertyReference: its object
-/// identifier under context tag `[0]`.
-fn starts_reference(tag: &Tag) -> bool {
-    tag.is_context(0)
-}
-
-/// The members a written value holds, checked in order.
-fn decode_members(value: PropertyValue) -> Result<Vec<BACnetDeviceObjectPropertyReference>, Error> {
-    let members = common::decode_elements(
-        value,
-        starts_reference,
-        decode_device_object_property_reference,
-    )?;
+/// The members a whole write holds, each checked in order: a member whose
+/// device identifier isn't a Device object is refused, empty or not.
+fn decode_members(
+    value: &PropertyValue,
+) -> Result<Vec<BACnetDeviceObjectPropertyReference>, Error> {
+    let members = device_reference::decode_references(value)?;
     if members.len() > MAX_CHANNEL_MEMBERS {
         return Err(no_space_error());
     }
-    members.iter().try_for_each(check_member)?;
+    device_reference::check_device_members(&members)?;
     Ok(members)
 }
 
@@ -151,7 +137,7 @@ impl ChannelObject {
     ) -> Result<(), Error> {
         match array_index {
             None => {
-                let members = decode_members(value)?;
+                let members = decode_members(&value)?;
                 let size = members.len();
                 self.members = members;
                 self.resize_members(size);
@@ -162,11 +148,10 @@ impl ChannelObject {
             }
             Some(index) => {
                 let at = slot(index, self.members.len())?;
-                let mut members = decode_members(value)?;
-                if members.len() != 1 {
-                    return Err(common::invalid_data_encoding_error());
-                }
-                self.members[at] = members.pop().expect("one member");
+                let member: BACnetDeviceObjectPropertyReference =
+                    device_reference::decode_reference(&value)?;
+                device_reference::check_device_member(member.device_identifier)?;
+                self.members[at] = member;
             }
         }
         Ok(())

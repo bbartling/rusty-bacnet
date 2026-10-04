@@ -69,6 +69,15 @@ impl BACnetObject for OptionalReliabilityTarget {
     }
 }
 
+/// Point `enrollment` at `target`'s Present_Value, in this device.
+fn monitor_present_value(enrollment: &mut EventEnrollmentObject, target: ObjectIdentifier) {
+    enrollment
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            target,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )))
+        .unwrap();
+}
 fn setup(
     present_value: f32,
     fault_parameters: FaultParameters,
@@ -89,10 +98,7 @@ fn setup(
 
     let mut enrollment =
         EventEnrollmentObject::new(301, "EE-fault", EventType::OUT_OF_RANGE).unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        target_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    monitor_present_value(&mut enrollment, target_oid);
     enrollment.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,
@@ -380,12 +386,7 @@ fn absent_optional_target_reliability_falls_through_but_malformed_type_is_config
             EventType::OUT_OF_RANGE,
         )
         .unwrap();
-        enrollment.set_object_property_reference(Some(
-            BACnetDeviceObjectPropertyReference::new_local(
-                target_oid,
-                PropertyIdentifier::PRESENT_VALUE.to_raw(),
-            ),
-        ));
+        monitor_present_value(&mut enrollment, target_oid);
         enrollment.set_event_parameters(BACnetEventParameter::OutOfRange {
             time_delay: 0,
             low_limit: 20.0,
@@ -533,10 +534,7 @@ fn missing_target_is_observation_unavailable_without_public_transition() {
     let missing_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 999).unwrap();
     let mut enrollment =
         EventEnrollmentObject::new(303, "EE-missing", EventType::OUT_OF_RANGE).unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        missing_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    monitor_present_value(&mut enrollment, missing_oid);
     enrollment.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 0.0,

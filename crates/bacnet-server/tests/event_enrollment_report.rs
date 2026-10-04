@@ -94,10 +94,12 @@ fn unavailable_observation_is_not_an_ordinary_no_transition() {
     let missing_oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 999).unwrap();
     let mut enrollment =
         EventEnrollmentObject::new(303, "EE-missing", EventType::OUT_OF_RANGE).unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        missing_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    enrollment
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            missing_oid,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 0.0,

@@ -130,7 +130,8 @@ fn out_of_range_event_enable_suppresses_distribution_not_the_transition() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,
@@ -189,7 +190,8 @@ fn out_of_range_suppressed_offnormal_still_yields_enabled_return_to_normal() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,
@@ -261,7 +263,8 @@ fn out_of_range_event_enable_zero_still_tracks_event_state() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,

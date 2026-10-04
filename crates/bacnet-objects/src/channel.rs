@@ -36,16 +36,13 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use bacnet_encoding::constructed::{
-    encode_device_object_property_reference, is_lighting_command_channel_value,
-};
+use bacnet_encoding::constructed::is_lighting_command_channel_value;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability, WriteStatus,
 };
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
-use bytes::BytesMut;
 
 use crate::command::{next_generation, CommandRun, RunPlan, WriteFailure};
 use crate::common::{self, read_identity_properties};
@@ -159,7 +156,7 @@ impl ChannelObject {
                 ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
             ));
         }
-        members.iter().try_for_each(arrays::check_member)?;
+        crate::device_reference::check_device_members(&members)?;
         self.execution_delay.resize(members.len(), 0);
         self.members = members;
         Ok(())
@@ -350,14 +347,7 @@ impl BACnetObject for ChannelObject {
             )),
             PropertyIdentifier::OUT_OF_SERVICE => Ok(PropertyValue::Boolean(self.out_of_service)),
             PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => common::read_array(
-                self.members
-                    .iter()
-                    .map(|member| {
-                        let mut encoded = BytesMut::new();
-                        encode_device_object_property_reference(&mut encoded, member);
-                        PropertyValue::ApplicationData(encoded.to_vec())
-                    })
-                    .collect(),
+                crate::device_reference::reference_elements(&self.members),
                 array_index,
             ),
             PropertyIdentifier::EXECUTION_DELAY => common::read_array(

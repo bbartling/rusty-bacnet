@@ -149,13 +149,22 @@ impl EventEnrollmentObject {
         self.description = desc.into();
     }
 
-    /// Set the object property reference.
+    /// Set Object_Property_Reference, the property the enrollment monitors,
+    /// or `None` for none. The property is read-only over the network.
+    ///
+    /// A reference whose device identifier isn't a Device object is refused
+    /// with PROPERTY / VALUE_OUT_OF_RANGE and the reference set before is
+    /// kept (#1308).
     pub fn set_object_property_reference(
         &mut self,
         reference: Option<BACnetDeviceObjectPropertyReference>,
-    ) {
+    ) -> Result<(), Error> {
+        if let Some(reference) = &reference {
+            crate::device_reference::check_device_member(reference.device_identifier)?;
+        }
         self.object_property_reference = reference;
         self.pending = None;
+        Ok(())
     }
 
     /// Set the structured event parameters.
@@ -304,7 +313,7 @@ impl BACnetObject for EventEnrollmentObject {
             p if p == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE => {
                 Ok(self.object_property_reference.as_ref().map_or(
                     PropertyValue::Null,
-                    crate::device_reference::property_reference_value,
+                    crate::device_reference::reference_value,
                 ))
             }
             p if p == PropertyIdentifier::EVENT_STATE => {

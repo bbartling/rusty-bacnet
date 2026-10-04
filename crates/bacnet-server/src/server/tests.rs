@@ -258,7 +258,8 @@ async fn server_enrollment_task_evaluates_at_startup_on_its_configured_interval(
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 0.0,

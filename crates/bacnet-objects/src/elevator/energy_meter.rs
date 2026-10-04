@@ -17,12 +17,10 @@
 //! to each object. Energy_Meter itself takes writes, which item (c) of each
 //! Out_Of_Service description requires while the object is out of service.
 
-use bacnet_encoding::constructed::encode_device_object_reference;
 use bacnet_types::constructed::BACnetDeviceObjectReference;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use bytes::BytesMut;
 
 use crate::common;
 
@@ -93,9 +91,7 @@ impl EnergyMeter {
         match property {
             PropertyIdentifier::ENERGY_METER => Some(PropertyValue::Real(self.reading)),
             PropertyIdentifier::ENERGY_METER_REF => {
-                let mut encoded = BytesMut::new();
-                encode_device_object_reference(&mut encoded, &self.reference);
-                Some(PropertyValue::ApplicationData(encoded.to_vec()))
+                Some(crate::device_reference::reference_value(&self.reference))
             }
             _ => None,
         }

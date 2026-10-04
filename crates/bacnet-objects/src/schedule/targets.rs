@@ -9,23 +9,27 @@
 //! write the result back whole through the same path (#1121).
 //! Priority_For_Writing takes an Unsigned from 1 to 16 (VALUE_OUT_OF_RANGE
 //! otherwise). The reference list arrives as the raw bytes of its
-//! BACnetDeviceObjectPropertyReference elements and is decoded with the
-//! shared Clause 21 codec one member at a time, in order. Each refusal names
-//! its member by position (`common::at_list_element`), so AddListElement can
-//! report the request element behind it: a member whose first tag is not the
-//! context `[0]` object identifier is INVALID_DATA_TYPE, one that starts right
-//! but doesn't decode INVALID_DATA_ENCODING, as for the schedule arrays in
-//! `writes.rs`, and a member past [`MAX_REFERENCES`] is
-//! NO_SPACE_TO_WRITE_PROPERTY.
+//! BACnetDeviceObjectPropertyReference elements and is decoded by the shared
+//! helpers in `device_reference.rs` (#1313). Each refusal names its member by
+//! position (`common::at_list_element`), so AddListElement can report the
+//! request element behind it. The checks run in three passes, and the first
+//! refusal of the first pass that refuses anything is the answer: the whole
+//! list is decoded (a member whose first tag is not the context `[0]` object
+//! identifier is INVALID_DATA_TYPE, one that starts right but doesn't decode
+//! INVALID_DATA_ENCODING), then its length is held to [`MAX_REFERENCES`]
+//! (NO_SPACE_TO_WRITE_PROPERTY, naming the first member past it), then each
+//! member's Device member is checked in order. So a malformed member, or the
+//! cap, wins over a Device refusal of an earlier member.
 //!
-//! A member carrying the optional Device identifier is refused with
-//! OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the error Clause 12.24.10 names for a
-//! Schedule that serves only objects of its own device. That is this object's
-//! profile: it writes local targets only and stores references without a
-//! Device member. The object can't tell which Device holds it, so the bundled
-//! server removes a Device identifier that names its own Device before the
-//! value gets here (#1122); what reaches this check names another device, or
-//! comes from a caller outside the server. A refused write changes nothing.
+//! A Device member that isn't a Device identifier is VALUE_OUT_OF_RANGE
+//! (#1308). Any other Device member is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+//! the error Clause 12.24.10 names for a Schedule that serves only objects of
+//! its own device. That is this object's profile: it writes local targets
+//! only and stores references without a Device member. The object can't tell
+//! which Device holds it, so the bundled server removes a Device identifier
+//! that names its own Device before the value gets here (#1122); what reaches
+//! this check names another device, or comes from a caller outside the
+//! server. A refused write changes nothing.
 //!
 //! What a change does is left to the implementation; the choices here:
 //!
@@ -48,17 +52,14 @@
 //! - Every accepted write counts as a change, even of the value already
 //!   held; sending the current value again is harmless.
 
-use bacnet_encoding::constructed::decode_device_object_property_reference;
-use bacnet_encoding::tags::Tag;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
 };
-use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
 use super::{writes, ScheduleObject, ScheduleWrite};
-use crate::common;
+use crate::{common, device_reference};
 
 /// Resource cap on List_Of_Object_Property_References members, the bound
 /// Exception_Schedule has.
@@ -72,54 +73,25 @@ pub(super) struct HeldCommand {
     references: Vec<BACnetObjectPropertyReference>,
 }
 
-/// The local reference a written member names, or
-/// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED for one in another device.
-fn local_reference(
-    member: BACnetDeviceObjectPropertyReference,
-) -> Result<BACnetObjectPropertyReference, Error> {
-    if member.device_identifier.is_some() {
-        return Err(common::protocol_error(
-            ErrorClass::PROPERTY,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+/// The local references in a written list. A refusal names its member's
+/// position in the list (#1121).
+fn decode_references(value: &PropertyValue) -> Result<Vec<BACnetObjectPropertyReference>, Error> {
+    let members: Vec<BACnetDeviceObjectPropertyReference> =
+        device_reference::decode_references_at(value)?;
+    if members.len() > MAX_REFERENCES {
+        return Err(common::at_list_element(
+            writes::no_space_error(),
+            MAX_REFERENCES,
         ));
     }
-    Ok(BACnetObjectPropertyReference {
-        object_identifier: member.object_identifier,
-        property_identifier: member.property_identifier,
-        property_array_index: member.property_array_index,
-    })
-}
-
-/// Whether a tag can begin a BACnetDeviceObjectPropertyReference: its
-/// object identifier under context tag `[0]`.
-fn starts_reference(tag: &Tag) -> bool {
-    tag.is_context(0)
-}
-
-/// The local references in a written list. Members are checked in order and
-/// a refusal names its member's position in the list (#1121).
-fn decode_references(value: PropertyValue) -> Result<Vec<BACnetObjectPropertyReference>, Error> {
-    let mut references = Vec::new();
-    for bytes in common::chunks(value)? {
-        let mut offset = 0;
-        while offset < bytes.len() {
-            let index = references.len();
-            let at = |error| common::at_list_element(error, index);
-            if index == MAX_REFERENCES {
-                return Err(at(writes::no_space_error()));
-            }
-            let (member, end) = common::decode_element(
-                &bytes,
-                offset,
-                starts_reference,
-                decode_device_object_property_reference,
-            )
-            .map_err(at)?;
-            references.push(local_reference(member).map_err(at)?);
-            offset = end;
-        }
-    }
-    Ok(references)
+    members
+        .into_iter()
+        .enumerate()
+        .map(|(index, member)| {
+            device_reference::into_local_property_reference(member)
+                .map_err(|error| common::at_list_element(error, index))
+        })
+        .collect()
 }
 
 impl ScheduleObject {
@@ -128,7 +100,7 @@ impl ScheduleObject {
         &mut self,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        let references = decode_references(value)?;
+        let references = decode_references(&value)?;
         self.set_object_property_references(references)
     }
 

@@ -2220,8 +2220,10 @@ reads back as these mappings with every key, the Write_Successful flags
 included (see [typed collections](#typed-collections)). `write_successful` is
 accepted so such a mapping can be given back, but ignored: only a run sets
 the flag, so every command starts False. A wrong shape or Python
-type raises TypeError, and an unknown or missing key raises ValueError. The
-object's own setters refuse a priority outside 1 to 16, a value with no
+type raises TypeError, and an unknown or missing key raises ValueError, as
+does a `device_identifier` that isn't a Device object identifier, naming the
+command (`action[0][1]: ...`), the check the other device reference
+arguments run. The object's own setters refuse a priority outside 1 to 16, a value with no
 encoding, or a text count that differs from the list count, raising
 BacnetProtocolError with VALUE_OUT_OF_RANGE. Once the server runs, writing N to
 the Command's Present_Value, over the network or with `write_property_local`,

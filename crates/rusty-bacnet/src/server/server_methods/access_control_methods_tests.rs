@@ -2,6 +2,7 @@ use super::*;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
+use pyo3::exceptions::PyValueError;
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
@@ -25,7 +26,7 @@ fn is_value_out_of_range(error: &Error) -> bool {
 fn references(
     references: Vec<PyDeviceObjectReference>,
 ) -> Option<Vec<BACnetDeviceObjectReference>> {
-    device_references(Some(references)).unwrap()
+    device_references(Some(references), "door_members").unwrap()
 }
 
 #[test]
@@ -153,13 +154,22 @@ fn python_device_reference_pairs_name_a_device() {
         py(ObjectType::ANALOG_VALUE, 99),
         py(ObjectType::ACCESS_DOOR, 99),
     ] {
-        let error = device_references(Some(vec![
-            PyDeviceObjectReference::Local(door.clone()),
-            PyDeviceObjectReference::Remote(not_a_device, door.clone()),
-        ]))
+        let error = device_references(
+            Some(vec![
+                PyDeviceObjectReference::Local(door.clone()),
+                PyDeviceObjectReference::Remote(not_a_device, door.clone()),
+            ]),
+            "door_members",
+        )
         .err()
         .unwrap();
-        Python::attach(|py| assert!(error.is_instance_of::<PyValueError>(py), "{error}"));
+        Python::attach(|py| {
+            assert!(error.is_instance_of::<PyValueError>(py), "{error}");
+            assert_eq!(
+                error.value(py).to_string(),
+                "door_members[1]: the device must be a Device object identifier"
+            );
+        });
     }
     // A Device pair and a bare identifier still convert, and no list at all
     // stays none.
@@ -169,7 +179,7 @@ fn python_device_reference_pairs_name_a_device() {
     ])
     .unwrap();
     assert_eq!(converted.len(), 2);
-    assert!(device_references(None).unwrap().is_none());
+    assert!(device_references(None, "door_members").unwrap().is_none());
 }
 
 #[test]

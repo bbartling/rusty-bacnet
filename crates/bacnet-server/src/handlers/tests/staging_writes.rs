@@ -50,7 +50,13 @@ fn staging_structured_decoder_rejects_trailing_malformed_data() {
     encode_stage_limit_value(&mut bytes, &stage);
     bytes.extend_from_slice(&[0x44, 0x00]);
     assert!(decode_write_property_value(PropertyIdentifier::STAGES, None, false, &bytes).is_err());
+}
 
+#[test]
+fn staging_targets_reach_the_object_as_raw_reference_bytes() {
+    // The object decodes them with the shared device-reference helpers, so
+    // trailing malformed data is its refusal to make, not the decoder's
+    // (#1313).
     let reference = BACnetDeviceObjectReference {
         device_identifier: None,
         object_identifier: ObjectIdentifier::new(ObjectType::BINARY_OUTPUT, 1).unwrap(),
@@ -58,13 +64,25 @@ fn staging_structured_decoder_rejects_trailing_malformed_data() {
     let mut bytes = BytesMut::new();
     encode_device_object_reference(&mut bytes, &reference);
     bytes.extend_from_slice(&[0x19]);
-    assert!(decode_write_property_value(
-        PropertyIdentifier::TARGET_REFERENCES,
-        None,
-        false,
-        &bytes
-    )
-    .is_err());
+    for index in [None, Some(1)] {
+        assert_eq!(
+            decode_write_property_value(
+                PropertyIdentifier::TARGET_REFERENCES,
+                index,
+                false,
+                &bytes
+            )
+            .unwrap(),
+            PropertyValue::ApplicationData(bytes.to_vec())
+        );
+    }
+    let mut size = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_unsigned(&mut size, 2);
+    assert_eq!(
+        decode_write_property_value(PropertyIdentifier::TARGET_REFERENCES, Some(0), false, &size)
+            .unwrap(),
+        PropertyValue::Unsigned(2)
+    );
 }
 
 #[test]

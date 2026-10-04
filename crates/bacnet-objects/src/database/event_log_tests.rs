@@ -154,7 +154,9 @@ fn enrollment(
     let mut reference = BACnetDeviceObjectPropertyReference::new_local(object, property.to_raw());
     reference.device_identifier =
         device.map(|instance| ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap());
-    enrollment.set_object_property_reference(Some(reference));
+    enrollment
+        .set_object_property_reference(Some(reference))
+        .unwrap();
     enrollment
 }
 

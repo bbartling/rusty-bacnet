@@ -9,7 +9,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::common;
-use crate::device_reference::check_device_member;
+use crate::device_reference::{check_device_member, check_local_member};
 
 /// The most references a Trend Log Multiple holds. Each poll reads every
 /// one and each record carries a value per reference, so the array is
@@ -36,31 +36,27 @@ pub(super) fn empty_element() -> BACnetDeviceObjectPropertyReference {
     )
 }
 
-/// Check a reference a client writes.
-///
-/// A Device member that isn't a Device identifier is PROPERTY /
-/// VALUE_OUT_OF_RANGE. Any other Device member is PROPERTY /
-/// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED: the poller reads only its own
-/// database, which both clauses let a writable reference be held to, and the
+/// Check a reference a client writes with the shared
+/// [`check_local_member`]: a Device member that isn't a Device identifier is
+/// PROPERTY / VALUE_OUT_OF_RANGE, and any other Device member PROPERTY /
+/// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, since the poller reads only its own
+/// database, which both clauses let a writable reference be held to. The
 /// bundled server has already put one naming its own Device in local form.
 /// With `empty_elements` (a Trend Log Multiple element), an object or Device
-/// instance of 4194303 marks the element empty (Clause 12.30.11) and is kept
-/// as written.
+/// instance of 4194303 marks the element empty (Clause 12.30.11), so a Device
+/// member there is kept as written.
 pub(super) fn check_written(
     reference: &BACnetDeviceObjectPropertyReference,
     empty_elements: bool,
 ) -> Result<(), Error> {
     check_device_member(reference.device_identifier)?;
-    let Some(device) = reference.device_identifier else {
-        return Ok(());
-    };
     let wildcard =
         |oid: ObjectIdentifier| oid.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE;
-    if empty_elements && (wildcard(reference.object_identifier) || wildcard(device)) {
+    let empty = reference
+        .device_identifier
+        .is_some_and(|device| wildcard(reference.object_identifier) || wildcard(device));
+    if empty_elements && empty {
         return Ok(());
     }
-    Err(common::protocol_error(
-        ErrorClass::PROPERTY,
-        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-    ))
+    check_local_member(reference.device_identifier)
 }

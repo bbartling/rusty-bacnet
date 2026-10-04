@@ -34,7 +34,8 @@ fn evaluates_multiple_enrollments() {
     ee1.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai1_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee1.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,
@@ -48,7 +49,8 @@ fn evaluates_multiple_enrollments() {
     ee2.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai2_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee2.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,
@@ -73,7 +75,8 @@ fn missing_monitored_object_is_skipped() {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         fake_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,
@@ -115,7 +118,8 @@ pub(super) fn setup_qualified_reference(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
         reference_device_oid,
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,

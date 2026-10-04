@@ -1,8 +1,7 @@
 //! Schedule (type 17) and Calendar (type 6) objects per ASHRAE 135-2020.
 
 use bacnet_encoding::constructed::{
-    encode_daily_schedule, encode_date_range, encode_object_property_reference,
-    encode_special_event,
+    encode_daily_schedule, encode_date_range, encode_special_event,
 };
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::constructed::{
@@ -383,13 +382,16 @@ impl BACnetObject for ScheduleObject {
                 encode_date_range(&mut encoded, &self.effective_period);
                 Ok(PropertyValue::ApplicationData(encoded.to_vec()))
             }
+            // The local references back to back, each with no Device member,
+            // in the run form the server's list services edit.
             p if p == PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
-                let mut encoded = BytesMut::new();
-                for reference in &self.list_of_object_property_references {
-                    // Local DeviceObjectPropertyReference: no optional Device member.
-                    encode_object_property_reference(&mut encoded, reference);
-                }
-                Ok(PropertyValue::ApplicationData(encoded.to_vec()))
+                Ok(crate::device_reference::reference_run(
+                    &self
+                        .list_of_object_property_references
+                        .iter()
+                        .map(crate::device_reference::local_property_reference)
+                        .collect::<Vec<_>>(),
+                ))
             }
             p if p == PropertyIdentifier::PRIORITY_FOR_WRITING => {
                 Ok(PropertyValue::Unsigned(self.priority_for_writing as u64))

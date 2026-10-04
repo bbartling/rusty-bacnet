@@ -33,7 +33,8 @@ fn setup(detection_enabled: bool) -> (ObjectDatabase, ObjectIdentifier) {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         ai_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,

@@ -18,12 +18,14 @@ use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue}
 fn objects() -> Vec<Box<dyn BACnetObject>> {
     let source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let mut enrollment = EventEnrollmentObject::new(1, "EE", EventType::OUT_OF_RANGE).unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference {
-        object_identifier: source,
-        property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
-        property_array_index: None,
-        device_identifier: None,
-    }));
+    enrollment
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference {
+            object_identifier: source,
+            property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
+            property_array_index: None,
+            device_identifier: None,
+        }))
+        .unwrap();
     vec![
         Box::new(AnalogInputObject::new(1, "AI", 62).unwrap()),
         Box::new(AnalogOutputObject::new(1, "AO", 62).unwrap()),

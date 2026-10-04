@@ -9,7 +9,6 @@
 //! - AccessZone (type 36)
 //! - CredentialDataInput (type 37)
 
-use bacnet_encoding::constructed::encode_device_object_reference;
 use bacnet_encoding::primitives::encode_timestamp_choice;
 use bacnet_types::constructed::BACnetDeviceObjectReference;
 use bacnet_types::enums::{
@@ -53,20 +52,6 @@ fn timestamp_value(stamp: &BACnetTimeStamp) -> Result<PropertyValue, Error> {
     let mut buf = BytesMut::new();
     encode_timestamp_choice(&mut buf, stamp)?;
     Ok(PropertyValue::ApplicationData(buf.to_vec()))
-}
-
-/// The elements of a BACnetARRAY of BACnetDeviceObjectReference (an Access
-/// Door's Door_Members, an Access Point's Access_Doors), each in its Clause 21
-/// form, for `common::read_array`.
-fn device_object_references(references: &[BACnetDeviceObjectReference]) -> Vec<PropertyValue> {
-    references
-        .iter()
-        .map(|reference| {
-            let mut buf = BytesMut::new();
-            encode_device_object_reference(&mut buf, reference);
-            PropertyValue::ApplicationData(buf.to_vec())
-        })
-        .collect()
 }
 
 /// The BACnetTimeStamp (Clause 21.6) for an update recorded now: the Device

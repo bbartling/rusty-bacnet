@@ -4,7 +4,7 @@
 //! and Who-Has) per ASHRAE 135-2020 Clauses 16.9 and 16.10.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -17,7 +17,7 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
 use bacnet_services::who_is::{IAmRequest, WhoIsRequest};
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::{NetworkPriority, UnconfirmedServiceChoice};
+use bacnet_types::enums::{ErrorClass, ErrorCode, NetworkPriority, UnconfirmedServiceChoice};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
@@ -735,10 +735,16 @@ fn ensure_source_capacity(state: &mut DiscoveryState, policy: &DiscoveryPolicy, 
     }
 }
 
+/// Broadcast this device's I-Am unless DeviceCommunicationControl restricts
+/// initiation. Clause 16.1.2 exempts only an I-Am answering a Who-Is, so an
+/// announcement made under DISABLE_INITIATION sends nothing and fails with
+/// `SERVICES` / `COMMUNICATION_DISABLED`, the code Clause 18.6 keeps for local
+/// work that could not initiate a service for that reason.
 pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
     config: &ServerConfig,
     db: &Arc<RwLock<ObjectDatabase>>,
     network: &Arc<NetworkLayer<T>>,
+    comm_state: &AtomicU8,
     limiter: Option<&Arc<DiscoveryLimiter>>,
 ) -> Result<(), Error> {
     let guard = db.read().await;
@@ -764,6 +770,12 @@ pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
     )?;
 
     drop(guard);
+    if comm_state.load(Ordering::Acquire) != 0 {
+        return Err(Error::Protocol {
+            class: ErrorClass::SERVICES.to_raw() as u32,
+            code: ErrorCode::COMMUNICATION_DISABLED.to_raw() as u32,
+        });
+    }
     if let Some(limiter) = limiter {
         limiter.record_i_am_sent(buf.len(), false, &MacAddr::new(), None, Instant::now());
     }
@@ -792,6 +804,8 @@ pub fn iam_request_for(device_oid: ObjectIdentifier, config: &ServerConfig) -> I
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Broadcast I-Am through this server's bounded local-send owner.
     /// Cancelling the waiter leaves admitted work owned until completion or stop.
+    /// While DeviceCommunicationControl restricts initiation nothing is sent
+    /// and this fails with `SERVICES` / `COMMUNICATION_DISABLED` (Clause 16.1).
     pub async fn broadcast_i_am(&self) -> Result<(), Error> {
         self.broadcaster
             .send(Some(Arc::clone(&self.discovery_limiter)))
