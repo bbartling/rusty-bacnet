@@ -2128,7 +2128,11 @@ the request, or an application dropped a `write_local` future) is dropped the
 same way once 10 s have passed since its save finished: by the next write
 that stages, or within a further second by the server's once-a-second
 operation task, which measures the time on its own monotonic clock. The
-forwarder's operation task applies the same bound. `wait_for_saves()` blocks until queued
+forwarder's operation task applies the same bound. Neither check runs once
+the server has stopped, so `stop()`, after joining its requests, drops a
+staged write still held and waits until storage holds the served list again,
+and a class dropped with one still held saves the served list as it goes,
+unless the staged save failed (#1363). `wait_for_saves()` blocks until queued
 saves have run, and dropping the class waits for them too. Like the forwarder,
 a `NotificationClass` is not `UnwindSafe` or `RefUnwindSafe`.
 
@@ -4423,7 +4427,12 @@ guard dropped and the log serves the new state only once storage holds it.
 A WritePropertyMultiple that turns Log_Enable off and then writes
 Buffer_Size stages the two together as one commit, made off the guard as
 well; the request takes each change as it reaches it, and if it stops
-between them, storage is set back to the state the log serves.
+between them, storage is set back to the state the log serves. That holds
+when the server stops mid-request too (#1363): `stop()`, once it has joined
+its requests, drops changes still staged and waits for the commit of the
+served state, and a log dropped with changes still staged commits the served
+state as it goes. A staged notification batch is left as it stands, since
+the log takes a batch whose commit succeeded.
 A commit that fails refuses the write or the purge with
 `DEVICE / OPERATIONAL_PROBLEM` and leaves the log as it was; a Log_Enable
 write whose commit fails is refused the same way. Changes to one log land one
@@ -4445,6 +4454,14 @@ Async BACnet server that hosts objects and dispatches incoming requests.
 
 `BACnetServer::stop()` seals new local broadcasts and mutations, joins admitted
 server work, then stops the owned network and transport before returning success.
+Once its requests are joined, it drops any write a Notification Forwarder,
+Notification Class or Audit Log still holds staged for one of them and waits
+until every save those objects have queued has run, so storage holds what they
+serve (#1363). That wait has no limit: storage that stalls holds `stop()` up,
+and a warning naming the objects still saving is logged after 5 s and every
+30 s after that. `stop()` doesn't wait while the application holds the
+database; the objects then settle once it lets go, and put storage back when
+they are dropped.
 The target-Audit drain retains the ingress needed for acknowledgments until its
 existing completion/deadline boundary. Cancelling a stop waiter retains cleanup:
 call `stop()` again to join it. Transport cleanup errors retain the owner for retry;
@@ -4932,9 +4949,15 @@ server's DeleteObject drops a removed forwarder on a blocking thread after
 releasing the guard. A staged write its request never makes (an earlier
 WritePropertyMultiple attempt failed, say) is dropped, and the forwarder at
 once queues a save of the lists it serves, so storage never keeps a list the
-forwarder refused. The writer is a plain `std` thread with no Tokio runtime,
-one per forwarder that has saved and parked while idle, and a `save` that
-panics counts as a failed save. Once its rename succeeds a
+forwarder refused. The same holds when the server stops mid-request (#1363):
+`stop()`, after joining its requests, drops a staged write still held and
+waits for that save, and a forwarder dropped with one still held saves the
+lists it serves before its writer stops. A drop without `stop()` saves the
+lists as they stood at the forwarder's last operation-task call, so an entry
+that lapsed within that last second can come back with a minute left;
+`stop()` saves them as they stand. The writer is a plain `std` thread with no
+Tokio runtime, one per forwarder that has saved and parked while idle, and a
+`save` that panics counts as a failed save. Once its rename succeeds a
 file save has landed: a filesystem that cannot synchronize a directory is
 passed over, and any other failure there is logged, not returned.
 

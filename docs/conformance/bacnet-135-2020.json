@@ -3861,7 +3861,8 @@
     "crates/bacnet-objects/src/durable.rs::SaveWriter",
     "crates/bacnet-server/src/server/durable_writes.rs::stage",
     "crates/bacnet-objects/src/durable/staged.rs::StagedSaves",
-    "crates/bacnet-objects/src/durable/file.rs::ObjectFile"
+    "crates/bacnet-objects/src/durable/file.rs::ObjectFile",
+    "crates/bacnet-objects/src/durable/staged.rs::StagedSaves::drop_forgotten"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/constructed/tests/event_notification_subscription.rs::event_notification_subscription_round_trips_golden_elements",
@@ -3922,7 +3923,8 @@
     "crates/bacnet-objects/src/durable/tests.rs::a_staged_lifetime_counts_from_the_end_of_the_save",
     "crates/bacnet-objects/src/durable/tests.rs::a_ticket_recognizes_only_its_own_wait",
     "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::a_write_property_multiple_stopped_before_its_list_write_puts_the_served_list_back",
-    "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::deleting_a_forwarder_while_its_save_is_held_leaves_the_database_available"
+    "crates/bacnet-server/src/server/requests/durable_write_wire_tests.rs::deleting_a_forwarder_while_its_save_is_held_leaves_the_database_available",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::{a_forwarder_dropped_with_a_staged_write_puts_storage_back_to_the_served_lists,a_forwarder_dropped_with_a_staged_recipient_list_keeps_none_written,a_forwarder_dropped_after_its_staged_write_was_made_keeps_the_new_lists,a_forwarder_dropped_while_its_staged_save_runs_puts_storage_back_after_it,a_forwarder_dropped_with_a_staged_write_puts_back_the_lists_it_serves_as_it_goes,settling_forgotten_writes_puts_storage_back_and_frees_the_forwarder}"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/event_notification_subscription.rs::event_notification_subscription_refuses_truncated_and_malformed_elements",
@@ -3945,7 +3947,8 @@
     "crates/bacnet-objects/src/durable/tests.rs::a_panicking_save_fails_its_ticket_and_the_writer_goes_on",
     "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_released_staged_write_whose_save_failed_saves_nothing_more",
     "crates/bacnet-objects/src/notification_forwarder/tests/persistence_tests.rs::file_persistence_refuses_a_file_past_its_size_or_entry_caps",
-    "crates/bacnet-objects/src/durable/tests.rs::a_filesystem_that_cannot_sync_a_directory_is_passed_over"
+    "crates/bacnet-objects/src/durable/tests.rs::a_filesystem_that_cannot_sync_a_directory_is_passed_over",
+    "crates/bacnet-objects/src/notification_forwarder/tests/staging_tests.rs::a_forwarder_dropped_with_a_staged_write_whose_save_failed_leaves_storage_alone"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3979,7 +3982,8 @@
     "The file backend synchronizes the directory after its rename, except on Windows, where std cannot open a directory. Dropping the forwarder waits for queued saves.",
     "A staged write its request never makes is dropped, and the forwarder queues a save of the lists it serves at once. A request releases only the staged write it made.",
     "A staged write waits for its request for 10 s from the end of its save. DeleteObject drops a removed forwarder on a blocking thread after releasing the guard.",
-    "Once the rename succeeds the save has landed: a directory sync the filesystem does not support is skipped, and any other sync failure is logged, not returned."
+    "Once the rename succeeds the save has landed: a directory sync the filesystem does not support is skipped, and any other sync failure is logged, not returned.",
+    "`stop()`, once it has joined its requests, drops a staged write still held and waits for the save of the served lists; a forwarder dropped with one still held saves the lists it serves as it goes, unless the staged save failed."
    ]
   },
   {
@@ -4358,7 +4362,9 @@
     "crates/bacnet-objects/src/durable/staged.rs::StagedSaves",
     "crates/bacnet-objects/src/durable/file.rs::ObjectFile",
     "crates/bacnet-server/src/server/durable_writes.rs::may_save",
-    "crates/rusty-bacnet/src/server/server_methods/registration.rs::add_notification_class"
+    "crates/rusty-bacnet/src/server/server_methods/registration.rs::add_notification_class",
+    "crates/bacnet-objects/src/durable/staged.rs::StagedSaves::drop_forgotten",
+    "crates/bacnet-server/src/server/durable_writes.rs::settle_forgotten"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::a_written_recipient_list_reads_back_after_a_rebuild",
@@ -4385,7 +4391,9 @@
     "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::deleting_a_class_while_its_save_is_held_leaves_the_database_available",
     "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_paused_clock_stands_still_while_a_class_save_runs",
     "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRestartTests::test_a_written_recipient_list_survives_a_restart",
-    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_runtime_and_stub_agree"
+    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_runtime_and_stub_agree",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::{a_class_dropped_with_a_staged_write_puts_storage_back_to_the_served_list,a_class_dropped_with_a_staged_write_and_no_written_list_saves_none,a_class_dropped_after_its_staged_write_was_made_keeps_the_new_list,a_class_dropped_while_its_staged_save_runs_puts_storage_back_after_it,settling_forgotten_writes_puts_storage_back_and_frees_the_class}",
+    "crates/bacnet-server/src/server/requests/durable_stop_tests.rs::{a_server_stopped_mid_request_leaves_storage_with_the_served_lists,a_stop_while_the_application_holds_the_database_puts_storage_back_once_it_lets_go,stop_warns_while_storage_holds_a_save_and_waits_for_it}"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::a_recipient_list_write_that_cannot_be_saved_is_refused",
@@ -4396,7 +4404,8 @@
     "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_list_that_cannot_be_saved_is_refused_on_every_path_and_the_old_list_stays",
     "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRestartTests::test_a_list_that_cannot_be_saved_is_refused_and_the_old_list_stays",
     "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_an_empty_storage_path_is_refused",
-    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_storage_path_is_a_str_naming_a_file_this_backend_wrote"
+    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_storage_path_is_a_str_naming_a_file_this_backend_wrote",
+    "crates/bacnet-objects/src/notification_class/tests/staging_tests.rs::a_class_dropped_with_a_staged_write_whose_save_failed_leaves_storage_alone"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -4406,7 +4415,7 @@
    "notes": [
     "Destinations from `add_destination` are never saved and apply at each start until a write sets the list; after that the saved list wins, even when empty, and `add_destination` only checks.",
     "The server stages list writes from WriteProperty, WritePropertyMultiple, AddListElement, RemoveListElement and `write_local`, saving with the database guard dropped; WritePropertyMultiple under a mutation authorizer saves in place.",
-    "A list that cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM. Storage goes back to the served list at once when a staged write is released unmade, or within 10 s and a tick when its request vanished.",
+    "A list that cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM. A staged write never made puts storage back to the served list: at once on release, within 10 s and a tick if its request vanished, at `stop()`, or on drop.",
     "`FileNotificationClassPersistence` writes its own `RBNNCL01` format, a sibling of the forwarder's `RBNFWD01`, and refuses a file past 64 KiB or 32 destinations, or saved for another object.",
     "A class built with `NotificationClass::new`, and one added from Python without `storage_path`, keeps its Recipient_List in memory only."
    ],
@@ -5813,7 +5822,8 @@
     "crates/bacnet-server/src/server/audit_local_network_tests.rs::{audit_notifications_to_a_binding_routed_through_this_network_go_without_a_dnet,audit_notifications_to_a_binding_routed_to_another_network_keep_its_dnet}",
     "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_to_a_parent_routed_through_this_network_goes_without_a_dnet",
     "crates/bacnet-server/src/server/audit_dcc_tests.rs::{audit_notifications_start_under_disable_initiation_and_keep_the_reporter_healthy,audit_owing_writes_commit_and_notify_under_disable_initiation,send_now_under_disable_initiation_flushes_the_queue_once,a_resource_drop_under_disable_initiation_is_summarized}",
-    "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_goes_out_under_disable_initiation"
+    "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_goes_out_under_disable_initiation",
+    "crates/bacnet-objects/src/audit/staging_tests.rs::{a_log_dropped_with_a_staged_change_puts_storage_back_to_the_served_log,a_log_dropped_after_its_staged_change_was_made_keeps_it,a_log_dropped_part_way_through_staged_changes_keeps_the_steps_taken,a_log_dropped_while_its_staged_commit_runs_puts_storage_back_after_it,a_log_dropped_with_a_committed_batch_keeps_it_as_settling_would,settling_forgotten_writes_puts_storage_back_and_takes_a_batch_once_committed}"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/audit_forwarder_tests.rs::audit_forwarding_invalid_parent_is_visible_at_startup_without_send",
@@ -5905,7 +5915,8 @@
     "crates/bacnet-server/src/server/audit_notification_staging_tests.rs::a_confirmed_notification_whose_commit_fails_is_refused_and_stores_nothing",
     "crates/bacnet-encoding/src/constructed/tests/audit_notification.rs::{an_object_identifier_of_the_wrong_length_is_malformed_even_when_cut_short,an_object_identifier_cut_short_is_a_short_buffer}",
     "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::confirmed_audit_notification_cut_short_draws_services_other",
-    "crates/bacnet-server/src/server/audit_dcc_tests.rs::disable_initiation_still_holds_back_cov_and_events_beside_audit"
+    "crates/bacnet-server/src/server/audit_dcc_tests.rs::disable_initiation_still_holds_back_cov_and_events_beside_audit",
+    "crates/bacnet-objects/src/audit/staging_tests.rs::a_log_dropped_with_a_staged_change_whose_commit_failed_leaves_storage_alone"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -5946,7 +5957,8 @@
     "A Buffer_Size write and `purge_audit_log` stage the same way. A Log_Enable or Buffer_Size write, or a purge, whose commit fails is refused with DEVICE / OPERATIONAL_PROBLEM.",
     "A configured Device binding routed through the known local network number is a local route for target notifications and Audit Log forwarding: no DNET, answered from the final MAC. Target routes are resolved for each notification, so a number learned after startup applies from the next one; a queued or sent notification keeps its route.",
     "Audit notifications, AUDITING_FAILURE summaries and Audit Log forwards go out under DISABLE_INITIATION (Clause 16.1). DCC never holds one back, marks a Reporter COMMUNICATION_FAILURE or refuses a write that owes one; COV and events stay held.",
-    "The endpoint has no DeviceCommunicationControl service, so nothing gates its source audit notifications on DCC."
+    "The endpoint has no DeviceCommunicationControl service, so nothing gates its source audit notifications on DCC.",
+    "`stop()` drops Log_Enable, Buffer_Size or purge changes still staged and waits for the commit of the served state; a log dropped with some still staged commits it as it goes. A staged batch is left, since the log takes a committed batch."
    ],
    "target_device_recipient": {
     "scope": "Target portion of #728; the completed bounded source endpoint migration is recorded separately in BACNET-19-SOURCE-READ-PROPERTY. Broader Audit conformance remains open. Corrected Device recipient requirement: Clause 12.11 with 135-2020 Errata Summary 2024-04-29 item 25 (PDF page 7), preserving base O and footnotes 19-20; NULL operation semantics in 15.9/15.10/19.2; record shape Table 19-4 and BACnetRecipient in Clause 21.",

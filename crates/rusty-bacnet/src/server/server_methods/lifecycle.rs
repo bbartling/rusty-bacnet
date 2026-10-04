@@ -290,6 +290,8 @@ impl BACnetServer {
 
     /// Stop admitted work and release the owned transport.
     /// Cancellation keeps shutdown available for a later stop to join.
+    /// Waits, with no limit, for the saves durable objects have queued, and
+    /// warns while storage holds it up (#1363).
     fn stop<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let started = self.started.clone();

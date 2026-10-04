@@ -385,6 +385,7 @@ impl DurableWrites for NotificationForwarderObject {
             return StageStep::Skip;
         };
         let snapshot = self.snapshot(Some(&next));
+        let served = self.snapshot(None);
         let base = self.list_writes;
         self.storage.as_mut().expect("checked above").stage(
             property,
@@ -392,11 +393,16 @@ impl DurableWrites for NotificationForwarderObject {
             base,
             next,
             snapshot,
+            served,
         )
     }
 
     fn release_staged_write(&mut self, staged: &SaveWait) {
         self.with_storage(|storage, _| storage.release(staged));
+    }
+
+    fn settle_forgotten_writes(&mut self) -> Option<SaveWait> {
+        self.with_storage(|storage, served| storage.drop_forgotten(served))
     }
 }
 

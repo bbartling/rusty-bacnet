@@ -29,6 +29,18 @@ async fn stop_producer(slot: &mut Option<JoinHandle<()>>) {
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Seal egress, join admitted work, and stop the owned transport.
     ///
+    /// Once its requests are joined, a write a Notification Forwarder,
+    /// Notification Class or Audit Log still holds staged for one of them is
+    /// dropped, and stop waits until every save those objects have queued
+    /// has run, so storage holds the state each object serves (#1363); see
+    /// [`DurableWrites::settle_forgotten_writes`]. That wait has no limit:
+    /// storage that stalls holds stop up, and a warning naming the objects
+    /// still saving is logged after 5 s and every 30 s after that. Stop does
+    /// not wait while the application holds the database: the objects then
+    /// settle once it lets go, and put storage back when they are dropped.
+    ///
+    /// [`DurableWrites::settle_forgotten_writes`]: bacnet_objects::durable::DurableWrites::settle_forgotten_writes
+    ///
     /// Cancelling this waiter leaves cleanup owned by the server. A later stop
     /// joins it; after transport cleanup begins, dropping the server lets that
     /// cleanup finish. Local mutation and broadcasts are rejected from the first
@@ -101,6 +113,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         stop_producer(&mut self.binary_lighting_operation_task).await;
         stop_producer(&mut self.cov_purge_task).await;
         stop_producer(&mut self.cov_revisit_task).await;
+        // No request is left to take or release a staged save, and the
+        // operation task that would drop one is gone: put storage back to
+        // what each object serves before stop returns (#1363). A
+        // `write_local` still in flight isn't joined; if it staged, it finds
+        // its stage gone and saves in place under the guard.
+        super::durable_writes::settle_forgotten(&self.db).await;
         // Nothing can own a Command or Channel run any more. End the runs let
         // go of while the database was busy where they stood, then any run no
         // task took up, so none is left in progress (#1252). An application
