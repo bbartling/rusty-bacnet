@@ -1583,7 +1583,8 @@
     "crates/bacnet-server/src/server/requests/audit_log_buffer_wire_tests.rs::{buffer_size_is_written_only_while_logging_is_off,a_buffer_size_commit_runs_while_the_database_stays_available,a_write_property_multiple_turns_logging_off_then_resizes_in_one_commit_off_the_guard,a_paused_clock_stands_still_while_a_buffer_size_commit_runs}",
     "crates/bacnet-server/src/server/audit_log_purge_tests.rs::{a_purge_commits_while_the_database_stays_available_and_lands_once_durable,a_batch_committing_when_a_purge_is_asked_for_lands_first_and_is_purged,a_batch_that_arrives_while_a_purge_commits_follows_the_purge_record,a_paused_clock_stands_still_while_a_purge_commits}",
     "crates/bacnet-server/src/pics/property_metadata_tests/audit_log.rs::pics_audit_log_property_metadata_is_exact",
-    "crates/rusty-bacnet/tests/test_audit_log_buffer.py::AuditLogBufferTests::test_buffer_size_writes_and_purge"
+    "crates/rusty-bacnet/tests/test_audit_log_buffer.py::AuditLogBufferTests::test_buffer_size_writes_and_purge",
+    "crates/bacnet-objects/src/audit/buffer_tests.rs::a_request_goes_on_past_a_null_the_log_leaves_unchanged"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/audit/buffer_tests.rs::{a_failing_store_refuses_a_resize_or_purge_and_leaves_the_log_unchanged,a_purge_without_a_valid_clock_changes_nothing,staging_skips_a_resize_the_write_would_refuse_or_not_need,an_object_without_a_log_refuses_a_purge,a_request_that_resizes_before_turning_logging_off_stages_nothing}",
@@ -2178,7 +2179,7 @@
     "Split child of BACNET-12-OBJECT-MODEL (#1131, found during #1061). Breaking pre-1.0 wire change: the three rows used to refuse every write. Footnote 1 of Table 12-30 marks exactly Door_Status, Lock_Status and Door_Alarm_State.",
     "Clause 12.26.9 also lists Reliability, but only for a door whose Reliability can leave NO_FAULT_DETECTED; this door applies no fault algorithm and nothing changes its Reliability, so Reliability stays read-only, and Present_Value is commandable in both states already.",
     "Local policies, each recorded in access_control/door_out_of_service.rs: the door holds the three values as one DoorState and sets it aside on the FALSE-to-TRUE edge through common::write_out_of_service_with_restore, the generic form #1131 extracted from write_out_of_service_with_reliability_restore (now a wrapper with its NO_FAULT_DETECTED fallback); the return to service restores it and drops the simulated values.",
-    "Meanwhile set_door_alarm_state and the new set_door_status and set_lock_status update the state set aside. A NULL write of one of the three is INVALID_DATA_TYPE, as for the Life Safety Tracking_Value.",
+    "Meanwhile set_door_alarm_state and the new set_door_status and set_lock_status update the state set aside. The object refuses a NULL to one of the three as INVALID_DATA_TYPE, as for the Life Safety Tracking_Value, and the server answers that NULL as a successful no-op.",
     "Clause 12.26.20 restricts Door_Alarm_State to NORMAL and the members of Alarm_Values and Fault_Values and keeps it out of Masked_Alarm_Values; the door serves none of those lists, so a simulated value is checked against the enumeration only.",
     "The pulse relock (BACNET-12-ACCESS-DOOR-PULSE-TIMING) runs on the timer the command armed and reads none of the three values. The door runs no intrinsic reporting (Event_State stays NORMAL), so a simulated Door_Alarm_State raises no event of its own; an Event Enrollment monitoring the property reads the served value.",
     "COV needed no server change: the Table 13-1 row values are compared around every committed write. Not covered: a runtime application route for the three values once the server holds the door (the setters reach it only before), Alarm_Values, Fault_Values and Masked_Alarm_Values, and the CHANGE_OF_STATE and FAULT_STATE algorithms.",
@@ -4323,7 +4324,8 @@
     "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::deleting_a_class_while_its_save_is_held_leaves_the_database_available",
     "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_paused_clock_stands_still_while_a_class_save_runs",
     "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRestartTests::test_a_written_recipient_list_survives_a_restart",
-    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_runtime_and_stub_agree"
+    "crates/rusty-bacnet/tests/test_notification_class_persistence.py::NotificationClassRegistrationTests::test_runtime_and_stub_agree",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_null_recipient_list_succeeds_unchanged_and_saves_nothing"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/notification_class/tests/persistence_tests.rs::a_recipient_list_write_that_cannot_be_saved_is_refused",
@@ -4670,7 +4672,7 @@
    ],
    "notes": [
     "The Loop, Pulse Converter and Averaging arms share one write decode (reference.rs): another datatype, the flat list included, is PROPERTY / INVALID_DATA_TYPE; octets that open right but don't fully decode, PROPERTY / INVALID_DATA_ENCODING.",
-    "An unset BACnetObjectPropertyReference reads Null and a Null write clears it. An unset Setpoint_Reference reads as the empty value and writing that value clears it; Null there is INVALID_DATA_TYPE.",
+    "An unset BACnetObjectPropertyReference reads Null and a Null write clears it. An unset Setpoint_Reference reads as the empty value and writing that value clears it; the object refuses Null there as INVALID_DATA_TYPE, which the server answers as a successful no-op.",
     "A Setpoint_Reference frame with nothing inside (0E 0F) is INVALID_DATA_ENCODING: a reference that is absent has no octets at all (Clause 20.2.16).",
     "Averaging Object_Property_Reference reads as the context-tagged BACnetDeviceObjectPropertyReference with no Device member; under that frame the flat list is INVALID_DATA_TYPE and a Device member naming no Device VALUE_OUT_OF_RANGE.",
     "The stack doesn't follow these references; an application decodes the value it reads with the shared codecs and follows that."
@@ -6104,7 +6106,8 @@
     "A value TLV-truncated so far that framing breaks is refused by the shared incremental service grammar before that write is attempted. Unlocks covered here: MSI Alarm_Values whole-list writes (the pin in handlers/list.rs flipped from pinned failure to per-element-validated success) and the datetime-paired value properties completing #270 (DateTime Value PV / Priority_Array entries, Relinquish_Default on DateTime Value + DateTime Pattern Value; see BACNET-12-RELINQUISH-DEFAULT-WRITABILITY).",
     "WPM decodes and commits each complete attempt in order and stops at the first failure.",
     "WP, WPM, write_local_encoded and a Command's writes ask the target object whether the property is a list; the durable-write pre-pass uses the standard classification. The object then judges every list write: an empty value on a read-only list is WRITE_ACCESS_DENIED, one on an object without the property UNKNOWN_PROPERTY, and a lone element of the wrong datatype is refused as element 1.",
-    "AddListElement/RemoveListElement now validate all elements before mutation and reject malformed tails atomically (#279). Remaining separate residues: Enumerated contents wider than four octets still truncate to u32 (#277, explicitly untouched); and properties declared SEQUENCE OF beyond the four reference arms (e.g. LIST_OF_OBJECT_PROPERTY_REFERENCES) keep their pre-existing arm-level behavior."
+    "AddListElement/RemoveListElement now validate all elements before mutation and reject malformed tails atomically (#279). Remaining separate residues: Enumerated contents wider than four octets still truncate to u32 (#277, explicitly untouched); and properties declared SEQUENCE OF beyond the four reference arms (e.g. LIST_OF_OBJECT_PROPERTY_REFERENCES) keep their pre-existing arm-level behavior.",
+    "A lone application NULL written to Port_Filter or Stages reaches the object as Null instead of failing the element split, so the noncommandable NULL rule judges it."
    ]
   },
   {
@@ -6728,7 +6731,8 @@
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/command_source.rs::command_source_local_required_identity_membership_and_owner_replacement",
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/command_source.rs::command_source_wire_wpm_prefix_and_create_initial_values_rollback",
     "crates/bacnet-objects/src/command_source/tests.rs::remote_origin_mac_holds_to_the_bacnet_address_bound",
-    "crates/bacnet-server/src/server/requests/recipient_mac_bound_tests.rs::write_property_of_a_value_source_mac_past_the_bound_is_invalid_data_type"
+    "crates/bacnet-server/src/server/requests/recipient_mac_bound_tests.rs::write_property_of_a_value_source_mac_past_the_bound_is_invalid_data_type",
+    "crates/bacnet-objects/src/command_source/tests.rs::command_source_correction_refuses_a_stranger_before_its_value"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -6745,7 +6749,8 @@
     "WPM preserves prefix/coordinate, CreateObject rolls back initialization failure, factory AV remains unsupported, Schedule priority16 and complete target index remain unchanged, Staging generation checks remain.",
     "Endpoint inbound allowlist and custom default writer semantics are unchanged; writable decorators forward source authority. Specialized source-property COV is evidenced separately by BACNET-13-VALUE-SOURCE-COV.",
     "No Command_Time_Array, broader object-family support or authentication claim. AV/BV/MSV tracking applies to commandable instances; their noncommandable construction modes are qualified separately by BACNET-12-VALUE-PRESENT-VALUE-ACCESS.",
-    "#1156: a remote origin's MAC must fit BACnetAddress::MAX_MAC_LEN (it was 255 octets), so the address Value_Source it publishes always encodes; a correction carrying a longer address does not decode and fails with PROPERTY / INVALID_DATA_TYPE, leaving the source unchanged."
+    "#1156: a remote origin's MAC must fit BACnetAddress::MAX_MAC_LEN (it was 255 octets), so the address Value_Source it publishes always encodes; a correction carrying a longer address does not decode and fails with PROPERTY / INVALID_DATA_TYPE, leaving the source unchanged.",
+    "A Value_Source correction checks the slot owner before decoding the value, so a requester other than the owner gets WRITE_ACCESS_DENIED whatever it wrote, a NULL included."
    ]
   },
   {
@@ -9083,17 +9088,31 @@
    "code_anchors": [
     "crates/bacnet-objects/src/common.rs::unhandled_write_error",
     "crates/bacnet-objects/src/staging.rs::replace_stage_names",
-    "crates/bacnet-objects/src/file.rs::write_property"
+    "crates/bacnet-objects/src/file.rs::write_property",
+    "crates/bacnet-server/src/handlers/relinquish.rs::leaves_unchanged",
+    "crates/bacnet-server/src/handlers/relinquish.rs::null_in_datatype",
+    "crates/bacnet-server/src/handlers/write_property.rs::commit_attempt",
+    "crates/bacnet-server/src/server/local_writes.rs"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/property_metadata_audit/unknown_writes.rs",
     "crates/bacnet-server/src/handlers/tests/scalar_null_writes.rs::scalar_null_wp_preserves_property_state_and_error_precedence",
     "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::unknown_writes_wpm_reports_coordinate_and_retains_successful_prefix",
-    "crates/rusty-bacnet/tests/test_unknown_property_writes.py"
+    "crates/rusty-bacnet/tests/test_unknown_property_writes.py",
+    "crates/bacnet-server/src/handlers/tests/noncommandable_null_writes.rs::{null_to_a_noncommandable_property_succeeds_unchanged_over_wp,null_to_a_noncommandable_property_succeeds_unchanged_over_wpm,null_still_relinquishes_a_commandable_present_value,null_is_stored_where_the_datatype_has_one,null_in_datatype_names_the_choices_with_an_application_null}",
+    "crates/bacnet-server/src/server/noncommandable_null_cov_tests.rs::a_null_left_unchanged_sends_no_cov_notification",
+    "crates/bacnet-server/src/server/local_encoded_writes_tests.rs::an_encoded_local_null_is_judged_as_a_network_null_is",
+    "crates/bacnet-server/src/server/requests/notification_class_durable_tests.rs::a_null_recipient_list_succeeds_unchanged_and_saves_nothing",
+    "crates/bacnet-server/src/server/audit_reporter_empty_tests.rs::audit_empty_values_wp_recipient_list_preserves_present_empty_and_null",
+    "crates/rusty-bacnet/tests/test_noncommandable_null_writes.py::NoncommandableNullTests::test_a_null_leaves_the_property_as_it_is_locally_and_over_the_network",
+    "crates/rusty-bacnet/tests/test_noncommandable_null_writes.py::NoncommandableNullTests::test_a_commandable_present_value_still_relinquishes",
+    "crates/rusty-bacnet/tests/test_noncommandable_null_writes.py::NoncommandableNullTests::test_a_null_is_stored_where_the_datatype_has_one"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/property_metadata_audit/unknown_writes.rs::unknown_writes_optional_staging_names_use_current_presence",
-    "crates/bacnet-objects/src/command_source/tests.rs::command_source_invalid_writes_are_atomic_and_metadata_is_paired"
+    "crates/bacnet-objects/src/command_source/tests.rs::command_source_invalid_writes_are_atomic_and_metadata_is_paired",
+    "crates/bacnet-server/src/handlers/tests/noncommandable_null_writes.rs::{null_keeps_the_errors_its_checks_give,null_to_value_source_needs_the_command_owner}",
+    "crates/rusty-bacnet/tests/test_noncommandable_null_writes.py::NoncommandableNullTests::test_a_read_only_property_still_refuses_a_null"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -9104,7 +9123,10 @@
     "Refs #870. Fifty syntactic terminal branches use current concrete property_metadata; the shared value-type branch expands across12types. The existing62-object fixture includes the already-correct Network Port control.",
     "Optional absent Staging STAGE_NAMES and absent stream File RECORD_COUNT (Table 12-16 footnote 2, printed 240/PDF 242) are corrected only for unindexed writes. Present read-only record File counts and other File resize guards retain their existing errors.",
     "PROPERTY_LIST must not be inferred absent from its own projection. Earlier successful writes, state/source/authorization and array/index guards remain in place. No server-wide presence precheck or custom-object policy change.",
-    "Direct matrix covers NULL/ordinary inputs and present read-only controls; Rust observed WPM proves exact coordinate and retained DESCRIPTION prefix. Installed Python exposes class/code and prefix through real localhost WP/WPM, not a new failed-coordinate API. This narrow evidence does not claim full object or service conformance."
+    "Direct matrix covers NULL/ordinary inputs and present read-only controls; Rust observed WPM proves exact coordinate and retained DESCRIPTION prefix. Installed Python exposes class/code and prefix through real localhost WP/WPM, not a new failed-coordinate API. This narrow evidence does not claim full object or service conformance.",
+    "A NULL to a property that is not commandable and has no application NULL in its datatype succeeds unchanged over WP, WPM and local writes: the object is asked first, and its INVALID_DATA_TYPE refusal of the NULL becomes the success.",
+    "The checks an object makes before the value keep their errors: unknown property, WRITE_ACCESS_DENIED (state included) and INVALID_ARRAY_INDEX. An array element is judged by its own datatype; index 0, the size, is an Unsigned.",
+    "Such a NULL is audited as a successful write and gets no COV, event, Schedule, Command or save work. Most objects take a NULL to Description or Out_Of_Service as a no-op themselves; the post-write checks then find no change."
    ]
   },
   {

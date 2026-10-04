@@ -1639,6 +1639,21 @@ Audit record; present read-only arrays and unindexed absence retain their existi
 Audit handling. The outer WP authorization check and direct object writes are
 unchanged.
 
+A NULL written to a property that isn't commandable and has no NULL in its
+datatype succeeds and leaves the property as it is (Clauses 15.9.2 and 15.10.2,
+#1396). The server applies this once, for WriteProperty, WritePropertyMultiple,
+`write_local`, `write_local_encoded` and a Command's local writes: the write goes
+to the object as usual, and when the object refuses the NULL with
+`PROPERTY/INVALID_DATA_TYPE` the server answers success instead. Every check the
+object makes first still answers, so an unknown property, a read-only one, one
+not writable in the object's state, or an array index out of range is refused as
+before. An object's own Present_Value relinquish, and a property that stores a
+NULL, never reach the rule. The rule covers an array element too, judged against
+the element's datatype once the index checks out. Nothing follows such a write as
+a change (no COV report, event pass or save); an Audit Reporter records it as a
+successful write. A custom object should therefore check access and state before
+the value's datatype, as the built-in objects do.
+
 WriteProperty and WritePropertyMultiple give a property that
 `BACnetObject::is_list_property` reports as a BACnetLIST, written whole, to the
 object as a `PropertyValue::List` of any length: a value with no octets is the

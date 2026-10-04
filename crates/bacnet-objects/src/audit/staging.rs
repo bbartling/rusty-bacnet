@@ -447,7 +447,10 @@ impl AuditLogObject {
 /// judged as the log will be when the request makes it. A write the log will
 /// refuse ends the list, since the request makes no write after it; a write
 /// of the value the log will already hold changes nothing; other properties
-/// commit nothing.
+/// commit nothing. Neither property takes a NULL, so one the log refuses as
+/// the wrong datatype changes nothing either: the server answers it as a
+/// relinquish that leaves the property as it is, and the request goes on
+/// (#1396).
 fn changes_made(
     mut log_enable: bool,
     mut buffer_size: u32,
@@ -463,6 +466,7 @@ fn changes_made(
                 log_enable = *on;
                 StagedChange::LogEnable(*on)
             }
+            (PropertyIdentifier::LOG_ENABLE, None, PropertyValue::Null) => continue,
             (PropertyIdentifier::BUFFER_SIZE, None, value) => {
                 match written_buffer_size(log_enable, value) {
                     Ok(size) if size == buffer_size => continue,
@@ -470,6 +474,8 @@ fn changes_made(
                         buffer_size = size;
                         StagedChange::BufferSize(size)
                     }
+                    // Logging off, a NULL is refused only as a datatype.
+                    Err(_) if *value == PropertyValue::Null && !log_enable => continue,
                     Err(_) => break,
                 }
             }

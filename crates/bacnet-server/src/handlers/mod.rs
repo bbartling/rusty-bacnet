@@ -56,6 +56,7 @@ mod read_property;
 mod read_range;
 mod rpm_budget;
 pub(crate) use rpm_budget::RpmPlan;
+pub(crate) mod relinquish;
 mod write_property;
 
 pub use alarm_event::*;

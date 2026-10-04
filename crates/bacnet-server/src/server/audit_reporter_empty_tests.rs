@@ -84,28 +84,27 @@ async fn audit_empty_values_wp_recipient_list_preserves_present_empty_and_null()
         assert_eq!(record.current_value, Some(previous));
         assert_eq!(record.result, None);
     }
-    // Encoded NULL is a present one-octet value, not an empty destination list.
+    // Encoded NULL is a present one-octet value, not an empty destination
+    // list. Recipient_List isn't commandable and has no NULL in its
+    // datatype, so the NULL succeeds unchanged (#1396), and the record is
+    // the successful write the requester was answered with.
     let response = dispatch(
         &fixture.server,
         ConfirmedServiceChoice::WRITE_PROPERTY,
         wp(target, PropertyIdentifier::RECIPIENT_LIST, vec![0], None),
     )
     .await;
-    let Apdu::Error(error) = response else {
-        panic!("expected NULL type rejection: {response:?}")
-    };
-    assert_eq!(error.error_class, ErrorClass::PROPERTY);
-    assert_eq!(error.error_code, ErrorCode::INVALID_DATA_TYPE);
+    assert!(
+        matches!(response, Apdu::SimpleAck(_)),
+        "expected the NULL to succeed: {response:?}"
+    );
     settle().await;
     let records = notifications(&fixture.transport.sent);
     assert_eq!(records.len(), 3);
     let record = &records[2].notifications[0];
     assert_eq!(record.target_value, Some(vec![0]));
     assert_eq!(record.current_value, Some(vec![]));
-    assert_eq!(
-        record.result,
-        Some((ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE))
-    );
+    assert_eq!(record.result, None);
     assert_eq!(
         fixture
             .server

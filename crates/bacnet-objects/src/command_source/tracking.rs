@@ -79,6 +79,14 @@ impl ValueSourceTracking {
     ) -> Result<(), Error> {
         let index = priority_index(priority)?;
         origin.validate()?;
+        // Ownership comes before the value: a requester who may not correct
+        // this slot is told so whatever it wrote, a NULL included (#1396).
+        if !self.owners[index]
+            .as_ref()
+            .is_some_and(|owner| owner.permits_correction_by(origin))
+        {
+            return Err(common::write_access_denied_error());
+        }
         let PropertyValue::ApplicationData(bytes) = value else {
             return Err(common::invalid_data_type_error());
         };
@@ -86,12 +94,6 @@ impl ValueSourceTracking {
             decode_value_source(&bytes, 0).map_err(|_| common::invalid_data_type_error())?;
         if end != bytes.len() {
             return Err(common::invalid_data_type_error());
-        }
-        if !self.owners[index]
-            .as_ref()
-            .is_some_and(|owner| owner.permits_correction_by(origin))
-        {
-            return Err(common::write_access_denied_error());
         }
         self.sources[index] = source;
         // Never replace the original command owner or timestamp on correction.

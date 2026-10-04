@@ -782,6 +782,8 @@ mod loop_controlled_variable_tests;
 #[cfg(test)]
 mod loop_cov_tests;
 #[cfg(test)]
+mod noncommandable_null_cov_tests;
+#[cfg(test)]
 mod notification_dcc_tests;
 #[cfg(test)]
 mod notification_transactions_tests;

@@ -22,6 +22,9 @@ pub(crate) trait WriteCommitObserver: Send {
     ) -> Option<Result<(), Error>> {
         None
     }
+    /// The attempt after `before` succeeded. A NULL the property left as it
+    /// was ([`relinquish`](super::relinquish)) succeeds too, and gets this
+    /// call without [`applied`](Self::applied).
     fn committed(&mut self, db: &mut ObjectDatabase);
     /// Execution returned an error after `before`; never called for authorization denial.
     fn failed(&mut self, db: &mut ObjectDatabase, error: &Error);
@@ -29,6 +32,16 @@ pub(crate) trait WriteCommitObserver: Send {
     /// after `committed`, and also for the Device-owned recipient write that
     /// bypasses `before` and `committed`.
     fn applied(&mut self, _db: &ObjectDatabase, _oid: ObjectIdentifier) {}
+}
+
+/// What a successful write attempt did to its object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Applied {
+    /// The object took the value: the post-write work for a change follows.
+    Written,
+    /// A NULL the property left as it was ([`relinquish`](super::relinquish)):
+    /// nothing changed, so no post-write work follows.
+    Unchanged,
 }
 
 /// Validate database-owned Object_Name uniqueness before mutation.
@@ -229,40 +242,89 @@ pub(crate) fn handle_write_property_multiple_observed(
             priority: attempt.priority,
             value: &attempt.value,
         };
-        if let Some(observer) = observer.as_deref_mut() {
-            observer.before(db, target);
-        }
-        let prepared = observer
-            .as_deref_mut()
-            .and_then(|observer| observer.commit_policy(db, target, &value));
-        let write = prepared.unwrap_or_else(|| {
-            write_with_source(
-                db.get_mut(&oid).expect("existence checked above"),
-                property,
-                reference.property_array_index,
-                value,
-                attempt.priority,
-                source,
-                command_origin,
-            )
-        });
-        if let Err(error) = write {
-            if let Some(observer) = observer.as_deref_mut() {
-                observer.failed(db, &error);
+        match commit_attempt(
+            db,
+            observer.as_deref_mut(),
+            target,
+            value,
+            source,
+            command_origin,
+        ) {
+            // A NULL the property left as it was commits nothing.
+            Ok(Applied::Unchanged) => {}
+            Ok(Applied::Written) => {
+                if !committed_oids.contains(&oid) {
+                    committed_oids.push(oid);
+                }
             }
-            return semantic_failure(error, reference, committed_oids);
-        }
-        if property == PropertyIdentifier::OBJECT_NAME {
-            db.update_name_index(&oid);
-        }
-        if let Some(observer) = observer.as_deref_mut() {
-            observer.committed(db);
-            observer.applied(db, oid);
-        }
-        if !committed_oids.contains(&oid) {
-            committed_oids.push(oid);
+            Err(error) => return semantic_failure(error, reference, committed_oids),
         }
     }
+}
+
+/// Make one checked write attempt: the object's write, or the observer's
+/// sealed policy commit, between the observer's `before` and its
+/// `committed` or `failed`.
+///
+/// A NULL the object refuses as the wrong datatype succeeds unchanged when
+/// [`relinquish::leaves_unchanged`](super::relinquish::leaves_unchanged)
+/// says so: the observer gets `committed`, so an Audit Reporter records the
+/// successful write, but not `applied`, since there is no change to capture.
+fn commit_attempt(
+    db: &mut ObjectDatabase,
+    mut observer: Option<&mut (dyn WriteCommitObserver + '_)>,
+    target: WriteTarget<'_>,
+    value: PropertyValue,
+    source: Option<&bacnet_objects::device::AuditWriteSource>,
+    command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
+) -> Result<Applied, Error> {
+    if let Some(observer) = observer.as_deref_mut() {
+        observer.before(db, target);
+    }
+    let prepared = observer
+        .as_deref_mut()
+        .and_then(|observer| observer.commit_policy(db, target, &value));
+    let result = prepared.unwrap_or_else(|| {
+        write_with_source(
+            db.get_mut(&target.oid).expect("existence checked above"),
+            target.property,
+            target.array_index,
+            value,
+            target.priority,
+            source,
+            command_origin,
+        )
+    });
+    let applied = match result {
+        Ok(()) => Applied::Written,
+        Err(error)
+            if super::relinquish::is_null_octets(target.value)
+                && super::relinquish::leaves_unchanged(
+                    db.get(&target.oid).expect("existence checked above"),
+                    target.property,
+                    target.array_index,
+                    &error,
+                ) =>
+        {
+            Applied::Unchanged
+        }
+        Err(error) => {
+            if let Some(observer) = observer {
+                observer.failed(db, &error);
+            }
+            return Err(error);
+        }
+    };
+    if applied == Applied::Written && target.property == PropertyIdentifier::OBJECT_NAME {
+        db.update_name_index(&target.oid);
+    }
+    if let Some(observer) = observer {
+        observer.committed(db);
+        if applied == Applied::Written {
+            observer.applied(db, target.oid);
+        }
+    }
+    Ok(applied)
 }
 
 fn semantic_failure(
@@ -521,6 +583,12 @@ fn decode_structured_array<F>(
 where
     F: FnMut(&[u8], usize) -> Result<usize, Error>,
 {
+    // A lone NULL is no element of these arrays. It reaches the object as
+    // Null, which refuses it as the wrong datatype, so the write is judged
+    // as a relinquish (`relinquish`) rather than as undecodable octets.
+    if super::relinquish::is_null_octets(bytes) {
+        return Ok(PropertyValue::Null);
+    }
     let mut values = Vec::new();
     let mut offset = 0;
     while offset < bytes.len() {
@@ -560,18 +628,20 @@ pub fn handle_write_property(
     db: &mut ObjectDatabase,
     service_data: &[u8],
 ) -> Result<ObjectIdentifier, Error> {
-    let oid = handle_write_property_observed(db, service_data, None, None, None)?;
+    let (oid, _) = handle_write_property_observed(db, service_data, None, None, None)?;
     crate::command_lists::end_unmade(db, std::slice::from_ref(&oid));
     Ok(oid)
 }
 
+/// Handle a WriteProperty for the server: the object written, and whether
+/// the write changed it or was a NULL the property left as it was.
 pub(crate) fn handle_write_property_observed(
     db: &mut ObjectDatabase,
     service_data: &[u8],
-    mut observer: Option<&mut dyn WriteCommitObserver>,
+    observer: Option<&mut dyn WriteCommitObserver>,
     source: Option<&bacnet_objects::device::AuditWriteSource>,
     command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
-) -> Result<ObjectIdentifier, Error> {
+) -> Result<(ObjectIdentifier, Applied), Error> {
     let request = WritePropertyRequest::decode(service_data)?;
     let oid = request.object_identifier;
 
@@ -608,7 +678,7 @@ pub(crate) fn handle_write_property_observed(
                 if let Some(observer) = observer {
                     observer.applied(db, oid);
                 }
-                return Ok(oid);
+                return Ok((oid, Applied::Written));
             }
         }
     }
@@ -619,37 +689,8 @@ pub(crate) fn handle_write_property_observed(
         priority: request.priority,
         value: &request.property_value,
     };
-    if let Some(observer) = observer.as_deref_mut() {
-        observer.before(db, target);
-    }
-    let prepared = observer
-        .as_deref_mut()
-        .and_then(|observer| observer.commit_policy(db, target, &value));
-    let result = prepared.unwrap_or_else(|| {
-        write_with_source(
-            db.get_mut(&oid).expect("existence checked above"),
-            request.property_identifier,
-            request.property_array_index,
-            value,
-            request.priority,
-            source,
-            command_origin,
-        )
-    });
-    if let Err(error) = result {
-        if let Some(observer) = observer {
-            observer.failed(db, &error);
-        }
-        return Err(error);
-    }
-    if request.property_identifier == PropertyIdentifier::OBJECT_NAME {
-        db.update_name_index(&oid);
-    }
-    if let Some(observer) = observer {
-        observer.committed(db);
-        observer.applied(db, oid);
-    }
-    Ok(oid)
+    let applied = commit_attempt(db, observer, target, value, source, command_origin)?;
+    Ok((oid, applied))
 }
 
 // Concrete Reporter changes keep the authorized request provenance at their
