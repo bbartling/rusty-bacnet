@@ -6,7 +6,9 @@
 //!
 //! A reference's array index is checked as WriteProperty checks it, ahead of
 //! the value and the NULL rule (#1426): an index the property can't take
-//! fails that target and leaves the property as it is.
+//! fails that target and leaves the property as it is. Such a refusal, like
+//! a missing object or property, is reported as a reference the target can't
+//! write (#1433).
 
 use std::borrow::Cow;
 use std::sync::Mutex;
@@ -19,7 +21,7 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
-use ScheduleTargetOutcome::{Accepted, Failed};
+use ScheduleTargetOutcome::{Accepted, Failed, ReferenceRefused};
 
 use super::*;
 
@@ -159,7 +161,7 @@ async fn a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others
                     reference(ai(), P::COV_INCREMENT),
                     // Read-only: still refused.
                     reference(ai(), P::STATUS_FLAGS),
-                    // No such object.
+                    // No such object: a reference it can't write.
                     reference(oid(ObjectType::ANALOG_INPUT, 9), P::PRESENT_VALUE),
                 ],
             ),
@@ -184,7 +186,7 @@ async fn a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others
         *outcomes.lock().unwrap(),
         [
             vec![Accepted, Accepted],
-            vec![Accepted, Accepted, Failed, Failed]
+            vec![Accepted, Accepted, Failed, ReferenceRefused]
         ]
     );
     let db = db.read().await;
@@ -236,7 +238,7 @@ async fn a_schedule_target_index_is_checked_as_write_property_checks_it() {
                 ],
             ),
             // A datatype Description refuses, and a NULL it would take as a
-            // no-op: the index answers first, so the first isn't a datatype
+            // no-op: the index answers first, so the first is a reference
             // refusal and the second isn't taken.
             write(
                 PropertyValue::Real(5.0),
@@ -278,10 +280,15 @@ async fn a_schedule_target_index_is_checked_as_write_property_checks_it() {
     assert_eq!(
         *outcomes.lock().unwrap(),
         [
-            vec![Failed, Accepted, Failed, Failed],
-            vec![Failed],
-            vec![Failed],
-            vec![Failed]
+            vec![
+                ReferenceRefused,
+                Accepted,
+                ReferenceRefused,
+                ReferenceRefused
+            ],
+            vec![ReferenceRefused],
+            vec![ReferenceRefused],
+            vec![ReferenceRefused]
         ]
     );
     let db = db.read().await;

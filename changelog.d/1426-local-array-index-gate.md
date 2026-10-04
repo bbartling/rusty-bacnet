@@ -1,7 +1,7 @@
 ---
 section: Fixed
 ---
-- **Wire:** `write_local`, a Command's or Channel's local writes and a
-  Schedule's target writes refuse an array index on a property that isn't an
-  array, as WriteProperty does, instead of letting the object write the whole
-  property (#1426).
+- **Wire:** `write_local`, Command and Channel local writes and Schedule
+  target writes refuse an array index as WriteProperty does
+  (PROPERTY_IS_NOT_AN_ARRAY, or UNKNOWN_PROPERTY) instead of writing the
+  whole property; a Schedule's NULL to such a reference now fails (#1426).

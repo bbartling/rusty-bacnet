@@ -16,6 +16,10 @@ mod staging_local_writes_tests;
 #[path = "local_array_index_tests.rs"]
 mod local_array_index_tests;
 
+#[cfg(test)]
+#[path = "local_index_staged_release_tests.rs"]
+mod local_index_staged_release_tests;
+
 /// What a local mutation is, and on whose behalf.
 ///
 /// Inputs and noncommandable Values distinguish application updates from
@@ -812,13 +816,15 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
     }
 }
 
-/// The checks a WriteProperty makes before its audit hooks or the object see
-/// the value, made under the write's guard: the object exists, and for a
-/// property write, the array index fits the property
-/// ([`check_write_array_index`](crate::handlers::check_write_array_index))
-/// and a new Object_Name is free. A Command's or Channel's write takes this
-/// path too; a Schedule's target writes run the same index gate in
-/// `schedule::deliver`.
+/// The checks made under the write's guard before the audit hooks or the
+/// object see the value, in WriteProperty's order: the object exists, and
+/// for a property write, the array index fits the property (WriteProperty's
+/// own [`check_write_array_index`](crate::handlers::check_write_array_index))
+/// and a new Object_Name is free. The name check calls
+/// [`ObjectDatabase::check_name_available`] directly, which is what
+/// WriteProperty's `check_and_prepare_name_write` runs for a CharacterString.
+/// A Command's or Channel's write takes this path too; a Schedule's target
+/// writes run the same index gate in `schedule::deliver`.
 fn precheck(
     db: &ObjectDatabase,
     oid: &ObjectIdentifier,

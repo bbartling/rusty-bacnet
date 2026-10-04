@@ -143,7 +143,7 @@
     "Refs #845. Evidence is limited to the local-reference profile; Priority_For_Writing was network read-only but locally configurable until #1088 made it and the reference list network-writable (BACNET-12-SCHEDULE-WRITES) (#1028, which also replaced the Octet String target writes with typed values and the (value, refs) tuple with ScheduleWrite).",
     "Full typed hook references replace the lossy tuple API; shared public reference encoder produces local DOPR member bodies without a duplicate codec or aliases. Direct fixed-clock ticks prove indexed STATE_TEXT[2] updates only that element, continue after invalid index3, and preserve unindexed writes.",
     "Fixed RP/legacy and budgeted RPM bytes cover indexed plus unindexed concatenation, empty list, and list-own nonarray refusal. Existing Schedule evaluation/Out_Of_Service and Life Safety delta controls remain. No remote writes, source-origin propagation or whole-Schedule conformance claim; #824/#823 remain open.",
-    "A reference's index goes through the WriteProperty index gate first: one on a property that isn't an array, or that the target doesn't hold, fails that target unwritten and leaves Reliability as it is."
+    "A reference's index goes through the WriteProperty index gate first: one on a property that isn't an array, or that the target doesn't hold, fails that target unwritten and makes Reliability CONFIGURATION_ERROR (BACNET-12-SCHEDULE-RELIABILITY)."
    ]
   },
   {
@@ -385,7 +385,7 @@
    "id": "BACNET-12-SCHEDULE-RELIABILITY",
    "standard_anchor": "Clause 12.24.13 Reliability, 12.24.12 Status_Flags and 12.24.14 Out_Of_Service (printed311-312/PDF313-314); output rule in 12.24.4 (printed309/PDF311); reference writes in 12.24.10 (printed311/PDF313)",
    "priority": "P1",
-   "requirement_summary": "Reliability is CONFIGURATION_ERROR while the non-NULL values in Weekly_Schedule, Exception_Schedule and Schedule_Default are not all of one datatype, or while a referenced property refused the last value of the schedule's datatype written to it with INVALID_DATA_TYPE or DATATYPE_NOT_SUPPORTED (#1086), and NO_FAULT_DETECTED again once neither holds; Status_Flags FAULT follows it. The check runs on every change to those properties, from the local setters or a network write, on the return to service, and in the fault detector's pass. The object clears only a fault it raised: a Reliability applied through set_reliability_internal, or simulated while Out_Of_Service is TRUE, is left alone. A misconfigured Schedule keeps evaluating and writing its references. Present_Value is outside the check: a value written while Out_Of_Service counts for nothing, and a simulated Reliability doesn't hold its write to the references back. The schedule pass reports every target write through BACnetObject::complete_schedule_write, one ScheduleTargetOutcome per reference: a refusal raises the reference half, a later accepted write to that target or its removal from the list clears it, and a NULL, a value of another datatype or any other failure counts for nothing.",
+   "requirement_summary": "Reliability is CONFIGURATION_ERROR while the non-NULL values in Weekly_Schedule, Exception_Schedule and Schedule_Default are not all of one datatype, or while a referenced property refused the last value of the schedule's datatype written to it with INVALID_DATA_TYPE or DATATYPE_NOT_SUPPORTED (#1086) or refused the reference itself with UNKNOWN_OBJECT, UNKNOWN_PROPERTY, PROPERTY_IS_NOT_AN_ARRAY or INVALID_ARRAY_INDEX (#1433), and NO_FAULT_DETECTED again once neither holds; Status_Flags FAULT follows it. The check runs on every change to those properties, from the local setters or a network write, on the return to service, and in the fault detector's pass. The object clears only a fault it raised: a Reliability applied through set_reliability_internal, or simulated while Out_Of_Service is TRUE, is left alone. A misconfigured Schedule keeps evaluating and writing its references. Present_Value is outside the check: a value written while Out_Of_Service counts for nothing, and a simulated Reliability doesn't hold its write to the references back. The schedule pass reports every target write through BACnetObject::complete_schedule_write, one ScheduleTargetOutcome per reference: a refusal raises the reference half, a later accepted write to that target or its removal from the list clears it, and a NULL, a value of another datatype or any other failure (WRITE_ACCESS_DENIED included) counts for nothing.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/schedule/reliability.rs",
@@ -404,7 +404,9 @@
     "crates/bacnet-objects/src/schedule/reliability_tests.rs::target_outcomes_classify_the_write_error",
     "crates/bacnet-server/src/server/schedule_reference_write_tests.rs::a_target_refusing_the_datatype_faults_the_schedule_which_still_writes_the_others",
     "crates/bacnet-server/src/server/schedule_reference_write_tests.rs::a_schedule_recovers_once_its_target_takes_the_datatype",
-    "crates/bacnet-endpoint/src/source_reporter_schedule_tests.rs::source_reporter_forwards_complete_schedule_targets"
+    "crates/bacnet-endpoint/src/source_reporter_schedule_tests.rs::source_reporter_forwards_complete_schedule_targets",
+    "crates/bacnet-objects/src/schedule/reliability_tests.rs::a_reference_the_target_cannot_write_faults_the_schedule_until_it_takes_one",
+    "crates/bacnet-server/src/schedule_reference_reliability_tests.rs::{a_reference_its_target_can_never_write_faults_the_schedule,the_fault_clears_once_the_reference_is_fixed,the_fault_clears_once_the_missing_object_takes_a_write}"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/schedule/reliability_tests.rs::nulls_and_an_empty_schedule_never_disagree",
@@ -424,7 +426,8 @@
    "notes": [
     "Refs #1056. Before, nothing evaluated a Schedule's Reliability. Datatypes compare by PropertyValue variant, so Real, Unsigned and Enumerated differ. Writes continue under CONFIGURATION_ERROR because 12.24.4 sends every change to the references and keeps going past a failing member, while 12.24.13 only reports the condition; the multi-state objects treat their CONFIGURATION_ERROR as report-only too.",
     "#1086: the second condition of 12.24.13, that every referenced property accept the datatype, is judged from the writes (the issue's option B) rather than checked beforehand: the objects publish no datatype per property, so an eager check would have to guess from a target's current value or probe it with a write.",
-    "The cost is that the fault shows at the first write rather than at configuration time; 12.24.13 already lets a remote member's fault wait for a write. Local choices: only a refusal of a value whose datatype the schedule itself holds counts, so a NULL, or an out-of-service value of another datatype, raises nothing; any other failure leaves a member's standing as it was; the flag combines with the contents check under the one ownership rule, so a Reliability set by the application or a client simulation is never cleared by it."
+    "The cost is that the fault shows at the first write rather than at configuration time; 12.24.13 already lets a remote member's fault wait for a write. Local choices: only a refusal of a value whose datatype the schedule itself holds counts, so a NULL, or an out-of-service value of another datatype, raises nothing; any other failure leaves a member's standing as it was; the flag combines with the contents check under the one ownership rule, so a Reliability set by the application or a client simulation is never cleared by it.",
+    "A reference the target can't write whatever the value (a missing object or property, or an array index the property can't take) faults the Schedule as a datatype refusal does, and clears the same way. A denied write doesn't: it can be the target's state."
    ]
   },
   {
@@ -6195,6 +6198,8 @@
     "crates/bacnet-server/src/server/local_array_index_tests.rs::{write_local_checks_an_array_index_before_the_object_sees_the_value,a_command_write_whose_index_the_property_refuses_fails,a_channel_member_whose_index_the_property_refuses_is_a_configuration_failure}",
     "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_target_index_is_checked_as_write_property_checks_it",
     "crates/bacnet-server/src/server/audit_reporter_indexed_absence_tests.rs::local_index_refusal_reaches_no_audit_record",
+    "crates/bacnet-server/src/server/local_index_staged_release_tests.rs::a_local_write_refused_before_the_object_releases_what_it_staged",
+    "crates/bacnet-server/src/schedule_reference_reliability_tests.rs::a_reference_its_target_can_never_write_faults_the_schedule",
     "crates/rusty-bacnet/tests/test_local_array_index.py"
    ],
    "benchmarks": [],
@@ -6222,7 +6227,7 @@
     "Channel's three arrays (List_Of_Object_Property_References, Execution_Delay, Control_Groups) admit an index and read one element per index (BACNET-12-CHANNEL-OBJECT).",
     "The default table holds every BACnetARRAY of the 2020 Clause 12 tables, served or not, and no built-in object overrides it. An indexed read of an array an object lacks answers UNKNOWN_PROPERTY.",
     "BACnetServer::write_local_encoded (Python write_property_local) applies the WriteProperty index gate and value decoding before the local write.",
-    "Typed write_local, a Command's and a Channel's local writes and a Schedule's target writes run the same index gate before Audit or the object sees the value. A Schedule counts the target failed; a Channel counts a configuration failure."
+    "Typed write_local, a Command's and a Channel's local writes and a Schedule's target writes run the same index gate before Audit or the object sees the value. A Schedule and a Channel both count a configuration failure."
    ]
   },
   {
@@ -9360,7 +9365,7 @@
     "The checks an object makes before the value keep their errors: unknown property, WRITE_ACCESS_DENIED (state included) and INVALID_ARRAY_INDEX. An array element is judged by its own datatype; index 0, the size, is an Unsigned.",
     "Over WP and WPM such a NULL is audited as a successful write; none gets COV, event, Schedule, Command or save work. Most objects take a NULL to Description or Out_Of_Service as a no-op themselves; the post-write checks then find no change.",
     "CreateObject initial values and a Schedule's target writes follow the same rule: such a NULL leaves the property as it is, the create goes on to its next value, and the Schedule counts the target as one that took the write.",
-    "The array index gate runs ahead of this rule on every path, typed write_local and Schedule targets included: a NULL with an index on a property that isn't an array is PROPERTY_IS_NOT_AN_ARRAY, and a Schedule counts that target failed."
+    "The array index gate runs ahead of this rule on every path, typed write_local and Schedule targets included: a NULL with an index on a property that isn't an array is PROPERTY_IS_NOT_AN_ARRAY, and a Schedule counts that reference as one it can't write."
    ]
   },
   {

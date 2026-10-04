@@ -54,28 +54,39 @@ pub enum ScheduleTargetOutcome {
     /// The target refused the value's datatype: INVALID_DATA_TYPE or
     /// DATATYPE_NOT_SUPPORTED.
     DatatypeRefused,
-    /// Any other failure, a missing target object included; it says nothing
-    /// about the datatype.
+    /// The reference names nothing the target can write, whatever the value
+    /// (#1433): UNKNOWN_OBJECT (a missing target object included),
+    /// UNKNOWN_PROPERTY, PROPERTY_IS_NOT_AN_ARRAY or INVALID_ARRAY_INDEX.
+    ReferenceRefused,
+    /// Any other failure. It says nothing about the configuration:
+    /// WRITE_ACCESS_DENIED, for one, can come from the target's state
+    /// (Out_Of_Service, a lock) and pass with it.
     Failed,
 }
 
 impl ScheduleTargetOutcome {
     /// Classify the result of one target write.
     pub fn of(result: &Result<(), Error>) -> Self {
+        const DATATYPE: [ErrorCode; 2] = [
+            ErrorCode::INVALID_DATA_TYPE,
+            ErrorCode::DATATYPE_NOT_SUPPORTED,
+        ];
+        const REFERENCE: [ErrorCode; 4] = [
+            ErrorCode::UNKNOWN_OBJECT,
+            ErrorCode::UNKNOWN_PROPERTY,
+            ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
+            ErrorCode::INVALID_ARRAY_INDEX,
+        ];
         let code = match result {
             Ok(()) => return Self::Accepted,
             Err(Error::Protocol { code, .. } | Error::Structured { code, .. }) => *code,
             Err(_) => return Self::Failed,
         };
-        let datatype = [
-            ErrorCode::INVALID_DATA_TYPE,
-            ErrorCode::DATATYPE_NOT_SUPPORTED,
-        ];
-        if datatype
-            .iter()
-            .any(|refusal| refusal.to_raw() as u32 == code)
-        {
+        let names = |codes: &[ErrorCode]| codes.iter().any(|known| known.to_raw() as u32 == code);
+        if names(&DATATYPE) {
             Self::DatatypeRefused
+        } else if names(&REFERENCE) {
+            Self::ReferenceRefused
         } else {
             Self::Failed
         }
