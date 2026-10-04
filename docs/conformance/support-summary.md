@@ -26,7 +26,7 @@ Row counts by priority and status are not committed, so concurrent ledger PRs me
 | `BACNET-15-WP-OUTBOUND-PRIORITY` | Clause 15.9.1.1 Priority, printed page 752 / PDF page 754; inbound error and noncommandable rules printed page 753 / PDF page 755 | P1 | in-progress | 2 |
 | `BACNET-LOCAL-MUTATION-POLICY` | Local operator authorization policy; Clauses 14, 15 and 13 COV service execution boundaries; not a normative authentication claim | P1 | in-progress | 3 |
 | `BACNET-16-LOCAL-INBOUND-SOURCE-POLICIES` | Clauses 13.14, 13.15, 13.16, 16.1, 16.7, 16.8 | P1 | supported-with-clause-evidence | 4 |
-| `BACNET-16-DCC-NOTIFICATION-INITIATION` | Clause 16.1 | P1 | supported-with-clause-evidence | 1 |
+| `BACNET-16-DCC-NOTIFICATION-INITIATION` | Clause 16.1 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-15-ENDPOINT-DEVICE-WRITE` | Clause 15.9; Clause 12.11 Protocol_Services_Supported | P1 | in-progress | 2 |
 | `BACNET-4-ARCHITECTURE` | Clause 4 | P2 | implementation-present-needs-source-review | 2 |
 | `BACNET-5-TSM-CLIENT` | Clause 5.4.4 | P1 | implementation-present-needs-state-machine-audit | 2 |
