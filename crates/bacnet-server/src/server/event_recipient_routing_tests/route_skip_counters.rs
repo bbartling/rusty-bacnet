@@ -52,7 +52,7 @@ async fn distribute(
         nc.add_destination(destination).unwrap();
     }
     db.add(Box::new(nc)).unwrap();
-    distribute_counted(db, bindings(), 0).await
+    distribute_counted(db, bindings(), DccState::Enable).await
 }
 
 #[tokio::test]

@@ -36,14 +36,18 @@ async fn disable_initiation(f: &mut Fixture) {
         .await,
         Apdu::SimpleAck(_)
     ));
-    assert_eq!(f.server.comm_state(), 2);
+    assert_eq!(f.server.comm_state(), DccState::DisableInitiation);
 }
 
 /// Let the DCC timer run out and check that initiation is enabled again.
 async fn expire_dcc(f: &Fixture) {
     tokio::time::advance(Duration::from_secs(60)).await;
     settle().await;
-    assert_eq!(f.server.comm_state(), 0, "the DCC timer re-enables");
+    assert_eq!(
+        f.server.comm_state(),
+        DccState::Enable,
+        "the DCC timer re-enables"
+    );
 }
 
 /// Every audit notification on the wire, with the invoke ID of a confirmed one.
@@ -120,7 +124,7 @@ async fn audit_notifications_start_under_disable_initiation_and_keep_the_reporte
             tokio::time::advance(Duration::from_secs(1)).await;
             settle().await;
         }
-        assert_eq!(f.server.comm_state(), 2, "{case}");
+        assert_eq!(f.server.comm_state(), DccState::DisableInitiation, "{case}");
         let frames = audit_frames(&f);
         assert_eq!(frames.len(), 1, "{case}: sent under DISABLE_INITIATION");
         assert_eq!(frames[0].0.is_some(), confirmed, "{case}");
@@ -450,7 +454,7 @@ async fn send_now_under_disable_initiation_flushes_the_queue_once() {
         (2, 1, 3),
         "queue flushed with the command record"
     );
-    assert_eq!(f.server.comm_state(), 2);
+    assert_eq!(f.server.comm_state(), DccState::DisableInitiation);
     assert_eq!(health(&f.server).await, Reliability::NO_FAULT_DETECTED);
     // Sixty seconds also runs past the 30-second send delay.
     expire_dcc(&f).await;
@@ -497,7 +501,7 @@ async fn a_resource_drop_under_disable_initiation_is_summarized() {
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0].1.operation, AuditOperation::AUDITING_FAILURE);
     assert_eq!(frames[0].1.current_value, Some(vec![0x21, 2]));
-    assert_eq!(f.server.comm_state(), 2);
+    assert_eq!(f.server.comm_state(), DccState::DisableInitiation);
     assert_eq!(
         f.server.notification_transactions.audit_resources(),
         (false, 0, 64)

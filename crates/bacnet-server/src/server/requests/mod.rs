@@ -130,18 +130,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut accepted_acknowledgment = None;
         let mut received_event = None;
 
-        let state = comm_state.load(Ordering::Acquire);
-        if state == 1
-            && service_choice != ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL
-            && service_choice != ConfirmedServiceChoice::REINITIALIZE_DEVICE
-        {
-            debug!(
-                service = service_choice.to_raw(),
-                "DCC DISABLE: dropping confirmed request"
-            );
-            return;
-        }
-
         let complex_ack = |ack_buf: BytesMut| -> Apdu {
             Apdu::ComplexAck(ComplexAck {
                 segmented: false,

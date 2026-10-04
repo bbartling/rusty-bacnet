@@ -397,7 +397,7 @@ async fn mutation_wpm_counts_elements_not_objects_requests_or_unvisited_suffixes
 }
 
 #[tokio::test]
-async fn mutation_pre_gate_failures_and_dcc_drops_do_not_count() {
+async fn mutation_pre_gate_failures_do_not_count() {
     for policy in [MutationPolicy::Permissive, MutationPolicy::DenyAll] {
         let mut server = server(policy, Some(Arc::new(|_| panic!("must not authorize")))).await;
         for (index, (service, bytes, _)) in cases().into_iter().enumerate() {
@@ -416,12 +416,6 @@ async fn mutation_pre_gate_failures_and_dcc_drops_do_not_count() {
         .await
         .unwrap();
         assert!(matches!(apdu(response), Apdu::SimpleAck(_)));
-        server.comm_state.store(1, Ordering::Release);
-        for (index, (service, bytes, _)) in cases().into_iter().enumerate() {
-            assert!(dispatch(&server, service, bytes, 30 + index as u8)
-                .await
-                .is_none());
-        }
         assert_eq!(
             server.mutation_decision_counters(),
             MutationDecisionCounters::default()
@@ -540,7 +534,7 @@ async fn mutation_deny_all_does_not_gate_reads_discovery_or_dcc() {
     assert_eq!(i_am.service_choice, UnconfirmedServiceChoice::I_AM);
     server.config.dcc_policy = DccPolicy::RequirePassword;
     server.config.dcc_password = Some("boundary-test".into());
-    server.comm_state.store(1, Ordering::Release);
+    server.comm_state.set_for_test(DccState::DisableInitiation);
     let mut data = BytesMut::new();
     DeviceCommunicationControlRequest {
         time_duration: None,
@@ -562,7 +556,7 @@ async fn mutation_deny_all_does_not_gate_reads_discovery_or_dcc() {
         ),
         Apdu::SimpleAck(_)
     ));
-    assert_eq!(server.comm_state.load(Ordering::Acquire), 0);
+    assert_eq!(server.comm_state.get(), DccState::Enable);
     assert_eq!(server.dcc_outcome_counters().accepted_total, 1);
     assert_eq!(
         server.mutation_decision_counters(),

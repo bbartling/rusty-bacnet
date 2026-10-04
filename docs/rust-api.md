@@ -2969,8 +2969,7 @@ runs: one that has left the group or changed its number by then is skipped,
 and one whose Allow_Group_Delay_Inhibit is FALSE by then keeps its delays.
 Nothing is answered and a malformed request is dropped. DCC's
 DISABLE_INITIATION leaves WriteGroup running, as it only stops what the device
-starts; the deprecated DISABLE state, which the server never accepts over the
-network, would drop it. Every WriteGroup is dropped while the server's
+starts (the server refuses the deprecated DISABLE outright). Every WriteGroup is dropped while the server's
 `mutation_policy` is `DenyAll` or a `mutation_authorizer` is installed, because
 the authorizer only decides confirmed services (#1319); those drops aren't
 counted in `mutation_decision_counters()`. The Channel writes make no Audit
@@ -4638,7 +4637,7 @@ let db = server.database().lock().await;
 let value = db.get(&oid).unwrap().read_property(pid, None)?;
 
 // Check communication state
-let state = server.comm_state(); // 0=Enable, 1=Disable, 2=DisableInitiation
+let state = server.comm_state(); // DccState::Enable or DccState::DisableInitiation
 
 // Stop
 server.stop().await?;
@@ -4870,6 +4869,18 @@ was first sent on for its retries. While the number is unknown, an address
 naming any network is sent routed, as it is written. The server has one port,
 so the local network is that port's; a multi-port device would need the
 network attached to each port (#863).
+
+### The DeviceCommunicationControl state
+
+`BACnetServer::comm_state()` returns a `DccState`: `Enable` or
+`DisableInitiation`. Every `DccPolicy` refuses a DISABLE request with
+`SERVICES` / `SERVICE_REQUEST_DENIED` (Clause 16.1), so the server never
+disables communication outright and the type has no variant for it.
+`EnableDisable::from(state)` gives the wire value (0 or 2), and
+`DccState::initiation_restricted()` says whether the server is holding back
+what it would start. Only an accepted DeviceCommunicationControl request and
+the expiry of its duration change the state, and every start begins at
+`Enable`.
 
 ### Confirmed notifications under DeviceCommunicationControl
 
@@ -5123,7 +5134,8 @@ fixes them, and the warning logged with each skip gives the finer reason:
 - Lock ordering: always `db` before `cov_table`
 - `seg_receivers` capped at 128 (DoS prevention)
 - `cov_in_flight` semaphore: max 255 concurrent confirmed COV notifications
-- `comm_state`: `Arc<AtomicU8>` — lock-free read
+- `comm_state`: `Arc<CommState>`, a lock-free DCC state that only the DCC
+  timer (an accepted request and its expiry) changes
 
 ---
 

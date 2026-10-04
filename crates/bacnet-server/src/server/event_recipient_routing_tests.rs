@@ -110,7 +110,7 @@ pub(super) async fn distribute_from_database_with_bindings(
     db: ObjectDatabase,
     device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
 ) -> (Vec<Bytes>, Vec<UnicastFrame>) {
-    let (broadcasts, unicasts, _) = distribute_counted(db, device_bindings, 0).await;
+    let (broadcasts, unicasts, _) = distribute_counted(db, device_bindings, DccState::Enable).await;
     (broadcasts, unicasts)
 }
 
@@ -119,10 +119,10 @@ pub(super) async fn distribute_from_database_with_bindings(
 pub(super) async fn distribute_counted(
     db: ObjectDatabase,
     device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
-    comm_state: u8,
+    state: DccState,
 ) -> (Vec<Bytes>, Vec<UnicastFrame>, EventNotificationCounters) {
     let (transport, _) = routing_transport();
-    distribute_counted_on(transport, db, device_bindings, comm_state).await
+    distribute_counted_on(transport, db, device_bindings, state).await
 }
 
 /// [`distribute_counted`] over a caller-built transport.
@@ -130,11 +130,11 @@ pub(super) async fn distribute_counted_on(
     transport: TestTransport,
     db: ObjectDatabase,
     device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
-    comm_state: u8,
+    state: DccState,
 ) -> (Vec<Bytes>, Vec<UnicastFrame>, EventNotificationCounters) {
     let sent = transport.sent();
     let network = Arc::new(NetworkLayer::new(transport));
-    distribute_counted_through(&network, &sent, db, device_bindings, comm_state).await
+    distribute_counted_through(&network, &sent, db, device_bindings, state).await
 }
 
 /// [`distribute_counted`] through a caller's network, such as a started
@@ -144,9 +144,10 @@ pub(super) async fn distribute_counted_through(
     sent: &SendLog,
     mut db: ObjectDatabase,
     device_bindings: Arc<RwLock<super::device_bindings::DeviceBindingTable>>,
-    comm_state: u8,
+    state: DccState,
 ) -> (Vec<Bytes>, Vec<UnicastFrame>, EventNotificationCounters) {
-    let comm_state = Arc::new(AtomicU8::new(comm_state));
+    let comm_state = Arc::new(CommState::default());
+    comm_state.set_for_test(state);
     let suppressions = Arc::default();
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
 

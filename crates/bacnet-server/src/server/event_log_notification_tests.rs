@@ -437,12 +437,14 @@ async fn a_transition_event_enable_suppresses_is_not_logged() {
 async fn a_transition_while_dcc_disables_initiation_is_not_logged() {
     let mut h =
         Harness::start_with(ServerConfig::default(), |db| alarm_and_logs(db, &[1], 8)).await;
-    h.server.comm_state.store(1, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     h.set_clock(40);
     h.write_local(90.0).await;
     h.settle().await;
     assert!(!notification_pending(&h));
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     h.set_clock(41);
     h.write_local(10.0).await;
     let normal = sent_notification(&h).await;

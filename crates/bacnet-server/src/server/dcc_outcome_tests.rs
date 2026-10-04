@@ -134,7 +134,7 @@ async fn dcc_source_outcomes_exactly_once_precedence_and_malformed_routing() {
                     u64::from(expected == "deprecated_denied")
                 );
                 assert_eq!(counts.malformed_total, u64::from(expected == "malformed"));
-                assert_eq!(server.comm_state(), 0);
+                assert_eq!(server.comm_state(), DccState::Enable);
                 assert!(server.dcc_timer.lock().await.is_none());
                 let events = capture.0.lock().unwrap();
                 assert_eq!(events.len(), 1);
@@ -220,12 +220,8 @@ async fn dcc_outcomes_exact_precedence_before_response_and_secret_redaction() {
             );
             assert_eq!(counts.malformed_total, u64::from(expected == "malformed"));
             assert_eq!(
-                server.comm_state(),
-                if expected == "accepted" {
-                    mode as u8
-                } else {
-                    0
-                }
+                EnableDisable::from(server.comm_state()).to_raw(),
+                if expected == "accepted" { mode } else { 0 }
             );
             {
                 let events = capture.0.lock().unwrap();
@@ -271,7 +267,7 @@ async fn dcc_outcomes_cancellation_denial_timer_identity_and_decode_failure() {
         poll_pending(future.as_mut()).await;
     }
     assert_eq!(server.dcc_outcome_counters(), DccOutcomeCounters::default());
-    assert_eq!(server.comm_state(), 0);
+    assert_eq!(server.comm_state(), DccState::Enable);
     assert!(capture.0.lock().unwrap().is_empty());
     drop(lock);
     {
@@ -299,7 +295,7 @@ async fn dcc_outcomes_cancellation_denial_timer_identity_and_decode_failure() {
         poll_pending(future.as_mut()).await;
         started.try_recv().unwrap();
         assert_eq!(lock.as_ref().unwrap().id(), identity);
-        assert_eq!(server.comm_state(), 2);
+        assert_eq!(server.comm_state(), DccState::DisableInitiation);
     }
     // Invalid UTF-8 password: no partially decoded metadata or error text logged.
     let mut malformed = request(0, None, None);
@@ -326,7 +322,7 @@ async fn dcc_outcomes_cancellation_denial_timer_identity_and_decode_failure() {
     tokio::time::advance(Duration::from_secs(601)).await;
     tokio::task::yield_now().await;
     assert_eq!(server.dcc_outcome_counters(), counts);
-    assert_eq!(server.comm_state(), 0);
+    assert_eq!(server.comm_state(), DccState::Enable);
     assert_eq!(capture.0.lock().unwrap().len(), 6);
     let (mut other, _, _) = fixture().await;
     assert_eq!(other.dcc_outcome_counters(), DccOutcomeCounters::default());

@@ -37,9 +37,9 @@ device's boot and recovery can live with that.
 
 ## What is checked, in order
 
-1. Before the policy: request admission bounds the unconfirmed work in flight,
-   and a server whose DeviceCommunicationControl state is DISABLE drops every
-   unconfirmed request.
+1. Before the policy: request admission bounds the unconfirmed work in flight.
+   DeviceCommunicationControl drops nothing here: the server refuses DISABLE,
+   and DISABLE_INITIATION leaves incoming requests alone.
 2. The request must decode, and no field of its date or time may be left
    unspecified.
 3. `enabled`.

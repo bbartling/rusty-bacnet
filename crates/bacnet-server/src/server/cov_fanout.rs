@@ -14,7 +14,7 @@ pub(super) struct CovFanout<T: TransportPort + 'static> {
     network: Arc<NetworkLayer<T>>,
     cov_in_flight: Arc<Semaphore>,
     pub(super) notification_transactions: Arc<NotificationTransactions>,
-    comm_state: Arc<AtomicU8>,
+    comm_state: Arc<CommState>,
     event_suppressions: Arc<super::event_suppression::EventSuppressions>,
     config: Arc<ServerConfig>,
 }

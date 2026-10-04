@@ -248,7 +248,9 @@ async fn staging_target_write_carries_its_commit_time() {
     // The Staging write commits BO-9 under the plan's own guard. Nothing
     // subscribes to the Staging object itself here, so its completion has no
     // subscriber.
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     h.set_clock(31);
     h.server
         .write_local(
@@ -262,7 +264,7 @@ async fn staging_target_write_carries_its_commit_time() {
         .await
         .unwrap();
     h.no_notification().await;
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     h.set_clock(32);
     h.write_local(1.0).await;
     let report = h.notification().await;

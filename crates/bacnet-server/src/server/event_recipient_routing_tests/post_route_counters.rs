@@ -37,7 +37,7 @@ async fn distribute_failing(
     let bindings = Arc::new(RwLock::new(
         super::super::device_bindings::DeviceBindingTable::new(),
     ));
-    distribute_counted_on(transport, db, bindings, 0).await
+    distribute_counted_on(transport, db, bindings, DccState::Enable).await
 }
 
 #[tokio::test]

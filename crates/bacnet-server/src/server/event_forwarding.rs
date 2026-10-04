@@ -301,7 +301,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             debug!("Forwarders ignore an event notification sent by global broadcast");
             return;
         }
-        if ctx.comm_state.load(Ordering::Acquire) >= 1 {
+        if ctx.comm_state.initiation_restricted() {
             return;
         }
         let mut taken = Vec::new();

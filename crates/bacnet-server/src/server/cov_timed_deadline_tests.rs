@@ -68,12 +68,14 @@ async fn changes_held_by_disable_initiation_go_out_at_the_deadline() {
     h.subscribe_with_delay(false, vec![(av1(), vec![(PV, true)])], DELAY)
         .await;
     h.notification().await;
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     h.set_clock(11);
     let earliest = TokioInstant::now();
     h.write_local(10.0).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     nothing_before_the_deadline(&h, earliest).await;
     let report = notification_at_the_deadline(&h, earliest).await;
     assert_eq!(pv_rows(&report), vec![(real(10.0), Some(time(11)))]);
@@ -153,11 +155,13 @@ async fn cancelling_with_a_deadline_pending_sends_nothing_and_holds_nothing() {
     let mut h = Harness::start(ServerConfig::default()).await;
     h.subscribe_with_delay(false, av1_timed(), DELAY).await;
     h.notification().await;
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     h.set_clock(12);
     h.write_local(10.0).await;
     h.cancel_specs(false, av1_timed()).await;
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     tokio::time::sleep(Duration::from_secs(u64::from(DELAY) * 3)).await;
     h.no_notification().await;
     assert_eq!(held(&h).await, (0, 0));
@@ -169,11 +173,13 @@ async fn expiry_with_a_deadline_pending_sends_nothing_and_holds_nothing() {
     let mut h = Harness::start(ServerConfig::default()).await;
     h.subscribe_with_delay(false, av1_timed(), DELAY).await;
     h.notification().await;
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     h.set_clock(13);
     h.write_local(10.0).await;
     h.server.cov_table.write().await.expire_all_for_test();
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     tokio::time::sleep(Duration::from_secs(u64::from(DELAY) * 3)).await;
     h.no_notification().await;
     h.server.cov_table.write().await.purge_expired();
@@ -364,12 +370,14 @@ async fn a_renewal_with_a_shorter_delay_brings_the_deadline_forward() {
     let mut h = Harness::start(ServerConfig::default()).await;
     h.subscribe_with_delay(false, av1_timed(), 30).await;
     h.notification().await;
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     h.set_clock(20);
     let earliest = TokioInstant::now();
     h.write_local(10.0).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     // A lifetime renewal listing no references changes the context's delay.
     h.subscribe_with_delay(false, Vec::new(), 5).await;
     let report = h.notification().await;

@@ -76,13 +76,15 @@ async fn changes_held_while_notifications_are_suppressed_are_all_reported_in_ord
     h.subscribe(false).await;
     h.notification().await;
     // DISABLE_INITIATION suppresses notifications but not local changes.
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     h.set_clock(11);
     h.write_local(10.0).await;
     h.set_clock(12);
     h.write_local(20.0).await;
     h.no_notification().await;
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     h.set_clock(13);
     h.write_local(10.0).await;
     let report = h.notification().await;
@@ -266,11 +268,13 @@ async fn any_notification_to_the_context_conveys_every_pending_timestamped_chang
     )
     .await;
     h.notification().await;
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     h.set_clock(51);
     h.write_local_to(av1(), 11.0).await;
     h.no_notification().await;
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     h.set_clock(52);
     h.write_local_to(av2(), 12.0).await;
     let report = h.notification().await;
@@ -306,12 +310,14 @@ async fn an_explicit_untimestamped_selector_is_never_repeated_or_timestamped() {
     h.subscribe_specs(false, vec![(av1(), vec![(PV, true), (SF, false)])])
         .await;
     h.notification().await;
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     h.set_clock(54);
     h.write_local(10.0).await;
     h.set_clock(55);
     h.write_local(20.0).await;
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     h.set_clock(56);
     h.write_local(30.0).await;
     let report = h.notification().await;

@@ -80,7 +80,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let notification_transactions = NotificationTransactions::new();
         let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
         let device_bindings = Arc::new(RwLock::new(device_bindings));
-        let comm_state = Arc::new(AtomicU8::new(0)); // 0 = Enable (default)
+        let comm_state = Arc::new(CommState::default()); // ENABLE at every start
         let dcc_timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>> =
             Arc::new(Mutex::new(Default::default()));
         let dcc_outcomes = Arc::new(dcc_outcomes::DccOutcomes::default());
