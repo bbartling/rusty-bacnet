@@ -515,7 +515,8 @@ impl BACnetServer {
 
     /// Get the server's current communication state.
     ///
-    /// Returns 0=Enable, 1=Disable, 2=DisableInitiation.
+    /// Returns the EnableDisable value: 0=Enable or 2=DisableInitiation. The
+    /// server refuses the deprecated Disable (1), so it never reports it.
     fn comm_state<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
 
@@ -524,7 +525,7 @@ impl BACnetServer {
             let srv = guard
                 .as_ref()
                 .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
-            Ok(srv.comm_state())
+            Ok(bacnet_types::enums::EnableDisable::from(srv.comm_state()).to_raw())
         })
     }
 }

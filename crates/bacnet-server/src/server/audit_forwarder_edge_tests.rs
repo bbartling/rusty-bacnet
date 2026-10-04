@@ -192,7 +192,7 @@ async fn disable_initiation(f: &mut Fixture) {
     .await;
     let response = decode_apdu(decode_npdu(rx.await.unwrap()).unwrap().payload).unwrap();
     assert!(matches!(response, Apdu::SimpleAck(_)), "{response:?}");
-    assert_eq!(f.server.comm_state(), 2);
+    assert_eq!(f.server.comm_state(), DccState::DisableInitiation);
 }
 
 /// A forward is an audit notification, which Clause 16.1 leaves running under
@@ -221,7 +221,11 @@ async fn audit_forwarding_goes_out_under_disable_initiation() {
     assert_eq!(f.server.notification_transactions.active_count(), 0);
     tokio::time::advance(Duration::from_secs(60)).await;
     settle().await;
-    assert_eq!(f.server.comm_state(), 0, "the DCC timer re-enables");
+    assert_eq!(
+        f.server.comm_state(),
+        DccState::Enable,
+        "the DCC timer re-enables"
+    );
     assert_eq!(f.requests().len(), 2, "nothing is forwarded again");
     f.server.stop().await.unwrap();
 }

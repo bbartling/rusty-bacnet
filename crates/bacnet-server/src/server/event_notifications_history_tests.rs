@@ -227,7 +227,7 @@ async fn commit_and_capture_history_notification(
             &crate::server::event_delivery::EventDelivery {
                 db: &db,
                 network: &network,
-                comm_state: &Arc::new(AtomicU8::new(0)),
+                comm_state: &Arc::new(CommState::default()),
                 learned_routers: &Arc::new(Mutex::new(LearnedRouterCache::new())),
                 notification_transactions: &NotificationTransactions::new(),
                 device_bindings: &Arc::new(RwLock::new(

@@ -48,7 +48,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         force: bool,
         budget: &mut EventBudget,
     ) {
-        if handles.ctx.comm_state.load(Ordering::Acquire) >= 1 || subscriptions.is_empty() {
+        if handles.ctx.comm_state.initiation_restricted() || subscriptions.is_empty() {
             return;
         }
 
@@ -519,7 +519,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // Communication may have been restricted since the fanout began
                 // (Clause 16.1). Stop; re-enabling it rearms the backstop, which
                 // sends the parts left queued.
-                if handles.ctx.comm_state.load(Ordering::Acquire) >= 1 {
+                if handles.ctx.comm_state.initiation_restricted() {
                     stopped = Some(part);
                     break;
                 }

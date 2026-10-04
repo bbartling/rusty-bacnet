@@ -19,7 +19,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         ctx: &CovNotifyContext<'_, T>,
         keys: &[CovSubscriptionKey],
     ) {
-        if ctx.comm_state.load(Ordering::Acquire) >= 1 {
+        if ctx.comm_state.initiation_restricted() {
             return;
         }
         let (subs, counters, in_flight_tracker) = {

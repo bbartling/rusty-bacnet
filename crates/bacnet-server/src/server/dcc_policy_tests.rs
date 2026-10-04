@@ -232,11 +232,11 @@ async fn dcc_source_denied_enable_still_occupies_recovery() {
         },
     )
     .await;
-    server.comm_state.store(2, Ordering::Release);
+    server.comm_state.set_for_test(DccState::DisableInitiation);
     for id in 1..=2 {
         dispatch(&server, enable(id, Some("required")), source(id), None).await;
         observed(&mut started).await;
-        assert_eq!(server.comm_state(), 2);
+        assert_eq!(server.comm_state(), DccState::DisableInitiation);
         assert!(server.dcc_timer.lock().await.is_none());
         assert!(
             matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::Error(e))
@@ -259,7 +259,7 @@ fn dcc_configured_validation_retains_decode_password_unknown_mode_precedence() {
         DccPolicy::RequirePassword,
         DccPolicy::LegacyPermissive,
     ] {
-        let state = AtomicU8::new(2);
+        let state = std::sync::atomic::AtomicU8::new(2);
         let password = Some("required".to_owned());
         let invalid = handlers::handle_device_communication_control_with_policy(
             &[0x19],
@@ -377,11 +377,11 @@ async fn dcc_default_recovery_admission_does_not_authorize_enable() {
             },
         )
         .await;
-        server.comm_state.store(2, Ordering::Release);
+        server.comm_state.set_for_test(DccState::DisableInitiation);
         for id in 1..=2 {
             dispatch(&server, enable(id, password), source(id), None).await;
             observed(&mut started).await;
-            assert_eq!(server.comm_state(), 2);
+            assert_eq!(server.comm_state(), DccState::DisableInitiation);
             assert!(server.dcc_timer.lock().await.is_none());
             assert!(
                 matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::Error(e))

@@ -1,7 +1,7 @@
 """Device management example.
 
 Demonstrates:
-- DeviceCommunicationControl (enable/disable)
+- DeviceCommunicationControl (disable initiation, then enable)
 - CreateObject / DeleteObject
 - Error handling with typed exceptions
 """
@@ -23,8 +23,13 @@ from rusty_bacnet import (
 
 
 async def main():
+    # The server refuses DeviceCommunicationControl unless a policy allows it.
     server = BACnetServer(
-        device_instance=3000, device_name="Managed Device", port=0
+        device_instance=3000,
+        device_name="Managed Device",
+        port=0,
+        dcc_policy="require_password",
+        dcc_password="dcc-secret",
     )
     server.add_analog_input(instance=1, name="Temp", units=62, present_value=72.0)
     await server.start()
@@ -66,18 +71,23 @@ async def main():
 
         # --- DeviceCommunicationControl ---
         print("\n=== DeviceCommunicationControl ===")
+        # The deprecated DISABLE is always refused; DISABLE_INITIATION stops
+        # what the server starts but leaves it answering requests.
         await client.device_communication_control(
             addr,
-            EnableDisable.DISABLE,
+            EnableDisable.DISABLE_INITIATION,
             time_duration=1,  # 1 minute
+            password="dcc-secret",
         )
-        print("Device communication disabled")
+        print("Device initiation disabled")
 
         state = await server.comm_state()
-        print(f"Server comm_state: {state} (1 = disabled)")
+        print(f"Server comm_state: {state} (2 = initiation disabled)")
 
         # Re-enable
-        await client.device_communication_control(addr, EnableDisable.ENABLE)
+        await client.device_communication_control(
+            addr, EnableDisable.ENABLE, password="dcc-secret"
+        )
         print("Device communication re-enabled")
 
         # --- Delete the object we created ---

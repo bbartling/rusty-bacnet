@@ -11,7 +11,7 @@ struct Fixture {
     config: ServerConfig,
     tasks: Arc<RequestTasks>,
     timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
-    state: Arc<AtomicU8>,
+    state: Arc<CommState>,
     outcomes: Arc<dcc_outcomes::DccOutcomes>,
 }
 
@@ -26,7 +26,7 @@ impl Fixture {
             tasks: RequestTasks::for_server(&config).unwrap(),
             config,
             timer: Arc::new(Mutex::new(Default::default())),
-            state: Arc::new(AtomicU8::new(0)),
+            state: Arc::default(),
             outcomes: Default::default(),
         }
     }
@@ -281,7 +281,7 @@ async fn dcc_disable_rate_admitted_cancellation_consumes_before_timer_lock() {
         std::task::Poll::Pending
     ));
     drop(request);
-    assert_eq!(fixture.state.load(Ordering::Acquire), 0);
+    assert_eq!(fixture.state.get(), DccState::Enable);
     assert_eq!(fixture.outcomes.snapshot().accepted_total, 0);
     // A timeout cannot auto-advance this paused clock: poll once, requiring Ready.
     let mut denied_request = Box::pin(fixture.disable(2));
@@ -347,7 +347,7 @@ async fn dcc_disable_rate_denial_preserves_live_timer_racing_expiry() {
             };
             denied(result);
             assert_eq!(slot.as_ref().unwrap().id(), id);
-            assert_eq!(fixture.state.load(Ordering::Acquire), 2);
+            assert_eq!(fixture.state.get(), DccState::DisableInitiation);
         }
         drop(slot);
         if !pending_expiry {
@@ -355,7 +355,7 @@ async fn dcc_disable_rate_denial_preserves_live_timer_racing_expiry() {
         }
         let task = fixture.timer.lock().await.take().unwrap();
         task.await.unwrap();
-        assert_eq!(fixture.state.load(Ordering::Acquire), 0);
+        assert_eq!(fixture.state.get(), DccState::Enable);
     }
 }
 
@@ -369,7 +369,7 @@ async fn dcc_disable_rate_authorized_timer_parity_and_repeated_charge() {
                     .send(EnableDisable::DISABLE_INITIATION, duration, None, 1, false)
                     .await,
             );
-            assert_eq!(fixture.state.load(Ordering::Acquire), 2);
+            assert_eq!(fixture.state.get(), DccState::DisableInitiation);
             assert_eq!(fixture.timer.lock().await.is_some(), duration.is_some());
         }
         denied(
@@ -382,7 +382,7 @@ async fn dcc_disable_rate_authorized_timer_parity_and_repeated_charge() {
                 .send(EnableDisable::ENABLE, duration, None, 1, false)
                 .await,
         );
-        assert_eq!(fixture.state.load(Ordering::Acquire), 0);
+        assert_eq!(fixture.state.get(), DccState::Enable);
         // Preserve the existing ENABLE-duration behavior, not a protocol correction.
         assert_eq!(fixture.timer.lock().await.is_some(), duration.is_some());
         denied(fixture.disable(2).await);

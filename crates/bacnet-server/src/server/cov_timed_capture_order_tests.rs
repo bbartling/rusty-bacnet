@@ -159,11 +159,13 @@ async fn take_as(
 /// DISABLE_INITIATION; the last re-enables and reports them all. Returns
 /// every change as its expected row, in capture order.
 async fn hold_one_change_each(h: &Harness, objects: &[ObjectIdentifier], first: u8) -> Vec<Row> {
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     let mut expected = Vec::new();
     for (index, (at_second, &object)) in (first..).zip(objects).enumerate() {
         if index + 1 == objects.len() {
-            h.server.comm_state.store(0, Ordering::Release);
+            h.server.comm_state.set_for_test(DccState::Enable);
         }
         h.set_clock(at_second);
         let value = f32::from(at_second);
@@ -300,14 +302,16 @@ async fn untimestamped_values_go_last_with_the_newest_changes_that_still_fit() {
     take_initial(&h, OBJECTS as usize + 1, false).await;
     // Every timestamped object changes behind DISABLE_INITIATION, then the
     // untimestamped one, which reports them all at once (§13.1).
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     let mut expected = Vec::new();
     for (at_second, object) in (1..).zip(timed_objects()) {
         h.set_clock(at_second);
         h.write_local_to(object, f32::from(at_second)).await;
         expected.push((object, real(f32::from(at_second)), Some(time(at_second))));
     }
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     h.set_clock(20);
     h.write_local_to(untimed, 7.0).await;
     expected.push((untimed, real(7.0), None));

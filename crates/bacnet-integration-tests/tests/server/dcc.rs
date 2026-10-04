@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_server::server::DccState;
 
 async fn make_server() -> BACnetServer<BipTransport> {
     make_server_with_dcc_policy(bacnet_server::server::DccPolicy::LegacyPermissive).await
@@ -26,14 +27,14 @@ async fn dcc_disable_rejected_without_changing_comm_state() {
         if class == bacnet_types::enums::ErrorClass::SERVICES.to_raw() as u32
             && code == bacnet_types::enums::ErrorCode::SERVICE_REQUEST_DENIED.to_raw() as u32)
     );
-    assert_eq!(server.comm_state(), 0);
+    assert_eq!(server.comm_state(), DccState::Enable);
 
     // Re-enable should work (DCC is allowed even when disabled)
     let result = client
         .device_communication_control(&server_mac, EnableDisable::ENABLE, None, None)
         .await;
     assert!(result.is_ok(), "DCC ENABLE should succeed");
-    assert_eq!(server.comm_state(), 0);
+    assert_eq!(server.comm_state(), DccState::Enable);
 
     client.stop().await.unwrap();
     server.stop().await.unwrap();
@@ -54,14 +55,14 @@ async fn dcc_disable_initiation_allows_re_enable() {
         .device_communication_control(&server_mac, EnableDisable::DISABLE_INITIATION, None, None)
         .await
         .unwrap();
-    assert_eq!(server.comm_state(), 2);
+    assert_eq!(server.comm_state(), DccState::DisableInitiation);
 
     // DCC ENABLE while disable-initiation — should still work
     client
         .device_communication_control(&server_mac, EnableDisable::ENABLE, None, None)
         .await
         .unwrap();
-    assert_eq!(server.comm_state(), 0);
+    assert_eq!(server.comm_state(), DccState::Enable);
 
     // ReadProperty should work
     let ack = client
@@ -153,7 +154,7 @@ async fn dcc_disable_initiation_allows_rp_blocks_cov() {
         .device_communication_control(&server_mac, EnableDisable::DISABLE_INITIATION, None, None)
         .await
         .unwrap();
-    assert_eq!(server.comm_state(), 2);
+    assert_eq!(server.comm_state(), DccState::DisableInitiation);
 
     // ReadProperty should still work
     let ack = client
@@ -245,7 +246,7 @@ async fn dcc_enable_restores_normal_operation() {
         .device_communication_control(&server_mac, EnableDisable::DISABLE_INITIATION, None, None)
         .await
         .unwrap();
-    assert_eq!(server.comm_state(), 2);
+    assert_eq!(server.comm_state(), DccState::DisableInitiation);
 
     // Write — no COV (suppressed)
     let mut value_buf = bytes::BytesMut::new();
@@ -273,7 +274,7 @@ async fn dcc_enable_restores_normal_operation() {
         .device_communication_control(&server_mac, EnableDisable::ENABLE, None, None)
         .await
         .unwrap();
-    assert_eq!(server.comm_state(), 0);
+    assert_eq!(server.comm_state(), DccState::Enable);
 
     // Write again — COV should fire now
     let mut value_buf2 = bytes::BytesMut::new();

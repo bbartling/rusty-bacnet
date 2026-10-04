@@ -241,7 +241,7 @@ async fn a_device_bound_at_the_broadcast_mac_on_this_network_is_unroutable() {
         &started.sent,
         db,
         Arc::new(RwLock::new(bindings)),
-        0,
+        DccState::Enable,
     )
     .await;
     // Skipped and counted; the other destination is still served.

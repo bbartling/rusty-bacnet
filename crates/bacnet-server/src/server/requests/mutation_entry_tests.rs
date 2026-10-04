@@ -507,7 +507,7 @@ async fn read_only_controls_unaffected_under_deny_all() {
     // Password-authorized DCC still works under DenyAll without policy contact.
     fixture.config.dcc_policy = DccPolicy::RequirePassword;
     fixture.config.dcc_password = Some("rb10-boundary".into());
-    fixture.state.store(1, Ordering::Release);
+    fixture.state.set_for_test(DccState::DisableInitiation);
     let mut dcc = BytesMut::new();
     DeviceCommunicationControlRequest {
         time_duration: None,

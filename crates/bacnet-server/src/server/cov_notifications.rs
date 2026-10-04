@@ -117,7 +117,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     /// Fire COV notifications for all active subscriptions on the given object.
-    /// Skipped when DCC is active (comm_state >= 1).
+    /// Skipped while DCC restricts initiation.
     pub(super) async fn fire_cov_notifications(
         ctx: &CovNotifyContext<'_, T>,
         oid: &ObjectIdentifier,
@@ -130,7 +130,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         snapshot: Option<&dyn bacnet_objects::traits::BACnetObject>,
     ) {
-        if ctx.comm_state.load(Ordering::Acquire) >= 1 {
+        if ctx.comm_state.initiation_restricted() {
             return;
         }
         let (subs, counters, in_flight_tracker, dispatch_turn) = {
@@ -248,12 +248,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     /// Fire the initial COV notification for a newly accepted subscription.
-    /// Skipped when DCC is active (comm_state >= 1).
+    /// Skipped while DCC restricts initiation.
     pub(super) async fn fire_initial_cov_notification(
         ctx: &CovNotifyContext<'_, T>,
         subscription: &CovSubscriptionSnapshot,
     ) {
-        if ctx.comm_state.load(Ordering::Acquire) >= 1 {
+        if ctx.comm_state.initiation_restricted() {
             return;
         }
 

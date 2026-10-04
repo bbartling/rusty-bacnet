@@ -2858,8 +2858,11 @@ Get the server's current DeviceCommunicationControl state.
 
 ```python
 state = await server.comm_state()
-# 0 = Enable, 1 = Disable, 2 = DisableInitiation
+# 0 = Enable, 2 = DisableInitiation
 ```
+
+The value is the `EnableDisable` number. The server refuses the deprecated
+Disable (1), so `comm_state()` never returns it.
 
 #### `cov_counters() -> CovCounters`
 

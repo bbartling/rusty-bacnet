@@ -90,7 +90,7 @@ async fn deny_all_leaves_read_discovery_and_password_authorized_dcc_working() {
 
     fixture.config.dcc_policy = DccPolicy::RequirePassword;
     fixture.config.dcc_password = Some("local-policy-test".into());
-    fixture.state.store(1, Ordering::Release);
+    fixture.state.set_for_test(DccState::DisableInitiation);
     let mut bytes = BytesMut::new();
     DeviceCommunicationControlRequest {
         time_duration: None,
@@ -108,7 +108,7 @@ async fn deny_all_leaves_read_discovery_and_password_authorized_dcc_working() {
         .await
         .unwrap();
     assert!(matches!(apdu(response), Apdu::SimpleAck(_)));
-    assert_eq!(fixture.state.load(Ordering::Acquire), 0);
+    assert_eq!(fixture.state.get(), DccState::Enable);
     assert_eq!(calls.load(Ordering::Relaxed), 0);
 }
 

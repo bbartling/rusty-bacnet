@@ -15,7 +15,7 @@ struct Fixture {
     table: Arc<RwLock<CovSubscriptionTable>>,
     permits: Arc<Semaphore>,
     transactions: Arc<NotificationTransactions>,
-    comm: Arc<AtomicU8>,
+    comm: Arc<CommState>,
     config: ServerConfig,
 }
 
@@ -75,7 +75,7 @@ impl Fixture {
             table: Arc::new(RwLock::new(CovSubscriptionTable::new())),
             permits: Arc::new(Semaphore::new(255)),
             transactions: NotificationTransactions::new(),
-            comm: Arc::new(AtomicU8::new(0)),
+            comm: Arc::new(CommState::default()),
             config,
         }
     }
@@ -466,7 +466,7 @@ async fn a_report_dcc_withdraws_before_its_first_attempt_is_not_counted() {
         ),
         (1, 1)
     );
-    f.comm.store(2, Ordering::Release); // DISABLE_INITIATION
+    f.comm.set_for_test(DccState::DisableInitiation); // DISABLE_INITIATION
     let joined = f.transactions.join_next().await;
     assert!(matches!(joined, Some(Ok(()))), "{joined:?}");
     assert!(f.sent.is_empty());

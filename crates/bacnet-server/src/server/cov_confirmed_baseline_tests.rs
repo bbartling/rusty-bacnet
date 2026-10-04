@@ -275,13 +275,15 @@ async fn confirmed_follow_up_under_dcc_is_dropped_not_deferred() {
         write(&h, INACTIVE).await;
         // DISABLE_INITIATION: the Ack still completes the baseline, but the
         // follow-up is suppressed like any fanout.
-        h.server.comm_state.store(2, Ordering::Release);
+        h.server
+            .comm_state
+            .set_for_test(DccState::DisableInitiation);
         h.ack().await;
         h.settle().await;
         assert_eq!(baseline(&h).await, Some(sample(ACTIVE)), "{family:?}");
         h.no_notification().await;
         // Re-enabled: the dropped follow-up does not come back by itself.
-        h.server.comm_state.store(0, Ordering::Release);
+        h.server.comm_state.set_for_test(DccState::Enable);
         h.no_notification().await;
         write(&h, INACTIVE).await;
         assert_eq!(family.report(&h).await, enumerated(INACTIVE), "{family:?}");
@@ -303,7 +305,9 @@ async fn confirmed_report_dcc_stops_at_a_retry_ends_there_without_a_hold_off() {
         assert_eq!(family.report(&h).await, enumerated(ACTIVE), "{family:?}");
         let sent = tokio::time::Instant::now();
         let (invoke_id, _) = h.take_confirmed();
-        h.server.comm_state.store(2, Ordering::Release);
+        h.server
+            .comm_state
+            .set_for_test(DccState::DisableInitiation);
         h.workers_idle().await;
         let ended = sent.elapsed();
         assert!(
@@ -322,7 +326,7 @@ async fn confirmed_report_dcc_stops_at_a_retry_ends_there_without_a_hold_off() {
         // enabling it sends nothing by itself.
         write(&h, ACTIVE).await;
         h.no_notification().await;
-        h.server.comm_state.store(0, Ordering::Release);
+        h.server.comm_state.set_for_test(DccState::Enable);
         h.no_notification().await;
         // The next fanout reports the change at once.
         write(&h, ACTIVE).await;

@@ -39,8 +39,8 @@
 //! writes, with [`MutationPolicy::DenyAll`] or an installed authorizer, drops
 //! every WriteGroup rather than let one past its policy (#1319 tracks letting
 //! the authorizer decide). These drops aren't counted in the mutation
-//! decision counters. The writes make no Audit records (#1318), and DCC's
-//! DISABLE drops the request before it gets here.
+//! decision counters. The writes make no Audit records (#1318). Under DCC's
+//! DISABLE_INITIATION a WriteGroup still runs: it initiates nothing.
 
 use super::command_runs::CommandRunner;
 use super::local_writes::{LocalWrite, LocalWriter};

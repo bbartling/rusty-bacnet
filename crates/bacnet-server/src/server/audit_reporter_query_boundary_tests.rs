@@ -87,10 +87,9 @@ async fn audit_reporter_query_decode_validation_and_ack_encode_failures_are_sile
 }
 
 #[tokio::test]
-async fn audit_reporter_query_disable_duplicate_and_overload_are_silent_disable_initiation_is_audited(
-) {
+async fn audit_reporter_query_duplicate_and_overload_are_silent_disable_initiation_is_audited() {
     use crate::server::{request_admission::Class, request_peer::canonical_requester};
-    for case in ["disable", "disable initiation", "duplicate", "overload"] {
+    for case in ["disable initiation", "duplicate", "overload"] {
         let mut fixture = server(read_reporter()).await;
         let (reads, _) = add_log(&fixture, 1, "real").await;
         let req = request(encode(&query(None, 1)));
@@ -109,11 +108,11 @@ async fn audit_reporter_query_disable_duplicate_and_overload_are_silent_disable_
         } else {
             None
         };
-        if case == "disable" {
-            fixture.server.comm_state.store(1, Ordering::Release);
-        }
         if case == "disable initiation" {
-            fixture.server.comm_state.store(2, Ordering::Release);
+            fixture
+                .server
+                .comm_state
+                .set_for_test(DccState::DisableInitiation);
         }
         if case == "overload" {
             for _ in 0..fixture

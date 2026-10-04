@@ -482,7 +482,7 @@ pub(super) struct LocalWriter<'a, T: TransportPort + 'static> {
     pub(super) cov_table: &'a Arc<RwLock<CovSubscriptionTable>>,
     pub(super) cov_in_flight: &'a Arc<Semaphore>,
     pub(super) notification_transactions: &'a Arc<NotificationTransactions>,
-    pub(super) comm_state: &'a Arc<AtomicU8>,
+    pub(super) comm_state: &'a Arc<CommState>,
     pub(super) learned_routers: &'a Arc<Mutex<LearnedRouterCache>>,
     pub(super) device_bindings: &'a Arc<RwLock<DeviceBindingTable>>,
     pub(super) event_suppressions: &'a Arc<super::event_suppression::EventSuppressions>,

@@ -47,15 +47,15 @@ async fn dcc_timer_stop_joins_live_duration_without_reset() {
         .as_ref()
         .unwrap()
         .abort_handle();
-    assert_eq!(server.comm_state(), 2);
+    assert_eq!(server.comm_state(), DccState::DisableInitiation);
     server.stop().await.unwrap();
     assert_eq!(response_resource.try_recv(), Ok(()));
     assert!(timer.is_finished(), "stop returned with a live DCC timer");
     assert!(server.dcc_timer.lock().await.is_none());
-    assert_eq!(server.comm_state(), 2);
+    assert_eq!(server.comm_state(), DccState::DisableInitiation);
     tokio::time::advance(Duration::from_secs(61)).await;
     tokio::task::yield_now().await;
-    assert_eq!(server.comm_state(), 2);
+    assert_eq!(server.comm_state(), DccState::DisableInitiation);
     server.stop().await.unwrap();
 }
 
@@ -75,7 +75,7 @@ async fn dcc_timer_cancelled_stop_retains_join_for_retry() {
     });
     let id = task.id();
     **server.dcc_timer.lock().await = Some(task);
-    server.comm_state.store(2, Ordering::Release);
+    server.comm_state.set_for_test(DccState::DisableInitiation);
     {
         let stop = server.stop();
         tokio::pin!(stop);
@@ -90,7 +90,7 @@ async fn dcc_timer_cancelled_stop_retains_join_for_retry() {
         resource.try_recv(),
         Err(oneshot::error::TryRecvError::Empty)
     );
-    assert_eq!(server.comm_state(), 2);
+    assert_eq!(server.comm_state(), DccState::DisableInitiation);
     server.stop().await.unwrap();
     assert_eq!(
         resource.try_recv(),
@@ -98,7 +98,7 @@ async fn dcc_timer_cancelled_stop_retains_join_for_retry() {
         "cleanup must precede stop return"
     );
     assert!(server.dcc_timer.lock().await.is_none());
-    assert_eq!(server.comm_state(), 2);
+    assert_eq!(server.comm_state(), DccState::DisableInitiation);
     server.stop().await.unwrap();
 }
 
@@ -118,7 +118,7 @@ async fn dcc_timer_stop_handles_absent_and_completed_timer() {
         .as_ref()
         .unwrap()
         .is_finished());
-    assert_eq!(server.comm_state(), 0);
+    assert_eq!(server.comm_state(), DccState::Enable);
     server.stop().await.unwrap();
     assert!(server.dcc_timer.lock().await.is_none());
     server.stop().await.unwrap();

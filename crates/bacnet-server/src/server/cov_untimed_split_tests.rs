@@ -326,7 +326,9 @@ async fn confirmed_deferred_parts_outlast_a_follow_up_dropped_under_dcc() {
     check(&first, true);
     // Initiation is disabled while the first part is outstanding, so the
     // follow-up its Ack owes is dropped (Clause 16.1).
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     h.ack().await;
     h.settle().await;
     tokio::time::sleep(Duration::from_secs(3)).await;

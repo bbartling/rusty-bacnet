@@ -45,7 +45,7 @@ async fn dcc_source_exact_full_bytes_and_fail_closed_wire() {
                     network,
                     mac_address: MacAddr::from_slice(&address),
                 });
-                let state = Arc::new(AtomicU8::new(1));
+                let state = comm_state_in(DccState::DisableInitiation);
                 let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
                 let response = dispatch_wire(
                     &state,
@@ -63,7 +63,14 @@ async fn dcc_source_exact_full_bytes_and_fail_closed_wire() {
                 } else {
                     assert_denied(response);
                 }
-                assert_eq!(state.load(Ordering::Acquire), if allowed { 0 } else { 1 });
+                assert_eq!(
+                    state.get(),
+                    if allowed {
+                        DccState::Enable
+                    } else {
+                        DccState::DisableInitiation
+                    }
+                );
                 assert!(timer.lock().await.is_none());
             }
         }
@@ -103,7 +110,7 @@ async fn dcc_source_exact_full_bytes_and_fail_closed_wire() {
 async fn dcc_source_denial_preserves_timer_and_error_precedence() {
     use crate::server::DccSourceRestriction;
     for pending_expiry in [false, true] {
-        let state = Arc::new(AtomicU8::new(0));
+        let state = comm_state_in(DccState::Enable);
         let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
         assert!(matches!(
             dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, Some(1)).await,
@@ -137,7 +144,7 @@ async fn dcc_source_denial_preserves_timer_and_error_precedence() {
                         );
                     }
                     assert_eq!(slot.as_ref().unwrap().id(), id);
-                    assert_eq!(state.load(Ordering::Acquire), 2);
+                    assert_eq!(state.get(), DccState::DisableInitiation);
                 }
             }
         }
@@ -145,17 +152,24 @@ async fn dcc_source_denial_preserves_timer_and_error_precedence() {
         if !pending_expiry {
             advance(Duration::from_secs(29)).await;
             tokio::task::yield_now().await;
-            assert_eq!(state.load(Ordering::Acquire), 2);
+            assert_eq!(state.get(), DccState::DisableInitiation);
             advance(Duration::from_secs(1)).await;
         }
         let task = timer.lock().await.take().unwrap();
         task.await.unwrap();
-        assert_eq!(state.load(Ordering::Acquire), 0);
+        assert_eq!(state.get(), DccState::Enable);
     }
 }
 
+/// A communication state already in `initial`.
+fn comm_state_in(initial: DccState) -> Arc<CommState> {
+    let state = Arc::new(CommState::default());
+    state.set_for_test(initial);
+    state
+}
+
 async fn dispatch(
-    comm_state: &Arc<AtomicU8>,
+    comm_state: &Arc<CommState>,
     dcc_timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     mode: EnableDisable,
     duration: Option<u16>,
@@ -174,7 +188,7 @@ async fn dispatch(
 }
 
 async fn dispatch_with_config(
-    comm_state: &Arc<AtomicU8>,
+    comm_state: &Arc<CommState>,
     dcc_timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     mode: EnableDisable,
     duration: Option<u16>,
@@ -184,7 +198,7 @@ async fn dispatch_with_config(
 }
 
 async fn dispatch_wire(
-    comm_state: &Arc<AtomicU8>,
+    comm_state: &Arc<CommState>,
     dcc_timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
     mode: EnableDisable,
     duration: Option<u16>,
@@ -252,14 +266,14 @@ fn assert_denied(apdu: Apdu) {
 #[tokio::test(start_paused = true)]
 async fn dcc_default_denies_valid_modes_without_live_mutation() {
     for mode in [EnableDisable::ENABLE, EnableDisable::DISABLE_INITIATION] {
-        for initial in [0, 1, 2] {
+        for initial in [DccState::Enable, DccState::DisableInitiation] {
             for duration in [None, Some(0), Some(1)] {
-                let state = Arc::new(AtomicU8::new(initial));
+                let state = comm_state_in(initial);
                 let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
                 let response =
                     dispatch_with_config(&state, &timer, mode, duration, &ServerConfig::default())
                         .await;
-                assert_eq!(state.load(Ordering::Acquire), initial);
+                assert_eq!(state.get(), initial);
                 assert!(timer.lock().await.is_none());
                 assert_denied(response);
             }
@@ -291,7 +305,12 @@ async fn dcc_policy_wire_password_precedence_direct_and_routed() {
                 ] {
                     for routed in [false, true] {
                         for duration in [None, Some(0), Some(2)] {
-                            let state = Arc::new(AtomicU8::new(1));
+                            let initial = if mode == EnableDisable::ENABLE {
+                                DccState::DisableInitiation
+                            } else {
+                                DccState::Enable
+                            };
+                            let state = comm_state_in(initial);
                             let timer = Arc::new(Mutex::new(
                                 crate::server::dcc_timer::TimerSlot::default(),
                             ));
@@ -314,15 +333,19 @@ async fn dcc_policy_wire_password_precedence_direct_and_routed() {
                             } else {
                                 assert!(matches!(response, Apdu::SimpleAck(_)));
                                 assert_eq!(
-                                    state.load(Ordering::Acquire),
-                                    if mode == EnableDisable::ENABLE { 0 } else { 2 }
+                                    state.get(),
+                                    if mode == EnableDisable::ENABLE {
+                                        DccState::Enable
+                                    } else {
+                                        DccState::DisableInitiation
+                                    }
                                 );
                                 assert_eq!(timer.lock().await.is_some(), duration.is_some());
                                 super::super::super::dcc_timer::cancel(&mut *timer.lock().await)
                                     .await;
                                 continue;
                             }
-                            assert_eq!(state.load(Ordering::Acquire), 1);
+                            assert_eq!(state.get(), initial);
                             assert!(timer.lock().await.is_none());
                         }
                     }
@@ -335,7 +358,7 @@ async fn dcc_policy_wire_password_precedence_direct_and_routed() {
 #[tokio::test(start_paused = true)]
 async fn dcc_default_denials_preserve_timer_even_with_expiry_waiting_for_lock() {
     for pending_expiry in [false, true] {
-        let state = Arc::new(AtomicU8::new(0));
+        let state = comm_state_in(DccState::Enable);
         let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
         assert!(matches!(
             dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, Some(1)).await,
@@ -362,7 +385,7 @@ async fn dcc_default_denials_preserve_timer_even_with_expiry_waiting_for_lock() 
                         dispatch_wire(&state, &timer, mode, duration, &config, password, None)
                             .await,
                     );
-                    assert_eq!(state.load(Ordering::Acquire), 2);
+                    assert_eq!(state.get(), DccState::DisableInitiation);
                     assert_eq!(slot.as_ref().unwrap().id(), id);
                 }
             }
@@ -371,19 +394,19 @@ async fn dcc_default_denials_preserve_timer_even_with_expiry_waiting_for_lock() 
         if !pending_expiry {
             advance(Duration::from_secs(29)).await;
             tokio::task::yield_now().await;
-            assert_eq!(state.load(Ordering::Acquire), 2);
+            assert_eq!(state.get(), DccState::DisableInitiation);
             advance(Duration::from_secs(1)).await;
         }
         let task = timer.lock().await.take().unwrap();
         task.await.unwrap();
-        assert_eq!(state.load(Ordering::Acquire), 0);
+        assert_eq!(state.get(), DccState::Enable);
     }
 }
 
 #[tokio::test(start_paused = true)]
 async fn dcc_disable_does_not_replace_cancel_or_extend_active_timer() {
     for rejected_duration in [None, Some(0), Some(1), Some(5)] {
-        let state = Arc::new(AtomicU8::new(0));
+        let state = comm_state_in(DccState::Enable);
         let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
         assert!(matches!(
             dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, Some(1)).await,
@@ -393,27 +416,27 @@ async fn dcc_disable_does_not_replace_cancel_or_extend_active_timer() {
         let timer_id = timer.lock().await.as_ref().unwrap().id();
         advance(Duration::from_secs(30)).await;
         assert_denied(dispatch(&state, &timer, EnableDisable::DISABLE, rejected_duration).await);
-        assert_eq!(state.load(Ordering::Acquire), 2);
+        assert_eq!(state.get(), DccState::DisableInitiation);
         assert_eq!(timer.lock().await.as_ref().unwrap().id(), timer_id);
         advance(Duration::from_secs(29)).await;
         tokio::task::yield_now().await;
-        assert_eq!(state.load(Ordering::Acquire), 2);
+        assert_eq!(state.get(), DccState::DisableInitiation);
         advance(Duration::from_secs(1)).await;
         let handle = timer.lock().await.take().unwrap();
         handle.await.unwrap();
-        assert_eq!(state.load(Ordering::Acquire), 0);
+        assert_eq!(state.get(), DccState::Enable);
     }
 }
 
 #[tokio::test(start_paused = true)]
 async fn dcc_disable_does_not_create_timer_in_any_state() {
-    for initial in [0, 1, 2] {
-        let state = Arc::new(AtomicU8::new(initial));
+    for initial in [DccState::Enable, DccState::DisableInitiation] {
+        let state = comm_state_in(initial);
         let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
         assert_denied(dispatch(&state, &timer, EnableDisable::DISABLE, Some(1)).await);
         assert!(timer.lock().await.is_none());
         advance(Duration::from_secs(61)).await;
-        assert_eq!(state.load(Ordering::Acquire), initial);
+        assert_eq!(state.get(), initial);
     }
 }
 
@@ -439,7 +462,7 @@ async fn dcc_require_password_preserves_replacement_expiry_and_enable_timer_sema
         ),
         ..Default::default()
     };
-    let state = Arc::new(AtomicU8::new(0));
+    let state = comm_state_in(DccState::Enable);
     let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     for (mode, duration) in [
         (EnableDisable::DISABLE_INITIATION, Some(1)),
@@ -467,21 +490,29 @@ async fn dcc_require_password_preserves_replacement_expiry_and_enable_timer_sema
             assert!(previous.is_finished());
         }
         assert_eq!(
-            state.load(Ordering::Acquire),
-            if mode == EnableDisable::ENABLE { 0 } else { 2 }
+            state.get(),
+            if mode == EnableDisable::ENABLE {
+                DccState::Enable
+            } else {
+                DccState::DisableInitiation
+            }
         );
         assert_eq!(timer.lock().await.is_some(), duration.is_some());
         tokio::task::yield_now().await;
         if duration == Some(0) {
             let task = timer.lock().await.take().unwrap();
             task.await.unwrap();
-            assert_eq!(state.load(Ordering::Acquire), 0);
+            assert_eq!(state.get(), DccState::Enable);
         } else {
             advance(Duration::from_secs(30)).await;
             tokio::task::yield_now().await;
             assert_eq!(
-                state.load(Ordering::Acquire),
-                if mode == EnableDisable::ENABLE { 0 } else { 2 }
+                state.get(),
+                if mode == EnableDisable::ENABLE {
+                    DccState::Enable
+                } else {
+                    DccState::DisableInitiation
+                }
             );
         }
     }
@@ -489,7 +520,7 @@ async fn dcc_require_password_preserves_replacement_expiry_and_enable_timer_sema
 
 #[tokio::test(start_paused = true)]
 async fn dcc_rejection_preserves_pending_expiry_and_password_precedence() {
-    let state = Arc::new(AtomicU8::new(0));
+    let state = comm_state_in(DccState::Enable);
     let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, Some(1)).await;
     tokio::task::yield_now().await;
@@ -510,20 +541,20 @@ async fn dcc_rejection_preserves_pending_expiry_and_password_precedence() {
     assert_eq!(error.error_class, ErrorClass::SECURITY);
     assert_eq!(error.error_code, ErrorCode::PASSWORD_FAILURE);
     assert_eq!(slot.as_ref().unwrap().id(), id);
-    assert_eq!(state.load(Ordering::Acquire), 2);
+    assert_eq!(state.get(), DccState::DisableInitiation);
     drop(slot);
     let handle = timer.lock().await.take().unwrap();
     handle.await.unwrap();
-    assert_eq!(state.load(Ordering::Acquire), 0);
+    assert_eq!(state.get(), DccState::Enable);
     // An expiry that wins first cannot undo a later accepted indefinite state.
     dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, None).await;
     advance(Duration::from_secs(301)).await;
-    assert_eq!(state.load(Ordering::Acquire), 2);
+    assert_eq!(state.get(), DccState::DisableInitiation);
 }
 
 #[tokio::test(start_paused = true)]
 async fn dcc_replacement_joins_resource_before_ack() {
-    let state = Arc::new(AtomicU8::new(2));
+    let state = comm_state_in(DccState::DisableInitiation);
     let (old, mut resource) = held_timer();
     let finished = old.abort_handle();
     let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot(Some(old))));
@@ -537,12 +568,12 @@ async fn dcc_replacement_joins_resource_before_ack() {
         Err(oneshot::error::TryRecvError::Closed)
     );
     assert!(timer.lock().await.is_none());
-    assert_eq!(state.load(Ordering::Acquire), 0);
+    assert_eq!(state.get(), DccState::Enable);
 }
 
 #[tokio::test(start_paused = true)]
 async fn dcc_cancelled_replacement_retains_join_and_defers_state_commit() {
-    let state = Arc::new(AtomicU8::new(2));
+    let state = comm_state_in(DccState::DisableInitiation);
     let (old, mut resource) = held_timer();
     let id = old.id();
     let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot(Some(old))));
@@ -555,7 +586,7 @@ async fn dcc_cancelled_replacement_retains_join_and_defers_state_commit() {
         })
         .await;
     }
-    assert_eq!(state.load(Ordering::Acquire), 2);
+    assert_eq!(state.get(), DccState::DisableInitiation);
     assert_eq!(timer.lock().await.as_ref().unwrap().id(), id);
     assert_eq!(
         resource.try_recv(),
@@ -571,12 +602,12 @@ async fn dcc_cancelled_replacement_retains_join_and_defers_state_commit() {
     );
     assert!(timer.lock().await.is_none());
     advance(Duration::from_secs(121)).await;
-    assert_eq!(state.load(Ordering::Acquire), 2);
+    assert_eq!(state.get(), DccState::DisableInitiation);
 }
 
 #[tokio::test(start_paused = true)]
 async fn dcc_concurrent_replacements_serialize_with_pending_expiry() {
-    let state = Arc::new(AtomicU8::new(0));
+    let state = comm_state_in(DccState::Enable);
     let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, Some(1)).await;
     tokio::task::yield_now().await;
@@ -595,8 +626,8 @@ async fn dcc_concurrent_replacements_serialize_with_pending_expiry() {
     advance(Duration::from_secs(60)).await;
     tokio::task::yield_now().await;
     assert_eq!(
-        state.load(Ordering::Acquire),
-        2,
+        state.get(),
+        DccState::DisableInitiation,
         "expiry must share the slot lock"
     );
     drop(slot);
@@ -608,20 +639,20 @@ async fn dcc_concurrent_replacements_serialize_with_pending_expiry() {
         2,
         "only the final timer may retain state"
     );
-    assert_eq!(state.load(Ordering::Acquire), 2);
+    assert_eq!(state.get(), DccState::DisableInitiation);
     tokio::task::yield_now().await;
     advance(Duration::from_secs(60)).await;
     tokio::task::yield_now().await;
-    assert_eq!(state.load(Ordering::Acquire), 2);
+    assert_eq!(state.get(), DccState::DisableInitiation);
     advance(Duration::from_secs(60)).await;
     let handle = timer.lock().await.take().unwrap();
     handle.await.unwrap();
-    assert_eq!(state.load(Ordering::Acquire), 0);
+    assert_eq!(state.get(), DccState::Enable);
 }
 
 #[tokio::test(start_paused = true)]
 async fn dcc_duration_extension_none_zero_and_enable_are_preserved() {
-    let state = Arc::new(AtomicU8::new(0));
+    let state = comm_state_in(DccState::Enable);
     let timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     dispatch(&state, &timer, EnableDisable::DISABLE_INITIATION, Some(1)).await;
     tokio::task::yield_now().await;
@@ -630,17 +661,21 @@ async fn dcc_duration_extension_none_zero_and_enable_are_preserved() {
     tokio::task::yield_now().await;
     advance(Duration::from_secs(119)).await;
     tokio::task::yield_now().await;
-    assert_eq!(state.load(Ordering::Acquire), 2);
+    assert_eq!(state.get(), DccState::DisableInitiation);
     advance(Duration::from_secs(1)).await;
     let handle = timer.lock().await.take().unwrap();
     handle.await.unwrap();
-    assert_eq!(state.load(Ordering::Acquire), 0);
+    assert_eq!(state.get(), DccState::Enable);
     for mode in [EnableDisable::DISABLE_INITIATION, EnableDisable::ENABLE] {
         for duration in [Some(0), None, Some(1)] {
             dispatch(&state, &timer, mode, duration).await;
             assert_eq!(
-                state.load(Ordering::Acquire),
-                if mode == EnableDisable::ENABLE { 0 } else { 2 }
+                state.get(),
+                if mode == EnableDisable::ENABLE {
+                    DccState::Enable
+                } else {
+                    DccState::DisableInitiation
+                }
             );
             assert_eq!(timer.lock().await.is_some(), duration.is_some());
             if let Some(minutes) = duration {
@@ -648,12 +683,16 @@ async fn dcc_duration_extension_none_zero_and_enable_are_preserved() {
                 advance(Duration::from_secs(minutes as u64 * 60)).await;
                 let handle = timer.lock().await.take().unwrap();
                 handle.await.unwrap();
-                assert_eq!(state.load(Ordering::Acquire), 0);
+                assert_eq!(state.get(), DccState::Enable);
             } else {
                 advance(Duration::from_secs(121)).await;
                 assert_eq!(
-                    state.load(Ordering::Acquire),
-                    if mode == EnableDisable::ENABLE { 0 } else { 2 }
+                    state.get(),
+                    if mode == EnableDisable::ENABLE {
+                        DccState::Enable
+                    } else {
+                        DccState::DisableInitiation
+                    }
                 );
             }
         }

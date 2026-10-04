@@ -225,12 +225,14 @@ async fn changes_that_fit_go_out_whole_between_ones_sent_value_by_value() {
         let (a, b, c) = ("a".repeat(LONG), "b".to_string(), "c".repeat(LONG));
         // Three changes held back, then released together: the long ones do
         // not fit a notification with their Status_Flags, the short one does.
-        h.server.comm_state.store(2, Ordering::Release);
+        h.server
+            .comm_state
+            .set_for_test(DccState::DisableInitiation);
         h.set_clock(1);
         write_string(&h, csv, &a).await;
         h.set_clock(2);
         write_string(&h, csv, &b).await;
-        h.server.comm_state.store(0, Ordering::Release);
+        h.server.comm_state.set_for_test(DccState::Enable);
         h.set_clock(3);
         write_string(&h, csv, &c).await;
         let flags = |second| (SF, normal_flags(), Some(time(second)));
@@ -487,7 +489,9 @@ async fn only_a_real_overflow_drops_a_change_and_never_the_one_in_delivery() {
         // 92 octets unconfirmed and 84 confirmed, whose header is longer.
         // The held part takes 19 and each change 33 (#1287).
         if !confirmed {
-            h.server.comm_state.store(2, Ordering::Release);
+            h.server
+                .comm_state
+                .set_for_test(DccState::DisableInitiation);
         }
         let newest = if confirmed { 3 } else { 4 };
         for second in 2..=newest {
@@ -504,7 +508,7 @@ async fn only_a_real_overflow_drops_a_change_and_never_the_one_in_delivery() {
         if confirmed {
             h.ack().await;
         } else {
-            h.server.comm_state.store(0, Ordering::Release);
+            h.server.comm_state.set_for_test(DccState::Enable);
         }
         // The Status_Flags still complete their change, before the rest.
         let mut expected = av1_apart(1.0, 1).split_off(1);

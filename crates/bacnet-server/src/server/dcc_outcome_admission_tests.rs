@@ -130,106 +130,44 @@ async fn dcc_outcomes_recovery_denied_duplicate_overload_and_shutdown() {
 }
 
 #[tokio::test]
-async fn admission_dcc_prechecks_and_duplicate_before_first_poll() {
+async fn disable_initiation_still_admits_requests_and_answers_overload_with_abort() {
+    // The server refuses DISABLE, so DISABLE_INITIATION is the only state DCC
+    // leaves it in: admission and the overload Abort carry on unchanged.
     let (mut server, _tx, mut started) = small_fixture().await;
+    server.comm_state.set_for_test(DccState::DisableInitiation);
     dispatch(&server, request(1), None, None).await;
-    dispatch(&server, request(1), None, None).await;
-    assert_eq!(
-        server.request_admission_counters().confirmed_admitted_total,
-        1
-    );
-    assert_eq!(
-        server
-            .request_admission_counters()
-            .confirmed_overloaded_total,
-        0
-    );
-    observed(&mut started).await;
-    server.comm_state.store(1, Ordering::Release);
-    dispatch(&server, request(2), None, None).await;
+    let answered = observed(&mut started).await;
+    dispatch(&server, request(2), None, None).await; // capacity is one
+    let aborted = observed(&mut started).await;
+    let counters = server.request_admission_counters();
+    assert_eq!(counters.confirmed_admitted_total, 1);
+    assert_eq!(counters.confirmed_overloaded_total, 1);
+    assert_eq!(counters.abort_admitted_total, 1);
+    {
+        let frames = held_sends(&server).frames.lock().unwrap();
+        assert!(
+            matches!(&frames[..], [Apdu::Error(_) | Apdu::Reject(_), Apdu::Abort(abort)]
+                if abort.invoke_id == 2 && abort.abort_reason == AbortReason::OUT_OF_RESOURCES),
+            "{frames:?}"
+        );
+    }
+    held_sends(&server).release.notify_waiters();
+    answered.await.unwrap();
+    aborted.await.unwrap();
+    wait_reaped(&server).await;
     dispatch(&server, who_is(), None, None).await;
-    assert_eq!(
-        server
-            .request_admission_counters()
-            .confirmed_overloaded_total,
-        0
-    );
+    let i_am = observed(&mut started).await;
     assert_eq!(
         server
             .request_admission_counters()
             .unconfirmed_admitted_total,
-        0
+        1
     );
-    assert_eq!(server.request_admission_counters().abort_active, 0);
-    // A no-response DCC discard does not leave a completed duplicate ghost.
-    let Apdu::ConfirmedRequest(req) = request(2) else {
-        unreachable!()
-    };
     assert!(matches!(
-        server
-            .confirmed_request_tracker
-            .begin(&[1], None, TransportProvenance::unverified(), req),
-        ConfirmedRequestAdmission::New(_)
+        held_sends(&server).frames.lock().unwrap().last(),
+        Some(Apdu::UnconfirmedRequest(req)) if req.service_choice == UnconfirmedServiceChoice::I_AM
     ));
-    server.comm_state.store(0, Ordering::Release);
     held_sends(&server).release.notify_waiters();
-    wait_reaped(&server).await;
-    dispatch(&server, request(2), None, None).await;
-    observed(&mut started).await;
-    assert_eq!(
-        server.request_admission_counters().confirmed_admitted_total,
-        2
-    );
-    server.stop().await.unwrap();
-}
-
-#[tokio::test]
-async fn admission_abort_rechecks_dcc_when_first_polled() {
-    let (mut server, _tx, mut started) = small_fixture().await;
-    dispatch(&server, request(1), None, None).await;
-    observed(&mut started).await;
-    dispatch(&server, request(2), None, None).await;
-    server.comm_state.store(1, Ordering::Release);
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while server.request_admission_counters().abort_active != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    assert!(started.try_recv().is_err());
-    assert_eq!(server.request_admission_counters().abort_admitted_total, 1);
-    server.stop().await.unwrap();
-}
-
-#[tokio::test]
-async fn admission_dcc_first_poll_discard_drops_pending_for_reuse() {
-    let (mut server, _, mut started) = small_fixture().await;
-    dispatch(&server, request(1), None, None).await;
-    server.comm_state.store(1, Ordering::Release);
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while server.request_admission_counters().confirmed_active != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    assert!(started.try_recv().is_err());
-    let Apdu::ConfirmedRequest(req) = request(1) else {
-        unreachable!()
-    };
-    assert!(matches!(
-        server
-            .confirmed_request_tracker
-            .begin(&[1], None, TransportProvenance::unverified(), req),
-        ConfirmedRequestAdmission::New(_)
-    ));
-    server.comm_state.store(0, Ordering::Release);
-    dispatch(&server, request(1), None, None).await;
-    observed(&mut started).await;
-    assert_eq!(
-        server.request_admission_counters().confirmed_admitted_total,
-        2
-    );
+    i_am.await.unwrap();
     server.stop().await.unwrap();
 }

@@ -10,7 +10,7 @@ mod reinitialize_device_tests;
 
 #[cfg(test)]
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Atomically admit a confirmed request before DCC, service decoding,
+    /// Atomically admit a confirmed request before service decoding,
     /// authorization, mutation, side effects, or response construction. Runs
     /// with fresh DCC outcome and mutation decision logs, whatever `services`
     /// carries for them.
@@ -23,11 +23,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         req: bacnet_encoding::apdu::ConfirmedRequest,
         reply_tx: Option<tokio::sync::oneshot::Sender<Bytes>>,
     ) {
-        let RequestServices {
-            network,
-            comm_state,
-            ..
-        } = services;
+        let RequestServices { network, .. } = services;
         let services = &RequestServices {
             dcc_outcomes: Arc::new(dcc_outcomes::DccOutcomes::default()),
             mutation_decisions: Arc::new(crate::mutation::MutationDecisions::default()),
@@ -37,9 +33,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // separate budget). Retransmitted already-executed LSO replays
         // byte-identically; pending in-flight duplicates discard.
         if req.service_choice == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION {
-            if comm_state.load(Ordering::Acquire) == 1 {
-                return;
-            }
             let lso_pending = match confirmed_request_tracker.lso.begin(
                 source_mac,
                 source_network.as_ref(),

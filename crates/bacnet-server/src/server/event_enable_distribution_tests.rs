@@ -52,7 +52,7 @@ async fn analog_event_enable_set_delivers_committed_event_values() {
             None,
         )
         .unwrap();
-    let sent = broadcasts_from_per_write_path(&db, 0).await;
+    let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
 
     assert_eq!(sent.len(), 1);
     let notification = decode_broadcast_notification(&sent);
@@ -74,7 +74,7 @@ async fn analog_event_enable_set_delivers_committed_event_values() {
 struct Fixture {
     db: Arc<RwLock<ObjectDatabase>>,
     network: Arc<NetworkLayer<TestTransport>>,
-    comm_state: Arc<AtomicU8>,
+    comm_state: Arc<CommState>,
     learned_routers: Arc<Mutex<LearnedRouterCache>>,
     notification_transactions: Arc<NotificationTransactions>,
     sent: SendLog,
@@ -150,7 +150,7 @@ impl Fixture {
         Self {
             db: Arc::new(RwLock::new(db)),
             network: Arc::new(NetworkLayer::new(transport)),
-            comm_state: Arc::new(AtomicU8::new(0)), // DCC not blocking
+            comm_state: Arc::new(CommState::default()), // DCC not blocking
             learned_routers: Arc::new(Mutex::new(LearnedRouterCache::new())),
             notification_transactions: NotificationTransactions::new(),
             sent,

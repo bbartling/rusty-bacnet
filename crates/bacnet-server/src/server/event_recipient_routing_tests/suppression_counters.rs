@@ -47,7 +47,7 @@ async fn each_failed_closed_lookup_moves_only_its_own_counter() {
         ("no-eligible-destination", none),
     ] {
         let (broadcasts, unicasts, counters) =
-            distribute_counted(non_matched_database(case), no_bindings(), 0).await;
+            distribute_counted(non_matched_database(case), no_bindings(), DccState::Enable).await;
         assert!(broadcasts.is_empty() && unicasts.is_empty(), "{case}");
         assert_eq!(counters, expected, "{case}");
     }
@@ -60,26 +60,20 @@ async fn delivered_and_dcc_held_transitions_move_no_counter() {
         TestRecipientList::Broadcasts(CAP),
     )))
     .unwrap();
-    let (broadcasts, _, counters) = distribute_counted(db, no_bindings(), 0).await;
+    let (broadcasts, _, counters) = distribute_counted(db, no_bindings(), DccState::Enable).await;
     assert_eq!(broadcasts.len(), CAP as usize);
     assert_eq!(counters, EventNotificationCounters::default());
 
     // DCC holds every notification back before the lookup runs, so even a
-    // missing class is not counted while communication is disabled.
-    for comm_state in [1, 2] {
-        let (broadcasts, unicasts, counters) = distribute_counted(
-            non_matched_database("missing-class"),
-            no_bindings(),
-            comm_state,
-        )
-        .await;
-        assert!(broadcasts.is_empty() && unicasts.is_empty());
-        assert_eq!(
-            counters,
-            EventNotificationCounters::default(),
-            "{comm_state}"
-        );
-    }
+    // missing class is not counted while initiation is disabled.
+    let (broadcasts, unicasts, counters) = distribute_counted(
+        non_matched_database("missing-class"),
+        no_bindings(),
+        DccState::DisableInitiation,
+    )
+    .await;
+    assert!(broadcasts.is_empty() && unicasts.is_empty());
+    assert_eq!(counters, EventNotificationCounters::default());
 }
 
 /// A running server counts on its own write path, through the public

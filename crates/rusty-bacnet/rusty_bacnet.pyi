@@ -3419,7 +3419,10 @@ class BACnetServer:
         ...
 
     def comm_state(self) -> Awaitable[int]:
-        """Get the DeviceCommunicationControl state (0=Enable, 1=Disable, 2=DisableInitiation)."""
+        """Get the DeviceCommunicationControl state: 0=Enable or 2=DisableInitiation.
+
+        The server refuses the deprecated Disable (1), so it never reports it.
+        """
         ...
 
     def cov_counters(self) -> Awaitable[CovCounters]:

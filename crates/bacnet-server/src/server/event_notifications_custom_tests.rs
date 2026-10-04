@@ -5,6 +5,7 @@ use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::primitives::StatusFlags;
 use std::borrow::Cow;
+use std::sync::atomic::AtomicU8;
 use std::sync::Mutex as StdMutex;
 
 struct CustomProposal {
@@ -352,7 +353,7 @@ async fn unsupported_custom_proposal_runtime_is_silent_unchanged_and_retryable()
             .unwrap()
             .evaluate_intrinsic_reporting()
             .unwrap();
-        let sent = broadcasts_from_per_write_path(&db, 0).await;
+        let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
         assert!(
             sent.is_empty(),
             "unsupported proposal must never be distributed"
@@ -377,12 +378,14 @@ async fn failed_custom_commit_retries_through_per_write_runtime() {
     let (db, commits) = database(0, mode.clone(), false, true);
     let before = snapshot(&db);
     let db = Arc::new(RwLock::new(db));
-    assert!(broadcasts_from_per_write_path(&db, 0).await.is_empty());
+    assert!(broadcasts_from_per_write_path(&db, DccState::Enable)
+        .await
+        .is_empty());
     assert_eq!(snapshot(&*db.read().await), before);
     assert_eq!(db.read().await.reserve_event_sequence_number().number(), 0);
     assert!(commits.lock().unwrap().is_empty());
     mode.store(1, Ordering::SeqCst);
-    let sent = broadcasts_from_per_write_path(&db, 0).await;
+    let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
     let notification = decode_broadcast_notification(&sent);
     assert_committed(&*db.read().await, &notification, &commits.lock().unwrap());
 }
@@ -391,10 +394,12 @@ async fn failed_custom_commit_retries_through_per_write_runtime() {
 async fn custom_immediate_proposal_commits_exact_history_before_distribution() {
     let (db, commits) = database(0, Arc::new(AtomicU8::new(1)), false, true);
     let db = Arc::new(RwLock::new(db));
-    let sent = broadcasts_from_per_write_path(&db, 0).await;
+    let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
     let notification = decode_broadcast_notification(&sent);
     assert_committed(&*db.read().await, &notification, &commits.lock().unwrap());
-    assert!(broadcasts_from_per_write_path(&db, 0).await.is_empty());
+    assert!(broadcasts_from_per_write_path(&db, DccState::Enable)
+        .await
+        .is_empty());
     assert_eq!(commits.lock().unwrap().len(), 1);
 }
 
@@ -477,7 +482,11 @@ async fn delayed_runtime(fail_first: bool, unsupported: bool) {
 
 #[tokio::test]
 async fn custom_local_commit_survives_distribution_gates() {
-    for (dcc, recipient, distribute) in [(1, true, true), (0, false, true), (0, true, false)] {
+    for (dcc, recipient, distribute) in [
+        (DccState::DisableInitiation, true, true),
+        (DccState::Enable, false, true),
+        (DccState::Enable, true, false),
+    ] {
         let (mut db, commits) = database(0, Arc::new(AtomicU8::new(1)), false, distribute);
         if !recipient {
             db.get_mut(&ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, 0).unwrap())

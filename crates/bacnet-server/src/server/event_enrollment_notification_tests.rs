@@ -328,7 +328,7 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
         &crate::server::event_delivery::EventDelivery {
             db: &db,
             network: &Arc::new(NetworkLayer::new(capture.transport())),
-            comm_state: &Arc::new(AtomicU8::new(0)),
+            comm_state: &Arc::new(CommState::default()),
             learned_routers: &Arc::new(Mutex::new(LearnedRouterCache::new())),
             notification_transactions: &NotificationTransactions::new(),
             device_bindings: &Arc::new(RwLock::new(
@@ -710,30 +710,28 @@ async fn local_suppression_paths_commit_only_the_applicable_transitions() {
 
 #[tokio::test(start_paused = true)]
 async fn dcc_suppresses_event_enrollment_io_without_suppressing_commit() {
-    for dcc_state in [1, 2] {
-        let mut db = ObjectDatabase::new();
-        let target = ObservedObject::new(40 + dcc_state as u32, PropertyValue::Real(85.0));
-        let target_oid = target.object_identifier();
-        db.add(Box::new(target)).unwrap();
-        let enrollment = enrollment(
-            40 + dcc_state as u32,
-            EventType::OUT_OF_RANGE,
-            Some(target_oid),
-            out_of_range_parameters(1),
-        );
-        let enrollment_oid = enrollment.object_identifier();
-        db.add(Box::new(enrollment)).unwrap();
+    let mut db = ObjectDatabase::new();
+    let target = ObservedObject::new(42, PropertyValue::Real(85.0));
+    let target_oid = target.object_identifier();
+    db.add(Box::new(target)).unwrap();
+    let enrollment = enrollment(
+        42,
+        EventType::OUT_OF_RANGE,
+        Some(target_oid),
+        out_of_range_parameters(1),
+    );
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
 
-        let (mut server, sent) = start_server(db, true).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        server.comm_state.store(dcc_state, Ordering::Release);
-        tokio::time::sleep(Duration::from_secs(1)).await;
+    let (mut server, sent) = start_server(db, true).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    server.comm_state.set_for_test(DccState::DisableInitiation);
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
-        assert!(drain_notifications(&sent).is_empty());
-        let db = server.database().write().await;
-        assert_eq!(event_state(&db, enrollment_oid), EventState::HIGH_LIMIT);
-        assert_eq!(db.reserve_event_sequence_number().number(), 1);
-        drop(db);
-        server.stop().await.unwrap();
-    }
+    assert!(drain_notifications(&sent).is_empty());
+    let db = server.database().write().await;
+    assert_eq!(event_state(&db, enrollment_oid), EventState::HIGH_LIMIT);
+    assert_eq!(db.reserve_event_sequence_number().number(), 1);
+    drop(db);
+    server.stop().await.unwrap();
 }
