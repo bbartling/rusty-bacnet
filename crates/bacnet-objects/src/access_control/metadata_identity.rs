@@ -52,10 +52,10 @@ use crate::property_metadata::{
 // Property_List, with the table R code and a routed Boolean arm, so
 // RequiredRead/Always too. Rights Accompaniment (#1393) carries the table O
 // code with a routed reference arm, so Optional/Always; it is a per-instance
-// row, present once the application sets it, after Enable.
-// CDI Present_Value and Reliability carry the table R
-// code with footnote 1, and dispatch takes their writes only while
-// Out_Of_Service is TRUE (#1168), so RequiredRead/WhenOutOfService.
+// row, present once the application sets it, after Enable. CDI Present_Value
+// and Reliability carry the table R code with footnote 1, and dispatch takes
+// their writes only while Out_Of_Service is TRUE (#1168), so
+// RequiredRead/WhenOutOfService.
 // Update_Time and Supported_Formats carry the table R code with no arm, so
 // RequiredRead/ReadOnly; Supported_Format_Classes carries the table O code,
 // so Optional/ReadOnly. Both format rows are BACnetARRAYs (#1169).

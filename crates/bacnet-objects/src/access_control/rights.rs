@@ -43,8 +43,7 @@ pub const MAX_ACCESS_RULES: usize = 1024;
 /// [`with_persistence`](Self::with_persistence) saves each write of the two
 /// arrays, Enable and Accompaniment in an [`AccessRightsPersistence`] before
 /// serving it, and serves the saved values when built again (#1392). A saved
-/// value wins over
-/// the configured one: the setter for a property a write set
+/// value wins over the configured one: the setter for a property a write set
 /// ([`property_saved`](Self::property_saved)) checks its argument but leaves
 /// the property alone. To change a saved value, write the property.
 pub struct AccessRightsObject {
@@ -59,7 +58,8 @@ pub struct AccessRightsObject {
     accompaniment: Option<BACnetDeviceObjectReference>,
     status_flags: StatusFlags,
     reliability: Reliability,
-    /// Where written rules and Enable are saved, with persistence.
+    /// Where written rules, Enable and Accompaniment are saved, with
+    /// persistence.
     storage: Option<saving::Storage>,
     /// Saved writes taken, so a staged write can tell whether another came
     /// between.
