@@ -3092,9 +3092,12 @@ Multi-state Input does: Time_Delay, Notification_Class, Alarm_Values,
 Event_Enable, Acked_Transitions, Notify_Type, Event_Time_Stamps,
 Event_Message_Texts, Event_Detection_Enable and Time_Delay_Normal, the
 configuration writable over the network. Alarm_Values is a list of
-BACnetAccessZoneOccupancyState values (named, or proprietary from 64 to
-65535; anything else is VALUE_OUT_OF_RANGE), which
-`AccessZoneObject::set_alarm_values` sets too. Event_State goes OFFNORMAL
+BACnetAccessZoneOccupancyState values other than NORMAL (named, or
+proprietary from 64 to 65535; anything else, NORMAL included, is
+VALUE_OUT_OF_RANGE naming the element), which
+`AccessZoneObject::set_alarm_values` sets too. NORMAL is refused because it is
+the state with no limit crossed: as an alarm value it would put the zone in
+alarm whenever its count sat inside its limits. Event_State goes OFFNORMAL
 once Occupancy_State has stayed in Alarm_Values for Time_Delay seconds,
 whether the count moves through `set_occupancy_count`, an Adjust_Value write
 or a count simulated out of service, and back to NORMAL once it has stayed

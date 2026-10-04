@@ -192,6 +192,50 @@ fn access_zone_alarm_values_take_occupancy_states_only() {
 }
 
 #[test]
+fn access_zone_alarm_values_refuse_normal() {
+    // NORMAL is the state with no limit crossed, so listing it as an alarm
+    // value would alarm a zone whose count sits inside its limits (#1401).
+    let mut zone = AccessZoneObject::new(1, "ZONE-1").unwrap();
+    let held = states(&[S::ABOVE_UPPER_LIMIT]);
+    write(&mut zone, P::ALARM_VALUES, held.clone()).unwrap();
+    for (value, position, context) in [
+        (states(&[S::AT_UPPER_LIMIT, S::NORMAL]), 2, "NORMAL second"),
+        (states(&[S::NORMAL]), 1, "NORMAL alone"),
+        (PropertyValue::Enumerated(0), 1, "a lone NORMAL"),
+    ] {
+        crate::common::assert_list_element_refused(
+            write(&mut zone, P::ALARM_VALUES, value),
+            ErrorClass::PROPERTY,
+            ErrorCode::VALUE_OUT_OF_RANGE,
+            position,
+            context,
+        );
+        assert_eq!(read(&zone, P::ALARM_VALUES), held, "{context}");
+    }
+    crate::common::assert_list_element_refused(
+        zone.set_alarm_values([S::BELOW_LOWER_LIMIT, S::NORMAL]),
+        ErrorClass::PROPERTY,
+        ErrorCode::VALUE_OUT_OF_RANGE,
+        2,
+        "the setter",
+    );
+    assert_eq!(read(&zone, P::ALARM_VALUES), held);
+
+    // Every other named state, and the first proprietary one, is taken.
+    let others = [
+        S::BELOW_LOWER_LIMIT,
+        S::AT_LOWER_LIMIT,
+        S::AT_UPPER_LIMIT,
+        S::ABOVE_UPPER_LIMIT,
+        S::DISABLED,
+        S::NOT_SUPPORTED,
+        S::from_raw(64),
+    ];
+    zone.set_alarm_values(others).unwrap();
+    assert_eq!(read(&zone, P::ALARM_VALUES), states(&others));
+}
+
+#[test]
 fn access_zone_goes_offnormal_after_time_delay_and_back_to_normal() {
     let mut zone = alarming_zone(2);
     adjust(&mut zone, 6);

@@ -9,7 +9,8 @@
 //! for intrinsic reporting in one place:
 //!
 //! - the CHANGE_OF_STATE detector (Clause 13.3.2), whose Alarm_Values hold
-//!   members of the watched enumeration;
+//!   members of the watched enumeration other than its NORMAL state
+//!   ([`ListedStates`]);
 //! - the history behind Event_Time_Stamps and Event_Message_Texts;
 //! - Event_Detection_Enable.
 //!
@@ -18,8 +19,8 @@
 //! asking the object for the watched value and its Reliability each time the
 //! server evaluates or ticks. An object adopts it in three steps:
 //!
-//! 1. hold a `ChangeOfStateReporting`, built with a check of which raw values
-//!    its enumeration admits;
+//! 1. hold a `ChangeOfStateReporting`, built with the [`ListedStates`] of its
+//!    enumeration;
 //! 2. offer each read and write to [`ChangeOfStateReporting::read`] and
 //!    [`ChangeOfStateReporting::write`], and take Event_State (and so the
 //!    IN_ALARM flag) from [`ChangeOfStateReporting::event_state`];
@@ -51,20 +52,20 @@ pub(crate) struct ChangeOfStateReporting {
     event_history: EventHistory,
     /// Event_Detection_Enable: FALSE suspends the detector (Clause 13.2.2.1).
     event_detection_enable: bool,
-    /// Whether a raw value belongs to the watched enumeration, named or
-    /// proprietary; an Alarm_Values element outside it is VALUE_OUT_OF_RANGE.
-    in_range: fn(u32) -> bool,
+    /// The values Alarm_Values may hold; any other element is
+    /// VALUE_OUT_OF_RANGE.
+    states: ListedStates,
 }
 
 impl ChangeOfStateReporting {
     /// Detection on, no alarm values, every transition acknowledged, and
     /// Notification_Class 0, as the other built-in detectors start.
-    pub(crate) fn new(in_range: fn(u32) -> bool) -> Self {
+    pub(crate) fn new(states: ListedStates) -> Self {
         Self {
             event_detector: ChangeOfStateDetector::default(),
             event_history: EventHistory::default(),
             event_detection_enable: true,
-            in_range,
+            states,
         }
     }
 
@@ -81,7 +82,7 @@ impl ChangeOfStateReporting {
     /// Replace Alarm_Values, checking each value as a network write would;
     /// a refused list leaves the one held.
     pub(crate) fn set_alarm_values(&mut self, values: Vec<u32>) -> Result<(), Error> {
-        self.event_detector.alarm_values = checked_raw_list(values, self.in_range)?;
+        self.event_detector.alarm_values = checked_raw_list(values, self.states)?;
         Ok(())
     }
 
@@ -116,7 +117,7 @@ impl ChangeOfStateReporting {
     ) -> Option<Result<(), Error>> {
         if property == PropertyIdentifier::ALARM_VALUES {
             return Some(
-                enumerated_list(array_index, value, self.in_range).map(|values| {
+                enumerated_list(array_index, value, self.states).map(|values| {
                     self.event_detector.alarm_values = values;
                 }),
             );
@@ -217,18 +218,45 @@ impl ChangeOfStateReporting {
     }
 }
 
-/// The values a written list of enumerated values holds, such as
-/// Alarm_Values: a list of Enumerated, where a value that isn't a list is its
-/// one element (WriteProperty hands over a list, but a local write may pass
-/// one value alone). An index is PROPERTY_IS_NOT_AN_ARRAY; more than
+/// The states a list on a CHANGE_OF_STATE object may hold, such as its
+/// Alarm_Values: members of the watched enumeration, named or proprietary,
+/// other than its NORMAL state.
+///
+/// NORMAL is the state in which nothing is wrong. Listed as an alarm value it
+/// would put a quiet object in alarm, and an object's other state lists (an
+/// Access Door's Fault_Values and Masked_Alarm_Values) are no place for it
+/// either, so every list built on these checks refuses it with
+/// VALUE_OUT_OF_RANGE naming the element (#1149, #1401). Clause 13.3.2 has
+/// the algorithm's alarm values stand for offnormal conditions, but no
+/// object clause bars NORMAL from a list outright, so the refusal is the
+/// stack's own reading.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ListedStates {
+    /// The enumeration's NORMAL state, raw.
+    pub(crate) normal: u32,
+    /// Whether a raw value belongs to the enumeration, named or proprietary.
+    pub(crate) in_range: fn(u32) -> bool,
+}
+
+impl ListedStates {
+    /// Whether a list may hold `raw`.
+    pub(crate) fn admits(self, raw: u32) -> bool {
+        raw != self.normal && (self.in_range)(raw)
+    }
+}
+
+/// The values a written list of states holds, such as Alarm_Values: a list of
+/// Enumerated, where a value that isn't a list is its one element
+/// (WriteProperty hands over a list, but a local write may pass one value
+/// alone). An index is PROPERTY_IS_NOT_AN_ARRAY; more than
 /// [`MAX_ALARM_VALUES`](crate::multistate::MAX_ALARM_VALUES) elements is
 /// NO_SPACE_TO_WRITE_PROPERTY; an element of another datatype is
-/// INVALID_DATA_TYPE and one `in_range` refuses VALUE_OUT_OF_RANGE, each
+/// INVALID_DATA_TYPE and one `states` doesn't admit VALUE_OUT_OF_RANGE, each
 /// naming the element.
 pub(crate) fn enumerated_list(
     array_index: Option<u32>,
     value: &PropertyValue,
-    in_range: fn(u32) -> bool,
+    states: ListedStates,
 ) -> Result<Vec<u32>, Error> {
     if array_index.is_some() {
         return Err(Error::Protocol {
@@ -253,7 +281,7 @@ pub(crate) fn enumerated_list(
         .enumerate()
         .map(|(index, item)| {
             match *item {
-                PropertyValue::Enumerated(raw) if in_range(raw) => Ok(raw),
+                PropertyValue::Enumerated(raw) if states.admits(raw) => Ok(raw),
                 PropertyValue::Enumerated(_) => Err(common::value_out_of_range_error()),
                 _ => Err(common::invalid_data_type_error()),
             }
@@ -264,12 +292,9 @@ pub(crate) fn enumerated_list(
 
 /// [`enumerated_list`] for values an application sets: the same checks, as
 /// a network write of the same list would meet them.
-pub(crate) fn checked_raw_list(
-    values: Vec<u32>,
-    in_range: fn(u32) -> bool,
-) -> Result<Vec<u32>, Error> {
+pub(crate) fn checked_raw_list(values: Vec<u32>, states: ListedStates) -> Result<Vec<u32>, Error> {
     let values = values.into_iter().map(PropertyValue::Enumerated).collect();
-    enumerated_list(None, &PropertyValue::List(values), in_range)
+    enumerated_list(None, &PropertyValue::List(values), states)
 }
 
 /// [`enumerated_list`] read back: the raw values as a list of Enumerated.

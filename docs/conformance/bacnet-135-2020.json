@@ -3012,8 +3012,10 @@
     "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact"
    ],
    "negative_tests": [
-    "crates/bacnet-objects/src/access_control/zone_event_tests.rs::{access_zone_alarm_values_take_occupancy_states_only,access_zone_alarm_values_past_the_cap_are_no_space,access_zone_condition_cleared_within_time_delay_reports_nothing,access_zone_event_detection_enable_suspends_and_resets_reporting}",
-    "crates/bacnet-server/src/handlers/tests/list_value_writes.rs::one_element_of_another_datatype_is_refused_as_element_one"
+    "crates/bacnet-objects/src/access_control/zone_event_tests.rs::{access_zone_alarm_values_take_occupancy_states_only,access_zone_alarm_values_refuse_normal,access_zone_alarm_values_past_the_cap_are_no_space,access_zone_condition_cleared_within_time_delay_reports_nothing,access_zone_event_detection_enable_suspends_and_resets_reporting}",
+    "crates/bacnet-server/src/handlers/tests/list_value_writes.rs::one_element_of_another_datatype_is_refused_as_element_one",
+    "crates/bacnet-server/src/handlers/tests/access_zone_oos_writes.rs::alarm_values_refuse_normal_over_the_wire",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_zone_alarm_values_refuse_normal"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -3021,7 +3023,7 @@
    ],
    "notes": [
     "Time_Delay, Notification_Class, Alarm_Values, Event_Enable, Notify_Type, Event_Detection_Enable and Time_Delay_Normal are writable; Acked_Transitions, Event_Time_Stamps and Event_Message_Texts are read-only.",
-    "Alarm_Values takes named BACnetAccessZoneOccupancyState values and proprietary ones from 64 to 65535, else VALUE_OUT_OF_RANGE naming the element. WriteProperty and WritePropertyMultiple take it at any length; an empty value clears it.",
+    "Alarm_Values takes BACnetAccessZoneOccupancyState values other than NORMAL (named, or proprietary from 64 to 65535), else VALUE_OUT_OF_RANGE naming the element; WriteProperty and WritePropertyMultiple take any length, and empty clears it.",
     "The algorithm watches the Occupancy_State and Reliability served, so a count or fault simulated out of service raises events as a real one does.",
     "A CHANGE_OF_STATE notification carries Occupancy_State as its `zone-occupancy-state` New_State; a CHANGE_OF_RELIABILITY one lists Occupancy_State.",
     "Moving from one alarm value to another keeps OFFNORMAL and sends nothing, the optional re-indication of Clause 13.3.2 being left out."
