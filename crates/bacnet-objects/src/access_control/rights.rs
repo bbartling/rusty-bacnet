@@ -1,26 +1,37 @@
 use bacnet_encoding::constructed::encode_access_rule;
 use bacnet_types::constructed::BACnetAccessRule;
-use bacnet_types::enums::{AccessRuleLocationSpecifier, AccessRuleTimeRangeSpecifier};
+use bacnet_types::enums::{
+    AccessRuleLocationSpecifier, AccessRuleTimeRangeSpecifier, ErrorClass, ErrorCode,
+};
 
 use super::*;
 
 // AccessRightsObject (type 34)
 // ---------------------------------------------------------------------------
 
+/// The most rules either rule array holds, a resource cap. A longer list,
+/// from a setter or a network write, is RESOURCES /
+/// NO_SPACE_TO_WRITE_PROPERTY.
+pub const MAX_ACCESS_RULES: usize = 1024;
+
 /// BACnet Access Rights object (type 34).
 ///
 /// Holds the positive and negative access rules that credentials and users
-/// are assigned. Both rule arrays are BACnetARRAYs of `BACnetAccessRule`
-/// that the application provisions with
+/// are assigned. Both rule arrays are BACnetARRAYs of `BACnetAccessRule`.
+/// The application provisions them with
 /// [`set_positive_access_rules`](Self::set_positive_access_rules) and
-/// [`set_negative_access_rules`](Self::set_negative_access_rules); Table
-/// 12-39 doesn't require them to be writable, so the network reads them only.
-/// The object stores the rules without evaluating them.
+/// [`set_negative_access_rules`](Self::set_negative_access_rules), and peers
+/// write them whole, one element at a time, or resize them at index 0, with
+/// the setters' checks. Enable (property 133, `LOG_ENABLE` in
+/// `PropertyIdentifier`) switches the whole object: while it is FALSE every
+/// rule in both arrays counts as disabled (Clause 12.34.8). The object stores
+/// the rules and the flag without evaluating them.
 pub struct AccessRightsObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
     global_identifier: u64,
+    enable: bool,
     positive_access_rules: Vec<BACnetAccessRule>,
     negative_access_rules: Vec<BACnetAccessRule>,
     status_flags: StatusFlags,
@@ -28,7 +39,7 @@ pub struct AccessRightsObject {
 }
 
 impl AccessRightsObject {
-    /// Create a new Access Rights object with no access rules.
+    /// Create a new Access Rights object with no access rules, enabled.
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::ACCESS_RIGHTS, instance)?;
         Ok(Self {
@@ -36,6 +47,7 @@ impl AccessRightsObject {
             name: name.into(),
             description: String::new(),
             global_identifier: 0,
+            enable: true,
             positive_access_rules: Vec::new(),
             negative_access_rules: Vec::new(),
             status_flags: StatusFlags::empty(),
@@ -43,10 +55,24 @@ impl AccessRightsObject {
         })
     }
 
+    /// Set Enable. FALSE disables every rule in both arrays (Clause
+    /// 12.34.8) and leaves each rule's own enable flag alone, so TRUE again
+    /// brings the rules back as they were. The default, TRUE, is a local
+    /// choice; the standard names none.
+    pub fn set_enable(&mut self, enable: bool) {
+        self.enable = enable;
+    }
+
+    /// The stored Enable flag.
+    pub fn enable(&self) -> bool {
+        self.enable
+    }
+
     /// Replace Positive_Access_Rules, the rules that grant access.
     ///
-    /// The whole list is refused with VALUE_OUT_OF_RANGE, keeping the rules
-    /// set before, when any rule (Clause 12.34.9.1):
+    /// The whole list is refused, keeping the rules set before, when it holds
+    /// more than [`MAX_ACCESS_RULES`] rules (NO_SPACE_TO_WRITE_PROPERTY), or
+    /// with VALUE_OUT_OF_RANGE when any rule (Clause 12.34.9.1):
     ///
     /// - names a device that isn't a Device in either reference (#1285);
     /// - holds a specifier outside its two named values;
@@ -90,19 +116,34 @@ impl AccessRightsObject {
     }
 }
 
-/// `rules` collected once every one has passed [`check_access_rule`].
-fn checked_rules(
+/// `rules` collected once they fit [`MAX_ACCESS_RULES`] and every one has
+/// passed [`check_access_rule`].
+pub(super) fn checked_rules(
     rules: impl IntoIterator<Item = BACnetAccessRule>,
 ) -> Result<Vec<BACnetAccessRule>, Error> {
     let rules: Vec<BACnetAccessRule> = rules.into_iter().collect();
+    check_rule_count(rules.len())?;
     rules.iter().try_for_each(check_access_rule)?;
     Ok(rules)
+}
+
+/// Refuse a rule array longer than [`MAX_ACCESS_RULES`] with RESOURCES /
+/// NO_SPACE_TO_WRITE_PROPERTY.
+pub(super) fn check_rule_count(count: usize) -> Result<(), Error> {
+    if count > MAX_ACCESS_RULES {
+        Err(common::protocol_error(
+            ErrorClass::RESOURCES,
+            ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 /// Refuse with VALUE_OUT_OF_RANGE a rule the setters' rules turn away (see
 /// [`AccessRightsObject::set_positive_access_rules`]). The device members go
 /// through the shared `check_device_member` first.
-fn check_access_rule(rule: &BACnetAccessRule) -> Result<(), Error> {
+pub(super) fn check_access_rule(rule: &BACnetAccessRule) -> Result<(), Error> {
     let time_range_device = rule.time_range.as_ref().and_then(|r| r.device_identifier);
     crate::device_reference::check_device_member(time_range_device)?;
     let location_device = rule.location.as_ref().and_then(|r| r.device_identifier);
@@ -184,6 +225,9 @@ impl BACnetObject for AccessRightsObject {
             p if p == PropertyIdentifier::GLOBAL_IDENTIFIER => {
                 Ok(PropertyValue::Unsigned(self.global_identifier))
             }
+            // Table 12-39's Enable row is property 133, which the enum names
+            // after the log objects' Log_Enable.
+            p if p == PropertyIdentifier::LOG_ENABLE => Ok(PropertyValue::Boolean(self.enable)),
             p if p == PropertyIdentifier::POSITIVE_ACCESS_RULES => {
                 common::read_array(rule_values(&self.positive_access_rules), array_index)
             }
@@ -197,7 +241,7 @@ impl BACnetObject for AccessRightsObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
@@ -213,12 +257,35 @@ impl BACnetObject for AccessRightsObject {
                     Err(common::invalid_data_type_error())
                 }
             }
-            // The rule arrays are R rows (Table 12-39): refused here as
-            // read-only, like the other unhandled rows.
+            // Table 12-39 makes Enable and both rule arrays R rows, so taking
+            // their writes is this implementation's choice: a head end
+            // provisions access rights over the network.
+            p if p == PropertyIdentifier::LOG_ENABLE => {
+                if let PropertyValue::Boolean(enable) = value {
+                    self.enable = enable;
+                    Ok(())
+                } else {
+                    Err(common::invalid_data_type_error())
+                }
+            }
+            p if p == PropertyIdentifier::POSITIVE_ACCESS_RULES => {
+                super::rights_writes::write_rules(
+                    &mut self.positive_access_rules,
+                    array_index,
+                    value,
+                )
+            }
+            p if p == PropertyIdentifier::NEGATIVE_ACCESS_RULES => {
+                super::rights_writes::write_rules(
+                    &mut self.negative_access_rules,
+                    array_index,
+                    value,
+                )
+            }
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
-                _array_index,
+                array_index,
             )),
         }
     }
