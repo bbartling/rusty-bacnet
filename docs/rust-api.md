@@ -1812,10 +1812,12 @@ framing, through the shared `bacnet-encoding` codecs.
   arrays. A Group_Members element is a BACnetDeviceObjectPropertyReference. A
   Present_Value element is a BACnetPropertyAccessResult: the member's
   reference, then the value read or the error the read failed with. The
-  application stores those results in `GlobalGroupObject::present_value` as
-  `AccessResult` values, by member position, and a member without one reads
-  PROPERTY / VALUE_NOT_INITIALIZED. Index 0 reads the array size and each
-  index from 1 one element.
+  application sets the members with `GlobalGroupObject::set_group_members` or
+  `add_group_member` (read back with `group_members()`), which return `Result`
+  and run the device reference check below, and stores the results in
+  `GlobalGroupObject::present_value` as `AccessResult` values, by member
+  position; a member without one reads PROPERTY / VALUE_NOT_INITIALIZED.
+  Index 0 reads the array size and each index from 1 one element.
 - **Group `List_Of_Group_Members` and `Present_Value`** (Clause 12.14) are
   lists, so an array index is refused. A member is a
   `bacnet_types::constructed::ReadAccessSpecification`: an object in this device
@@ -1848,8 +1850,9 @@ framing, through the shared `bacnet-encoding` codecs.
   `subordinates()` reads them back. An Action element is a
   BACnetActionList, the BACnetActionCommand writes that Present_Value N
   selects, framed in `[0]`. `CommandObject::set_action` takes
-  `BACnetActionList` values and refuses a command whose priority is outside 1
-  to 16 or whose value can't be encoded. All three arrays are read-only on the
+  `BACnetActionList` values and refuses, with VALUE_OUT_OF_RANGE, a command
+  whose device identifier isn't a Device, whose priority is outside 1 to 16 or
+  whose value can't be encoded. All three arrays are read-only on the
   network. Writing the Command's Present_Value runs the list it selects; see
   [Building Control](#building-control-7).
 - **Load Control shed levels** (Clause 12.28): Requested_Shed_Level,
@@ -1918,24 +1921,35 @@ framing, through the shared `bacnet-encoding` codecs.
   every rule in both arrays (Clause 12.34.8) without touching each rule's own
   flag. The object stores and serves the rules and the flag; nothing in the
   stack evaluates them.
-- **Device references**: a
-  `BACnetDeviceObjectReference` whose device identifier is present must name
-  a Device object (Clause 21);
-  `BACnetDeviceObjectReference::device_identifier_is_device` tells, as does
+- **Device references**: a `BACnetDeviceObjectReference` or
+  `BACnetDeviceObjectPropertyReference` whose device identifier is present
+  must name a Device object (Clause 21); each type's
+  `device_identifier_is_device` tells, as does
   `bacnet_types::constructed::device_identifier_is_device` for a bare
-  optional identifier. Every
-  setter that stores these references refuses one that breaks the rule with
-  VALUE_OUT_OF_RANGE and keeps what it held: `set_door_members`,
+  optional identifier. Every setter that stores one, and every network write
+  path, refuses one that breaks the rule with VALUE_OUT_OF_RANGE and keeps
+  what it held, whatever the instance number: `set_door_members`,
   `set_access_doors`, `set_access_event`'s credential,
   `AccessZoneObject::set_entry_points` and `set_exit_points`,
-  `AccessCredentialObject::set_assigned_access_rights`,
-  `StructuredViewObject::add_subordinate`, `set_energy_meter_ref` and the
-  Staging configuration. A Staging `Target_References` write over the network
-  gets the same answer, ahead of the refusal of a remote device. A Channel
-  member is a `BACnetDeviceObjectPropertyReference`, which has the same
-  method and rule: `ChannelObject::set_members` and network writes of
-  `List_Of_Object_Property_References` refuse a member whose device
-  identifier isn't a Device with VALUE_OUT_OF_RANGE.
+  `AccessCredentialObject::set_assigned_access_rights`, the Access Rights
+  rules, `StructuredViewObject::add_subordinate` and `set_subordinates`,
+  `set_energy_meter_ref`, the Life Safety `add_member` and `add_zone_member`,
+  the Staging configuration, `ChannelObject::set_members`,
+  `GlobalGroupObject::set_group_members` and `add_group_member`,
+  `EventEnrollmentObject::set_object_property_reference`,
+  `TrendLogObject::set_log_device_object_property`,
+  `TrendLogMultipleObject::add_property_reference` and the device identifier
+  of each command `CommandObject::set_action` takes. One module in
+  bacnet-objects serves every one of these properties and decodes every
+  writable one (Averaging and Trend Log references, Trend Log Multiple
+  Log_DeviceObjectProperty, Channel and Schedule
+  List_Of_Object_Property_References, Staging Target_References), so a
+  written value gets one answer whichever object takes it: another datatype,
+  or a list or array element that can't open a reference, INVALID_DATA_TYPE;
+  a reference that doesn't decode, or anything at all after the reference
+  where the property (or an indexed element) holds one, INVALID_DATA_ENCODING;
+  a non-Device member VALUE_OUT_OF_RANGE, ahead of any refusal of a remote
+  device.
 
 ### ObjectDatabase
 
@@ -2119,7 +2133,9 @@ list that a write would refuse (past the cap, or an address MAC past 18
 octets) fails `with_persistence`.
 
 An Event Enrollment's Object_Property_Reference, set with
-`set_object_property_reference`, reads as the context-tagged
+`set_object_property_reference` (which returns `Result`, refusing a device
+identifier that isn't a Device with VALUE_OUT_OF_RANGE), reads as the
+context-tagged
 `BACnetDeviceObjectPropertyReference` in one `PropertyValue::ApplicationData`,
 its array index and Device members present only when set (Null while unset;
 #1182), and it stays read-only over the network. The server's evaluation and
@@ -2175,7 +2191,8 @@ network-writable too (#1088), through the setters' checks. The list is written
 whole, as the bytes a read returns, or edited by AddListElement and
 RemoveListElement, which write the result back whole through the same check
 (#1121). The Schedule writes only local targets, so a member naming another
-device is refused with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A member naming the
+device is refused with OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and one whose
+device identifier isn't a Device with VALUE_OUT_OF_RANGE. A member naming the
 Device the server answers for is the local reference it stands for: the server
 drops that Device member before the Schedule decodes the value, and it reads
 back without it (#1122). `ScheduleObject` itself can't tell which Device holds
@@ -2278,8 +2295,9 @@ is stored without the Device member; one naming another device is
 OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, except that a Trend Log Multiple element
 naming instance 4194303 is an empty element and kept. A Device member that
 isn't a Device identifier is VALUE_OUT_OF_RANGE, another datatype (the old flat
-application-tagged form included) INVALID_DATA_TYPE and a malformed reference
-INVALID_DATA_ENCODING. A write that changes the value purges the log, leaving a
+application-tagged form included) INVALID_DATA_TYPE, and a malformed reference,
+or anything after one written alone, INVALID_DATA_ENCODING. A write that
+changes the value purges the log, leaving a
 BUFFER_PURGED status record; without a valid clock it fails with DEVICE /
 OPERATIONAL_PROBLEM and changes nothing. The local
 `TrendLogObject::set_log_device_object_property` and
@@ -2664,8 +2682,10 @@ Object_Property_Reference reads as the context-tagged
 no Device member (Null while unset), and a write takes that encoding back
 (#1182). The flat application-tagged list reads used to serve is now
 INVALID_DATA_TYPE, as are octets that don't open with the object
-identifier's context tag 0 (#1312), and a Device member that isn't a Device
-identifier VALUE_OUT_OF_RANGE.
+identifier's context tag 0 (#1312); anything after the one reference is
+INVALID_DATA_ENCODING, and a Device member that isn't a Device identifier
+VALUE_OUT_OF_RANGE. The server hands the written octets over whole, as for a
+Trend Log (#1313).
 
 Staging uses an explicit atomic configuration; the former stage-count-only
 constructor is intentionally removed because it could not create a valid
@@ -2730,6 +2750,9 @@ evaluation, and returning to service reapplies the selected stage. Network
 writes may replace individual or whole `Stages`, `Target_References`, and
 configured `Stage_Names` arrays, but array lengths are fixed after construction
 so coupled configuration cannot pass through an invalid intermediate shape.
+`Target_References` reaches the object as the written octets and is decoded
+by the shared device reference helpers, so an element of another datatype is
+INVALID_DATA_TYPE (#1313).
 `Max_Pres_Value` is derived from the final stage limit. Staging does not
 advertise intrinsic reporting. It supports COV (Table 13-1): a SubscribeCOV
 notification carries Present_Value, Status_Flags and Present_Stage, and fires
@@ -4374,6 +4397,10 @@ a cleanup-task panic remains an error on later calls.
 32 local sends in flight, independent of inbound peer quotas. An admitted send is
 server-owned even if its caller stops waiting. Shutdown cancels and joins it;
 retained handles reject new sends and do not prolong the transport lifetime.
+While DeviceCommunicationControl restricts initiation, a send goes nowhere and
+fails with `SERVICES` / `COMMUNICATION_DISABLED` (see [Discovery under
+DeviceCommunicationControl](#discovery-under-devicecommunicationcontrol)); an
+announce loop should treat that error as a skipped announcement.
 Local mutation methods reject before changing objects once shutdown starts.
 `read_local()`, PICS, counters and database inspection remain available after
 Rust server stop. `local_mac()` retains the last bound address snapshot; it does
@@ -4729,6 +4756,19 @@ the notification:
 
 A write a Command or Channel makes in another device follows the same rule
 (see [Building Control](#building-control-7)).
+
+### Discovery under DeviceCommunicationControl
+
+Of the discovery messages, Clause 16.1 lets a device whose initiation is
+disabled send only the I-Am that answers a Who-Is (#1388). Under
+DISABLE_INITIATION the server therefore still answers Who-Is, but a Who-Has
+gets no I-Have, and an I-Am announcement through `broadcast_i_am()` or an
+`IAmBroadcaster` sends nothing and returns `SERVICES` /
+`COMMUNICATION_DISABLED`. The state is read just before the I-Have would go
+out, ahead of the discovery limiter, so a held-back Who-Has costs no rate
+budget and leaves nothing to coalesce: the same request is answered once
+initiation is enabled again. Network-layer messages, such as a
+Network-Number-Is answer, are not application services and go out as usual.
 
 ### Notification forwarding
 

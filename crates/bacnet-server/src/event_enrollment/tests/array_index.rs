@@ -25,10 +25,12 @@ fn add_out_of_range_enrollment(
         EventType::OUT_OF_RANGE,
     )
     .unwrap();
-    enrollment.set_object_property_reference(Some(
-        BACnetDeviceObjectPropertyReference::new_local(monitored_oid, property.to_raw())
-            .with_index(index),
-    ));
+    enrollment
+        .set_object_property_reference(Some(
+            BACnetDeviceObjectPropertyReference::new_local(monitored_oid, property.to_raw())
+                .with_index(index),
+        ))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay,
         low_limit: 20.0,
@@ -53,13 +55,15 @@ fn add_cov_enrollment(
         EventType::CHANGE_OF_VALUE,
     )
     .unwrap();
-    enrollment.set_object_property_reference(Some(
-        BACnetDeviceObjectPropertyReference::new_local(
-            monitored_oid,
-            PropertyIdentifier::PRIORITY_ARRAY.to_raw(),
-        )
-        .with_index(index),
-    ));
+    enrollment
+        .set_object_property_reference(Some(
+            BACnetDeviceObjectPropertyReference::new_local(
+                monitored_oid,
+                PropertyIdentifier::PRIORITY_ARRAY.to_raw(),
+            )
+            .with_index(index),
+        ))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::ChangeOfValue {
         time_delay: 0,
         criteria: ChangeOfValueCriteria::ReferencedPropertyIncrement(5.0),
@@ -518,10 +522,12 @@ fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
 
     let mut enrollment =
         EventEnrollmentObject::new(9, "EE-indexed-setpoint", EventType::FLOATING_LIMIT).unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        monitored_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    enrollment
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            monitored_oid,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::FloatingLimit {
         time_delay: 2,
         setpoint_reference: BACnetDeviceObjectPropertyReference::new_local(

@@ -557,10 +557,12 @@ fn count_watcher(instance: u32, log: ObjectIdentifier) -> EventEnrollmentObject 
         EventType::CHANGE_OF_STATE,
     )
     .unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        log,
-        PropertyIdentifier::TOTAL_RECORD_COUNT.to_raw(),
-    )));
+    enrollment
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            log,
+            PropertyIdentifier::TOTAL_RECORD_COUNT.to_raw(),
+        )))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::ChangeOfState {
         time_delay: 0,
         list_of_values: (1..=16).map(BACnetPropertyStates::UnsignedValue).collect(),

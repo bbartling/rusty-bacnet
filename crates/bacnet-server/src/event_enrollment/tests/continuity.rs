@@ -141,10 +141,12 @@ fn add_out_of_range_enrollment(
         EventType::OUT_OF_RANGE,
     )
     .unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        target_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    enrollment
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            target_oid,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: delay,
         low_limit: 20.0,
@@ -273,10 +275,12 @@ fn change_of_state_does_not_reuse_pre_gap_last_offnormal_identity() {
     db.add(Box::new(target)).unwrap();
     let mut enrollment =
         EventEnrollmentObject::new(323, "EE-COS-continuity", EventType::CHANGE_OF_STATE).unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        target_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    enrollment
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            target_oid,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::ChangeOfState {
         time_delay: 0,
         list_of_values: vec![
@@ -517,10 +521,12 @@ fn missing_fault_status_flags_observation_clears_continuity() {
     let flags_oid = ObjectIdentifier::new(ObjectType::BINARY_INPUT, 328).unwrap();
     let mut enrollment =
         EventEnrollmentObject::new(328, "EE-fault-flags", EventType::OUT_OF_RANGE).unwrap();
-    enrollment.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        target_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    enrollment
+        .set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            target_oid,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )))
+        .unwrap();
     enrollment.set_event_parameters(BACnetEventParameter::OutOfRange {
         time_delay: 0,
         low_limit: 20.0,

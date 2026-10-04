@@ -31,7 +31,8 @@ fn make_db_with_ack_required_ee() -> (ObjectDatabase, ObjectIdentifier) {
     ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
         bi_oid,
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )));
+    )))
+    .unwrap();
     ee.set_event_parameters(BACnetEventParameter::ChangeOfState {
         time_delay: 0,
         list_of_values: vec![BACnetPropertyStates::BinaryValue(1)],

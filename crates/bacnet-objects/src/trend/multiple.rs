@@ -125,7 +125,7 @@ impl TrendLogMultipleObject {
         let mut candidate = self.log_device_object_property.clone();
         match array_index {
             None => {
-                let written = device_reference::decode_property_references(&value)?;
+                let written = device_reference::decode_references(&value)?;
                 if written.len() > MAX_LOG_DEVICE_OBJECT_PROPERTIES {
                     return Err(references::no_space_error());
                 }
@@ -149,7 +149,7 @@ impl TrendLogMultipleObject {
                     .ok()
                     .and_then(|slot| candidate.get_mut(slot))
                     .ok_or_else(common::invalid_array_index_error)?;
-                let reference = device_reference::decode_property_reference(&value)?;
+                let reference = device_reference::decode_reference(&value)?;
                 references::check_written(&reference, true)?;
                 *slot = reference;
             }
@@ -323,10 +323,7 @@ impl BACnetObject for TrendLogMultipleObject {
             p if p == PropertyIdentifier::LOG_BUFFER => Err(log_buffer_read_denied()),
             // A BACnetARRAY: one Clause 21 encoding per element (#1234).
             p if p == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => common::read_array(
-                self.log_device_object_property
-                    .iter()
-                    .map(device_reference::property_reference_value)
-                    .collect(),
+                device_reference::reference_elements(&self.log_device_object_property),
                 array_index,
             ),
             p if p == PropertyIdentifier::PROPERTY_LIST => {

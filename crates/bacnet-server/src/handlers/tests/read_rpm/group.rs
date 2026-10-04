@@ -421,14 +421,16 @@ fn global_group(configured: bool) -> GlobalGroupObject {
     if configured {
         let ai = |instance| ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap();
         let device = ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap();
-        object.group_members = vec![
-            BACnetDeviceObjectPropertyReference::new_local(ai(1), P::PRESENT_VALUE.to_raw()),
-            BACnetDeviceObjectPropertyReference::new_remote(
-                ai(2),
-                P::PRESENT_VALUE.to_raw(),
-                device,
-            ),
-        ];
+        object
+            .set_group_members(vec![
+                BACnetDeviceObjectPropertyReference::new_local(ai(1), P::PRESENT_VALUE.to_raw()),
+                BACnetDeviceObjectPropertyReference::new_remote(
+                    ai(2),
+                    P::PRESENT_VALUE.to_raw(),
+                    device,
+                ),
+            ])
+            .unwrap();
         object.group_member_names = vec!["a".into(), "b".into()];
         object.present_value = vec![
             AccessResult::Value(PropertyValue::Enumerated(1)),
@@ -493,14 +495,14 @@ fn rp_and_rpm_global_group_member_status_flags_combine_status_flags_members() {
         (3, P::STATUS_FLAGS),
     ] {
         object
-            .group_members
-            .push(BACnetDeviceObjectPropertyReference {
+            .add_group_member(BACnetDeviceObjectPropertyReference {
                 object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance)
                     .unwrap(),
                 property_identifier: property.to_raw(),
                 property_array_index: None,
                 device_identifier: None,
-            });
+            })
+            .unwrap();
     }
     let flags = |octet| PropertyValue::BitString {
         unused_bits: 4,

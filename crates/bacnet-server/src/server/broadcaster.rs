@@ -7,6 +7,8 @@ pub(super) struct BroadcasterState<T: TransportPort> {
     requests: Weak<request_tasks::RequestTasks>,
     config: ServerConfig,
     db: Arc<RwLock<ObjectDatabase>>,
+    /// The server's DeviceCommunicationControl state, read before each send.
+    comm_state: Arc<AtomicU8>,
     capacity: Arc<Semaphore>,
 }
 
@@ -20,12 +22,14 @@ impl<T: TransportPort> BroadcasterState<T> {
         requests: &Arc<request_tasks::RequestTasks>,
         config: &ServerConfig,
         db: &Arc<RwLock<ObjectDatabase>>,
+        comm_state: &Arc<AtomicU8>,
     ) -> Arc<Self> {
         Arc::new(Self {
             network: SyncMutex::new(Some(Arc::clone(network))),
             requests: Arc::downgrade(requests),
             config: config.clone(),
             db: Arc::clone(db),
+            comm_state: Arc::clone(comm_state),
             capacity: Arc::new(Semaphore::new(32)),
         })
     }
@@ -55,11 +59,18 @@ impl<T: TransportPort + 'static> BroadcasterState<T> {
         let requests = self.requests.upgrade().ok_or_else(stopped)?;
         let config = self.config.clone();
         let db = Arc::clone(&self.db);
+        let comm_state = Arc::clone(&self.comm_state);
         let (tx, rx) = oneshot::channel();
         requests.spawn(async move {
             let _permit = permit;
-            let result =
-                discovery::broadcast_i_am_from(&config, &db, &network, limiter.as_ref()).await;
+            let result = discovery::broadcast_i_am_from(
+                &config,
+                &db,
+                &network,
+                &comm_state,
+                limiter.as_ref(),
+            )
+            .await;
             let _ = tx.send(result);
         });
         Ok(rx)
@@ -71,8 +82,10 @@ impl<T: TransportPort + 'static> BroadcasterState<T> {
 }
 
 impl<T: TransportPort + 'static> IAmBroadcaster<T> {
-    /// Send through the running server; overload or shutdown returns an error.
-    /// Cancelling this waiter does not cancel an already admitted send.
+    /// Send through the running server; overload or shutdown returns an error,
+    /// and so does DeviceCommunicationControl restricting initiation (see
+    /// [`BACnetServer::broadcast_i_am`]). Cancelling this waiter does not
+    /// cancel an already admitted send.
     pub async fn broadcast_i_am(&self) -> Result<(), Error> {
         let completion = self.state.upgrade().ok_or_else(stopped)?.admit(None)?;
         completion.await.map_err(|_| stopped())?

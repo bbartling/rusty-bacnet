@@ -216,7 +216,7 @@ fn configuration_setters_cancel_pending_countdowns() {
         .is_none());
 
     seed(&mut ee);
-    ee.set_object_property_reference(None);
+    ee.set_object_property_reference(None).unwrap();
     assert!(ee
         .enrollment_eval_state_internal()
         .unwrap()

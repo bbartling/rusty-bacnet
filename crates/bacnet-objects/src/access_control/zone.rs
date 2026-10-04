@@ -252,12 +252,12 @@ impl BACnetObject for AccessZoneObject {
             p if p == PropertyIdentifier::OCCUPANCY_LOWER_LIMIT => {
                 Ok(PropertyValue::Unsigned(self.occupancy.lower_limit))
             }
-            p if p == PropertyIdentifier::ENTRY_POINTS => Ok(
-                crate::device_reference::object_reference_list(&self.entry_points),
-            ),
-            p if p == PropertyIdentifier::EXIT_POINTS => Ok(
-                crate::device_reference::object_reference_list(&self.exit_points),
-            ),
+            p if p == PropertyIdentifier::ENTRY_POINTS => {
+                Ok(crate::device_reference::reference_list(&self.entry_points))
+            }
+            p if p == PropertyIdentifier::EXIT_POINTS => {
+                Ok(crate::device_reference::reference_list(&self.exit_points))
+            }
             _ => Err(common::unknown_property_error()),
         }
     }

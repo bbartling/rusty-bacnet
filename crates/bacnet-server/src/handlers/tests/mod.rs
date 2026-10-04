@@ -129,6 +129,7 @@ mod detection_enable_summary;
 mod device_description_writes;
 mod device_event;
 mod device_reference_reads;
+mod device_reference_writes;
 mod elevator_landing_calls;
 mod elevator_properties;
 mod enrollment_summary_budget;

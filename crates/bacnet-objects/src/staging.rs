@@ -6,10 +6,7 @@
 
 use std::borrow::Cow;
 
-use bacnet_encoding::constructed::{
-    decode_device_object_reference, decode_stage_limit_value, encode_device_object_reference,
-    encode_stage_limit_value,
-};
+use bacnet_encoding::constructed::{decode_stage_limit_value, encode_stage_limit_value};
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetStageLimitValue};
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, Reliability,
@@ -19,6 +16,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 
 use crate::common::{self, read_common_properties};
+use crate::device_reference;
 use crate::property_metadata::{
     property_list_from_metadata, PropertyConformance, PropertyMetadata, PropertyWriteCapability,
 };
@@ -263,23 +261,19 @@ impl StagingObject {
         let mut candidate = self.target_references.clone();
         match array_index {
             None => {
-                let PropertyValue::List(values) = value else {
-                    return Err(common::invalid_data_type_error());
-                };
-                if values.len() != candidate.len() {
+                let references: Vec<BACnetDeviceObjectReference> =
+                    device_reference::decode_references(&value)?;
+                if references.len() != candidate.len() {
                     return Err(common::value_out_of_range_error());
                 }
-                candidate = values
-                    .into_iter()
-                    .map(decode_reference_property_value)
-                    .collect::<Result<_, _>>()?;
+                candidate = references;
             }
             Some(0) => return Err(common::write_access_denied_error()),
             Some(index) => {
                 let Some(reference) = candidate.get_mut((index - 1) as usize) else {
                     return Err(common::invalid_array_index_error());
                 };
-                *reference = decode_reference_property_value(value)?;
+                *reference = device_reference::decode_reference(&value)?;
             }
         }
         validate_target_references(&candidate)?;
@@ -407,14 +401,7 @@ impl BACnetObject for StagingObject {
                 )
             }
             PropertyIdentifier::TARGET_REFERENCES => common::read_array(
-                self.target_references
-                    .iter()
-                    .map(|reference| {
-                        let mut encoded = BytesMut::new();
-                        encode_device_object_reference(&mut encoded, reference);
-                        PropertyValue::ApplicationData(encoded.to_vec())
-                    })
-                    .collect(),
+                device_reference::reference_elements(&self.target_references),
                 array_index,
             ),
             PropertyIdentifier::EVENT_STATE => {
@@ -592,20 +579,6 @@ fn decode_stage_property_value(value: PropertyValue) -> Result<BACnetStageLimitV
     Ok(stage)
 }
 
-fn decode_reference_property_value(
-    value: PropertyValue,
-) -> Result<BACnetDeviceObjectReference, Error> {
-    let PropertyValue::ApplicationData(bytes) = value else {
-        return Err(common::invalid_data_type_error());
-    };
-    let (reference, consumed) = decode_device_object_reference(&bytes, 0)
-        .map_err(|_| common::invalid_data_encoding_error())?;
-    if consumed != bytes.len() {
-        return Err(common::invalid_data_encoding_error());
-    }
-    Ok(reference)
-}
-
 fn validate_config(config: &StagingConfig) -> Result<(), Error> {
     common::reject_non_finite(config.present_value)?;
     if !(1..=16).contains(&config.priority_for_writing) {
@@ -627,15 +600,10 @@ fn validate_config(config: &StagingConfig) -> Result<(), Error> {
 fn validate_target_references(references: &[BACnetDeviceObjectReference]) -> Result<(), Error> {
     for reference in references {
         // A device member that isn't a Device makes no reference (#1285).
-        crate::device_reference::check_device_member(reference.device_identifier)?;
-        // The object can't tell which Device holds it, so any Device member
-        // is refused here; the server localizes one naming itself (#1136).
-        if reference.device_identifier.is_some() {
-            return Err(protocol_error(
-                ErrorClass::PROPERTY,
-                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-            ));
-        }
+        // The object can't tell which Device holds it, so any other Device
+        // member is refused too; the server localizes one naming itself
+        // (#1136).
+        device_reference::check_local_member(reference.device_identifier)?;
         if !matches!(
             reference.object_identifier.object_type(),
             ObjectType::BINARY_OUTPUT

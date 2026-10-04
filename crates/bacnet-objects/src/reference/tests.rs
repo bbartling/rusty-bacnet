@@ -6,11 +6,7 @@ use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;
 
-const FRAMES: [ReferenceFrame; 3] = [
-    ReferenceFrame::Bare,
-    ReferenceFrame::Setpoint,
-    ReferenceFrame::Device,
-];
+const FRAMES: [ReferenceFrame; 2] = [ReferenceFrame::Bare, ReferenceFrame::Setpoint];
 
 fn ai_ref(instance: u32, property: u32) -> BACnetObjectPropertyReference {
     BACnetObjectPropertyReference::new(
@@ -123,12 +119,10 @@ fn read_values_write_back_unchanged() {
 
 #[test]
 fn null_clears_except_on_setpoint_reference() {
-    for frame in [ReferenceFrame::Bare, ReferenceFrame::Device] {
-        assert_eq!(
-            decode_reference_write(&PropertyValue::Null, frame).unwrap(),
-            None
-        );
-    }
+    assert_eq!(
+        decode_reference_write(&PropertyValue::Null, ReferenceFrame::Bare).unwrap(),
+        None
+    );
     // BACnetSetpointReference has its own empty value; Null is another
     // datatype there.
     expect_protocol(
@@ -145,32 +139,28 @@ fn empty_value_clears_only_setpoint_reference() {
         decode_reference_write(&empty, ReferenceFrame::Setpoint).unwrap(),
         None
     );
-    for frame in [ReferenceFrame::Bare, ReferenceFrame::Device] {
-        expect_protocol(
-            decode_reference_write(&empty, frame),
-            ErrorCode::INVALID_DATA_ENCODING,
-            &format!("empty value under {frame:?}"),
-        );
-    }
+    expect_protocol(
+        decode_reference_write(&empty, ReferenceFrame::Bare),
+        ErrorCode::INVALID_DATA_ENCODING,
+        "empty value on a bare reference",
+    );
 }
 
 #[test]
 fn framed_form_decodes_from_one_or_split_application_data() {
     let reference =
         BACnetObjectPropertyReference::new_indexed(ai_ref(7, 88).object_identifier, 88, 12);
-    for frame in [ReferenceFrame::Bare, ReferenceFrame::Device] {
-        // Whole members in one element (a WriteProperty's octets).
-        assert_eq!(
-            decode_reference_write(&PropertyValue::ApplicationData(framed(&reference)), frame)
-                .unwrap(),
-            Some(reference.clone())
-        );
-        // Split at tag boundaries, as the generic value decode hands over.
-        assert_eq!(
-            decode_reference_write(&framed_split(&reference), frame).unwrap(),
-            Some(reference.clone())
-        );
-    }
+    let frame = ReferenceFrame::Bare;
+    // Whole members in one element (a WriteProperty's octets).
+    assert_eq!(
+        decode_reference_write(&PropertyValue::ApplicationData(framed(&reference)), frame).unwrap(),
+        Some(reference.clone())
+    );
+    // Split at tag boundaries, as the generic value decode hands over.
+    assert_eq!(
+        decode_reference_write(&framed_split(&reference), frame).unwrap(),
+        Some(reference.clone())
+    );
     assert_eq!(
         decode_reference_write(
             &PropertyValue::ApplicationData(framed_wrapped(&reference)),
@@ -309,57 +299,6 @@ fn setpoint_frame_must_hold_one_whole_reference() {
             decode_reference_write(
                 &PropertyValue::ApplicationData(bytes),
                 ReferenceFrame::Setpoint,
-            ),
-            ErrorCode::INVALID_DATA_ENCODING,
-            context,
-        );
-    }
-}
-
-#[test]
-fn device_frame_takes_a_local_reference_and_refuses_a_device_member() {
-    let reference =
-        BACnetObjectPropertyReference::new_indexed(ai_ref(7, 85).object_identifier, 85, 3);
-    // A Device member [3] is valid encoding, so its refusal names the
-    // missing remote support, or the range when it names no Device;
-    // malformed bytes stay INVALID_DATA_ENCODING.
-    let good = framed(&reference);
-    let with_device = [good.clone(), vec![0x3C, 0x02, 0x00, 0x00, 0x4D]].concat();
-    expect_protocol(
-        decode_reference_write(
-            &PropertyValue::ApplicationData(with_device.clone()),
-            ReferenceFrame::Device,
-        ),
-        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        "device-qualified member [3]",
-    );
-    expect_protocol(
-        decode_reference_write(
-            &PropertyValue::ApplicationData(
-                [good.clone(), vec![0x3C, 0x00, 0x00, 0x00, 0x4D]].concat(),
-            ),
-            ReferenceFrame::Device,
-        ),
-        ErrorCode::VALUE_OUT_OF_RANGE,
-        "[3] naming an Analog Input",
-    );
-    let cases: Vec<(Vec<u8>, &str)> = vec![
-        (good[..5].to_vec(), "object id only"),
-        (
-            with_device[..with_device.len() - 1].to_vec(),
-            "truncated [3]",
-        ),
-        (
-            [good.clone(), vec![0x49, 0x01]].concat(),
-            "trailing context tag [4]",
-        ),
-        ([good.clone(), good].concat(), "two references"),
-    ];
-    for (bytes, context) in cases {
-        expect_protocol(
-            decode_reference_write(
-                &PropertyValue::ApplicationData(bytes),
-                ReferenceFrame::Device,
             ),
             ErrorCode::INVALID_DATA_ENCODING,
             context,

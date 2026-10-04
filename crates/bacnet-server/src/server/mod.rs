@@ -734,6 +734,8 @@ mod device_recipient_routing_tests;
 #[cfg(all(test, feature = "sc-tls"))]
 mod direct_principal_tests;
 #[cfg(test)]
+mod discovery_dcc_tests;
+#[cfg(test)]
 mod discovery_tests;
 #[cfg(test)]
 mod event_confirmed_routing_tests;

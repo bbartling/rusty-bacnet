@@ -6,7 +6,8 @@ use std::time::Duration;
 use bacnet_encoding::constructed::encode_log_multiple_record;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_types::constructed::{
-    BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue,
+    BACnetDeviceObjectPropertyReference, BACnetLogMultipleRecord, BACnetLogRecord, LogData,
+    LogDatum, LogValue,
 };
 use bacnet_types::enums::{
     ErrorClass, ErrorCode, LoggingType, ObjectType, PropertyIdentifier as P,
@@ -17,7 +18,7 @@ use bytes::BytesMut;
 use tracing::warn;
 
 use super::{LocalDevice, ObjectDatabase};
-use crate::device_reference::decode_property_reference;
+use crate::device_reference::decode_reference;
 use crate::log_buffer::ANY_VALUE_MAX_OCTETS;
 use crate::traits::{BACnetObject, MonotonicClock};
 use alignment::{Alignment, DAY};
@@ -402,7 +403,7 @@ fn configuration(object: &dyn BACnetObject) -> Option<Configuration> {
 /// `wildcard_is_empty` applies the Trend Log Multiple rule for instance
 /// 4194303.
 fn member(value: &PropertyValue, wildcard_is_empty: bool) -> Option<Member> {
-    let reference = decode_property_reference(value).ok()?;
+    let reference: BACnetDeviceObjectPropertyReference = decode_reference(value).ok()?;
     let empty =
         |oid: &ObjectIdentifier| oid.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE;
     if wildcard_is_empty

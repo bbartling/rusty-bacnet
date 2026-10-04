@@ -758,8 +758,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             ),
         );
 
-        let broadcaster =
-            super::broadcaster::BroadcasterState::new(&network, &request_tasks, &config, &db);
+        let broadcaster = super::broadcaster::BroadcasterState::new(
+            &network,
+            &request_tasks,
+            &config,
+            &db,
+            &comm_state,
+        );
         let server = Self {
             target_audit,
             config,
