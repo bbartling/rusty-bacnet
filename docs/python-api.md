@@ -107,10 +107,10 @@ ev = ErrorCode.UNKNOWN_PROPERTY
 
 ### EnableDisable
 
-For `device_communication_control`, and what `BACnetServer.comm_state()` returns. Constants: `ENABLE`, `DISABLE`, `DISABLE_INITIATION`.
+For `device_communication_control`, and what `BACnetServer.comm_state()` returns. Constants: `ENABLE`, `DISABLE`, `DISABLE_INITIATION`. `DISABLE` is deprecated, and a rusty-bacnet server refuses it under every DCC policy.
 
 ```python
-ed = EnableDisable.DISABLE
+ed = EnableDisable.DISABLE_INITIATION
 ```
 
 ### ReinitializedState
@@ -864,7 +864,7 @@ await client.delete_object(
 ```python
 await client.device_communication_control(
     "192.168.1.100:47808",
-    EnableDisable.DISABLE,
+    EnableDisable.DISABLE_INITIATION,
     time_duration=60,       # minutes
     password="secret",
 )
@@ -2943,9 +2943,15 @@ if state == EnableDisable.DISABLE_INITIATION:
 
 The result is `EnableDisable.ENABLE` or `EnableDisable.DISABLE_INITIATION`,
 the same class `device_communication_control` takes. The server refuses the
-deprecated `DISABLE`, so `comm_state()` never returns it. `EnableDisable` does
-not compare equal to an `int`; use `state.to_raw()` for the number. It raises
-`RuntimeError` before start and after stop.
+deprecated `DISABLE`, so `comm_state()` never returns it.
+
+- `EnableDisable` doesn't compare equal to an `int`, and it is truthy in both
+  states, so `if await server.comm_state():` can't tell them apart. Compare
+  with the constants; `state.to_raw()` gives the number.
+- `copy.copy`, `copy.deepcopy` and `pickle` raise `TypeError` on it. Keep
+  `state.to_raw()` and rebuild with `EnableDisable.from_raw()` instead.
+
+`comm_state()` raises `RuntimeError` before start and after stop.
 
 #### `cov_counters() -> CovCounters`
 

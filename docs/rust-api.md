@@ -4114,7 +4114,7 @@ client.clear_devices().await;                            // reset table
 ### Device Management
 
 ```rust
-client.device_communication_control(&mac, EnableDisable::DISABLE, Some(60), Some("password".into())).await?;
+client.device_communication_control(&mac, EnableDisable::DISABLE_INITIATION, Some(60), Some("password".into())).await?;
 client.reinitialize_device(&mac, ReinitializedState::WARMSTART, None).await?;
 ```
 

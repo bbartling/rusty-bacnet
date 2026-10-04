@@ -828,7 +828,7 @@ class EnableDisable:
 
 
 class ReinitializedState:
-    """BACnet ReinitializeDevice state options (Clause 16.5)."""
+    """BACnet ReinitializeDevice state options (Clause 16.4)."""
 
     COLDSTART: ReinitializedState
     WARMSTART: ReinitializedState

@@ -1,13 +1,13 @@
 """Installed-native DCC local policy, not source authentication or hardware proof."""
 import ast
 import asyncio
-import importlib.util
 import inspect
 from pathlib import Path
 import socket
 import unittest
 from typing import Any
 
+import rusty_bacnet
 from rusty_bacnet import BACnetServer, EnableDisable
 
 
@@ -86,17 +86,15 @@ class DccConstructorTests(unittest.TestCase):
                                  sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
 
     def test_comm_state_stub_returns_enable_disable(self):
-        spec = importlib.util.find_spec("rusty_bacnet")
-        assert spec is not None and spec.origin is not None
-        origin = Path(spec.origin)
-        candidates = [origin.with_suffix(".pyi"), origin.parent / "rusty_bacnet.pyi"]
-        stub = next(path for path in candidates if path.exists())
-        server = next(node for node in ast.parse(stub.read_text()).body
-                      if isinstance(node, ast.ClassDef) and node.name == "BACnetServer")
-        method = next(node for node in server.body
-                      if isinstance(node, ast.FunctionDef) and node.name == "comm_state")
-        assert method.returns is not None
-        self.assertEqual(ast.unparse(method.returns), "Awaitable[EnableDisable]")
+        stub_path = Path(rusty_bacnet.__file__).with_suffix(".pyi")
+        tree = ast.parse(stub_path.read_text(encoding="utf-8"), filename=str(stub_path))
+        methods = {method.name: method
+                   for node in tree.body
+                   if isinstance(node, ast.ClassDef) and node.name == "BACnetServer"
+                   for method in node.body if isinstance(method, ast.FunctionDef)}
+        self.assertIn("comm_state", methods)
+        returns = methods["comm_state"].returns
+        self.assertEqual(returns and ast.unparse(returns), "Awaitable[EnableDisable]")
 
 
 class DccNativeTests(unittest.IsolatedAsyncioTestCase):
