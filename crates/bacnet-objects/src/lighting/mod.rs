@@ -183,12 +183,15 @@ impl LightingOutputObject {
 /// that gap taken as 1.0, so such a level comes back as 1.0. 0.0 and levels
 /// from 1.0 to 100.0 come back unchanged. A level below 0.0 or above 100.0,
 /// NaN included, is VALUE_OUT_OF_RANGE. The blink-warn values -1.0 to -3.0
-/// are refused here with the rest until #1384 carries them out.
+/// are refused here with the rest until #1384 carries them out. -0.0 is off,
+/// so it comes back as 0.0 rather than keeping its sign on the wire.
 fn normalized_level(value: f32) -> Result<f32, Error> {
     if !(0.0..=100.0).contains(&value) {
         return Err(common::value_out_of_range_error());
     }
-    Ok(if value > 0.0 && value < 1.0 {
+    Ok(if value == 0.0 {
+        0.0
+    } else if value < 1.0 {
         1.0
     } else {
         value

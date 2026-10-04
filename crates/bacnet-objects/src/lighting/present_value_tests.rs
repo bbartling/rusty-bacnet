@@ -89,6 +89,15 @@ fn lighting_output_present_value_off_and_one_percent_up_are_stored_as_written() 
 }
 
 #[test]
+fn lighting_output_present_value_negative_zero_is_stored_as_off() {
+    let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
+    command(&mut lo, PropertyValue::Real(-0.0), 8);
+    assert_eq!(levels_at_8(&lo), [0.0f32.to_bits(); 3]);
+    lo.set_relinquish_default(-0.0).unwrap();
+    assert_eq!(real(&lo, RD, None).to_bits(), 0.0f32.to_bits());
+}
+
+#[test]
 fn lighting_output_present_value_outside_the_range_is_refused_and_changes_nothing() {
     let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
     command(&mut lo, PropertyValue::Real(0.5), 8);
