@@ -774,6 +774,8 @@ mod life_safety_operation_tests;
 #[cfg(test)]
 mod lighting_command_member_tests;
 #[cfg(test)]
+mod lighting_present_value_tests;
+#[cfg(test)]
 mod list_element_event_tests;
 #[cfg(test)]
 mod local_network_number_tests;

@@ -4546,6 +4546,7 @@
     "crates/bacnet-objects/src/binary/tests/value.rs::bv_relinquish_default_write_recaptures_present_value",
     "crates/bacnet-objects/src/multistate/tests/relinquish_default.rs::mso_msv_relinquish_default_write_recaptures_present_value",
     "crates/bacnet-objects/src/lighting/tests.rs::lighting_output_relinquish_default_write_recaptures_present_value",
+    "crates/bacnet-objects/src/lighting/present_value_tests.rs::lighting_output_relinquish_default_below_one_percent_is_stored_as_one_percent",
     "crates/bacnet-objects/src/lighting/tests.rs::binary_lighting_output_relinquish_default_accepts_off_on_and_recaptures_present_value",
     "crates/bacnet-objects/src/lighting/tests.rs::binary_lighting_output_active_command_outranks_relinquish_default",
     "crates/bacnet-server/src/handlers/tests/binary_lighting_relinquish_default.rs::binary_lighting_output_relinquish_default_accepts_off_on_over_write_property",
@@ -4571,7 +4572,8 @@
     "Invalid writes refuse with VALUE_OUT_OF_RANGE for range/finiteness and INVALID_DATA_TYPE for a wrong BACnet datatype, without changing Relinquish_Default or Present_Value. For Binary Lighting Output, direct setter/object and WP tests cover the exact OFF/ON domain and atomic refusal while WPM proves a valid Relinquish_Default prefix remains committed when a later value is refused, without disturbing the active priority state.",
     "Binary Lighting operation handling is evidenced separately in BACNET-12-BINARY-LIGHTING-OPERATIONS; this row remains bounded to Relinquish_Default. Number_Of_States shrink interplay on MSO/MSV: Clause 12.19/12.22 leave stored-value adjustment a local matter and this implementation does not auto-adjust - pinned in a test comment, with CONFIGURATION_ERROR reporting for the condition tracked under #226.",
     "CURRENT_COMMAND_PRIORITY stays read-only (derived). The Access Door Present_Value arm, which used to accept any Enumerated, now shares the Relinquish_Default check (#979, evidenced in BACNET-12-ACCESS-DOOR-DOOR-VALUE), and the door's property_list now lists PRIORITY_ARRAY and RELINQUISH_DEFAULT.",
-    "#182 added the paired datetime write path, replacing the pinned-denial test with datetime_value_relinquish_default_write_recaptures_present_value. Issue #821 removes the private unused access selector and no-metadata fallbacks: all twelve value types retain the same validated Relinquish_Default write and required metadata-derived property presence/writability. #1073 narrowed the Access Door's Relinquish_Default to LOCK and UNLOCK (Clause 12.26.11), refusing the two pulse values with VALUE_OUT_OF_RANGE."
+    "#182 added the paired datetime write path, replacing the pinned-denial test with datetime_value_relinquish_default_write_recaptures_present_value. Issue #821 removes the private unused access selector and no-metadata fallbacks: all twelve value types retain the same validated Relinquish_Default write and required metadata-derived property presence/writability. #1073 narrowed the Access Door's Relinquish_Default to LOCK and UNLOCK (Clause 12.26.11), refusing the two pulse values with VALUE_OUT_OF_RANGE.",
+    "Lighting Output stores a Relinquish_Default above 0.0 and below 1.0 as 1.0, the level it stores for a Present_Value command in that gap."
    ]
   },
   {
@@ -4669,6 +4671,43 @@
    ],
    "gaps": [
     "#1384: a command doesn't fade, ramp, step, blink-warn or start egress; Present_Value, Tracking_Value and In_Progress don't change"
+   ]
+  },
+  {
+   "id": "BACNET-12-LIGHTING-OUTPUT-PRESENT-VALUE",
+   "standard_anchor": "Clauses 12.54, 12.54.4, 12.54.5, 12.54.22 and 15.9.1.3",
+   "priority": "P1",
+   "summary": "Lighting Output takes a Present_Value level from 0.0 to 100.0 at priorities 1 to 16, stores a level between 0.0 and 1.0 as 1.0, and serves Tracking_Value equal to Present_Value.",
+   "status": "in-progress",
+   "code_anchors": [
+    "crates/bacnet-objects/src/lighting/mod.rs::normalized_level",
+    "crates/bacnet-objects/src/lighting/mod.rs::LightingOutputObject"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/lighting/present_value_tests.rs::{lighting_output_present_value_below_one_percent_is_stored_as_one_percent,lighting_output_present_value_off_and_one_percent_up_are_stored_as_written,lighting_output_relinquish_falls_back_through_a_one_percent_slot,lighting_output_relinquish_default_below_one_percent_is_stored_as_one_percent}",
+    "crates/bacnet-server/src/handlers/tests/lighting_present_value_writes.rs::lighting_output_present_value_below_one_percent_reads_one_percent_over_the_wire",
+    "crates/bacnet-server/src/server/lighting_present_value_tests.rs::lighting_output_local_write_below_one_percent_is_stored_and_reported_as_one_percent",
+    "crates/rusty-bacnet/tests/test_lighting_present_value.py::LightingPresentValueTests::{test_level_below_one_percent_is_stored_as_one_percent,test_off_and_one_percent_up_are_stored_as_written,test_relinquish_default_below_one_percent_is_stored_as_one_percent}"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/lighting/present_value_tests.rs::lighting_output_present_value_outside_the_range_is_refused_and_changes_nothing",
+    "crates/bacnet-server/src/handlers/tests/lighting_present_value_writes.rs::lighting_output_present_value_outside_the_range_is_refused_over_the_wire",
+    "crates/rusty-bacnet/tests/test_lighting_present_value.py::LightingPresentValueTests::test_level_outside_the_range_is_refused_and_changes_nothing"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#lighting--color-5",
+    "docs/python-api.md#lighting"
+   ],
+   "notes": [
+    "The level is normalized before it enters its priority slot, so the slot, Present_Value, Tracking_Value and SubscribeCOV reports all carry 1.0 for a write between 0.0 and 1.0.",
+    "A Relinquish_Default between 0.0 and 1.0 is stored as 1.0 too, a local reading: it feeds Present_Value, and the normalized range has no level in that gap.",
+    "A level below 0.0 or above 100.0, NaN and the infinities included, is VALUE_OUT_OF_RANGE and changes nothing.",
+    "Tracking_Value equals Present_Value because no fade or ramp runs, so In_Progress stays IDLE.",
+    "Min_Actual_Value and Max_Actual_Value aren't served. They would scale the normalized range onto the physical output and leave stored levels alone."
+   ],
+   "gaps": [
+    "#1384: the blink-warn values -1.0, -2.0 and -3.0 are refused with VALUE_OUT_OF_RANGE, and no fade or ramp moves Tracking_Value"
    ]
   },
   {

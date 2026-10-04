@@ -2795,6 +2795,13 @@ A fade time outside 100 to 86,400,000 ms, or a rate or increment outside 0.1
 to 100.0, is refused with VALUE_OUT_OF_RANGE (Clauses 12.54.16 to 12.54.18).
 Both lighting objects serve `Current_Command_Priority`.
 
+Lighting Output's Present_Value and Relinquish_Default take a level from 0.0
+(off) to 100.0 percent. A level above 0.0 and below 1.0 is stored as 1.0, the
+dimmest on level (Clause 12.54.4), so the priority slot, Present_Value,
+Tracking_Value and COV reports all carry 1.0 (#1385). A level below 0.0 or
+above 100.0, NaN included, is refused with VALUE_OUT_OF_RANGE. Tracking_Value
+follows Present_Value, since In_Progress stays IDLE.
+
 Lighting Output's `Lighting_Command` holds a `BACnetLightingCommand`
 (`bacnet_types::constructed`): an operation plus an optional target level, ramp
 rate, step increment, fade time and priority (#1263). It reads operation NONE
