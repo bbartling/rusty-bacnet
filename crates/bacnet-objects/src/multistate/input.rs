@@ -64,6 +64,9 @@ impl MultiStateInputObject {
     }
 
     /// Set the alarm values (states that trigger OFFNORMAL).
+    ///
+    /// Unlike a network write, which refuses a state past Number_Of_States
+    /// (#1429), this takes any state.
     pub fn set_alarm_values(&mut self, values: Vec<u32>) {
         self.event_detector.alarm_values = values;
     }
@@ -258,7 +261,7 @@ impl BACnetObject for MultiStateInputObject {
             }
         }
         if property == PropertyIdentifier::ALARM_VALUES {
-            let values = decode_alarm_values_write(array_index, value)?;
+            let values = decode_alarm_values_write(array_index, value, self.number_of_states)?;
             self.event_detector.alarm_values = values;
             return Ok(());
         }

@@ -1215,7 +1215,11 @@
     "crates/bacnet-server/src/handlers/tests",
     "crates/bacnet-objects/src/analog/tests/creation_only.rs::analog_value_is_not_createable_and_takes_nothing_at_creation",
     "crates/bacnet-objects/src/multistate/tests/creation_only.rs::a_count_that_would_strand_a_held_state_is_refused",
-    "crates/bacnet-server/src/handlers/tests/create_object_creation_only.rs::a_units_initial_value_is_checked_and_a_null_leaves_the_default"
+    "crates/bacnet-server/src/handlers/tests/create_object_creation_only.rs::a_units_initial_value_is_checked_and_a_null_leaves_the_default",
+    "crates/bacnet-server/src/handlers/tests/create_object_state_count.rs::an_alarm_state_past_the_count_is_refused_in_either_order",
+    "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::add_list_element_names_an_alarm_state_past_the_count",
+    "crates/bacnet-objects/src/multistate/tests/generic_event_properties.rs::multistate_alarm_values_round_trip_and_match_pics",
+    "crates/rusty-bacnet/tests/test_create_object_defaults.py::CreateObjectDefaultsTests::test_an_alarm_state_past_the_count_is_refused"
    ],
    "benchmarks": [
     "benchmarks/src/stress/objects.rs"
@@ -1228,7 +1232,8 @@
    "notes": [
     "Initial family row only; later work should split high-claim services and object families into detailed rows.",
     "CreateObject sets a few read-only properties whole through `initialize_property`: Units on Analog Input and Output, Number_Of_States and State_Text on the multi-state types. WriteProperty refuses each with WRITE_ACCESS_DENIED.",
-    "A created state count runs from 1 to 1024 and is refused if a held state would fall past it; it resizes State_Text. State_Text written whole needs one CharacterString per state. Feedback_Value doesn't hold a state."
+    "A created state count runs from 1 to 1024 and is refused if a held state would fall past it; it resizes State_Text. State_Text written whole needs one CharacterString per state. Feedback_Value doesn't hold a state.",
+    "Multi-state Input and Value refuse an Alarm_Values entry past Number_Of_States with VALUE_OUT_OF_RANGE at its element, on every network write path. The local `set_alarm_values` takes any state."
    ]
   },
   {
@@ -6605,7 +6610,8 @@
     "crates/rusty-bacnet/src/errors.rs::to_py_err",
     "crates/bacnet-server/src/cov/admission.rs::MultipleRefusal",
     "crates/bacnet-server/src/handlers/object_mgmt.rs::initialize",
-    "crates/bacnet-server/src/handlers/object_mgmt.rs::default_name"
+    "crates/bacnet-server/src/handlers/object_mgmt.rs::default_name",
+    "crates/bacnet-server/src/handlers/object_mgmt.rs::apply_counts_first"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::structured_error_golden_vectors_replace_the_generic_pair",
@@ -6650,6 +6656,8 @@
     "crates/bacnet-server/src/handlers/tests/create_object_default_name.rs::a_taken_default_name_takes_the_first_free_suffix",
     "crates/bacnet-server/src/handlers/tests/create_object_creation_only.rs::number_of_states_and_state_text_give_the_same_object_in_either_order",
     "crates/bacnet-server/src/handlers/tests/create_object_creation_only.rs::values_that_name_a_state_are_judged_against_the_requested_count",
+    "crates/bacnet-server/src/handlers/tests/create_object_state_count.rs::of_several_good_counts_the_last_sets_the_states",
+    "crates/bacnet-server/src/handlers/tests/create_object_state_count.rs::a_null_count_or_state_text_leaves_the_defaults",
     "crates/rusty-bacnet/tests/test_create_object_defaults.py::CreateObjectDefaultsTests::test_a_taken_default_name_takes_a_suffix_or_the_requested_name",
     "crates/rusty-bacnet/tests/test_create_object_defaults.py::CreateObjectDefaultsTests::test_states_round_trip_in_either_order"
    ],
@@ -6669,6 +6677,7 @@
     "crates/bacnet-server/src/handlers/tests/create_object_default_name.rs::a_requested_name_that_is_taken_is_still_refused_at_its_position",
     "crates/bacnet-server/src/handlers/tests/create_object_creation_only.rs::a_state_text_of_the_wrong_length_is_refused_at_its_position",
     "crates/bacnet-server/src/handlers/tests/create_object_creation_only.rs::a_number_of_states_out_of_range_is_refused_at_its_position",
+    "crates/bacnet-server/src/handlers/tests/create_object_state_count.rs::a_count_that_fails_its_own_checks_keeps_its_place",
     "crates/rusty-bacnet/tests/test_create_object_defaults.py::CreateObjectDefaultsTests::test_a_state_text_of_the_wrong_length_is_refused"
    ],
    "benchmarks": [],
@@ -6689,7 +6698,7 @@
     "CreateObject checks and decodes each initial value as WriteProperty does and names the first one it can't apply. One that doesn't decode is INVALID_DATA_ENCODING and isn't audited; no object is left behind.",
     "An initial Object_Name another object holds is PROPERTY / DUPLICATE_NAME at its position, the pair WriteProperty gives; CreateObject's own error table has no row for a name in use.",
     "A new object starts as `<TYPE>-<instance>`, or the first free `<TYPE>-<instance> (n)` from n = 2 when another object holds that name, so a renamed object never fails a create. An initial Object_Name then renames it.",
-    "On the multi-state types Number_Of_States applies before the other initial values, so state-bound values are judged against the requested count wherever it stands. A refused Number_Of_States is named by its own position."
+    "On the multi-state types a Number_Of_States that passes its own checks applies before the other initial values; one that fails stays in list order. A refusal names the value's own position, so an earlier bad value is named first."
    ]
   },
   {

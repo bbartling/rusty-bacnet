@@ -429,9 +429,18 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// The server calls this only on the object it is creating, before any
     /// other request can see it. Check the value as a write would, and on
     /// `Err` leave the object unchanged: the server then refuses the request,
-    /// naming the initial value, and drops the object. The default refuses
-    /// every property with PROPERTY / WRITE_ACCESS_DENIED, the answer for a
-    /// property that can't be initialized at creation (Clause 15.3.1.3.1).
+    /// naming the initial value, and drops the object. As on the write
+    /// route, an initial value that is one application NULL and that this
+    /// refuses with PROPERTY / INVALID_DATA_TYPE leaves the property as it
+    /// is and counts as applied, so refuse a NULL that way. The default
+    /// refuses every property with PROPERTY / WRITE_ACCESS_DENIED, the
+    /// answer for a property that can't be initialized at creation (Clause
+    /// 15.3.1.3.1).
+    ///
+    /// The bundled server's CreateObject builds only built-in objects today
+    /// (Analog Input and Output, the binary types and the multi-state
+    /// types), so on a custom object this hook is reached only by a caller
+    /// that builds the object itself.
     fn initialize_property(
         &mut self,
         _property: PropertyIdentifier,

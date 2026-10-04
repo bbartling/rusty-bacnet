@@ -114,23 +114,7 @@ pub(crate) fn handle_create_object_observed(
     let created_oid = create(db, &request, target).map_err(CreateObjectRefusal::Failed)?;
 
     // Apply initial values; on failure, remove the created object.
-    let mut values: Vec<_> = (1u32..).zip(&request.list_of_initial_values).collect();
-    // An object that takes Number_Of_States at creation (the multi-state
-    // types) takes it before any other initial value (#1429). Present_Value,
-    // Relinquish_Default, the State_Text elements and State_Text written
-    // whole are then judged against the count the request asks for,
-    // wherever it stands in the list. The sort is stable, so the other
-    // values keep their order, and a refusal still names the value's own
-    // position.
-    let object = db.get(&created_oid).expect("created above");
-    if object
-        .creation_only_properties()
-        .contains(&PropertyIdentifier::NUMBER_OF_STATES)
-    {
-        values
-            .sort_by_key(|(_, pv)| pv.property_identifier != PropertyIdentifier::NUMBER_OF_STATES);
-    }
-    for (position, pv) in values {
+    for (position, pv) in apply_counts_first(db, created_oid, &request, command_origin) {
         if let Err(refusal) = initialize(db, created_oid, pv, command_origin) {
             let _ = db.remove(&created_oid);
             return Err(refusal.of_initial_value(position));
@@ -139,6 +123,43 @@ pub(crate) fn handle_create_object_observed(
 
     bacnet_encoding::primitives::encode_app_object_id(buf, &created_oid);
     Ok(())
+}
+
+/// Apply the request's Number_Of_States values first, on an object that
+/// takes one at creation (the multi-state types), and return the initial
+/// values left to apply, with their positions, in request order (#1429).
+///
+/// Present_Value, Relinquish_Default, Alarm_Values, the State_Text elements
+/// and State_Text written whole are then judged against the count the
+/// request asks for, wherever it stands in the list. A Number_Of_States
+/// that fails its own checks (an index, its datatype, its range) isn't
+/// applied here: it stays in its place among the rest, so a bad value
+/// before it is still the one named. With several, each that passes is
+/// applied in request order, so the last of those sets the count. A refusal
+/// always names the value's own position. On a fresh object the count can
+/// only fail its own checks here, since every state the object holds is 1.
+fn apply_counts_first<'a>(
+    db: &mut ObjectDatabase,
+    created_oid: ObjectIdentifier,
+    request: &'a CreateObjectRequest,
+    command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
+) -> Vec<(u32, &'a bacnet_services::common::BACnetPropertyValue)> {
+    let values = (1u32..).zip(&request.list_of_initial_values);
+    let object = db.get(&created_oid).expect("created above");
+    if !object
+        .creation_only_properties()
+        .contains(&PropertyIdentifier::NUMBER_OF_STATES)
+    {
+        return values.collect();
+    }
+    // A refused attempt leaves the object as it was, and the value is tried
+    // again in its place.
+    values
+        .filter(|(_, pv)| {
+            pv.property_identifier != PropertyIdentifier::NUMBER_OF_STATES
+                || initialize(db, created_oid, pv, command_origin).is_err()
+        })
+        .collect()
 }
 
 /// Create the requested object with its default values, setting `target` to
@@ -187,28 +208,35 @@ fn create(
     *target = (object_type.to_raw() <= 1023)
         .then(|| ObjectIdentifier::new(object_type, instance).ok())
         .flatten();
-    let name = default_name(db, object_type, instance);
+    // Named only once the type is known to be one the server builds.
+    let name = || default_name(db, object_type, instance);
 
     let object: Box<dyn bacnet_objects::traits::BACnetObject> = if object_type
         == ObjectType::ANALOG_INPUT
     {
         Box::new(bacnet_objects::analog::AnalogInputObject::new(
-            instance, &name, 95,
+            instance,
+            name(),
+            95,
         )?)
     } else if object_type == ObjectType::ANALOG_OUTPUT {
         Box::new(bacnet_objects::analog::AnalogOutputObject::new(
-            instance, &name, 95,
+            instance,
+            name(),
+            95,
         )?)
     } else if object_type == ObjectType::BINARY_INPUT {
         Box::new(bacnet_objects::binary::BinaryInputObject::new(
-            instance, &name,
+            instance,
+            name(),
         )?)
     } else if object_type == ObjectType::BINARY_OUTPUT {
         Box::new(bacnet_objects::binary::BinaryOutputObject::new(
-            instance, &name,
+            instance,
+            name(),
         )?)
     } else if object_type == ObjectType::BINARY_VALUE {
-        let mut object = bacnet_objects::binary::BinaryValueObject::new(instance, &name)?;
+        let mut object = bacnet_objects::binary::BinaryValueObject::new(instance, name())?;
         // Initial values provision only the optional rows actually requested.
         // Normal WP cannot materialize an absent property. Values still pass
         // the same writer below, including rollback on invalid initialization.
@@ -232,15 +260,21 @@ fn create(
         Box::new(object)
     } else if object_type == ObjectType::MULTI_STATE_INPUT {
         Box::new(bacnet_objects::multistate::MultiStateInputObject::new(
-            instance, &name, 2,
+            instance,
+            name(),
+            2,
         )?)
     } else if object_type == ObjectType::MULTI_STATE_OUTPUT {
         Box::new(bacnet_objects::multistate::MultiStateOutputObject::new(
-            instance, &name, 2,
+            instance,
+            name(),
+            2,
         )?)
     } else if object_type == ObjectType::MULTI_STATE_VALUE {
         Box::new(bacnet_objects::multistate::MultiStateValueObject::new(
-            instance, &name, 2,
+            instance,
+            name(),
+            2,
         )?)
     } else {
         return Err(Error::Protocol {

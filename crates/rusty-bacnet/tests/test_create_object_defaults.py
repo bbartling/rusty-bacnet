@@ -124,6 +124,21 @@ class CreateObjectDefaultsTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(BacnetProtocolError):
             await self.read(ObjectIdentifier(MSV, 1), NAME)
 
+    async def test_an_alarm_state_past_the_count_is_refused(self):
+        alarms = PropertyIdentifier.ALARM_VALUES
+        past = PropertyValue.list([PropertyValue.unsigned(1), PropertyValue.unsigned(7)])
+        await self.refused(
+            self.create(MSV, [initial(alarms, past), initial(STATES, PropertyValue.unsigned(3))]),
+            ErrorCode.VALUE_OUT_OF_RANGE,
+            element=1,
+        )
+        await self.create(MSV, [initial(STATES, PropertyValue.unsigned(3))])
+        created = ObjectIdentifier(MSV, 1)
+        await self.refused(
+            self.client.write_property(self.address, created, alarms, past),
+            ErrorCode.VALUE_OUT_OF_RANGE,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

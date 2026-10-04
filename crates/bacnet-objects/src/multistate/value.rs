@@ -143,6 +143,10 @@ impl MultiStateValueObject {
     }
 
     /// Set the alarm values and synchronously re-evaluate configuration Reliability.
+    ///
+    /// Unlike a network write, which refuses a state past Number_Of_States
+    /// (#1429), this takes any state; one past the count shows as
+    /// CONFIGURATION_ERROR.
     pub fn set_alarm_values(&mut self, values: Vec<u32>) {
         self.event_detector.alarm_values = values;
         let _ = self.recompute_reliability();
@@ -396,7 +400,7 @@ impl BACnetObject for MultiStateValueObject {
             }
         }
         if property == PropertyIdentifier::ALARM_VALUES {
-            let values = decode_alarm_values_write(array_index, value)?;
+            let values = decode_alarm_values_write(array_index, value, self.number_of_states)?;
             self.set_alarm_values(values);
             return Ok(());
         }

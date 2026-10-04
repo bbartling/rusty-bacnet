@@ -19,9 +19,15 @@ use crate::traits::{BACnetObject, ReliabilityEvaluation};
 /// `MAX_COV_SUBSCRIPTIONS`.
 pub(crate) const MAX_ALARM_VALUES: usize = 1024;
 
+/// Decode an Alarm_Values write on a Multi-state Input or Value. Each entry
+/// is an Unsigned naming one of the object's `number_of_states` states; one
+/// past them could never match Present_Value, so it is VALUE_OUT_OF_RANGE,
+/// naming the element, rather than stored for Reliability to report as
+/// CONFIGURATION_ERROR (#1429). The local `set_alarm_values` stays unchecked.
 fn decode_alarm_values_write(
     array_index: Option<u32>,
     value: PropertyValue,
+    number_of_states: u32,
 ) -> Result<Vec<u32>, Error> {
     if array_index.is_some() {
         return Err(Error::Protocol {
@@ -48,7 +54,12 @@ fn decode_alarm_values_write(
         .enumerate()
         .map(|(index, value)| {
             match value {
-                PropertyValue::Unsigned(value) => common::u64_to_u32(value),
+                PropertyValue::Unsigned(state)
+                    if (1..=u64::from(number_of_states)).contains(&state) =>
+                {
+                    Ok(state as u32)
+                }
+                PropertyValue::Unsigned(_) => Err(common::value_out_of_range_error()),
                 _ => Err(common::invalid_data_type_error()),
             }
             .map_err(|error| common::at_list_element(error, index))
