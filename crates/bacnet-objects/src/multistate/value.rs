@@ -483,6 +483,28 @@ impl BACnetObject for MultiStateValueObject {
     fn is_createable(&self) -> bool {
         true
     }
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        CREATION_ONLY
+    }
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        let held = self.priority_array.iter().flatten().copied();
+        let held = held
+            .chain([self.present_value, self.relinquish_default])
+            .chain(self.event_detector.alarm_values.iter().copied());
+        initialize_states(
+            &mut self.number_of_states,
+            &mut self.state_text,
+            held,
+            property,
+            value,
+        )?;
+        let _ = self.recompute_reliability();
+        Ok(())
+    }
     fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());

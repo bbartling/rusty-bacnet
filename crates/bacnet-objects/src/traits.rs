@@ -409,6 +409,40 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
         false
     }
 
+    /// The properties whose whole value a CreateObject initial value may set
+    /// on this object although WriteProperty can't change it afterwards.
+    ///
+    /// Clause 15.3 doesn't limit initial values to the properties
+    /// WriteProperty can change, so a device may take some of its read-only
+    /// properties at creation. The bundled server hands such an initial value,
+    /// written without an array index, to [`Self::initialize_property`]
+    /// instead of the write route; every other initial value goes the way a
+    /// WriteProperty does. The PICS lists the set for each createable type.
+    /// Default empty: no property is set only at creation.
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        &[]
+    }
+
+    /// Apply a CreateObject initial value to one of
+    /// [`Self::creation_only_properties`], written whole.
+    ///
+    /// The server calls this only on the object it is creating, before any
+    /// other request can see it. Check the value as a write would, and on
+    /// `Err` leave the object unchanged: the server then refuses the request,
+    /// naming the initial value, and drops the object. The default refuses
+    /// every property with PROPERTY / WRITE_ACCESS_DENIED, the answer for a
+    /// property that can't be initialized at creation (Clause 15.3.1.3.1).
+    fn initialize_property(
+        &mut self,
+        _property: PropertyIdentifier,
+        _value: PropertyValue,
+    ) -> Result<(), Error> {
+        Err(Error::Protocol {
+            class: ErrorClass::PROPERTY.to_raw() as u32,
+            code: ErrorCode::WRITE_ACCESS_DENIED.to_raw() as u32,
+        })
+    }
+
     /// Whether this object type can be deleted at runtime via DeleteObject.
     ///
     /// Default `true`; override `false` on object types that are not

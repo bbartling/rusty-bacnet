@@ -125,6 +125,8 @@ mod cov_multiple_admission;
 mod cov_multiple_parameters;
 mod cov_property_parameters;
 mod cov_request_parameters;
+mod create_object_creation_only;
+mod create_object_default_name;
 mod create_object_initial_values;
 mod credential_data_input_oos_writes;
 mod detection_enable_summary;

@@ -346,6 +346,9 @@ impl BACnetObject for DeviceReadView<'_> {
     fn is_createable(&self) -> bool {
         self.object.is_createable()
     }
+    fn creation_only_properties(&self) -> &'static [P] {
+        self.object.creation_only_properties()
+    }
     fn is_deleteable(&self) -> bool {
         self.object.is_deleteable()
     }

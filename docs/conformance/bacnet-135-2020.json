@@ -1195,15 +1195,27 @@
    "code_anchors": [
     "crates/bacnet-objects/src",
     "crates/bacnet-server/src/handlers",
-    "crates/bacnet-server/src/pics/mod.rs"
+    "crates/bacnet-server/src/pics/mod.rs",
+    "crates/bacnet-objects/src/traits.rs::BACnetObject::creation_only_properties",
+    "crates/bacnet-objects/src/traits.rs::BACnetObject::initialize_property",
+    "crates/bacnet-objects/src/analog/mod.rs::initialize_units",
+    "crates/bacnet-objects/src/multistate/mod.rs::initialize_states"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/priority_array_writes.rs::priority_array_all_twenty_profiles_trait_metadata_and_pics_are_read_only",
     "crates/bacnet-server/src/pics/tests.rs",
-    "crates/bacnet-objects/src"
+    "crates/bacnet-objects/src",
+    "crates/bacnet-objects/src/analog/tests/creation_only.rs::analog_input_and_output_take_units_only_at_creation",
+    "crates/bacnet-objects/src/multistate/tests/creation_only.rs::a_new_count_resizes_state_text_and_whole_labels_must_match_it",
+    "crates/bacnet-server/src/handlers/tests/create_object_creation_only.rs::an_analog_object_takes_units_at_creation_and_keeps_it_read_only",
+    "crates/bacnet-server/src/handlers/tests/create_object_creation_only.rs::a_single_state_takes_one_label",
+    "crates/rusty-bacnet/tests/test_create_object_defaults.py::CreateObjectDefaultsTests::test_units_round_trip_and_stay_read_only"
    ],
    "negative_tests": [
-    "crates/bacnet-server/src/handlers/tests"
+    "crates/bacnet-server/src/handlers/tests",
+    "crates/bacnet-objects/src/analog/tests/creation_only.rs::analog_value_is_not_createable_and_takes_nothing_at_creation",
+    "crates/bacnet-objects/src/multistate/tests/creation_only.rs::a_count_that_would_strand_a_held_state_is_refused",
+    "crates/bacnet-server/src/handlers/tests/create_object_creation_only.rs::a_units_initial_value_is_checked_and_a_null_leaves_the_default"
    ],
    "benchmarks": [
     "benchmarks/src/stress/objects.rs"
@@ -1214,7 +1226,9 @@
     "docs/rust-api.md#bacnet-objects object model"
    ],
    "notes": [
-    "Initial family row only; later work should split high-claim services and object families into detailed rows."
+    "Initial family row only; later work should split high-claim services and object families into detailed rows.",
+    "CreateObject sets a few read-only properties whole through `initialize_property`: Units on Analog Input and Output, Number_Of_States and State_Text on the multi-state types. WriteProperty refuses each with WRITE_ACCESS_DENIED.",
+    "A created state count runs from 1 to 1024 and is refused if a held state would fall past it; it resizes State_Text. State_Text written whole needs one CharacterString per state. Feedback_Value doesn't hold a state."
    ]
   },
   {
@@ -3572,7 +3586,8 @@
     "Table 13-1 reports Update_Time with the Pulse Converter's Present_Value and Status_Flags, so `cov_reported_properties_default` now lists it (reported, not a trigger). Lighting: Default_Ramp_Rate starts at 100.0 and Default_Step_Increment at 1.0, both inside the 0.1 to 100.0 range Clauses 12.54.17 and 12.54.18 set; they are writable, with matching setters.",
     "Current_Command_Priority reuses `common::current_command_priority`, which the analog, binary and multi-state outputs and values already share; on Binary Lighting Output it stays at the commanding slot through a WARN_RELINQUISH egress, since the slot holds until the egress ends.",
     "Not covered: Lighting Output's Default_Fade_Time still reads a constant 0, below the 100 ms floor of Clause 12.54.16; Current_Command_Priority and COV_Increment on the commandable value types; periodic COV notifications; feeding Count from Input_Reference.",
-    "Lighting Output Default_Fade_Time, Current_Command_Priority on the commandable value types and COV_Increment on the numeric value types are covered by BACNET-12-REQUIRED-ROWS-VALUE-PRIORITY-COV-FADE."
+    "Lighting Output Default_Fade_Time, Current_Command_Priority on the commandable value types and COV_Increment on the numeric value types are covered by BACNET-12-REQUIRED-ROWS-VALUE-PRIORITY-COV-FADE.",
+    "Analog Input and Output take Units from a CreateObject initial value, with the same 65535 bound; WriteProperty still refuses it. Analog Value isn't createable."
    ]
   },
   {
@@ -6589,7 +6604,8 @@
     "crates/bacnet-server/src/handlers/cov.rs::subscription_error",
     "crates/rusty-bacnet/src/errors.rs::to_py_err",
     "crates/bacnet-server/src/cov/admission.rs::MultipleRefusal",
-    "crates/bacnet-server/src/handlers/object_mgmt.rs::initialize"
+    "crates/bacnet-server/src/handlers/object_mgmt.rs::initialize",
+    "crates/bacnet-server/src/handlers/object_mgmt.rs::default_name"
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::structured_error_golden_vectors_replace_the_generic_pair",
@@ -6629,7 +6645,13 @@
     "crates/bacnet-server/src/server/cov_multiple_admission_tests.rs::the_reference_past_the_subscription_cap_is_named_and_the_ones_before_it_kept",
     "crates/bacnet-server/src/server/cov_multiple_admission_tests.rs::a_refusal_of_the_whole_request_keeps_and_reports_nothing",
     "crates/bacnet-server/src/handlers/tests/cov_multiple_admission.rs::subscribe_cov_property_multiple_capacity_names_the_overflowing_reference",
-    "crates/bacnet-server/src/server/cov_multiple_admission_tests.rs::without_a_clock_the_timestamped_reference_is_refused_and_the_earlier_ones_stay"
+    "crates/bacnet-server/src/server/cov_multiple_admission_tests.rs::without_a_clock_the_timestamped_reference_is_refused_and_the_earlier_ones_stay",
+    "crates/bacnet-server/src/handlers/tests/create_object_default_name.rs::a_taken_default_name_gives_way_to_the_requested_one",
+    "crates/bacnet-server/src/handlers/tests/create_object_default_name.rs::a_taken_default_name_takes_the_first_free_suffix",
+    "crates/bacnet-server/src/handlers/tests/create_object_creation_only.rs::number_of_states_and_state_text_give_the_same_object_in_either_order",
+    "crates/bacnet-server/src/handlers/tests/create_object_creation_only.rs::values_that_name_a_state_are_judged_against_the_requested_count",
+    "crates/rusty-bacnet/tests/test_create_object_defaults.py::CreateObjectDefaultsTests::test_a_taken_default_name_takes_a_suffix_or_the_requested_name",
+    "crates/rusty-bacnet/tests/test_create_object_defaults.py::CreateObjectDefaultsTests::test_states_round_trip_in_either_order"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::malformed_structured_error_bodies_are_refused",
@@ -6643,7 +6665,11 @@
     "crates/bacnet-client/src/client/tests/wpm_error_projection.rs::plain_error_projection_stays_class_and_code",
     "crates/bacnet-server/src/handlers/tests/create_object_initial_values.rs::the_first_initial_value_that_fails_is_named_and_nothing_is_created",
     "crates/bacnet-integration-tests/tests/server/duplicate_name.rs::a_name_in_use_is_property_duplicate_name_over_wp_wpm_and_create_object",
-    "crates/rusty-bacnet/tests/test_duplicate_name.py::DuplicateNameTests::test_create_object_names_the_initial_value"
+    "crates/rusty-bacnet/tests/test_duplicate_name.py::DuplicateNameTests::test_create_object_names_the_initial_value",
+    "crates/bacnet-server/src/handlers/tests/create_object_default_name.rs::a_requested_name_that_is_taken_is_still_refused_at_its_position",
+    "crates/bacnet-server/src/handlers/tests/create_object_creation_only.rs::a_state_text_of_the_wrong_length_is_refused_at_its_position",
+    "crates/bacnet-server/src/handlers/tests/create_object_creation_only.rs::a_number_of_states_out_of_range_is_refused_at_its_position",
+    "crates/rusty-bacnet/tests/test_create_object_defaults.py::CreateObjectDefaultsTests::test_a_state_text_of_the_wrong_length_is_refused"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -6661,7 +6687,9 @@
     "A timestamped reference while the Device has no valid clock is named the same way, with SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (#1102). CreateObject keeps its refusal codes; only the undecodable initial value changed from SERVICES / OTHER to PROPERTY / INVALID_DATA_ENCODING, and it is still a malformed request, not an audited execution.",
     "ConfirmedPrivateTransfer-Error decodes the vendor identifier as u32, like the request and ACK types, where the production narrows it to Unsigned16. A VTClose-Error list that is present but empty decodes as an empty list.",
     "CreateObject checks and decodes each initial value as WriteProperty does and names the first one it can't apply. One that doesn't decode is INVALID_DATA_ENCODING and isn't audited; no object is left behind.",
-    "An initial Object_Name another object holds is PROPERTY / DUPLICATE_NAME at its position, the pair WriteProperty gives; CreateObject's own error table has no row for a name in use."
+    "An initial Object_Name another object holds is PROPERTY / DUPLICATE_NAME at its position, the pair WriteProperty gives; CreateObject's own error table has no row for a name in use.",
+    "A new object starts as `<TYPE>-<instance>`, or the first free `<TYPE>-<instance> (n)` from n = 2 when another object holds that name, so a renamed object never fails a create. An initial Object_Name then renames it.",
+    "On the multi-state types Number_Of_States applies before the other initial values, so state-bound values are judged against the requested count wherever it stands. A refused Number_Of_States is named by its own position."
    ]
   },
   {
@@ -7307,7 +7335,8 @@
     "crates/bacnet-endpoint/src/device_execution_tests.rs::endpoint_execution_view_covers_write_opt_in_and_custom_device_reader",
     "crates/bacnet-objects/src/device/service_profile_tests.rs::standalone_device_cov_properties_follow_declared_service_profile",
     "crates/bacnet-server/src/pics/tests.rs",
-    "crates/bacnet-server/src/pics/selected_device_tests.rs::standalone_pics_reads_the_lowest_of_several_devices"
+    "crates/bacnet-server/src/pics/selected_device_tests.rs::standalone_pics_reads_the_lowest_of_several_devices",
+    "crates/bacnet-server/src/pics/creation_only_tests.rs::each_createable_type_lists_what_only_creation_sets"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/device_execution_writes.rs::device_execution_owned_wp_rejects_custom_writer",
@@ -7327,7 +7356,8 @@
     "Both COV lists are present on every served Device; only the selected minimum instance gets live values and other Devices get empty lists. Endpoint server roles execute exactly RP or RP+WP and expose neither COV list; incompatible identity declarations fail before ingress even without WP, while WP profile commit remains after all validation.",
     "ClientOnly has no responder and retains a local declaration. Standalone built-in Device metadata/direct reads follow declared services: 152 iff SubscribeCOV or SubscribeCOVProperty, 481 iff Multiple; present raw lists are empty.",
     "Context-free RP/RPM and standalone PicsGenerator retain raw declarations. No runtime service-disable switch, general database guard, discovery rebinding, or conformance-status promotion is claimed. This ledger does not claim certification.",
-    "#1204: the standalone PicsGenerator takes declared executed services from the selected Device, the lowest instance, whatever order the database's hash map visits several Devices in."
+    "#1204: the standalone PicsGenerator takes declared executed services from the selected Device, the lowest instance, whatever order the database's hash map visits several Devices in.",
+    "Each createable type lists `creation_only_properties`, the properties a CreateObject initial value sets whole while WriteProperty refuses them, on a line of its own; their rows stay read-only."
    ]
   },
   {

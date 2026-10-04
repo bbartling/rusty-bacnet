@@ -114,7 +114,23 @@ pub(crate) fn handle_create_object_observed(
     let created_oid = create(db, &request, target).map_err(CreateObjectRefusal::Failed)?;
 
     // Apply initial values; on failure, remove the created object.
-    for (position, pv) in (1u32..).zip(&request.list_of_initial_values) {
+    let mut values: Vec<_> = (1u32..).zip(&request.list_of_initial_values).collect();
+    // An object that takes Number_Of_States at creation (the multi-state
+    // types) takes it before any other initial value (#1429). Present_Value,
+    // Relinquish_Default, the State_Text elements and State_Text written
+    // whole are then judged against the count the request asks for,
+    // wherever it stands in the list. The sort is stable, so the other
+    // values keep their order, and a refusal still names the value's own
+    // position.
+    let object = db.get(&created_oid).expect("created above");
+    if object
+        .creation_only_properties()
+        .contains(&PropertyIdentifier::NUMBER_OF_STATES)
+    {
+        values
+            .sort_by_key(|(_, pv)| pv.property_identifier != PropertyIdentifier::NUMBER_OF_STATES);
+    }
+    for (position, pv) in values {
         if let Err(refusal) = initialize(db, created_oid, pv, command_origin) {
             let _ = db.remove(&created_oid);
             return Err(refusal.of_initial_value(position));
@@ -171,7 +187,7 @@ fn create(
     *target = (object_type.to_raw() <= 1023)
         .then(|| ObjectIdentifier::new(object_type, instance).ok())
         .flatten();
-    let name = format!("{:?}-{}", object_type, instance);
+    let name = default_name(db, object_type, instance);
 
     let object: Box<dyn bacnet_objects::traits::BACnetObject> = if object_type
         == ObjectType::ANALOG_INPUT
@@ -239,11 +255,37 @@ fn create(
     Ok(created_oid)
 }
 
+/// The Object_Name a new object starts with until an initial value names
+/// it: the type's name and the instance (`BINARY_VALUE-2`), or, when another object
+/// already holds that name, the same with the first free ` (n)` from 2 up
+/// (`BINARY_VALUE-2 (2)`) (#1437). Clause 15.3 leaves the value of a
+/// property the request doesn't give to the device, so a client renaming
+/// an object never makes the next create of its type fail.
+///
+/// Each object holds one name, so one of the first `db.len() + 1`
+/// candidates is free.
+fn default_name(db: &ObjectDatabase, object_type: ObjectType, instance: u32) -> String {
+    let base = format!("{object_type}-{instance}");
+    if db.find_by_name(&base).is_none() {
+        return base;
+    }
+    (2u64..)
+        .map(|n| format!("{base} ({n})"))
+        .find(|name| db.find_by_name(name).is_none())
+        .expect("one candidate past the names held is free")
+}
+
 /// Apply one initial value to the created object the way WriteProperty
 /// applies its value: the array index checked against the object, the value
 /// decoded whole with the object's list classification, the Object_Name kept
 /// unique, and a NULL the property leaves as it is taken as applied
-/// ([`relinquish`]). The caller removes the object when this fails.
+/// ([`relinquish`]). A whole value for one of the object's
+/// [`creation_only_properties`] goes to its
+/// [`initialize_property`] instead of the write route, which keeps refusing
+/// it (#1429). The caller removes the object when this fails.
+///
+/// [`creation_only_properties`]: bacnet_objects::traits::BACnetObject::creation_only_properties
+/// [`initialize_property`]: bacnet_objects::traits::BACnetObject::initialize_property
 fn initialize(
     db: &mut ObjectDatabase,
     created_oid: ObjectIdentifier,
@@ -268,6 +310,20 @@ fn initialize(
     )
     .map_err(CreateObjectRefusal::Malformed)?;
     let value = crate::local_references::localize(db, created_oid, property, value);
+    let object = db.get_mut(&created_oid).expect("created above");
+    if array_index.is_none() && object.creation_only_properties().contains(&property) {
+        return match object.initialize_property(property, value) {
+            Ok(()) => Ok(()),
+            // A NULL is judged as on the write route.
+            Err(error)
+                if super::relinquish::is_null_octets(&pv.value)
+                    && super::relinquish::leaves_unchanged(object, property, None, &error) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(CreateObjectRefusal::Failed(error)),
+        };
+    }
     // The object was added under its default name; a new one has to be free,
     // and the write moves the database's name index along with it.
     if property == PropertyIdentifier::OBJECT_NAME {

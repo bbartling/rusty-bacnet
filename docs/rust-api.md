@@ -1688,6 +1688,26 @@ index against the new object first, as WriteProperty does, and names the first
 initial value it can't apply by its position; one that doesn't decode is
 `PROPERTY/INVALID_DATA_ENCODING` there.
 
+A new object's Object_Name, until an initial value renames it, is its type
+and instance (`BINARY_VALUE-2`). When another object already holds that
+name, the server takes the first free `BINARY_VALUE-2 (n)` from n = 2, so a
+client that renamed an object to the next default name doesn't make the
+create fail (#1437). A few read-only properties take a CreateObject initial
+value: `BACnetObject::creation_only_properties` lists the ones an object sets
+whole only at creation, and the server gives such a value, sent without an
+array index, to `BACnetObject::initialize_property` instead of the write
+route (#1429). The built-in Analog Input and Analog Output take Units (an
+Enumerated up to 65535). The Multi-state Input, Output and Value take
+Number_Of_States (1 to `multistate::MAX_CREATED_NUMBER_OF_STATES`, 1024),
+which resizes State_Text, and State_Text written whole, which needs one
+CharacterString per state. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
+if a value the object holds would name a state past it. WriteProperty still
+answers `PROPERTY/WRITE_ACCESS_DENIED` for each. The server applies
+Number_Of_States before the other initial values on these objects, so
+Present_Value, Relinquish_Default and State_Text are judged against the
+requested count wherever it stands in the list; a refused Number_Of_States is
+named by its own position. The PICS lists each createable type's set.
+
 AddListElement and RemoveListElement edit only properties that
 `BACnetObject::is_list_property` reports as a BACnetLIST. The default follows the
 Clause 12 datatypes, including identifiers whose type depends on the object type
