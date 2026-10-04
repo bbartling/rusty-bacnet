@@ -46,11 +46,12 @@ fn object_reference(
     }
 }
 
-/// What one setter call did: its answer, and whether `property` reads the
-/// same after it as before.
+/// What one setter call did: its answer, whether `property` reads the same
+/// after it as before, and what it reads after it.
 struct Outcome {
     result: Result<(), Error>,
     unchanged: bool,
+    after: Option<PropertyValue>,
 }
 
 fn outcome<O: BACnetObject>(
@@ -60,8 +61,27 @@ fn outcome<O: BACnetObject>(
 ) -> Outcome {
     let before = object.read_property(property, None).ok();
     let result = set(&mut object);
-    let unchanged = object.read_property(property, None).ok() == before;
-    Outcome { result, unchanged }
+    let after = object.read_property(property, None).ok();
+    Outcome {
+        result,
+        unchanged: after == before,
+        after,
+    }
+}
+
+/// The octets a read carries, every chunk joined.
+fn octets(value: &PropertyValue) -> Vec<u8> {
+    match value {
+        PropertyValue::ApplicationData(bytes) => bytes.clone(),
+        PropertyValue::List(items) => items.iter().flat_map(octets).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Whether a read holds `device`'s four identifier octets.
+fn holds(after: &Option<PropertyValue>, device: ObjectIdentifier) -> bool {
+    let bytes = after.as_ref().map(octets).unwrap_or_default();
+    bytes.windows(4).any(|window| window == device.encode())
 }
 
 /// One setter, called on a fresh object with a reference whose Device member
@@ -262,9 +282,17 @@ const SETTERS: [Setter; 15] = [
     Setter {
         name: "StagingObject::new",
         // A refused configuration builds no object, so nothing can change.
-        set: |device| Outcome {
-            result: StagingObject::new(1, "STG-1", staging_config(device)).map(drop),
-            unchanged: true,
+        set: |device| match StagingObject::new(1, "STG-1", staging_config(device)) {
+            Ok(object) => Outcome {
+                result: Ok(()),
+                unchanged: false,
+                after: object.read_property(P::TARGET_REFERENCES, None).ok(),
+            },
+            Err(error) => Outcome {
+                result: Err(error),
+                unchanged: true,
+                after: None,
+            },
         },
         remote: false,
     },
@@ -283,13 +311,21 @@ fn every_device_reference_setter_refuses_a_non_device_and_takes_a_device() {
     for setter in &SETTERS {
         let local = (setter.set)(None);
         assert!(local.result.is_ok(), "{}: {:?}", setter.name, local.result);
-        let remote = (setter.set)(Some(oid(ObjectType::DEVICE, 9)));
+        assert!(!local.unchanged, "{}: the reference is stored", setter.name);
+        let device = oid(ObjectType::DEVICE, 9);
+        let remote = (setter.set)(Some(device));
         if setter.remote {
             assert!(
                 remote.result.is_ok(),
                 "{}: {:?}",
                 setter.name,
                 remote.result
+            );
+            assert!(
+                holds(&remote.after, device),
+                "{}: the Device member is stored: {:?}",
+                setter.name,
+                remote.after
             );
         } else {
             // The property is held to this device: any Device member is

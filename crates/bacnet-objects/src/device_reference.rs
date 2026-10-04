@@ -18,6 +18,28 @@
 //! elevator family's Energy_Meter_Ref and Audit Log Member_Of. A Command's
 //! action commands and an Access Rights rule carry a device identifier inside
 //! another production, so they share only [`check_device_member`].
+//!
+//! # Refusal codes for a written value
+//!
+//! One rule for every writable user, so the same octets get the same answer
+//! whichever property they're written to:
+//!
+//! - A value of another kind than raw octets (or a list of raw-octet chunks),
+//!   or octets whose first element can't open the production, is PROPERTY /
+//!   INVALID_DATA_TYPE: the value isn't a reference at all.
+//! - In a list or array, the same goes for any later element that can't open
+//!   the production: each element is a value of its own.
+//! - A single-reference value (a property holding one reference, or one array
+//!   element written by index) that opens correctly but isn't exactly one
+//!   whole reference is PROPERTY / INVALID_DATA_ENCODING, whatever follows
+//!   the reference: a second reference, a context tag of no member, an
+//!   application tag, or nothing usable at all. Once the value has opened as
+//!   a reference, anything other than exactly one is an encoding fault.
+//! - A reference that opens correctly but doesn't decode in full is
+//!   INVALID_DATA_ENCODING everywhere.
+//! - The Device member is judged after the decode, by
+//!   [`check_device_member`] (VALUE_OUT_OF_RANGE), and on properties held to
+//!   this device then by [`check_local_member`].
 
 use bacnet_encoding::constructed::{
     decode_device_object_property_reference, decode_device_object_reference,
@@ -156,7 +178,7 @@ fn decode_all<R: DeviceReference>(value: &PropertyValue) -> Result<Vec<R>, (Opti
     Ok(references)
 }
 
-/// Every reference in a written value, in order.
+/// Every reference in a written list or array value, in order.
 ///
 /// The value is raw member octets (what WriteProperty carried), or a list of
 /// such chunks (the shape a read returns); each chunk holds whole references
@@ -164,7 +186,8 @@ fn decode_all<R: DeviceReference>(value: &PropertyValue) -> Result<Vec<R>, (Opti
 /// [`DeviceReference::starts`]), or a value of any other kind, is PROPERTY /
 /// INVALID_DATA_TYPE. One that opens right but doesn't decode in full is
 /// PROPERTY / INVALID_DATA_ENCODING. The Device member isn't checked here:
-/// see [`check_device_members`].
+/// see [`check_device_members`]. A single-reference value goes through
+/// [`decode_reference`] instead.
 pub(crate) fn decode_references<R: DeviceReference>(
     value: &PropertyValue,
 ) -> Result<Vec<R>, Error> {
@@ -188,15 +211,21 @@ pub(crate) fn decode_references_at<R: DeviceReference>(
 ///
 /// A list of chunks is joined first: a value read back is one chunk, and a
 /// caller that split the octets at each member's tag hands over the same
-/// octets in pieces. More than one reference, or none, is PROPERTY /
-/// INVALID_DATA_ENCODING; see [`decode_references`] for the other refusals.
+/// octets in pieces. A value of another kind, or octets that don't open the
+/// production, is PROPERTY / INVALID_DATA_TYPE. Octets that open it but
+/// aren't exactly one whole reference (none, one cut short, or anything at
+/// all after it) are PROPERTY / INVALID_DATA_ENCODING; see the module
+/// documentation.
 pub(crate) fn decode_reference<R: DeviceReference>(value: &PropertyValue) -> Result<R, Error> {
-    let joined = PropertyValue::ApplicationData(common::chunks(value)?.concat());
-    let mut references = decode_references(&joined)?;
-    match references.pop() {
-        Some(reference) if references.is_empty() => Ok(reference),
-        _ => Err(common::invalid_data_encoding_error()),
+    let bytes = common::chunks(value)?.concat();
+    if bytes.is_empty() {
+        return Err(common::invalid_data_encoding_error());
     }
+    let (reference, end) = common::decode_element(&bytes, 0, R::starts, R::decode)?;
+    if end != bytes.len() {
+        return Err(common::invalid_data_encoding_error());
+    }
+    Ok(reference)
 }
 
 /// Refuse a Device member that isn't a Device object identifier with

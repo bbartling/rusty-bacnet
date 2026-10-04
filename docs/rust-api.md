@@ -1917,10 +1917,11 @@ framing, through the shared `bacnet-encoding` codecs.
   Log_DeviceObjectProperty, Channel and Schedule
   List_Of_Object_Property_References, Staging Target_References), so a
   written value gets one answer whichever object takes it: another datatype,
-  or octets after a reference that can't open another, INVALID_DATA_TYPE; a
-  reference that doesn't decode, or a second one where the property holds
-  one, INVALID_DATA_ENCODING; a non-Device member VALUE_OUT_OF_RANGE, ahead
-  of any refusal of a remote device.
+  or a list or array element that can't open a reference, INVALID_DATA_TYPE;
+  a reference that doesn't decode, or anything at all after the reference
+  where the property (or an indexed element) holds one, INVALID_DATA_ENCODING;
+  a non-Device member VALUE_OUT_OF_RANGE, ahead of any refusal of a remote
+  device.
 
 ### ObjectDatabase
 
@@ -2266,8 +2267,9 @@ is stored without the Device member; one naming another device is
 OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, except that a Trend Log Multiple element
 naming instance 4194303 is an empty element and kept. A Device member that
 isn't a Device identifier is VALUE_OUT_OF_RANGE, another datatype (the old flat
-application-tagged form included) INVALID_DATA_TYPE and a malformed reference
-INVALID_DATA_ENCODING. A write that changes the value purges the log, leaving a
+application-tagged form included) INVALID_DATA_TYPE, and a malformed reference,
+or anything after one written alone, INVALID_DATA_ENCODING. A write that
+changes the value purges the log, leaving a
 BUFFER_PURGED status record; without a valid clock it fails with DEVICE /
 OPERATIONAL_PROBLEM and changes nothing. The local
 `TrendLogObject::set_log_device_object_property` and
@@ -2652,8 +2654,8 @@ Object_Property_Reference reads as the context-tagged
 no Device member (Null while unset), and a write takes that encoding back
 (#1182). The flat application-tagged list reads used to serve is now
 INVALID_DATA_TYPE, as are octets that don't open with the object
-identifier's context tag 0 (#1312) or that follow the reference without
-opening another, and a Device member that isn't a Device identifier
+identifier's context tag 0 (#1312); anything after the one reference is
+INVALID_DATA_ENCODING, and a Device member that isn't a Device identifier
 VALUE_OUT_OF_RANGE. The server hands the written octets over whole, as for a
 Trend Log (#1313).
 

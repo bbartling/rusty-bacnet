@@ -146,18 +146,58 @@ fn decode_refuses_other_shapes_with_the_matching_error() {
         .unwrap_err(),
         ErrorCode::INVALID_DATA_TYPE,
     );
-    // A single-reference property holds exactly one.
+    // A single-reference property holds exactly one: once the value opens as
+    // a reference, anything after it is an encoding fault, whatever its tag.
     let mut two = FULL.to_vec();
     two.extend_from_slice(&FULL);
+    let after = |trailing: &[u8]| PropertyValue::ApplicationData([&FULL[..], trailing].concat());
     for value in [
         PropertyValue::ApplicationData(two),
         PropertyValue::ApplicationData(Vec::new()),
+        PropertyValue::List(Vec::new()),
+        after(&[0x49, 0x01]), // [4]
+        after(&[0x21, 0x01]), // application Unsigned
+        after(&[0x09, 0x01]), // [0], too short to be an object identifier
     ] {
         assert_property_error(
             decode_reference::<BACnetDeviceObjectPropertyReference>(&value).unwrap_err(),
             ErrorCode::INVALID_DATA_ENCODING,
         );
     }
+    // A value that doesn't open as a reference is another datatype.
+    for value in [
+        PropertyValue::Null,
+        PropertyValue::ApplicationData(vec![0xC4, 0x00, 0x80, 0x00, 0x07]),
+        PropertyValue::ApplicationData(vec![0x19, 0x55]),
+    ] {
+        assert_property_error(
+            decode_reference::<BACnetDeviceObjectPropertyReference>(&value).unwrap_err(),
+            ErrorCode::INVALID_DATA_TYPE,
+        );
+    }
+    // The object reference opens with its Device member [0] or, without one,
+    // the object [1]; the same rule holds after it.
+    let object = [0x1C, 0x05, 0x80, 0x00, 0x03]; // [1] life-safety-zone 3
+    assert!(
+        decode_reference::<BACnetDeviceObjectReference>(&PropertyValue::ApplicationData(
+            object.to_vec()
+        ))
+        .is_ok()
+    );
+    assert_property_error(
+        decode_reference::<BACnetDeviceObjectReference>(&PropertyValue::ApplicationData(
+            [&object[..], &[0x49, 0x01]].concat(),
+        ))
+        .unwrap_err(),
+        ErrorCode::INVALID_DATA_ENCODING,
+    );
+    assert_property_error(
+        decode_reference::<BACnetDeviceObjectReference>(&PropertyValue::ApplicationData(vec![
+            0x29, 0x01,
+        ]))
+        .unwrap_err(),
+        ErrorCode::INVALID_DATA_TYPE,
+    );
 }
 
 #[test]

@@ -10,12 +10,16 @@
 //! Priority_For_Writing takes an Unsigned from 1 to 16 (VALUE_OUT_OF_RANGE
 //! otherwise). The reference list arrives as the raw bytes of its
 //! BACnetDeviceObjectPropertyReference elements and is decoded by the shared
-//! helpers in `device_reference.rs` (#1313), in order. Each refusal names its
-//! member by position (`common::at_list_element`), so AddListElement can
-//! report the request element behind it: a member whose first tag is not the
-//! context `[0]` object identifier is INVALID_DATA_TYPE, one that starts right
-//! but doesn't decode INVALID_DATA_ENCODING, and a member past
-//! [`MAX_REFERENCES`] is NO_SPACE_TO_WRITE_PROPERTY.
+//! helpers in `device_reference.rs` (#1313). Each refusal names its member by
+//! position (`common::at_list_element`), so AddListElement can report the
+//! request element behind it. The checks run in three passes, and the first
+//! refusal of the first pass that refuses anything is the answer: the whole
+//! list is decoded (a member whose first tag is not the context `[0]` object
+//! identifier is INVALID_DATA_TYPE, one that starts right but doesn't decode
+//! INVALID_DATA_ENCODING), then its length is held to [`MAX_REFERENCES`]
+//! (NO_SPACE_TO_WRITE_PROPERTY, naming the first member past it), then each
+//! member's Device member is checked in order. So a malformed member, or the
+//! cap, wins over a Device refusal of an earlier member.
 //!
 //! A Device member that isn't a Device identifier is VALUE_OUT_OF_RANGE
 //! (#1308). Any other Device member is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,

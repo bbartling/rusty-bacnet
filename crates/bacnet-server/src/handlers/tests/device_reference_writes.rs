@@ -221,67 +221,117 @@ fn wp(db: &mut ObjectDatabase, user: &User, value: &[u8]) -> Result<(), Error> {
     sourced_wp(db, &request).map(|_| ())
 }
 
-#[test]
-fn every_writable_device_reference_answers_the_same_octets_the_same_way() {
-    // Each row: what it is, single-reference values only, the octets for a
-    // user, and the code every user answers (None: taken).
-    type Octets = fn(&User) -> Vec<u8>;
-    let rows: [(&str, bool, Octets, Option<ErrorCode>); 9] = [
-        ("a local reference", false, |u| (u.reference)(2, None), None),
-        (
+type Octets = fn(&User) -> Vec<u8>;
+
+/// One row of the wire table: the octets written for a user, and what every
+/// user answers, for a single-reference value and for a whole list or array.
+struct Row {
+    what: &'static str,
+    single_only: bool,
+    octets: Octets,
+    single: Answer,
+    list: Answer,
+}
+
+#[derive(Clone, Copy)]
+enum Answer {
+    /// Taken, and read back as these octets.
+    Stored(Octets),
+    Refused(ErrorCode),
+}
+
+/// The octets a read carries: raw octets, or the chunks of a list joined.
+fn read_octets(value: &PropertyValue) -> Vec<u8> {
+    match value {
+        PropertyValue::ApplicationData(bytes) => bytes.clone(),
+        PropertyValue::List(items) => items.iter().flat_map(read_octets).collect(),
+        other => panic!("not reference octets: {other:?}"),
+    }
+}
+
+fn rows() -> Vec<Row> {
+    use Answer::{Refused, Stored};
+    use ErrorCode as E;
+    let local: Octets = |u| (u.reference)(2, None);
+    let row = |what, single_only, octets, single, list| Row {
+        what,
+        single_only,
+        octets,
+        single,
+        list,
+    };
+    let both = |what, octets, answer| row(what, false, octets, answer, answer);
+    vec![
+        both("a local reference", local, Stored(local)),
+        both(
             "the empty object instance",
-            false,
             |u| (u.reference)(EMPTY, None),
-            None,
+            Stored(|u| (u.reference)(EMPTY, None)),
         ),
-        (
+        // Stored in its local form, without the Device member.
+        both(
             "a reference naming this device",
-            false,
             |u| (u.reference)(2, Some(oid(ObjectType::DEVICE, 7))),
-            None,
+            Stored(local),
         ),
-        (
+        both(
             "a non-Device device identifier",
-            false,
             |u| (u.reference)(2, Some(oid(ObjectType::ANALOG_VALUE, 9))),
-            Some(ErrorCode::VALUE_OUT_OF_RANGE),
+            Refused(E::VALUE_OUT_OF_RANGE),
         ),
-        (
+        both(
             "a non-Device device identifier at the empty instance",
-            false,
             |u| (u.reference)(EMPTY, Some(oid(ObjectType::ANALOG_VALUE, EMPTY))),
-            Some(ErrorCode::VALUE_OUT_OF_RANGE),
+            Refused(E::VALUE_OUT_OF_RANGE),
         ),
-        (
+        row(
             "a second reference",
             true,
             |u| [(u.reference)(2, None), (u.reference)(3, None)].concat(),
-            Some(ErrorCode::INVALID_DATA_ENCODING),
+            Refused(E::INVALID_DATA_ENCODING),
+            Refused(E::INVALID_DATA_ENCODING),
         ),
-        (
-            // The first member alone: well-formed tags, but no whole
-            // reference.
+        // The first member alone: well-formed tags, but no whole reference.
+        both(
             "an incomplete reference",
-            false,
             |u| (u.reference)(2, Some(oid(ObjectType::DEVICE, 9)))[..5].to_vec(),
-            Some(ErrorCode::INVALID_DATA_ENCODING),
+            Refused(E::INVALID_DATA_ENCODING),
         ),
-        (
-            "an element after the reference that can't open one",
+        // After one whole reference, anything is an encoding fault in a
+        // single-reference value; in a list it is the next element, which
+        // can't open a reference or doesn't decode.
+        row(
+            "a context tag [4] after the reference",
             false,
             |u| [(u.reference)(2, None), vec![0x49, 0x01]].concat(),
-            Some(ErrorCode::INVALID_DATA_TYPE),
+            Refused(E::INVALID_DATA_ENCODING),
+            Refused(E::INVALID_DATA_TYPE),
         ),
-        (
-            "an application-tagged object identifier",
+        row(
+            "an application Unsigned after the reference",
             false,
-            |_| vec![0xC4, 0x00, 0x00, 0x00, 0x02],
-            Some(ErrorCode::INVALID_DATA_TYPE),
+            |u| [(u.reference)(2, None), vec![0x21, 0x01]].concat(),
+            Refused(E::INVALID_DATA_ENCODING),
+            Refused(E::INVALID_DATA_TYPE),
         ),
-    ];
+        both(
+            "a context tag [0] after the reference",
+            |u| [(u.reference)(2, None), vec![0x09, 0x01]].concat(),
+            Refused(E::INVALID_DATA_ENCODING),
+        ),
+        both(
+            "an application-tagged object identifier",
+            |_| vec![0xC4, 0x00, 0x00, 0x00, 0x02],
+            Refused(E::INVALID_DATA_TYPE),
+        ),
+    ]
+}
+
+#[test]
+fn every_writable_device_reference_answers_the_same_octets_the_same_way() {
     for user in users() {
-        for (what, single_only, octets, expected) in &rows {
-            if *single_only && !user.single {
+        for row in rows() {
+            if row.single_only && !user.single {
                 continue;
             }
             let mut db = database();
@@ -292,16 +342,19 @@ fn every_writable_device_reference_answers_the_same_octets_the_same_way() {
                     .unwrap()
             };
             let before = read(&db);
-            let result = wp(&mut db, &user, &octets(&user));
+            let result = wp(&mut db, &user, &(row.octets)(&user));
             let context = format!(
-                "{:?} {:?}[{:?}]: {what}",
-                user.oid, user.property, user.index
+                "{:?} {:?}[{:?}]: {}",
+                user.oid, user.property, user.index, row.what
             );
-            match expected {
-                None => result.unwrap_or_else(|error| panic!("{context}: {error:?}")),
-                Some(code) => {
+            match if user.single { row.single } else { row.list } {
+                Answer::Stored(stored) => {
+                    result.unwrap_or_else(|error| panic!("{context}: {error:?}"));
+                    assert_eq!(read_octets(&read(&db)), stored(&user), "{context}: stored");
+                }
+                Answer::Refused(code) => {
                     let (class, actual, _) = list_refusal(result);
-                    assert_eq!((class, actual), (ErrorClass::PROPERTY, *code), "{context}");
+                    assert_eq!((class, actual), (ErrorClass::PROPERTY, code), "{context}");
                     assert_eq!(read(&db), before, "{context}: a refusal changes nothing");
                 }
             }

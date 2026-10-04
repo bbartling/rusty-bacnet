@@ -254,31 +254,44 @@ const WRITABLE: [Writable; 9] = [
 ];
 
 /// One row of the write table: the value, built for a user, and the answer
-/// every user gives it (`None` for acceptance).
+/// every user gives it (`None` for acceptance), one for a single-reference
+/// value and one for a list or array written whole.
 struct Row {
     what: &'static str,
     single_only: bool,
     value: fn(&Writable) -> PropertyValue,
-    expected: Option<(u32, u32)>,
+    single: Option<(u32, u32)>,
+    list: Option<(u32, u32)>,
 }
 
 fn reference_to(user: &Writable, instance: u32, device: Option<ObjectIdentifier>) -> Vec<u8> {
     encoded(user.production, oid(user.target, instance), device)
 }
 
+/// One reference to instance 2, then `trailing`.
+fn followed_by(user: &Writable, trailing: &[u8]) -> PropertyValue {
+    PropertyValue::ApplicationData([reference_to(user, 2, None), trailing.to_vec()].concat())
+}
+
 fn rows() -> Vec<Row> {
+    let taken = None;
+    let out_of_range = property_code(ErrorCode::VALUE_OUT_OF_RANGE);
+    let encoding = property_code(ErrorCode::INVALID_DATA_ENCODING);
+    let datatype = property_code(ErrorCode::INVALID_DATA_TYPE);
     vec![
         Row {
             what: "a reference to an object in this device",
             single_only: false,
             value: |user| PropertyValue::ApplicationData(reference_to(user, 2, None)),
-            expected: None,
+            single: taken,
+            list: taken,
         },
         Row {
             what: "the empty object instance 4194303",
             single_only: false,
             value: |user| PropertyValue::ApplicationData(reference_to(user, EMPTY, None)),
-            expected: None,
+            single: taken,
+            list: taken,
         },
         Row {
             what: "a non-Device device identifier",
@@ -287,7 +300,8 @@ fn rows() -> Vec<Row> {
                 let device = Some(oid(ObjectType::ANALOG_VALUE, 9));
                 PropertyValue::ApplicationData(reference_to(user, 2, device))
             },
-            expected: property_code(ErrorCode::VALUE_OUT_OF_RANGE),
+            single: out_of_range,
+            list: out_of_range,
         },
         Row {
             what: "a non-Device device identifier at the empty instance",
@@ -296,7 +310,8 @@ fn rows() -> Vec<Row> {
                 let device = Some(oid(ObjectType::ANALOG_VALUE, EMPTY));
                 PropertyValue::ApplicationData(reference_to(user, EMPTY, device))
             },
-            expected: property_code(ErrorCode::VALUE_OUT_OF_RANGE),
+            single: out_of_range,
+            list: out_of_range,
         },
         Row {
             what: "a second reference in a single-reference value",
@@ -305,7 +320,8 @@ fn rows() -> Vec<Row> {
                 let one = reference_to(user, 2, None);
                 PropertyValue::ApplicationData([one.clone(), one].concat())
             },
-            expected: property_code(ErrorCode::INVALID_DATA_ENCODING),
+            single: encoding,
+            list: encoding,
         },
         Row {
             what: "a truncated reference",
@@ -314,23 +330,39 @@ fn rows() -> Vec<Row> {
                 let one = reference_to(user, 2, None);
                 PropertyValue::ApplicationData(one[..one.len() - 1].to_vec())
             },
-            expected: property_code(ErrorCode::INVALID_DATA_ENCODING),
+            single: encoding,
+            list: encoding,
+        },
+        // After one whole reference, anything at all is an encoding fault in a
+        // single-reference value; in a list it is the next element, which
+        // either can't open a reference or doesn't decode.
+        Row {
+            what: "a context tag [4] after the reference",
+            single_only: false,
+            value: |user| followed_by(user, &[0x49, 0x01]),
+            single: encoding,
+            list: datatype,
         },
         Row {
-            what: "an element after the reference that can't open one",
+            what: "an application Unsigned after the reference",
             single_only: false,
-            value: |user| {
-                PropertyValue::ApplicationData(
-                    [reference_to(user, 2, None), vec![0x49, 0x01]].concat(),
-                )
-            },
-            expected: property_code(ErrorCode::INVALID_DATA_TYPE),
+            value: |user| followed_by(user, &[0x21, 0x01]),
+            single: encoding,
+            list: datatype,
+        },
+        Row {
+            what: "a context tag [0] after the reference",
+            single_only: false,
+            value: |user| followed_by(user, &[0x09, 0x01]),
+            single: encoding,
+            list: encoding,
         },
         Row {
             what: "a REAL",
             single_only: false,
             value: |_| PropertyValue::Real(1.0),
-            expected: property_code(ErrorCode::INVALID_DATA_TYPE),
+            single: datatype,
+            list: datatype,
         },
         Row {
             what: "an application-tagged object identifier",
@@ -341,9 +373,19 @@ fn rows() -> Vec<Row> {
                 bytes.extend_from_slice(&id.encode());
                 PropertyValue::ApplicationData(bytes)
             },
-            expected: property_code(ErrorCode::INVALID_DATA_TYPE),
+            single: datatype,
+            list: datatype,
         },
     ]
+}
+
+/// The octets a value carries: raw octets, or the chunks of a list joined.
+fn octets(value: &PropertyValue) -> Vec<u8> {
+    match value {
+        PropertyValue::ApplicationData(bytes) => bytes.clone(),
+        PropertyValue::List(items) => items.iter().flat_map(octets).collect(),
+        other => panic!("not reference octets: {other:?}"),
+    }
 }
 
 #[test]
@@ -355,18 +397,23 @@ fn every_writable_device_reference_answers_the_same_value_the_same_way() {
             }
             let mut object = (user.build)();
             let before = object.read_property(user.property, user.index).unwrap();
-            let result = object.write_property(user.property, user.index, (row.value)(user), None);
+            let value = (row.value)(user);
+            let result = object.write_property(user.property, user.index, value.clone(), None);
             let context = format!("{}: {}", user.name, row.what);
-            match row.expected {
-                None => result.unwrap_or_else(|error| panic!("{context}: refused with {error:?}")),
+            let read = object.read_property(user.property, user.index).unwrap();
+            match if user.single { row.single } else { row.list } {
+                None => {
+                    result.unwrap_or_else(|error| panic!("{context}: refused with {error:?}"));
+                    assert_eq!(
+                        octets(&read),
+                        octets(&value),
+                        "{context}: stored as written"
+                    );
+                }
                 Some(expected) => {
                     let error = result.expect_err(&context);
                     assert_eq!(class_and_code(&error), expected, "{context}: {error:?}");
-                    assert_eq!(
-                        object.read_property(user.property, user.index).unwrap(),
-                        before,
-                        "{context}: a refused value changes nothing"
-                    );
+                    assert_eq!(read, before, "{context}: a refused value changes nothing");
                 }
             }
         }

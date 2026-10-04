@@ -297,7 +297,7 @@
     "#1122: 12.24.10 only lets a Schedule limited to its own device refuse references to objects outside it. The Schedule object cannot tell which Device holds it, so the server, which selects the local Device under the write's database guard, drops a Device identifier naming that Device from each member before the object decodes the value (WriteProperty, WritePropertyMultiple, write_local and both list services); teaching the object the identifier would have needed a new BACnetObject hook and keeping every Schedule in step with the Device set.",
     "A Device at the wildcard instance names no device and is never local. A read returns the stored local form, so a member written with and without the identifier is one member to the list services. Direct callers of ScheduleObject::write_property still get every Device member refused. Staging's Target_References gets the same rewrite since #1136 (BACNET-12-STAGING-TARGET-REFERENCES).",
     "A local write of an encoded value (BACnetServer::write_local_encoded, Python write_property_local) decodes it as WriteProperty does, so an Effective_Period read locally writes back.",
-    "A written List_Of_Object_Property_References member whose device identifier isn't a Device is VALUE_OUT_OF_RANGE, named by position, ahead of OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED for another device; the list decodes through the shared device_reference.rs helpers."
+    "A written List_Of_Object_Property_References member whose device identifier isn't a Device is VALUE_OUT_OF_RANGE, named by position, ahead of OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED for another device. The list is decoded whole and capped before any Device check, so a malformed member or the cap answers first."
    ]
   },
   {
@@ -336,7 +336,7 @@
     "The rewrite is the Schedule's (BACNET-12-SCHEDULE-WRITES), generalized in local_references.rs over both reference types: the server, which selects the local Device under the write's database guard, drops a Device member naming that Device from each element before the object decodes the value.",
     "A Device at the wildcard instance names no device and is never local. StagingObject written directly, or configured through StagingConfig, still refuses every Device member, since it cannot tell which Device holds it. Target_References is an array, so the list services do not apply. Not covered: targets in other devices (refused; the object issues no remote writes).",
     "Python reads Stages as (limit, values, deadband) triples and Target_References as ObjectIdentifiers, the forms add_staging takes, or as a (device, object) pair for a reference that keeps its Device member, which add_staging refuses as it takes local targets only.",
-    "The server hands Target_References writes over as the written octets, decoded by the shared device_reference.rs helpers, so an element of another datatype is INVALID_DATA_TYPE as on the other reference properties."
+    "The server hands Target_References writes over as the written octets, decoded by the shared device_reference.rs helpers: an element of another datatype is INVALID_DATA_TYPE, and anything after an element written by index INVALID_DATA_ENCODING."
    ]
   },
   {
@@ -374,7 +374,7 @@
     "Local choice: a reference naming another device is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the code the Schedule, Staging, Event Enrollment, Timer, Trend Log Multiple and Life Safety clauses give for the same restriction; 12.5.13 names none, and the encoding is valid for this production, so INVALID_DATA_ENCODING no longer fit.",
     "AveragingObject written directly still refuses every Device member, since it cannot tell which Device holds it. The property holds one reference, so array indexes and the list services do not apply; the mixed case is a value with two references, refused whole.",
     "The object stores only local references, so the server's sampler (#1144) reads only local properties; the WriteProperty wire test has it sample a reference written with this device's identifier. Log_DeviceObjectProperty on a Trend Log (12.25.8) or a Trend Log Multiple (12.30.11) is writable and takes the same local-Device rewrite. Event Enrollment Object_Property_Reference (12.12.8), Life Safety Point and Zone Member_Of and Zone_Members (12.15.29, 12.16.26, 12.16.27) and Global Group Group_Members (12.50.5) are read-only here, and a writable Group_Members would have to accept members in other devices under 12.50.5 in any case; Timer List_Of_Object_Property_References (12.57.21) and the Channel object are not implemented. Not covered: sampling a property in another device (refused).",
-    "The server hands Object_Property_Reference writes over as the written octets, as for a Trend Log, and the shared device_reference.rs helpers decode them, so octets after the reference that can't open another are INVALID_DATA_TYPE."
+    "The server hands Object_Property_Reference writes over as the written octets, as for a Trend Log, and the shared device_reference.rs helpers decode them: anything after the one reference is INVALID_DATA_ENCODING, whatever its tag."
    ]
   },
   {
@@ -3131,7 +3131,7 @@
     "docs/python-api.md#access-control"
    ],
    "notes": [
-    "One check, `check_device_member` on the bacnet-types rule, covers every device reference setter and network write path in bacnet-objects, and the device identifier of each Command action command.",
+    "One check, `check_device_member` on the bacnet-types rule, covers every device reference setter and network write path in bacnet-objects except Audit Log Member_Of, and the device identifier of each Command action command.",
     "On Averaging, Trend Log, Schedule and Staging writes, held to this device, the answer comes ahead of the remote-device refusal; a member naming another object type at the local Device's instance is not localized.",
     "Python raises ValueError for a non-Device device in a `(device, object)` pair, a reference mapping or an `ActionCommand`, naming the element, before any object is built.",
     "Audit Log Member_Of keeps any parent and reports an unusable one as CONFIGURATION_ERROR, outside this check.",
@@ -4667,7 +4667,7 @@
    ],
    "notes": [
     "An unset Averaging, Event Enrollment or Trend Log reference reads Null, since the production has no empty form.",
-    "Averaging, both trend logs, Channel, Schedule and Staging receive the written octets whole: another datatype, or octets after a reference that can't open another, is INVALID_DATA_TYPE; a malformed or second reference INVALID_DATA_ENCODING.",
+    "Writable references reach the object as the written octets: another datatype, or a list element that can't open a reference, is INVALID_DATA_TYPE; a malformed reference, or anything after a single one, INVALID_DATA_ENCODING.",
     "Averaging and both trend objects keep their references inside this device: the server drops a Device member naming its own Device, and any other is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.",
     "A Trend Log Multiple holds at most 64 references; an index 0 write resizes it, padding with empty elements, ones naming instance 4194303. A client's change to either trend reference purges the log.",
     "Event Enrollment Object_Property_Reference and the Life Safety member lists are read-only over the network; the application sets them."
