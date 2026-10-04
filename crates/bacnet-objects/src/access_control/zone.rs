@@ -3,7 +3,7 @@ use bacnet_types::enums::AccessZoneOccupancyState;
 use super::zone_occupancy::{adjusted, Occupancy};
 use super::zone_out_of_service::ZoneState;
 use super::*;
-use crate::event::state_reporting::ChangeOfStateReporting;
+use crate::event::state_reporting::{ChangeOfStateReporting, ListedStates};
 
 // AccessZoneObject (type 36)
 // ---------------------------------------------------------------------------
@@ -26,7 +26,9 @@ use crate::event::state_reporting::ChangeOfStateReporting;
 /// Time_Delay_Normal, and a Reliability other than NO_FAULT_DETECTED puts it
 /// in FAULT. The event rows are served and written through
 /// `ChangeOfStateReporting`, and the server sends the notifications to the
-/// Notification Class recipients.
+/// Notification Class recipients. Alarm_Values never holds NORMAL, the state
+/// with no limit crossed: listed, it would put the zone in alarm whenever its
+/// count sat inside its limits (#1401).
 ///
 /// Entry_Points and Exit_Points list the Access Points leading into and out
 /// of the zone as `BACnetDeviceObjectReference` values (Clauses 12.32.23 and
@@ -73,7 +75,7 @@ impl AccessZoneObject {
             entry_points: Vec::new(),
             exit_points: Vec::new(),
             out_of_service: false,
-            reporting: ChangeOfStateReporting::new(occupancy_state_in_range),
+            reporting: ChangeOfStateReporting::new(ALARM_STATES),
         })
     }
 
@@ -104,11 +106,13 @@ impl AccessZoneObject {
     }
 
     /// Set Alarm_Values, the occupancy states the zone reports as offnormal
-    /// (Clause 12.32.27). A value outside the BACnetAccessZoneOccupancyState
-    /// production, named or proprietary (64 to 65535), is refused with
-    /// VALUE_OUT_OF_RANGE and the values set before are kept. Clients can
-    /// write the list too, as they can the zone's other event configuration
-    /// (Time_Delay, Notification_Class, Event_Enable and the rest).
+    /// (Clause 12.32.27). NORMAL, or a value outside the
+    /// BACnetAccessZoneOccupancyState production, named or proprietary (64
+    /// to 65535), is refused with VALUE_OUT_OF_RANGE naming the element, and
+    /// the values set before are kept. Clients can write the list too, as
+    /// they can the zone's other event configuration (Time_Delay,
+    /// Notification_Class, Event_Enable and the rest), and meet the same
+    /// checks.
     pub fn set_alarm_values(
         &mut self,
         states: impl IntoIterator<Item = AccessZoneOccupancyState>,
@@ -359,6 +363,13 @@ fn access_points(
     }
     Ok(points)
 }
+
+/// The states Alarm_Values can hold: a BACnetAccessZoneOccupancyState other
+/// than NORMAL.
+const ALARM_STATES: ListedStates = ListedStates {
+    normal: AccessZoneOccupancyState::NORMAL.to_raw(),
+    in_range: occupancy_state_in_range,
+};
 
 /// Whether `raw` is a BACnetAccessZoneOccupancyState: a named state or a
 /// proprietary one from 64 to 65535 (Clause 23.1).
