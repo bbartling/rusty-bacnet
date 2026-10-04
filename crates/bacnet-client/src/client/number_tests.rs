@@ -14,6 +14,7 @@ async fn client_number_learns_and_answers_through_network_intake() {
 }
 
 mod lifecycle;
+mod local_routes;
 mod progress;
 
 #[tokio::test]

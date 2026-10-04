@@ -15,8 +15,9 @@ fn assert_error(error: Error, expected: ErrorCode) {
     );
 }
 
-/// The zone's intrinsic-reporting rows (#1305), in metadata order.
-const ZONE_EVENT_ROWS: [P; 10] = [
+/// The intrinsic-reporting rows of the zone (#1305) and the door (#1149),
+/// in metadata order.
+const EVENT_ROWS: [P; 10] = [
     P::TIME_DELAY,
     P::NOTIFICATION_CLASS,
     P::ALARM_VALUES,
@@ -48,7 +49,7 @@ fn assert_exact_sets(object: &dyn BACnetObject, all: &[P], required: &[P]) {
     for row in metadata.iter() {
         assert_eq!(
             row.presence_condition,
-            ZONE_EVENT_ROWS
+            EVENT_ROWS
                 .contains(&row.property_identifier)
                 .then_some(PropertyPresenceCondition::IntrinsicReporting),
             "{:?}",
@@ -126,7 +127,15 @@ fn property_metadata_access_door_exact_sets_readable_rows_and_indexed_list() {
         P::DOOR_EXTENDED_PULSE_TIME,
         P::DOOR_OPEN_TOO_LONG_TIME,
         P::CURRENT_COMMAND_PRIORITY,
-    ];
+        // The rows #1149 added: the masked list, the event rows and, after
+        // Alarm_Values, Fault_Values.
+        P::MASKED_ALARM_VALUES,
+    ]
+    .into_iter()
+    .chain(EVENT_ROWS[..3].iter().copied())
+    .chain([P::FAULT_VALUES])
+    .chain(EVENT_ROWS[3..].iter().copied())
+    .collect::<Vec<_>>();
     let required = [
         P::OBJECT_IDENTIFIER,
         P::OBJECT_NAME,
@@ -163,6 +172,15 @@ fn property_metadata_access_door_exact_sets_readable_rows_and_indexed_list() {
         object.read_property(P::DOOR_MEMBERS, None).unwrap(),
         PropertyValue::List(vec![])
     );
+    // The three alarm lists start empty and are BACnetLISTs, not arrays.
+    for p in [P::MASKED_ALARM_VALUES, P::ALARM_VALUES, P::FAULT_VALUES] {
+        assert_eq!(
+            object.read_property(p, None).unwrap(),
+            PropertyValue::List(vec![])
+        );
+        assert!(!object.is_array_property(p), "{p:?}");
+        assert!(object.is_list_property(p), "{p:?}");
+    }
     // Priority_Array and Door_Members are BACnetARRAYs (Table 12-30), so
     // the service gate admits an index on both (#1169).
     assert!(object.is_array_property(P::PRIORITY_ARRAY));
@@ -315,7 +333,7 @@ fn property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list() {
         P::OCCUPANCY_LOWER_LIMIT,
     ]
     .into_iter()
-    .chain(ZONE_EVENT_ROWS)
+    .chain(EVENT_ROWS)
     .collect::<Vec<_>>();
     let required = [
         P::OBJECT_IDENTIFIER,
@@ -384,9 +402,25 @@ fn property_metadata_access_trio_write_capabilities_match_dispatch() {
                 P::DOOR_PULSE_TIME,
                 P::DOOR_EXTENDED_PULSE_TIME,
                 P::DOOR_OPEN_TOO_LONG_TIME,
+                // The lists and the event configuration (#1149).
+                P::MASKED_ALARM_VALUES,
+                P::TIME_DELAY,
+                P::NOTIFICATION_CLASS,
+                P::ALARM_VALUES,
+                P::FAULT_VALUES,
+                P::EVENT_ENABLE,
+                P::NOTIFY_TYPE,
+                P::EVENT_DETECTION_ENABLE,
+                P::TIME_DELAY_NORMAL,
             ],
-            // Table 12-30 footnote 1 (#1131).
-            &[P::DOOR_STATUS, P::LOCK_STATUS, P::DOOR_ALARM_STATE],
+            // Table 12-30 footnote 1 (#1131), and Reliability, which the
+            // FAULT_STATE check can move (Clause 12.26.9, #1149).
+            &[
+                P::DOOR_STATUS,
+                P::LOCK_STATUS,
+                P::DOOR_ALARM_STATE,
+                P::RELIABILITY,
+            ],
         ),
         (
             || Box::new(AccessPointObject::new(1, "AP-1").unwrap()),
@@ -472,138 +506,6 @@ fn property_metadata_access_trio_write_capabilities_match_dispatch() {
                 ErrorCode::WRITE_ACCESS_DENIED,
             );
             assert_eq!(object.property_metadata().as_ref(), original);
-        }
-    }
-}
-
-#[test]
-fn property_metadata_access_door_writes_command_priority_and_gate_relinquish() {
-    for out_of_service in [false, true] {
-        let mut object = AccessDoorObject::new(1, "DOOR-1").unwrap();
-        object
-            .write_property(
-                P::OUT_OF_SERVICE,
-                None,
-                PropertyValue::Boolean(out_of_service),
-                None,
-            )
-            .unwrap();
-        // A priority write commands Present_Value; relinquishing the slot
-        // falls back to Relinquish_Default.
-        object
-            .write_property(
-                P::PRESENT_VALUE,
-                None,
-                PropertyValue::Enumerated(1),
-                Some(8),
-            )
-            .unwrap();
-        assert_eq!(
-            object.read_property(P::PRESENT_VALUE, None).unwrap(),
-            PropertyValue::Enumerated(1)
-        );
-        assert_eq!(
-            object.read_property(P::PRIORITY_ARRAY, Some(8)).unwrap(),
-            PropertyValue::Enumerated(1)
-        );
-        object
-            .write_property(P::PRESENT_VALUE, None, PropertyValue::Null, Some(8))
-            .unwrap();
-        assert_eq!(
-            object.read_property(P::PRESENT_VALUE, None).unwrap(),
-            PropertyValue::Enumerated(0)
-        );
-        // Relinquish_Default admits LOCK and UNLOCK (Clause 12.26.11)
-        // and resolves Present_Value anew from the empty array.
-        for raw in [0u32, 1] {
-            object
-                .write_property(
-                    P::RELINQUISH_DEFAULT,
-                    None,
-                    PropertyValue::Enumerated(raw),
-                    None,
-                )
-                .unwrap();
-            assert_eq!(
-                object.read_property(P::RELINQUISH_DEFAULT, None).unwrap(),
-                PropertyValue::Enumerated(raw)
-            );
-            assert_eq!(
-                object.read_property(P::PRESENT_VALUE, None).unwrap(),
-                PropertyValue::Enumerated(raw)
-            );
-        }
-        object
-            .write_property(
-                P::RELINQUISH_DEFAULT,
-                None,
-                PropertyValue::Enumerated(1),
-                None,
-            )
-            .unwrap();
-        for raw in [2, 3, 4] {
-            assert_error(
-                object
-                    .write_property(
-                        P::RELINQUISH_DEFAULT,
-                        None,
-                        PropertyValue::Enumerated(raw),
-                        None,
-                    )
-                    .unwrap_err(),
-                ErrorCode::VALUE_OUT_OF_RANGE,
-            );
-        }
-        assert_eq!(
-            object.read_property(P::RELINQUISH_DEFAULT, None).unwrap(),
-            PropertyValue::Enumerated(1)
-        );
-        // Mistyped values are rejected without changing state.
-        for (p, value) in [
-            (P::PRESENT_VALUE, PropertyValue::Real(1.0)),
-            (P::RELINQUISH_DEFAULT, PropertyValue::Real(1.0)),
-            (P::DOOR_PULSE_TIME, PropertyValue::Real(1.0)),
-            (P::DESCRIPTION, PropertyValue::Unsigned(1)),
-            (P::OUT_OF_SERVICE, PropertyValue::Unsigned(1)),
-        ] {
-            assert_error(
-                object.write_property(p, None, value, None).unwrap_err(),
-                ErrorCode::INVALID_DATA_TYPE,
-            );
-        }
-        assert_eq!(
-            object.read_property(P::PRESENT_VALUE, None).unwrap(),
-            PropertyValue::Enumerated(1)
-        );
-        // The footnote-1 status rows take their own readback only while
-        // out of service (#1131).
-        for p in [P::DOOR_STATUS, P::LOCK_STATUS, P::DOOR_ALARM_STATE] {
-            let value = object.read_property(p, None).unwrap();
-            let result = object.write_property(p, None, value, None);
-            if out_of_service {
-                result.unwrap();
-            } else {
-                assert_error(result.unwrap_err(), ErrorCode::WRITE_ACCESS_DENIED);
-            }
-            assert!(object.is_writable_property(p));
-        }
-        // The other Table-O status rows and the readable-only rows deny
-        // even their own readback on write.
-        for p in [
-            P::SECURED_STATUS,
-            P::DOOR_MEMBERS,
-            P::PRIORITY_ARRAY,
-            P::EVENT_STATE,
-            P::STATUS_FLAGS,
-            P::RELIABILITY,
-            P::CURRENT_COMMAND_PRIORITY,
-        ] {
-            let value = object.read_property(p, None).unwrap();
-            assert_error(
-                object.write_property(p, None, value, None).unwrap_err(),
-                ErrorCode::WRITE_ACCESS_DENIED,
-            );
-            assert!(!object.is_writable_property(p));
         }
     }
 }
@@ -724,11 +626,11 @@ fn property_metadata_access_trio_unserved_rows_stay_unknown() {
         );
     }
 
-    // Door_Unlock_Delay_Time and Masked_Alarm_Values are Table 12-30 O
-    // rows with no read arm.
+    // Door_Unlock_Delay_Time and Maintenance_Required are Table 12-30 O
+    // rows with no read arm; Masked_Alarm_Values is served (#1149).
     let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
     assert_unserved(&mut door, P::DOOR_UNLOCK_DELAY_TIME);
-    assert_unserved(&mut door, P::MASKED_ALARM_VALUES);
+    assert_unserved(&mut door, P::MAINTENANCE_REQUIRED);
     // Access_Event_Authentication_Factor is a Table 12-36 O row with no read
     // arm; Present_Value is no Table 12-36 row (#1064). Authentication_Status
     // is served (#1284).
@@ -743,3 +645,6 @@ fn property_metadata_access_trio_unserved_rows_stay_unknown() {
     assert_unserved(&mut zone, P::PRESENT_VALUE);
     assert_unserved(&mut zone, P::ACCESS_DOORS);
 }
+
+#[path = "metadata_topology_door_tests.rs"]
+mod door;

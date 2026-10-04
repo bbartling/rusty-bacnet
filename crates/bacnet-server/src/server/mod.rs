@@ -660,6 +660,8 @@ pub use request_admission::{RequestAdmissionCounters, RequestAdmissionPolicy};
 mod shutdown;
 
 #[cfg(test)]
+mod access_door_event_tests;
+#[cfg(test)]
 mod access_door_pulse_task_tests;
 #[cfg(test)]
 mod access_zone_event_tests;
@@ -776,11 +778,15 @@ mod list_element_event_tests;
 #[cfg(test)]
 mod local_network_number_tests;
 #[cfg(test)]
+mod local_network_outbound_tests;
+#[cfg(test)]
 mod log_reference_resize_tests;
 #[cfg(test)]
 mod loop_controlled_variable_tests;
 #[cfg(test)]
 mod loop_cov_tests;
+#[cfg(test)]
+mod mistagged_request_wire_tests;
 #[cfg(test)]
 mod noncommandable_null_cov_tests;
 #[cfg(test)]

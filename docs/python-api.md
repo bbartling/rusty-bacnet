@@ -2484,6 +2484,25 @@ Active_Authentication_Policy (1 to the policy count) and the mode by writing
 Authorization_Mode (one of the supported modes). Another value is refused
 with VALUE_OUT_OF_RANGE, and another datatype with INVALID_DATA_TYPE.
 
+`add_access_door` also takes `alarm_values`, `fault_values` and
+`masked_alarm_values`, the door's starting Alarm_Values, Fault_Values and
+Masked_Alarm_Values as BACnetDoorAlarmState numbers other than NORMAL (1 to
+8, or 256 to 65535); peers can write all three. Any other number, NORMAL (0)
+included, raises VALUE_OUT_OF_RANGE. Door_Alarm_State stays
+NORMAL or a member of the alarm or fault values and never takes a masked
+state, so a client's simulated value outside them is refused, and masking the
+state the door is in returns it to NORMAL. The door raises a CHANGE_OF_STATE
+alarm once Door_Alarm_State has stayed in Alarm_Values for Time_Delay, and a
+fault value makes Reliability MULTI_STATE_FAULT. Deciding that the door is in
+alarm, DOOR_OPEN_TOO_LONG included, is up to the application.
+
+```python
+# Alarm on DOOR_OPEN_TOO_LONG (2) and FORCED_OPEN (3); fault on DOOR_FAULT (5).
+server.add_access_door(
+    instance=2, name="Side Entry", alarm_values=[2, 3], fault_values=[5]
+)
+```
+
 `add_access_rights` takes `positive_access_rules` and `negative_access_rules`,
 lists of `AccessRule` mappings for Positive_Access_Rules and
 Negative_Access_Rules, and `enable` for the object's Enable flag:
@@ -2670,6 +2689,8 @@ A valid local-broadcast announcement with flag zero updates an unknown/learned o
 Routed controls, malformed payloads and unicast Network-Number-Is are ignored. A BBMD Forwarded-NPDU is a logical broadcast even when its UDP hop is unicast and remains eligible. Ignoring number zero, 65535 and flags outside zero/one is this implementation's validation policy, rather than an additional quoted Standard mandate. Conflicting announcements against a locally configured number produce a debug diagnostic without changing configuration.
 
 Standalone clients start UNKNOWN on transports that opt into local nonrouter Number controls. They learn and reply using the same validation and precedence rules, without a Device object, registered Network Port, configured-number setter or persistence. One 256-entry serial worker owns this state; full or closed admission drops only Number controls. A held Number send leaves routed reason-4 Reject correlation and independent APDU dispatch available. Stop aborts and joins both the Number worker and dispatch before transport cleanup, retaining their joins across a canceled stop waiter. Drop aborts both. Already transmitted bytes cannot be retracted. Controlled-client tests qualify the shared intake/lifecycle behavior; Linux NORMAL-B/IP loopback and Ethernet virtual-link tests independently observe actual reply frames. Constrained-TLS SC tests observe Hub broadcast VMAC and exact Number bytes, including replies to direct-peer queries, while ordinary confirmed client requests complete. SC stop/drop retires client connections; the external DirectListener must separately be stopped and joined before its bind is released. Pending-send/queue cancellation remains covered by the generic controlled-client tests, rather than inferred from wire silence. Rust standalone-client B/IPv6 tests independently capture normal selected-link OriginalBroadcast and configured-foreign DBTN with exact source, destination, interface and Number bytes. Positive reply fences cover UNKNOWN, precedence and invalid/admission refusal; stop and eventual Drop release the socket, and reconstruction starts UNKNOWN. These external ignored Linux tests require the integration `ipv6` feature and isolated observer; ordinary hosted CI does not execute them. They add no Python foreign-device API, configured-client authority or physical-LAN claim. Separate isolated Linux standalone-client BBMD/foreign tests capture own Original-Broadcast versus forwarding traffic and exact DBTN to the configured BBMD. Positive Number fences cover UNKNOWN, BDT/FDT admission/refusal, alternate-sender compatibility, precedence and representative invalid/routed controls; registration NAKs retain DBTN attempts and the timer retries registration. An ordinary client ReadProperty completes during live Number controls, and awaited stop permits exclusive socket rebind before client Drop. No configured client number, new registration policy or complete Annex J claim is added. Rust MS/TP LoopbackSerial tests also cover the standalone client in both execution modes; see the MS/TP paragraph below.
+
+Once `BACnetClient` has learned its network's number, a device its table holds as routed through a network with that number is on the client's own network (#1358). `read_property_from_device`, `write_property_to_device` and the other `_from_device` and `_to_device` methods send to it as a local request: a unicast to the device's own address with no DNET, not through the router it was heard through. Only an answer from that address completes the request. One relayed back by a router with that number as its SNET matches nothing, and the request is retried. While the number is unknown, these requests go through the router as before.
 
 SC starts UNKNOWN with no configured SC Network Port API; unrelated configured objects provide no authority. SC logical broadcast is the BVLC broadcast destination VMAC. A direct unicast What-Is is valid, but its Number reply uses the Hub broadcast path, never the saved original-direct APDU response capability. Hub-relayed controls do not identify an originating TLS leaf; SC control-origin authorization remains separate (#518). A message from a direct-connection peer is never a logical broadcast, so it can ask but cannot teach.
 

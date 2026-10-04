@@ -1,13 +1,15 @@
 //! WriteProperty service per ASHRAE 135-2020 Clause 15.9.
 
 use bacnet_encoding::primitives;
-use bacnet_encoding::tags::{self, TagClass};
+use bacnet_encoding::tags;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use bacnet_encoding::constructed::tagged::decode_ctx_unsigned;
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx, expect_end, expect_opening,
+};
 use bacnet_encoding::constructed::{extract_property_value, PropertyValueBoundary};
 
 // ---------------------------------------------------------------------------
@@ -71,50 +73,29 @@ impl WritePropertyRequest {
 
     /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
         // [0] object-identifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(0) {
-            return Err(Error::decoding(
-                offset,
-                "WriteProperty expected context tag 0 for object-id",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "WriteProperty truncated at object-id"));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
+        let (object_identifier, offset) =
+            decode_ctx_object_id(data, 0, 0, "WriteProperty object-id")?;
 
         // [1] property-identifier
-        let (prop_raw, end) =
+        let (prop_raw, offset) =
             decode_ctx_unsigned::<u32>(data, offset, 1, "WriteProperty property-id")?;
         let property_identifier = PropertyIdentifier::from_raw(prop_raw);
-        offset = end;
 
         // [2] propertyArrayIndex (optional)
-        let mut property_array_index = None;
-        let (tag, _) = tags::decode_tag(data, offset)?;
-        if tag.class == TagClass::Context && tag.number == 2 && !tag.is_opening && !tag.is_closing {
-            let (index, end) =
-                decode_ctx_unsigned::<u32>(data, offset, 2, "WriteProperty array-index")?;
-            property_array_index = Some(index);
-            offset = end;
-        }
+        let (property_array_index, offset) = decode_optional_ctx(
+            data,
+            offset,
+            2,
+            "WriteProperty array-index",
+            decode_ctx_unsigned::<u32>,
+        )?;
 
         // [3] propertyValue (opening/closing tag 3)
-        let (tag, tag_end) = tags::decode_tag(data, offset)?;
-        if !tag.is_opening_tag(3) {
-            return Err(Error::decoding(
-                offset,
-                "WriteProperty expected opening tag 3",
-            ));
-        }
-        let (value_bytes, new_offset) = extract_property_value(
+        let content = expect_opening(data, offset, 3, "WriteProperty property-value")?;
+        let (value_bytes, offset) = extract_property_value(
             data,
-            tag_end,
+            content,
             3,
             property_identifier,
             &[
@@ -123,26 +104,14 @@ impl WritePropertyRequest {
             ],
         )?;
         let property_value = value_bytes.to_vec();
-        offset = new_offset;
 
-        // [4] priority (optional)
+        // [4] priority (optional), and nothing after it. Read at full width
+        // so a value past 16 draws the range error, not a width error.
         let mut priority = None;
         if offset < data.len() {
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            if !tag.is_context(4) {
-                return Err(Error::decoding(
-                    offset,
-                    "WriteProperty expected context tag 4 for priority",
-                ));
-            }
-            let end = pos + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(pos, "WriteProperty truncated at priority"));
-            }
-            let prio = primitives::decode_unsigned(&data[pos..end])?;
-            if end != data.len() {
-                return Err(Error::decoding(end, "WriteProperty has trailing data"));
-            }
+            let (prio, end) =
+                decode_ctx_unsigned::<u64>(data, offset, 4, "WriteProperty priority")?;
+            expect_end(data, end, end, "WriteProperty")?;
             if !(1..=16).contains(&prio) {
                 return Err(Error::Protocol {
                     class: ErrorClass::SERVICES.to_raw() as u32,
@@ -165,6 +134,7 @@ impl WritePropertyRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_encoding::tags::TagClass;
     use bacnet_types::enums::ObjectType;
 
     fn object_id() -> ObjectIdentifier {

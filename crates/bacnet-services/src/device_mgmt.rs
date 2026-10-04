@@ -5,6 +5,10 @@
 //! - TimeSynchronization (§16.7)
 //! - UTCTimeSynchronization (§16.8)
 
+use bacnet_encoding::constructed::tagged::{
+    decode_app_fixed, decode_ctx_character_string, decode_ctx_unsigned, decode_optional_ctx,
+    expect_end,
+};
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
 use bacnet_types::enums::{EnableDisable, ReinitializedState};
@@ -46,52 +50,21 @@ impl DeviceCommunicationControlRequest {
     /// Decode the request from `data`; errors on malformed input, an out-of-range duration or a
     /// password longer than 20 characters.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
         // [0] time-duration (optional)
-        let mut time_duration = None;
-        let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 0)?;
-        if let Some(content) = opt_data {
-            let time_duration_raw = primitives::decode_unsigned(content)?;
-            time_duration = Some(u16::try_from(time_duration_raw).map_err(|_| {
-                Error::decoding(
-                    offset,
-                    format!("DCC time-duration {time_duration_raw} exceeds u16"),
-                )
-            })?);
-            offset = new_offset;
-        }
+        let (time_duration, offset) =
+            decode_optional_ctx(data, 0, 0, "DCC time-duration", decode_ctx_unsigned::<u16>)?;
 
         // [1] enable-disable
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(1) {
-            return Err(Error::decoding(offset, "DCC expected context tag 1"));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "DCC truncated at enable-disable"));
-        }
-        let enable_disable_raw = primitives::decode_unsigned(&data[pos..end])?;
-        let enable_disable =
-            EnableDisable::from_raw(u32::try_from(enable_disable_raw).map_err(|_| {
-                Error::decoding(
-                    pos,
-                    format!("DCC enable-disable {enable_disable_raw} exceeds u32"),
-                )
-            })?);
-        offset = end;
+        let (enable_disable, offset) =
+            decode_ctx_unsigned::<u32>(data, offset, 1, "DCC enable-disable")?;
+        let enable_disable = EnableDisable::from_raw(enable_disable);
 
-        // [2] password (optional, max 20 characters)
-        let mut password = None;
-        if offset < data.len() {
-            let (opt_data, _new_offset) = tags::decode_optional_context(data, offset, 2)?;
-            if let Some(content) = opt_data {
-                let s = primitives::decode_character_string(content)?;
-                if s.len() > 20 {
-                    return Err(Error::Encoding("DCC password exceeds 20 characters".into()));
-                }
-                password = Some(s);
-            }
+        // [2] password (optional, max 20 characters); octets after the
+        // members that aren't a [2] are left unread
+        let (password, _) =
+            decode_optional_ctx(data, offset, 2, "DCC password", decode_ctx_character_string)?;
+        if password.as_ref().is_some_and(|s| s.len() > 20) {
+            return Err(Error::Encoding("DCC password exceeds 20 characters".into()));
         }
 
         Ok(Self {
@@ -129,44 +102,23 @@ impl ReinitializeDeviceRequest {
 
     /// Decode the request from `data`; errors on missing or malformed fields.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
         // [0] reinitialized-state
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(0) {
+        let (state, offset) = decode_ctx_unsigned::<u32>(data, 0, 0, "Reinitialize state")?;
+        let reinitialized_state = ReinitializedState::from_raw(state);
+
+        // [1] password (optional, max 20 characters)
+        let (password, _) = decode_optional_ctx(
+            data,
+            offset,
+            1,
+            "ReinitializeDevice password",
+            decode_ctx_character_string,
+        )?;
+        if password.as_ref().is_some_and(|s| s.len() > 20) {
             return Err(Error::decoding(
                 offset,
-                "Reinitialize expected context tag 0",
+                "ReinitializeDevice password exceeds 20 characters",
             ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "Reinitialize truncated at state"));
-        }
-        let reinitialized_state_raw = primitives::decode_unsigned(&data[pos..end])?;
-        let reinitialized_state =
-            ReinitializedState::from_raw(u32::try_from(reinitialized_state_raw).map_err(|_| {
-                Error::decoding(
-                    pos,
-                    format!("Reinitialize state {reinitialized_state_raw} exceeds u32"),
-                )
-            })?);
-        offset = end;
-
-        // [1] password (optional)
-        let mut password = None;
-        if offset < data.len() {
-            let (opt_data, _new_offset) = tags::decode_optional_context(data, offset, 1)?;
-            if let Some(content) = opt_data {
-                let s = primitives::decode_character_string(content)?;
-                if s.len() > 20 {
-                    return Err(Error::decoding(
-                        offset,
-                        "ReinitializeDevice password exceeds 20 characters",
-                    ));
-                }
-                password = Some(s);
-            }
         }
 
         Ok(Self {
@@ -200,43 +152,11 @@ impl TimeSynchronizationRequest {
 
     /// Decode the request from `data`; errors on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.class != tags::TagClass::Application
-            || tag.number != tags::app_tag::DATE
-            || tag.length != 4
-        {
-            return Err(Error::decoding(
-                offset,
-                "TimeSync expected application Date",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "TimeSync truncated at date"));
-        }
-        let date = Date::decode(&data[pos..end])?;
-        offset = end;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if tag.class != tags::TagClass::Application
-            || tag.number != tags::app_tag::TIME
-            || tag.length != 4
-        {
-            return Err(Error::decoding(
-                offset,
-                "TimeSync expected application Time",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "TimeSync truncated at time"));
-        }
-        let time = Time::decode(&data[pos..end])?;
-        if end != data.len() {
-            return Err(Error::decoding(end, "TimeSync contains trailing data"));
-        }
+        let (date, offset) = decode_app_fixed(data, 0, tags::app_tag::DATE, 4, "TimeSync date")?;
+        let date = Date::decode(date)?;
+        let (time, end) = decode_app_fixed(data, offset, tags::app_tag::TIME, 4, "TimeSync time")?;
+        let time = Time::decode(time)?;
+        expect_end(data, end, end, "TimeSync")?;
 
         Ok(Self { date, time })
     }
@@ -289,16 +209,19 @@ mod tests {
 
     #[test]
     fn dcc_values_must_fit_field_widths() {
+        // The shared readers' wording names the member, its tag and the value.
         for (duration, enable_disable, field, value) in [
-            (Some(65_536), 0, "time-duration", 65_536_u64),
-            (None, 4_294_967_296, "enable-disable", 4_294_967_296),
-            (Some(u64::MAX), 0, "time-duration", u64::MAX),
-            (None, u64::MAX, "enable-disable", u64::MAX),
+            (Some(65_536), 0, "time-duration: [0]", 65_536_u64),
+            (None, 4_294_967_296, "enable-disable: [1]", 4_294_967_296),
+            (Some(u64::MAX), 0, "time-duration: [0]", u64::MAX),
+            (None, u64::MAX, "enable-disable: [1]", u64::MAX),
         ] {
             let encoded = encode_dcc(duration, enable_disable);
             let error = DeviceCommunicationControlRequest::decode(&encoded).unwrap_err();
             assert!(
-                error.to_string().contains(&format!("DCC {field} {value}")),
+                error
+                    .to_string()
+                    .contains(&format!("DCC {field} value {value} exceeds")),
                 "unexpected error for {field} {value}: {error}"
             );
         }
@@ -342,9 +265,9 @@ mod tests {
             let encoded = encode_reinitialize(value);
             let error = ReinitializeDeviceRequest::decode(&encoded).unwrap_err();
             assert!(
-                error
-                    .to_string()
-                    .contains(&format!("Reinitialize state {value}")),
+                error.to_string().contains(&format!(
+                    "Reinitialize state: [0] value {value} exceeds u32"
+                )),
                 "unexpected error for state {value}: {error}"
             );
         }

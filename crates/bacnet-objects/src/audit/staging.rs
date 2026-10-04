@@ -196,15 +196,44 @@ impl AuditLogObject {
     /// log again. A commit made in place right after lands later and
     /// replaces it.
     fn drop_staged_write(&mut self, ticket: &SaveTicket) {
-        if ticket.succeeded() == Some(false) {
-            return;
+        if let Some(served) = self.served_to_put_back(ticket) {
+            self.writer.submit_coalescing(Arc::new(served));
         }
-        let Some(generation) = self.generation.checked_add(1) else {
-            return;
-        };
+    }
+
+    /// The served state, at the next generation, that storage goes back to
+    /// after staged changes committed on `ticket` are dropped; `None` when
+    /// their commit failed, so storage never left the served state, or the
+    /// generations have run out.
+    fn served_to_put_back(&self, ticket: &SaveTicket) -> Option<AuditLogSnapshot> {
+        if ticket.succeeded() == Some(false) {
+            return None;
+        }
+        let generation = self.generation.checked_add(1)?;
         let mut served = self.current_snapshot();
         served.generation = generation;
-        self.writer.submit_coalescing(Arc::new(served));
+        Some(served)
+    }
+
+    /// The log is going away (#1363). Staged changes no request finished
+    /// are dropped as [`settle_staged`](Self::settle_staged) drops them, but
+    /// the commit of the served state is waited for here, so it lands before
+    /// the writer's own drop joins its thread, and a failure is logged. A
+    /// staged batch stays as it is: storage holds it, or will once its
+    /// commit runs, and the log takes a batch whose commit succeeded
+    /// whenever it settles one, so a restart serving it is what this log
+    /// would have done.
+    fn close_staged(&mut self) {
+        let Some(commit) = self
+            .staged
+            .take_if(|commit| matches!(commit.kind, StagedKind::Changes { .. }))
+        else {
+            return;
+        };
+        commit.released.set();
+        if let Some(served) = self.served_to_put_back(&commit.ticket) {
+            self.writer.put_back(Arc::new(served));
+        }
     }
 
     /// The wait for a staged commit that still holds the log: a batch's
@@ -539,5 +568,24 @@ impl DurableWrites for AuditLogObject {
         }) {
             self.settle_staged();
         }
+    }
+
+    /// Settle what the operation task would, without waiting out a
+    /// lifetime: drop staged changes, putting storage back, and take a
+    /// batch whose commit has run. A batch whose commit still runs is left
+    /// to land; the wait returned covers it.
+    fn settle_forgotten_writes(&mut self) -> Option<SaveWait> {
+        if self.staged.as_ref().is_some_and(|commit| {
+            commit.ticket.is_done() || matches!(commit.kind, StagedKind::Changes { .. })
+        }) {
+            self.settle_staged();
+        }
+        Some(self.writer.idle())
+    }
+}
+
+impl Drop for AuditLogObject {
+    fn drop(&mut self) {
+        self.close_staged();
     }
 }

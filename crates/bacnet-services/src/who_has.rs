@@ -1,7 +1,10 @@
 //! Who-Has and I-Have services per ASHRAE 135-2020 Clause 16.9.
 
+use bacnet_encoding::constructed::tagged::{
+    decode_app_character_string, decode_app_object_id, decode_ctx_character_string,
+    decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx, next_is_context,
+};
 use bacnet_encoding::primitives;
-use bacnet_encoding::tags;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
@@ -57,48 +60,24 @@ impl WhoHasRequest {
 
     /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
-        // [0] low-limit (optional)
-        let mut low_limit = None;
-        let (opt, new_offset) = tags::decode_optional_context(data, offset, 0)?;
-        if let Some(content) = opt {
-            let low_limit_raw = primitives::decode_unsigned(content)?;
-            low_limit = Some(u32::try_from(low_limit_raw).map_err(|_| {
-                Error::decoding(
-                    offset,
-                    format!("WhoHas low-limit {low_limit_raw} exceeds u32"),
-                )
-            })?);
-            offset = new_offset;
-        }
-
-        // [1] high-limit (optional)
-        let mut high_limit = None;
-        let (opt, new_offset) = tags::decode_optional_context(data, offset, 1)?;
-        if let Some(content) = opt {
-            let high_limit_raw = primitives::decode_unsigned(content)?;
-            high_limit = Some(u32::try_from(high_limit_raw).map_err(|_| {
-                Error::decoding(
-                    offset,
-                    format!("WhoHas high-limit {high_limit_raw} exceeds u32"),
-                )
-            })?);
-            offset = new_offset;
-        }
+        // [0] low-limit and [1] high-limit (optional)
+        let (low_limit, offset) =
+            decode_optional_ctx(data, 0, 0, "WhoHas low-limit", decode_ctx_unsigned::<u32>)?;
+        let (high_limit, offset) = decode_optional_ctx(
+            data,
+            offset,
+            1,
+            "WhoHas high-limit",
+            decode_ctx_unsigned::<u32>,
+        )?;
 
         // CHOICE: [2] object-identifier OR [3] object-name
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "WhoHas truncated at object choice"));
-        }
-
-        let object = if tag.is_context(2) {
-            WhoHasObject::Identifier(ObjectIdentifier::decode(&data[pos..end])?)
-        } else if tag.is_context(3) {
-            let s = primitives::decode_character_string(&data[pos..end])?;
-            WhoHasObject::Name(s)
+        let object = if next_is_context(data, offset, 2)? {
+            let (oid, _) = decode_ctx_object_id(data, offset, 2, "WhoHas object-identifier")?;
+            WhoHasObject::Identifier(oid)
+        } else if next_is_context(data, offset, 3)? {
+            let (name, _) = decode_ctx_character_string(data, offset, 3, "WhoHas object-name")?;
+            WhoHasObject::Name(name)
         } else {
             return Err(Error::decoding(
                 offset,
@@ -138,32 +117,13 @@ impl IHaveRequest {
         Ok(())
     }
 
-    /// Decode the request from service-request octets; fails on malformed or truncated input.
+    /// Decode the request from service-request octets; fails on malformed or truncated input,
+    /// and on a member under any tag but its application tag.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IHave truncated at device-id"));
-        }
-        let device_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IHave truncated at object-id"));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
-
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(pos, "IHave truncated at object-name"));
-        }
-        let object_name = primitives::decode_character_string(&data[pos..end])?;
+        let (device_identifier, offset) = decode_app_object_id(data, 0, "IHave device-identifier")?;
+        let (object_identifier, offset) =
+            decode_app_object_id(data, offset, "IHave object-identifier")?;
+        let (object_name, _) = decode_app_character_string(data, offset, "IHave object-name")?;
 
         Ok(Self {
             device_identifier,
@@ -176,6 +136,7 @@ impl IHaveRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_encoding::tags;
     use bacnet_types::enums::ObjectType;
 
     #[test]
@@ -217,17 +178,23 @@ mod tests {
             buf
         };
 
+        // The shared readers' wording names the member, its tag and the value.
         for (low, high, field, value) in [
-            (4_294_967_296, 4_294_967_296, "low-limit", 4_294_967_296_u64),
-            (1, 4_294_967_297, "high-limit", 4_294_967_297),
-            (u64::MAX, u64::MAX, "low-limit", u64::MAX),
+            (
+                4_294_967_296,
+                4_294_967_296,
+                "low-limit: [0]",
+                4_294_967_296_u64,
+            ),
+            (1, 4_294_967_297, "high-limit: [1]", 4_294_967_297),
+            (u64::MAX, u64::MAX, "low-limit: [0]", u64::MAX),
         ] {
             let encoded = encode_request(low, high);
             let error = WhoHasRequest::decode(&encoded).unwrap_err();
             assert!(
                 error
                     .to_string()
-                    .contains(&format!("WhoHas {field} {value}")),
+                    .contains(&format!("WhoHas {field} value {value} exceeds u32")),
                 "unexpected error for {field} {value}: {error}"
             );
         }

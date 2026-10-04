@@ -1583,6 +1583,16 @@ A client or server attached to a router through a `LoopbackTransport` port
 does not need either receiver: it is an ordinary node on that port's network,
 and rejects for its requests reach its own `NetworkLayer`.
 
+`NetworkLayer` is a non-router and frames each NPDU with the destination its
+caller names: `send_apdu_routed` and `broadcast_to_network` put that DNET in
+the NPDU even when it is the number `local_network_number()` holds. The
+choice between local and routed traffic belongs to the caller, because a
+confirmed request's transaction is keyed to the peer it was sent to, and an
+answer goes back by the route its request arrived on. The full server and the
+standalone client make that choice on every path they start, and send a
+destination naming their own network's number as local traffic (#1358).
+`BACnetRouter` keeps its own per-port networks and is not affected.
+
 ---
 
 ## bacnet-objects
@@ -2133,7 +2143,11 @@ the request, or an application dropped a `write_local` future) is dropped the
 same way once 10 s have passed since its save finished: by the next write
 that stages, or within a further second by the server's once-a-second
 operation task, which measures the time on its own monotonic clock. The
-forwarder's operation task applies the same bound. `wait_for_saves()` blocks until queued
+forwarder's operation task applies the same bound. Neither check runs once
+the server has stopped, so `stop()`, after joining its requests, drops a
+staged write still held and waits until storage holds the served list again,
+and a class dropped with one still held saves the served list as it goes,
+unless the staged save failed (#1363). `wait_for_saves()` blocks until queued
 saves have run, and dropping the class waits for them too. Like the forwarder,
 a `NotificationClass` is not `UnwindSafe` or `RefUnwindSafe`.
 
@@ -2584,9 +2598,12 @@ a minute of one that drew nothing fails at once. At most 256 devices with a
 Who-Is out or held off are tracked, and a command needing another fails
 unsent; a device that answers frees its place at once and stays bound for
 ten minutes, so the cap limits unanswered Who-Is requests to 256 a minute.
-The wildcard instance 4194303 is never looked for. The write itself, to a
-binding routed through the local network's own number, still carries that
-DNET (#1358). Each attempt waits `ServerConfig::cov_retry_timeout_ms` (3
+The wildcard instance 4194303 is never looked for. A binding routed through
+the network numbered as this device's own, once the server knows that number
+(see [Local Network Number controls](#local-network-number-controls)), is a
+device on the local network: the WriteProperty goes to its final MAC with no
+DNET, not through its router, and the answer is awaited from that MAC
+(#1358). Each attempt waits `ServerConfig::cov_retry_timeout_ms` (3
 seconds by default) for the answer, and only silence earns another attempt,
 up to three retries under the one invoke ID. An Error (BUSY included), Reject
 or Abort fails the command at once. Nothing is sent while
@@ -2866,7 +2883,8 @@ with one targeted Who-Is and a wait of `cov_retry_timeout_ms` for the I-Am
 when the device has no fresh binding (#1322, sent and limited as for a
 Command), each attempt waiting `cov_retry_timeout_ms`, up to three
 retries for silence, nothing sent while DeviceCommunicationControl restricts
-initiation.
+initiation. A binding routed through the local network's own number is
+written as a local device, with no DNET (#1358), as a Command's is.
 The server can't read that property's datatype first, so the value goes as
 written (a lighting command only to `Lighting_Command`) and the device refuses
 a datatype it doesn't take (#1342). Members are written one at a time: while a
@@ -3038,6 +3056,27 @@ CHANGE_OF_RELIABILITY one lists Occupancy_State (Table 13-5). A count the
 application sets directly on the object is picked up by the one-second
 tick.
 
+An Access Door reports intrinsically on Door_Alarm_State with the
+CHANGE_OF_STATE algorithm (Clause 12.26), serving the same event rows as the
+zone plus Fault_Values and Masked_Alarm_Values, all three lists of
+BACnetDoorAlarmState values other than NORMAL (named, or proprietary from 256
+to 65535) that clients can write and `set_alarm_values`, `set_fault_values`
+and `set_masked_alarm_values` set. Door_Alarm_State is NORMAL or a member of
+Alarm_Values or Fault_Values, never a masked state:
+`AccessDoorObject::set_door_alarm_state` (now returning `Result`) and a
+simulated write refuse any other state with VALUE_OUT_OF_RANGE, and a list
+change that leaves the current state outside them, masking it included,
+returns the door to NORMAL at once. An alarm value makes Event_State OFFNORMAL
+after Time_Delay; a fault value makes Reliability MULTI_STATE_FAULT (the
+FAULT_STATE algorithm) and Event_State FAULT. The server sends the transitions
+to the door's Notification Class: a CHANGE_OF_STATE notification carries
+Door_Alarm_State as its `door-alarm-state` New_State, and a
+CHANGE_OF_RELIABILITY one lists Door_Alarm_State, then Present_Value (Table
+13-5). The application decides when the door is in alarm, DOOR_OPEN_TOO_LONG
+included: the door serves Door_Open_Too_Long_Time but runs no timer, and a
+state the application sets directly on the object reaches the algorithm at the
+one-second tick.
+
 Over the network the Access Point event values stay read-only, but writing
 its Out_Of_Service records an event on each edge (Clause 12.31.8):
 OUT_OF_SERVICE on entry and OUT_OF_SERVICE_RELINQUISHED on the return, each
@@ -3081,25 +3120,29 @@ again. Neither stamps 0, the value of an update time with no update yet. A
 time the application passes to `set_access_event` or `set_present_value` is
 served as given.
 
-A door's Door_Status, Lock_Status and Door_Alarm_State, the rows
-footnote 1 of Table 12-30 marks, take WriteProperty and WritePropertyMultiple
-while Out_Of_Service is TRUE, so a client can simulate the door; in service
-they refuse writes with WRITE_ACCESS_DENIED. A write must be an Enumerated in
-the property's production: a named BACnetDoorStatus or one from 1024 to 65535,
-a named BACnetLockStatus (no proprietary range), or a named
-BACnetDoorAlarmState or one from 256 to 65535. Entering out of service puts the
-door's own three values aside, a value the application sets meanwhile replaces
-the one put aside, and the return to service serves them again, dropping the
-simulation. A simulated Door_Alarm_State sends the COV report as a real change
-does. The pulse relock runs on its timer whatever the simulated values say.
+A door's Door_Status, Lock_Status and Door_Alarm_State, the rows footnote 1 of
+Table 12-30 marks, and its Reliability take WriteProperty and
+WritePropertyMultiple while Out_Of_Service is TRUE, so a client can simulate
+the door; in service they refuse writes with WRITE_ACCESS_DENIED. A write must
+be an Enumerated in the property's production: a named BACnetDoorStatus or one
+from 1024 to 65535, a named BACnetLockStatus (no proprietary range), a named
+BACnetDoorAlarmState or one from 256 to 65535 that the door's alarm lists
+admit, or a BACnetReliability value, its proprietary range included. A
+simulated Reliability overrides the fault check until the return to service.
+Entering out of service puts the door's own three values aside, a value the
+application sets meanwhile replaces the one put aside, and the return to
+service serves them again, dropping the simulation. A simulated
+Door_Alarm_State sends the COV report as a real change does. The pulse relock
+runs on its timer whatever the simulated values say.
 
 A door's Secured_Status isn't stored: each read works it out from what the
 door serves (Clause 12.26.14). It reads SECURED while the door is commanded
-LOCK, isn't IN_ALARM, and its Door_Status and Lock_Status show it shut and
-locked (or UNUSED). Any other input makes it UNSECURED, so an UNLOCK or a pulse
-reads UNSECURED until it ends. A Door_Status or Lock_Status of UNKNOWN or a
-fault makes it UNKNOWN, unless another input has already made it UNSECURED.
-Simulated values count the same as the device's.
+LOCK, isn't IN_ALARM, masks no alarm state, and its Door_Status and
+Lock_Status show it shut and locked (or UNUSED). Any other input makes it
+UNSECURED, so an UNLOCK or a pulse reads UNSECURED until it ends. A
+Door_Status or Lock_Status of UNKNOWN or a fault makes it UNKNOWN, unless
+another input has already made it UNSECURED. Simulated values count the same
+as the device's.
 
 #### Transportation (3)
 
@@ -3305,6 +3348,24 @@ transaction registered. Both configuration methods use the same DNET check,
 `add_routed_device` refuses such a peer, and the endpoint requester refuses
 such a routed destination. Unconfirmed sends keep remote and global broadcasts,
 for example `broadcast_network_unconfirmed`.
+
+A routed destination whose DNET is the client's own network number, once the
+client has learned it from Network-Number-Is (see
+[Local Network Number controls](#local-network-number-controls)), is on the
+client's own network (#1358). A routed confirmed request to it, from any of
+the methods above or for a device added with `add_routed_device`, passes the
+checks above and then goes as a local request: a unicast to the DADR with no
+DNET, not through the router, so a non-routing peer there takes it. It holds
+no routed-path state, and `router_mac` is not used. Only an answer from the
+DADR, with no SNET, completes it: an answer relayed back by a router with that
+number as its SNET matches nothing, and the request is retried. The peer's
+limits still come from its routed device-table row, so a request past them is
+refused or segmented as for the routed peer.
+`broadcast_network_unconfirmed`, and `who_is_network` and a `write_group` to
+`WriteGroupDestination::RemoteBroadcast` built on it, send a broadcast for that
+number as a local broadcast. While the number is unknown, every destination goes as written.
+Replies, SegmentACKs and Aborts to a routed peer keep the route its PDU
+arrived by.
 
 State is keyed by the immediate router MAC together with DNET. One confirmed
 request at a time owns that path; requests through a different router or to a
@@ -4381,7 +4442,12 @@ guard dropped and the log serves the new state only once storage holds it.
 A WritePropertyMultiple that turns Log_Enable off and then writes
 Buffer_Size stages the two together as one commit, made off the guard as
 well; the request takes each change as it reaches it, and if it stops
-between them, storage is set back to the state the log serves.
+between them, storage is set back to the state the log serves. That holds
+when the server stops mid-request too (#1363): `stop()`, once it has joined
+its requests, drops changes still staged and waits for the commit of the
+served state, and a log dropped with changes still staged commits the served
+state as it goes. A staged notification batch is left as it stands, since
+the log takes a batch whose commit succeeded.
 A commit that fails refuses the write or the purge with
 `DEVICE / OPERATIONAL_PROBLEM` and leaves the log as it was; a Log_Enable
 write whose commit fails is refused the same way. Changes to one log land one
@@ -4403,6 +4469,14 @@ Async BACnet server that hosts objects and dispatches incoming requests.
 
 `BACnetServer::stop()` seals new local broadcasts and mutations, joins admitted
 server work, then stops the owned network and transport before returning success.
+Once its requests are joined, it drops any write a Notification Forwarder,
+Notification Class or Audit Log still holds staged for one of them and waits
+until every save those objects have queued has run, so storage holds what they
+serve (#1363). That wait has no limit: storage that stalls holds `stop()` up,
+and a warning naming the objects still saving is logged after 5 s and every
+30 s after that. `stop()` doesn't wait while the application holds the
+database; the objects then settle once it lets go, and put storage back when
+they are dropped.
 The target-Audit drain retains the ingress needed for acknowledgments until its
 existing completion/deadline boundary. Cancelling a stop waiter retains cleanup:
 call `stop()` again to join it. Transport cleanup errors retain the owner for retry;
@@ -4890,9 +4964,15 @@ server's DeleteObject drops a removed forwarder on a blocking thread after
 releasing the guard. A staged write its request never makes (an earlier
 WritePropertyMultiple attempt failed, say) is dropped, and the forwarder at
 once queues a save of the lists it serves, so storage never keeps a list the
-forwarder refused. The writer is a plain `std` thread with no Tokio runtime,
-one per forwarder that has saved and parked while idle, and a `save` that
-panics counts as a failed save. Once its rename succeeds a
+forwarder refused. The same holds when the server stops mid-request (#1363):
+`stop()`, after joining its requests, drops a staged write still held and
+waits for that save, and a forwarder dropped with one still held saves the
+lists it serves before its writer stops. A drop without `stop()` saves the
+lists as they stood at the forwarder's last operation-task call, so an entry
+that lapsed within that last second can come back with a minute left;
+`stop()` saves them as they stand. The writer is a plain `std` thread with no
+Tokio runtime, one per forwarder that has saved and parked while idle, and a
+`save` that panics counts as a failed save. Once its rename succeeds a
 file save has landed: a filesystem that cannot synchronize a directory is
 passed over, and any other failure there is logged, not returned.
 
@@ -5211,7 +5291,7 @@ A valid local-broadcast announcement with flag zero updates an unknown/learned o
 
 Routed controls, malformed payloads and unicast Network-Number-Is are ignored. A BBMD Forwarded-NPDU is a logical broadcast even when its UDP hop is unicast and remains eligible. Ignoring number zero, 65535 and flags outside zero/one is this implementation's validation policy, rather than an additional quoted Standard mandate. Conflicting announcements against a locally configured number produce a debug diagnostic without changing configuration.
 
-The full server publishes the number its owner holds on `NetworkLayer::local_network_number` (a `bacnet_network::network_number::LocalNetworkNumber` handle), where event routing reads it without the database lock (#1298). With a registered Network Port the port stays the one authority: startup copies the port's number there once the bind is published, and the worker copies the port's state after each control under the same database write lock that changed it, so the handle never holds a number the port does not. Without a registered port, the handle holds the number the worker learned. A later announcement that replaces the number takes effect for the next notification sent. Nothing withdraws a known number, since no announcement can, so it stays until a new runtime starts again from the configured number or unknown. The standalone client publishes its learned number on its own layer the same way, though nothing in the client reads it yet; neither exposes its layer. The shared endpoint exposes no layer and does not publish.
+The full server publishes the number its owner holds on `NetworkLayer::local_network_number` (a `bacnet_network::network_number::LocalNetworkNumber` handle), where event routing, writes in other devices and Audit delivery read it without the database lock (#1298, #1358). With a registered Network Port the port stays the one authority: startup copies the port's number there once the bind is published, and the worker copies the port's state after each control under the same database write lock that changed it, so the handle never holds a number the port does not. Without a registered port, the handle holds the number the worker learned. A later announcement that replaces the number takes effect for the next notification or write sent. Nothing withdraws a known number, since no announcement can, so it stays until a new runtime starts again from the configured number or unknown. The standalone client publishes its learned number on its own layer the same way, where its routed requests and network broadcasts read it (#1358); neither exposes its layer. Every sender that reads the number sends a destination naming it as local traffic, with no DNET, and keys a confirmed request to the MAC it went to, since the answer comes from there with no SNET. `NetworkLayer`'s own send methods frame the destination they are given and never rewrite it, so answers to a request, and COV notifications to a subscriber, keep the route the request arrived by. The shared endpoint exposes no layer and does not publish, so its sends go as written.
 
 Standalone clients start UNKNOWN on transports that opt into local nonrouter Number controls. They learn and reply using the same validation and precedence rules, without a Device object, registered Network Port, configured-number setter or persistence. One 256-entry serial worker owns this state; full or closed admission drops only Number controls. A held Number send leaves routed reason-4 Reject correlation and independent APDU dispatch available. Stop aborts and joins both the Number worker and dispatch before transport cleanup, retaining their joins across a canceled stop waiter. Drop aborts both. Already transmitted bytes cannot be retracted. Controlled-client tests qualify the shared intake/lifecycle behavior; Linux NORMAL-B/IP loopback and Ethernet virtual-link tests independently observe actual reply frames. Constrained-TLS SC tests observe Hub broadcast VMAC and exact Number bytes, including replies to direct-peer queries, while ordinary confirmed client requests complete. SC stop/drop retires client connections; the external DirectListener must separately be stopped and joined before its bind is released. Pending-send/queue cancellation remains covered by the generic controlled-client tests, rather than inferred from wire silence. Rust standalone-client B/IPv6 tests independently capture normal selected-link OriginalBroadcast and configured-foreign DBTN with exact source, destination, interface and Number bytes. Positive reply fences cover UNKNOWN, precedence and invalid/admission refusal; stop and eventual Drop release the socket, and reconstruction starts UNKNOWN. These external ignored Linux tests require the integration `ipv6` feature and isolated observer; ordinary hosted CI does not execute them. They add no Python foreign-device API, configured-client authority or physical-LAN claim. Separate isolated Linux standalone-client BBMD/foreign tests capture own Original-Broadcast versus forwarding traffic and exact DBTN to the configured BBMD. Positive Number fences cover UNKNOWN, BDT/FDT admission/refusal, alternate-sender compatibility, precedence and representative invalid/routed controls; registration NAKs retain DBTN attempts and the timer retries registration. An ordinary client ReadProperty completes during live Number controls, and awaited stop permits exclusive socket rebind before client Drop. No configured client number, new registration policy or complete Annex J claim is added. MS/TP LoopbackSerial tests also cover the standalone client in both execution modes, with the same frame decoding and fences as the full server and shared endpoint below; its own ReadProperty to the peer completes while a Number send is held.
 

@@ -56,6 +56,36 @@ async fn audit_forwarding_routed_ack_uses_final_peer_not_router() {
     f.server.stop().await.unwrap();
 }
 
+/// A parent bound at `[2]` on network 200 behind router `[9]`, on a server
+/// whose own network is numbered 200, gets its copy straight at `[2]` with
+/// no DNET, and its ACK from there, with no SNET, completes it (#1358). The
+/// link accepts unicasts to `[2]` only, so nothing went to the router.
+#[tokio::test(start_paused = true)]
+async fn audit_forwarding_to_a_parent_routed_through_this_network_goes_without_a_dnet() {
+    let mut f = fixture(
+        Some(parent()),
+        Some(DeviceBinding::routed(oid(ObjectType::DEVICE, 20), 200, [2], [9]).unwrap()),
+    )
+    .await;
+    f.server
+        .test_network()
+        .local_network_number()
+        .publish(bacnet_types::network_number::NetworkNumber::configured(200).unwrap());
+    f.unconfirmed(payload(false)).await;
+    settle().await;
+    let wire = f.wire.sent.lock().unwrap()[0].clone();
+    assert_eq!(decode_npdu(wire).unwrap().destination, None);
+    let req = f.requests().remove(0);
+    assert!(f.ack(req.invoke_id, &[2], req.service_choice));
+    settle().await;
+    assert_eq!(f.server.notification_transactions.active_count(), 0);
+    assert_eq!(
+        f.reliability().await,
+        PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
+    );
+    f.server.stop().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn audit_forwarding_observed_binding_and_local_alias_do_not_send() {
     let mut f = fixture(Some(parent()), None).await;

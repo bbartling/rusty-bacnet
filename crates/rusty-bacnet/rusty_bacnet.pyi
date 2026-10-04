@@ -3012,6 +3012,9 @@ class BACnetServer:
         door_members: Optional[
             list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
         ] = None,
+        alarm_values: Optional[list[int]] = None,
+        fault_values: Optional[list[int]] = None,
+        masked_alarm_values: Optional[list[int]] = None,
     ) -> None:
         """Add an Access Door object to the server (before starting).
 
@@ -3020,6 +3023,17 @@ class BACnetServer:
         in this device or a ``(device, object)`` pair of identifiers for one
         in another device. A pair whose device isn't a Device object
         identifier raises ValueError, and nothing is registered.
+
+        ``alarm_values``, ``fault_values`` and ``masked_alarm_values`` set the
+        starting Alarm_Values, Fault_Values and Masked_Alarm_Values, as
+        BACnetDoorAlarmState numbers other than NORMAL (1 to 8, or 256 to
+        65535); peers can write all three. Door_Alarm_State stays NORMAL or a member of the
+        alarm or fault values, never a masked state: a simulated value
+        outside them is refused, and masking the current state returns the
+        door to NORMAL. An alarm value raises a CHANGE_OF_STATE alarm after
+        Time_Delay, and a fault value makes Reliability MULTI_STATE_FAULT. Any
+        other number, NORMAL (0) included, raises BacnetProtocolError with
+        VALUE_OUT_OF_RANGE, and nothing is registered.
         """
         ...
     def add_access_credential(self, instance: int, name: str) -> None: ...
@@ -3239,6 +3253,12 @@ class BACnetServer:
         Cancelling the returned Future retains shutdown ownership. Call stop()
         again to join it; a cleanup error also retains the owner for retry.
         Local mutation is rejected once shutdown starts.
+
+        A Notification Forwarder, Notification Class or Audit Log write staged
+        for a request that stop() cut short is dropped, and stop() waits, with
+        no limit, until every save those objects queued has run, so storage
+        holds what they serve. While storage holds it up, a warning naming the
+        objects still saving is logged after 5 s and every 30 s after that.
         """
         ...
 

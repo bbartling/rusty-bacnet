@@ -5,13 +5,16 @@
 
 use bacnet_encoding::constructed::{check_decoded_mac_len, check_encoded_mac_len};
 use bacnet_encoding::primitives;
-use bacnet_encoding::tags::{self, TagClass};
+use bacnet_encoding::tags;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use bacnet_encoding::constructed::tagged::{decode_app_primitive, decode_app_unsigned};
+use bacnet_encoding::constructed::tagged::{
+    decode_app_character_string, decode_app_object_id, decode_app_primitive, decode_app_unsigned,
+    next_is_application,
+};
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -20,20 +23,10 @@ use bacnet_encoding::constructed::tagged::{decode_app_primitive, decode_app_unsi
 /// Decode the vendor ID, model name and serial number that start both requests.
 fn decode_identity(data: &[u8], context: &str) -> Result<(u16, String, String, usize), Error> {
     let (vendor_id, offset) = decode_app_unsigned::<u16>(data, 0, &format!("{context} vendor-id"))?;
-    let (content, offset) = decode_app_primitive(
-        data,
-        offset,
-        tags::app_tag::CHARACTER_STRING,
-        &format!("{context} model-name"),
-    )?;
-    let model_name = primitives::decode_character_string(content)?;
-    let (content, offset) = decode_app_primitive(
-        data,
-        offset,
-        tags::app_tag::CHARACTER_STRING,
-        &format!("{context} serial-number"),
-    )?;
-    let serial_number = primitives::decode_character_string(content)?;
+    let (model_name, offset) =
+        decode_app_character_string(data, offset, &format!("{context} model-name"))?;
+    let (serial_number, offset) =
+        decode_app_character_string(data, offset, &format!("{context} serial-number"))?;
     Ok((vendor_id, model_name, serial_number, offset))
 }
 
@@ -187,14 +180,8 @@ impl YouAreRequest {
         let (vendor_id, model_name, serial_number, mut offset) = decode_identity(data, "YouAre")?;
 
         let mut device_identifier = None;
-        if offset < data.len() && is_app_tag(data, offset, tags::app_tag::OBJECT_IDENTIFIER)? {
-            let (content, end) = decode_app_primitive(
-                data,
-                offset,
-                tags::app_tag::OBJECT_IDENTIFIER,
-                "YouAre device-identifier",
-            )?;
-            let oid = ObjectIdentifier::decode(content)?;
+        if next_is_application(data, offset, tags::app_tag::OBJECT_IDENTIFIER)? {
+            let (oid, end) = decode_app_object_id(data, offset, "YouAre device-identifier")?;
             if oid.object_type() != ObjectType::DEVICE {
                 return Err(Error::decoding(
                     offset,
@@ -206,7 +193,7 @@ impl YouAreRequest {
         }
 
         let mut device_mac_address = None;
-        if offset < data.len() && is_app_tag(data, offset, tags::app_tag::OCTET_STRING)? {
+        if next_is_application(data, offset, tags::app_tag::OCTET_STRING)? {
             let what = "YouAre device-mac-address";
             let (content, end) =
                 decode_app_primitive(data, offset, tags::app_tag::OCTET_STRING, what)?;
@@ -236,12 +223,6 @@ impl YouAreRequest {
             device_mac_address,
         })
     }
-}
-
-/// True if the tag at `offset` is the application tag `number`.
-fn is_app_tag(data: &[u8], offset: usize, number: u8) -> Result<bool, Error> {
-    let (tag, _) = tags::decode_tag(data, offset)?;
-    Ok(tag.class == TagClass::Application && tag.number == number)
 }
 
 #[cfg(test)]

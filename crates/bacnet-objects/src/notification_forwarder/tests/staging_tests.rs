@@ -382,3 +382,145 @@ fn an_operation_task_save_returns_while_storage_is_held() {
     nf.wait_for_saves();
     assert_eq!(storage.saved(), [subscription(device(2), 1, 5)]);
 }
+
+// A forwarder can go while a write is still staged for a request that never
+// came back, as when the server stops mid-request and the database is
+// dropped (#1363). Storage then goes back to the lists it served.
+
+#[test]
+fn a_forwarder_dropped_with_a_staged_write_puts_storage_back_to_the_served_lists() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nf = persistent(&storage);
+    let served = [subscription(device(7), 1, 10)];
+    write(&mut nf, &served).unwrap();
+    let _forgotten = stage_saved(&mut nf, &[subscription(device(9), 1, 10)]);
+    assert_eq!(storage.saved(), [subscription(device(9), 1, 10)]);
+    // The forwarder goes before any lifetime check could drop the write.
+    drop(nf);
+    assert_eq!(storage.saved(), served);
+    // The first write, the staged one and the put-back.
+    assert_eq!(storage.saves(), 3);
+    assert_eq!(persistent(&storage).subscriptions(), served);
+}
+
+#[test]
+fn a_forwarder_dropped_with_a_staged_recipient_list_keeps_none_written() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nf = persistent(&storage);
+    let list = [destination(device(9), 1, false)];
+    let wait = staged(nf.stage_write(P::RECIPIENT_LIST, None, &framed_destinations(&list)));
+    block_on(wait);
+    assert_eq!(storage.snapshot().recipient_list, Some(list.to_vec()));
+    drop(nf);
+    // No write set Recipient_List, so the configured one applies again.
+    assert_eq!(storage.snapshot().recipient_list, None);
+    assert!(!persistent(&storage).recipient_list_saved());
+}
+
+#[test]
+fn a_forwarder_dropped_after_its_staged_write_was_made_keeps_the_new_lists() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nf = persistent(&storage);
+    write(&mut nf, &[subscription(device(7), 1, 10)]).unwrap();
+    let new = [subscription(device(8), 1, 10)];
+    let wait = stage_saved(&mut nf, &new);
+    write(&mut nf, &new).unwrap();
+    nf.release_staged_write(&wait);
+    drop(nf);
+    assert_eq!(storage.saved(), new);
+    assert_eq!(storage.saves(), 2);
+    assert_eq!(persistent(&storage).subscriptions(), new);
+}
+
+#[test]
+fn a_forwarder_dropped_with_a_staged_write_whose_save_failed_leaves_storage_alone() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nf = persistent(&storage);
+    let served = [subscription(device(7), 1, 10)];
+    write(&mut nf, &served).unwrap();
+    storage.fail.store(true, Ordering::SeqCst);
+    let _failed = stage_saved(&mut nf, &[subscription(device(9), 1, 10)]);
+    // Storage works again, so a save at the drop would land and count.
+    storage.fail.store(false, Ordering::SeqCst);
+    drop(nf);
+    assert_eq!(storage.saved(), served);
+    assert_eq!(storage.saves(), 1);
+}
+
+#[test]
+fn a_forwarder_dropped_while_its_staged_save_runs_puts_storage_back_after_it() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nf = persistent(&storage);
+    let served = [subscription(device(7), 1, 10)];
+    write(&mut nf, &served).unwrap();
+    let held = storage.hold();
+    let list = framed_subscriptions(&[subscription(device(9), 1, 10)]);
+    let _forgotten = staged(nf.stage_write(P::SUBSCRIBED_RECIPIENTS, None, &list));
+    held.started.recv_timeout(WAIT).unwrap();
+    // The drop waits for the saves it queues, so it runs on a thread of its
+    // own while the staged save is held.
+    let dropping = std::thread::spawn(move || drop(nf));
+    drop(held.go);
+    dropping.join().unwrap();
+    // The staged save landed first, then the put-back.
+    assert_eq!(storage.saved(), served);
+    assert_eq!(storage.saves(), 3);
+}
+
+#[test]
+fn a_forwarder_dropped_with_a_staged_write_puts_back_the_lists_it_serves_as_it_goes() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let (clock, set) = manual_clock();
+    let mut nf = persistent(&storage);
+    nf.bind_monotonic_clock_internal(Some(clock));
+    write(
+        &mut nf,
+        &[subscription(device(1), 1, 1), subscription(device(2), 1, 6)],
+    )
+    .unwrap();
+    // A Recipient_List write stages, and its save of both lists as they
+    // stand lands.
+    let list = framed_destinations(&[destination(device(9), 1, false)]);
+    let wait = staged(nf.stage_write(P::RECIPIENT_LIST, None, &list));
+    block_on(wait);
+    // While it waits for its request, the one-minute entry lapses and the
+    // other loses a minute. Nothing saves that while the write is staged.
+    set(MINUTE);
+    assert!(nf.advance_monotonic_time_internal(MINUTE));
+    drop(nf);
+    // The put-back holds the lists the forwarder served when it went, not
+    // those it served when the write staged.
+    assert_eq!(
+        storage.snapshot(),
+        ForwarderSnapshot {
+            recipient_list: None,
+            subscribed_recipients: vec![subscription(device(2), 1, 5)],
+        }
+    );
+}
+
+#[test]
+fn settling_forgotten_writes_puts_storage_back_and_frees_the_forwarder() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nf = persistent(&storage);
+    let served = [subscription(device(7), 1, 10)];
+    write(&mut nf, &served).unwrap();
+    let _forgotten = stage_saved(&mut nf, &[subscription(device(9), 1, 10)]);
+    // What the server's stop() does once it has joined every request.
+    let settled = nf.settle_forgotten_writes().expect("the forwarder saves");
+    block_on(settled);
+    assert_eq!(storage.saved(), served);
+    assert_eq!(nf.subscriptions(), served);
+    // The forwarder is free: the next write stages at once.
+    let list = [subscription(device(8), 1, 10)];
+    let wait = stage_saved(&mut nf, &list);
+    write(&mut nf, &list).unwrap();
+    nf.release_staged_write(&wait);
+    nf.wait_for_saves();
+    assert_eq!(storage.saved(), list);
+    assert!(nf.settle_forgotten_writes().unwrap().is_ready());
+    assert!(NotificationForwarderObject::new(2, "NF-2")
+        .unwrap()
+        .settle_forgotten_writes()
+        .is_none());
+}

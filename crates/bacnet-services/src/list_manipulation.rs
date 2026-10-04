@@ -1,5 +1,9 @@
 //! AddListElement / RemoveListElement services per ASHRAE 135-2020 Clauses 15.1 and 15.2.
 
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_constructed, decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx,
+    expect_end,
+};
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
@@ -67,68 +71,28 @@ impl ListElementRequest {
 
     /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
         // [0] objectIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(0) {
-            return Err(Error::decoding(
-                offset,
-                "ListElement request expected context tag 0",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
+        let (object_identifier, offset) =
+            decode_ctx_object_id(data, 0, 0, "ListElement request object-id")?;
 
         // [1] propertyIdentifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(1) {
-            return Err(Error::decoding(
-                offset,
-                "ListElement request expected context tag 1",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        let property_identifier = primitives::decode_unsigned(&data[pos..end])?;
-        let property_identifier = u32::try_from(property_identifier)
-            .map(PropertyIdentifier::from_raw)
-            .map_err(|_| Error::decoding(pos, "ListElement property-id exceeds u32"))?;
-        offset = end;
+        let (property_identifier, offset) =
+            decode_ctx_unsigned::<u32>(data, offset, 1, "ListElement request property-id")?;
+        let property_identifier = PropertyIdentifier::from_raw(property_identifier);
 
         // [2] propertyArrayIndex (optional)
-        let mut property_array_index = None;
-        let (opt_data, new_offset) = tags::decode_optional_context(data, offset, 2)?;
-        if let Some(content) = opt_data {
-            let value = primitives::decode_unsigned(content)?;
-            property_array_index = Some(
-                u32::try_from(value)
-                    .map_err(|_| Error::decoding(offset, "ListElement array-index exceeds u32"))?,
-            );
-            offset = new_offset;
-        }
+        let (property_array_index, offset) = decode_optional_ctx(
+            data,
+            offset,
+            2,
+            "ListElement request array-index",
+            decode_ctx_unsigned::<u32>,
+        )?;
 
-        // [3] listOfElements
-        let (tag, tag_end) = tags::decode_tag(data, offset)?;
-        if !tag.is_opening_tag(3) {
-            return Err(Error::decoding(
-                offset,
-                "ListElement request expected opening tag 3",
-            ));
-        }
-        let (content, offset) = tags::extract_context_value(data, tag_end, 3)?;
-        if offset != data.len() {
-            return Err(Error::decoding(
-                offset,
-                "ListElement request has trailing data",
-            ));
-        }
+        // [3] listOfElements, and nothing after it
+        let what = "ListElement request list-of-elements";
+        let (content, end) = decode_ctx_constructed(data, offset, 3, what)?;
+        expect_end(data, end, end, "ListElement request")?;
         let list_of_elements = content.to_vec();
 
         Ok(Self {
