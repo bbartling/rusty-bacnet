@@ -17,7 +17,8 @@ its native runners or its services.
 | Windows x86_64 (MSVC) | GitHub, native tests: tests, doctests, clippy, rustdoc, Python bindings. Forgejo CI: clippy and rustdoc for each published crate with default features, cross-checked |
 
 A PR merges only when both are green on its head SHA: `CI OK` on Forgejo and
-both jobs of the native tests on GitHub (see [Merge evidence](#merge-evidence)).
+`Native OK` on GitHub, which passes only when every native job did (see
+[Merge evidence](#merge-evidence)).
 
 ## Pipeline
 
@@ -229,22 +230,34 @@ severity lives in `[workspace.lints]`.
 ## Native tests (GitHub)
 
 [`.github/workflows/native-tests.yml`](../.github/workflows/native-tests.yml)
-runs the tests, clippy and rustdoc natively on two GitHub-hosted runners
-(#950), which the Linux-only Forgejo runner can't:
+runs the tests, clippy and rustdoc natively on GitHub-hosted macOS
+(`macos-latest`, Apple Silicon) and Windows (`windows-latest`, the MSVC
+toolchain) runners (#950), which the Linux-only Forgejo runner can't. Each
+platform has two jobs, which run in parallel:
 
-- **Test (macOS arm64)**: `macos-latest`, Apple Silicon;
-- **Test (Windows x86_64)**: `windows-latest`, the MSVC toolchain.
+- **Tests (macOS arm64)** and **Tests (Windows x86_64)**: the workspace tests,
+  the stack guard and the doctests, which share one test build;
+- **Lint and Python (macOS arm64)** and **Lint and Python (Windows x86_64)**:
+  clippy, rustdoc, the CLI's default-feature tests, and the Python bindings
+  with their Python and Rust tests.
+
+**Native OK** waits for all four and passes only when every one succeeded. It
+runs even when a job failed or was cancelled, so it always reports, like
+Forgejo's `CI OK`. It is the one native check the merge gate reads.
 
 **Trigger.** Every push to any branch, and a manual dispatch. PRs live on
 Forgejo, so GitHub's `pull_request` event never fires; the push mirror brings
-every PR branch, and every merge to `dev`, to GitHub instead. Tag pushes don't
-run it. A newer push to a branch cancels that branch's running run.
+every PR branch, and every merge to `dev`, to GitHub instead. `wip/` branches
+don't start the native jobs: they get their review before their first real
+push. Tag pushes don't run it. A newer push to a branch cancels that branch's
+running run.
 
 **Steps.** `NATIVE_FEATURES` is the `features=` list in
 [`scripts/ci/local-macos.sh`](../scripts/ci/local-macos.sh), which the
 workflow reads: every optional feature except the Linux-only `serial` and
 `ethernet`, including per-crate ones such as `bacnet-endpoint/sc-tls`. Windows
-also leaves out `bacnet-cli/pcap`, which needs the Npcap SDK. Each job runs:
+also leaves out `bacnet-cli/pcap`, which needs the Npcap SDK. The Tests jobs
+run:
 
 ```bash
 cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES" --profile ci
@@ -253,11 +266,16 @@ cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$NATIV
 # main thread, as on Windows
 RUST_MIN_STACK=1048576 cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES" --profile ci -E "$STACK_GUARD_TESTS"
 cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$NATIVE_FEATURES"
-cargo nextest run -p bacnet-cli --locked --profile ci   # the CLI's feature-off tests
+```
+
+The Lint and Python jobs run:
+
+```bash
 cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$NATIVE_FEATURES" -- -D warnings
 cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --document-private-items --features "$NATIVE_FEATURES"
 RUSTDOCFLAGS="-D warnings" cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
+cargo nextest run -p bacnet-cli --locked --profile ci   # the CLI's feature-off tests
 # Python 3.12 from actions/setup-python, in a fresh venv
 python -m pip install maturin==1.15.0
 maturin develop -m crates/rusty-bacnet/Cargo.toml --locked
@@ -265,18 +283,21 @@ python -m unittest discover -s crates/rusty-bacnet/tests
 cargo nextest run -p rusty-bacnet --locked --profile ci
 ```
 
-PyO3 builds link setup-python's interpreter (`PYO3_PYTHON`), not the venv's.
-Every step runs even when an earlier one failed, so one run reports each
-failure. `STACK_GUARD_TESTS` (in the workflow's `env`) selects every server,
-client, endpoint, integration and CLI test, the benchmark SC mTLS tests and
-bacnet-transport's BACnet/SC tests; the guard step runs `--no-run` first
-because rustc reads `RUST_MIN_STACK` too, and adds a minute or two to each
-job. The per-crate default-feature checks
+The CLI's default-feature tests build `bacnet-cli` with its default features,
+which the Tests job's build can't reuse, so they run in the shorter job.
+PyO3 builds link setup-python's interpreter (`PYO3_PYTHON`), not the venv's;
+the Tests jobs set up Python too, because the conformance ledger test runs
+`python3`. Within a job every step runs even when an earlier one failed, so
+one run reports each failure. `STACK_GUARD_TESTS` (in the workflow's `env`)
+selects every server, client, endpoint, integration and CLI test, the
+benchmark SC mTLS tests and bacnet-transport's BACnet/SC tests; the guard step
+runs `--no-run` first because rustc reads `RUST_MIN_STACK` too, and adds about
+two minutes to each Tests job. The per-crate default-feature checks
 (`scripts/ci/check-default-features.sh`) aren't here: Forgejo's Clippy job
 runs them for Windows and macOS too, cross-checked (see
 [Local checks](#local-checks)).
 
-Before anything else, the Windows job stops the Microsoft Compatibility
+Before anything else, each Windows job stops the Microsoft Compatibility
 Appraiser (#1003). Its `CompatTelRunner.exe` can take all four of the runner's
 CPUs for seconds at a time, enough to blow a test's timing budget. The runner
 image already disables the scheduled tasks that run it (those in
@@ -290,28 +311,55 @@ service, disables any task that runs `CompatTelRunner.exe` in case a newer
 image re-enables one, stops any running copy, and logs what it found. It
 takes about two seconds and never fails the job.
 
-**Toolchain and tools.** Both runner images ship rustup, and
-`rustup toolchain install` with no arguments installs what
-`rust-toolchain.toml` pins, so the workflow has no toolchain version to keep in
-step. cargo-nextest is a prebuilt binary from `taiki-e/install-action`, and
-maturin comes from PyPI, both at the CI image's versions. aws-lc-sys, which
-`sc-tls` pulls in, builds with the images' own C tools: on Windows, MSVC with
-the NASM and CMake already on `PATH`. The SC tests make certificates with the
-runner image's `openssl`.
+**Toolchain and tools.** Both runner images ship rustup. The workflow reads
+the channel and components from `rust-toolchain.toml`, so it has no toolchain
+version to keep in step, and installs them with rustup's minimal profile. The
+file's default profile would add `rust-docs`, thousands of small files that
+took the step to about a minute on Windows, and up to three; without them it
+takes 10 to 20 seconds. cargo-nextest is a prebuilt binary from
+`taiki-e/install-action`, and maturin comes from PyPI, both at the CI image's
+versions. aws-lc-sys, which `sc-tls` pulls in, builds with the images' own C
+tools: on Windows, MSVC with the NASM and CMake already on `PATH`. The SC
+tests make certificates with the runner image's `openssl`.
 
 **Efficiency.** The workflow can only read the repository
 (`permissions: contents: read`), and each job stops after 60 minutes. A newer
 push to a branch cancels that branch's running run. On `dev` each commit gets
 its own concurrency group, keyed by its SHA, so no run is cancelled or
-replaced while pending and every merge gets its own result. `Swatinem/rust-cache` keeps
-dependency builds, keyed per OS on the toolchain, `Cargo.lock`, the manifests
-and `NATIVE_FEATURES`. Only `dev` saves it, and only from a successful job, so
-a failed or cancelled run never leaves a partial cache that later runs would
-restore by exact key. GitHub lets a branch's run restore the default branch's
-(`dev`) cache, so every branch starts from the last good `dev` build. The cache
-holds dependencies only, so most of a run is compiling the workspace, its
-tests, clippy and rustdoc: in October 2026 a run took about 16 minutes on
-macOS and 21 on Windows cold, and 13 and 16 with a warm cache.
+replaced while pending and every merge gets its own result.
+`Swatinem/rust-cache` keeps dependency builds, keyed per job and OS on the
+toolchain, `Cargo.lock`, the manifests and `NATIVE_FEATURES`. Only `dev` saves
+it, and only from a successful job, so a failed or cancelled run never leaves
+a partial cache that later runs would restore by exact key. GitHub lets a
+branch's run restore the default branch's (`dev`) cache, so every branch
+starts from the last good `dev` build. The cache holds dependencies only, so
+most of a job is compiling the workspace and its tests. In October 2026, with
+the jobs split, a run took about 11 to 12 minutes, cold or warm. The Windows
+Tests job, the usual floor, took 10 to 11.5 minutes; the macOS one 4.6 to 10.2,
+as macOS hosts vary widely in speed; the Lint and Python jobs 6 to 8 minutes
+warm and 8 to 11 cold. With one job per platform a run had taken a median
+18.4 minutes, Windows being the slowest.
+
+Two Windows build speedups were measured and left out. A ReFS Dev Drive for
+the target directory, `CARGO_HOME` and `RUSTUP_HOME` made the test build two
+to three minutes slower: Defender's real-time scanning is already off on the
+runner image, with `C:\` and `D:\` excluded, and `D:` is a local NVMe disk, so
+the virtual disk only added a layer. Linking with `rust-lld` instead of
+MSVC's `link.exe` saved no more than the spread between runner VMs (the same
+build took 3.6 to 5.1 minutes on different VMs).
+
+**macOS capacity.** GitHub's free plan runs at most 5 macOS jobs at once
+across the account, and the native tests already reach that cap: over 400
+runs on 3 and 4 October 2026, a macOS job waited a median 0.1 minutes to
+start, 7.3 at the 90th percentile and up to 28. Splitting macOS gives each run
+two macOS jobs and about 12% more macOS minutes. Replaying those runs' arrival
+times against the caps, with each job's time drawn from their history, the
+split came out ahead at 4 October's load (median 10.9 minutes to a result
+against 13.0; 90th percentile 11.8 against 15.3) and at the median over both
+days (11.4 against 13.7). It queued longer only in bursts of about 20 runs an
+hour, which fill the cap with either layout: over both days its 90th
+percentile was 24.7 minutes against 22.9, and over the busiest seven hours 36
+against 29.
 
 **Portable tests.** What the first Windows and macOS runs showed (#950):
 
@@ -463,8 +511,8 @@ CI runs it on PRs to `main`; on a Mac, rely on that job.
 Before merging a PR:
 
 - `CI OK` is green on Forgejo for the exact head being merged;
-- both jobs of the [native tests](#native-tests-github) are green on GitHub
-  for the same head SHA;
+- `Native OK`, the [native tests](#native-tests-github)' aggregate check, is
+  green on GitHub for the same head SHA;
 - existing review and merge-authorization rules are met.
 
 A `local-macos.sh` pass is optional and isn't needed to merge.
