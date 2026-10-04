@@ -2493,8 +2493,9 @@ lists the same way: `credentials` names the user's Access Credentials, and
 `members` and `member_of` the Access Users one level below and above it,
 here or in another device. An element of another object type raises
 `BacnetProtocolError` (VALUE_OUT_OF_RANGE).
-A whole read of any of these lists returns the references' octets as
-`bytes`, or `[]` while the list is empty. `supported_formats` takes
+A whole read of Entry_Points, Exit_Points, Credentials, Members or
+Member_Of returns the references' octets as `bytes`, or `[]` while the list
+is empty. `supported_formats` takes
 `(format, format_class)` pairs, a format being a
 BACnetAuthenticationFactorType number or a
 `(format_type, vendor_id, vendor_format)` triple, which a CUSTOM format

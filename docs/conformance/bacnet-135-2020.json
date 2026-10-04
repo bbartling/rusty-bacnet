@@ -3113,6 +3113,9 @@
     "`set_entry_points` and `set_exit_points` refuse a reference to anything but an Access Point, or one whose device identifier is not a Device, with VALUE_OUT_OF_RANGE, keeping the list.",
     "Both lists are read-only on the network: WriteProperty gets WRITE_ACCESS_DENIED.",
     "Python sets them at registration with `add_access_zone(entry_points=..., exit_points=...)`."
+   ],
+   "gaps": [
+    "#1344: Python reads Entry_Points and Exit_Points as octets rather than the ObjectIdentifier and (device, object) forms the keywords take"
    ]
   },
   {
@@ -3155,7 +3158,7 @@
     "Python sets the lists with `add_access_user(credentials=..., members=..., member_of=...)` and reads each back as the references' octets."
    ],
    "gaps": [
-    "Python reads the three lists as octets rather than the ObjectIdentifier and (device, object) forms the keywords take (no issue)"
+    "#1344: Python reads the three lists as octets rather than the ObjectIdentifier and (device, object) forms the keywords take"
    ]
   },
   {
