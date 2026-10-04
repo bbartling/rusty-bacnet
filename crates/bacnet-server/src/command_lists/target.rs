@@ -10,7 +10,8 @@
 //!   has (UNKNOWN_OBJECT, UNKNOWN_PROPERTY, an array index or array access
 //!   that doesn't fit) or that the property takes no value of this datatype
 //!   (INVALID_DATA_TYPE, DATATYPE_NOT_SUPPORTED, or a Reject for an invalid
-//!   parameter datatype). The Schedule reads a datatype refusal the same way.
+//!   parameter datatype). The Schedule reads both kinds of refusal the same
+//!   way, as a configuration fault (#1433).
 //!   A value the Channel itself can't coerce is a configuration failure too
 //!   (in `channel`).
 //! - communication: a member in another device that couldn't be reached: no
