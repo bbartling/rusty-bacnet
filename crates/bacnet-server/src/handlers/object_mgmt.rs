@@ -254,6 +254,7 @@ fn initialize(
         super::write_property::decode_write_property_value(
             pv.property_identifier,
             pv.property_array_index,
+            false,
             &pv.value,
         )
         .map(|value| (value, pv.value.len()))

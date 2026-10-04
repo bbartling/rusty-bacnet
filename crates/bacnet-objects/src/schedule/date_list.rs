@@ -5,9 +5,10 @@
 //! A read is a `List` holding one `ApplicationData` per entry, so the services
 //! put the concatenated entries on the wire and ReadRange can address each
 //! entry by position. A write arrives in the same shape (the service decoders
-//! split a payload at tag boundaries, one element per entry) or, for a single
-//! entry or a pre-encoded list, as one `ApplicationData`. AddListElement and
-//! RemoveListElement edit that list and write it back through the same path.
+//! split a payload at tag boundaries, one element per entry) or, from a local
+//! write of one entry or a pre-encoded list, as one `ApplicationData`.
+//! AddListElement and RemoveListElement edit that list and write it back
+//! through the same path.
 //!
 //! Error pairings follow Clause 15.9.1.3, which separates a value of the wrong
 //! datatype from a malformed encoding and from a value out of range: an
