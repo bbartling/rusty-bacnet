@@ -29,13 +29,14 @@ fn request_data(state: ReinitializedState, password: Option<&str>) -> Bytes {
     data.freeze()
 }
 
-async fn dispatch(service_request: Bytes, password: Option<&str>, initial: u8) -> Apdu {
+async fn dispatch(service_request: Bytes, password: Option<&str>, initial: DccState) -> Apdu {
     let network = Arc::new(NetworkLayer::new(BipTransport::new(
         Ipv4Addr::LOCALHOST,
         0,
         Ipv4Addr::BROADCAST,
     )));
-    let comm_state = Arc::new(AtomicU8::new(initial));
+    let comm_state = Arc::new(CommState::default());
+    comm_state.set_for_test(initial);
     let dcc_timer = Arc::new(Mutex::new(crate::server::dcc_timer::TimerSlot::default()));
     let config = ServerConfig {
         reinit_password: password.map(str::to_owned),
@@ -68,7 +69,7 @@ async fn dispatch(service_request: Bytes, password: Option<&str>, initial: u8) -
         Some(tx),
     )
     .await;
-    assert_eq!(comm_state.load(Ordering::Acquire), initial);
+    assert_eq!(comm_state.get(), initial);
     assert!(dcc_timer.lock().await.is_none());
     let npdu = decode_npdu(rx.await.unwrap()).unwrap();
     decode_apdu(npdu.payload).unwrap()
@@ -96,7 +97,7 @@ async fn reinitialize_device_refuses_all_states_after_password_validation() {
             (None, None),
             (None, Some("anything")),
         ] {
-            for initial in [0, 1, 2] {
+            for initial in [DccState::Enable, DccState::DisableInitiation] {
                 assert_error(
                     dispatch(request_data(state, supplied), configured, initial).await,
                     ErrorClass::SERVICES,
@@ -111,7 +112,7 @@ async fn reinitialize_device_refuses_all_states_after_password_validation() {
 async fn reinitialize_device_password_failure_precedes_refusal() {
     for state in STATES {
         for supplied in [None, Some("wrong")] {
-            for initial in [0, 1, 2] {
+            for initial in [DccState::Enable, DccState::DisableInitiation] {
                 assert_error(
                     dispatch(request_data(state, supplied), Some("reinit-pw"), initial).await,
                     ErrorClass::SECURITY,
@@ -132,7 +133,7 @@ async fn reinitialize_device_malformed_request_precedes_password_and_refusal() {
     ] {
         assert!(ReinitializeDeviceRequest::decode(data).is_err());
         for configured in [None, Some("reinit-pw")] {
-            for initial in [0, 1, 2] {
+            for initial in [DccState::Enable, DccState::DisableInitiation] {
                 // Preserve the server's existing decode-error mapping.
                 assert_error(
                     dispatch(Bytes::copy_from_slice(data), configured, initial).await,

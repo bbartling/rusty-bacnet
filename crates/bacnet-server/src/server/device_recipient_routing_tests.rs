@@ -148,7 +148,7 @@ async fn unknown_stale_invalid_and_capacity_rejected_devices_emit_zero_frames() 
             (rejected, false),
         ]),
         Arc::new(RwLock::new(table)),
-        0,
+        DccState::Enable,
     )
     .await;
     assert!(broadcasts.is_empty());

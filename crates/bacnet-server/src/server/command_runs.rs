@@ -43,7 +43,7 @@ pub(super) struct CommandRunner<T: TransportPort + 'static> {
     cov_table: Arc<RwLock<CovSubscriptionTable>>,
     cov_in_flight: Arc<Semaphore>,
     notification_transactions: Arc<NotificationTransactions>,
-    comm_state: Arc<AtomicU8>,
+    comm_state: Arc<CommState>,
     learned_routers: Arc<Mutex<LearnedRouterCache>>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     event_suppressions: Arc<super::event_suppression::EventSuppressions>,

@@ -5,7 +5,7 @@ use super::*;
 pub(super) struct EventEnrollmentTask<T: TransportPort + 'static> {
     pub(super) db: Arc<RwLock<ObjectDatabase>>,
     pub(super) network: Arc<NetworkLayer<T>>,
-    pub(super) comm_state: Arc<AtomicU8>,
+    pub(super) comm_state: Arc<CommState>,
     pub(super) learned_routers: Arc<Mutex<LearnedRouterCache>>,
     pub(super) notification_transactions: Arc<NotificationTransactions>,
     pub(super) device_bindings: Arc<RwLock<DeviceBindingTable>>,

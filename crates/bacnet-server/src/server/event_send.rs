@@ -62,7 +62,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             retry_timeout_ms,
             local_apdu_capacity,
         } = ctx;
-        if comm_state.load(Ordering::Acquire) >= 1 {
+        if comm_state.initiation_restricted() {
             return;
         }
         let notification_class = outbound.notification_class;

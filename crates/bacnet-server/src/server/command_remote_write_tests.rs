@@ -151,10 +151,9 @@ pub(super) async fn deliver(
 /// DeviceCommunicationControl's DISABLE_INITIATION: requests are still
 /// answered, nothing is initiated.
 pub(super) fn disable_initiation(h: &Harness) {
-    h.server.comm_state.store(
-        bacnet_types::enums::EnableDisable::DISABLE_INITIATION.to_raw() as u8,
-        Ordering::Release,
-    );
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
 }
 
 pub(super) fn ack(invoke_id: u8) -> Apdu {
@@ -247,7 +246,7 @@ async fn command_write_another_device_fails_unsent_while_dcc_restricts_initiatio
     assert_eq!(db_flags(&h, 1).await, [false, true]);
     assert_eq!(state(&mut h, 1).await, (false, false));
 
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     write_pv(&mut h, 1, 1).await.unwrap();
     let invoke_id = remote_write(&h).await;
     h.respond(ack(invoke_id)).await;

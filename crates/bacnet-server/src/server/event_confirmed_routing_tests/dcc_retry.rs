@@ -44,7 +44,7 @@ async fn dcc_ends_an_outstanding_confirmed_event_notification_at_its_next_retry(
         }
     );
 
-    harness.comm_state.store(2, Ordering::Release); // DISABLE_INITIATION
+    harness.comm_state.set_for_test(DccState::DisableInitiation); // DISABLE_INITIATION
     let finished = tokio::time::timeout(
         Duration::from_secs(60),
         harness.notification_transactions.join_next(),
@@ -66,7 +66,7 @@ async fn dcc_ends_an_outstanding_confirmed_event_notification_at_its_next_retry(
     assert_eq!(acked_transitions(&harness, &oid).await, acked);
 
     // Enabled again: the withdrawn notification is not sent again.
-    harness.comm_state.store(0, Ordering::Release);
+    harness.comm_state.set_for_test(DccState::Enable);
     tokio::time::advance(TIMEOUT * 4).await;
     for _ in 0..16 {
         tokio::task::yield_now().await;

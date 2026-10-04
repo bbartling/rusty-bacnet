@@ -367,7 +367,7 @@ async fn notification_class_and_forwarded_copies_to_this_network_go_without_a_dn
         &started.sent,
         db,
         Arc::new(RwLock::new(bindings)),
-        0,
+        DccState::Enable,
     )
     .await;
     assert_eq!(

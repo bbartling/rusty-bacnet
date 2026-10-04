@@ -140,7 +140,7 @@ pub(super) struct RemoteWriter<'a, T: TransportPort + 'static> {
     pub(super) network: &'a Arc<NetworkLayer<T>>,
     pub(super) transactions: &'a Arc<NotificationTransactions>,
     pub(super) bindings: &'a RwLock<DeviceBindingTable>,
-    pub(super) comm_state: &'a AtomicU8,
+    pub(super) comm_state: &'a CommState,
     /// How long each attempt waits for the answer.
     pub(super) timeout: Duration,
     /// Attempts after the first, each earned by silence.
@@ -366,7 +366,7 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
     }
 
     fn initiation_restricted(&self) -> bool {
-        self.comm_state.load(Ordering::Acquire) >= 1
+        self.comm_state.initiation_restricted()
     }
 }
 

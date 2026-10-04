@@ -12,11 +12,11 @@ async fn recovery_classification_is_not_password_authorization() {
         },
     )
     .await;
-    server.comm_state.store(1, Ordering::Release);
+    server.comm_state.set_for_test(DccState::DisableInitiation);
     for (id, password) in [(1, None), (2, Some("wrong"))] {
         dispatch(&server, enable(id, password), source(id), None).await;
         observed(&mut started).await;
-        assert_eq!(server.comm_state.load(Ordering::Acquire), 1);
+        assert_eq!(server.comm_state.get(), DccState::DisableInitiation);
         assert!(
             matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::Error(e)) if e.error_code == ErrorCode::PASSWORD_FAILURE)
         );
@@ -24,7 +24,7 @@ async fn recovery_classification_is_not_password_authorization() {
     assert_eq!(server.request_admission_counters().recovery_active, 2);
     dispatch(&server, enable(3, Some("required")), source(3), None).await;
     observed(&mut started).await;
-    assert_eq!(server.comm_state.load(Ordering::Acquire), 0);
+    assert_eq!(server.comm_state.get(), DccState::Enable);
     server.stop().await.unwrap();
 }
 

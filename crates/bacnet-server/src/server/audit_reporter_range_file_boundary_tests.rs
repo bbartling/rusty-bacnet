@@ -116,11 +116,11 @@ async fn audit_reporter_range_file_decode_and_budget_aborts_are_silent() {
 }
 
 #[tokio::test]
-async fn audit_reporter_range_file_disable_duplicate_and_overload_are_silent_disable_initiation_is_audited(
-) {
+async fn audit_reporter_range_file_duplicate_and_overload_are_silent_disable_initiation_is_audited()
+{
     use crate::server::{request_admission::Class, request_peer::canonical_requester};
     for kind in [Kind::Range, Kind::Stream, Kind::Record] {
-        for case in ["disable", "disable initiation", "duplicate", "overload"] {
+        for case in ["disable initiation", "duplicate", "overload"] {
             let mut fixture = server(read_reporter()).await;
             let reads = add_target(&fixture, kind, None, false).await;
             let req = request(kind, kind.request(1, 1), false);
@@ -139,11 +139,11 @@ async fn audit_reporter_range_file_disable_duplicate_and_overload_are_silent_dis
             } else {
                 None
             };
-            if case == "disable" {
-                fixture.server.comm_state.store(1, Ordering::Release);
-            }
             if case == "disable initiation" {
-                fixture.server.comm_state.store(2, Ordering::Release);
+                fixture
+                    .server
+                    .comm_state
+                    .set_for_test(DccState::DisableInitiation);
             }
             if case == "overload" {
                 for _ in 0..fixture

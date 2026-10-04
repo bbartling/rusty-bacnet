@@ -1,5 +1,10 @@
 use super::*;
 
+#[path = "comm_state.rs"]
+mod comm_state;
+pub(crate) use comm_state::CommState;
+pub use comm_state::DccState;
+
 /// Last-owner destruction aborts the timer even if server Drop could not acquire
 /// the async slot while a request was replacing it.
 #[derive(Default)]
@@ -45,7 +50,7 @@ pub(super) struct DccRequest<'a> {
 /// rearmed so timestamped COV changes held meanwhile go out promptly (#856).
 pub(super) async fn replace(
     timer: &Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
-    comm_state: &Arc<AtomicU8>,
+    comm_state: &Arc<CommState>,
     request: DccRequest<'_>,
     config: &ServerConfig,
     request_tasks: &super::request_tasks::RequestTaskSpawner,
@@ -58,8 +63,9 @@ pub(super) async fn replace(
     } = request;
     // Decode and validate once, retaining only non-secret proposed state and
     // metadata. Never change live state before a cancellable await.
-    let (mode, duration, proposed) =
+    let (proposed, duration) =
         handlers::device_mgmt::validate_dcc(service_data, &config.dcc_password, config.dcc_policy)?;
+    let mode = bacnet_types::enums::EnableDisable::from(proposed).to_raw();
     // Short-circuit source refusal before touching the shared budget. ENABLE
     // never checks it. A successful charge precedes every cancellable await.
     if config
@@ -69,8 +75,7 @@ pub(super) async fn replace(
             config.dcc_policy != DccPolicy::RequirePassword
                 || !restriction.allows(source_mac, source)
         })
-        || (mode == bacnet_types::enums::EnableDisable::DISABLE_INITIATION
-            && !request_tasks.admit_dcc_disable())
+        || (proposed == DccState::DisableInitiation && !request_tasks.admit_dcc_disable())
     {
         return Err(handlers::device_mgmt::DccFailure {
             error: Error::Protocol {
@@ -79,7 +84,7 @@ pub(super) async fn replace(
             },
             outcome: dcc_outcomes::DccOutcome::PolicyDenied,
             metadata: dcc_outcomes::DccMetadata {
-                mode: Some(mode.to_raw()),
+                mode: Some(mode),
                 duration,
             },
         });
@@ -88,8 +93,8 @@ pub(super) async fn replace(
     cancel(&mut slot).await;
     // Replacement, expiry, and shutdown share this linearization boundary.
     // No suspension between the live commit and installing the new owner.
-    comm_state.store(proposed, Ordering::Release);
-    if proposed == 0 {
+    comm_state.set(proposed);
+    if proposed == DccState::Enable {
         cov_resume.rearm();
     }
     if let Some(minutes) = duration {
@@ -102,7 +107,7 @@ pub(super) async fn replace(
                 // An old task waiting here can be aborted and joined while a
                 // replacement holds the slot; it never joins or removes itself.
                 let _slot = owner.lock().await;
-                comm.store(0, Ordering::Release);
+                comm.set(DccState::Enable);
                 cov_resume.rearm();
                 debug!(
                     "DCC timer expired after {} min, state reverted to ENABLE",
@@ -112,7 +117,7 @@ pub(super) async fn replace(
         }));
     }
     Ok(dcc_outcomes::DccMetadata {
-        mode: Some(mode.to_raw()),
+        mode: Some(mode),
         duration,
     })
 }

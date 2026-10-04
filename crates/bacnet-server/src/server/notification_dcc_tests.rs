@@ -15,7 +15,6 @@ use super::*;
 
 const TIMEOUT: Duration = Duration::from_secs(3);
 const PEER: [u8; 6] = [10, 0, 0, 9, 0xBA, 0xC0];
-const DISABLE_INITIATION: u8 = 2;
 
 type Outcome = Result<NotificationWorkerResult, InitiationRestricted>;
 
@@ -23,7 +22,7 @@ type Outcome = Result<NotificationWorkerResult, InitiationRestricted>;
 /// own task: the task, its count of sends and its lease.
 fn spawn_notification(
     transactions: &NotificationTransactions,
-    comm_state: &Arc<AtomicU8>,
+    comm_state: &Arc<CommState>,
 ) -> (JoinHandle<Outcome>, Arc<AtomicUsize>, LeaseToken) {
     let (operation, receiver) = transactions
         .reserve(
@@ -54,12 +53,12 @@ async fn settle() {
 #[tokio::test(start_paused = true)]
 async fn dcc_ends_an_outstanding_notification_at_its_next_retry_and_frees_its_lease() {
     let transactions = NotificationTransactions::new();
-    let comm_state = Arc::new(AtomicU8::new(0));
+    let comm_state = Arc::new(CommState::default());
     let (worker, sends, _) = spawn_notification(&transactions, &comm_state);
     settle().await;
     assert_eq!(sends.load(Ordering::Acquire), 1);
     let sent = tokio::time::Instant::now();
-    comm_state.store(DISABLE_INITIATION, Ordering::Release);
+    comm_state.set_for_test(DccState::DisableInitiation);
     assert_eq!(worker.await.unwrap(), Err(InitiationRestricted));
     let ended = sent.elapsed();
     assert!(
@@ -73,7 +72,8 @@ async fn dcc_ends_an_outstanding_notification_at_its_next_retry_and_frees_its_le
 #[tokio::test(start_paused = true)]
 async fn dcc_in_force_at_the_first_attempt_sends_nothing_and_frees_the_lease_at_once() {
     let transactions = NotificationTransactions::new();
-    let comm_state = Arc::new(AtomicU8::new(DISABLE_INITIATION));
+    let comm_state = Arc::new(CommState::default());
+    comm_state.set_for_test(DccState::DisableInitiation);
     let started = tokio::time::Instant::now();
     let (worker, sends, _) = spawn_notification(&transactions, &comm_state);
     assert_eq!(worker.await.unwrap(), Err(InitiationRestricted));
@@ -88,11 +88,11 @@ async fn dcc_in_force_at_the_first_attempt_sends_nothing_and_frees_the_lease_at_
 #[tokio::test(start_paused = true)]
 async fn an_answer_claimed_as_the_retry_timer_fires_still_ends_the_notification() {
     let transactions = NotificationTransactions::new();
-    let comm_state = Arc::new(AtomicU8::new(0));
+    let comm_state = Arc::new(CommState::default());
     let (worker, sends, token) = spawn_notification(&transactions, &comm_state);
     settle().await;
     let answer = transactions.claim_answer_for_test(token);
-    comm_state.store(DISABLE_INITIATION, Ordering::Release);
+    comm_state.set_for_test(DccState::DisableInitiation);
     tokio::time::advance(TIMEOUT).await;
     settle().await;
     assert!(!worker.is_finished());

@@ -57,13 +57,15 @@ pub(crate) fn handle_device_communication_control_with_policy(
     dcc_password: &Option<String>,
     policy: crate::server::DccPolicy,
 ) -> Result<(EnableDisable, Option<u16>), Error> {
-    let validated = validate_dcc(service_data, dcc_password, policy).map_err(|f| f.error)?;
-    let (mode, duration, new_state) = validated;
-    comm_state.store(new_state, Ordering::Release);
+    let (state, duration) =
+        validate_dcc(service_data, dcc_password, policy).map_err(|f| f.error)?;
+    let mode = EnableDisable::from(state);
+    // The caller's atomic holds the EnableDisable value: 0 or 2, as DISABLE
+    // is refused.
+    comm_state.store(mode.to_raw() as u8, Ordering::Release);
     tracing::debug!(
-        "DeviceCommunicationControl: state set to {:?} ({}), duration={:?} min",
+        "DeviceCommunicationControl: state set to {:?}, duration={:?} min",
         mode,
-        new_state,
         duration
     );
     Ok((mode, duration))
@@ -79,7 +81,7 @@ pub(crate) fn validate_dcc(
     service_data: &[u8],
     dcc_password: &Option<String>,
     policy: crate::server::DccPolicy,
-) -> Result<(EnableDisable, Option<u16>, u8), DccFailure> {
+) -> Result<(crate::server::DccState, Option<u16>), DccFailure> {
     use crate::server::dcc_outcomes::{DccMetadata, DccOutcome};
     let request =
         DeviceCommunicationControlRequest::decode(service_data).map_err(|error| DccFailure {
@@ -98,11 +100,12 @@ pub(crate) fn validate_dcc(
     };
     validate_password(dcc_password, &request.password)
         .map_err(|e| failure(e, DccOutcome::PasswordFailure))?;
-    let new_state = if request.enable_disable == EnableDisable::ENABLE {
-        0u8
+    let state = if request.enable_disable == EnableDisable::ENABLE {
+        crate::server::DccState::Enable
     } else if request.enable_disable == EnableDisable::DISABLE {
         // ASHRAE 135-2020 Clause 16.1: reject deprecated DISABLE after
         // password validation, without changing state or the caller's timer.
+        // No DccPolicy admits it, so DccState has no DISABLE.
         return Err(failure(
             Error::Protocol {
                 class: ErrorClass::SERVICES.to_raw() as u32,
@@ -111,7 +114,7 @@ pub(crate) fn validate_dcc(
             DccOutcome::DeprecatedDenied,
         ));
     } else if request.enable_disable == EnableDisable::DISABLE_INITIATION {
-        2u8
+        crate::server::DccState::DisableInitiation
     } else {
         return Err(failure(
             Error::Encoding("unknown EnableDisable value".into()),
@@ -127,7 +130,7 @@ pub(crate) fn validate_dcc(
             DccOutcome::PolicyDenied,
         ));
     }
-    Ok((request.enable_disable, request.time_duration, new_state))
+    Ok((state, request.time_duration))
 }
 
 /// Handle a ReinitializeDevice request.

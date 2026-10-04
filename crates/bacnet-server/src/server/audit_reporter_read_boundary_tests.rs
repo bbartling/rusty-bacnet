@@ -211,7 +211,7 @@ async fn audit_reporter_read_audit_log_targets_are_not_excluded() {
 }
 
 #[tokio::test]
-async fn audit_reporter_read_malformed_and_disable_are_silent_disable_initiation_is_audited() {
+async fn audit_reporter_read_malformed_is_silent_disable_initiation_is_audited() {
     for service in [
         ConfirmedServiceChoice::READ_PROPERTY,
         ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
@@ -230,20 +230,17 @@ async fn audit_reporter_read_malformed_and_disable_are_silent_disable_initiation
         let malformed = data.slice(..data.len() - 1);
         let response = dispatch(&fixture.server, service, malformed).await;
         assert!(matches!(response, Apdu::Error(_) | Apdu::Reject(_)));
-        for state in [1, 2] {
-            fixture.server.comm_state.store(state, Ordering::Release);
-            let response = dispatch_optional(&fixture.server, service, data.clone()).await;
-            if state == 1 {
-                assert!(response.is_none());
-            } else {
-                assert!(matches!(response, Some(Apdu::ComplexAck(_))));
-            }
-        }
+        fixture
+            .server
+            .comm_state
+            .set_for_test(DccState::DisableInitiation);
+        let response = dispatch_optional(&fixture.server, service, data.clone()).await;
+        assert!(matches!(response, Some(Apdu::ComplexAck(_))));
         settle().await;
         assert_eq!(
             reads.load(Ordering::Acquire),
             1,
-            "only DISABLE_INITIATION executes"
+            "only the well-formed read executes"
         );
         // That read is audited: Clause 16.1 leaves audit notifications
         // running under DISABLE_INITIATION.

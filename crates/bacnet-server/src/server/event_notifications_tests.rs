@@ -33,7 +33,7 @@ pub(super) fn recording_transport() -> (TestTransport, SendLog) {
     (transport, sent)
 }
 
-/// A DCC-disabled server (comm_state >= 1) suppresses the periodic event
+/// A server under DISABLE_INITIATION suppresses the periodic event
 /// send: `build_and_send_event_notification` returns without sending,
 /// matching the per-write path's DCC gate. Verified against a recording
 /// transport that would otherwise capture the broadcast APDU.
@@ -41,7 +41,8 @@ pub(super) fn recording_transport() -> (TestTransport, SendLog) {
 async fn dcc_suppresses_periodic_event_send() {
     let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
-    let comm_state = Arc::new(AtomicU8::new(1)); // DCC disabled
+    let comm_state = Arc::new(CommState::default());
+    comm_state.set_for_test(DccState::DisableInitiation);
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
 
     let mut db = clocked_test_database();
@@ -177,14 +178,14 @@ async fn fixture_with_commanded_nc(
 ) -> (
     Arc<RwLock<ObjectDatabase>>,
     Arc<NetworkLayer<TestTransport>>,
-    Arc<AtomicU8>,
+    Arc<CommState>,
     Arc<Mutex<LearnedRouterCache>>,
     SendLog,
     ObjectIdentifier,
 ) {
     let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
-    let comm_state = Arc::new(AtomicU8::new(0)); // DCC enabled
+    let comm_state = Arc::new(CommState::default()); // DCC enabled
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
 
     let mut db = clocked_test_database();
@@ -249,7 +250,7 @@ async fn fixture_with_commanded_nc(
 async fn event_notification_missing_class_distributes_nothing() {
     let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
-    let comm_state = Arc::new(AtomicU8::new(0));
+    let comm_state = Arc::new(CommState::default());
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
 
     let mut db = clocked_test_database();
@@ -431,11 +432,12 @@ pub(super) fn db_with_high_limit_transition(
 /// Drive the per-write path once and return the broadcasts it produced.
 pub(super) async fn broadcasts_from_per_write_path(
     db: &Arc<tokio::sync::RwLock<ObjectDatabase>>,
-    comm_state_value: u8,
+    state: DccState,
 ) -> Vec<Bytes> {
     let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
-    let comm_state = Arc::new(AtomicU8::new(comm_state_value));
+    let comm_state = Arc::new(CommState::default());
+    comm_state.set_for_test(state);
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
 
@@ -471,7 +473,7 @@ pub(super) async fn broadcasts_from_per_write_path(
 #[tokio::test]
 async fn event_enable_cleared_suppresses_per_write_send() {
     let db = db_with_high_limit_transition(0x00); // no transition distributable
-    let sent = broadcasts_from_per_write_path(&db, 0).await;
+    let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
 
     assert!(
         sent.is_empty(),

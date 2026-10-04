@@ -115,7 +115,7 @@ struct Harness {
     tracker: Arc<ConfirmedRequestTracker>,
     transactions: Arc<NotificationTransactions>,
     bindings: Arc<RwLock<DeviceBindingTable>>,
-    comm_state: Arc<AtomicU8>,
+    comm_state: Arc<CommState>,
     config: ServerConfig,
     sent: SendLog,
     failures: FailedPeers,
@@ -200,7 +200,7 @@ impl Harness {
             tracker: Arc::new(ConfirmedRequestTracker::default()),
             transactions: NotificationTransactions::new(),
             bindings: Arc::new(RwLock::new(DeviceBindingTable::new())),
-            comm_state: Arc::new(AtomicU8::new(0)),
+            comm_state: Arc::new(CommState::default()),
             config: ServerConfig {
                 cov_retry_timeout_ms: retry_ms,
                 ..ServerConfig::default()
@@ -454,27 +454,15 @@ async fn event_enable_dcc_empty_and_unresolved_recipients_preserve_acceptance_wi
         EventTransitionBits::all(),
         1_000,
     );
-    disable_initiation.comm_state.store(2, Ordering::Release);
+    disable_initiation
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     assert_ack(
         disable_initiation.dispatch_with_reply(0x43).await.unwrap(),
         0x43,
     );
     assert!(disable_initiation.acknowledged().await);
     assert!(disable_initiation.frames().is_empty());
-}
-
-#[tokio::test]
-async fn full_dcc_disable_drops_acknowledgment_before_response_or_mutation() {
-    let full_disable = Harness::new(
-        vec![local_recipient(UNCONFIRMED_RECIPIENT, 3, false)],
-        EventTransitionBits::all(),
-        1_000,
-    );
-    full_disable.comm_state.store(1, Ordering::Release);
-
-    assert!(full_disable.dispatch_with_reply(0x44).await.is_err());
-    assert!(!full_disable.acknowledged().await);
-    assert!(full_disable.frames().is_empty());
 }
 
 #[tokio::test]

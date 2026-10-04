@@ -252,7 +252,7 @@ async fn no_who_is_while_dcc_restricts_initiation_or_for_the_wildcard_device() {
     // With initiation allowed again, the same write asks for Device 9, but a
     // Who-Is for the wildcard instance would call on unconfigured devices,
     // so a write naming it fails at once.
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     let wildcard = ObjectIdentifier::WILDCARD_INSTANCE;
     let (result, _) = start_write(&h, wildcard).await.unwrap();
     assert_eq!(result, Err(RemoteWriteError::Unbound));

@@ -222,7 +222,7 @@ pub struct MutationServiceCounters {
 /// New servers start at zero. Each field is independently sampled and saturates at
 /// `u64::MAX`, so snapshots are not atomic aggregates. Counters never affect policy.
 /// WPM counts each element reaching its gate, not requests or an unvisited suffix.
-/// Pre-gate failures, duplicates and DCC drops do not count. In permissive mode an
+/// Pre-gate failures and duplicates do not count. In permissive mode an
 /// absent authorizer allows without decoding, so a later handler failure still counts.
 /// An inbound WriteGroup dropped under `DenyAll` or an installed authorizer isn't a
 /// decision and doesn't count (#1319).

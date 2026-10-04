@@ -256,7 +256,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// Shared by the per-write path and the
     /// periodic `Time_Delay` confirmation path, so both emit identical
-    /// notifications. Skipped when DCC is active (comm_state >= 1). Re-reads
+    /// notifications. Skipped while DCC restricts initiation. Re-reads
     /// `Notification_Class` / `Notify_Type` under a brief `db.write()` guard,
     /// then drops the lock before any network send.
     ///
@@ -282,7 +282,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             suppressions,
             ..
         } = ctx;
-        if comm_state.load(Ordering::Acquire) >= 1 {
+        if comm_state.initiation_restricted() {
             return;
         }
 

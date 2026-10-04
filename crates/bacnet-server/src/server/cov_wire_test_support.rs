@@ -71,7 +71,7 @@ enum PlanAction {
     /// Fail its send.
     Fail,
     /// Disable initiation right after sending it.
-    Disable(Arc<AtomicU8>),
+    Disable(Arc<CommState>),
 }
 
 /// An action on the COV-multiple notification after `after` more of them.
@@ -157,7 +157,7 @@ impl ClockLink {
             }
             Some(PlanAction::Disable(comm_state)) => {
                 self.frames.lock().unwrap().push(apdu);
-                comm_state.store(2, Ordering::Release);
+                comm_state.set_for_test(DccState::DisableInitiation);
             }
             None => self.frames.lock().unwrap().push(apdu),
         }

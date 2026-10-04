@@ -132,9 +132,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
     /// Get the communication state per DeviceCommunicationControl.
     ///
-    /// Returns 0 (Enable), 1 (Disable), or 2 (DisableInitiation).
-    pub fn comm_state(&self) -> u8 {
-        self.comm_state.load(Ordering::Acquire)
+    /// The server refuses the deprecated DISABLE, so this is
+    /// [`DccState::Enable`] or [`DccState::DisableInitiation`].
+    pub fn comm_state(&self) -> DccState {
+        self.comm_state.get()
     }
 
     /// Generate PICS from the database and the server's effective Device execution view.

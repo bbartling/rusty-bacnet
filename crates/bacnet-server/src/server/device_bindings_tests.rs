@@ -297,11 +297,12 @@ fn received(
 }
 
 #[tokio::test]
-async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_blocks_refresh() {
+async fn passive_local_and_routed_i_am_share_the_authority_and_disable_initiation_keeps_observing()
+{
     let db = Arc::new(RwLock::new(ObjectDatabase::new()));
     let network = Arc::new(NetworkLayer::new(transport()));
     let config = ServerConfig::default();
-    let comm_state = Arc::new(AtomicU8::new(0));
+    let comm_state = Arc::new(CommState::default());
     let bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let discovery_limiter = Arc::new(DiscoveryLimiter::new(DiscoveryPolicy::default(), None));
     let time_sync_limiter = Arc::new(TimeSyncLimiter::new(TimeSyncPolicy::default()));
@@ -392,7 +393,8 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
     .await;
     assert_eq!(bindings.read().await.len(), 2);
 
-    comm_state.store(1, Ordering::Release);
+    // Observing an I-Am initiates nothing, so DISABLE_INITIATION leaves it on.
+    comm_state.set_for_test(DccState::DisableInitiation);
     BACnetServer::<TestTransport>::handle_unconfirmed_request(
         &UnconfirmedServices {
             db: Arc::clone(&db),
@@ -419,7 +421,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         &received(LOCAL_PEER, None),
     )
     .await;
-    assert_eq!(bindings.read().await.len(), 2, "DCC also blocks insertion");
+    assert_eq!(bindings.read().await.len(), 3, "DCC leaves insertion on");
     assert!(matches!(
         bindings
             .read()
@@ -428,7 +430,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_dcc_disable_block
         DeviceResolution::ResolvedLocal {
             peer_mac,
             freshness: BindingFreshness::ObservedUntil(_),
-        } if peer_mac.as_slice() == LOCAL_PEER
+        } if peer_mac.as_slice() == UPDATED_PEER
     ));
 }
 

@@ -232,7 +232,7 @@ async fn local_notification_reaches_the_forwarders_its_class_names() {
         Arc::new(RwLock::new(
             super::device_bindings::DeviceBindingTable::new(),
         )),
-        0,
+        DccState::Enable,
     )
     .await;
     assert_eq!(

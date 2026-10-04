@@ -621,19 +621,24 @@
     "crates/bacnet-server/src/server/audit_delivery.rs::deliver_observed",
     "crates/bacnet-server/src/server/requests/unconfirmed.rs::handle_unconfirmed_request",
     "crates/bacnet-server/src/server/discovery.rs::broadcast_i_am_from",
-    "crates/bacnet-server/src/handlers/device_mgmt.rs::validate_dcc"
+    "crates/bacnet-server/src/handlers/device_mgmt.rs::validate_dcc",
+    "crates/bacnet-server/src/server/comm_state.rs::CommState",
+    "crates/bacnet-server/src/server/dcc_timer.rs::replace"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/notification_dcc_tests.rs::an_answer_claimed_as_the_retry_timer_fires_still_ends_the_notification",
     "crates/bacnet-server/src/server/audit_dcc_tests.rs::{an_outstanding_audit_notification_survives_disable_initiation_to_its_answer,audit_notifications_start_under_disable_initiation_and_keep_the_reporter_healthy,audit_owing_writes_commit_and_notify_under_disable_initiation,send_now_under_disable_initiation_flushes_the_queue_once,a_resource_drop_under_disable_initiation_is_summarized}",
-    "crates/bacnet-server/src/server/audit_reporter_read_boundary_tests.rs::audit_reporter_read_malformed_and_disable_are_silent_disable_initiation_is_audited",
-    "crates/bacnet-server/src/server/audit_reporter_query_boundary_tests.rs::audit_reporter_query_disable_duplicate_and_overload_are_silent_disable_initiation_is_audited",
-    "crates/bacnet-server/src/server/audit_reporter_range_file_boundary_tests.rs::audit_reporter_range_file_disable_duplicate_and_overload_are_silent_disable_initiation_is_audited",
+    "crates/bacnet-server/src/server/audit_reporter_read_boundary_tests.rs::audit_reporter_read_malformed_is_silent_disable_initiation_is_audited",
+    "crates/bacnet-server/src/server/audit_reporter_query_boundary_tests.rs::audit_reporter_query_duplicate_and_overload_are_silent_disable_initiation_is_audited",
+    "crates/bacnet-server/src/server/audit_reporter_range_file_boundary_tests.rs::audit_reporter_range_file_duplicate_and_overload_are_silent_disable_initiation_is_audited",
     "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_goes_out_under_disable_initiation",
     "crates/bacnet-server/src/server/notification_transactions_tests.rs::an_answer_ahead_of_a_withdrawn_retry_still_ends_the_transaction",
     "crates/bacnet-server/src/server/cov_timed_deadline_tests.rs::history_of_a_report_dcc_ends_at_a_retry_goes_out_once_enabled",
     "crates/bacnet-server/src/server/discovery_dcc_tests.rs::{a_who_has_held_back_by_dcc_is_answered_once_the_timer_enables_initiation,a_who_has_held_back_by_dcc_is_answered_after_enable_inside_the_coalescing_window}",
-    "crates/bacnet-server/src/server/cov_timed_value_split_tests.rs::a_value_dcc_withdraws_goes_out_again_with_the_rest_of_its_change"
+    "crates/bacnet-server/src/server/cov_timed_value_split_tests.rs::a_value_dcc_withdraws_goes_out_again_with_the_rest_of_its_change",
+    "crates/bacnet-server/src/server/comm_state_tests.rs::{a_new_comm_state_is_enabled,set_switches_between_the_two_states_and_back,every_holder_of_a_shared_state_sees_a_change,only_disable_initiation_restricts_initiation,each_state_maps_to_its_enable_disable_value_and_none_to_disable}",
+    "crates/bacnet-server/src/server/dcc_outcome_admission_tests.rs::{disable_initiation_still_admits_requests_and_answers_overload_with_abort,disable_initiation_still_admits_life_safety_operations_and_answers_overload_with_abort}",
+    "crates/bacnet-server/src/server/device_bindings_tests.rs::passive_local_and_routed_i_am_share_the_authority_and_disable_initiation_keeps_observing"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/discovery_dcc_tests.rs::{disable_initiation_holds_back_i_have_and_still_answers_who_is,broadcast_i_am_fails_under_disable_initiation_and_sends_once_enabled,an_i_am_broadcaster_handle_is_refused_under_disable_initiation}",
@@ -4284,6 +4289,7 @@
     "crates/bacnet-server/src/server/write_group_tests.rs::{write_group_plan_matches_group_and_number_per_channel_in_instance_order,write_group_writes_the_channels_in_the_group_with_each_number_at_the_entry_priority,write_group_inhibit_delay_skips_delays_only_where_the_channel_allows_it}",
     "crates/bacnet-server/src/server/channel_remote_write_tests.rs::write_group_distribution_writes_a_member_in_another_device",
     "crates/bacnet-server/src/server/write_group_tests.rs::write_group_lighting_command_reaches_a_lighting_output",
+    "crates/bacnet-server/src/server/write_group_tests.rs::write_group_runs_under_disable_initiation",
     "crates/bacnet-services/src/write_group_tests.rs::{vector_annex_f_examples,vector_override_priority_inhibit_and_multiple_entries,vector_lighting_command_value}",
     "crates/bacnet-client/src/client/write_group_tests.rs::write_group_sends_the_request_to_a_device_or_a_broadcast",
     "crates/bacnet-objects/src/channel/tests.rs::channel_allow_group_delay_inhibit_starts_false_and_takes_boolean_writes",
@@ -4294,7 +4300,7 @@
     "crates/rusty-bacnet/src/client/client_methods/enrollment_alarm_covmulti_who_writegroup.rs::write_group_address_and_network_pick_the_destination"
    ],
    "negative_tests": [
-    "crates/bacnet-server/src/server/write_group_tests.rs::{write_group_is_dropped_under_dcc_disable_and_runs_under_disable_initiation,write_group_is_dropped_when_local_policy_restricts_network_writes,write_group_malformed_requests_are_dropped_without_an_answer,write_group_skips_a_channel_that_left_the_group_after_the_plan,write_group_reads_allow_group_delay_inhibit_at_the_write,write_group_dropped_after_a_channel_took_its_value_ends_that_distribution_failed}",
+    "crates/bacnet-server/src/server/write_group_tests.rs::{write_group_is_dropped_when_local_policy_restricts_network_writes,write_group_malformed_requests_are_dropped_without_an_answer,write_group_skips_a_channel_that_left_the_group_after_the_plan,write_group_reads_allow_group_delay_inhibit_at_the_write,write_group_dropped_after_a_channel_took_its_value_ends_that_distribution_failed}",
     "crates/bacnet-server/src/server/requests/endpoint_responder_tests.rs::responder_ignores_write_group_and_leaves_its_channels_alone",
     "crates/bacnet-endpoint/src/device_execution_tests.rs::endpoint_execution_profile_refusals_precede_ingress_and_allow_repair",
     "crates/bacnet-client/src/client/write_group_tests.rs::write_group_refuses_a_bad_request_or_network_before_sending",

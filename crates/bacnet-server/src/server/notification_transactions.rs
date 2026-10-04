@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::future::{poll_fn, Future};
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
 
@@ -20,7 +19,7 @@ use tokio::task::{JoinError, JoinSet};
 use tokio::time::Duration;
 
 use super::event_recipient_route::ConfirmedRecipientRoute;
-use super::{CovAckResult, Refusal};
+use super::{CommState, CovAckResult, Refusal};
 
 #[cfg(test)]
 #[path = "notification_worker_owner_tests.rs"]
@@ -693,7 +692,7 @@ pub(super) async fn run_notification_under_dcc<F, Fut, E>(
     receiver: oneshot::Receiver<CovAckResult>,
     timeout: Duration,
     max_retries: u8,
-    comm_state: &AtomicU8,
+    comm_state: &CommState,
     mut send: F,
 ) -> Result<NotificationWorkerResult, InitiationRestricted>
 where
@@ -701,8 +700,7 @@ where
     Fut: Future<Output = Result<(), E>>,
 {
     run_attempts(operation, receiver, timeout, max_retries, |attempt| {
-        // DISABLE and DISABLE_INITIATION both stop these notifications.
-        let sent = (comm_state.load(Ordering::Acquire) == 0).then(|| send(attempt));
+        let sent = (!comm_state.initiation_restricted()).then(|| send(attempt));
         async move {
             let Some(sent) = sent else {
                 return Attempt::Withdrawn(InitiationRestricted);
