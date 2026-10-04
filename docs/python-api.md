@@ -2328,6 +2328,12 @@ server.add_lighting_output(instance=1, name="Dimmer")
 server.add_binary_lighting_output(instance=1, name="On/Off Light")
 ```
 
+A Lighting Output's Present_Value and Relinquish_Default take a REAL level
+from 0.0 to 100.0. A level above 0.0 and below 1.0, written locally or over the
+network, is stored and read back as 1.0, the dimmest on level (#1385); one
+outside 0.0 to 100.0 raises `BacnetProtocolError` with VALUE_OUT_OF_RANGE.
+Tracking_Value reads the same level as Present_Value.
+
 A Lighting Output's `Lighting_Command` is a BACnetLightingCommand (#1263). It
 reads as `application_data` holding the command's context-tagged fields, and
 reads `b"\x09\x00"` (operation NONE) until written. Write it the same way,
