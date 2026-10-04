@@ -23,7 +23,7 @@ pub(crate) trait WriteCommitObserver: Send {
         None
     }
     /// The attempt after `before` succeeded. A NULL the property left as it
-    /// was ([`relinquish`](super::relinquish)) succeeds too, and gets this
+    /// was ([`relinquish`]) succeeds too, and gets this
     /// call without [`applied`](Self::applied).
     fn committed(&mut self, db: &mut ObjectDatabase);
     /// Execution returned an error after `before`; never called for authorization denial.
@@ -39,7 +39,7 @@ pub(crate) trait WriteCommitObserver: Send {
 pub(crate) enum Applied {
     /// The object took the value: the post-write work for a change follows.
     Written,
-    /// A NULL the property left as it was ([`relinquish`](super::relinquish)):
+    /// A NULL the property left as it was ([`relinquish`]):
     /// nothing changed, so no post-write work follows.
     Unchanged,
 }
@@ -267,7 +267,7 @@ pub(crate) fn handle_write_property_multiple_observed(
 /// `committed` or `failed`.
 ///
 /// A NULL the object refuses as the wrong datatype succeeds unchanged when
-/// [`relinquish::leaves_unchanged`](super::relinquish::leaves_unchanged)
+/// [`relinquish::leaves_unchanged`]
 /// says so: the observer gets `committed`, so an Audit Reporter records the
 /// successful write, but not `applied`, since there is no change to capture.
 fn commit_attempt(
