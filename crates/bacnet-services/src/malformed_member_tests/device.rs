@@ -1,9 +1,9 @@
 //! Remote device management: DeviceCommunicationControl,
 //! ReinitializeDevice, TimeSynchronization, the PrivateTransfer request and
 //! acknowledgment, and TextMessage. TimeSynchronization is application-tagged
-//! (Clause 21); the others read context tags. DeviceCommunicationControl,
-//! ReinitializeDevice and PrivateTransfer leave octets after their members
-//! unread.
+//! (Clause 21); the others read context tags. Every one of them refuses
+//! octets after its last member (#1411), including a member that would be
+//! the optional last one if it carried that member's tag.
 
 use super::*;
 use crate::device_mgmt::{
@@ -34,12 +34,22 @@ fn device_communication_control_request() {
         (
             "password as an application tag",
             &[0x19, 0x00, 0x72, 0x00, 0x41],
-            Decodes,
+            Malformed,
+        ),
+        (
+            "an octet after the enable-disable",
+            &[0x09, 0x05, 0x19, 0x00, 0x00],
+            Malformed,
+        ),
+        (
+            "a [3] after the enable-disable",
+            &[0x19, 0x00, 0x39, 0x07],
+            Malformed,
         ),
         (
             "an octet after the password",
             &[0x19, 0x00, 0x2A, 0x00, 0x41, 0x00],
-            Decodes,
+            Malformed,
         ),
     ];
     check(decoder!(DeviceCommunicationControlRequest), rows);
@@ -53,7 +63,17 @@ fn reinitialize_device_request() {
         ("state as an application tag", &[0x91, 0x00], Malformed),
         ("state cut short", &[0x0A, 0x00], Short),
         ("password cut short", &[0x09, 0x00, 0x1B, 0x00, 0x41], Short),
-        ("an octet after the state", &[0x09, 0x00, 0x00], Decodes),
+        ("an octet after the state", &[0x09, 0x00, 0x00], Malformed),
+        (
+            "password as an application tag",
+            &[0x09, 0x00, 0x72, 0x00, 0x41],
+            Malformed,
+        ),
+        (
+            "an octet after the password",
+            &[0x09, 0x00, 0x1A, 0x00, 0x41, 0x00],
+            Malformed,
+        ),
     ];
     check(decoder!(ReinitializeDeviceRequest), rows);
 }
@@ -124,7 +144,17 @@ fn private_transfer_rows() -> Vec<(&'static str, Vec<u8>, Kind)> {
         (
             "an octet after the service number",
             vec![0x09, 0x07, 0x19, 0x01, 0x00],
-            Decodes,
+            Malformed,
+        ),
+        (
+            "a primitive [2] after the service number",
+            vec![0x09, 0x07, 0x19, 0x01, 0x29, 0x05],
+            Malformed,
+        ),
+        (
+            "an octet after the block",
+            vec![0x09, 0x07, 0x19, 0x01, 0x2E, 0x21, 0x05, 0x2F, 0x00],
+            Malformed,
         ),
     ]
 }

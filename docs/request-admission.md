@@ -81,7 +81,7 @@ optional password content before invoking the existing decoder. A decoded passwo
 has at most 20 UTF-8 bytes; accepted UTF-8/Latin-1 payloads require at most 20 wire
 bytes and UCS-2 at most 40. The preflight therefore introduces no attacker-sized
 password allocation and excludes no accepted password encoding. Duration handling,
-alternate charset validation, and the decoder's existing trailing-data tolerance
+alternate charset validation, and the decoder's refusal of trailing data
 are retained. There is no arbitrary total-request cutoff, password comparison,
 password logging, or mutating handler call in classification.
 

@@ -2,7 +2,7 @@
 
 use bacnet_encoding::constructed::tagged::{
     decode_app_enumerated, decode_app_object_id, decode_app_unsigned, decode_ctx_unsigned,
-    decode_optional_ctx,
+    decode_optional_ctx, expect_end,
 };
 use bacnet_encoding::primitives;
 use bacnet_types::enums::Segmentation;
@@ -52,22 +52,21 @@ impl WhoIsRequest {
         }
     }
 
-    /// Decode the request from service-request octets; fails on malformed or truncated input.
+    /// Decode the request from service-request octets; fails on malformed or truncated input
+    /// and on any octet that isn't a `[0]` or `[1]` limit in its place, so a limit under another
+    /// tag or anything after the limits refuses the request rather than reading as no limits.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        if data.is_empty() {
-            return Ok(Self::all());
-        }
-
         // [0] low-limit and [1] high-limit
         let (low_limit, offset) =
             decode_optional_ctx(data, 0, 0, "WhoIs low-limit", decode_ctx_unsigned::<u32>)?;
-        let (high_limit, _) = decode_optional_ctx(
+        let (high_limit, end) = decode_optional_ctx(
             data,
             offset,
             1,
             "WhoIs high-limit",
             decode_ctx_unsigned::<u32>,
         )?;
+        expect_end(data, end, end, "WhoIs")?;
 
         // Both present or both absent
         if low_limit.is_some() != high_limit.is_some() {
@@ -116,14 +115,16 @@ impl IAmRequest {
         primitives::encode_app_unsigned(buf, self.vendor_id as u64);
     }
 
-    /// Decode the request from service-request octets; fails on malformed or truncated input.
+    /// Decode the request from service-request octets; fails on malformed or truncated input
+    /// and on octets after the vendor identifier.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let (object_identifier, offset) = decode_app_object_id(data, 0, "IAm object identifier")?;
         let (max_apdu_length, offset) =
             decode_app_unsigned::<u32>(data, offset, "IAm max APDU length")?;
         let (segmentation, offset) = decode_app_enumerated::<u8>(data, offset, "IAm segmentation")?;
         let segmentation_supported = Segmentation::from_raw(segmentation);
-        let (vendor_id, _) = decode_app_unsigned::<u16>(data, offset, "IAm vendor ID")?;
+        let (vendor_id, end) = decode_app_unsigned::<u16>(data, offset, "IAm vendor ID")?;
+        expect_end(data, end, end, "IAm")?;
 
         Ok(Self {
             object_identifier,
@@ -207,10 +208,9 @@ mod tests {
 
     #[test]
     fn test_decode_who_is_invalid_tag() {
-        // Non-empty but with non-matching context tags — decoder treats as unbounded
-        let result = WhoIsRequest::decode(&[0x29, 0]).unwrap();
-        assert_eq!(result.low_limit, None);
-        assert_eq!(result.high_limit, None);
+        // A tag that is neither limit is left over, not read as no limits.
+        let error = WhoIsRequest::decode(&[0x29, 0]).unwrap_err();
+        assert!(matches!(error, Error::Decoding { .. }), "{error:?}");
     }
 
     #[test]

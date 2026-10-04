@@ -2305,7 +2305,8 @@ class BACnetClient:
         Returns ``{"vendor_id": int, "service_number": int, "result_block": bytes | None}``.
         A device error raises BacnetProtocolError with vendor_id,
         service_number and error_parameters set from its
-        ConfirmedPrivateTransfer-Error.
+        ConfirmedPrivateTransfer-Error. An ACK that is malformed, cut short
+        or has octets after its last member raises BacnetError.
         """
         ...
 

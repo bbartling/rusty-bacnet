@@ -2,7 +2,7 @@
 //! per ASHRAE 135-2020 Clauses 16.2 and 16.3.
 
 use bacnet_encoding::constructed::tagged::{
-    decode_ctx_constructed, decode_ctx_unsigned, next_is_opening,
+    decode_ctx_constructed, decode_ctx_unsigned, expect_end, next_is_opening,
 };
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
@@ -13,18 +13,19 @@ mod error;
 pub use error::PrivateTransferError;
 
 /// The `[0]` vendor identifier, `[1]` service number and optional `[2]`
-/// block that the request and the acknowledgment share. Octets after them
-/// that don't open `[2]` are left unread.
+/// block that the request and the acknowledgment share, and nothing after
+/// them.
 fn decode_members(data: &[u8], what: &str) -> Result<(u32, u32, Option<Vec<u8>>), Error> {
     let (vendor_id, offset) = decode_ctx_unsigned::<u32>(data, 0, 0, &format!("{what} vendorID"))?;
     let (service_number, offset) =
         decode_ctx_unsigned::<u32>(data, offset, 1, &format!("{what} serviceNumber"))?;
-    let block = if next_is_opening(data, offset, 2)? {
-        let (body, _) = decode_ctx_constructed(data, offset, 2, &format!("{what} block"))?;
-        Some(body.to_vec())
+    let (block, end) = if next_is_opening(data, offset, 2)? {
+        let (body, end) = decode_ctx_constructed(data, offset, 2, &format!("{what} block"))?;
+        (Some(body.to_vec()), end)
     } else {
-        None
+        (None, offset)
     };
+    expect_end(data, end, end, what)?;
     Ok((vendor_id, service_number, block))
 }
 
