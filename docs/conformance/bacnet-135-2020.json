@@ -125,7 +125,8 @@
     "crates/bacnet-server/src/server/life_safety_cov_tests/schedule.rs::schedule_indexed_target_and_later_unindexed_target_survive_failure",
     "crates/bacnet-server/src/server/life_safety_cov_tests/schedule.rs::schedule_unindexed_command_retains_fixed_priority_sixteen",
     "crates/bacnet-server/src/handlers/tests/read_rpm/schedule.rs::rpm_schedule_indexed_reads_and_reference_wire_bytes",
-    "crates/bacnet-server/src/schedule_tests.rs::schedule_commands_its_typed_value_at_priority_for_writing_and_relinquishes_with_null"
+    "crates/bacnet-server/src/schedule_tests.rs::schedule_commands_its_typed_value_at_priority_for_writing_and_relinquishes_with_null",
+    "crates/bacnet-server/src/schedule_reference_retry_tests.rs::a_retry_runs_no_command_or_channel_member_again"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/life_safety_cov_tests/schedule.rs::schedule_indexed_target_and_later_unindexed_target_survive_failure",
@@ -143,7 +144,8 @@
     "Refs #845. Evidence is limited to the local-reference profile; Priority_For_Writing was network read-only but locally configurable until #1088 made it and the reference list network-writable (BACNET-12-SCHEDULE-WRITES) (#1028, which also replaced the Octet String target writes with typed values and the (value, refs) tuple with ScheduleWrite).",
     "Full typed hook references replace the lossy tuple API; shared public reference encoder produces local DOPR member bodies without a duplicate codec or aliases. Direct fixed-clock ticks prove indexed STATE_TEXT[2] updates only that element, continue after invalid index3, and preserve unindexed writes.",
     "Fixed RP/legacy and budgeted RPM bytes cover indexed plus unindexed concatenation, empty list, and list-own nonarray refusal. Existing Schedule evaluation/Out_Of_Service and Life Safety delta controls remain. No remote writes, source-origin propagation or whole-Schedule conformance claim; #824/#823 remain open.",
-    "A reference's index goes through the WriteProperty index gate first: one on a property that isn't an array, or that the target doesn't hold, fails that target unwritten and makes Reliability CONFIGURATION_ERROR (BACNET-12-SCHEDULE-RELIABILITY)."
+    "A reference's index goes through the WriteProperty index gate first: one on a property that isn't an array, or that the target doesn't hold, fails that target unwritten and makes Reliability CONFIGURATION_ERROR (BACNET-12-SCHEDULE-RELIABILITY).",
+    "A pass that owes the list nothing still writes the current value to the members whose last write was refused, and to them alone: members that took it, Commands and Channels among them, aren't written again (BACNET-12-SCHEDULE-RELIABILITY)."
    ]
   },
   {
@@ -406,9 +408,14 @@
     "crates/bacnet-server/src/server/schedule_reference_write_tests.rs::a_schedule_recovers_once_its_target_takes_the_datatype",
     "crates/bacnet-endpoint/src/source_reporter_schedule_tests.rs::source_reporter_forwards_complete_schedule_targets",
     "crates/bacnet-objects/src/schedule/reliability_tests.rs::a_reference_the_target_cannot_write_faults_the_schedule_until_it_takes_one",
-    "crates/bacnet-server/src/schedule_reference_reliability_tests.rs::{a_reference_its_target_can_never_write_faults_the_schedule,the_fault_clears_once_the_reference_is_fixed,the_fault_clears_once_the_missing_object_takes_a_write}"
+    "crates/bacnet-server/src/schedule_reference_reliability_tests.rs::{a_reference_its_target_can_never_write_faults_the_schedule,the_fault_clears_once_the_reference_is_fixed,a_missing_object_created_later_takes_the_value_at_the_next_pass}",
+    "crates/bacnet-objects/src/schedule/retry_tests.rs::{a_pass_with_nothing_else_to_send_retries_only_the_refused_reference,a_datatype_refusal_is_retried_too,a_retry_leaves_the_held_slots_alone,a_new_value_goes_to_the_whole_list_not_as_a_retry}",
+    "crates/bacnet-server/src/schedule_reference_retry_tests.rs::{a_state_text_index_that_becomes_valid_clears_the_fault,a_retry_runs_no_command_or_channel_member_again}",
+    "crates/bacnet-server/src/server/schedule_reference_write_tests.rs::a_target_created_later_takes_the_value_within_one_tick"
    ],
    "negative_tests": [
+    "crates/bacnet-objects/src/schedule/retry_tests.rs::nothing_is_retried_without_a_value_the_schedule_sends",
+    "crates/bacnet-server/src/schedule_reference_retry_tests.rs::a_reference_still_refused_keeps_the_fault_and_logs_only_at_debug",
     "crates/bacnet-objects/src/schedule/reliability_tests.rs::nulls_and_an_empty_schedule_never_disagree",
     "crates/bacnet-objects/src/schedule/reliability_tests.rs::a_reliability_applied_by_the_application_is_left_alone",
     "crates/bacnet-objects/src/schedule/reliability_tests.rs::out_of_service_keeps_the_simulated_reliability_until_return",
@@ -427,7 +434,8 @@
     "Refs #1056. Before, nothing evaluated a Schedule's Reliability. Datatypes compare by PropertyValue variant, so Real, Unsigned and Enumerated differ. Writes continue under CONFIGURATION_ERROR because 12.24.4 sends every change to the references and keeps going past a failing member, while 12.24.13 only reports the condition; the multi-state objects treat their CONFIGURATION_ERROR as report-only too.",
     "#1086: the second condition of 12.24.13, that every referenced property accept the datatype, is judged from the writes (the issue's option B) rather than checked beforehand: the objects publish no datatype per property, so an eager check would have to guess from a target's current value or probe it with a write.",
     "The cost is that the fault shows at the first write rather than at configuration time; 12.24.13 already lets a remote member's fault wait for a write. Local choices: only a refusal of a value whose datatype the schedule itself holds counts, so a NULL, or an out-of-service value of another datatype, raises nothing; any other failure leaves a member's standing as it was; the flag combines with the contents check under the one ownership rule, so a Reliability set by the application or a client simulation is never cleared by it.",
-    "A reference the target can't write whatever the value (a missing object or property, or an array index the property can't take) faults the Schedule as a datatype refusal does, and clears the same way. A denied write doesn't: it can be the target's state."
+    "A reference the target can't write whatever the value (a missing object or property, or an array index the property can't take) faults the Schedule as a datatype refusal does, and clears the same way. A denied write doesn't: it can be the target's state.",
+    "While a refusal of either kind stands, each pass with nothing else to send offers Present_Value again to the refused members only, so the fault clears within a tick of its cause going away. NULL isn't retried; failures log at debug."
    ]
   },
   {

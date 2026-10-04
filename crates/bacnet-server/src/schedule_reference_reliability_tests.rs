@@ -4,7 +4,7 @@
 //! Reliability CONFIGURATION_ERROR and FAULT in Status_Flags, as a datatype
 //! the target refuses does. A denied write doesn't: that can be the target's
 //! state. The fault clears once the member leaves the list or a later write
-//! to it succeeds.
+//! to it succeeds, a pass's retry of the refused member included (#1436).
 //!
 //! Each Schedule here holds one default value and no weekly or exception
 //! entries, so its first pass in the period writes that value.
@@ -25,29 +25,33 @@ use super::*;
 
 use PropertyIdentifier as P;
 
-fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
+pub(super) fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
 }
 
-fn sch() -> ObjectIdentifier {
+pub(super) fn sch() -> ObjectIdentifier {
     oid(ObjectType::SCHEDULE, 1)
 }
 
-fn av(instance: u32) -> ObjectIdentifier {
+pub(super) fn av(instance: u32) -> ObjectIdentifier {
     oid(ObjectType::ANALOG_VALUE, instance)
 }
 
-fn reference(object: ObjectIdentifier, property: P) -> BACnetObjectPropertyReference {
+pub(super) fn reference(object: ObjectIdentifier, property: P) -> BACnetObjectPropertyReference {
     BACnetObjectPropertyReference::new(object, property.to_raw())
 }
 
-fn indexed(object: ObjectIdentifier, property: P, index: u32) -> BACnetObjectPropertyReference {
+pub(super) fn indexed(
+    object: ObjectIdentifier,
+    property: P,
+    index: u32,
+) -> BACnetObjectPropertyReference {
     BACnetObjectPropertyReference::new_indexed(object, property.to_raw(), index)
 }
 
 /// A Device, AI-1, AV-1, AV-2, MSV-1 (three states) and SCH-1, which writes
 /// `default` to `references`, with the clock inside the period.
-fn database(
+pub(super) fn database(
     default: PropertyValue,
     references: Vec<BACnetObjectPropertyReference>,
 ) -> Arc<RwLock<ObjectDatabase>> {
@@ -73,7 +77,7 @@ fn database(
     Arc::new(RwLock::new(db))
 }
 
-fn read(db: &ObjectDatabase, object: ObjectIdentifier, property: P) -> PropertyValue {
+pub(super) fn read(db: &ObjectDatabase, object: ObjectIdentifier, property: P) -> PropertyValue {
     db.get(&object)
         .unwrap()
         .read_property(property, None)
@@ -81,7 +85,7 @@ fn read(db: &ObjectDatabase, object: ObjectIdentifier, property: P) -> PropertyV
 }
 
 /// SCH-1's Reliability, and whether Status_Flags shows FAULT.
-async fn health(db: &RwLock<ObjectDatabase>) -> (Reliability, bool) {
+pub(super) async fn health(db: &RwLock<ObjectDatabase>) -> (Reliability, bool) {
     let db = db.read().await;
     let PropertyValue::Enumerated(raw) = read(&db, sch(), P::RELIABILITY) else {
         panic!("Reliability reads as an enumeration");
@@ -93,8 +97,8 @@ async fn health(db: &RwLock<ObjectDatabase>) -> (Reliability, bool) {
     (Reliability::from_raw(raw), fault)
 }
 
-const FAULTED: (Reliability, bool) = (Reliability::CONFIGURATION_ERROR, true);
-const HEALTHY: (Reliability, bool) = (Reliability::NO_FAULT_DETECTED, false);
+pub(super) const FAULTED: (Reliability, bool) = (Reliability::CONFIGURATION_ERROR, true);
+pub(super) const HEALTHY: (Reliability, bool) = (Reliability::NO_FAULT_DETECTED, false);
 
 #[tokio::test]
 async fn a_reference_its_target_can_never_write_faults_the_schedule() {
@@ -207,35 +211,28 @@ async fn the_fault_clears_once_the_reference_is_fixed() {
     );
 }
 
-#[tokio::test]
-async fn the_fault_clears_once_the_missing_object_takes_a_write() {
+#[tokio::test(start_paused = true)]
+async fn a_missing_object_created_later_takes_the_value_at_the_next_pass() {
     let db = database(
         PropertyValue::Real(5.0),
         vec![reference(av(9), P::PRESENT_VALUE)],
     );
     tick_schedules(&db).await;
     assert_eq!(health(&db).await, FAULTED);
+    // The value never changes, but each pass offers it to AV-9 again.
+    tick_schedules(&db).await;
+    assert_eq!(health(&db).await, FAULTED, "AV-9 still missing");
 
-    // The object appears. Until the Schedule writes it again, the fault
-    // stands: nothing has written it yet.
+    // The object appears, and the next pass writes it and clears the fault,
+    // though the Schedule's value is the one it has held all along.
     db.write()
         .await
         .add(Box::new(AnalogValueObject::new(9, "AV-9", 62).unwrap()))
         .unwrap();
     tick_schedules(&db).await;
-    assert_eq!(health(&db).await, FAULTED, "no write since");
-
-    // A new value goes out, AV-9 takes it, and the fault clears.
-    db.write()
-        .await
-        .get_mut(&sch())
-        .unwrap()
-        .write_property(P::SCHEDULE_DEFAULT, None, PropertyValue::Real(6.0), None)
-        .unwrap();
-    tick_schedules(&db).await;
     assert_eq!(health(&db).await, HEALTHY);
     assert_eq!(
         read(&*db.read().await, av(9), P::PRESENT_VALUE),
-        PropertyValue::Real(6.0)
+        PropertyValue::Real(5.0)
     );
 }

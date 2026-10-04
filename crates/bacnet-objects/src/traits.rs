@@ -704,7 +704,10 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// writes owed when Present_Value changed, the object has just entered
     /// its Effective_Period, or its references or priority changed since the
     /// last write, with the complete local references, target array indices
-    /// included. Only meaningful for Schedule objects; default returns `None`.
+    /// included. Otherwise, while some references refused their last write,
+    /// returns a [`retry`](ScheduleWrite::retry) of the current value to
+    /// those references only (#1436). Only meaningful for Schedule objects;
+    /// default returns `None`.
     fn tick_schedule(
         &mut self,
         _today: SpecificDate,

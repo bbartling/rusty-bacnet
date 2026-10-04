@@ -41,6 +41,11 @@ pub struct ScheduleWrite {
     pub priority: u8,
     /// The complete local references, target array indices included.
     pub references: Vec<BACnetObjectPropertyReference>,
+    /// Whether this write only offers the value the references already owe
+    /// again, to those whose last write was refused (#1436). A Schedule makes
+    /// it on every pass with nothing else to send while a refusal stands, so
+    /// the server logs a target's failure of it at debug, not warn.
+    pub retry: bool,
 }
 
 /// How one target took a [`ScheduleWrite`], as the server reports it back

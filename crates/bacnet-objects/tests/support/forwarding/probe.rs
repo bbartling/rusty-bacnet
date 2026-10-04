@@ -115,10 +115,8 @@ pub fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
 }
 
 pub fn property_error(code: ErrorCode) -> Error {
-    Error::Protocol {
-        class: ErrorClass::PROPERTY.to_raw() as u32,
-        code: code.to_raw() as u32,
-    }
+    let class = ErrorClass::PROPERTY.to_raw() as u32;
+    Error::protocol(class, code.to_raw() as u32, None)
 }
 
 struct NoClock;
@@ -153,6 +151,7 @@ pub fn schedule_write(value: u64) -> ScheduleWrite {
         value: PropertyValue::Unsigned(value),
         priority: 16,
         references: Vec::new(),
+        retry: false,
     }
 }
 

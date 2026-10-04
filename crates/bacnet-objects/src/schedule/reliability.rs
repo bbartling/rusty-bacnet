@@ -1,4 +1,4 @@
-//! The Schedule's own Reliability evaluation (#1056, #1086, #1433).
+//! The Schedule's own Reliability evaluation (#1056, #1086, #1433, #1436).
 //!
 //! Clause 12.24.13 ties Reliability to the schedule's configuration being
 //! consistent, in two halves. When either fails, Reliability is
@@ -30,6 +30,23 @@
 //! state and not its configuration. Deciding beforehand instead would need a
 //! model of each target property's datatype, which the objects don't
 //! publish, or a guess from the target's current value.
+//!
+//! A refusal can outlive its cause: the missing object is created later, or the
+//! array grows to take the index. The Schedule writes its list only when its
+//! value changes, when it enters Effective_Period and when its references or
+//! priority change, so a Schedule whose value stays put would never ask again
+//! (#1436). So a pass that owes the list nothing still offers the current value
+//! to the refused members, and to them only: the members that took it, a
+//! Command or Channel among them, are not written again, and the slots the
+//! Schedule holds stay as they were. A member that takes the retry clears as
+//! after any accepted write. A NULL Present_Value isn't retried, since a NULL
+//! never counts here, and nothing is retried out of service or outside
+//! Effective_Period, where the calculation sends nothing. Datatype refusals are
+//! retried as well as reference refusals: both answer the one question of
+//! 12.24.13, and a datatype refusal can pass without the Schedule changing too,
+//! when the application puts an object that takes the datatype under the
+//! target's identifier. A member that still refuses costs one refused write per
+//! pass and changes nothing.
 //!
 //! A misconfigured schedule keeps evaluating and writing its references.
 //! Clause 12.24.4 makes those writes unconditional, Reliability only reports
@@ -112,6 +129,21 @@ impl ScheduleObject {
             self.recompute_reliability(),
             ReliabilityEvaluation::Changed { .. }
         )
+    }
+
+    /// The write that offers Present_Value again to the references whose
+    /// last write was refused (#1436), at Priority_For_Writing; `None` with
+    /// no refusal standing or a NULL Present_Value, which can't clear one.
+    pub(super) fn retry_refused(&self) -> Option<ScheduleWrite> {
+        if self.refusing_references.is_empty() || self.present_value == PropertyValue::Null {
+            return None;
+        }
+        Some(ScheduleWrite {
+            value: self.present_value.clone(),
+            priority: self.priority_for_writing,
+            references: self.refusing_references.clone(),
+            retry: true,
+        })
     }
 
     /// Re-run the consistency check after the contents or the references

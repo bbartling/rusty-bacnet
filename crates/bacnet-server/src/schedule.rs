@@ -16,7 +16,11 @@
 //! After each write the pass tells the Schedule how every target took it, so
 //! a target that refuses the schedule's datatype faults it (Clause 12.24.13,
 //! #1086), as does a reference naming a missing object or property or an
-//! array index the property can't take (#1433).
+//! array index the property can't take (#1433). While such a refusal stands,
+//! a pass with nothing else to send for that Schedule offers its value again
+//! to the refused references alone (#1436), so the fault clears within one
+//! tick of its cause going away: the object created, say, or the array grown.
+//! Those retries log at debug, since they repeat every tick.
 //!
 //! A NULL relinquishes the Schedule's slot in a commandable target. On a
 //! target property that isn't commandable and has no NULL in its datatype,
@@ -162,11 +166,19 @@ fn evaluate(db_w: &mut ObjectDatabase, schedules: Vec<ObjectIdentifier>) -> Back
             continue;
         };
         if let Some(write) = obj.tick_schedule(today, now, &calendar_active) {
-            debug!(
-                schedule = %oid,
-                refs = write.references.len(),
-                "Schedule value changed, writing to controlled properties"
-            );
+            if write.retry {
+                debug!(
+                    schedule = %oid,
+                    refs = write.references.len(),
+                    "Schedule retrying the controlled properties that refused its value"
+                );
+            } else {
+                debug!(
+                    schedule = %oid,
+                    refs = write.references.len(),
+                    "Schedule value changed, writing to controlled properties"
+                );
+            }
             writes.push((oid, write));
         }
     }
@@ -237,6 +249,13 @@ fn deliver(
                 outcomes.push(ScheduleTargetOutcome::Accepted);
                 continue;
             }
+            // A retry repeats every pass while the refusal stands (#1436).
+            Err(e) if write.retry => debug!(
+                target = %target_oid,
+                property = prop_id,
+                error = %e,
+                "Schedule retry failed to write to controlled property"
+            ),
             Err(e) => warn!(
                 target = %target_oid,
                 property = prop_id,
@@ -273,3 +292,7 @@ mod relinquish_tests;
 #[cfg(test)]
 #[path = "schedule_reference_reliability_tests.rs"]
 mod reference_reliability_tests;
+
+#[cfg(test)]
+#[path = "schedule_reference_retry_tests.rs"]
+mod reference_retry_tests;
