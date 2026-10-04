@@ -16,8 +16,10 @@ pub(super) struct TargetAudit<T: TransportPort> {
     pub(super) owner: Arc<AuditOwnership>,
     pub(super) device: ObjectIdentifier,
     pub(super) association: Arc<TargetAuditAssociation>,
-    pub(super) current_route:
-        std::sync::Mutex<Option<Arc<super::event_recipient_route::ConfirmedRecipientRoute>>>,
+    /// The recipient this device reports to now. Its route is resolved at
+    /// each use ([`Self::current_route`]), so a local network number
+    /// published after startup applies to the next notification (#1358).
+    pub(super) recipient: std::sync::Mutex<BACnetRecipient>,
     pub(super) routes: Arc<super::audit_recipient_routes::AuditRoutes>,
     pub(super) sequence: Arc<EventSequence>,
     pub(super) network: Arc<NetworkLayer<T>>,
@@ -92,6 +94,10 @@ pub(super) fn validate(
             route.as_ref(),
             config.max_apdu_length,
         )?;
+        // Set here, at prepare and finish, only. A local network number learned
+        // later can make a routed binding at the link broadcast MAC unusable
+        // (`RecipientRoute::localize`): notifications then find no route, but
+        // this flag keeps its startup value.
         db.get(selected)
             .unwrap()
             .audit_reporter_internal()
@@ -146,7 +152,7 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
             owner: AuditOwnership::for_target(device, Arc::clone(&association)),
             device,
             association: Arc::clone(&association),
-            current_route: std::sync::Mutex::new(routes.resolve(&recipient)),
+            recipient: std::sync::Mutex::new(recipient),
             routes: Arc::clone(&routes),
             sequence: db.event_sequence_internal(),
             network: Arc::clone(network),
@@ -181,6 +187,13 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
             transactions,
         );
         Ok(Some(runtime))
+    }
+
+    /// The route to the current recipient, resolved now.
+    pub(super) fn current_route(
+        &self,
+    ) -> Option<Arc<super::event_recipient_route::ConfirmedRecipientRoute>> {
+        self.routes.resolve(&self.recipient.lock().unwrap())
     }
 
     pub(super) fn uninstall(self: &Arc<Self>, db: &mut ObjectDatabase) {
@@ -289,7 +302,7 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
                 }
                 // No fallible work remains. Worker registration happens under
                 // the same owner lock as this commit and shutdown sealing.
-                *self.current_route.lock().unwrap() = Some(Arc::clone(&attempts[1].0));
+                *self.recipient.lock().unwrap() = new.clone();
                 *current = new;
                 for (_, other) in self.association.reporters() {
                     if !Arc::ptr_eq(other, &status) {

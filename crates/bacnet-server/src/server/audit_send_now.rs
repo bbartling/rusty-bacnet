@@ -47,10 +47,7 @@ impl<T: TransportPort + 'static> super::audit_recipient::TargetAudit<T> {
                 }
                 self.batches.command(status, value, true, || {
                     let route = self
-                        .current_route
-                        .lock()
-                        .unwrap()
-                        .clone()
+                        .current_route()
                         .ok_or_else(super::audit_recipient::denied)?;
                     let permit = self
                         .transactions
