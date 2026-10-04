@@ -349,6 +349,18 @@ impl BACnetObject for AnalogInputObject {
     fn is_createable(&self) -> bool {
         true
     }
+
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        super::CREATION_ONLY
+    }
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        super::initialize_units(&mut self.units, property, value)
+    }
 }
 
 #[cfg(test)]

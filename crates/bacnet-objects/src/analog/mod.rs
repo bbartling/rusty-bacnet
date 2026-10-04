@@ -112,6 +112,31 @@ impl FaultOutOfRangeState {
     }
 }
 
+/// What a createable analog object takes only from a CreateObject initial
+/// value (#1429): Units, which stays read-only to WriteProperty.
+const CREATION_ONLY: &[PropertyIdentifier] = &[PropertyIdentifier::UNITS];
+
+/// Set `units` from a Units initial value. An Enumerated above 65535 is
+/// outside BACnetEngineeringUnits (Clause 21) and is VALUE_OUT_OF_RANGE;
+/// any other property is WRITE_ACCESS_DENIED, as the trait default answers.
+fn initialize_units(
+    units: &mut u32,
+    property: PropertyIdentifier,
+    value: PropertyValue,
+) -> Result<(), Error> {
+    if property != PropertyIdentifier::UNITS {
+        return Err(common::write_access_denied_error());
+    }
+    let PropertyValue::Enumerated(raw) = value else {
+        return Err(common::invalid_data_type_error());
+    };
+    if raw > 65_535 {
+        return Err(common::value_out_of_range_error());
+    }
+    *units = raw;
+    Ok(())
+}
+
 mod input;
 mod output;
 mod value;

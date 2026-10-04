@@ -64,6 +64,9 @@ impl MultiStateInputObject {
     }
 
     /// Set the alarm values (states that trigger OFFNORMAL).
+    ///
+    /// Unlike a network write, which refuses a state past Number_Of_States
+    /// (#1429), this takes any state.
     pub fn set_alarm_values(&mut self, values: Vec<u32>) {
         self.event_detector.alarm_values = values;
     }
@@ -258,7 +261,7 @@ impl BACnetObject for MultiStateInputObject {
             }
         }
         if property == PropertyIdentifier::ALARM_VALUES {
-            let values = decode_alarm_values_write(array_index, value)?;
+            let values = decode_alarm_values_write(array_index, value, self.number_of_states)?;
             self.event_detector.alarm_values = values;
             return Ok(());
         }
@@ -337,6 +340,26 @@ impl BACnetObject for MultiStateInputObject {
 
     fn is_createable(&self) -> bool {
         true
+    }
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        CREATION_ONLY
+    }
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        let held = std::iter::once(self.present_value)
+            .chain(self.event_detector.alarm_values.iter().copied());
+        initialize_states(
+            &mut self.number_of_states,
+            &mut self.state_text,
+            held,
+            property,
+            value,
+        )?;
+        let _ = self.recompute_reliability();
+        Ok(())
     }
     fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {

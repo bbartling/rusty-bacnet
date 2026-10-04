@@ -837,6 +837,15 @@ raw = await client.create_object(
 )
 ```
 
+A rusty-bacnet server names an object created without an Object_Name after
+its type and instance (`ANALOG_INPUT-2`), adding the first free ` (n)` when
+another object holds that name. It also takes a few properties at creation
+that WriteProperty refuses afterwards: Units on an Analog Input or Output,
+and Number_Of_States (1 to 1024) and State_Text written whole on the
+multi-state types. A valid Number_Of_States applies before the other initial
+values, State_Text needs one string per state, and an Alarm_Values entry
+past the count is refused.
+
 #### `delete_object(address, object_id)`
 
 ```python

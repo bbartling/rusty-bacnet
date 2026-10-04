@@ -435,6 +435,28 @@ impl BACnetObject for MultiStateOutputObject {
     fn is_createable(&self) -> bool {
         true
     }
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        CREATION_ONLY
+    }
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        // Feedback_Value is left out: it is sensed, and outside the states it
+        // is reported as CONFIGURATION_ERROR rather than refused.
+        let held = self.priority_array.iter().flatten().copied();
+        let held = held.chain([self.present_value, self.relinquish_default]);
+        initialize_states(
+            &mut self.number_of_states,
+            &mut self.state_text,
+            held,
+            property,
+            value,
+        )?;
+        let _ = self.recompute_reliability();
+        Ok(())
+    }
     fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {
             return Err(common::write_access_denied_error());
@@ -775,37 +797,4 @@ mod command_failure_tests {
 }
 
 #[cfg(test)]
-mod reliability_evaluator_tests {
-    use super::*;
-    use bacnet_types::enums::Reliability;
-
-    #[test]
-    fn configuration_error_dominates_bypassed_invalid_present_value() {
-        let mut mso = MultiStateOutputObject::new(1, "MSO-dominance", 2).unwrap();
-        mso.present_value = 3;
-        mso.feedback_value = 3;
-
-        mso.evaluate_reliability_internal().unwrap();
-        assert_eq!(
-            mso.reliability,
-            Reliability::CONFIGURATION_ERROR,
-            "invalid configuration must dominate invalid Present_Value"
-        );
-        mso.feedback_value = 1;
-        mso.evaluate_reliability_internal().unwrap();
-        assert_eq!(mso.reliability, Reliability::MULTI_STATE_OUT_OF_RANGE);
-        mso.write_property_from(
-            PropertyIdentifier::PRESENT_VALUE,
-            None,
-            PropertyValue::Unsigned(1),
-            None,
-            &crate::command_source::test_origin(),
-        )
-        .unwrap();
-        assert_eq!(
-            mso.reliability,
-            Reliability::NO_FAULT_DETECTED,
-            "the central priority recalculation must recover synchronously"
-        );
-    }
-}
+mod reliability_evaluator_tests;
