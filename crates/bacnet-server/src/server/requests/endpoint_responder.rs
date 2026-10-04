@@ -143,9 +143,12 @@ impl EndpointResponder {
                 code: ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32,
             });
         }
+        // Description and Audit_Notification_Recipient, the only targets
+        // `device_write_target` admits, are single values.
         let value = handlers::decode_write_property_value(
             write.property_identifier,
             None,
+            false,
             &write.property_value,
         )?;
         if write.property_identifier == PropertyIdentifier::DESCRIPTION
