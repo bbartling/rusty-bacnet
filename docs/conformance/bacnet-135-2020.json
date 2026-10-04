@@ -4671,6 +4671,7 @@
    "code_anchors": [
     "crates/bacnet-encoding/src/constructed/object_property_reference.rs",
     "crates/bacnet-objects/src/reference.rs",
+    "crates/bacnet-objects/src/common/encoded_elements.rs::decode_single_element",
     "crates/bacnet-objects/src/loop_obj.rs",
     "crates/bacnet-objects/src/accumulator/pulse_converter.rs",
     "crates/bacnet-server/src/handlers/write_property.rs::decode_write_property_value"
@@ -4713,7 +4714,7 @@
     "crates/bacnet-objects/src/reference/tests.rs::opening_of_another_datatype_is_invalid_data_type",
     "crates/bacnet-objects/src/reference/tests.rs::framed_malformed_is_invalid_data_encoding",
     "crates/bacnet-objects/src/reference/tests.rs::setpoint_frame_must_hold_one_whole_reference",
-    "crates/bacnet-objects/src/reference/tests.rs::mixed_flat_and_framed_list_is_invalid_data_encoding",
+    "crates/bacnet-objects/src/reference/tests.rs::list_mixing_chunks_and_decoded_values_is_invalid_data_type",
     "crates/bacnet-objects/src/reference/tests.rs::wrong_value_datatypes_are_invalid_data_type",
     "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_flat_reference_writes_are_refused_and_change_nothing",
     "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_reference_writes_of_other_datatypes_or_bad_octets_change_nothing",
@@ -4721,6 +4722,8 @@
     "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_flat_input_reference_write_is_refused_and_changes_nothing",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::flat_reference_writes_are_refused_and_change_nothing",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_write_rejections_over_the_wire_preserve_state",
+    "crates/bacnet-objects/src/device_reference_users_tests.rs::every_writable_device_reference_answers_the_same_value_the_same_way",
+    "crates/bacnet-server/src/server/reference_write_wire_tests.rs::single_references_answer_the_same_octets_the_same_way",
     "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_rejects_bad_shapes_and_preserves_state",
     "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_refuses_the_flat_list_forms",
     "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_flat_list_is_refused_and_changes_nothing"
@@ -4731,11 +4734,12 @@
     "docs/rust-api.md#measurement-2 Pulse Converter Input_Reference"
    ],
    "notes": [
-    "The Loop, Pulse Converter and Averaging arms share one write decode (reference.rs): another datatype, the flat list included, is PROPERTY / INVALID_DATA_TYPE; octets that open right but don't fully decode, PROPERTY / INVALID_DATA_ENCODING.",
+    "The Loop, Pulse Converter and Averaging arms share one write decode (common::decode_single_element): another datatype, the flat list included, is PROPERTY / INVALID_DATA_TYPE; octets that open right but don't fully decode, PROPERTY / INVALID_DATA_ENCODING.",
     "An unset BACnetObjectPropertyReference reads Null and a Null write clears it. An unset Setpoint_Reference reads as the empty value and writing that value clears it; Null there is INVALID_DATA_TYPE.",
     "A Setpoint_Reference frame with nothing inside (0E 0F) is INVALID_DATA_ENCODING: a reference that is absent has no octets at all (Clause 20.2.16).",
     "Averaging Object_Property_Reference reads as the context-tagged BACnetDeviceObjectPropertyReference with no Device member; under that frame the flat list is INVALID_DATA_TYPE and a Device member naming no Device VALUE_OUT_OF_RANGE.",
-    "The stack doesn't follow these references; an application decodes the value it reads with the shared codecs and follows that."
+    "The stack doesn't follow these references; an application decodes the value it reads with the shared codecs and follows that.",
+    "Loop and Pulse Converter writes share the device references' codes: anything after the reference, or an empty list, is INVALID_DATA_ENCODING (Setpoint_Reference clears instead); a list mixing chunks with values, INVALID_DATA_TYPE."
    ]
   },
   {

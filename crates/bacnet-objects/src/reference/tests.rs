@@ -1,6 +1,6 @@
 //! The read values and the write decode of the reference properties: the
 //! served bytes, the values that clear, and the error each refused value
-//! carries (#182, #1312).
+//! carries (#182, #1312, #1395).
 
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};

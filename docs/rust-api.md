@@ -2520,7 +2520,11 @@ Setpoint_Reference. Another datatype is INVALID_DATA_TYPE: the flat
 `[ObjectIdentifier, Enumerated, Unsigned?]` list these used to read as, Null
 on Setpoint_Reference, or the setpoint frame on a variable reference.
 Malformed octets, such as a Device member `[3]` the production lacks or an
-empty frame `0E 0F`, are INVALID_DATA_ENCODING. The `set_*_reference` setters
+empty frame `0E 0F`, are INVALID_DATA_ENCODING. These refusals are the device
+references' single-reference codes (#1395): anything after the one reference
+is INVALID_DATA_ENCODING whatever its tag, and a value passed to
+`write_property` as a list mixing raw chunks with decoded values is
+INVALID_DATA_TYPE. The `set_*_reference` setters
 still take a `BACnetObjectPropertyReference`. An application that follows the
 references decodes what it reads with
 `bacnet_encoding::constructed::decode_object_property_reference`, or
