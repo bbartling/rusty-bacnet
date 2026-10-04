@@ -425,6 +425,11 @@ impl BACnetServer {
     /// Its Lighting_Command reads and writes as `application_data` holding
     /// the context-tagged BACnetLightingCommand, operation NONE until written
     /// (#1263). The object stores a command without carrying it out.
+    ///
+    /// A Present_Value or Relinquish_Default level above 0.0 and below 1.0 is
+    /// stored as 1.0, and one outside 0.0 to 100.0 is refused with
+    /// VALUE_OUT_OF_RANGE (#1385). Tracking_Value reads the same level as
+    /// Present_Value.
     #[pyo3(signature = (instance, name))]
     fn add_lighting_output(&self, instance: u32, name: &str) -> PyResult<()> {
         let obj = LightingOutputObject::new(instance, name).map_err(to_py_err)?;

@@ -2931,6 +2931,11 @@ class BACnetServer:
         datatype is refused with INVALID_DATA_TYPE, and a command its operation
         can't take with VALUE_OUT_OF_RANGE. The object stores a command
         without carrying it out.
+
+        A Present_Value or Relinquish_Default level above 0.0 and below 1.0
+        is stored as 1.0, and one outside 0.0 to 100.0 is refused with
+        VALUE_OUT_OF_RANGE. Tracking_Value reads the same level as
+        Present_Value.
         """
         ...
     def add_binary_lighting_output(self, instance: int, name: str) -> None: ...
