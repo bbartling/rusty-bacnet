@@ -294,7 +294,22 @@ fn duplicate_name_rejected() {
         2,
         "Sensor",
     ));
-    assert!(result.is_err());
+    // Clause 18.3 files DUPLICATE_NAME under PROPERTY, so both the add and
+    // the write-path check answer with that class.
+    let duplicate = |result: Result<(), Error>| {
+        assert!(
+            matches!(
+                result,
+                Err(Error::Protocol { class, code })
+                    if class == ErrorClass::PROPERTY.to_raw() as u32
+                        && code == ErrorCode::DUPLICATE_NAME.to_raw() as u32
+            ),
+            "expected PROPERTY / DUPLICATE_NAME, got {result:?}"
+        );
+    };
+    duplicate(result);
+    let other = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap();
+    duplicate(db.check_name_available(&other, "Sensor"));
     assert_eq!(db.len(), 1); // original still there
 }
 

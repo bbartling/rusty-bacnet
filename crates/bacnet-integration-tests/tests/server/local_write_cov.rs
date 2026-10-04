@@ -169,7 +169,15 @@ async fn local_object_name_write_refreshes_name_index() {
             bacnet_server::LocalCommandSource::ServerDevice,
         )
         .await;
-    assert!(dup.is_err(), "duplicate object name must be rejected");
+    assert!(
+        matches!(
+            dup,
+            Err(bacnet_types::error::Error::Protocol { class, code })
+                if class == bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+                    && code == bacnet_types::enums::ErrorCode::DUPLICATE_NAME.to_raw() as u32
+        ),
+        "a duplicate object name is PROPERTY / DUPLICATE_NAME, got {dup:?}"
+    );
 
     // The failed rename must not have corrupted the index: AO:1 is still
     // reachable as "AO-Renamed" and the Device still owns its name.

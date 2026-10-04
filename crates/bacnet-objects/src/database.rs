@@ -91,7 +91,9 @@ impl ObjectDatabase {
 
     /// Add an object to the database.
     ///
-    /// Returns `Err` if another object already has the same `object_name()`.
+    /// Returns PROPERTY / DUPLICATE_NAME if another object already has the
+    /// same `object_name()`, as
+    /// [`check_name_available`](Self::check_name_available) does.
     /// Replacing an object with the same OID is allowed unless an installed
     /// Audit runtime protects its membership. Protection is checked before any binding.
     pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
@@ -103,14 +105,7 @@ impl ObjectDatabase {
         let name = object.object_name().to_string();
 
         // Check for name collision with a *different* object
-        if let Some(&existing_oid) = self.name_index.get(&name) {
-            if existing_oid != oid {
-                return Err(Error::Protocol {
-                    class: ErrorClass::OBJECT.to_raw() as u32,
-                    code: ErrorCode::DUPLICATE_NAME.to_raw() as u32,
-                });
-            }
-        }
+        self.check_name_available(&oid, &name)?;
 
         // If replacing an existing object, remove its old name from the index
         // and invalidate state owned by enrollments that monitor it.
@@ -146,8 +141,12 @@ impl ObjectDatabase {
 
     /// Check whether `new_name` is available for object `oid`.
     ///
-    /// Returns `Ok(())` if the name is unused or already belongs to `oid`.
-    /// Returns `Err(DUPLICATE_NAME)` if another object owns the name.
+    /// Returns `Ok(())` if the name is unused or already belongs to `oid`,
+    /// and PROPERTY / DUPLICATE_NAME if another object owns it. Clause 18.3
+    /// lists that code under the PROPERTY class, and the WriteProperty and
+    /// WritePropertyMultiple error tables (15.9.1.3.1, 15.10.1.3.1) give the
+    /// same pair; CreateObject's table (15.3.1.3.1) has no row for a name in
+    /// use, so its initial values answer as WriteProperty does.
     pub fn check_name_available(
         &self,
         oid: &ObjectIdentifier,
@@ -156,7 +155,7 @@ impl ObjectDatabase {
         if let Some(&owner) = self.name_index.get(new_name) {
             if owner != *oid {
                 return Err(Error::Protocol {
-                    class: ErrorClass::OBJECT.to_raw() as u32,
+                    class: ErrorClass::PROPERTY.to_raw() as u32,
                     code: ErrorCode::DUPLICATE_NAME.to_raw() as u32,
                 });
             }
