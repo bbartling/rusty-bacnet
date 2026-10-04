@@ -2925,7 +2925,7 @@
     "crates/bacnet-objects/src/access_control/door_alarm_tests.rs::{access_door_serves_the_event_rows_and_alarm_lists,access_door_masking_the_current_state_returns_it_to_normal,access_door_goes_offnormal_after_time_delay_and_back_to_normal,access_door_fault_values_report_multi_state_fault,access_door_simulated_reliability_holds_until_the_return_to_service}",
     "crates/bacnet-objects/src/access_control/door_secured_status_tests.rs::{access_door_secured_status_follows_the_in_alarm_flag,access_door_secured_status_fails_while_any_state_is_masked}",
     "crates/bacnet-server/src/server/access_door_event_tests.rs::{access_door_open_too_long_reaches_recipients_until_masked,access_door_simulated_alarm_goes_into_and_out_of_alarm,access_door_fault_value_reports_door_alarm_state_and_present_value}",
-    "crates/bacnet-server/src/server/list_element_event_tests.rs::{masked_alarm_values_list_edit_returns_a_door_to_normal_at_once,masked_alarm_values_add_list_element_reports_the_door_back_to_normal,alarm_values_remove_list_element_reports_the_door_back_to_normal}",
+    "crates/bacnet-server/src/server/list_element_event_tests.rs::{masked_alarm_values_list_edit_returns_a_door_to_normal_at_once,masked_alarm_values_add_list_element_reports_the_door_back_to_normal,alarm_values_remove_list_element_reports_the_door_back_to_normal,alarm_values_edits_that_move_no_reported_value_stay_quiet,list_edit_stamps_a_timestamped_change_at_the_time_of_the_edit}",
     "crates/bacnet-server/src/handlers/tests/access_door_oos_writes.rs::{door_alarm_lists_take_door_alarm_states_over_the_wire,masking_the_door_alarm_state_over_the_wire_returns_it_to_normal}",
     "crates/bacnet-objects/src/database/tests.rs::all_eleven_builtin_intrinsic_families_implement_atomic_commit",
     "crates/bacnet-objects/src/enrollment_summary_capability_tests.rs::all_eleven_intrinsic_families_report_implied_algorithm_and_shared_commit_coordinate",
@@ -6254,7 +6254,7 @@
     "crates/rusty-bacnet/src/errors.rs::tests::protocol_errors_carry_their_structured_detail",
     "crates/rusty-bacnet/tests/test_list_validation.py::test_change_list_error_reaches_python_with_its_element_number",
     "crates/bacnet-server/src/server/schedule_reference_list_tests.rs::add_commands_the_new_target_and_remove_relinquishes_the_dropped_one",
-    "crates/bacnet-server/src/server/list_element_event_tests.rs::{alarm_values_list_edits_move_a_zone_at_once,alarm_values_list_edit_moves_a_multi_state_input_at_once,masked_alarm_values_add_list_element_reports_the_door_back_to_normal,alarm_values_remove_list_element_reports_the_door_back_to_normal}"
+    "crates/bacnet-server/src/server/list_element_event_tests.rs::{alarm_values_list_edits_move_a_zone_at_once,alarm_values_list_edit_moves_a_multi_state_input_at_once,masked_alarm_values_add_list_element_reports_the_door_back_to_normal,alarm_values_remove_list_element_reports_the_door_back_to_normal,alarm_values_edits_that_move_no_reported_value_stay_quiet,list_edit_stamps_a_timestamped_change_at_the_time_of_the_edit}"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::remove_list_element_refuses_an_absent_element_and_removes_nothing",
@@ -6311,6 +6311,7 @@
     "A pure-duplicate AddListElement still writes the unchanged list, so the object's write-access check applies. Audit observation is unchanged in kind: an executable request that fails (not found, datatype, object refusal) is recorded with its error and pre-image, and malformed elements stay silent. CreateObject-Error, which has the same shape, and the other structured error bodies are BACNET-21-STRUCTURED-ERROR-BODIES (#1047), which generalized Error::ChangeList into Error::Structured.",
     "A successful edit runs the object's per-write event evaluation, as WriteProperty does: an Alarm_Values edit with Time_Delay 0 moves Event_State at once.",
     "A successful edit gives the edited object the post-write COV fanout a WriteProperty gives it, Life Safety objects aside (they keep their exact-change path), so a value the edit moves is reported with or without a transition: masking an Access Door's Door_Alarm_State returns it to NORMAL, and subscribers hear it.",
+    "The edit is captured for timestamped COV-multiple references while it commits, as a WriteProperty is, so its change carries the time of the edit; an edit that moves no reported value sends nothing.",
     "Subscribed_Recipients has its own codec and matcher: an element names the entry with the same recipient and process identifier, an add renews that entry in place, and a refusal on a renewed entry names the request element that renewed it. Its evidence is under BACNET-12-FORWARDER-SUBSCRIBED-RECIPIENTS."
    ]
   },

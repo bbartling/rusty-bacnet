@@ -411,7 +411,8 @@ fn door_alarm_lists_take_door_alarm_states_over_the_wire() {
         PropertyIdentifier::FAULT_VALUES,
         PropertyIdentifier::MASKED_ALARM_VALUES,
     ] {
-        // TAMPER alone, then with LOCK_DOWN (#1149).
+        // TAMPER alone, then with LOCK_DOWN (#1149). WriteProperty hands the
+        // object the one element as a list of one (#1328).
         write_property(&mut db, oid, list, alarm_states(&[4])).unwrap();
         assert_eq!(read_bytes(&db, oid, list), [0x91, 4], "{list:?}");
         write_property_multiple(&mut db, oid, &[(list, alarm_states(&[4, 6]))]).unwrap();
@@ -472,6 +473,12 @@ fn door_alarm_lists_take_door_alarm_states_over_the_wire() {
             "{list:?}"
         );
         assert_eq!(read_bytes(&db, oid, list), [0x91, 7], "{list:?}");
+        // No octets at all is the empty list, over either write service.
+        write_property(&mut db, oid, list, alarm_states(&[])).unwrap();
+        assert!(read_bytes(&db, oid, list).is_empty(), "{list:?}");
+        write_property_multiple(&mut db, oid, &[(list, alarm_states(&[7]))]).unwrap();
+        write_property_multiple(&mut db, oid, &[(list, alarm_states(&[]))]).unwrap();
+        assert!(read_bytes(&db, oid, list).is_empty(), "{list:?}");
     }
 }
 

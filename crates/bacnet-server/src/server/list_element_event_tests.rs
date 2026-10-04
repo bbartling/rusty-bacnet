@@ -6,7 +6,9 @@
 //! whole Alarm_Values written with WriteProperty or WritePropertyMultiple,
 //! one element or none (#1328). A list edit that moves a reported value with
 //! no transition at all, such as masking an Access Door's Door_Alarm_State,
-//! gets the COV fanout too (#1149).
+//! gets the COV fanout too, stamped for a timestamped reference when the
+//! edit commits, while an edit that moves no reported value stays quiet
+//! (#1149).
 //!
 //! The clock is paused, so the periodic task ticks only when a test sleeps
 //! past a second; `settle` stays well inside the first one.
@@ -326,4 +328,70 @@ async fn alarm_values_remove_list_element_reports_the_door_back_to_normal() {
     h.request(REMOVE, alarm_values(door1, &[0x91, 3])).await;
     assert_eq!(door_alarm_state(&h.cov_notification().await), [0x91, 0]);
     h.no_notification().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn alarm_values_edits_that_move_no_reported_value_stay_quiet() {
+    let (mut h, door1) = subscribed_alarming_door().await;
+    // FORCED_OPEN again: AddListElement leaves the list as it was.
+    h.request(ADD, alarm_values(door1, &[0x91, 3])).await;
+    h.no_notification().await;
+    // DOOR_OPEN_TOO_LONG in and out: the door's FORCED_OPEN stays an alarm
+    // value, so nothing a subscriber hears changes.
+    h.request(ADD, alarm_values(door1, &[0x91, 2])).await;
+    h.no_notification().await;
+    h.request(REMOVE, alarm_values(door1, &[0x91, 2])).await;
+    h.no_notification().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn list_edit_stamps_a_timestamped_change_at_the_time_of_the_edit() {
+    use bacnet_objects::traits::BACnetObject;
+    use bacnet_types::enums::DoorAlarmState;
+    const STATE: PropertyIdentifier = PropertyIdentifier::DOOR_ALARM_STATE;
+    let door1 = ObjectIdentifier::new(ObjectType::ACCESS_DOOR, 1).unwrap();
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        let mut door = AccessDoorObject::new(1, "DOOR-1").unwrap();
+        door.set_alarm_values([DoorAlarmState::FORCED_OPEN])
+            .unwrap();
+        door.write_property(
+            PropertyIdentifier::TIME_DELAY,
+            None,
+            PropertyValue::Unsigned(60),
+            None,
+        )
+        .unwrap();
+        door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN)
+            .unwrap();
+        db.add(Box::new(door)).unwrap();
+    })
+    .await;
+    h.subscribe_specs(false, vec![(door1, vec![(STATE, true)])])
+        .await;
+    h.notification().await;
+
+    // The edit commits at :10; the clock moves to :20 as the response goes
+    // out, before the COV fanout runs.
+    h.set_clock(10);
+    *h.after_ack.lock().unwrap() = Some(at(20));
+    h.request(
+        ADD,
+        list_body(door1, PropertyIdentifier::MASKED_ALARM_VALUES, &[0x91, 3]),
+    )
+    .await;
+    let report = h.notification().await;
+    let rows: Vec<_> = report
+        .list_of_cov_notifications
+        .iter()
+        .filter(|item| item.monitored_object_identifier == door1)
+        .flat_map(|item| &item.list_of_values)
+        .filter(|value| value.property_identifier == STATE)
+        .map(|value| (value.value.clone(), value.time_of_change))
+        .collect();
+    assert_eq!(
+        rows,
+        [(vec![0x91, 0], Some(time(10)))],
+        "the change is stamped when the edit committed"
+    );
+    h.server.stop().await.unwrap();
 }

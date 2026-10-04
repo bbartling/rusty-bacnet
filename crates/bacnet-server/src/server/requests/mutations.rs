@@ -584,16 +584,17 @@ impl Request<'_> {
             };
             (result, written, schedule_cov)
         };
-        // Targets a Schedule commanded on re-evaluation.
+        // The edited object first, then a Schedule's targets, which the merge
+        // adds only when not already there, as after a WriteProperty.
+        effects.written_oids.extend(written);
+        effects
+            .coarse_cov_oids
+            .extend(written.filter(|oid| !crate::life_safety_cov::is_life_safety_object(*oid)));
         schedule_cov.merge_into(
             &mut effects.coarse_cov_oids,
             &mut effects.life_safety_cov_changes,
             &mut effects.command_runs,
         );
-        effects.written_oids.extend(written);
-        effects
-            .coarse_cov_oids
-            .extend(written.filter(|oid| !crate::life_safety_cov::is_life_safety_object(*oid)));
         match result {
             Ok(()) => self.simple_ack(),
             Err(e) => self.error::<T>(&e),
