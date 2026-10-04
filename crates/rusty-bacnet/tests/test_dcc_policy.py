@@ -1,11 +1,14 @@
 """Installed-native DCC local policy, not source authentication or hardware proof."""
+import ast
 import asyncio
+import importlib.util
 import inspect
+from pathlib import Path
 import socket
 import unittest
 from typing import Any
 
-from rusty_bacnet import BACnetServer
+from rusty_bacnet import BACnetServer, EnableDisable
 
 
 class DccConstructorTests(unittest.TestCase):
@@ -82,6 +85,19 @@ class DccConstructorTests(unittest.TestCase):
                                  sc_device_uuid=bytes.fromhex("8e62ac46d7084226913776a32b619315"),
                                  sc_ca_cert="ca.pem", sc_client_cert="cert.pem", sc_client_key="key.pem")
 
+    def test_comm_state_stub_returns_enable_disable(self):
+        spec = importlib.util.find_spec("rusty_bacnet")
+        assert spec is not None and spec.origin is not None
+        origin = Path(spec.origin)
+        candidates = [origin.with_suffix(".pyi"), origin.parent / "rusty_bacnet.pyi"]
+        stub = next(path for path in candidates if path.exists())
+        server = next(node for node in ast.parse(stub.read_text()).body
+                      if isinstance(node, ast.ClassDef) and node.name == "BACnetServer")
+        method = next(node for node in server.body
+                      if isinstance(node, ast.FunctionDef) and node.name == "comm_state")
+        assert method.returns is not None
+        self.assertEqual(ast.unparse(method.returns), "Awaitable[EnableDisable]")
+
 
 class DccNativeTests(unittest.IsolatedAsyncioTestCase):
     async def test_disable_rate_global_native_lifetime_and_enable_exemption(self):
@@ -105,10 +121,10 @@ class DccNativeTests(unittest.IsolatedAsyncioTestCase):
                     for invoke in range(7, 10):
                         reply = await self.exchange(server, sockets[0], invoke, 0, "required", False)
                         self.assertEqual(reply, bytes([0x20, invoke, 17]))
-                    self.assertEqual(await server.comm_state(), 0)
+                    self.assertEqual(await server.comm_state(), EnableDisable.ENABLE)
                     reply = await self.exchange(server, sockets[1], 10, 2, "required", True)
                     self.assertEqual(reply, bytes([0x50, 10, 17, 0x91, 5, 0x91, 29]))
-                    self.assertEqual(await server.comm_state(), 0)
+                    self.assertEqual(await server.comm_state(), EnableDisable.ENABLE)
                     self.assertEqual(await server.dcc_outcome_counters(), dict(
                         accepted_total=6, policy_denied_total=4, password_failure_total=0,
                         deprecated_denied_total=0, malformed_total=0))
@@ -170,7 +186,8 @@ class DccNativeTests(unittest.IsolatedAsyncioTestCase):
                                 expected[outcome + "_total"] += 1
                                 if outcome == "accepted":
                                     self.assertEqual(reply, bytes([0x20, invoke, 17]))
-                                    self.assertEqual(await server.comm_state(), mode)
+                                    self.assertEqual(await server.comm_state(),
+                                                     EnableDisable.from_raw(mode))
                                 else:
                                     bad = outcome == "password_failure"
                                     self.assertEqual(reply, bytes([0x50, invoke, 17, 0x91,
@@ -182,6 +199,33 @@ class DccNativeTests(unittest.IsolatedAsyncioTestCase):
                     await server.stop()
         finally:
             sock.close()
+
+    async def test_comm_state_returns_enable_disable(self):
+        server = BACnetServer(123, interface="127.0.0.1", port=0,
+                              broadcast_address="127.0.0.1", dcc_policy="legacy_permissive")
+        with self.assertRaisesRegex(RuntimeError, "^server not started$"):
+            await server.comm_state()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("127.0.0.1", 0))
+        sock.setblocking(False)
+        try:
+            await server.start()
+            state = await server.comm_state()
+            self.assertIsInstance(state, EnableDisable)
+            self.assertEqual(state, EnableDisable.ENABLE)
+            self.assertEqual((await self.exchange(server, sock, 1, 2, None, False))[0], 0x20)
+            state = await server.comm_state()
+            self.assertIsInstance(state, EnableDisable)
+            self.assertEqual(state, EnableDisable.DISABLE_INITIATION)
+            self.assertEqual(state.to_raw(), 2)
+            self.assertEqual(hash(state), hash(EnableDisable.DISABLE_INITIATION))
+            self.assertEqual((await self.exchange(server, sock, 2, 0, None, False))[0], 0x20)
+            self.assertEqual(await server.comm_state(), EnableDisable.ENABLE)
+        finally:
+            await server.stop()
+            sock.close()
+        with self.assertRaisesRegex(RuntimeError, "^server not started$"):
+            await server.comm_state()
 
     async def exchange(self, server, sock, invoke, mode, password, routed, duration=None):
         body = b"" if duration is None else bytes([0x09, duration])
@@ -242,7 +286,8 @@ class DccNativeTests(unittest.IsolatedAsyncioTestCase):
                                         self.assertEqual(await server.comm_state(), before)
                                     else:
                                         self.assertEqual(reply, bytes([0x20, invoke, 17]))
-                                        self.assertEqual(await server.comm_state(), mode)
+                                        self.assertEqual(await server.comm_state(),
+                                                         EnableDisable.from_raw(mode))
                     counters = await server.request_admission_counters()
                     self.assertEqual(counters["recovery_admitted_total"], 6)
                 finally:
@@ -259,10 +304,10 @@ class DccNativeTests(unittest.IsolatedAsyncioTestCase):
             await server.start()
             self.assertEqual((await self.exchange(server, sock, 1, 2, None, False))[0], 0x20)
             await asyncio.sleep(0.02)
-            self.assertEqual(await server.comm_state(), 2)
+            self.assertEqual(await server.comm_state(), EnableDisable.DISABLE_INITIATION)
             self.assertEqual((await self.exchange(server, sock, 2, 2, None, False, 0))[0], 0x20)
             async with asyncio.timeout(2):
-                while await server.comm_state() != 0:
+                while await server.comm_state() != EnableDisable.ENABLE:
                     await asyncio.sleep(0)
         finally:
             await server.stop()
