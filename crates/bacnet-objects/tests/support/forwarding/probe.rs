@@ -297,6 +297,14 @@ impl BACnetObject for Probe {
         self.called("is_createable", ());
         true
     }
+    fn creation_only_properties(&self) -> &'static [P] {
+        self.called("creation_only_properties", ());
+        &[CUSTOM]
+    }
+    fn initialize_property(&mut self, property: P, value: PropertyValue) -> Result<(), Error> {
+        self.called("initialize_property", (property, value));
+        Ok(())
+    }
     fn is_deleteable(&self) -> bool {
         self.called("is_deleteable", ());
         false
@@ -658,33 +666,5 @@ fn own_record_error() -> Error {
     Error::Protocol {
         class: ErrorClass::DEVICE.to_raw() as u32,
         code: ErrorCode::OPERATIONAL_PROBLEM.to_raw() as u32,
-    }
-}
-
-/// A probe's identity and readings, every provided method left at the trait
-/// default: what an adapter that forwarded nothing more would answer.
-pub struct Defaults(pub Probe);
-
-impl BACnetObject for Defaults {
-    fn object_identifier(&self) -> ObjectIdentifier {
-        self.0.object_identifier()
-    }
-    fn object_name(&self) -> &str {
-        self.0.object_name()
-    }
-    fn read_property(&self, property: P, index: Option<u32>) -> Result<PropertyValue, Error> {
-        self.0.read_property(property, index)
-    }
-    fn write_property(
-        &mut self,
-        property: P,
-        index: Option<u32>,
-        value: PropertyValue,
-        priority: Option<u8>,
-    ) -> Result<(), Error> {
-        self.0.write_property(property, index, value, priority)
-    }
-    fn property_list(&self) -> Cow<'static, [P]> {
-        self.0.property_list()
     }
 }

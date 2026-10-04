@@ -19,9 +19,15 @@ use crate::traits::{BACnetObject, ReliabilityEvaluation};
 /// `MAX_COV_SUBSCRIPTIONS`.
 pub(crate) const MAX_ALARM_VALUES: usize = 1024;
 
+/// Decode an Alarm_Values write on a Multi-state Input or Value. Each entry
+/// is an Unsigned naming one of the object's `number_of_states` states; one
+/// past them could never match Present_Value, so it is VALUE_OUT_OF_RANGE,
+/// naming the element, rather than stored for Reliability to report as
+/// CONFIGURATION_ERROR (#1429). The local `set_alarm_values` stays unchecked.
 fn decode_alarm_values_write(
     array_index: Option<u32>,
     value: PropertyValue,
+    number_of_states: u32,
 ) -> Result<Vec<u32>, Error> {
     if array_index.is_some() {
         return Err(Error::Protocol {
@@ -48,7 +54,12 @@ fn decode_alarm_values_write(
         .enumerate()
         .map(|(index, value)| {
             match value {
-                PropertyValue::Unsigned(value) => common::u64_to_u32(value),
+                PropertyValue::Unsigned(state)
+                    if (1..=u64::from(number_of_states)).contains(&state) =>
+                {
+                    Ok(state as u32)
+                }
+                PropertyValue::Unsigned(_) => Err(common::value_out_of_range_error()),
                 _ => Err(common::invalid_data_type_error()),
             }
             .map_err(|error| common::at_list_element(error, index))
@@ -89,6 +100,74 @@ fn resize_state_text(
     }
     *current_number_of_states = number_of_states;
     Ok(())
+}
+
+/// What a multi-state object takes only from a CreateObject initial value
+/// (#1429): Number_Of_States, and State_Text written whole. WriteProperty
+/// refuses both; a State_Text element stays writable.
+const CREATION_ONLY: &[PropertyIdentifier] = &[
+    PropertyIdentifier::NUMBER_OF_STATES,
+    PropertyIdentifier::STATE_TEXT,
+];
+
+/// The most states a CreateObject initial value may give a multi-state
+/// object. State_Text keeps a label for every state, so the count a client
+/// picks is bounded like the other tables a client sizes.
+pub const MAX_CREATED_NUMBER_OF_STATES: u32 = 1024;
+
+/// Apply a CreateObject initial value to Number_Of_States or to the whole of
+/// State_Text (#1429), checked before anything changes.
+///
+/// A state count runs from 1 to [`MAX_CREATED_NUMBER_OF_STATES`]. It is also
+/// VALUE_OUT_OF_RANGE when one of `held`, the values the object keeps that
+/// name a state (Present_Value, Relinquish_Default, the commands in
+/// Priority_Array, Alarm_Values), would fall outside it. A new count resizes
+/// State_Text as [`resize_state_text`] does (Clause 12.20.10 ties the two
+/// sizes together). State_Text needs exactly one CharacterString per state,
+/// VALUE_OUT_OF_RANGE for any other count; a single label arrives as that
+/// CharacterString, the way a one-element array value decodes. Any other
+/// property is WRITE_ACCESS_DENIED, as the trait default answers.
+fn initialize_states(
+    number_of_states: &mut u32,
+    state_text: &mut Vec<String>,
+    held: impl IntoIterator<Item = u32>,
+    property: PropertyIdentifier,
+    value: PropertyValue,
+) -> Result<(), Error> {
+    match property {
+        PropertyIdentifier::NUMBER_OF_STATES => {
+            let PropertyValue::Unsigned(count) = value else {
+                return Err(common::invalid_data_type_error());
+            };
+            let count = u32::try_from(count)
+                .ok()
+                .filter(|count| (1..=MAX_CREATED_NUMBER_OF_STATES).contains(count))
+                .ok_or_else(common::value_out_of_range_error)?;
+            if held.into_iter().any(|state| !(1..=count).contains(&state)) {
+                return Err(common::value_out_of_range_error());
+            }
+            resize_state_text(number_of_states, state_text, count)
+        }
+        PropertyIdentifier::STATE_TEXT => {
+            let labels = match value {
+                PropertyValue::CharacterString(label) => vec![label],
+                PropertyValue::List(values) => values
+                    .into_iter()
+                    .map(|value| match value {
+                        PropertyValue::CharacterString(label) => Ok(label),
+                        _ => Err(common::invalid_data_type_error()),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                _ => return Err(common::invalid_data_type_error()),
+            };
+            if labels.len() != *number_of_states as usize {
+                return Err(common::value_out_of_range_error());
+            }
+            *state_text = labels;
+            Ok(())
+        }
+        _ => Err(common::write_access_denied_error()),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

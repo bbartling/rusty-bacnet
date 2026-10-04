@@ -12,12 +12,14 @@
 //! probe. Values the probe and the rows share, such as identifiers, dates
 //! and clocks, are in `fixtures.rs`.
 
+pub mod defaults;
 pub mod fixtures;
 pub mod probe;
 pub mod rows;
 
 use bacnet_types::enums::ObjectType;
-use probe::{take, CallLog, Defaults, Probe};
+use defaults::Defaults;
+use probe::{take, CallLog, Probe};
 use rows::{rows, COMMANDS, QUERIES};
 use std::collections::BTreeSet;
 

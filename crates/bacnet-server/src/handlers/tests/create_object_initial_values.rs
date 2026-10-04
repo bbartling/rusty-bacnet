@@ -10,13 +10,17 @@ use super::*;
 use bacnet_services::common::BACnetPropertyValue;
 use PropertyIdentifier as P;
 
-fn initial(property: P, array_index: Option<u32>, value: &PropertyValue) -> BACnetPropertyValue {
+pub(super) fn initial(
+    property: P,
+    array_index: Option<u32>,
+    value: &PropertyValue,
+) -> BACnetPropertyValue {
     let mut bytes = BytesMut::new();
     encode_property_value(&mut bytes, value).unwrap();
     raw(property, array_index, &bytes, None)
 }
 
-fn raw(
+pub(super) fn raw(
     property: P,
     array_index: Option<u32>,
     value: &[u8],
@@ -30,11 +34,11 @@ fn raw(
     }
 }
 
-fn text(value: &str) -> PropertyValue {
+pub(super) fn text(value: &str) -> PropertyValue {
     PropertyValue::CharacterString(value.into())
 }
 
-fn request(object_type: ObjectType, values: Vec<BACnetPropertyValue>) -> BytesMut {
+pub(super) fn request(object_type: ObjectType, values: Vec<BACnetPropertyValue>) -> BytesMut {
     let mut request = BytesMut::new();
     CreateObjectRequest {
         object_specifier: ObjectSpecifier::Type(object_type),
@@ -46,7 +50,7 @@ fn request(object_type: ObjectType, values: Vec<BACnetPropertyValue>) -> BytesMu
 
 /// Create an object of `object_type` from `values`: the new identifier, or
 /// the refusal.
-fn create(
+pub(super) fn create(
     db: &mut ObjectDatabase,
     object_type: ObjectType,
     values: Vec<BACnetPropertyValue>,
@@ -62,7 +66,7 @@ fn create(
     }
 }
 
-fn read(
+pub(super) fn read(
     db: &ObjectDatabase,
     oid: ObjectIdentifier,
     property: P,
@@ -205,7 +209,7 @@ fn a_null_initial_value_leaves_a_noncommandable_property_as_it_is() {
         // with, and the initial value after them was applied.
         for &(property, index) in &nulls {
             let expected = if property == P::OBJECT_NAME {
-                text(&format!("{object_type:?}-{}", oid.instance_number()))
+                text(&format!("{object_type}-{}", oid.instance_number()))
             } else {
                 read(&db, plain, property, index)
             };
