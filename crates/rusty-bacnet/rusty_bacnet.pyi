@@ -3116,7 +3116,10 @@ class BACnetServer:
         With ``storage_path``, a rule array, Enable or Accompaniment that a
         client writes is kept in that file across restarts, and wins over the
         keyword given for it at the next start, which is then checked but not
-        applied; a saved Accompaniment is served even without the keyword. A
+        applied; a saved Accompaniment is served even without the keyword.
+        To lift a saved requirement, write the no-accompaniment reference
+        (instance 4194303), which keeps the row; to drop the row, remove the
+        storage file, which also drops the saved rules and Enable. A
         write that cannot be saved is refused with DEVICE /
         OPERATIONAL_PROBLEM and the old value stays. Without it, written
         values live in memory only. ``storage_path`` is a ``str``; a

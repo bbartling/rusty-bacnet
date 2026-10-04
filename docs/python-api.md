@@ -2616,7 +2616,10 @@ it, on a thread of its own while the server goes on answering other requests.
 A write that cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM, and
 nothing changes. Once a write has set one of them, the saved value wins at
 every later start: the keyword for it is still checked, but not applied, and
-a saved Accompaniment is served even without the keyword. A keyword whose
+a saved Accompaniment is served even without the keyword. To lift a saved
+Accompaniment requirement, write the no-accompaniment reference (instance
+4194303), which keeps the row; to drop the row, remove the storage file,
+which also drops the saved rules and Enable. A keyword whose
 property no write has set applies as usual, and keyword values alone are
 never saved, but a write saves the whole array it leaves, so an element write
 also saves the keyword rules it didn't touch. `storage_path` takes a `str` (a

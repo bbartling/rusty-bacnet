@@ -36,7 +36,10 @@ impl BACnetServer {
     /// that a client writes is kept in that file and restored when the
     /// server is built again. It then wins over the keyword given here,
     /// which is checked but not applied, and a saved Accompaniment is served
-    /// even without the keyword. A write that cannot be saved is refused
+    /// even without the keyword. To lift a saved requirement, write the
+    /// no-accompaniment reference (instance 4194303), which keeps the row;
+    /// to drop the row, remove the storage file, which also drops the saved
+    /// rules and Enable. A write that cannot be saved is refused
     /// with DEVICE / OPERATIONAL_PROBLEM, and the old value stays. Without
     /// it, writes live in memory only. Give each object its own file: one
     /// that holds another object's state, or that this backend did not

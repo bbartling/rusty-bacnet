@@ -3049,7 +3049,11 @@ closing context tag 3. Loading refuses a file past 128 KiB, an array of more
 than 1024 rules, members out of order, trailing octets, and another object's
 file. `with_persistence` then puts each saved array and Accompaniment
 through the setters' checks, so a file holding a value they refuse fails it.
-A saved Accompaniment serves the row whether or not the application sets one.
+A saved Accompaniment serves the row whether or not the application sets one,
+and `set_accompaniment(None)` doesn't remove it. To lift a saved requirement,
+write the no-accompaniment reference (instance 4194303), which keeps the row;
+to drop the row itself, remove the storage file, which also drops the saved
+rules and Enable.
 An object built with `new` keeps written values in memory only.
 
 Saves follow the Notification Class's rules (see

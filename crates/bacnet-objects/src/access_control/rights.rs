@@ -183,7 +183,10 @@ impl AccessRightsObject {
     /// This configures the object and is not saved. With persistence, once
     /// a write has set Accompaniment and it was saved, the saved reference
     /// wins: the one given here is still checked, but not stored, and `None`
-    /// leaves the property in place.
+    /// leaves the property in place. To lift a saved requirement, write the
+    /// no-accompaniment reference (instance 4194303), which keeps the row;
+    /// to drop the row itself, remove the storage file, which also drops the
+    /// saved rules and Enable.
     pub fn set_accompaniment(
         &mut self,
         accompaniment: Option<BACnetDeviceObjectReference>,

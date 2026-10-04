@@ -9,9 +9,9 @@
 //! the storage belongs to the application. The object loads it once, when it
 //! is built, and saves on its own writer thread each time a write changes
 //! Positive_Access_Rules, Negative_Access_Rules, Enable or Accompaniment
-//! (#1393). The bundled server
-//! waits for that save with the database guard dropped; a write nobody staged
-//! waits where it is ([`crate::durable`] lists those paths).
+//! (#1393). The bundled server waits for that save with the database guard
+//! dropped; a write nobody staged waits where it is ([`crate::durable`] lists
+//! those paths).
 
 use std::path::Path;
 

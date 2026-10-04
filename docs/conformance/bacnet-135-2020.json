@@ -3397,7 +3397,7 @@
    ],
    "gaps": [
     "#1331: no Access Point authorization uses the stored Accompaniment",
-    "Python reads Accompaniment as application_data octets, not the forms the keyword takes (no issue)"
+    "#1344: Python reads Accompaniment as application_data octets, not the forms the keyword takes"
    ]
   },
   {
