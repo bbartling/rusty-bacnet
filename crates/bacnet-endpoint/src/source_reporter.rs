@@ -232,6 +232,18 @@ impl BACnetObject for SourceReporter {
         self.wrapped.is_createable()
     }
 
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        self.wrapped.creation_only_properties()
+    }
+
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        self.wrapped.initialize_property(property, value)
+    }
+
     fn is_deleteable(&self) -> bool {
         !self.active() && self.wrapped.is_deleteable()
     }

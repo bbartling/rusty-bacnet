@@ -44,6 +44,17 @@ fn alarm_values(elements: &[u8]) -> Bytes {
     )
 }
 
+/// Replace the fixture's Multi-state Input with one that has a state for
+/// every value up to 2048 and holds `values` as its Alarm_Values, so a full
+/// list stays in range (#1429).
+pub(super) async fn fill_msi_alarm_values(fixture: &Fixture, values: std::ops::Range<u32>) {
+    let mut msi = bacnet_objects::multistate::MultiStateInputObject::new(1, "msi", 2048).unwrap();
+    msi.set_alarm_values(values.collect());
+    let mut db = fixture.db.write().await;
+    db.remove(&oid(ObjectType::MULTI_STATE_INPUT, 1)).unwrap();
+    db.add(Box::new(msi)).unwrap();
+}
+
 /// The response APDU exactly as the server encoded it.
 pub(super) async fn wire(
     fixture: &Fixture,
@@ -159,19 +170,7 @@ async fn list_element_refusals_go_out_as_change_list_errors() {
 
     // The list is full: present elements take no space, so the first new one
     // (Unsigned 7, the third element) is the one that does not fit.
-    fixture
-        .db
-        .write()
-        .await
-        .get_mut(&oid(ObjectType::MULTI_STATE_INPUT, 1))
-        .unwrap()
-        .write_property(
-            PropertyIdentifier::ALARM_VALUES,
-            None,
-            PropertyValue::List((100..1124).map(PropertyValue::Unsigned).collect()),
-            None,
-        )
-        .unwrap();
+    fill_msi_alarm_values(&fixture, 100..1124).await;
     assert_eq!(
         wire(
             &fixture,

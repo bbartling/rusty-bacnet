@@ -364,23 +364,33 @@ fn msv_configuration_sources_recompute_immediately_and_fault_values_stays_absent
         read_reliability(&alarms),
         Reliability::CONFIGURATION_ERROR.to_raw()
     );
-    alarms.set_alarm_values(vec![2]);
+    // The list write route funnels through the same synchronous setter: an
+    // in-range list clears the fault at once. A state past the count is
+    // refused there (#1429), so only a local change makes the fault.
+    alarms
+        .write_property(
+            PropertyIdentifier::ALARM_VALUES,
+            None,
+            PropertyValue::List(vec![PropertyValue::Unsigned(2)]),
+            None,
+        )
+        .unwrap();
     assert_eq!(
         read_reliability(&alarms),
-        Reliability::NO_FAULT_DETECTED.to_raw()
+        Reliability::NO_FAULT_DETECTED.to_raw(),
+        "the list write route must funnel through the same synchronous setter"
     );
-    alarms
+    assert!(alarms
         .write_property(
             PropertyIdentifier::ALARM_VALUES,
             None,
             PropertyValue::List(vec![PropertyValue::Unsigned(4)]),
             None,
         )
-        .unwrap();
+        .is_err());
     assert_eq!(
         read_reliability(&alarms),
-        Reliability::CONFIGURATION_ERROR.to_raw(),
-        "the list write route must funnel through the same synchronous setter"
+        Reliability::NO_FAULT_DETECTED.to_raw()
     );
 
     assert_unknown_property(alarms.read_property(PropertyIdentifier::FAULT_VALUES, None));

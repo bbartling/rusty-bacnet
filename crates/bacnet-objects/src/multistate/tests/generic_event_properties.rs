@@ -456,10 +456,8 @@ fn multistate_alarm_values_round_trip_and_match_pics() {
         &mut MultiStateInputObject::new(1, "MSI-1", 3).unwrap() as &mut dyn BACnetObject,
         &mut MultiStateValueObject::new(1, "MSV-1", 3).unwrap() as &mut dyn BACnetObject,
     ] {
-        let value = PropertyValue::List(vec![
-            PropertyValue::Unsigned(2),
-            PropertyValue::Unsigned(99),
-        ]);
+        let value =
+            PropertyValue::List(vec![PropertyValue::Unsigned(2), PropertyValue::Unsigned(3)]);
         object
             .write_property(PropertyIdentifier::ALARM_VALUES, None, value.clone(), None)
             .unwrap();
@@ -520,9 +518,31 @@ fn multistate_alarm_values_round_trip_and_match_pics() {
             value,
             "an overflowing element must leave the prior list intact"
         );
+        // A state the object doesn't have is refused at its element (#1429).
+        for (states, element) in [(vec![2, 4], 2), (vec![0, 1], 1)] {
+            crate::common::assert_list_element_refused(
+                object.write_property(
+                    PropertyIdentifier::ALARM_VALUES,
+                    None,
+                    PropertyValue::List(states.into_iter().map(PropertyValue::Unsigned).collect()),
+                    None,
+                ),
+                ErrorClass::PROPERTY,
+                ErrorCode::VALUE_OUT_OF_RANGE,
+                element,
+                "a state past Number_Of_States",
+            );
+            assert_eq!(
+                object
+                    .read_property(PropertyIdentifier::ALARM_VALUES, None)
+                    .unwrap(),
+                value,
+                "an out-of-range state must leave the prior list intact"
+            );
+        }
         let boundary = PropertyValue::List(
             (0..MAX_ALARM_VALUES)
-                .map(|value| PropertyValue::Unsigned(value as u64))
+                .map(|value| PropertyValue::Unsigned(value as u64 % 3 + 1))
                 .collect(),
         );
         object

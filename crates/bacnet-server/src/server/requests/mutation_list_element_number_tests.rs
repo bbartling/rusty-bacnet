@@ -9,7 +9,9 @@
 //! PROPERTY 2, RESOURCES 3; INVALID_DATA_TYPE 9, NO_SPACE_TO_ADD_LIST_ELEMENT
 //! 19, NO_SPACE_TO_WRITE_PROPERTY 20, VALUE_OUT_OF_RANGE 37.
 
-use super::mutation_list_wire_tests::{change_list_error, list_request, wire, ADD, REMOVE};
+use super::mutation_list_wire_tests::{
+    change_list_error, fill_msi_alarm_values, list_request, wire, ADD, REMOVE,
+};
 use super::mutation_tests::{oid, Fixture};
 use super::*;
 use bacnet_encoding::constructed::{
@@ -90,19 +92,7 @@ async fn add_list_element_names_the_value_that_does_not_fit() {
     let fixture = Fixture::new(None);
     let msi = oid(ObjectType::MULTI_STATE_INPUT, 1);
     let alarm_values = PropertyIdentifier::ALARM_VALUES;
-    fixture
-        .db
-        .write()
-        .await
-        .get_mut(&msi)
-        .unwrap()
-        .write_property(
-            alarm_values,
-            None,
-            PropertyValue::List((100..1123).map(PropertyValue::Unsigned).collect()),
-            None,
-        )
-        .unwrap();
+    fill_msi_alarm_values(&fixture, 100..1123).await;
     let stored = fixture.read(msi, alarm_values).await;
     for (what, elements, element) in [
         ("two new values", &[0x21, 7, 0x21, 8][..], 2),
