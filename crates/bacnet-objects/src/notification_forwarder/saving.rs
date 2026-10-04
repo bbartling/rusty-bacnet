@@ -156,8 +156,9 @@ impl Storage {
         snapshot: ForwarderSnapshot,
         served: ForwarderSnapshot,
     ) -> StageStep {
+        // Both lists are BACnetLISTs, written whole.
         self.saves
-            .stage(property, value, base, next, snapshot, served)
+            .stage(property, None, value, base, next, snapshot, served)
     }
 
     /// Take the staged list for a write (see [`StagedSaves::claim`]).
@@ -167,7 +168,7 @@ impl Storage {
         value: &PropertyValue,
         base: u64,
     ) -> Option<Result<NextList, Error>> {
-        self.saves.claim(property, value, base)
+        self.saves.claim(property, None, value, base)
     }
 
     /// Save `snapshot` and wait for the outcome, for a write nobody staged.

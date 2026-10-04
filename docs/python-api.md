@@ -2558,6 +2558,33 @@ its last rules. Writes get the same checks as the keywords, and a refused
 write leaves the array unchanged. The server stores and serves the rules and
 the flag; it doesn't evaluate them.
 
+With `storage_path`, the arrays and Enable that peers write are kept in that
+file and served again after a restart; without it they live in memory only:
+
+```python
+server.add_access_rights(
+    instance=3,
+    name="Lobby Weekdays",
+    positive_access_rules=[
+        {"location": ObjectIdentifier(ObjectType.ACCESS_POINT, 1), "enable": True},
+    ],
+    storage_path="/application/state/access-rights-3",  # optional
+)
+```
+
+Each written array or Enable is saved before the object serves it, on a
+thread of its own while the server goes on answering other requests. A write
+that cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM, and
+nothing changes. Once a write has set an array or Enable, the saved value
+wins at every later start: the keyword for it is still checked, but not
+applied. A keyword whose property no write has set applies as usual, and
+keyword values are never saved. `storage_path` takes a `str` (a
+`pathlib.Path` raises `TypeError`). Give each object its own file: the file
+records which object it belongs to, so two objects sharing a path fail to
+register after a restart. A file this backend did not write, or a corrupt
+one, makes `add_access_rights` raise `BacnetError`, and one holding a rule
+the object refuses raises `BacnetProtocolError`.
+
 Access Door, Access Point, Credential Data Input and Load Control take
 SubscribeCOV, and each report carries the values their Table 13-1 rows name:
 Door_Alarm_State on a door; Access_Event (in place of Present_Value),
