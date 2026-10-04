@@ -14,18 +14,18 @@ use bacnet_objects::file::FileObject;
 use bacnet_types::enums::FileAccessMethod;
 
 /// FILE-1, the stream file, as an application object identifier.
-const FILE_1: [u8; 5] = [0xC4, 0x02, 0x80, 0x00, 0x01];
+pub(super) const FILE_1: [u8; 5] = [0xC4, 0x02, 0x80, 0x00, 0x01];
 /// FILE-2, the record file.
-const FILE_2: [u8; 5] = [0xC4, 0x02, 0x80, 0x00, 0x02];
+pub(super) const FILE_2: [u8; 5] = [0xC4, 0x02, 0x80, 0x00, 0x02];
 /// FILE-1's contents.
 const STREAM: &[u8] = b"0123456789abcdefghijklmnopqrstuv";
 
-const READ: ConfirmedServiceChoice = ConfirmedServiceChoice::ATOMIC_READ_FILE;
-const WRITE: ConfirmedServiceChoice = ConfirmedServiceChoice::ATOMIC_WRITE_FILE;
+pub(super) const READ: ConfirmedServiceChoice = ConfirmedServiceChoice::ATOMIC_READ_FILE;
+pub(super) const WRITE: ConfirmedServiceChoice = ConfirmedServiceChoice::ATOMIC_WRITE_FILE;
 
 /// A server holding FILE-1 (stream access) and FILE-2 (record access, two
 /// records), both writable.
-async fn harness() -> Harness {
+pub(super) async fn harness() -> Harness {
     Harness::start_with(ServerConfig::default(), |db| {
         let mut stream = FileObject::new(1, "stream", "binary").unwrap();
         stream.set_data(STREAM.to_vec());
@@ -39,7 +39,7 @@ async fn harness() -> Harness {
 }
 
 /// FILE-1's octets and FILE-2's records as the server holds them.
-async fn contents(h: &Harness) -> (Vec<u8>, Vec<Vec<u8>>) {
+pub(super) async fn contents(h: &Harness) -> (Vec<u8>, Vec<Vec<u8>>) {
     let db = h.server.database().read().await;
     let storage = |instance| {
         db.get(&ObjectIdentifier::new(ObjectType::FILE, instance).unwrap())
@@ -54,7 +54,7 @@ async fn contents(h: &Harness) -> (Vec<u8>, Vec<Vec<u8>>) {
 }
 
 /// `body` after `file`.
-fn request(file: [u8; 5], body: &[u8]) -> Vec<u8> {
+pub(super) fn request(file: [u8; 5], body: &[u8]) -> Vec<u8> {
     [&file[..], body].concat()
 }
 

@@ -4,7 +4,7 @@
 //! - DeleteObject (Clause 15.4)
 
 use bacnet_encoding::constructed::tagged::{
-    decode_app_object_id, decode_ctx_object_id, decode_ctx_unsigned, expect_closing,
+    decode_app_object_id, decode_ctx_object_id, decode_ctx_unsigned, expect_closing, expect_end,
     expect_opening, next_is_context,
 };
 use bacnet_encoding::constructed::{
@@ -148,10 +148,11 @@ impl DeleteObjectRequest {
     }
 
     /// Decode the request from service-request octets; fails on malformed or truncated input,
-    /// and on an object identifier under any tag but its application tag.
+    /// on an object identifier under any tag but its application tag, and on octets after it.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (object_identifier, _) =
+        let (object_identifier, end) =
             decode_app_object_id(data, 0, "DeleteObject object-identifier")?;
+        expect_end(data, end, end, "DeleteObject")?;
         Ok(Self { object_identifier })
     }
 }

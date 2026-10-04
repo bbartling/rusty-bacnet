@@ -2,7 +2,7 @@
 
 use bacnet_encoding::constructed::tagged::{
     decode_app_object_id, decode_app_primitive, decode_app_unsigned, decode_ctx_constructed,
-    decode_ctx_primitive, next_is_context, next_is_opening,
+    decode_ctx_primitive, expect_end, next_is_context, next_is_opening,
 };
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -111,40 +111,48 @@ impl AtomicReadFileRequest {
     }
 
     /// Decode the request from service-request octets; fails on malformed or truncated input,
-    /// and on a member under any tag but its application tag.
+    /// on a member under any tag but its application tag, and on octets after the access
+    /// frame's members or after the frame.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let (file_identifier, offset) =
             decode_app_object_id(data, 0, "AtomicReadFile file-identifier")?;
 
-        let access = if next_is_opening(data, offset, 0)? {
-            let (content, _) = decode_ctx_constructed(data, offset, 0, "AtomicReadFile stream")?;
+        let (access, end) = if next_is_opening(data, offset, 0)? {
+            const WHAT: &str = "AtomicReadFile stream";
+            let (content, end) = decode_ctx_constructed(data, offset, 0, WHAT)?;
             let (file_start_position, inner) =
                 decode_start(content, 0, "AtomicReadFile stream file-start-position")?;
-            let (requested_octet_count, _) = decode_app_unsigned::<u32>(
+            let (requested_octet_count, inner) = decode_app_unsigned::<u32>(
                 content,
                 inner,
                 "AtomicReadFile stream requested-octet-count",
             )?;
-            FileAccessMethod::Stream {
+            expect_end(content, inner, offset, WHAT)?;
+            let access = FileAccessMethod::Stream {
                 file_start_position,
                 requested_octet_count,
-            }
+            };
+            (access, end)
         } else if next_is_opening(data, offset, 1)? {
-            let (content, _) = decode_ctx_constructed(data, offset, 1, "AtomicReadFile record")?;
+            const WHAT: &str = "AtomicReadFile record";
+            let (content, end) = decode_ctx_constructed(data, offset, 1, WHAT)?;
             let (file_start_record, inner) =
                 decode_start(content, 0, "AtomicReadFile record file-start-record")?;
-            let (requested_record_count, _) = decode_app_unsigned::<u32>(
+            let (requested_record_count, inner) = decode_app_unsigned::<u32>(
                 content,
                 inner,
                 "AtomicReadFile record requested-record-count",
             )?;
-            FileAccessMethod::Record {
+            expect_end(content, inner, offset, WHAT)?;
+            let access = FileAccessMethod::Record {
                 file_start_record,
                 requested_record_count,
-            }
+            };
+            (access, end)
         } else {
             return Err(Error::decoding(offset, "Unknown file access method"));
         };
+        expect_end(data, end, end, "AtomicReadFile")?;
 
         Ok(Self {
             file_identifier,
@@ -184,27 +192,33 @@ impl AtomicWriteFileRequest {
     }
 
     /// Decode the request from service-request octets; fails on malformed or truncated input,
-    /// and on a member under any tag but its application tag.
+    /// on a member under any tag but its application tag, and on octets after the stream
+    /// frame's file data or after the frame. In record access, a record list that doesn't
+    /// match its count is a Reject: MISSING_REQUIRED_PARAMETER when records are missing,
+    /// TOO_MANY_ARGUMENTS when anything follows the counted ones.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let (file_identifier, offset) =
             decode_app_object_id(data, 0, "AtomicWriteFile file-identifier")?;
 
-        let access = if next_is_opening(data, offset, 0)? {
-            let (content, _) = decode_ctx_constructed(data, offset, 0, "AtomicWriteFile stream")?;
+        let (access, end) = if next_is_opening(data, offset, 0)? {
+            const WHAT: &str = "AtomicWriteFile stream";
+            let (content, end) = decode_ctx_constructed(data, offset, 0, WHAT)?;
             let (file_start_position, inner) =
                 decode_start(content, 0, "AtomicWriteFile stream file-start-position")?;
-            let (file_data, _) = decode_app_primitive(
+            let (file_data, inner) = decode_app_primitive(
                 content,
                 inner,
                 tags::app_tag::OCTET_STRING,
                 "AtomicWriteFile stream file-data",
             )?;
-            FileWriteAccessMethod::Stream {
+            expect_end(content, inner, offset, WHAT)?;
+            let access = FileWriteAccessMethod::Stream {
                 file_start_position,
                 file_data: file_data.to_vec(),
-            }
+            };
+            (access, end)
         } else if next_is_opening(data, offset, 1)? {
-            let (content, _) = decode_ctx_constructed(data, offset, 1, "AtomicWriteFile record")?;
+            let (content, end) = decode_ctx_constructed(data, offset, 1, "AtomicWriteFile record")?;
             let (file_start_record, mut inner) =
                 decode_start(content, 0, "AtomicWriteFile record file-start-record")?;
             let (record_count, new_inner) =
@@ -234,14 +248,16 @@ impl AtomicWriteFileRequest {
                     reason: RejectReason::TOO_MANY_ARGUMENTS.to_raw(),
                 });
             }
-            FileWriteAccessMethod::Record {
+            let access = FileWriteAccessMethod::Record {
                 file_start_record,
                 record_count,
                 file_record_data,
-            }
+            };
+            (access, end)
         } else {
             return Err(Error::decoding(offset, "Unknown file write access method"));
         };
+        expect_end(data, end, end, "AtomicWriteFile")?;
 
         Ok(Self {
             file_identifier,
@@ -461,23 +477,26 @@ impl AtomicWriteFileAck {
     }
 
     /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
-    /// input.
+    /// input and on octets after the choice.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let access = if next_is_context(data, 0, 0)? {
-            let (octets, _) =
+        let (access, end) = if next_is_context(data, 0, 0)? {
+            let (octets, end) =
                 decode_ctx_primitive(data, 0, 0, "AtomicWriteFileAck file-start-position")?;
-            FileWriteAckMethod::Stream {
+            let access = FileWriteAckMethod::Stream {
                 file_start_position: primitives::decode_signed(octets)?,
-            }
+            };
+            (access, end)
         } else if next_is_context(data, 0, 1)? {
-            let (octets, _) =
+            let (octets, end) =
                 decode_ctx_primitive(data, 0, 1, "AtomicWriteFileAck file-start-record")?;
-            FileWriteAckMethod::Record {
+            let access = FileWriteAckMethod::Record {
                 file_start_record: primitives::decode_signed(octets)?,
-            }
+            };
+            (access, end)
         } else {
             return Err(Error::decoding(0, "Unknown write file ACK access method"));
         };
+        expect_end(data, end, end, "AtomicWriteFileAck")?;
 
         Ok(Self { access })
     }

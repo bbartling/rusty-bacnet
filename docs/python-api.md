@@ -1072,17 +1072,22 @@ await client.remove_list_element(
 
 ### Private Transfer
 
-#### `confirmed_private_transfer(address, vendor_id, service_number, service_parameters=None) -> bytes`
+#### `confirmed_private_transfer(address, vendor_id, service_number, service_parameters=None) -> dict`
 
-Send a vendor-specific confirmed service request.
+Send a vendor-specific confirmed service request. The result is a dict with
+`vendor_id`, `service_number` and `result_block` (`bytes`, or `None` when the
+ACK carries no block). A device error raises `BacnetProtocolError` with
+`vendor_id`, `service_number` and `error_parameters` set; an ACK that is
+malformed, cut short or has octets after its last member raises `BacnetError`.
 
 ```python
-raw = await client.confirmed_private_transfer(
+ack = await client.confirmed_private_transfer(
     "192.168.1.100:47808",
     vendor_id=999,
     service_number=1,
     service_parameters=b"\x01\x02\x03",
 )
+block = ack["result_block"]
 ```
 
 #### `unconfirmed_private_transfer(address, vendor_id, service_number, service_parameters=None)`
@@ -1102,20 +1107,21 @@ await client.unconfirmed_private_transfer(
 
 ### Text Messages
 
-#### `confirmed_text_message(address, source_device, message_priority, message, message_class_type=None, message_class_value=None) -> bytes`
+#### `confirmed_text_message(address, source_device, message_priority, message, message_class_type=None, message_class_value=None)`
 
-Send a confirmed text message to a device.
+Send a confirmed text message to a device. It returns `None` once the device
+acknowledges the message.
 
 ```python
 from rusty_bacnet import MessagePriority
 
-raw = await client.confirmed_text_message(
+await client.confirmed_text_message(
     "192.168.1.100:47808",
     source_device=ObjectIdentifier(ObjectType.DEVICE, 1234),
     message_priority=MessagePriority.URGENT,
     message="Fire alarm on floor 3",
-    message_class_type="numeric",     # "numeric" or "string"
-    message_class_value=1,            # int for numeric, str for string
+    message_class_type="numeric",     # "numeric" or "text"
+    message_class_value=1,            # int for numeric, str for text
 )
 ```
 
