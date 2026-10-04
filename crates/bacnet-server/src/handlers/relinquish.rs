@@ -4,9 +4,12 @@
 //! The standard treats such a write as a relinquish there is nothing to
 //! relinquish from: if the request is otherwise sound, the property keeps
 //! its value and the write counts as a success. WriteProperty,
-//! WritePropertyMultiple and the server's local write path
-//! (`write_local`, `write_local_encoded` and a Command's writes) settle it
-//! here, for every object, rather than each object deciding for itself.
+//! WritePropertyMultiple, the server's local write path (`write_local`,
+//! `write_local_encoded` and a Command's writes), CreateObject's initial
+//! values and a Schedule's writes to its targets settle it here, for every
+//! object, rather than each object deciding for itself. Clause 19.2.1 holds
+//! local actions to the same prioritization rules as service requests, so
+//! the local paths follow the services.
 //!
 //! The write still goes to the object first, so every check the object
 //! makes before it looks at the value keeps its answer: an unknown property,
@@ -35,7 +38,8 @@
 //! Nothing changed, so nothing follows the write as a change: no COV report,
 //! event pass, Schedule re-evaluation, Command run or save. An Audit
 //! Reporter records it as the successful write the requester was told it is
-//! (Clause 19.6.1).
+//! (Clause 19.6.1). A CreateObject goes on to its next initial value, and a
+//! Schedule counts the target as one that took its write.
 
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};

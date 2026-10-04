@@ -4,7 +4,7 @@
 //! and Who-Has) per ASHRAE 135-2020 Clauses 16.9 and 16.10.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::MacAddr;
 use tokio::sync::RwLock;
 
-use super::{BACnetServer, ServerConfig};
+use super::{BACnetServer, CommState, ServerConfig};
 
 /// Configuration policy for discovery rate limiting and duplicate suppression.
 #[derive(Debug, Clone)]
@@ -744,7 +744,7 @@ pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
     config: &ServerConfig,
     db: &Arc<RwLock<ObjectDatabase>>,
     network: &Arc<NetworkLayer<T>>,
-    comm_state: &AtomicU8,
+    comm_state: &CommState,
     limiter: Option<&Arc<DiscoveryLimiter>>,
 ) -> Result<(), Error> {
     let guard = db.read().await;
@@ -770,7 +770,7 @@ pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
     )?;
 
     drop(guard);
-    if comm_state.load(Ordering::Acquire) != 0 {
+    if comm_state.initiation_restricted() {
         return Err(Error::Protocol {
             class: ErrorClass::SERVICES.to_raw() as u32,
             code: ErrorCode::COMMUNICATION_DISABLED.to_raw() as u32,

@@ -3,7 +3,7 @@ use super::*;
 use crate::server::test_transport::TestTransport;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_transport::port::ReceivedNpdu;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use tokio::sync::Notify;
 
 #[derive(Debug, PartialEq)]
@@ -264,7 +264,7 @@ async fn stopped_local_mutations_fail_before_effects_but_reads_remain() {
     let mac = server.local_mac().to_vec();
     server.stop().await.unwrap();
     assert_eq!(server.local_mac(), mac);
-    assert_eq!(server.comm_state(), 0);
+    assert_eq!(server.comm_state(), DccState::Enable);
     let _ = server.discovery_counters();
     let _ = server.cov_counters();
     let _ = server.mutation_decision_counters();

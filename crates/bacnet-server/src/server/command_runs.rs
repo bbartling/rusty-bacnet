@@ -43,7 +43,7 @@ pub(super) struct CommandRunner<T: TransportPort + 'static> {
     cov_table: Arc<RwLock<CovSubscriptionTable>>,
     cov_in_flight: Arc<Semaphore>,
     notification_transactions: Arc<NotificationTransactions>,
-    comm_state: Arc<AtomicU8>,
+    comm_state: Arc<CommState>,
     learned_routers: Arc<Mutex<LearnedRouterCache>>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     event_suppressions: Arc<super::event_suppression::EventSuppressions>,
@@ -213,20 +213,22 @@ impl<T: TransportPort + 'static> RunHost for CommandRunner<T> {
         // expects.
         let mut encoded = BytesMut::new();
         encode_property_value(&mut encoded, &command.property_value)?;
-        // A read guard of its own: an object's list classification is fixed,
-        // so it still holds when the write takes its guard.
-        let list = self
-            .db
-            .read()
-            .await
-            .get(&command.object_identifier)
-            .is_some_and(|object| object.is_list_property(command.property_identifier));
-        let value = handlers::decode_write_property_value(
-            command.property_identifier,
-            command.property_array_index,
-            list,
-            &encoded,
-        )?;
+        // A read guard of its own: an object's array and list classification
+        // is fixed, so it still holds when the write takes its guard, which
+        // checks the index again (#1426).
+        let value = {
+            let db = self.db.read().await;
+            let object = db.get(&command.object_identifier).ok_or(Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+            })?;
+            handlers::gate_and_decode_write(
+                object,
+                command.property_identifier,
+                command.property_array_index,
+                &encoded,
+            )?
+        };
         let runs = self
             .writer()
             .write(

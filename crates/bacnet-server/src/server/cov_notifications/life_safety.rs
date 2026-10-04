@@ -13,7 +13,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         changed_properties: &[PropertyIdentifier],
     ) {
-        if ctx.comm_state.load(Ordering::Acquire) >= 1 || changed_properties.is_empty() {
+        if ctx.comm_state.initiation_restricted() || changed_properties.is_empty() {
             return;
         }
         let status_changed = changed_properties.contains(&PropertyIdentifier::STATUS_FLAGS);

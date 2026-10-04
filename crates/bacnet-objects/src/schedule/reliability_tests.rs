@@ -2,7 +2,7 @@
 //! values of Weekly_Schedule, Exception_Schedule and Schedule_Default are not
 //! all of one datatype, from the setters and from network writes alike; and
 //! (#1086) while a referenced property refused the schedule's datatype at its
-//! last write.
+//! last write, or (#1433) refused the reference itself.
 
 use super::*;
 use crate::traits::ReliabilityEvaluation;
@@ -333,7 +333,7 @@ fn commanding() -> (ScheduleObject, ScheduleWrite) {
     (sched, write)
 }
 
-use ScheduleTargetOutcome::{Accepted, DatatypeRefused, Failed};
+use ScheduleTargetOutcome::{Accepted, DatatypeRefused, Failed, ReferenceRefused};
 
 #[test]
 fn a_target_refusing_the_datatype_faults_the_schedule_until_it_takes_one() {
@@ -361,6 +361,7 @@ fn only_a_value_of_the_schedules_datatype_counts() {
             value,
             priority: 16,
             references: refs.clone(),
+            retry: false,
         };
         assert!(!sched.complete_schedule_write(&other, &[DatatypeRefused, DatatypeRefused]));
         assert_fault(&sched, false, "a NULL or another datatype");
@@ -436,6 +437,22 @@ fn target_outcomes_classify_the_write_error() {
             )),
             DatatypeRefused,
         ),
+        (
+            Err(Error::Protocol {
+                class: ErrorClass::OBJECT.to_raw() as u32,
+                code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+            }),
+            ReferenceRefused,
+        ),
+        (Err(protocol(ErrorCode::UNKNOWN_PROPERTY)), ReferenceRefused),
+        (
+            Err(protocol(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY)),
+            ReferenceRefused,
+        ),
+        (
+            Err(protocol(ErrorCode::INVALID_ARRAY_INDEX)),
+            ReferenceRefused,
+        ),
         (Err(protocol(ErrorCode::WRITE_ACCESS_DENIED)), Failed),
         (Err(protocol(ErrorCode::VALUE_OUT_OF_RANGE)), Failed),
         (Err(Error::Reject { reason: 0 }), Failed),
@@ -443,4 +460,23 @@ fn target_outcomes_classify_the_write_error() {
     for (result, outcome) in cases {
         assert_eq!(ScheduleTargetOutcome::of(&result), outcome, "{result:?}");
     }
+}
+
+#[test]
+fn a_reference_the_target_cannot_write_faults_the_schedule_until_it_takes_one() {
+    let (mut sched, write) = commanding();
+    assert!(sched.complete_schedule_write(&write, &[Accepted, ReferenceRefused]));
+    assert_fault(&sched, true, "BV-3 can't be written through this reference");
+    // A denied write may be the target's state, so it leaves the fault alone.
+    assert!(!sched.complete_schedule_write(&write, &[Accepted, Failed]));
+    assert_fault(&sched, true, "a later write was denied");
+    // Once the target takes a write, say after the object is created.
+    assert!(sched.complete_schedule_write(&write, &[Accepted, Accepted]));
+    assert_fault(&sched, false, "BV-3 took the Real");
+
+    // The reference leaving the list clears it too.
+    sched.complete_schedule_write(&write, &[Accepted, ReferenceRefused]);
+    assert_fault(&sched, true, "BV-3 refused again");
+    sched.set_object_property_references(vec![av2()]).unwrap();
+    assert_fault(&sched, false, "BV-3 left the list");
 }

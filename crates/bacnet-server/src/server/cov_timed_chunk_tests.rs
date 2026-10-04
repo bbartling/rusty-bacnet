@@ -78,11 +78,13 @@ fn av1_pv_rows(notification: &COVNotificationMultipleRequest) -> Vec<Row> {
 /// DISABLE_INITIATION, then re-enable and change once more, which reports
 /// them all. Returns every change as its expected row, in capture order.
 async fn hold_then_release(h: &Harness, first: u8, count: u8) -> Vec<Row> {
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     let mut expected = Vec::new();
     for second in first..=first + count {
         if second == first + count {
-            h.server.comm_state.store(0, Ordering::Release);
+            h.server.comm_state.set_for_test(DccState::Enable);
         }
         h.set_clock(second);
         let value = f32::from(second);
@@ -186,14 +188,16 @@ async fn untimestamped_values_go_in_the_last_notification() {
     .await;
     h.notification().await;
     // AV-1's changes queue; AV-2's untimestamped change then reports them.
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     let mut expected = Vec::new();
     for second in 1..=HELD {
         h.set_clock(second);
         h.write_local(f32::from(second)).await;
         expected.push((real(f32::from(second)), Some(time(second))));
     }
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     h.set_clock(16);
     h.write_local_to(av2(), 7.0).await;
     let mut taken = Vec::new();
@@ -360,14 +364,16 @@ async fn a_report_going_out_holds_back_a_later_one_until_its_last_part() {
     h.request_max_apdu = SMALL_APDU;
     h.subscribe(false).await;
     h.notification().await;
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     let mut expected = Vec::new();
     for second in 1..HELD {
         h.set_clock(second);
         h.write_local(f32::from(second)).await;
         expected.push((real(f32::from(second)), Some(time(second))));
     }
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     // The release goes through the network, so its report is sent from the
     // server's task; the transport holds that report's second part.
     let release = h.hold_notification(1);
@@ -473,11 +479,13 @@ fn pv_rows_of(notification: &COVNotificationMultipleRequest, object: ObjectIdent
 /// Hold alternating changes of AV-1 and AV-2, then release them with one
 /// more AV-1 change. Returns each object's expected rows in capture order.
 async fn hold_interleaved(h: &Harness) -> (Vec<Row>, Vec<Row>) {
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     let (mut first, mut second) = (Vec::new(), Vec::new());
     for at_second in 1..=HELD {
         if at_second == HELD {
-            h.server.comm_state.store(0, Ordering::Release);
+            h.server.comm_state.set_for_test(DccState::Enable);
         }
         h.set_clock(at_second);
         let value = f32::from(at_second);
@@ -631,10 +639,12 @@ async fn a_value_too_large_for_any_notification_is_dropped_and_counted() {
     };
     // Two 200-character values: each change alone is larger than a 206-octet
     // notification, though the context's bound holds both.
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     h.set_clock(1);
     write("a".repeat(200)).await;
-    h.server.comm_state.store(0, Ordering::Release);
+    h.server.comm_state.set_for_test(DccState::Enable);
     h.set_clock(2);
     write("b".repeat(200)).await;
     // Neither value could ever be sent, the latest no more than the earlier

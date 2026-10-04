@@ -11,7 +11,7 @@ pub(super) struct CovNotifyContext<'a, T: TransportPort + 'static> {
     pub(super) cov_table: &'a Arc<RwLock<CovSubscriptionTable>>,
     pub(super) cov_in_flight: &'a Arc<Semaphore>,
     pub(super) notification_transactions: &'a Arc<NotificationTransactions>,
-    pub(super) comm_state: &'a Arc<AtomicU8>,
+    pub(super) comm_state: &'a Arc<CommState>,
     pub(super) config: &'a ServerConfig,
 }
 

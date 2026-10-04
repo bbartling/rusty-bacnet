@@ -165,7 +165,7 @@ fn stale_commit_does_not_mutate_committed_event_properties() {
 #[tokio::test]
 async fn outbound_message_text_equals_the_committed_history_coordinate() {
     let db = db_with_high_limit_transition(0x80);
-    let sent = broadcasts_from_per_write_path(&db, 0).await;
+    let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
     let notification = decode_broadcast_notification(&sent);
     let expected = "ANALOG_INPUT,1: NORMAL -> HIGH_LIMIT";
     let history = message_slots(
@@ -180,8 +180,12 @@ async fn outbound_message_text_equals_the_committed_history_coordinate() {
 #[tokio::test]
 async fn event_enable_and_dcc_suppression_still_commit_the_policy_message() {
     for (event_enable, dcc, label) in [
-        (0x00, 0, "Event_Enable"),
-        (0x80, 1, "device communication control"),
+        (0x00, DccState::Enable, "Event_Enable"),
+        (
+            0x80,
+            DccState::DisableInitiation,
+            "device communication control",
+        ),
     ] {
         let db = db_with_high_limit_transition(event_enable);
         let sent = broadcasts_from_per_write_path(&db, dcc).await;

@@ -48,11 +48,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             ..
         } = services;
         let clock = clock.as_ref();
-        let comm = comm_state.load(Ordering::Acquire);
-        if comm == 1 {
-            tracing::debug!("Dropping unconfirmed service: DCC is DISABLE");
-            return;
-        }
 
         if req.service_choice == UnconfirmedServiceChoice::I_AM {
             let i_am = match IAmRequest::decode(&req.service_request) {
@@ -217,7 +212,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             // await before the send, and before the limiter
                             // records anything, so the same Who-Has is
                             // answered once initiation is enabled again.
-                            if comm_state.load(Ordering::Acquire) != 0 {
+                            if comm_state.initiation_restricted() {
                                 debug!("I-Have held back: DCC restricts initiation");
                                 return;
                             }

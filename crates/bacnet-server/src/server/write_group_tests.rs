@@ -297,14 +297,13 @@ async fn write_group_inhibit_delay_skips_delays_only_where_the_channel_allows_it
 }
 
 #[tokio::test(start_paused = true)]
-async fn write_group_is_dropped_under_dcc_disable_and_runs_under_disable_initiation() {
+async fn write_group_runs_under_disable_initiation() {
     let h = start(ServerConfig::default()).await;
     let write = request(27, 8, vec![entry(11, None, real(5.0))]);
-    h.server.comm_state.store(1, Ordering::Release);
-    send(&h, &write).await;
-    assert_untouched(&h).await;
     // DISABLE_INITIATION stops what the device starts, not what it executes.
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     send(&h, &write).await;
     assert_eq!(present_value(&h, 1).await, PropertyValue::Real(5.0));
     assert_eq!(slot(&h, ao(1), 8).await, PropertyValue::Real(5.0));

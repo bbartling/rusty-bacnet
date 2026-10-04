@@ -30,10 +30,7 @@ async fn under_disable_initiation_with(policy: DiscoveryPolicy) -> Harness {
     .await;
     h.dcc(EnableDisable::DISABLE_INITIATION, Some(1)).await;
     assert_eq!(response(&h).await, Ok(()));
-    assert_eq!(
-        h.server.comm_state(),
-        EnableDisable::DISABLE_INITIATION.to_raw() as u8
-    );
+    assert_eq!(h.server.comm_state(), DccState::DisableInitiation);
     h
 }
 
@@ -41,14 +38,18 @@ async fn under_disable_initiation_with(policy: DiscoveryPolicy) -> Harness {
 async fn timer_expires(h: &Harness) {
     tokio::time::advance(Duration::from_secs(60)).await;
     h.settle().await;
-    assert_eq!(h.server.comm_state(), 0, "the timer enabled initiation");
+    assert_eq!(
+        h.server.comm_state(),
+        DccState::Enable,
+        "the timer enabled initiation"
+    );
 }
 
 /// Enable initiation again with an acknowledged DCC ENABLE.
 async fn enable(h: &mut Harness) {
     h.dcc(EnableDisable::ENABLE, None).await;
     assert_eq!(response(h).await, Ok(()));
-    assert_eq!(h.server.comm_state(), 0);
+    assert_eq!(h.server.comm_state(), DccState::Enable);
 }
 
 /// Whether `error` is the refusal of an I-Am announcement under DCC.

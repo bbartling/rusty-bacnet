@@ -149,13 +149,13 @@ async fn recovery_wire_same_peer_enable_with_sixteen_ordinary_held() {
         observed(&mut started).await; // Transport barrier: ordinary handler stays live.
     }
     assert_eq!(server.request_admission_counters().confirmed_active, 16);
-    server.comm_state.store(1, Ordering::Release);
+    server.comm_state.set_for_test(DccState::DisableInitiation);
     inject(&tx, enable(16, None)).await;
     observed(&mut started).await;
     assert!(
         matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::SimpleAck(a)) if a.invoke_id == 16)
     );
-    assert_eq!(server.comm_state.load(Ordering::Acquire), 0);
+    assert_eq!(server.comm_state.get(), DccState::Enable);
     let c = server.request_admission_counters();
     assert_eq!((c.confirmed_active, c.recovery_active), (17, 1));
     assert_eq!(
@@ -172,7 +172,7 @@ async fn recovery_wire_same_peer_enable_with_sixteen_ordinary_held() {
 #[tokio::test]
 async fn recovery_segmented_enable_charged_once_after_reassembly() {
     let (mut server, tx, mut started) = fixture().await;
-    server.comm_state.store(1, Ordering::Release);
+    server.comm_state.set_for_test(DccState::DisableInitiation);
     let Apdu::ConfirmedRequest(mut first) = enable(42, None) else {
         unreachable!()
     };
@@ -198,7 +198,7 @@ async fn recovery_segmented_enable_charged_once_after_reassembly() {
         server.request_admission_counters().confirmed_admitted_total,
         0
     );
-    assert_eq!(server.comm_state.load(Ordering::Acquire), 1);
+    assert_eq!(server.comm_state.get(), DccState::DisableInitiation);
     inject(&tx, Apdu::ConfirmedRequest(last)).await;
     observed(&mut started).await;
     let c = server.request_admission_counters();
@@ -211,7 +211,7 @@ async fn recovery_segmented_enable_charged_once_after_reassembly() {
         ),
         (1, 1, 1, 1)
     );
-    assert_eq!(server.comm_state.load(Ordering::Acquire), 0);
+    assert_eq!(server.comm_state.get(), DccState::Enable);
     server.stop().await.unwrap();
 }
 
@@ -551,10 +551,10 @@ async fn recovery_wire_enable_restores_communications_at_ordinary_saturation() {
     assert!(
         matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::Abort(a)) if a.invoke_id == 60 && a.abort_reason == AbortReason::OUT_OF_RESOURCES)
     );
-    server.comm_state.store(1, Ordering::Release);
+    server.comm_state.set_for_test(DccState::DisableInitiation);
     inject(&tx, enable(61, None)).await; // Full NPDU/APDU ingress, different logical peer.
     observed(&mut started).await;
-    assert_eq!(server.comm_state.load(Ordering::Acquire), 0);
+    assert_eq!(server.comm_state.get(), DccState::Enable);
     assert!(
         matches!(held_sends(&server).frames.lock().unwrap().last(), Some(Apdu::SimpleAck(a)) if a.invoke_id == 61)
     );

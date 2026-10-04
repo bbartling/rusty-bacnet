@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::net::Ipv4Addr;
 #[cfg(test)]
 pub(crate) use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -481,8 +481,8 @@ pub struct BACnetServer<T: TransportPort> {
     confirmed_request_tracker: Arc<ConfirmedRequestTracker>,
     /// Shared configured and passively observed Device recipient authority.
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
-    /// Communication state: 0 = Enable, 1 = Disable, 2 = DisableInitiation.
-    comm_state: Arc<AtomicU8>,
+    /// DeviceCommunicationControl state; only `dcc_timer` changes it.
+    comm_state: Arc<CommState>,
     /// DCC timer owner and replacement/expiry serialization boundary.
     /// Valid replacement and explicit stop abort and join before clearing it.
     dcc_timer: Arc<Mutex<crate::server::dcc_timer::TimerSlot>>,
@@ -566,6 +566,8 @@ pub use dcc_disable_rate::DccDisableRateLimit;
 mod dcc_timer;
 pub use dcc_outcomes::DccOutcomeCounters;
 pub use dcc_policy::{DccPolicy, DccSource, DccSourceRestriction};
+use dcc_timer::CommState;
+pub use dcc_timer::DccState;
 mod binding_probes;
 mod device_bindings;
 mod discovery;

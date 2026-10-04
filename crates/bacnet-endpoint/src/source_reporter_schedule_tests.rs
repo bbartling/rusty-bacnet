@@ -49,6 +49,7 @@ fn source_reporter_forwards_complete_schedule_targets() {
             value: PropertyValue::Unsigned(2),
             priority: 16,
             references: refs.clone(),
+            retry: false,
         })
     );
     assert!(object.tick_schedule(today, noon, &no_calendars).is_none());
@@ -70,6 +71,7 @@ fn source_reporter_forwards_complete_schedule_targets() {
         value: PropertyValue::Unsigned(5),
         priority: 16,
         references: refs.clone(),
+        retry: false,
     };
     assert_eq!(object.take_owed_schedule_writes(), [simulated]);
     assert!(object.take_owed_schedule_writes().is_empty());
@@ -93,11 +95,13 @@ fn source_reporter_forwards_complete_schedule_targets() {
                 value: PropertyValue::Null,
                 priority: 16,
                 references: vec![refs[1].clone()],
+                retry: false,
             },
             ScheduleWrite {
                 value: PropertyValue::Unsigned(5),
                 priority: 16,
                 references: vec![refs[0].clone()],
+                retry: false,
             },
         ]
     );
@@ -114,6 +118,7 @@ fn source_reporter_forwards_complete_schedule_targets() {
             value: PropertyValue::Unsigned(2),
             priority: 16,
             references: vec![refs[0].clone()],
+            retry: false,
         },
         &[ScheduleTargetOutcome::DatatypeRefused],
     ));

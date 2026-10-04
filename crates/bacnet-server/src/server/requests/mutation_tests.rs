@@ -52,7 +52,7 @@ pub(super) struct Fixture {
     pub db: Arc<RwLock<ObjectDatabase>>,
     pub table: Arc<RwLock<CovSubscriptionTable>>,
     pub config: ServerConfig,
-    pub state: Arc<AtomicU8>,
+    pub state: Arc<CommState>,
     pub tracker: Arc<ConfirmedRequestTracker>,
     pub network: Arc<NetworkLayer<TestTransport>>,
 }
@@ -77,7 +77,7 @@ impl Fixture {
                 mutation_authorizer: authorizer,
                 ..Default::default()
             },
-            state: Arc::new(AtomicU8::new(0)),
+            state: Arc::default(),
             tracker: Arc::new(ConfirmedRequestTracker::default()),
             network: Arc::new(NetworkLayer::new(TestTransport::new())),
         }
@@ -462,24 +462,6 @@ async fn panics_deny_all_ten_without_mutation() {
         );
         assert_eq!(fixture.snapshot().await, before);
     }
-}
-
-#[tokio::test]
-async fn dcc_precheck_precedes_decoding_and_authorization_for_all_ten() {
-    let calls = Arc::new(AtomicUsize::new(0));
-    for (service, bytes, _) in cases() {
-        let seen = calls.clone();
-        let fixture = Fixture::new(Some(Arc::new(move |_| {
-            seen.fetch_add(1, Ordering::Relaxed);
-            false
-        })));
-        fixture.state.store(1, Ordering::Release);
-        let before = fixture.snapshot().await;
-        assert!(fixture.dispatch(service, bytes, 1).await.is_none());
-        assert!(fixture.dispatch(service, Bytes::new(), 2).await.is_none());
-        assert_eq!(fixture.snapshot().await, before);
-    }
-    assert_eq!(calls.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]

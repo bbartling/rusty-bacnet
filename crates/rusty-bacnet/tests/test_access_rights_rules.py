@@ -2,7 +2,10 @@
 
 positive_access_rules=... and negative_access_rules=... set Access Rights'
 Positive_Access_Rules and Negative_Access_Rules (#1316), and enable=... its
-Enable row, property 133 (#1332). Peers can write all three (#1330).
+Enable row, property 133 (#1332). Peers can write all three (#1330), and
+storage_path=... keeps what they write across a restart (#1392; see
+test_access_rights_persistence.py). accompaniment=... serves the optional
+Accompaniment row (#1393; see test_access_rights_accompaniment.py).
 """
 
 from __future__ import annotations
@@ -52,7 +55,7 @@ GROWN = bytes(
 )
 
 RULE_KEYWORDS = ["positive_access_rules", "negative_access_rules"]
-KEYWORDS = [*RULE_KEYWORDS, "enable"]
+KEYWORDS = [*RULE_KEYWORDS, "enable", "accompaniment", "storage_path"]
 
 
 def installed_stub_method(name: str) -> ast.FunctionDef:
@@ -95,7 +98,13 @@ class AccessRightsStubContractTests(unittest.TestCase):
     def test_runtime_and_stub_expose_the_keywords(self) -> None:
         parameters = inspect.signature(BACnetServer.add_access_rights).parameters
         self.assertEqual(list(parameters), ["self", "instance", "name", *KEYWORDS])
-        defaults = {"positive_access_rules": None, "negative_access_rules": None, "enable": True}
+        defaults = {
+            "positive_access_rules": None,
+            "negative_access_rules": None,
+            "enable": True,
+            "accompaniment": None,
+            "storage_path": None,
+        }
         for keyword in KEYWORDS:
             with self.subTest(keyword=keyword):
                 self.assertIs(parameters[keyword].kind, inspect.Parameter.KEYWORD_ONLY)

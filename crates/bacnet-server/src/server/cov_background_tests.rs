@@ -230,7 +230,9 @@ async fn dcc_still_suppresses_background_cov() {
     h.cov_notification().await;
     h.write_local(90.0).await;
     h.cov_notification().await;
-    h.server.comm_state.store(2, Ordering::Release);
+    h.server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert_eq!(
         database_flags(&*h.server.database().read().await) & IN_ALARM,

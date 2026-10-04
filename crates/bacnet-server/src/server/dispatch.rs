@@ -98,7 +98,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             seg_ack_senders,
             learned_routers,
             notification_transactions,
-            comm_state,
             ..
         } = services;
         if notification_transactions
@@ -123,11 +122,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // Pending in-flight duplicates preserve DISCARD. This is a
                 // local service-specific extension, not a Standard mandate.
                 if req.service_choice == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION {
-                    if comm_state.load(Ordering::Acquire) == 1 {
-                        // DCC DISABLE drops without touching the replay store
-                        // so a later retry executes normally (invariant 1).
-                        return;
-                    }
                     let lso_pending = match confirmed_request_tracker.lso.begin(
                         source_mac,
                         received.source_network.as_ref(),
@@ -153,8 +147,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         LsoAdmission::New(pending) => pending,
                     };
                     let invoke_id = req.invoke_id;
-                    let service_choice = req.service_choice;
-                    let abort_comm_state = Arc::clone(comm_state);
                     let abort_network = Arc::clone(network);
                     let abort_mac = MacAddr::from_slice(source_mac);
                     let abort_source = received.source_network.clone();
@@ -192,13 +184,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     });
                     if result == Err(Rejection::Overloaded) {
                         let _ = request_tasks.try_spawn(Class::Abort, peer, || async move {
-                            if abort_comm_state.load(Ordering::Acquire) == 1
-                                && service_choice
-                                    != ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL
-                                && service_choice != ConfirmedServiceChoice::REINITIALIZE_DEVICE
-                            {
-                                return;
-                            }
                             requests::confirmed_response::send_overload_response(
                                 &abort_network,
                                 &Apdu::Abort(AbortPdu {
@@ -225,17 +210,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     ConfirmedRequestAdmission::Duplicate => return,
                     ConfirmedRequestAdmission::New(pending) => pending,
                 };
-                if comm_state.load(Ordering::Acquire) == 1
-                    && req.service_choice != ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL
-                    && req.service_choice != ConfirmedServiceChoice::REINITIALIZE_DEVICE
-                {
-                    // Preserve DCC discard; a discarded operation owns no pending entry.
-                    drop(pending);
-                    return;
-                }
                 let invoke_id = req.invoke_id;
-                let service_choice = req.service_choice;
-                let abort_comm_state = Arc::clone(comm_state);
                 let abort_network = Arc::clone(network);
                 let abort_mac = MacAddr::from_slice(source_mac);
                 let abort_source = received.source_network.clone();
@@ -275,15 +250,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     // Eight owned sends bound this response work. If all are
                     // busy, the counted silent drop is a known local limitation.
                     let _ = request_tasks.try_spawn(Class::Abort, peer, || async move {
-                        // Match the handler's first-poll DCC check as well as
-                        // dispatch's precheck if DCC changed after registration.
-                        if abort_comm_state.load(Ordering::Acquire) == 1
-                            && service_choice
-                                != ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL
-                            && service_choice != ConfirmedServiceChoice::REINITIALIZE_DEVICE
-                        {
-                            return;
-                        }
                         requests::confirmed_response::send_overload_response(
                             &abort_network,
                             &Apdu::Abort(AbortPdu {
@@ -301,12 +267,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             Apdu::UnconfirmedRequest(req) => {
-                let comm = comm_state.load(Ordering::Acquire);
-                if comm == 1 {
-                    debug!("Dropping unconfirmed service: DCC is DISABLE");
-                    return;
-                }
-
                 let now = Instant::now();
                 if req.service_choice == UnconfirmedServiceChoice::WHO_IS {
                     match discovery_limiter.pre_check_who_is(&req.service_request, &received, now) {

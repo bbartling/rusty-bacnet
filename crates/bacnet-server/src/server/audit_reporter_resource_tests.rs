@@ -554,6 +554,9 @@ async fn audit_reporter_auditing_failure_counts_execution_error_but_not_normal_a
     drop(permits);
     settle().await;
     assert_eq!(records(&fixture)[1], expected(1, 1));
-    fixture.server.comm_state.store(2, Ordering::Release);
+    fixture
+        .server
+        .comm_state
+        .set_for_test(DccState::DisableInitiation);
     stop(&mut fixture).await;
 }

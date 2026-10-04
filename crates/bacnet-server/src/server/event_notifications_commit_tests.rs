@@ -73,7 +73,7 @@ async fn no_recipient_transition_commits_locally_without_sending() {
             .unwrap();
     }
 
-    let sent = broadcasts_from_per_write_path(&db, 0).await;
+    let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
     assert!(sent.is_empty());
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     assert_eq!(
@@ -115,7 +115,7 @@ fn unsupported_fault_reindication_is_retryable_without_sequence_consumption() {
 #[tokio::test]
 async fn dcc_suppressed_intrinsic_transition_commits_locally_without_sending() {
     let db = db_with_high_limit_transition(0x80);
-    let sent = broadcasts_from_per_write_path(&db, 1).await;
+    let sent = broadcasts_from_per_write_path(&db, DccState::DisableInitiation).await;
 
     assert!(sent.is_empty(), "DCC must suppress external distribution");
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
@@ -142,7 +142,7 @@ async fn clockless_intrinsic_commit_stores_and_sends_one_reserved_sequence() {
         guard.add(Box::new(notification_class)).unwrap();
     }
 
-    let sent = broadcasts_from_per_write_path(&db, 0).await;
+    let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
     let notification = decode_broadcast_notification(&sent);
     assert_eq!(
         notification.timestamp,
@@ -237,7 +237,7 @@ async fn committed_ack_required_snapshot_survives_notification_class_replacement
         &crate::server::event_delivery::EventDelivery {
             db: &db,
             network: &network,
-            comm_state: &Arc::new(AtomicU8::new(0)),
+            comm_state: &Arc::new(CommState::default()),
             learned_routers: &Arc::new(Mutex::new(LearnedRouterCache::new())),
             notification_transactions: &NotificationTransactions::new(),
             device_bindings: &Arc::new(RwLock::new(

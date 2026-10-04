@@ -394,7 +394,7 @@ fn semantic_index_value_name_and_write_arm_failures_keep_exact_reference() {
             PropertyIdentifier::OBJECT_NAME,
             None,
             encode_value(&PropertyValue::CharacterString("taken".into())),
-            ErrorClass::OBJECT,
+            ErrorClass::PROPERTY,
             ErrorCode::DUPLICATE_NAME,
         ),
         (

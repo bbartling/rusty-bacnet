@@ -130,6 +130,7 @@ impl ScheduleObject {
                     value: PropertyValue::Null,
                     priority,
                     references: left,
+                    retry: false,
                 });
             }
             if !kept.is_empty() {
@@ -163,6 +164,7 @@ impl ScheduleObject {
             value,
             priority: self.priority_for_writing,
             references: references.clone(),
+            retry: false,
         })
     }
 

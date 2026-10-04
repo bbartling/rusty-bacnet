@@ -46,7 +46,7 @@ struct Harness {
     learned_routers: Arc<Mutex<LearnedRouterCache>>,
     notification_transactions: Arc<NotificationTransactions>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
-    comm_state: Arc<AtomicU8>,
+    comm_state: Arc<CommState>,
     suppressions: Arc<super::event_suppression::EventSuppressions>,
     sent: SendLog,
     retry_timeout_ms: u64,
@@ -65,7 +65,7 @@ impl Harness {
         let transport = TestTransport::builder().local_mac(&BIP_LOCAL_MAC).build();
         let sent = transport.sent();
         let network = Arc::new(NetworkLayer::new(transport));
-        let comm_state = Arc::new(AtomicU8::new(0));
+        let comm_state = Arc::new(CommState::default());
         let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
         let notification_transactions = NotificationTransactions::new();
 

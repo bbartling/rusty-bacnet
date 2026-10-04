@@ -1652,7 +1652,8 @@ unchanged.
 A NULL written to a property that isn't commandable and has no NULL in its
 datatype succeeds and leaves the property as it is (Clauses 15.9.2 and 15.10.2,
 #1396). The server applies this once, for WriteProperty, WritePropertyMultiple,
-`write_local`, `write_local_encoded` and a Command's local writes: the write goes
+`write_local`, `write_local_encoded`, a Command's local writes, CreateObject's
+initial values and a Schedule's writes to its targets (#1416): the write goes
 to the object as usual, and when the object refuses the NULL with
 `PROPERTY/INVALID_DATA_TYPE` the server answers success instead. Every check the
 object makes first still answers, so an unknown property, a read-only one, one
@@ -1660,9 +1661,13 @@ not writable in the object's state, or an array index out of range is refused as
 before. An object's own Present_Value relinquish, and a property that stores a
 NULL, never reach the rule. The rule covers an array element too, judged against
 the element's datatype once the index checks out. Nothing follows such a write as
-a change (no COV report, event pass or save); an Audit Reporter records it as a
-successful write. A custom object should therefore check access and state before
-the value's datatype, as the built-in objects do.
+a change (no COV report, event pass or save). Over WriteProperty and
+WritePropertyMultiple an Audit Reporter records it as a successful write; a
+CreateObject is audited once, as its CREATE, and a Schedule's target writes
+aren't audited. A CreateObject goes on to its next initial value, and a
+Schedule counts the target as one that took its write. A custom object should
+therefore check access and state before the value's datatype, as the built-in
+objects do.
 
 WriteProperty and WritePropertyMultiple give a property that
 `BACnetObject::is_list_property` reports as a BACnetLIST, written whole, to the
@@ -1677,7 +1682,11 @@ List_Of_Object_Property_References, and the Loop and Pulse Converter references.
 The object decides what an empty value means there (an empty
 Setpoint_Reference holds no reference). For any other property, no octets is
 `PROPERTY/INVALID_DATA_ENCODING` and one element arrives alone.
-`write_local_encoded` and a Command's writes decode the same way (#1328).
+`write_local_encoded`, a Command's writes and CreateObject's initial values
+decode the same way (#1328, #1389). CreateObject checks an initial value's array
+index against the new object first, as WriteProperty does, and names the first
+initial value it can't apply by its position; one that doesn't decode is
+`PROPERTY/INVALID_DATA_ENCODING` there.
 
 AddListElement and RemoveListElement edit only properties that
 `BACnetObject::is_list_property` reports as a BACnetLIST. The default follows the
@@ -1945,7 +1954,20 @@ framing, through the shared `bacnet-encoding` codecs.
   TRUE by default, set with `set_enable` or written by peers; FALSE disables
   every rule in both arrays (Clause 12.34.8) without touching each rule's own
   flag. The object stores and serves the rules and the flag; nothing in the
-  stack evaluates them.
+  stack evaluates them. An object built with `with_persistence` keeps what
+  peers write to the arrays and Enable across a restart (see
+  [Access Control](#access-control-7)).
+- **Access Rights Accompaniment**: the optional row (Clause 12.34.11) is one
+  `BACnetDeviceObjectReference`, served only once the application sets it
+  with `AccessRightsObject::set_accompaniment(Some(reference))`; until then,
+  and after `set_accompaniment(None)`, it is out of Property_List and a read
+  or write gets UNKNOWN_PROPERTY. It names an Access Rights, Access Credential
+  or Access User object, here or in another device; a reference whose object
+  and device instances are 4194303 asks for no accompaniment. The setter, and
+  a peer's WriteProperty or WritePropertyMultiple of the reference's octets
+  once the row is served, refuse with VALUE_OUT_OF_RANGE a device member that
+  isn't a Device or any other object type (unless unspecified), keeping the
+  old value. `accompaniment()` returns it. Nothing in the stack evaluates it.
 - **Device references**: a `BACnetDeviceObjectReference` or
   `BACnetDeviceObjectPropertyReference` whose device identifier is present
   must name a Device object (Clause 21); each type's
@@ -2185,10 +2207,13 @@ period it returns `None`. Time-values are typed (`BACnetTimeValue::value` is a
 primitive `PropertyValue`), so Present_Value and the target writes carry the
 scheduled value's own datatype. The public `BACnetObject::tick_schedule(today,
 time, calendar_active)` hook returns `Option<ScheduleWrite>` (value, priority,
-references): a changed value, or any value on entering the Effective_Period
-(start-up included). The server writes it to every reference at
+references, retry): a changed value, or any value on entering the
+Effective_Period (start-up included); with neither, the current value for the
+references that refused their last write, flagged `retry` (#1436). The server writes it to every reference at
 `Priority_For_Writing`, set with `set_priority_for_writing` (1 to 16, default
-16); a NULL relinquishes that slot. A failed target write
+16); a NULL relinquishes that slot, and leaves a target property that isn't
+commandable and has no NULL in its datatype as it is, the target counting as
+one that took the write (#1416). A failed target write
 does not prevent subsequent target writes. `set_weekly_schedule`,
 `add_exception` and `set_effective_period` return `Result` and refuse
 non-primitive values, non-specific or repeated times, out-of-range priorities
@@ -2207,13 +2232,25 @@ evaluation at once, as the tick would, and fans COV out for the targets it
 writes. Reliability is CONFIGURATION_ERROR, with FAULT in Status_Flags, while
 the non-NULL values in Weekly_Schedule, Exception_Schedule and Schedule_Default
 are not all of one datatype (#1056), or while a referenced property refused a
-value of that datatype at its last write (#1086); the Schedule still writes its
-references. The server reports each write's per-target result through the
-public `BACnetObject::complete_schedule_write(write, outcomes)` hook, one
+value of that datatype at its last write (#1086), or the reference itself: a
+missing object or property, or an array index the property can't take (#1433).
+The Schedule still writes its references. The server reports each write's
+per-target result through the public
+`BACnetObject::complete_schedule_write(write, outcomes)` hook, one
 `ScheduleTargetOutcome` (`Accepted`, `DatatypeRefused` for INVALID_DATA_TYPE or
-DATATYPE_NOT_SUPPORTED, `Failed` otherwise) per reference. A refusal clears
-when that target later takes a value or leaves the list; a NULL, or an
-out-of-service value of another datatype, counts for nothing.
+DATATYPE_NOT_SUPPORTED, `ReferenceRefused` for UNKNOWN_OBJECT,
+UNKNOWN_PROPERTY, PROPERTY_IS_NOT_AN_ARRAY or INVALID_ARRAY_INDEX, `Failed`
+otherwise, WRITE_ACCESS_DENIED included) per reference. A refusal clears when
+that target later takes a value or leaves the list; a NULL, or an
+out-of-service value of another datatype, counts for nothing. While a refusal
+stands, each pass with nothing else to send offers the current value again to
+the refused references alone (#1436): the 60-second tick, or the pass any
+committed write to the Schedule runs. So a target object created later, or an
+array grown to take the index, gets the value and clears the fault within one
+tick. A retry that fails otherwise (an out-of-range value, a denied write) ends
+the refusal as well, as that failure on a first write would never have raised
+it, and warns once; one still refused logs at debug. Retries skip a NULL value
+and a Schedule out of service or outside its period.
 
 List_Of_Object_Property_References and Priority_For_Writing are
 network-writable too (#1088), through the setters' checks. The list is written
@@ -2956,8 +2993,7 @@ runs: one that has left the group or changed its number by then is skipped,
 and one whose Allow_Group_Delay_Inhibit is FALSE by then keeps its delays.
 Nothing is answered and a malformed request is dropped. DCC's
 DISABLE_INITIATION leaves WriteGroup running, as it only stops what the device
-starts; the deprecated DISABLE state, which the server never accepts over the
-network, would drop it. Every WriteGroup is dropped while the server's
+starts (the server refuses the deprecated DISABLE outright). Every WriteGroup is dropped while the server's
 `mutation_policy` is `DenyAll` or a `mutation_authorizer` is installed, because
 the authorizer only decides confirmed services (#1319); those drops aren't
 counted in `mutation_decision_counters()`. The Channel writes make no Audit
@@ -2993,9 +3029,53 @@ that started it fails with OBJECT / BUSY, so such a loop stops after one round.
 | `AccessPointObject` | `::new(instance, name)` |
 | `AccessCredentialObject` | `::new(instance, name)` |
 | `AccessUserObject` | `::new(instance, name)` |
-| `AccessRightsObject` | `::new(instance, name)` |
+| `AccessRightsObject` | `::new(instance, name)`, `::with_persistence(instance, name, persistence)` |
 | `AccessZoneObject` | `::new(instance, name)` |
 | `CredentialDataInputObject` | `::new(instance, name)` |
+
+An `AccessRightsObject` built with `with_persistence` keeps the
+`Positive_Access_Rules`, `Negative_Access_Rules`, Enable and Accompaniment
+that peers write across a restart (#1392, #1393). Clause 12.34 doesn't ask
+for this; the stack does it because head ends provision access rights over
+the network. The storage is an application-owned `AccessRightsPersistence`
+that loads and saves an `AccessRightsSnapshot`, whose four members stay
+`None` until a write sets them. `FileAccessRightsPersistence` keeps it in one
+file, replaced whole the same way as the Notification Class's. The file is
+tagged `RBNACR01` and holds the object identifier, then the BACnet encodings
+of each member a write has set, in order: the positive rules between opening
+and closing context tag 0, the negative rules between tag 1, Enable as a
+BOOLEAN with context tag 2, and Accompaniment's reference between opening and
+closing context tag 3. Loading refuses a file past 128 KiB, an array of more
+than 1024 rules, members out of order, trailing octets, and another object's
+file. `with_persistence` then puts each saved array and Accompaniment
+through the setters' checks, so a file holding a value they refuse fails it.
+A saved Accompaniment serves the row whether or not the application sets one,
+and `set_accompaniment(None)` doesn't remove it. To lift a saved requirement,
+write the no-accompaniment reference (instance 4194303), which keeps the row;
+to drop the row itself, remove the storage file, which also drops the saved
+rules and Enable.
+An object built with `new` keeps written values in memory only.
+
+Saves follow the Notification Class's rules (see
+[Schedule & Notification](#schedule--notification-6)): the save runs on the
+object's own writer thread, and the bundled server stages each WriteProperty,
+WritePropertyMultiple or `write_local` write of the arrays (whole, one
+element, or the size at index 0), of Enable or of Accompaniment, and waits
+for its save with the database guard dropped. A request stages only its
+first such write to an object; a WritePropertyMultiple's later writes to the
+same object save in place. A state that cannot be saved is refused with DEVICE /
+OPERATIONAL_PROBLEM, and nothing changes. A staged write that is never made
+puts storage back to the served state on release, after its lifetime, at
+`stop()`, or when the object drops. A saved value wins over the
+configuration: once a write has set a property and it was saved,
+`property_saved(property)` is true, and that property's setter
+(`set_positive_access_rules`, `set_negative_access_rules`, `set_enable` or
+`set_accompaniment`) checks its argument without storing it. Configuration alone is never saved,
+but a write saves the whole array it leaves: an element or index-0 write to
+an array no write has set yet saves the configured rules it didn't touch too.
+`wait_for_saves()` blocks until queued saves have run. Like a
+`NotificationClass`, an `AccessRightsObject` is not `UnwindSafe` or
+`RefUnwindSafe`.
 
 Access Door, Access Point and Credential Data Input support COV (Table 13-1).
 A door's SubscribeCOV report carries Present_Value, Status_Flags and
@@ -4587,7 +4667,7 @@ let db = server.database().lock().await;
 let value = db.get(&oid).unwrap().read_property(pid, None)?;
 
 // Check communication state
-let state = server.comm_state(); // 0=Enable, 1=Disable, 2=DisableInitiation
+let state = server.comm_state(); // DccState::Enable or DccState::DisableInitiation
 
 // Stop
 server.stop().await?;
@@ -4819,6 +4899,18 @@ was first sent on for its retries. While the number is unknown, an address
 naming any network is sent routed, as it is written. The server has one port,
 so the local network is that port's; a multi-port device would need the
 network attached to each port (#863).
+
+### The DeviceCommunicationControl state
+
+`BACnetServer::comm_state()` returns a `DccState`: `Enable` or
+`DisableInitiation`. Every `DccPolicy` refuses a DISABLE request with
+`SERVICES` / `SERVICE_REQUEST_DENIED` (Clause 16.1), so the server never
+disables communication outright and the type has no variant for it.
+`EnableDisable::from(state)` gives the wire value (0 or 2), and
+`DccState::initiation_restricted()` says whether the server is holding back
+what it would start. Only an accepted DeviceCommunicationControl request and
+the expiry of its duration change the state, and every start begins at
+`Enable`.
 
 ### Confirmed notifications under DeviceCommunicationControl
 
@@ -5072,7 +5164,8 @@ fixes them, and the warning logged with each skip gives the finer reason:
 - Lock ordering: always `db` before `cov_table`
 - `seg_receivers` capped at 128 (DoS prevention)
 - `cov_in_flight` semaphore: max 255 concurrent confirmed COV notifications
-- `comm_state`: `Arc<AtomicU8>` — lock-free read
+- `comm_state`: `Arc<CommState>`, a lock-free DCC state that only the DCC
+  timer (an accepted request and its expiry) changes
 
 ---
 

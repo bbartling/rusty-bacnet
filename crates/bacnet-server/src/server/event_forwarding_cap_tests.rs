@@ -98,7 +98,7 @@ async fn a_local_notification_under_several_process_identifiers_has_one_cap() {
         Arc::new(RwLock::new(
             super::device_bindings::DeviceBindingTable::new(),
         )),
-        0,
+        DccState::Enable,
     )
     .await;
     assert!(broadcasts.is_empty());

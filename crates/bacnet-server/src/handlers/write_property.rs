@@ -45,7 +45,7 @@ pub(crate) enum Applied {
 }
 
 /// Validate database-owned Object_Name uniqueness before mutation.
-fn check_and_prepare_name_write(
+pub(super) fn check_and_prepare_name_write(
     db: &ObjectDatabase,
     oid: &ObjectIdentifier,
     value: &PropertyValue,
@@ -188,15 +188,10 @@ pub(crate) fn handle_write_property_multiple_observed(
                 committed_oids,
             );
         };
-        if let Err(error) =
-            check_write_array_index(object, property, reference.property_array_index)
-        {
-            return semantic_failure(error, reference, committed_oids);
-        }
-        let value = match decode_write_property_value(
+        let value = match gate_and_decode_write(
+            object,
             property,
             reference.property_array_index,
-            object.is_list_property(property),
             &attempt.value,
         ) {
             Ok(value) => crate::local_references::localize(db, oid, property, value),
@@ -275,7 +270,8 @@ pub(crate) fn handle_write_property_multiple_observed(
 /// [`relinquish::leaves_unchanged`]
 /// says so: the observer gets `committed`, so an Audit Reporter records the
 /// successful write, but not `applied`, since there is no change to capture.
-fn commit_attempt(
+/// CreateObject applies each initial value through here too, with no observer.
+pub(super) fn commit_attempt(
     db: &mut ObjectDatabase,
     mut observer: Option<&mut (dyn WriteCommitObserver + '_)>,
     target: WriteTarget<'_>,
@@ -381,6 +377,27 @@ pub(crate) fn check_write_array_index(
         ));
     }
     Ok(())
+}
+
+/// What WriteProperty does with a value's octets before `object` takes it:
+/// [`check_write_array_index`], then [`decode_write_property_value`] with the
+/// object's list classification. WriteProperty, WritePropertyMultiple,
+/// `write_local_encoded` and a Command's or Channel's local writes share it,
+/// so each answers an index the same way and ahead of the value's decoding.
+/// The typed local paths, which have no octets, run the index check alone.
+pub(crate) fn gate_and_decode_write(
+    object: &dyn bacnet_objects::traits::BACnetObject,
+    property: PropertyIdentifier,
+    array_index: Option<u32>,
+    bytes: &[u8],
+) -> Result<PropertyValue, Error> {
+    check_write_array_index(object, property, array_index)?;
+    decode_write_property_value(
+        property,
+        array_index,
+        object.is_list_property(property),
+        bytes,
+    )
 }
 
 fn wpm_undecodable_coordinate() -> BACnetObjectPropertyReference {
@@ -653,15 +670,10 @@ pub(crate) fn handle_write_property_observed(
     let object = db
         .get(&oid)
         .ok_or_else(|| protocol_error(ErrorClass::OBJECT, ErrorCode::UNKNOWN_OBJECT))?;
-    check_write_array_index(
+    let value = gate_and_decode_write(
         object,
         request.property_identifier,
         request.property_array_index,
-    )?;
-    let value = decode_write_property_value(
-        request.property_identifier,
-        request.property_array_index,
-        object.is_list_property(request.property_identifier),
         &request.property_value,
     )?;
     let value = crate::local_references::localize(db, oid, request.property_identifier, value);

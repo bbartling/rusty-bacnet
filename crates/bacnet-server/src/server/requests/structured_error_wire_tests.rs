@@ -110,7 +110,7 @@ async fn create_object_refusals_go_out_as_create_object_errors() {
                     description(),
                 ],
             ),
-            create_object_error(ErrorClass::OBJECT, ErrorCode::DUPLICATE_NAME, 1),
+            create_object_error(ErrorClass::PROPERTY, ErrorCode::DUPLICATE_NAME, 1),
         ),
         (
             "an out-of-range Present_Value, the second initial value",

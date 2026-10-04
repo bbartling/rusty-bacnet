@@ -15,7 +15,21 @@
 //!
 //! After each write the pass tells the Schedule how every target took it, so
 //! a target that refuses the schedule's datatype faults it (Clause 12.24.13,
-//! #1086).
+//! #1086), as does a reference naming a missing object or property or an
+//! array index the property can't take (#1433). While such a refusal stands,
+//! a pass with nothing else to send for that Schedule offers its value again
+//! to the refused references alone (#1436): the 60-second tick, or the pass a
+//! committed write to the Schedule runs, of any property. So the fault clears
+//! within one tick of its cause going away: the object created, say, or the
+//! array grown. A retry still refused logs at debug, since it repeats every
+//! pass; one that fails otherwise ends the refusal and warns once.
+//!
+//! A NULL relinquishes the Schedule's slot in a commandable target. On a
+//! target property that isn't commandable and has no NULL in its datatype,
+//! it is the no-op WriteProperty would make of it (`handlers::relinquish`,
+//! #1416): the property keeps its value and the target counts as having
+//! taken the write. Every target here is local; a Schedule's references
+//! name objects of its own device only.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -154,11 +168,19 @@ fn evaluate(db_w: &mut ObjectDatabase, schedules: Vec<ObjectIdentifier>) -> Back
             continue;
         };
         if let Some(write) = obj.tick_schedule(today, now, &calendar_active) {
-            debug!(
-                schedule = %oid,
-                refs = write.references.len(),
-                "Schedule value changed, writing to controlled properties"
-            );
+            if write.retry {
+                debug!(
+                    schedule = %oid,
+                    refs = write.references.len(),
+                    "Schedule retrying the controlled properties that refused its value"
+                );
+            } else {
+                debug!(
+                    schedule = %oid,
+                    refs = write.references.len(),
+                    "Schedule value changed, writing to controlled properties"
+                );
+            }
             writes.push((oid, write));
         }
     }
@@ -180,26 +202,74 @@ fn deliver(
     let origin =
         crate::command_source::resolve_local(db_w, crate::LocalCommandSource::Object(initiator))
             .ok();
+    let null = crate::handlers::relinquish::is_null_value(&write.value);
     // Clause 12.24.4: a failed member does not stop the others.
     let mut outcomes = Vec::with_capacity(write.references.len());
     for reference in &write.references {
         let target_oid = reference.object_identifier;
         let prop_id = reference.property_identifier;
+        let property = PropertyIdentifier::from_raw(prop_id);
         commit.before_change(db_w, target_oid);
+        // A missing object is a reference the Schedule can't write (#1433).
         let Some(target_obj) = db_w.get_mut(&target_oid) else {
-            outcomes.push(ScheduleTargetOutcome::Failed);
+            outcomes.push(ScheduleTargetOutcome::ReferenceRefused);
             continue;
         };
-        let result = crate::command_source::write_target(
-            target_obj,
-            PropertyIdentifier::from_raw(prop_id),
+        // WriteProperty's index gate comes first (#1426), so an index on a
+        // property that isn't an array fails the target without the object
+        // seeing the value, a NULL included. Its refusals, like the object's
+        // UNKNOWN_PROPERTY or INVALID_ARRAY_INDEX, fault the Schedule (#1433).
+        let result = crate::handlers::check_write_array_index(
+            &*target_obj,
+            property,
             reference.property_array_index,
-            write.value.clone(),
-            Some(write.priority),
-            origin.as_ref(),
-        );
+        )
+        .and_then(|()| {
+            crate::command_source::write_target(
+                target_obj,
+                property,
+                reference.property_array_index,
+                write.value.clone(),
+                Some(write.priority),
+                origin.as_ref(),
+            )
+        });
+        let outcome = ScheduleTargetOutcome::of(&result);
         match &result {
             Ok(()) => commit.changed(target_oid),
+            // A NULL on a target property that isn't commandable and can't
+            // hold one leaves it as it is, and the target took the write
+            // (`handlers::relinquish`); nothing changed, so no COV follows.
+            Err(error)
+                if null
+                    && crate::handlers::relinquish::leaves_unchanged(
+                        &*target_obj,
+                        property,
+                        reference.property_array_index,
+                        error,
+                    ) =>
+            {
+                outcomes.push(ScheduleTargetOutcome::Accepted);
+                continue;
+            }
+            // A retry still refused repeats every pass while the refusal
+            // stands (#1436). One failing otherwise ends the refusal, so it
+            // warns once, as a first write failing that way does.
+            Err(e)
+                if write.retry
+                    && matches!(
+                        outcome,
+                        ScheduleTargetOutcome::DatatypeRefused
+                            | ScheduleTargetOutcome::ReferenceRefused
+                    ) =>
+            {
+                debug!(
+                    target = %target_oid,
+                    property = prop_id,
+                    error = %e,
+                    "Schedule retry still refused by controlled property"
+                )
+            }
             Err(e) => warn!(
                 target = %target_oid,
                 property = prop_id,
@@ -207,7 +277,7 @@ fn deliver(
                 "Schedule failed to write to controlled property"
             ),
         }
-        outcomes.push(ScheduleTargetOutcome::of(&result));
+        outcomes.push(outcome);
     }
     let reliability_changed = db_w
         .get_mut(&initiator)
@@ -228,3 +298,15 @@ mod command_tests;
 #[cfg(test)]
 #[path = "schedule_channel_tests.rs"]
 mod channel_tests;
+
+#[cfg(test)]
+#[path = "schedule_relinquish_tests.rs"]
+mod relinquish_tests;
+
+#[cfg(test)]
+#[path = "schedule_reference_reliability_tests.rs"]
+mod reference_reliability_tests;
+
+#[cfg(test)]
+#[path = "schedule_reference_retry_tests.rs"]
+mod reference_retry_tests;

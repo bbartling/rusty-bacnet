@@ -8,7 +8,7 @@ pub(super) struct BroadcasterState<T: TransportPort> {
     config: ServerConfig,
     db: Arc<RwLock<ObjectDatabase>>,
     /// The server's DeviceCommunicationControl state, read before each send.
-    comm_state: Arc<AtomicU8>,
+    comm_state: Arc<CommState>,
     capacity: Arc<Semaphore>,
 }
 
@@ -22,7 +22,7 @@ impl<T: TransportPort> BroadcasterState<T> {
         requests: &Arc<request_tasks::RequestTasks>,
         config: &ServerConfig,
         db: &Arc<RwLock<ObjectDatabase>>,
-        comm_state: &Arc<AtomicU8>,
+        comm_state: &Arc<CommState>,
     ) -> Arc<Self> {
         Arc::new(Self {
             network: SyncMutex::new(Some(Arc::clone(network))),

@@ -96,7 +96,7 @@ pub(super) enum LsoAdmission {
 /// RAII admission for one LSO request.
 ///
 /// A handler that produces a response calls [`Self::complete_with_response`].
-/// Cancellation, panic, DCC drops, or overload drops an incomplete admission
+/// Cancellation, panic, or overload drops an incomplete admission
 /// and removes its pending entry so a retry executes normally.
 pub(super) struct PendingLsoReplay {
     cache: Arc<LsoReplayCache>,

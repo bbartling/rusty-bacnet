@@ -429,8 +429,9 @@ impl BACnetServer {
     /// `read_property` returns, and a local write fires the same post-write
     /// COV and event notifications as a network one. `OBJECT_NAME` writes are
     /// routed through the database name index — a duplicate name is rejected
-    /// up front and a successful rename refreshes the index — so local writes
-    /// obey the same uniqueness and lookup invariants as the network handlers.
+    /// up front with PROPERTY / `DUPLICATE_NAME` and a successful rename
+    /// refreshes the index — so local writes obey the same uniqueness and
+    /// lookup invariants as the network handlers.
     ///
     /// Errors are surfaced as `BacnetProtocolError` (with `error_class`/
     /// `error_code`) for parity with the network path — e.g. an unknown object
@@ -515,7 +516,8 @@ impl BACnetServer {
 
     /// Get the server's current communication state.
     ///
-    /// Returns 0=Enable, 1=Disable, 2=DisableInitiation.
+    /// Returns the EnableDisable value: 0=Enable or 2=DisableInitiation. The
+    /// server refuses the deprecated Disable (1), so it never reports it.
     fn comm_state<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
 
@@ -524,7 +526,7 @@ impl BACnetServer {
             let srv = guard
                 .as_ref()
                 .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
-            Ok(srv.comm_state())
+            Ok(bacnet_types::enums::EnableDisable::from(srv.comm_state()).to_raw())
         })
     }
 }
