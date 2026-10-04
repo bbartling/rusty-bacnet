@@ -8,7 +8,8 @@ also takes the policy count, the supported authorization modes and
 Priority_For_Writing, which are read-only over the network too (#1307).
 add_access_door also takes the door's starting Alarm_Values, Fault_Values and
 Masked_Alarm_Values, which keep Door_Alarm_State to the states they admit
-(#1149).
+(#1149). A zone's Alarm_Values, written locally, refuses NORMAL as the door's
+lists do (#1401).
 """
 
 from __future__ import annotations
@@ -287,6 +288,36 @@ class AccessControlConfigurationTests(unittest.TestCase):
                     ObjectIdentifier(ObjectType.ACCESS_ZONE, 3), entry
                 )
             self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
+        finally:
+            await server.stop()
+
+    def test_zone_alarm_values_refuse_normal(self) -> None:
+        asyncio.run(self._zone_alarm_values())
+
+    async def _zone_alarm_values(self) -> None:
+        server = make_server()
+        server.add_access_zone(1, "Building A")
+        await server.start()
+        try:
+            zone = ObjectIdentifier(ObjectType.ACCESS_ZONE, 1)
+            alarms = PropertyIdentifier.ALARM_VALUES
+
+            def states(*raw: int) -> PropertyValue:
+                return PropertyValue.list([PropertyValue.enumerated(r) for r in raw])
+
+            async def write(value: PropertyValue) -> None:
+                await server.write_property_local(zone, alarms, value, source_object=None)
+
+            # ABOVE_UPPER_LIMIT (4), DISABLED (5) and NOT_SUPPORTED (6) may
+            # alarm, but NORMAL (0) may not (#1401); the refusal names the
+            # element and keeps the list.
+            await write(states(4, 5, 6))
+            for refused, element in ((states(3, 0), 2), (states(0), 1)):
+                with self.assertRaises(BacnetProtocolError) as raised:
+                    await write(refused)
+                self.assert_value_out_of_range(raised.exception)
+                self.assertEqual(raised.exception.first_failed_element_number, element)
+            self.assertEqual(await server.read_property(zone, alarms), states(4, 5, 6))
         finally:
             await server.stop()
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::door_alarm::{listed_state_in_range, DoorAlarmLists};
+use super::door_alarm::{DoorAlarmLists, LISTED_STATES};
 use super::door_out_of_service::DoorState;
 use super::*;
 use crate::event::state_reporting::ChangeOfStateReporting;
@@ -114,7 +114,7 @@ impl AccessDoorObject {
             status_flags: StatusFlags::empty(),
             out_of_service: false,
             alarm_lists: DoorAlarmLists::default(),
-            reporting: ChangeOfStateReporting::new(listed_state_in_range),
+            reporting: ChangeOfStateReporting::new(LISTED_STATES),
             priority_array: Default::default(),
             relinquish_default: DoorValue::LOCK,
             door_pulse_time: DEFAULT_DOOR_PULSE_TIME,
