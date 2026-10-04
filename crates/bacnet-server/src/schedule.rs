@@ -199,14 +199,24 @@ fn deliver(
             outcomes.push(ScheduleTargetOutcome::Failed);
             continue;
         };
-        let result = crate::command_source::write_target(
-            target_obj,
+        // WriteProperty's index gate comes first (#1426), so an index on a
+        // property that isn't an array fails the target without the object
+        // seeing the value, a NULL included.
+        let result = crate::handlers::check_write_array_index(
+            &*target_obj,
             property,
             reference.property_array_index,
-            write.value.clone(),
-            Some(write.priority),
-            origin.as_ref(),
-        );
+        )
+        .and_then(|()| {
+            crate::command_source::write_target(
+                target_obj,
+                property,
+                reference.property_array_index,
+                write.value.clone(),
+                Some(write.priority),
+                origin.as_ref(),
+            )
+        });
         match &result {
             Ok(()) => commit.changed(target_oid),
             // A NULL on a target property that isn't commandable and can't

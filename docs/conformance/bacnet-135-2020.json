@@ -130,7 +130,8 @@
    "negative_tests": [
     "crates/bacnet-server/src/server/life_safety_cov_tests/schedule.rs::schedule_indexed_target_and_later_unindexed_target_survive_failure",
     "crates/bacnet-server/src/handlers/tests/read_rpm/schedule.rs::rpm_schedule_indexed_reads_and_reference_wire_bytes",
-    "crates/bacnet-server/src/handlers/tests/array_index_gating.rs"
+    "crates/bacnet-server/src/handlers/tests/array_index_gating.rs",
+    "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_target_index_is_checked_as_write_property_checks_it"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -141,7 +142,8 @@
    "notes": [
     "Refs #845. Evidence is limited to the local-reference profile; Priority_For_Writing was network read-only but locally configurable until #1088 made it and the reference list network-writable (BACNET-12-SCHEDULE-WRITES) (#1028, which also replaced the Octet String target writes with typed values and the (value, refs) tuple with ScheduleWrite).",
     "Full typed hook references replace the lossy tuple API; shared public reference encoder produces local DOPR member bodies without a duplicate codec or aliases. Direct fixed-clock ticks prove indexed STATE_TEXT[2] updates only that element, continue after invalid index3, and preserve unindexed writes.",
-    "Fixed RP/legacy and budgeted RPM bytes cover indexed plus unindexed concatenation, empty list, and list-own nonarray refusal. Existing Schedule evaluation/Out_Of_Service and Life Safety delta controls remain. No remote writes, source-origin propagation or whole-Schedule conformance claim; #824/#823 remain open."
+    "Fixed RP/legacy and budgeted RPM bytes cover indexed plus unindexed concatenation, empty list, and list-own nonarray refusal. Existing Schedule evaluation/Out_Of_Service and Life Safety delta controls remain. No remote writes, source-origin propagation or whole-Schedule conformance claim; #824/#823 remain open.",
+    "A reference's index goes through the WriteProperty index gate first: one on a property that isn't an array, or that the target doesn't hold, fails that target unwritten and leaves Reliability as it is."
    ]
   },
   {
@@ -2677,6 +2679,8 @@
    "negative_tests": [
     "crates/bacnet-server/src/server/command_action_wire_tests.rs::{command_quit_on_failure_stops_the_list_and_action_reads_back_the_flags,command_present_value_above_the_action_size_is_value_out_of_range,command_naming_another_device_fails_and_naming_this_device_is_local,command_writing_its_own_present_value_is_refused_busy}",
     "crates/bacnet-server/src/server/command_action_run_tests.rs::command_replaced_during_a_post_delay_leaves_the_rest_of_the_run_unmade",
+    "crates/bacnet-server/src/server/local_array_index_tests.rs::a_command_write_whose_index_the_property_refuses_fails",
+    "crates/rusty-bacnet/tests/test_local_array_index.py::LocalArrayIndexTests::test_a_command_write_with_such_an_index_fails",
     "crates/bacnet-objects/src/command/tests.rs::{command_quit_on_failure_marks_the_commands_after_it_unsuccessful,command_present_value_above_the_action_size_is_out_of_range,command_set_action_abandons_a_run_and_its_reports_go_stale}",
     "crates/bacnet-server/src/schedule_command_tests.rs::tick_schedules_dropped_mid_run_ends_the_command_run_unsuccessful",
     "crates/bacnet-server/src/server/requests/endpoint_device_write_tests.rs::endpoint_refuses_a_command_present_value_write_and_starts_no_run",
@@ -2733,7 +2737,8 @@
     "The write waits cov_retry_timeout_ms from the Who-Is send for the I-Am and fails unsent without one. A Who-Is that draws nothing drops the stale I-Am, so the device's next Who-Is is global.",
     "Who-Is bounds: one per device per 60 s from its send, shared by writes that miss while it is out; a miss inside that minute fails at once; none for instance 4194303 or while DCC restricts initiation.",
     "At most 256 devices with a Who-Is out or held off; an answered device frees its place and stays bound ten minutes, so the cap holds unanswered Who-Is requests to 256 a minute.",
-    "A binding routed through the network numbered as this one, once that number is known, is written as a local device: the WriteProperty goes to its final MAC with no DNET and is answered from there."
+    "A binding routed through the network numbered as this one, once that number is known, is written as a local device: the WriteProperty goes to its final MAC with no DNET and is answered from there.",
+    "A local command's array index goes through the WriteProperty index gate before its value is decoded: an index on a property that isn't an array, or that the target doesn't hold, fails that command and leaves the property unwritten."
    ],
    "gaps": [
    ]
@@ -4231,6 +4236,7 @@
     "crates/bacnet-server/src/server/command_run_stop_tests.rs::{stop_during_a_channel_member_delay_ends_the_distribution_failed,stop_while_the_database_is_busy_ends_a_channel_distribution_failed,channel_run_no_task_starts_ends_at_once_failed,stop_ends_a_run_nothing_took}",
     "crates/bacnet-server/src/server/channel_remote_write_tests.rs::{channel_member_in_another_device_that_refuses_fails_the_distribution,channel_member_in_another_device_that_never_answers_is_a_communication_failure,channel_member_in_another_device_sends_nothing_while_dcc_restricts_initiation,channel_skips_the_rest_of_an_unbound_device_its_who_is_finds_silent,stop_during_an_outstanding_member_write_ends_the_distribution_failed}",
     "crates/bacnet-server/src/server/channel_reliability_tests.rs::{channel_member_naming_a_missing_object_is_a_configuration_error,channel_value_a_member_cannot_take_is_a_configuration_error,stop_after_a_member_failed_keeps_that_failure}",
+    "crates/bacnet-server/src/server/local_array_index_tests.rs::a_channel_member_whose_index_the_property_refuses_is_a_configuration_failure",
     "crates/bacnet-server/src/command_lists/unattached_tests.rs::unattached_channel_member_in_another_device_fails_unsent",
     "crates/bacnet-server/src/server/command_run_cancel_tests.rs::{write_local_dropped_inside_its_database_guard_ends_the_distribution_failed,write_local_dropped_after_its_commit_ends_the_distribution_failed}"
    ],
@@ -6124,7 +6130,10 @@
     "crates/bacnet-objects/src/common.rs",
     "crates/bacnet-objects/src/value_types/mod.rs",
     "crates/bacnet-server/src/handlers/read_property.rs::rpm_response_index",
-    "crates/bacnet-server/src/handlers/rpm_budget.rs::handle_rpm_budgeted_observed"
+    "crates/bacnet-server/src/handlers/rpm_budget.rs::handle_rpm_budgeted_observed",
+    "crates/bacnet-server/src/handlers/write_property.rs::gate_and_decode_write",
+    "crates/bacnet-server/src/server/local_writes.rs::precheck",
+    "crates/bacnet-server/src/schedule.rs::deliver"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/priority_array_writes.rs::priority_array_custom_object_write_policy_is_not_globally_restricted",
@@ -6176,7 +6185,10 @@
     "crates/bacnet-server/src/handlers/tests/indexed_write_effects.rs::indexed_absence_keeps_wpm_prefix_coordinate_and_skips_authorizer_observer_source_suffix",
     "crates/bacnet-server/src/server/audit_reporter_indexed_absence_tests.rs::indexed_absence_served_wpm_audits_only_prefix_and_preserves_source_writes",
     "crates/bacnet-server/src/handlers/tests/loop_properties.rs::loop_action_rejects_an_array_index_but_command_action_admits_one",
-    "crates/bacnet-server/src/server/local_encoded_writes_tests.rs::an_encoded_local_write_is_refused_as_a_network_write_is"
+    "crates/bacnet-server/src/server/local_encoded_writes_tests.rs::an_encoded_local_write_is_refused_as_a_network_write_is",
+    "crates/bacnet-server/src/server/local_array_index_tests.rs::{write_local_checks_an_array_index_before_the_object_sees_the_value,a_command_write_whose_index_the_property_refuses_fails,a_channel_member_whose_index_the_property_refuses_is_a_configuration_failure}",
+    "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_target_index_is_checked_as_write_property_checks_it",
+    "crates/rusty-bacnet/tests/test_local_array_index.py"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -6202,7 +6214,8 @@
     "Encoded AI and B/IP raw5555 plus unprovisioned Staging names cover valid/malformed values, while present Staging arrays, read-only B/IP DNS and a custom vendor array supply controls. WPM preserves its Description prefix and exact failed object/property/index, with no failing/suffix authorization, observer, source write or Audit record. A running-server fixture retains actual successful Audit delivery and source-aware writing. Unindexed writes, direct object calls, outer WP authorization and read service precedence are unchanged.",
     "Channel's three arrays (List_Of_Object_Property_References, Execution_Delay, Control_Groups) admit an index and read one element per index (BACNET-12-CHANNEL-OBJECT).",
     "The default table holds every BACnetARRAY of the 2020 Clause 12 tables, served or not, and no built-in object overrides it. An indexed read of an array an object lacks answers UNKNOWN_PROPERTY.",
-    "BACnetServer::write_local_encoded (Python write_property_local) applies the WriteProperty index gate and value decoding before the local write."
+    "BACnetServer::write_local_encoded (Python write_property_local) applies the WriteProperty index gate and value decoding before the local write.",
+    "Typed write_local, a Command's and a Channel's local writes and a Schedule's target writes run the same index gate before Audit or the object sees the value. A Schedule counts the target failed; a Channel counts a configuration failure."
    ]
   },
   {
@@ -9323,7 +9336,8 @@
     "crates/bacnet-objects/src/property_metadata_audit/unknown_writes.rs::unknown_writes_optional_staging_names_use_current_presence",
     "crates/bacnet-objects/src/command_source/tests.rs::command_source_invalid_writes_are_atomic_and_metadata_is_paired",
     "crates/bacnet-server/src/handlers/tests/noncommandable_null_writes.rs::{null_keeps_the_errors_its_checks_give,null_to_value_source_needs_the_command_owner}",
-    "crates/rusty-bacnet/tests/test_noncommandable_null_writes.py::NoncommandableNullTests::test_a_read_only_property_still_refuses_a_null"
+    "crates/rusty-bacnet/tests/test_noncommandable_null_writes.py::NoncommandableNullTests::test_a_read_only_property_still_refuses_a_null",
+    "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_target_index_is_checked_as_write_property_checks_it"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -9338,7 +9352,8 @@
     "Over WP, WPM and local writes, a NULL succeeds unchanged on a property that isn't commandable here and has no application NULL in its datatype: the object is asked first, and its INVALID_DATA_TYPE refusal of the NULL becomes the success.",
     "The checks an object makes before the value keep their errors: unknown property, WRITE_ACCESS_DENIED (state included) and INVALID_ARRAY_INDEX. An array element is judged by its own datatype; index 0, the size, is an Unsigned.",
     "Over WP and WPM such a NULL is audited as a successful write; none gets COV, event, Schedule, Command or save work. Most objects take a NULL to Description or Out_Of_Service as a no-op themselves; the post-write checks then find no change.",
-    "CreateObject initial values and a Schedule's target writes follow the same rule: such a NULL leaves the property as it is, the create goes on to its next value, and the Schedule counts the target as one that took the write."
+    "CreateObject initial values and a Schedule's target writes follow the same rule: such a NULL leaves the property as it is, the create goes on to its next value, and the Schedule counts the target as one that took the write.",
+    "The array index gate runs ahead of this rule on every path, typed write_local and Schedule targets included: a NULL with an index on a property that isn't an array is PROPERTY_IS_NOT_AN_ARRAY, and a Schedule counts that target failed."
    ]
   },
   {

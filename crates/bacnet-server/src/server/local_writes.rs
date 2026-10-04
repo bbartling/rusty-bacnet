@@ -12,6 +12,10 @@ mod input_present_value_tests;
 #[path = "staging_local_writes_tests.rs"]
 mod staging_local_writes_tests;
 
+#[cfg(test)]
+#[path = "local_array_index_tests.rs"]
+mod local_array_index_tests;
+
 /// What a local mutation is, and on whose behalf.
 ///
 /// Inputs and noncommandable Values distinguish application updates from
@@ -111,6 +115,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// A NULL to a property that isn't commandable and has no NULL in its
     /// datatype succeeds and changes nothing, as over the network (#1396):
     /// Audit records it, and no COV, event or Schedule work follows it.
+    ///
+    /// An array index is checked first, as the WriteProperty handler checks
+    /// it (#1426): UNKNOWN_PROPERTY for a property the object doesn't hold,
+    /// PROPERTY_IS_NOT_AN_ARRAY for one that isn't an array. Neither the
+    /// object nor Audit sees such a write. The writes a Command or Channel
+    /// run makes here get the same check.
     ///
     /// # Cancellation
     ///
@@ -551,16 +561,10 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
         let (exact_changes, staging_plans, mut command_runs, schedule_cov) = {
             let mut db = self.db.write().await;
             let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_oid(&db, *oid);
-            if db.get(oid).is_none() {
-                return Err(Error::Protocol {
-                    class: ErrorClass::OBJECT.to_raw() as u32,
-                    code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
-                });
-            }
-            if renaming {
-                if let PropertyValue::CharacterString(ref new_name) = value {
-                    db.check_name_available(oid, new_name)?;
-                }
+            if let Err(error) = precheck(&db, oid, write, &value) {
+                // Nothing reached the object: what was staged goes back.
+                staged.release(&mut db);
+                return Err(error);
             }
             // A WriteGroup was planned under an earlier guard; the Channel
             // may have left the group or changed number since.
@@ -805,5 +809,38 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
         )
         .await;
         Ok(command_runs)
+    }
+}
+
+/// The checks a WriteProperty makes before its audit hooks or the object see
+/// the value, made under the write's guard: the object exists, and for a
+/// property write, the array index fits the property
+/// ([`check_write_array_index`](crate::handlers::check_write_array_index))
+/// and a new Object_Name is free. A Command's or Channel's write takes this
+/// path too, so the index gate covers every local write that carries one.
+fn precheck(
+    db: &ObjectDatabase,
+    oid: &ObjectIdentifier,
+    write: LocalWrite,
+    value: &PropertyValue,
+) -> Result<(), Error> {
+    let object = db.get(oid).ok_or(Error::Protocol {
+        class: ErrorClass::OBJECT.to_raw() as u32,
+        code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
+    })?;
+    let LocalWrite::Property {
+        property,
+        array_index,
+        ..
+    } = write
+    else {
+        return Ok(());
+    };
+    crate::handlers::check_write_array_index(object, property, array_index)?;
+    match value {
+        PropertyValue::CharacterString(new_name) if property == PropertyIdentifier::OBJECT_NAME => {
+            db.check_name_available(oid, new_name)
+        }
+        _ => Ok(()),
     }
 }
