@@ -15,7 +15,8 @@
 //!
 //! After each write the pass tells the Schedule how every target took it, so
 //! a target that refuses the schedule's datatype faults it (Clause 12.24.13,
-//! #1086).
+//! #1086), as does a reference naming a missing object or property or an
+//! array index the property can't take (#1433).
 //!
 //! A NULL relinquishes the Schedule's slot in a commandable target. On a
 //! target property that isn't commandable and has no NULL in its datatype,
@@ -195,18 +196,30 @@ fn deliver(
         let prop_id = reference.property_identifier;
         let property = PropertyIdentifier::from_raw(prop_id);
         commit.before_change(db_w, target_oid);
+        // A missing object is a reference the Schedule can't write (#1433).
         let Some(target_obj) = db_w.get_mut(&target_oid) else {
-            outcomes.push(ScheduleTargetOutcome::Failed);
+            outcomes.push(ScheduleTargetOutcome::ReferenceRefused);
             continue;
         };
-        let result = crate::command_source::write_target(
-            target_obj,
+        // WriteProperty's index gate comes first (#1426), so an index on a
+        // property that isn't an array fails the target without the object
+        // seeing the value, a NULL included. Its refusals, like the object's
+        // UNKNOWN_PROPERTY or INVALID_ARRAY_INDEX, fault the Schedule (#1433).
+        let result = crate::handlers::check_write_array_index(
+            &*target_obj,
             property,
             reference.property_array_index,
-            write.value.clone(),
-            Some(write.priority),
-            origin.as_ref(),
-        );
+        )
+        .and_then(|()| {
+            crate::command_source::write_target(
+                target_obj,
+                property,
+                reference.property_array_index,
+                write.value.clone(),
+                Some(write.priority),
+                origin.as_ref(),
+            )
+        });
         match &result {
             Ok(()) => commit.changed(target_oid),
             // A NULL on a target property that isn't commandable and can't
@@ -256,3 +269,7 @@ mod channel_tests;
 #[cfg(test)]
 #[path = "schedule_relinquish_tests.rs"]
 mod relinquish_tests;
+
+#[cfg(test)]
+#[path = "schedule_reference_reliability_tests.rs"]
+mod reference_reliability_tests;

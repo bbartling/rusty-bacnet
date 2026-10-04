@@ -111,16 +111,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         source: crate::LocalCommandSource,
     ) -> Result<(), Error> {
         self.active_network()?;
-        let list = {
+        let value = {
             let db = self.db.read().await;
             let object = db.get(oid).ok_or_else(|| Error::Protocol {
                 class: ErrorClass::OBJECT.to_raw() as u32,
                 code: ErrorCode::UNKNOWN_OBJECT.to_raw() as u32,
             })?;
-            handlers::check_write_array_index(object, property, array_index)?;
-            object.is_list_property(property)
+            handlers::gate_and_decode_write(object, property, array_index, value)?
         };
-        let value = handlers::decode_write_property_value(property, array_index, list, value)?;
         self.write_local(oid, property, array_index, value, priority, source)
             .await
     }

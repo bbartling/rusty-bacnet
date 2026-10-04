@@ -1,4 +1,4 @@
-//! The Schedule's own Reliability evaluation (#1056, #1086).
+//! The Schedule's own Reliability evaluation (#1056, #1086, #1433).
 //!
 //! Clause 12.24.13 ties Reliability to the schedule's configuration being
 //! consistent, in two halves. When either fails, Reliability is
@@ -14,15 +14,22 @@
 //! learns it from its writes (#1086): the server reports how each target took
 //! a write through `complete_schedule_write`, and a member that refused the
 //! value for its datatype (INVALID_DATA_TYPE or DATATYPE_NOT_SUPPORTED) faults
-//! the Schedule until a later write to it succeeds or it leaves the list. The
-//! fault therefore shows at the first write, not at configuration time; the
-//! clause already lets a remote member's fault wait for a write. Only a value
-//! of a datatype the schedule itself holds counts, so a NULL, or a value of
-//! another datatype a client wrote to Present_Value out of service, says
-//! nothing about the configuration. Any other failure, an unknown object or a
-//! denied write, leaves a member's standing as it was. Deciding beforehand
-//! instead would need a model of each target property's datatype, which the
-//! objects don't publish, or a guess from the target's current value.
+//! the Schedule until a later write to it succeeds or it leaves the list. So
+//! does a member the target can't write at all, whatever the value (#1433):
+//! one naming a missing object or property, or an array index the property
+//! can't take (UNKNOWN_OBJECT, UNKNOWN_PROPERTY, PROPERTY_IS_NOT_AN_ARRAY,
+//! INVALID_ARRAY_INDEX). Such a member clears once a later write to it
+//! succeeds, say after the object is created, or once it leaves the list.
+//!
+//! The fault therefore shows at the first write, not at configuration time;
+//! the clause already lets a remote member's fault wait for a write. Only a
+//! value of a datatype the schedule itself holds counts, so a NULL, or a
+//! value of another datatype a client wrote to Present_Value out of service,
+//! says nothing about the configuration. Any other failure leaves a member's
+//! standing as it was: a denied write, for one, can come from the target's
+//! state and not its configuration. Deciding beforehand instead would need a
+//! model of each target property's datatype, which the objects don't
+//! publish, or a guess from the target's current value.
 //!
 //! A misconfigured schedule keeps evaluating and writing its references.
 //! Clause 12.24.4 makes those writes unconditional, Reliability only reports
@@ -92,6 +99,7 @@ impl ScheduleObject {
                         .retain(|refusing| refusing != reference);
                 }
                 ScheduleTargetOutcome::DatatypeRefused
+                | ScheduleTargetOutcome::ReferenceRefused
                     if self.list_of_object_property_references.contains(reference)
                         && !self.refusing_references.contains(reference) =>
                 {

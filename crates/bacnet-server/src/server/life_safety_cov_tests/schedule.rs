@@ -110,11 +110,21 @@ async fn schedule_indexed_target_and_later_unindexed_target_survive_failure() {
     db.add(Box::new(target)).unwrap();
     db.add(Box::new(schedule)).unwrap();
     let db = Arc::new(RwLock::new(db));
-    // An ordinary target owes a whole-object COV fanout, not a Life Safety delta.
+    // An ordinary target owes a whole-object COV fanout, not a Life Safety
+    // delta. Index 3 is past the end of State_Text, a reference the target
+    // can't write, so the Schedule's Reliability changes too (#1433).
+    let schedule_oid = ObjectIdentifier::new(ObjectType::SCHEDULE, 2).unwrap();
     let committed = tick(&db).await;
     assert!(committed.life_safety.is_empty());
-    assert_eq!(committed.coarse, vec![target_oid]);
+    assert_eq!(committed.coarse, vec![target_oid, schedule_oid]);
     let db = db.read().await;
+    assert_eq!(
+        db.get(&schedule_oid)
+            .unwrap()
+            .read_property(PropertyIdentifier::RELIABILITY, None)
+            .unwrap(),
+        PropertyValue::Enumerated(bacnet_types::enums::Reliability::CONFIGURATION_ERROR.to_raw())
+    );
     let target = db.get(&target_oid).unwrap();
     assert_eq!(
         target

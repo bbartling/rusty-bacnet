@@ -3,17 +3,25 @@
 //! commandable and has no NULL in its datatype it is the no-op WriteProperty
 //! makes of it, the target counting as one that took the write. A target
 //! that refuses for any other reason still fails.
+//!
+//! A reference's array index is checked as WriteProperty checks it, ahead of
+//! the value and the NULL rule (#1426): an index the property can't take
+//! fails that target and leaves the property as it is. Such a refusal, like
+//! a missing object or property, is reported as a reference the target can't
+//! write (#1433).
 
 use std::borrow::Cow;
 use std::sync::Mutex;
 
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject};
+use bacnet_objects::binary::BinaryValueObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
+use bacnet_objects::multistate::MultiStateValueObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
-use ScheduleTargetOutcome::{Accepted, Failed};
+use ScheduleTargetOutcome::{Accepted, Failed, ReferenceRefused};
 
 use super::*;
 
@@ -153,7 +161,7 @@ async fn a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others
                     reference(ai(), P::COV_INCREMENT),
                     // Read-only: still refused.
                     reference(ai(), P::STATUS_FLAGS),
-                    // No such object.
+                    // No such object: a reference it can't write.
                     reference(oid(ObjectType::ANALOG_INPUT, 9), P::PRESENT_VALUE),
                 ],
             ),
@@ -178,7 +186,7 @@ async fn a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others
         *outcomes.lock().unwrap(),
         [
             vec![Accepted, Accepted],
-            vec![Accepted, Accepted, Failed, Failed]
+            vec![Accepted, Accepted, Failed, ReferenceRefused]
         ]
     );
     let db = db.read().await;
@@ -193,5 +201,100 @@ async fn a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others
     assert_eq!(
         read(&db, ai(), P::COV_INCREMENT, None),
         PropertyValue::Real(5.0)
+    );
+}
+
+fn indexed(
+    object: ObjectIdentifier,
+    property: PropertyIdentifier,
+    index: u32,
+) -> BACnetObjectPropertyReference {
+    BACnetObjectPropertyReference::new_indexed(object, property.to_raw(), index)
+}
+
+#[tokio::test]
+async fn a_schedule_target_index_is_checked_as_write_property_checks_it() {
+    use PropertyIdentifier as P;
+    let outcomes = Outcomes::default();
+    let msv = oid(ObjectType::MULTI_STATE_VALUE, 1);
+    let bv = oid(ObjectType::BINARY_VALUE, 1);
+    let write = |value, references| ScheduleWrite {
+        value,
+        priority: 9,
+        references,
+    };
+    let schedule = OwingSchedule {
+        owed: vec![
+            write(
+                PropertyValue::CharacterString("scheduled".into()),
+                vec![
+                    // Description is one string, not an array.
+                    indexed(ai(), P::DESCRIPTION, 1),
+                    indexed(msv, P::STATE_TEXT, 2),
+                    // MSV-1 has three states.
+                    indexed(msv, P::STATE_TEXT, 9),
+                    // An Analog Input has no State_Text.
+                    indexed(ai(), P::STATE_TEXT, 1),
+                ],
+            ),
+            // A datatype Description refuses, and a NULL it would take as a
+            // no-op: the index answers first, so the first is a reference
+            // refusal and the second isn't taken.
+            write(
+                PropertyValue::Real(5.0),
+                vec![indexed(ai(), P::DESCRIPTION, 1)],
+            ),
+            write(PropertyValue::Null, vec![indexed(ai(), P::DESCRIPTION, 1)]),
+            write(
+                PropertyValue::Enumerated(1),
+                vec![indexed(bv, P::PRESENT_VALUE, 1)],
+            ),
+        ],
+        outcomes: Arc::clone(&outcomes),
+    };
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(
+        DeviceObject::new(DeviceConfig::default()).unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 62).unwrap()))
+        .unwrap();
+    db.add(Box::new(BinaryValueObject::new(1, "BV-1").unwrap()))
+        .unwrap();
+    db.add(Box::new(MultiStateValueObject::new(1, "MSV-1", 3).unwrap()))
+        .unwrap();
+    db.add(Box::new(schedule)).unwrap();
+    let left_alone = |db: &ObjectDatabase| {
+        [
+            read(db, ai(), P::DESCRIPTION, None),
+            read(db, bv, P::PRESENT_VALUE, None),
+            read(db, msv, P::STATE_TEXT, Some(1)),
+            read(db, msv, P::STATE_TEXT, Some(3)),
+        ]
+    };
+    let before = left_alone(&db);
+    let db = Arc::new(RwLock::new(db));
+
+    tick_schedules(&db).await;
+
+    assert_eq!(
+        *outcomes.lock().unwrap(),
+        [
+            vec![
+                ReferenceRefused,
+                Accepted,
+                ReferenceRefused,
+                ReferenceRefused
+            ],
+            vec![ReferenceRefused],
+            vec![ReferenceRefused],
+            vec![ReferenceRefused]
+        ]
+    );
+    let db = db.read().await;
+    assert_eq!(left_alone(&db), before);
+    assert_eq!(
+        read(&db, msv, P::STATE_TEXT, Some(2)),
+        PropertyValue::CharacterString("scheduled".into())
     );
 }

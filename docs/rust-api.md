@@ -2220,12 +2220,16 @@ evaluation at once, as the tick would, and fans COV out for the targets it
 writes. Reliability is CONFIGURATION_ERROR, with FAULT in Status_Flags, while
 the non-NULL values in Weekly_Schedule, Exception_Schedule and Schedule_Default
 are not all of one datatype (#1056), or while a referenced property refused a
-value of that datatype at its last write (#1086); the Schedule still writes its
-references. The server reports each write's per-target result through the
-public `BACnetObject::complete_schedule_write(write, outcomes)` hook, one
+value of that datatype at its last write (#1086), or the reference itself: a
+missing object or property, or an array index the property can't take (#1433).
+The Schedule still writes its references. The server reports each write's
+per-target result through the public
+`BACnetObject::complete_schedule_write(write, outcomes)` hook, one
 `ScheduleTargetOutcome` (`Accepted`, `DatatypeRefused` for INVALID_DATA_TYPE or
-DATATYPE_NOT_SUPPORTED, `Failed` otherwise) per reference. A refusal clears
-when that target later takes a value or leaves the list; a NULL, or an
+DATATYPE_NOT_SUPPORTED, `ReferenceRefused` for UNKNOWN_OBJECT,
+UNKNOWN_PROPERTY, PROPERTY_IS_NOT_AN_ARRAY or INVALID_ARRAY_INDEX, `Failed`
+otherwise, WRITE_ACCESS_DENIED included) per reference. A refusal clears when
+that target later takes a value or leaves the list; a NULL, or an
 out-of-service value of another datatype, counts for nothing.
 
 List_Of_Object_Property_References and Priority_For_Writing are
