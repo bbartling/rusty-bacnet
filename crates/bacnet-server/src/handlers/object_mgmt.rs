@@ -77,24 +77,21 @@ impl CreateObjectRefusal {
     }
 
     /// The refusal of the initial value at `position` (from 1), which names
-    /// it. An undecodable value is an encoding invalid for the property.
+    /// it.
     fn of_initial_value(self, position: u32) -> Self {
-        let named = |class, code| {
-            Error::protocol(
-                class,
-                code,
-                Some(ErrorDetail::FirstFailedElementNumber(position)),
-            )
+        let named = |error| match error {
+            Error::Protocol { class, code } | Error::Structured { class, code, .. } => {
+                Error::protocol(
+                    class,
+                    code,
+                    Some(ErrorDetail::FirstFailedElementNumber(position)),
+                )
+            }
+            other => other,
         };
         match self {
-            Self::Malformed(Error::Decoding { .. }) => Self::Malformed(named(
-                ErrorClass::PROPERTY.to_raw() as u32,
-                ErrorCode::INVALID_DATA_ENCODING.to_raw() as u32,
-            )),
-            Self::Failed(
-                Error::Protocol { class, code } | Error::Structured { class, code, .. },
-            ) => Self::Failed(named(class, code)),
-            other => other,
+            Self::Malformed(error) => Self::Malformed(named(error)),
+            Self::Failed(error) => Self::Failed(named(error)),
         }
     }
 }
@@ -242,56 +239,52 @@ fn create(
     Ok(created_oid)
 }
 
-/// Apply one initial value to the created object. The caller removes the
-/// object when this fails.
+/// Apply one initial value to the created object the way WriteProperty
+/// applies its value: the array index checked against the object, the value
+/// decoded whole with the object's list classification, the Object_Name kept
+/// unique, and a NULL the property leaves as it is taken as applied
+/// ([`relinquish`](super::relinquish)). The caller removes the object when
+/// this fails.
 fn initialize(
     db: &mut ObjectDatabase,
     created_oid: ObjectIdentifier,
     pv: &bacnet_services::common::BACnetPropertyValue,
     command_origin: Option<&bacnet_objects::command_source::CommandOrigin>,
 ) -> Result<(), CreateObjectRefusal> {
-    let decoded = if pv.property_identifier == PropertyIdentifier::VALUE_SOURCE {
-        super::write_property::decode_write_property_value(
-            pv.property_identifier,
-            pv.property_array_index,
-            false,
-            &pv.value,
-        )
-        .map(|value| (value, pv.value.len()))
-    } else {
-        bacnet_encoding::primitives::decode_application_value(&pv.value, 0)
+    use super::write_property::{
+        check_and_prepare_name_write, check_write_array_index, commit_attempt,
+        decode_write_property_value, WriteTarget,
     };
-    let (value, _) = decoded.map_err(|error| match error {
-        Error::Decoding { .. } => CreateObjectRefusal::Malformed(error),
-        error => CreateObjectRefusal::Failed(error),
-    })?;
-    // Route Object_Name initial values through the database name index,
-    // matching the WriteProperty handlers: reject a duplicate up front and
-    // refresh the index after a successful rename. (The created object was
-    // added under its default name, so the index must follow a rename.)
-    if pv.property_identifier == PropertyIdentifier::OBJECT_NAME {
-        if let PropertyValue::CharacterString(ref new_name) = value {
-            db.check_name_available(&created_oid, new_name)
-                .map_err(CreateObjectRefusal::Failed)?;
-        }
+    let property = pv.property_identifier;
+    let array_index = pv.property_array_index;
+    let object = db.get(&created_oid).expect("created above");
+    check_write_array_index(object, property, array_index).map_err(CreateObjectRefusal::Failed)?;
+    // Octets that don't decode for the property make the request invalid,
+    // not a write that was tried and failed.
+    let value = decode_write_property_value(
+        property,
+        array_index,
+        object.is_list_property(property),
+        &pv.value,
+    )
+    .map_err(CreateObjectRefusal::Malformed)?;
+    let value = crate::local_references::localize(db, created_oid, property, value);
+    // The object was added under its default name; a new one has to be free,
+    // and the write moves the database's name index along with it.
+    if property == PropertyIdentifier::OBJECT_NAME {
+        check_and_prepare_name_write(db, &created_oid, &value)
+            .map_err(CreateObjectRefusal::Failed)?;
     }
-    if let Some(obj) = db.get_mut(&created_oid) {
-        crate::command_source::write_target(
-            obj,
-            pv.property_identifier,
-            pv.property_array_index,
-            value,
-            pv.priority,
-            command_origin,
-        )
-        .map_err(CreateObjectRefusal::Failed)?;
-    }
-    // A successful Object_Name write changed the object's name field;
-    // resync the database name index to the new name.
-    if pv.property_identifier == PropertyIdentifier::OBJECT_NAME {
-        db.update_name_index(&created_oid);
-    }
-    Ok(())
+    let target = WriteTarget {
+        oid: created_oid,
+        property,
+        array_index,
+        priority: pv.priority,
+        value: &pv.value,
+    };
+    commit_attempt(db, None, target, value, None, command_origin)
+        .map(|_| ())
+        .map_err(CreateObjectRefusal::Failed)
 }
 
 /// Handle a DeleteObject request.

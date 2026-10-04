@@ -1652,7 +1652,8 @@ unchanged.
 A NULL written to a property that isn't commandable and has no NULL in its
 datatype succeeds and leaves the property as it is (Clauses 15.9.2 and 15.10.2,
 #1396). The server applies this once, for WriteProperty, WritePropertyMultiple,
-`write_local`, `write_local_encoded` and a Command's local writes: the write goes
+`write_local`, `write_local_encoded`, a Command's local writes, CreateObject's
+initial values and a Schedule's writes to its targets (#1416): the write goes
 to the object as usual, and when the object refuses the NULL with
 `PROPERTY/INVALID_DATA_TYPE` the server answers success instead. Every check the
 object makes first still answers, so an unknown property, a read-only one, one
@@ -1661,7 +1662,8 @@ before. An object's own Present_Value relinquish, and a property that stores a
 NULL, never reach the rule. The rule covers an array element too, judged against
 the element's datatype once the index checks out. Nothing follows such a write as
 a change (no COV report, event pass or save); an Audit Reporter records it as a
-successful write. A custom object should therefore check access and state before
+successful write. A CreateObject goes on to its next initial value, and a
+Schedule counts the target as one that took its write. A custom object should therefore check access and state before
 the value's datatype, as the built-in objects do.
 
 WriteProperty and WritePropertyMultiple give a property that
@@ -1677,7 +1679,11 @@ List_Of_Object_Property_References, and the Loop and Pulse Converter references.
 The object decides what an empty value means there (an empty
 Setpoint_Reference holds no reference). For any other property, no octets is
 `PROPERTY/INVALID_DATA_ENCODING` and one element arrives alone.
-`write_local_encoded` and a Command's writes decode the same way (#1328).
+`write_local_encoded`, a Command's writes and CreateObject's initial values
+decode the same way (#1328, #1389). CreateObject checks an initial value's array
+index against the new object first, as WriteProperty does, and names the first
+initial value it can't apply by its position; one that doesn't decode is
+`PROPERTY/INVALID_DATA_ENCODING` there.
 
 AddListElement and RemoveListElement edit only properties that
 `BACnetObject::is_list_property` reports as a BACnetLIST. The default follows the
@@ -2188,7 +2194,9 @@ time, calendar_active)` hook returns `Option<ScheduleWrite>` (value, priority,
 references): a changed value, or any value on entering the Effective_Period
 (start-up included). The server writes it to every reference at
 `Priority_For_Writing`, set with `set_priority_for_writing` (1 to 16, default
-16); a NULL relinquishes that slot. A failed target write
+16); a NULL relinquishes that slot, and leaves a target property that isn't
+commandable and has no NULL in its datatype as it is, the target counting as
+one that took the write (#1416). A failed target write
 does not prevent subsequent target writes. `set_weekly_schedule`,
 `add_exception` and `set_effective_period` return `Result` and refuse
 non-primitive values, non-specific or repeated times, out-of-range priorities
