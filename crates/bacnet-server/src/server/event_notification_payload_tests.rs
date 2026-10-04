@@ -45,16 +45,29 @@ impl BACnetObject for BuiltInProjectionObject {
         property: PropertyIdentifier,
         _array_index: Option<u32>,
     ) -> Result<PropertyValue, bacnet_types::error::Error> {
+        let object_type = self.oid.object_type();
         match property {
             // An Access Zone watches Occupancy_State and serves no
-            // Present_Value; the fixture's value stands for the watched one.
+            // Present_Value, and an Access Door watches Door_Alarm_State; the
+            // fixture's value stands for the watched one. The door's own
+            // Present_Value reads LOCK.
             p if p == PropertyIdentifier::OCCUPANCY_STATE
-                && self.oid.object_type() == ObjectType::ACCESS_ZONE =>
+                && object_type == ObjectType::ACCESS_ZONE =>
+            {
+                Ok(self.present_value.clone())
+            }
+            p if p == PropertyIdentifier::DOOR_ALARM_STATE
+                && object_type == ObjectType::ACCESS_DOOR =>
             {
                 Ok(self.present_value.clone())
             }
             p if p == PropertyIdentifier::PRESENT_VALUE
-                && self.oid.object_type() != ObjectType::ACCESS_ZONE =>
+                && object_type == ObjectType::ACCESS_DOOR =>
+            {
+                Ok(PropertyValue::Enumerated(0))
+            }
+            p if p == PropertyIdentifier::PRESENT_VALUE
+                && object_type != ObjectType::ACCESS_ZONE =>
             {
                 Ok(self.present_value.clone())
             }
@@ -105,7 +118,8 @@ fn normal_payload(object: &BuiltInProjectionObject) -> NotificationParameters {
         | ObjectType::BINARY_VALUE
         | ObjectType::MULTI_STATE_INPUT
         | ObjectType::MULTI_STATE_VALUE
-        | ObjectType::ACCESS_ZONE => (EventType::CHANGE_OF_STATE, EventState::OFFNORMAL),
+        | ObjectType::ACCESS_ZONE
+        | ObjectType::ACCESS_DOOR => (EventType::CHANGE_OF_STATE, EventState::OFFNORMAL),
         ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT => {
             (EventType::COMMAND_FAILURE, EventState::OFFNORMAL)
         }
@@ -123,7 +137,7 @@ fn normal_payload(object: &BuiltInProjectionObject) -> NotificationParameters {
     .0
 }
 
-fn all_ten_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> {
+fn all_eleven_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> {
     vec![
         (
             BuiltInProjectionObject::new(
@@ -254,19 +268,32 @@ fn all_ten_sources() -> Vec<(BuiltInProjectionObject, NotificationParameters)> {
                 status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
             },
         ),
+        (
+            // Door_Alarm_State FORCED_OPEN (3), as door-alarm-state.
+            BuiltInProjectionObject::new(
+                11,
+                ObjectType::ACCESS_DOOR,
+                PropertyValue::Enumerated(3),
+                None,
+            ),
+            NotificationParameters::ChangeOfState {
+                new_state: BACnetPropertyStates::DoorAlarmState(3),
+                status_flags: StatusFlags::IN_ALARM | StatusFlags::FAULT,
+            },
+        ),
     ]
 }
 
 #[test]
-fn all_ten_builtin_normal_families_project_exact_typed_values() {
-    for (source, expected) in all_ten_sources() {
+fn all_eleven_builtin_normal_families_project_exact_typed_values() {
+    for (source, expected) in all_eleven_sources() {
         assert_eq!(normal_payload(&source), expected, "source {}", source.oid);
     }
 }
 
 #[test]
 fn builtin_fault_projection_is_tag_19_with_explicit_property_order() {
-    for (source, _) in all_ten_sources() {
+    for (source, _) in all_eleven_sources() {
         let payload = project_intrinsic_payload(
             &source,
             &EventStateChange {
@@ -297,13 +324,17 @@ fn builtin_fault_projection_is_tag_19_with_explicit_property_order() {
             offset = next;
         }
         // Table 13-5: the zone reports Occupancy_State in place of
-        // Present_Value.
+        // Present_Value, and the door Door_Alarm_State before it.
         let expected_properties = match source.oid.object_type() {
             ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT => vec![
                 PropertyIdentifier::PRESENT_VALUE,
                 PropertyIdentifier::FEEDBACK_VALUE,
             ],
             ObjectType::ACCESS_ZONE => vec![PropertyIdentifier::OCCUPANCY_STATE],
+            ObjectType::ACCESS_DOOR => vec![
+                PropertyIdentifier::DOOR_ALARM_STATE,
+                PropertyIdentifier::PRESENT_VALUE,
+            ],
             _ => vec![PropertyIdentifier::PRESENT_VALUE],
         };
         assert_eq!(
@@ -321,6 +352,10 @@ fn builtin_fault_projection_is_tag_19_with_explicit_property_order() {
         );
         if let Some(feedback) = &source.feedback_value {
             assert_eq!(decoded[1].value, encode_abstract_value(feedback).unwrap());
+        }
+        if source.oid.object_type() == ObjectType::ACCESS_DOOR {
+            // The door's Present_Value, LOCK.
+            assert_eq!(decoded[1].value, [0x91, 0x00]);
         }
     }
 }

@@ -1,13 +1,15 @@
 //! Secured_Status derived from what the door serves (Clause 12.26.14,
-//! #1148): each input moves it between SECURED and UNSECURED, an input the
-//! door's own monitor can't tell makes it UNKNOWN, and pulses, simulated
-//! values and the return to service all show through.
+//! #1148, #1149): each input moves it between SECURED and UNSECURED, an
+//! input the door's own monitor can't tell makes it UNKNOWN, and pulses,
+//! simulated values, the event algorithm, Masked_Alarm_Values and the return
+//! to service all show through.
 
 use std::time::Duration;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
 use super::*;
+use crate::event::commit_test_proposal;
 
 const SECURED: DoorSecuredStatus = DoorSecuredStatus::SECURED;
 const UNSECURED: DoorSecuredStatus = DoorSecuredStatus::UNSECURED;
@@ -65,8 +67,12 @@ fn access_door_secured_status_is_secured_with_every_input_met() {
     assert_eq!(secured(&door), SECURED);
     door.set_lock_status(LockStatus::UNUSED);
     assert_eq!(secured(&door), SECURED);
-    // Door_Alarm_State isn't an input: only Event_State sets IN_ALARM.
-    door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN);
+    // Door_Alarm_State isn't an input: only Event_State sets IN_ALARM, and
+    // no event algorithm has run on it.
+    door.set_alarm_values([DoorAlarmState::FORCED_OPEN])
+        .unwrap();
+    door.set_door_alarm_state(DoorAlarmState::FORCED_OPEN)
+        .unwrap();
     assert_eq!(secured(&door), SECURED);
 }
 
@@ -127,24 +133,66 @@ fn access_door_secured_status_follows_door_and_lock_status() {
     assert_eq!(secured(&door), SECURED);
 }
 
+/// Move the door to `state`, then let its event algorithm (Time_Delay 0)
+/// commit whatever transition that proposes.
+fn report(door: &mut AccessDoorObject, state: DoorAlarmState) {
+    door.set_door_alarm_state(state).unwrap();
+    let outcome = door.evaluate_intrinsic_reporting().unwrap();
+    commit_test_proposal(door, outcome);
+}
+
 #[test]
 fn access_door_secured_status_follows_the_in_alarm_flag() {
     let mut door = door();
-    for state in [EventState::OFFNORMAL, EventState::FAULT] {
-        // No route sets the door's Event_State yet; an event algorithm would.
-        door.event_state = state;
+    door.set_alarm_values([DoorAlarmState::FORCED_OPEN])
+        .unwrap();
+    door.set_fault_values([DoorAlarmState::DOOR_FAULT]).unwrap();
+    for (state, event_state, flags) in [
+        (
+            DoorAlarmState::FORCED_OPEN,
+            EventState::OFFNORMAL,
+            StatusFlags::IN_ALARM,
+        ),
+        (
+            DoorAlarmState::DOOR_FAULT,
+            EventState::FAULT,
+            StatusFlags::IN_ALARM | StatusFlags::FAULT,
+        ),
+    ] {
+        report(&mut door, state);
+        assert_eq!(
+            door.read_property(P::EVENT_STATE, None).unwrap(),
+            PropertyValue::Enumerated(event_state.to_raw())
+        );
         assert_eq!(
             door.read_property(P::STATUS_FLAGS, None).unwrap(),
-            status_flags(StatusFlags::IN_ALARM),
+            status_flags(flags),
             "{state:?}"
         );
         assert_eq!(secured(&door), UNSECURED, "{state:?}");
+        report(&mut door, DoorAlarmState::NORMAL);
     }
-    door.event_state = EventState::NORMAL;
     assert_eq!(
         door.read_property(P::STATUS_FLAGS, None).unwrap(),
         status_flags(StatusFlags::empty())
     );
+    assert_eq!(secured(&door), SECURED);
+}
+
+#[test]
+fn access_door_secured_status_fails_while_any_state_is_masked() {
+    let mut door = door();
+    // Masking a state the door isn't in still unsecures it.
+    door.set_masked_alarm_values([DoorAlarmState::TAMPER])
+        .unwrap();
+    assert_eq!(secured(&door), UNSECURED);
+    door.write_property(
+        P::MASKED_ALARM_VALUES,
+        None,
+        PropertyValue::List(vec![]),
+        None,
+    )
+    .unwrap();
     assert_eq!(secured(&door), SECURED);
 }
 

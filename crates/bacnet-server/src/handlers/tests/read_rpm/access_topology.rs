@@ -289,16 +289,19 @@ fn rpm_access_door_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
+            // The last twelve identifiers, from 234, are the rows #1149 added.
             (
                 P::PROPERTY_LIST,
                 None,
                 Ok(&[
                     0x91, 28, 0x91, 85, 0x91, 231, 0x91, 233, 0x91, 235, 0x91, 226, 0x91, 228,
                     0x91, 111, 0x91, 81, 0x91, 103, 0x91, 36, 0x91, 87, 0x91, 104, 0x91, 230, 0x91,
-                    227, 0x91, 229, 0x92, 0x01, 0xAF,
+                    227, 0x91, 229, 0x92, 0x01, 0xAF, 0x91, 234, 0x91, 113, 0x91, 17, 0x91, 7,
+                    0x91, 39, 0x91, 35, 0x91, 0, 0x91, 72, 0x91, 130, 0x92, 0x01, 0x5f, 0x92, 0x01,
+                    0x61, 0x92, 0x01, 0x64,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 17])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 29])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 231])),
@@ -314,9 +317,11 @@ fn rpm_access_door_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(13), Ok(&[0x91, 104])),
             (P::PROPERTY_LIST, Some(14), Ok(&[0x91, 230])),
             (P::PROPERTY_LIST, Some(17), Ok(&[0x92, 0x01, 0xAF])),
+            (P::PROPERTY_LIST, Some(18), Ok(&[0x91, 234])),
+            (P::PROPERTY_LIST, Some(29), Ok(&[0x92, 0x01, 0x64])),
             (
                 P::PROPERTY_LIST,
-                Some(18),
+                Some(30),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (

@@ -24,7 +24,7 @@ pub(super) fn system_utc_recipient_filter_time(now: Duration) -> (DaysOfWeek, Ti
 }
 
 /// The transport action selected for one matched Notification Class recipient.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum RecipientRoute {
     LocalUnicast(MacAddr),
     BoundLocalUnicast {

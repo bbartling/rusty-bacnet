@@ -12,7 +12,11 @@
 //! misses while that Who-Is is out waits on it instead of sending another,
 //! and a device gets at most one Who-Is a minute (`binding_probes`), so a
 //! write that misses within a minute of a Who-Is that drew nothing fails at
-//! once. A write that ends with no binding sends no WriteProperty.
+//! once. A write that ends with no binding sends no WriteProperty. A binding
+//! routed through the network numbered as this device's own, once that number
+//! is known, names a device on this network: the write goes to its MAC with
+//! no DNET, not through the router (#1358), since a non-routing device drops
+//! an NPDU whose DNET names a network (Clause 6.5.2.1).
 //!
 //! The invoke ID is leased from the same device-wide pool as confirmed
 //! notifications (and, in an endpoint, client requests), so no two
@@ -230,14 +234,14 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
     ) -> Result<ConfirmedRecipientRoute, RemoteWriteError> {
         let resolution = self.resolve(&*self.bindings.read().await, device);
         if !can_look_for(device, &resolution) {
-            return confirmed(resolution, RemoteWriteError::Unbound);
+            return self.confirmed(resolution, RemoteWriteError::Unbound);
         }
         let (step, scope) = {
             let mut table = self.bindings.write().await;
             // An I-Am may have come in since the read guard went.
             let resolution = self.resolve(&table, device);
             if !can_look_for(device, &resolution) {
-                return confirmed(resolution, RemoteWriteError::Unbound);
+                return self.confirmed(resolution, RemoteWriteError::Unbound);
             }
             if self.initiation_restricted() {
                 return Err(RemoteWriteError::Disabled);
@@ -260,7 +264,7 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
         // Woken by the I-Am or the deadline, the write looks again either way.
         wait.answered().await;
         let resolution = self.resolve(&*self.bindings.read().await, device);
-        if let Some(route) = RecipientRoute::from_device_resolution(resolution).into_confirmed() {
+        if let Ok(route) = self.confirmed(resolution, RemoteWriteError::Undiscovered) {
             return Ok(route);
         }
         // A probe withdrawn before its Who-Is went out ends here too.
@@ -280,6 +284,24 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
         table.resolve_at(&device, Instant::now(), |mac| {
             self.network.transport().is_broadcast_mac(mac)
         })
+    }
+
+    /// The confirmed route `resolution` gives, or `missing` when it gives
+    /// none. A binding routed through this network's own number, read now,
+    /// is the local device it is (#1358): the write goes straight to its MAC
+    /// with no DNET and is answered from there, and one at the link's
+    /// broadcast MAC names no device, so it gives no route.
+    fn confirmed(
+        &self,
+        resolution: DeviceResolution,
+        missing: RemoteWriteError,
+    ) -> Result<ConfirmedRecipientRoute, RemoteWriteError> {
+        RecipientRoute::from_device_resolution(resolution)
+            .localize(self.network.local_network_number().get(), |mac| {
+                self.network.transport().is_broadcast_mac(mac)
+            })
+            .into_confirmed()
+            .ok_or(missing)
     }
 
     /// Broadcast a Who-Is whose limits are both `device`'s instance across
@@ -358,18 +380,8 @@ fn can_look_for(device: ObjectIdentifier, resolution: &DeviceResolution) -> bool
     ) && device.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE
 }
 
-/// The confirmed route `resolution` gives, or `missing` when it gives none.
-fn confirmed(
-    resolution: DeviceResolution,
-    missing: RemoteWriteError,
-) -> Result<ConfirmedRecipientRoute, RemoteWriteError> {
-    RecipientRoute::from_device_resolution(resolution)
-        .into_confirmed()
-        .ok_or(missing)
-}
-
-/// One attempt: the request to the bound peer, or through the binding's
-/// router to a device on another network.
+/// One attempt: the request to the bound peer, a device on this network
+/// included, or through the binding's router to a device on another network.
 async fn send<T: TransportPort + 'static>(
     network: &NetworkLayer<T>,
     apdu: &[u8],

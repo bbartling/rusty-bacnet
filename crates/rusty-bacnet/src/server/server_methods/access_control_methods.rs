@@ -5,10 +5,15 @@
 //! Exit_Points (#1306). Each is read-only over the network, so these keyword
 //! arguments are the Python route to it. The Access Point's policy count,
 //! supported authorization modes and Priority_For_Writing are read-only
-//! too, and take keyword arguments the same way (#1307).
+//! too, and take keyword arguments the same way (#1307). The Access Door's
+//! Alarm_Values, Fault_Values and Masked_Alarm_Values (#1149) are writable
+//! over the network as well; their keyword arguments set the starting
+//! lists.
 use super::super::*;
 use bacnet_types::constructed::BACnetAuthenticationFactorFormat;
-use bacnet_types::enums::{AuthenticationFactorType, AuthorizationMode, ErrorClass, ErrorCode};
+use bacnet_types::enums::{
+    AuthenticationFactorType, AuthorizationMode, DoorAlarmState, ErrorClass, ErrorCode,
+};
 use bacnet_types::error::Error;
 
 /// One element of Door_Members, Access_Doors, Entry_Points or Exit_Points as
@@ -103,15 +108,36 @@ impl BACnetServer {
     /// Each element is an `ObjectIdentifier` in this device or a
     /// `(device, object)` pair of identifiers for one in another device; a
     /// pair whose device isn't a Device raises ValueError.
-    #[pyo3(signature = (instance, name, *, door_members=None))]
+    ///
+    /// `alarm_values`, `fault_values` and `masked_alarm_values` set
+    /// Alarm_Values, Fault_Values and Masked_Alarm_Values as
+    /// BACnetDoorAlarmState numbers other than NORMAL (1 to 8, or 256 to
+    /// 65535). Any other number raises VALUE_OUT_OF_RANGE.
+    #[pyo3(signature = (
+        instance,
+        name,
+        *,
+        door_members=None,
+        alarm_values=None,
+        fault_values=None,
+        masked_alarm_values=None
+    ))]
     fn add_access_door(
         &self,
         instance: u32,
         name: &str,
         door_members: Option<Vec<PyDeviceObjectReference>>,
+        alarm_values: Option<Vec<u32>>,
+        fault_values: Option<Vec<u32>>,
+        masked_alarm_values: Option<Vec<u32>>,
     ) -> PyResult<()> {
-        let members = device_references(door_members, "door_members")?;
-        let obj = access_door(instance, name, members).map_err(to_py_err)?;
+        let settings = DoorSettings {
+            door_members: device_references(door_members, "door_members")?,
+            alarm_values,
+            fault_values,
+            masked_alarm_values,
+        };
+        let obj = access_door(instance, name, settings).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 
@@ -200,16 +226,36 @@ impl BACnetServer {
     }
 }
 
-/// Build an Access Door, applying Door_Members through its validating
-/// setter.
+/// The optional `add_access_door` keyword arguments; `None` keeps the
+/// door's default.
+#[derive(Default)]
+struct DoorSettings {
+    door_members: Option<Vec<BACnetDeviceObjectReference>>,
+    alarm_values: Option<Vec<u32>>,
+    fault_values: Option<Vec<u32>>,
+    masked_alarm_values: Option<Vec<u32>>,
+}
+
+/// Build an Access Door, applying Door_Members and the alarm lists through
+/// its validating setters.
 fn access_door(
     instance: u32,
     name: &str,
-    members: Option<Vec<BACnetDeviceObjectReference>>,
+    settings: DoorSettings,
 ) -> Result<AccessDoorObject, Error> {
     let mut obj = AccessDoorObject::new(instance, name)?;
-    if let Some(members) = members {
+    if let Some(members) = settings.door_members {
         obj.set_door_members(members)?;
+    }
+    let states = |raw: Vec<u32>| raw.into_iter().map(DoorAlarmState::from_raw);
+    if let Some(values) = settings.alarm_values {
+        obj.set_alarm_values(states(values))?;
+    }
+    if let Some(values) = settings.fault_values {
+        obj.set_fault_values(states(values))?;
+    }
+    if let Some(values) = settings.masked_alarm_values {
+        obj.set_masked_alarm_values(states(values))?;
     }
     Ok(obj)
 }

@@ -118,10 +118,17 @@ pub async fn harness(
     (client, inbound, tx, gates)
 }
 pub async fn inject(inbound: &mpsc::Sender<ReceivedNpdu>, npdu: &[u8], group: bool) {
+    deliver(inbound, npdu, &[2], group).await;
+}
+/// Hand the client `npdu` by unicast from link MAC `source`.
+pub async fn inject_from(inbound: &mpsc::Sender<ReceivedNpdu>, npdu: &[u8], source: &[u8]) {
+    deliver(inbound, npdu, source, false).await;
+}
+async fn deliver(inbound: &mpsc::Sender<ReceivedNpdu>, npdu: &[u8], source: &[u8], group: bool) {
     inbound
         .send(ReceivedNpdu {
             npdu: Bytes::copy_from_slice(npdu),
-            source_mac: MacAddr::from_slice(&[2]),
+            source_mac: MacAddr::from_slice(source),
             link_layer_group: group,
             data_attributes: vec![],
             provenance: TransportProvenance::unverified(),

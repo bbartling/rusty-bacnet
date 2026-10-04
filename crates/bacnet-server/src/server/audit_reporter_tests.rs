@@ -681,6 +681,9 @@ mod batch_history;
 #[path = "audit_reporter_empty_tests.rs"]
 mod empty_values;
 
+#[path = "audit_local_network_tests.rs"]
+mod local_network;
+
 #[path = "audit_dcc_tests.rs"]
 mod dcc;
 
