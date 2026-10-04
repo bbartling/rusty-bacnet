@@ -123,6 +123,7 @@ pub(crate) fn project_intrinsic_payload(
             | ObjectType::MULTI_STATE_INPUT
             | ObjectType::MULTI_STATE_VALUE
             | ObjectType::ACCESS_ZONE
+            | ObjectType::ACCESS_DOOR
                 if event_type == EventType::CHANGE_OF_STATE =>
             {
                 project_builtin_change_of_state(object, object_type)?
@@ -203,12 +204,12 @@ fn project_builtin_out_of_range(
 
 /// The property a built-in CHANGE_OF_STATE source watches, whose value
 /// New_State carries (Clause 13.3.2): Present_Value, except on an Access
-/// Zone, which watches Occupancy_State (Clause 12.32.6). An Access Door
-/// watching Door_Alarm_State (#1149) adds its row here and a
-/// `DoorAlarmState` arm below.
+/// Zone, which watches Occupancy_State (Clause 12.32.6), and an Access Door,
+/// which watches Door_Alarm_State (Clause 12.26.20).
 fn watched_property(object_type: ObjectType) -> PropertyIdentifier {
     match object_type {
         ObjectType::ACCESS_ZONE => PropertyIdentifier::OCCUPANCY_STATE,
+        ObjectType::ACCESS_DOOR => PropertyIdentifier::DOOR_ALARM_STATE,
         _ => PropertyIdentifier::PRESENT_VALUE,
     }
 }
@@ -232,6 +233,9 @@ fn project_builtin_change_of_state(
         ) if value > 0 => BACnetPropertyStates::UnsignedValue(u32::try_from(value).ok()?),
         (ObjectType::ACCESS_ZONE, PropertyValue::Enumerated(value)) => {
             BACnetPropertyStates::ZoneOccupancyState(value)
+        }
+        (ObjectType::ACCESS_DOOR, PropertyValue::Enumerated(value)) => {
+            BACnetPropertyStates::DoorAlarmState(value)
         }
         _ => return None,
     };
@@ -301,8 +305,7 @@ fn project_builtin_reliability(
 }
 
 /// The properties a built-in source's CHANGE_OF_RELIABILITY notification
-/// carries, in the order Table 13-5 lists them for its object type. An
-/// Access Door (#1149) adds Door_Alarm_State then Present_Value.
+/// carries, in the order Table 13-5 lists them for its object type.
 fn reliability_report_properties(object_type: ObjectType) -> Option<&'static [PropertyIdentifier]> {
     match object_type {
         ObjectType::ANALOG_INPUT
@@ -317,6 +320,10 @@ fn reliability_report_properties(object_type: ObjectType) -> Option<&'static [Pr
             PropertyIdentifier::FEEDBACK_VALUE,
         ]),
         ObjectType::ACCESS_ZONE => Some(&[PropertyIdentifier::OCCUPANCY_STATE]),
+        ObjectType::ACCESS_DOOR => Some(&[
+            PropertyIdentifier::DOOR_ALARM_STATE,
+            PropertyIdentifier::PRESENT_VALUE,
+        ]),
         _ => None,
     }
 }
@@ -660,6 +667,8 @@ fn validate_builtin_present_value(object_type: ObjectType, value: &PropertyValue
             | ObjectType::MULTI_STATE_VALUE,
             PropertyValue::Unsigned(value),
         ) if *value > 0 && u32::try_from(*value).is_ok() => Some(()),
+        // A BACnetDoorValue: LOCK to EXTENDED_PULSE_UNLOCK.
+        (ObjectType::ACCESS_DOOR, PropertyValue::Enumerated(value)) if *value <= 3 => Some(()),
         _ => None,
     }
 }

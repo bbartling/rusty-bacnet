@@ -1,4 +1,4 @@
-use bacnet_objects::access_control::AccessZoneObject;
+use bacnet_objects::access_control::{AccessDoorObject, AccessZoneObject};
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::database::ObjectDatabase;
@@ -67,6 +67,11 @@ fn acked_transitions_network_policy_is_uniform_on_all_supported_types() {
             "Access Zone",
             ObjectType::ACCESS_ZONE,
             Box::new(AccessZoneObject::new(1, "ZONE-1").unwrap()),
+        ),
+        (
+            "Access Door",
+            ObjectType::ACCESS_DOOR,
+            Box::new(AccessDoorObject::new(1, "DOOR-1").unwrap()),
         ),
         (
             "Event Enrollment",

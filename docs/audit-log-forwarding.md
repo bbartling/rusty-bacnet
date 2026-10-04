@@ -59,7 +59,10 @@ Device references (including another log on the same Device), non-Device or
 non-Audit-Log identifiers, and a direct binding to the local MAC are unusable:
 Reliability reports CONFIGURATION_ERROR and no forward is sent. No discovery
 traffic is initiated. Direct and explicitly routed unicast bindings are
-supported. A configured binding does not authenticate the peer.
+supported. A routed binding whose network is this device's own number, once
+the server knows it, is used as a local one: the copy goes to the parent's MAC
+with no DNET and is answered from there (#1358). A configured binding does not
+authenticate the peer.
 Each changed accepted batch resolves the route anew. If a valid configured route
 is present at that attempt, delivery can resume and a successful ACK can clear
 the earlier failure. Merely making a route available does not replay work or

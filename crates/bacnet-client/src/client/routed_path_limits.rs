@@ -576,8 +576,10 @@ fn check_routed_dadr(dadr_len: usize) -> Result<(), Error> {
 
 /// Refuse a routed confirmed destination that does not name exactly one
 /// device: a DNET [`check_remote_dnet`] refuses or a DADR outside
-/// [`routed_mac_fits`]. For senders that measure no forwarded NPCI; the
-/// client's own request path gets the DADR check from [`forwarded_npci_len`].
+/// [`routed_mac_fits`]. The client's own request path runs it on the target
+/// as named, before a target on the local network is sent locally, and
+/// measures the forwarded NPCI with [`forwarded_npci_len`] only for a target
+/// still routed.
 pub(crate) fn check_routed_unicast(dnet: u16, dadr_len: usize) -> Result<(), Error> {
     check_remote_dnet(dnet)?;
     check_routed_dadr(dadr_len)

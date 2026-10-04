@@ -21,7 +21,12 @@ its responder accepts WP only with the explicit Device authorizer, and does not
 execute RPM or WPM.
 
 The standalone target uses immutable explicitly configured local or routed Device
-bindings. The endpoint source uses `BipEndpointBuilder::source_audit_device_binding`
+bindings. A routed binding whose network is this device's own number, once the
+server knows it, names a device on the local network: each notification goes to
+the binding's final MAC with no DNET, not through its router, and a confirmed one
+is answered from that MAC (#1358). The route is resolved for each notification,
+so a number learned after startup applies from the next one; a notification
+already queued or sent keeps its route. The endpoint source uses `BipEndpointBuilder::source_audit_device_binding`
 for direct IPv4 Device route facts. Observed I-Am entries are not eligible. An unresolved Device provision
 may start with CONFIGURATION_ERROR; it emits no ordinary records. A live change
 must resolve both old and new destinations, so an unavailable old binding requires

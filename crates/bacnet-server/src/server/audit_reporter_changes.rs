@@ -84,7 +84,7 @@ impl<T: TransportPort + 'static> AuditReporterChangeSink
                     status,
                     &next,
                     self.device,
-                    self.current_route.lock().unwrap().as_ref(),
+                    self.current_route().as_ref(),
                     self.max_apdu,
                 )?;
                 let context = self
@@ -97,7 +97,7 @@ impl<T: TransportPort + 'static> AuditReporterChangeSink
                 Ok(())
             })?;
         } else {
-            let route = self.current_route.lock().unwrap().clone();
+            let route = self.current_route();
             let apply = |sequence: u16| {
                 self.transactions.commit_audit(|| {
                     if !self.owner.is_active() {

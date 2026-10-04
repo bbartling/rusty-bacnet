@@ -134,6 +134,7 @@ mod credential_data_input_formats;
 mod credential_data_input_out_of_service;
 mod credential_rules;
 mod door;
+mod door_alarm;
 mod door_out_of_service;
 mod metadata_identity;
 mod metadata_topology;
@@ -165,6 +166,8 @@ mod credential_data_input_out_of_service_tests;
 mod credential_tests;
 #[cfg(test)]
 mod device_reference_tests;
+#[cfg(test)]
+mod door_alarm_tests;
 #[cfg(test)]
 mod door_out_of_service_tests;
 #[cfg(test)]

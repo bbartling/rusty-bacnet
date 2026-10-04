@@ -35,7 +35,11 @@ fn python_door_members_and_access_doors_reach_the_arrays() {
     let remote = || {
         PyDeviceObjectReference::Remote(py(ObjectType::DEVICE, 99), py(ObjectType::ACCESS_DOOR, 4))
     };
-    let door = access_door(1, "DOOR-1", references(vec![local(), remote()])).unwrap();
+    let members = |references| DoorSettings {
+        door_members: references,
+        ..DoorSettings::default()
+    };
+    let door = access_door(1, "DOOR-1", members(references(vec![local(), remote()]))).unwrap();
     let mut expected = AccessDoorObject::new(1, "DOOR-1").unwrap();
     expected
         .set_door_members([
@@ -72,7 +76,7 @@ fn python_door_members_and_access_doors_reach_the_arrays() {
     assert!(is_value_out_of_range(&refused), "{refused:?}");
 
     // Omitted arguments keep the empty arrays.
-    let door = access_door(3, "DOOR-3", None).unwrap();
+    let door = access_door(3, "DOOR-3", DoorSettings::default()).unwrap();
     assert_eq!(
         size(&door, PropertyIdentifier::DOOR_MEMBERS),
         PropertyValue::Unsigned(0)
@@ -329,5 +333,75 @@ fn python_point_settings_reach_the_access_point_rows() {
     for settings in refusals {
         let refused = access_point(3, "AP-3", settings).err().unwrap();
         assert!(is_value_out_of_range(&refused), "{refused:?}");
+    }
+}
+
+#[test]
+fn python_door_alarm_lists_reach_the_door() {
+    let settings = DoorSettings {
+        alarm_values: Some(vec![2, 3]),
+        fault_values: Some(vec![5, 256]),
+        masked_alarm_values: Some(vec![4]),
+        ..DoorSettings::default()
+    };
+    let door = access_door(1, "DOOR-1", settings).unwrap();
+    let enumerated = |raw: &[u32]| {
+        PropertyValue::List(raw.iter().copied().map(PropertyValue::Enumerated).collect())
+    };
+    for (property, raw) in [
+        (PropertyIdentifier::ALARM_VALUES, &[2, 3][..]),
+        (PropertyIdentifier::FAULT_VALUES, &[5, 256][..]),
+        (PropertyIdentifier::MASKED_ALARM_VALUES, &[4][..]),
+    ] {
+        assert_eq!(
+            door.read_property(property, None).unwrap(),
+            enumerated(raw),
+            "{property:?}"
+        );
+    }
+
+    // A reserved state, or NORMAL in any list (#1149).
+    let out_of_range = |error: &Error| {
+        matches!(error, Error::Structured { class, code, .. }
+            if *class == ErrorClass::PROPERTY.to_raw() as u32
+                && *code == ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u32)
+    };
+    for settings in [
+        DoorSettings {
+            alarm_values: Some(vec![9]),
+            ..DoorSettings::default()
+        },
+        DoorSettings {
+            fault_values: Some(vec![65_536]),
+            ..DoorSettings::default()
+        },
+        DoorSettings {
+            alarm_values: Some(vec![0]),
+            ..DoorSettings::default()
+        },
+        DoorSettings {
+            fault_values: Some(vec![5, 0]),
+            ..DoorSettings::default()
+        },
+        DoorSettings {
+            masked_alarm_values: Some(vec![0]),
+            ..DoorSettings::default()
+        },
+    ] {
+        let refused = access_door(2, "DOOR-2", settings).err().unwrap();
+        assert!(out_of_range(&refused), "{refused:?}");
+    }
+
+    // Omitted arguments keep the lists empty.
+    let door = access_door(3, "DOOR-3", DoorSettings::default()).unwrap();
+    for property in [
+        PropertyIdentifier::ALARM_VALUES,
+        PropertyIdentifier::FAULT_VALUES,
+        PropertyIdentifier::MASKED_ALARM_VALUES,
+    ] {
+        assert_eq!(
+            door.read_property(property, None).unwrap(),
+            PropertyValue::List(vec![])
+        );
     }
 }

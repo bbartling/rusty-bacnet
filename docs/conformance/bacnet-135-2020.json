@@ -936,7 +936,8 @@
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_path_macs_hold_to_the_npdu_address_bound",
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_unicast_needs_one_remote_network_and_one_station",
      "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::path_apis_and_routed_requests_share_the_remote_dnet_bound",
-     "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::add_routed_device_refuses_a_destination_no_request_could_reach"
+     "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::add_routed_device_refuses_a_destination_no_request_could_reach",
+     "crates/bacnet-client/src/client/number_tests/local_routes.rs::{a_routed_request_naming_this_network_goes_local_and_its_direct_answer_completes_it,a_routed_row_on_this_network_still_bounds_a_local_request,a_long_request_to_this_network_is_segmented_to_the_peer,an_answer_relayed_with_this_networks_snet_leaves_a_local_request_open}"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/npdu.rs::tests::reject_message_to_network_payload_requires_exact_length",
@@ -968,7 +969,8 @@
      "Malformed, unmatched, stale, wrong-router, wrong-DNET, other-reason, and direct traffic do not mutate policy. Full active probing, persistent cache, router enforcement, and unconfirmed-traffic changes remain deferred. Third-party conformance evidence is still required.",
     "A client attached to a BACnetRouter through a LoopbackTransport port gets reason 4 rejects on its own NetworkLayer from the router's port MAC, so it needs no router-side receiver (#1175).",
     "Every MAC on a routed path holds to NpduAddress::MAX_MAC_LEN (18 octets). A routed request refuses a longer DADR or local source MAC, and an empty or longer router MAC, with Error::Encoding before it reserves or waits on the path; the path configuration methods refuse such a router MAC too (#1267).",
-    "A routed confirmed request goes to one device: DNET 0, DNET 65535 or an empty DADR fails with Error::Encoding before the path or a TSM entry is taken. The path methods share that DNET check; add_routed_device and the endpoint requester apply the same rule. Unconfirmed sends keep remote and global broadcasts."
+    "A routed confirmed request goes to one device: DNET 0, DNET 65535 or an empty DADR fails with Error::Encoding before the path or a TSM entry is taken. The path methods share that DNET check; add_routed_device and the endpoint requester apply the same rule. Unconfirmed sends keep remote and global broadcasts.",
+    "A routed target naming the client's learned local network number passes the routed checks and then goes as a local request to its DADR: it takes no path state, its limits come from the routed row, and only an answer from that MAC with no SNET completes it."
     ]
   },
   {
@@ -2129,7 +2131,7 @@
     "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_pulse_below_a_live_command_or_of_zero_length_never_takes_effect",
     "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_rewriting_a_pulse_slot_cancels_or_rearms_its_deadline",
     "crates/bacnet-objects/src/access_control/door_pulse_tests.rs::access_door_times_are_unsigned32_tenths",
-    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::property_metadata_access_door_writes_command_priority_and_gate_relinquish"
+    "crates/bacnet-objects/src/access_control/metadata_topology_door_tests.rs::property_metadata_access_door_writes_command_priority_and_gate_relinquish"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -2138,7 +2140,7 @@
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1073). The relock reuses the server's existing monotonic operation task (spawn_binary_lighting_operation_task, which already drives Binary Lighting Output egress): the door records each pulse slot's deadline from the database's monotonic clock when the command is written, reports its earliest deadline through next_monotonic_deadline_internal, relinquishes due slots in advance_monotonic_time_internal and hands the task a snapshot for COV.",
     "No new task, trait method or clock source was added; a door with no bound clock advances a logical clock through advance_time_internal, which the object tests use. Local policies: the clause lets the controller relinquish a pulse early as a local matter; this implementation lets an outranked pulse run to its own deadline.",
-    "Changing a pulse time leaves an armed deadline as it was. The defaults are 5 s, 15 s and 30 s. Not covered: Door_Unlock_Delay_Time (an optional row the object doesn't serve, so no unlock delay is applied) and the door-open-too-long alarm, since Door_Open_Too_Long_Time is stored and served but no Door_Alarm_State logic consumes it.",
+    "Changing a pulse time leaves an armed deadline as it was. The defaults are 5 s, 15 s and 30 s. Not covered: Door_Unlock_Delay_Time (an optional row the object doesn't serve, so no unlock delay is applied) and a door-open-too-long timer: the application reads Door_Open_Too_Long_Time and reports DOOR_OPEN_TOO_LONG itself (BACNET-12-ACCESS-DOOR-INTRINSIC-REPORTING).",
     "#1131: the relock reads none of Door_Status, Lock_Status or Door_Alarm_State, so values a client simulates while Out_Of_Service is TRUE neither move nor follow it (BACNET-12-ACCESS-DOOR-OUT-OF-SERVICE-SIMULATION)."
    ]
   },
@@ -2146,7 +2148,7 @@
    "id": "BACNET-12-ACCESS-DOOR-OUT-OF-SERVICE-SIMULATION",
    "standard_anchor": "Clause 12.26, Table 12-30 footnote 1 and Clauses 12.26.9, 12.26.12, 12.26.13 and 12.26.20 (Access Door Door_Status, Lock_Status, Door_Alarm_State); Clauses 12.26.6 and 12.26.14 (Secured_Status derived from them); Clause 13.1 Table 13-1 (Access Door row); Clause 15.9.1.3 WriteProperty errors; Clause 21 BACnetDoorStatus, BACnetLockStatus and BACnetDoorAlarmState; Clause 23.1 Table 23-1",
    "priority": "P1",
-   "requirement_summary": "While Out_Of_Service is TRUE, an Access Door takes WriteProperty and WritePropertyMultiple of Door_Status, Lock_Status and Door_Alarm_State, the three rows footnote 1 of Table 12-30 makes writable out of service; in service each fails with PROPERTY / WRITE_ACCESS_DENIED. A write must be an Enumerated inside the row's production: a named BACnetDoorStatus or one from the proprietary range 1024..=65535, a named BACnetLockStatus (a closed production that Table 23-1 doesn't list), or a named BACnetDoorAlarmState or one from 256..=65535. Another number is VALUE_OUT_OF_RANGE and another datatype INVALID_DATA_TYPE, with the property unchanged. The three rows are WhenOutOfService in the property metadata and writable in the PICS. Entering out of service sets the door's own three values aside and the return to service serves them again. A simulated Door_Alarm_State sends the Access Door SubscribeCOV report, and so does the restore when it changes the value served. Secured_Status is worked out on every read from what the door serves (Clause 12.26.14, #1148). It reads SECURED for a door that is commanded LOCK, not IN_ALARM, CLOSED or UNUSED at its contact and LOCKED or UNUSED at its lock monitor. Any input that misses makes it UNSECURED, so an UNLOCK or a pulse reads UNSECURED until it is relinquished or relocks. With none missed, a Door_Status or Lock_Status that reads UNKNOWN or a fault makes it UNKNOWN. A simulated Door_Status or Lock_Status moves it the same way, and the return to service moves it back with the device's values.",
+   "requirement_summary": "While Out_Of_Service is TRUE, an Access Door takes WriteProperty and WritePropertyMultiple of Door_Status, Lock_Status and Door_Alarm_State, the three rows footnote 1 of Table 12-30 makes writable out of service; in service each fails with PROPERTY / WRITE_ACCESS_DENIED. A write must be an Enumerated inside the row's production: a named BACnetDoorStatus or one from the proprietary range 1024..=65535, a named BACnetLockStatus (a closed production that Table 23-1 doesn't list), or a named BACnetDoorAlarmState or one from 256..=65535. Another number is VALUE_OUT_OF_RANGE and another datatype INVALID_DATA_TYPE, with the property unchanged. The three rows, and Reliability (a BACnetReliability value) since the door's fault check can move it, are WhenOutOfService in the property metadata and writable in the PICS; a simulated Door_Alarm_State must also be one the door's alarm lists admit. Entering out of service sets the door's own three values aside and the return to service serves them again, dropping any simulated Reliability. A simulated Door_Alarm_State sends the Access Door SubscribeCOV report, and so does the restore when it changes the value served. Secured_Status is worked out on every read from what the door serves (Clause 12.26.14, #1148). It reads SECURED for a door that is commanded LOCK, not IN_ALARM, masks no alarm state (an empty Masked_Alarm_Values), CLOSED or UNUSED at its contact and LOCKED or UNUSED at its lock monitor. Any input that misses makes it UNSECURED, so an UNLOCK or a pulse reads UNSECURED until it is relinquished or relocks. With none missed, a Door_Status or Lock_Status that reads UNKNOWN or a fault makes it UNKNOWN. A simulated Door_Status or Lock_Status moves it the same way, and the return to service moves it back with the device's values.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-objects/src/access_control/door_out_of_service.rs",
@@ -2156,12 +2158,14 @@
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/access_control/door_out_of_service_tests.rs::{access_door_takes_simulated_rows_out_of_service,access_door_return_to_service_serves_the_device_state_again,access_door_simulation_neither_drives_nor_follows_the_pulse_relock}",
-    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_trio_write_capabilities_match_dispatch,property_metadata_access_door_writes_command_priority_and_gate_relinquish}",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::property_metadata_access_trio_write_capabilities_match_dispatch",
+    "crates/bacnet-objects/src/access_control/metadata_topology_door_tests.rs::property_metadata_access_door_writes_command_priority_and_gate_relinquish",
     "crates/bacnet-objects/src/access_control/door_secured_status_tests.rs::{access_door_secured_status_is_secured_with_every_input_met,access_door_secured_status_follows_present_value,access_door_secured_status_follows_door_and_lock_status,access_door_secured_status_follows_the_in_alarm_flag,access_door_secured_status_is_unknown_when_an_input_cannot_be_told,access_door_secured_status_follows_a_pulse_and_its_relock,access_door_secured_status_follows_a_simulation_and_the_return_to_service}",
     "crates/bacnet-server/src/handlers/tests/access_door_oos_writes.rs::{write_property_takes_door_status_rows_only_out_of_service,write_property_multiple_takes_door_status_rows_only_out_of_service,read_property_derives_secured_status_from_the_served_door}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_door_indexed_reads_and_bytes_are_unchanged",
-    "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_door_simulated_door_alarm_state_reports_and_restores",
-    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact"
+    "crates/bacnet-server/src/server/table_13_1_door_cov_tests.rs::access_door_simulated_door_alarm_state_reports_and_restores",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact",
+    "crates/bacnet-objects/src/access_control/door_secured_status_tests.rs::access_door_secured_status_fails_while_any_state_is_masked"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/access_control/door_out_of_service_tests.rs::{access_door_refuses_simulated_rows_in_service,access_door_simulated_rows_outside_their_datatypes_are_refused_unchanged}",
@@ -2176,17 +2180,17 @@
    ],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1131, found during #1061). Breaking pre-1.0 wire change: the three rows used to refuse every write. Footnote 1 of Table 12-30 marks exactly Door_Status, Lock_Status and Door_Alarm_State.",
-    "Clause 12.26.9 also lists Reliability, but only for a door whose Reliability can leave NO_FAULT_DETECTED; this door applies no fault algorithm and nothing changes its Reliability, so Reliability stays read-only, and Present_Value is commandable in both states already.",
+    "Clause 12.26.9 also lists Reliability for a door whose Reliability can leave NO_FAULT_DETECTED. The FAULT_STATE check on Fault_Values can, so Reliability takes writes out of service too, and a simulated value holds until the return to service.",
     "Local policies, each recorded in access_control/door_out_of_service.rs: the door holds the three values as one DoorState and sets it aside on the FALSE-to-TRUE edge through common::write_out_of_service_with_restore, the generic form #1131 extracted from write_out_of_service_with_reliability_restore (now a wrapper with its NO_FAULT_DETECTED fallback); the return to service restores it and drops the simulated values.",
     "Meanwhile set_door_alarm_state and the new set_door_status and set_lock_status update the state set aside. A NULL write of one of the three is INVALID_DATA_TYPE, as for the Life Safety Tracking_Value.",
-    "Clause 12.26.20 restricts Door_Alarm_State to NORMAL and the members of Alarm_Values and Fault_Values and keeps it out of Masked_Alarm_Values; the door serves none of those lists, so a simulated value is checked against the enumeration only.",
-    "The pulse relock (BACNET-12-ACCESS-DOOR-PULSE-TIMING) runs on the timer the command armed and reads none of the three values. The door runs no intrinsic reporting (Event_State stays NORMAL), so a simulated Door_Alarm_State raises no event of its own; an Event Enrollment monitoring the property reads the served value.",
-    "COV needed no server change: the Table 13-1 row values are compared around every committed write. Not covered: a runtime application route for the three values once the server holds the door (the setters reach it only before), Alarm_Values, Fault_Values and Masked_Alarm_Values, and the CHANGE_OF_STATE and FAULT_STATE algorithms.",
+    "A simulated Door_Alarm_State is also checked against Alarm_Values, Fault_Values and Masked_Alarm_Values (BACNET-12-ACCESS-DOOR-INTRINSIC-REPORTING).",
+    "The pulse relock (BACNET-12-ACCESS-DOOR-PULSE-TIMING) runs on the timer the command armed and reads none of the three values. The CHANGE_OF_STATE and FAULT_STATE algorithms watch the served Door_Alarm_State, so a simulated one raises events.",
+    "COV: the Table 13-1 row values are compared around every committed write. A list edit that moves Door_Alarm_State needed the list services to give the edited object that fanout too (BACNET-15-LIST-ELEMENT-SEMANTICS). Not covered: a runtime application route for the three values once the server holds the door (the setters reach it only before).",
     "#1148 (wire change): Secured_Status used to read a stored SECURED whatever the door did; AccessDoorObject::secured_status now derives it on each read and nothing stores it, so COV snapshots, ReadProperty, ReadPropertyMultiple and an Event Enrollment monitoring it all see the current value.",
     "Secured_Status is not in the Access Door row of Table 13-1 (#1061), so no COV path needed a change. Local policies, recorded on AccessDoorObject::secured_status: each input is met, failed or undetermined, a failed input gives UNSECURED even when another is undetermined (a door commanded UNLOCK is not secure whatever its contact reports), and UNKNOWN needs every input met or undetermined.",
-    "The only undetermined inputs are Door_Status UNKNOWN or DOOR_FAULT and Lock_Status UNKNOWN or LOCK_FAULT: the door's own monitor saying it can't tell. The option of keying UNKNOWN on Reliability was not taken, because this door applies no fault algorithm and nothing moves its Reliability off NO_FAULT_DETECTED; a new door starts CLOSED and LOCKED, so a never-reported Door_Status reads CLOSED, not UNKNOWN.",
-    "Door_Status values the clause does not describe for a door (NONE, CLOSING, OPENING, SAFETY_LOCKED, LIMITED_OPENED) and proprietary ones count as not closed. IN_ALARM comes from Event_State (Clause 12.26.6); the door now serves Status_Flags from its own Event_State field so the flag and Secured_Status read the same source, which stays NORMAL until intrinsic reporting is modelled (no wire change).",
-    "Masked_Alarm_Values is not served, so that input is treated as met; #1149 adds the list and its input next to the others in secured_status. Door_Alarm_State is not an input: it reaches Secured_Status only through Event_State once an event algorithm runs.",
+    "The only undetermined inputs are Door_Status UNKNOWN or DOOR_FAULT and Lock_Status UNKNOWN or LOCK_FAULT: the door's own monitor saying it can't tell. Reliability is no input of its own; a fault reaches Secured_Status through Event_State FAULT and IN_ALARM. A new door starts CLOSED and LOCKED, so a never-reported Door_Status reads CLOSED, not UNKNOWN.",
+    "Door_Status values the clause does not describe for a door (NONE, CLOSING, OPENING, SAFETY_LOCKED, LIMITED_OPENED) and proprietary ones count as not closed. IN_ALARM comes from Event_State (Clause 12.26.6), which the door's intrinsic reporting moves.",
+    "A Masked_Alarm_Values list with any member fails the door. Door_Alarm_State is not an input: it reaches Secured_Status only through Event_State.",
     "Door_Members is a BACnetARRAY of BACnetDeviceObjectReference, set by AccessDoorObject::set_door_members (BACNET-12-ACCESS-CONTROL-ARRAYS)."
    ]
   },
@@ -2664,7 +2668,8 @@
     "crates/bacnet-server/src/server/binding_probes_tests.rs::{an_answer_wakes_every_wait_and_frees_the_device,the_send_moves_the_deadline_every_waiting_write_shares,a_remote_scope_on_this_network_by_number_is_local}",
     "crates/bacnet-server/src/server/device_bindings_tests.rs::who_is_scope_follows_the_last_observation_and_a_fruitless_probe_drops_it",
     "crates/rusty-bacnet/tests/test_typed_list_reads.py::TypedListReadTests::test_command_action_reads_as_the_action_commands_written",
-    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::command_actions_read_as_the_action_commands_written"
+    "crates/rusty-bacnet/src/types/constructed_read_tests.rs::command_actions_read_as_the_action_commands_written",
+    "crates/bacnet-server/src/server/local_network_outbound_tests.rs::command_write_bound_through_this_network_goes_without_a_dnet"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/command_action_wire_tests.rs::{command_quit_on_failure_stops_the_list_and_action_reads_back_the_flags,command_present_value_above_the_action_size_is_value_out_of_range,command_naming_another_device_fails_and_naming_this_device_is_local,command_writing_its_own_present_value_is_refused_busy}",
@@ -2696,7 +2701,8 @@
     "CHANGELOG.md Unreleased Fixed entry for #1252 (stop ends Command runs), from changelog.d/1252-stop-ends-command-runs.md",
     "CHANGELOG.md Unreleased Changed entry for #1323 (remote write refusals keep their payload), from changelog.d/1323-refusal-payload.md",
     "CHANGELOG.md Unreleased Fixed entry for #1324 (a dropped write_local ends its runs), from changelog.d/1324-dropped-write-local-runs.md",
-    "CHANGELOG.md Unreleased Added entry for #1322 (targeted Who-Is for unbound remote targets), from changelog.d/1322-targeted-who-is.md"
+    "CHANGELOG.md Unreleased Added entry for #1322 (targeted Who-Is for unbound remote targets), from changelog.d/1322-targeted-who-is.md",
+    "CHANGELOG.md Unreleased Fixed entry for #1358 (the local network number on outbound paths), from changelog.d/1358-local-number-outbound.md"
    ],
    "notes": [
     "Split child of BACNET-12-OBJECT-MODEL (#1150, found in #1135). Breaking pre-1.0 wire change: Present_Value used to store any Unsigned and run nothing. Clause 12.10 and Table 12-12 were read as page images.",
@@ -2723,7 +2729,8 @@
     "A remote target with no fresh binding gets one Who-Is with both limits set to its instance: global for a device never heard from, else where its stale I-Am came from (local if that network is numbered as this one).",
     "The write waits cov_retry_timeout_ms from the Who-Is send for the I-Am and fails unsent without one. A Who-Is that draws nothing drops the stale I-Am, so the device's next Who-Is is global.",
     "Who-Is bounds: one per device per 60 s from its send, shared by writes that miss while it is out; a miss inside that minute fails at once; none for instance 4194303 or while DCC restricts initiation.",
-    "At most 256 devices with a Who-Is out or held off; an answered device frees its place and stays bound ten minutes, so the cap holds unanswered Who-Is requests to 256 a minute."
+    "At most 256 devices with a Who-Is out or held off; an answered device frees its place and stays bound ten minutes, so the cap holds unanswered Who-Is requests to 256 a minute.",
+    "A binding routed through the network numbered as this one, once that number is known, is written as a local device: the WriteProperty goes to its final MAC with no DNET and is answered from there."
    ],
    "gaps": [
    ]
@@ -2924,6 +2931,59 @@
    ]
   },
   {
+   "id": "BACNET-12-ACCESS-DOOR-INTRINSIC-REPORTING",
+   "standard_anchor": "Table 12-30, Clauses 12.26.20-21, 12.26.23-31, 12.26.33, 12.26.36, 13.3.2 and 13.4.5, Table 13-5",
+   "priority": "P1",
+   "summary": "An Access Door serves its three alarm lists, keeps Door_Alarm_State within them and reports CHANGE_OF_STATE and fault transitions to its Notification Class recipients.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/door_alarm.rs",
+    "crates/bacnet-objects/src/access_control/door.rs::AccessDoorObject",
+    "crates/bacnet-objects/src/access_control/door_out_of_service.rs",
+    "crates/bacnet-objects/src/event/state_reporting.rs",
+    "crates/bacnet-objects/src/access_control/metadata_topology.rs",
+    "crates/bacnet-server/src/server/event_notification_payload.rs::project_intrinsic_payload"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/door_alarm_tests.rs::{access_door_serves_the_event_rows_and_alarm_lists,access_door_masking_the_current_state_returns_it_to_normal,access_door_goes_offnormal_after_time_delay_and_back_to_normal,access_door_fault_values_report_multi_state_fault,access_door_simulated_reliability_holds_until_the_return_to_service}",
+    "crates/bacnet-objects/src/access_control/door_secured_status_tests.rs::{access_door_secured_status_follows_the_in_alarm_flag,access_door_secured_status_fails_while_any_state_is_masked}",
+    "crates/bacnet-server/src/server/access_door_event_tests.rs::{access_door_open_too_long_reaches_recipients_until_masked,access_door_simulated_alarm_goes_into_and_out_of_alarm,access_door_fault_value_reports_door_alarm_state_and_present_value}",
+    "crates/bacnet-server/src/server/list_element_event_tests.rs::{masked_alarm_values_list_edit_returns_a_door_to_normal_at_once,masked_alarm_values_add_list_element_reports_the_door_back_to_normal,alarm_values_remove_list_element_reports_the_door_back_to_normal,alarm_values_edits_that_move_no_reported_value_stay_quiet,list_edit_stamps_a_timestamped_change_at_the_time_of_the_edit}",
+    "crates/bacnet-server/src/handlers/tests/access_door_oos_writes.rs::{door_alarm_lists_take_door_alarm_states_over_the_wire,masking_the_door_alarm_state_over_the_wire_returns_it_to_normal}",
+    "crates/bacnet-objects/src/database/tests.rs::all_eleven_builtin_intrinsic_families_implement_atomic_commit",
+    "crates/bacnet-objects/src/enrollment_summary_capability_tests.rs::all_eleven_intrinsic_families_report_implied_algorithm_and_shared_commit_coordinate",
+    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::{all_eleven_builtin_normal_families_project_exact_typed_values,builtin_fault_projection_is_tag_19_with_explicit_property_order}",
+    "crates/bacnet-server/src/server/event_message_policy_tests.rs::all_eleven_builtin_families_store_each_policy_message_in_only_its_coordinate",
+    "crates/bacnet-server/src/pics/acked_transitions_policy_tests.rs::acked_transitions_network_policy_is_uniform_on_all_supported_types",
+    "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_door_exact_sets_readable_rows_and_indexed_list,property_metadata_access_trio_write_capabilities_match_dispatch}",
+    "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_door_indexed_reads_and_bytes_are_unchanged",
+    "crates/bacnet-server/src/pics/property_metadata_tests/access_topology.rs::pics_access_topology_property_metadata_is_exact",
+    "crates/rusty-bacnet/src/server/server_methods/access_control_methods_tests.rs::python_door_alarm_lists_reach_the_door",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlConfigurationTests::test_door_alarm_lists_reach_the_door_and_gate_its_alarm_state",
+    "crates/rusty-bacnet/tests/test_access_control_configuration.py::AccessControlStubContractTests::test_runtime_and_stub_expose_the_keywords"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/door_alarm_tests.rs::{access_door_alarm_lists_take_door_alarm_states_only,access_door_alarm_state_outside_the_lists_is_refused}",
+    "crates/bacnet-server/src/handlers/tests/access_door_oos_writes.rs::simulated_door_alarm_state_outside_the_lists_is_refused"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#access-control-7",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "The application decides when the door is in alarm, DOOR_OPEN_TOO_LONG included: the door serves Door_Open_Too_Long_Time for it to read and runs no timer of its own.",
+    "Door_Alarm_State is refused outside NORMAL, Alarm_Values and Fault_Values or inside Masked_Alarm_Values. A list edit that leaves it outside, masking included, returns it to NORMAL. No list takes NORMAL.",
+    "Reliability is MULTI_STATE_FAULT while Door_Alarm_State is a fault value; it takes writes only out of service, where a simulated value overrides the check. Moving between fault or alarm values sends no new transition.",
+    "A CHANGE_OF_STATE notification carries Door_Alarm_State as `door-alarm-state`; a CHANGE_OF_RELIABILITY one lists Door_Alarm_State, then Present_Value.",
+    "A Masked_Alarm_Values list with any member makes Secured_Status UNSECURED."
+   ],
+   "gaps": [
+    "#1132: a Door_Alarm_State the application sets on the held object reaches the algorithm at the one-second tick, and no door-open-too-long timer runs",
+    "#1329: Event_Message_Texts_Config, Event_Algorithm_Inhibit and Event_Algorithm_Inhibit_Ref are not served"
+   ]
+  },
+  {
    "id": "BACNET-12-ACCESS-ZONE-INTRINSIC-REPORTING",
    "standard_anchor": "Clause 12.32, Table 12-37, Clauses 12.32.25 to 12.32.37, Clause 13.3.2, Table 13-5",
    "priority": "P1",
@@ -2941,10 +3001,10 @@
     "crates/bacnet-server/src/server/list_element_event_tests.rs::{alarm_values_list_edits_move_a_zone_at_once,alarm_values_writes_move_a_zone_at_once}",
     "crates/bacnet-server/src/handlers/tests/list_value_writes.rs::{empty_alarm_values_write_clears_the_list,one_element_alarm_values_write_is_a_list_of_one}",
     "crates/bacnet-server/src/handlers/tests/access_zone_oos_writes.rs::alarm_values_take_occupancy_states_over_the_wire",
-    "crates/bacnet-objects/src/database/tests.rs::all_ten_builtin_intrinsic_families_implement_atomic_commit",
-    "crates/bacnet-objects/src/enrollment_summary_capability_tests.rs::all_ten_intrinsic_families_report_implied_algorithm_and_shared_commit_coordinate",
-    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::{all_ten_builtin_normal_families_project_exact_typed_values,builtin_fault_projection_is_tag_19_with_explicit_property_order}",
-    "crates/bacnet-server/src/server/event_message_policy_tests.rs::all_ten_builtin_families_store_each_policy_message_in_only_its_coordinate",
+    "crates/bacnet-objects/src/database/tests.rs::all_eleven_builtin_intrinsic_families_implement_atomic_commit",
+    "crates/bacnet-objects/src/enrollment_summary_capability_tests.rs::all_eleven_intrinsic_families_report_implied_algorithm_and_shared_commit_coordinate",
+    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::{all_eleven_builtin_normal_families_project_exact_typed_values,builtin_fault_projection_is_tag_19_with_explicit_property_order}",
+    "crates/bacnet-server/src/server/event_message_policy_tests.rs::all_eleven_builtin_families_store_each_policy_message_in_only_its_coordinate",
     "crates/bacnet-server/src/pics/acked_transitions_policy_tests.rs::acked_transitions_network_policy_is_uniform_on_all_supported_types",
     "crates/bacnet-objects/src/access_control/metadata_topology_tests.rs::{property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list,property_metadata_access_trio_write_capabilities_match_dispatch}",
     "crates/bacnet-server/src/handlers/tests/read_rpm/access_topology.rs::rpm_access_zone_indexed_reads_and_bytes_are_unchanged",
@@ -4091,7 +4151,8 @@
     "crates/bacnet-server/src/server/channel_reliability_tests.rs::{channel_member_that_refuses_is_a_process_error_until_a_good_run_clears_it,channel_reliability_takes_a_client_value_only_out_of_service,channel_reliability_names_the_first_failure_in_write_order}",
     "crates/bacnet-objects/src/channel/reliability_tests.rs::{channel_reliability_names_the_failure_and_clears_on_the_next_success,channel_write_with_nothing_to_distribute_clears_reliability,channel_reliability_is_simulated_out_of_service_and_restored_in_service,channel_takes_members_in_other_devices}",
     "crates/bacnet-server/src/command_lists/target.rs::tests::{failures_sort_into_configuration_process_and_communication,only_an_invalid_datatype_error_or_reject_refuses_the_datatype,only_silence_to_the_write_or_its_who_is_marks_the_device_silent}",
-    "crates/bacnet-integration-tests/tests/server/channel_remote.rs::channel_writes_members_in_another_device_over_bip"
+    "crates/bacnet-integration-tests/tests/server/channel_remote.rs::channel_writes_members_in_another_device_over_bip",
+    "crates/bacnet-server/src/server/local_network_outbound_tests.rs::channel_member_bound_through_this_network_is_written_without_a_dnet"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/channel_wire_tests.rs::{channel_value_no_member_can_take_fails_without_writing,channel_writing_its_own_present_value_is_refused_busy}",
@@ -4127,11 +4188,12 @@
     "CHANGELOG.md Unreleased Added entry for #1264 (Channel remote members and Reliability), from changelog.d/1264-channel-remote-members-reliability.md",
     "CHANGELOG.md Unreleased Fixed entry for #1324 (a dropped write_local ends its runs), from changelog.d/1324-dropped-write-local-runs.md",
     "CHANGELOG.md Unreleased Added entry for #1322 (targeted Who-Is for unbound remote targets), from changelog.d/1322-targeted-who-is.md",
-    "docs/rust-api.md#lighting--color-5 Channel object"
+    "docs/rust-api.md#lighting--color-5 Channel object",
+    "CHANGELOG.md Unreleased Fixed entry for #1358 (the local network number on outbound paths), from changelog.d/1358-local-number-outbound.md"
    ],
    "notes": [
     "A local member's datatype is that of its property's value; NULL, constructed values and remote members count as unknown and pass unchanged, `Lighting_Command` as a BACnetLightingCommand. Rule 3 bounds Unsigned and ENUMERATED at 2147483647.",
-    "Remote members get WriteProperty one at a time, after a Who-Is if unbound; a device silent to a write or Who-Is fails its later members unsent (one Who-Is and one write's retries per silent device). This Device's identifier is dropped.",
+    "Remote members are written one at a time (no DNET if bound via this network's number), after a Who-Is if unbound; a silent device fails its later members unsent (one Who-Is, one write's retries each). This Device's identifier is dropped.",
     "A whole `Execution_Delay` write takes exactly one delay per member (VALUE_OUT_OF_RANGE otherwise); index-0 and whole member-list writes resize both arrays. Caps are 1024 members and 64 control groups.",
     "A run that would start its own object again, or with more than eight runs above it, ends failed and its writer gets OBJECT / BUSY. `tick_schedules` runs a distribution; the bare handlers and `stop()` end it FAILED.",
     "Reliability names the first failed member: CONFIGURATION_ERROR for a value the Channel can't coerce (type or rule range) or an unknown-target or datatype refusal, COMMUNICATION_FAILURE for no binding, DCC or silence, else PROCESS_ERROR."
@@ -5579,7 +5641,9 @@
     "crates/bacnet-integration-tests/tests/audit_query.rs",
     "crates/rusty-bacnet/tests/test_audit_api.py",
     "crates/bacnet-objects/src/audit/policy_authority.rs",
-    "crates/bacnet-server/src/server/audit_policy_precommit.rs"
+    "crates/bacnet-server/src/server/audit_policy_precommit.rs",
+    "crates/bacnet-server/src/server/audit_recipient_routes.rs::AuditRoutes::resolve",
+    "crates/bacnet-server/src/server/audit_recipient.rs::current_route"
    ],
    "target_create_delete_immediate": "RB-21d, Refs #345 (remains open). Standard 135-2020 Clause 19.6 and Tables 19-3/19-4/19-5, PDF pp. 819-828 (printed 817-826), inspected through the local licensed source navigation; paraphrase only. Uses the elected configured target Reporter to successful and authorized execution-failed CreateObject/DeleteObject operations. Lifecycle operations are locally classified as AUDIT_CONFIG, require their respective CREATE/DELETE bit, ignore priority filtering, and apply existing Monitored_Objects selection to the final/candidate created OID or captured deleted OID. CREATE/DELETE use nominal selector membership and their lifecycle operation bit. Each operation admits at most one immediate record, with source identity/invoke semantics, local target Device, completion timestamp, and no property, priority, target/current value, or separate initial-value WRITE records. Success omits Result; failure uses the unchanged response-mapped BACnet Error. By-type failures before allocation or without a wire-representable OID omit target_object instead of inventing an identity; only catch-all or the known requested type can select such a failure. Existing public handlers, factory support, response behavior, rollback/name-index removal, and COV cleanup remain unchanged. All configured Reporter identities remain protected until runtime quiescence. Other completed deletions retain the captured per-operation Reporter identity and health authority. Authorization denials, decode failures, requests dropped under DCC DISABLE (not DISABLE_INITIATION), overload and unknown Timeout/Reject/Abort outcomes remain silent. Reuses existing no-await admission, 64-active/three-second-total delivery bounds, health and stale-generation ownership. No source-side, per-object overrides, multi-Reporter arbitration, batching/Send_Now, AUDITING_FAILURE, retry/queue/segmentation/durable outbox, forwarding, Python parity, Audit BIBB, or BTL claim.",
    "target_list_immediate": "RB-21e, Refs #345 (remains open). Standard 135-2020 Clause 19.6, Tables 19-3/19-4/19-5 (PDF pp. 821-825, printed 819-823), and existing Clause 15.1/15.2 handlers; licensed source inspected locally, paraphrase only. The selected single target Reporter emits at most one immediate WRITE notification for an authorized AddListElement/RemoveListElement success or valid execution failure. Full service, element and required framed-destination decoding precedes observation. Existing responses, error precedence, atomicity, duplicate additions, framing, capacities and event semantics are preserved. The record carries target object/property/requested array index and no priority. Owner-selected Target_Value policy retains the raw requested delta without another application tag; Current_Value uses the existing bounded pre-image policy. Values are included when structurally valid and at most 32 encoded octets, including present empty values, otherwise omitted without truncation. A successful no-match removal still reports once. Success omits Result; authorized unknown-object, property, target-shape, write-access and capacity failures carry the unchanged response-mapped Error and truthful known fields. NONE, missing WRITE, and unmatched Monitored_Objects suppress ordinary targets; AUDIT_CONFIG and AUDIT_ALL admit implemented non-Present_Value lists, priority filtering is irrelevant, and enabled Reporter targets bypass selection and WRITE but not NONE. Duplicated selectors never duplicate records. Denials, service/element/framed decode failures, DCC DISABLE ingress drops, admission drops and unknown Timeout/Reject/Abort outcomes remain silent. Reuses no-await admission, 64-active/three-second-total delivery, APDU fit, confirmed/unconfirmed transaction ownership, instance-owned health and no-recursion behavior. No queue, retries, segmentation, durability or complete WRITE claim: AtomicWriteFile is covered separately by RB-21f; inbound WriteGroup remains unsupported by design. Multi-Reporter association is qualified by target_multiple_reporters; no full Reporter, BIBB or BTL qualification, source operation expansion or batching is claimed here.",
@@ -5746,6 +5810,8 @@
     "crates/bacnet-objects/src/audit/staging_tests.rs::a_finished_batch_its_request_forgot_lands_from_the_operation_task",
     "crates/bacnet-objects/src/audit/staging_tests.rs::staging_skips_a_write_with_nothing_to_commit",
     "crates/bacnet-server/src/server/audit_notification_staging_tests.rs::a_confirmed_notification_commits_while_the_database_stays_available",
+    "crates/bacnet-server/src/server/audit_local_network_tests.rs::{audit_notifications_to_a_binding_routed_through_this_network_go_without_a_dnet,audit_notifications_to_a_binding_routed_to_another_network_keep_its_dnet}",
+    "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_to_a_parent_routed_through_this_network_goes_without_a_dnet",
     "crates/bacnet-server/src/server/audit_dcc_tests.rs::{audit_notifications_start_under_disable_initiation_and_keep_the_reporter_healthy,audit_owing_writes_commit_and_notify_under_disable_initiation,send_now_under_disable_initiation_flushes_the_queue_once,a_resource_drop_under_disable_initiation_is_summarized}",
     "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_goes_out_under_disable_initiation"
    ],
@@ -5847,7 +5913,9 @@
     "docs/python-api.md#object-owned-avbv-audit-policy",
     "docs/device-audit-recipient.md#device-audit-recipient",
     "docs/target-audit-reporters.md#target-audit-reporters",
-    "docs/python-api.md#target-audit-reporters"
+    "docs/python-api.md#target-audit-reporters",
+    "docs/audit-log-forwarding.md#configuration-health-and-resource-bounds",
+    "CHANGELOG.md Unreleased Fixed entry for #1358 (the local network number on outbound paths), from changelog.d/1358-local-number-outbound.md"
    ],
    "target_write_immediate": "RB-21a/b/c narrow slices only, Refs #345 (remains open). Clause 12.63 / Table 12-82 and Clause 19.6 / Tables 19-3, 19-4, 19-5; Standard 135-2020 PDF pp. 621-624 and 819-828 inspected, including table footnotes; 2024-04-29 errata checked, with commandable-priority footnotes visually verified on errata p. 4. Failed target-operation reporting is implementation-defined; Monitored_Objects and batching are optional. One elected configured Reporter emits separate successful WP/WPM elements after authorization and commit. RB-21b reports execution errors at the existing observed object-write boundary, after decode/semantic prechecks and authorization: WP emits at most one failed record with the actual response-mapped BACnet Error in Result; WPM emits each committed-prefix success, one failed-element record, then halts without attempting or reporting later elements. Authorization/policy denials remain silent by owner decision; decode/pre-execution failures and unknown/timeout/Reject/Abort outcomes are not recast as execution failures. Disabled NONE emits no ordinary records; AUDIT_CONFIG locally designates non-Present_Value properties as configuration, and proprietary levels use AUDIT_ALL behavior. The same filters apply to success and failure records. Commandable Present_Value uses the object's Priority_Array capability and omitted priority 16; other properties are not priority-filtered. External Reporter writes emit once when enabled even with WRITE disabled, while internal status changes cannot recurse. Records include pre-write current value when available, target value, object/property/index, incoming invoke ID, source address or unambiguous known Device identity, local target Device and execution-completion timestamp; successes still omit Result and all target records omit source timestamp. Values over 32 encoded octets are omitted. The target Device owns Audit_Notification_Recipient; configured local/routed Device bindings remain immutable route authority and passive discovery is ineligible. The separate mandatory recipient-change path is described in target_device_recipient. Delivery is best-effort: 64 active slots, no waiting queue, one total three-second send/ACK deadline, no retries, no outbound segmentation, and complete APDU size bounded by the server limit. Encoding/size/admission/send/ACK failures do not change protocol responses or roll back writes and expose COMMUNICATION_FAILURE; an unresolved configured Device destination exposes CONFIGURATION_ERROR; missing local Device or provision rejects startup. Saturation and deadline tests cover both delivery modes without queued replay or recursive records; real UDP tests deliver successes and failures to an Audit Log and query them separately. There is no durable delivery guarantee. Source operations beyond the bounded endpoint READ slice in BACNET-19-SOURCE-READ-PROPERTY, non-WP/WPM production (including ordinary direct local/schedule writes), per-object audit overrides, Maximum_Send_Delay/Send_Now/batching, AUDITING_FAILURE drop records, parent forwarding/outbox/receipt changes (RB-22), and Python parity (RB-23) are explicitly deferred. Corrected RB-20 query contracts are untouched; no full Reporter, BIBB, BTL, or #345 completion claim. Public scope: CHANGELOG.md RB-21a/b/c and AuditReportersConfig Rust API docs. Audit family status is not promoted. #809 narrows the historical best-effort response statement for eligible actual built-in AV/BV Audit setting changes only: object_owned_av_bv_policy.mandatory_precommit_admission records the local atomic reject-before-change contract.",
    "target_write_monitored_objects": "RB-21c, Refs #345. Clause 12.63 / Table 12-82 (PDF pp. 621-623, printed 619-621), Clause 19.6.2 (PDF p. 821, printed 819), Clause 21 BACnetObjectSelector (PDF p. 921, printed 919), and Clause 12.1.5.1 (PDF p. 164, printed 162) inspected. The 2024-04-29 errata do not change selector semantics; item 4 Property_List exclusions are preserved. Local Rust set_monitored_objects(None) omits the optional property and selects nominal catch-all membership. Some(empty) or all-NULL selects no ordinary targets; exact ObjectIdentifier and ObjectType alternatives select matching targets, ignoring NULL and admitting at most one record per attempted element despite duplicates. Selection precedes pending-record creation for both successful and failed WP/WPM elements and never changes execution, response, committed-prefix ordering, reliability, or delivery bounds. Enabled Reporter-target writes bypass selection and existing WRITE/priority filters. Network WP/WPM cannot mutate the property; denied Reporter execution produces one failure record under the existing rule, without recursive delivery records. Effective optional/read-only metadata, Property_List, RP/RPM (including array count/index errors), and runtime PICS reflect local property presence without a metadata-schema change. Existing application primitive codecs encode the untagged NULL/ObjectIdentifier/Enumerated CHOICE and concatenated array; independent byte vectors and real UDP selected success/failure receipt are tested. Multiple target association and overlap health are qualified separately by target_multiple_reporters; no broader support claim.",
@@ -5876,6 +5944,7 @@
     "One commit is staged per Audit Log at a time; a second batch waits for the first without the guard. A network or write_local Log_Enable change stages the same way; add_record and other in-place changes commit under the caller's guard.",
     "Storage holds a staged batch a moment before the log serves it: the commit returns on the writer thread, then the request applies the batch under the guard. A query made after the SimpleACK sees the batch.",
     "A Buffer_Size write and `purge_audit_log` stage the same way. A Log_Enable or Buffer_Size write, or a purge, whose commit fails is refused with DEVICE / OPERATIONAL_PROBLEM.",
+    "A configured Device binding routed through the known local network number is a local route for target notifications and Audit Log forwarding: no DNET, answered from the final MAC. Target routes are resolved for each notification, so a number learned after startup applies from the next one; a queued or sent notification keeps its route.",
     "Audit notifications, AUDITING_FAILURE summaries and Audit Log forwards go out under DISABLE_INITIATION (Clause 16.1). DCC never holds one back, marks a Reporter COMMUNICATION_FAILURE or refuses a write that owes one; COV and events stay held.",
     "The endpoint has no DeviceCommunicationControl service, so nothing gates its source audit notifications on DCC."
    ],
@@ -6234,7 +6303,7 @@
     "crates/rusty-bacnet/src/errors.rs::tests::protocol_errors_carry_their_structured_detail",
     "crates/rusty-bacnet/tests/test_list_validation.py::test_change_list_error_reaches_python_with_its_element_number",
     "crates/bacnet-server/src/server/schedule_reference_list_tests.rs::add_commands_the_new_target_and_remove_relinquishes_the_dropped_one",
-    "crates/bacnet-server/src/server/list_element_event_tests.rs::{alarm_values_list_edits_move_a_zone_at_once,alarm_values_list_edit_moves_a_multi_state_input_at_once}"
+    "crates/bacnet-server/src/server/list_element_event_tests.rs::{alarm_values_list_edits_move_a_zone_at_once,alarm_values_list_edit_moves_a_multi_state_input_at_once,masked_alarm_values_add_list_element_reports_the_door_back_to_normal,alarm_values_remove_list_element_reports_the_door_back_to_normal,alarm_values_edits_that_move_no_reported_value_stay_quiet,list_edit_stamps_a_timestamped_change_at_the_time_of_the_edit}"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/handlers/tests/list_element_edits.rs::remove_list_element_refuses_an_absent_element_and_removes_nothing",
@@ -6289,7 +6358,9 @@
     "A named element the list already held, or a refusal of what a removal leaves, is no element of the request and reports 0 (Clause 15.1.1.3.2). A refusal that names no element, from a custom object, keeps the earlier estimate: the first element the list would gain, exact for a request adding one new element.",
     "Before #1048 a named refusal passed through unmapped, so a custom object's list position went out as the request's element number. WriteProperty and WritePropertyMultiple keep the plain class/code on the wire; their Rust results now carry the detail.",
     "A pure-duplicate AddListElement still writes the unchanged list, so the object's write-access check applies. Audit observation is unchanged in kind: an executable request that fails (not found, datatype, object refusal) is recorded with its error and pre-image, and malformed elements stay silent. CreateObject-Error, which has the same shape, and the other structured error bodies are BACNET-21-STRUCTURED-ERROR-BODIES (#1047), which generalized Error::ChangeList into Error::Structured.",
-    "A successful edit runs the object's per-write event evaluation, as WriteProperty does: an Alarm_Values edit with Time_Delay 0 moves Event_State at once, and a transition it starts gets the COV fanout the periodic task would give it.",
+    "A successful edit runs the object's per-write event evaluation, as WriteProperty does: an Alarm_Values edit with Time_Delay 0 moves Event_State at once.",
+    "A successful edit gives the edited object the post-write COV fanout a WriteProperty gives it, Life Safety objects aside (they keep their exact-change path), so a value the edit moves is reported with or without a transition: masking an Access Door's Door_Alarm_State returns it to NORMAL, and subscribers hear it.",
+    "The edit is captured for timestamped COV-multiple references while it commits, as a WriteProperty is, so its change carries the time of the edit; an edit that moves no reported value sends nothing.",
     "Subscribed_Recipients has its own codec and matcher: an element names the entry with the same recipient and process identifier, an add renews that entry in place, and a refusal on a renewed entry names the request element that renewed it. Its evidence is under BACNET-12-FORWARDER-SUBSCRIBED-RECIPIENTS."
    ]
   },
@@ -6798,7 +6869,7 @@
     "crates/bacnet-server/src/server/averaging_window_tests.rs::averaging_missed_sample_local_counts_an_attempt_and_not_a_value",
     "crates/bacnet-objects/src/averaging/sample_tests.rs::averaging_missed_samples_count_as_attempted_but_not_valid",
     "crates/bacnet-server/src/server/averaging_sampling_tests.rs::averaging_server_samples_notify_property_subscribers",
-    "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_door_cov_reports_and_triggers_on_door_alarm_state",
+    "crates/bacnet-server/src/server/table_13_1_door_cov_tests.rs::access_door_cov_reports_and_triggers_on_door_alarm_state",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::access_point_cov_leads_with_access_event_and_triggers_on_its_time",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::credential_data_input_cov_reports_and_triggers_on_update_time",
     "crates/bacnet-server/src/server/table_13_1_cov_tests.rs::load_control_cov_reports_and_triggers_on_its_shed_rows",
@@ -6836,7 +6907,7 @@
     "The server picks the leading value by object type (cov/reported.rs lead): Present_Value as a trigger, or on an Access Point Access_Event, which doesn't trigger; Active_COV_Subscriptions names the same property.",
     "Credential Data Input's Present_Value stays a trigger although its row's criteria name only Update_Time and Status_Flags: Clause 12.36 has Update_Time change on every Present_Value update, so this sends no report the row wouldn't.",
     "Load Control has no COV_Increment, so its Present_Value reports on any change. Door_Alarm_State, Update_Time and the Access Point event rows have no runtime application route yet: the new setters AccessDoorObject::set_door_alarm_state, AccessPointObject::set_access_event and CredentialDataInputObject::set_update_time reach the object only before the server holds it, so the wire tests replace the stored object and run the fanout.",
-    "#1131 made Door_Alarm_State, Door_Status and Lock_Status writable while Out_Of_Service is TRUE (BACNET-12-ACCESS-DOOR-OUT-OF-SERVICE-SIMULATION), and table_13_1_cov_tests.rs::access_door_simulated_door_alarm_state_reports_and_restores shows a simulated Door_Alarm_State and its restore on the return to service each sending the report.",
+    "#1131 made Door_Alarm_State, Door_Status and Lock_Status writable while Out_Of_Service is TRUE (BACNET-12-ACCESS-DOOR-OUT-OF-SERVICE-SIMULATION), and table_13_1_door_cov_tests.rs::access_door_simulated_door_alarm_state_reports_and_restores shows a simulated Door_Alarm_State and its restore on the return to service each sending the report.",
     "Not claimed for #1061: Access_Event_Authentication_Factor and Duty_Window, which the objects don't serve and the reports leave out (#1092); and a Load Control Start_Time write route.",
     "An Access Point serves Access_Event_Credential (#1284), so its reports carry it after Access_Event_Time (BACNET-12-ACCESS-POINT-AUTHENTICATION-AND-CREDENTIAL).",
     "The reports carry Credential Data Input Present_Value, the BACnetTimeStamp rows (Update_Time, Access_Event_Time) and the BACnetShedLevel rows exactly as ReadProperty serves them, in their Clause 21 forms since #1133 (BACNET-12-ACCESS-LOAD-CONTROL-DATATYPES).",
@@ -8860,8 +8931,8 @@
     "crates/bacnet-server/src/server/lifecycle.rs"
    ],
    "positive_tests": [
-    "crates/bacnet-objects/src/database/tests.rs::all_ten_builtin_intrinsic_families_implement_atomic_commit",
-    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::all_ten_builtin_normal_families_project_exact_typed_values",
+    "crates/bacnet-objects/src/database/tests.rs::all_eleven_builtin_intrinsic_families_implement_atomic_commit",
+    "crates/bacnet-server/src/server/event_notification_payload_tests.rs::all_eleven_builtin_normal_families_project_exact_typed_values",
     "crates/bacnet-server/src/server/event_notifications_custom_tests.rs::custom_immediate_proposal_commits_exact_history_before_distribution",
     "crates/bacnet-server/src/server/event_notifications_custom_tests.rs::custom_delayed_proposal_commits_exact_history_before_distribution",
     "crates/bacnet-server/src/server/event_notifications_custom_tests.rs::custom_local_commit_survives_distribution_gates",
@@ -8953,7 +9024,9 @@
     "crates/bacnet-transport/src/mstp/port.rs",
     "crates/bacnet-transport/src/bip/mod.rs",
     "crates/bacnet-transport/src/bip/io.rs",
-    "crates/bacnet-network/src/network_number.rs::LocalNetworkNumber"
+    "crates/bacnet-network/src/network_number.rs::LocalNetworkNumber",
+    "crates/bacnet-client/src/client/transaction_peer.rs::ConfirmedTarget::localized",
+    "crates/bacnet-client/src/client/requests.rs::broadcast_network_unconfirmed"
    ],
    "positive_tests": [
     "crates/bacnet-integration-tests/tests/ethernet_network_numbers.rs",
@@ -8998,7 +9071,11 @@
     "crates/bacnet-network/src/network_number/tests.rs::local_network_number_shares_the_last_published_state",
     "crates/bacnet-server/src/server/local_network_number_tests.rs::a_number_learned_without_a_network_port_makes_this_network_local",
     "crates/bacnet-server/src/server/local_network_number_tests.rs::a_registered_port_and_the_routes_share_one_network_number",
-    "crates/bacnet-client/src/client/number_tests/lifecycle.rs::client_number_worker_queue_is_bounded_and_closes_on_abort"
+    "crates/bacnet-client/src/client/number_tests/lifecycle.rs::client_number_worker_queue_is_bounded_and_closes_on_abort",
+    "crates/bacnet-network/src/network_number/tests.rs::a_published_number_leaves_routed_sends_as_named",
+    "crates/bacnet-client/src/client/number_tests/local_routes.rs::{a_routed_request_naming_this_network_goes_local_and_its_direct_answer_completes_it,a_device_added_as_routed_on_this_network_is_written_locally,a_who_is_on_this_network_by_number_goes_as_a_local_broadcast}",
+    "crates/bacnet-client/src/client/transaction_peer.rs::tests::only_a_routed_target_on_the_known_local_network_is_localized",
+    "crates/bacnet-server/src/server/local_network_outbound_tests.rs::an_answer_to_a_request_routed_from_this_network_goes_back_by_its_route"
    ],
    "negative_tests": [
     "crates/bacnet-endpoint/tests/mstp_network_numbers.rs::mstp_number_server_tokio_wire",
@@ -9030,7 +9107,8 @@
    "public_claims": [
     "README.md#conformance general pointer to this ledger; no row-specific claim",
     "docs/rust-api.md#local-network-number-controls Local Network Number controls",
-    "docs/python-api.md#local-network-number-controls Local Network Number controls"
+    "docs/python-api.md#local-network-number-controls Local Network Number controls",
+    "CHANGELOG.md Unreleased Fixed entry for #1358 (the local network number on outbound paths), from changelog.d/1358-local-number-outbound.md"
    ],
    "notes": [
     "Refs #875 and #879: SC, B/IPv6, MS/TP, B/IP BBMD/foreign and Linux Ethernet slices plus standalone-client ownership, with no remaining built-in link profile. Clauses 6.4.19 (What-Is-Network-Number) and 6.4.20 (Network-Number-Is) carry these messages in the 2020 edition, where 6.4.14-6.4.15 are deleted clauses; earlier rows and comments cited the deleted numbers.",
@@ -9071,7 +9149,9 @@
     "Positive Number fences cover UNKNOWN, BDT/FDT admission/refusal, alternate-sender compatibility, precedence and representative invalid/routed controls; registration NAKs retain DBTN attempts and the timer retries registration.",
     "An ordinary client ReadProperty completes during live Number controls, and awaited stop permits exclusive socket rebind before client Drop. No configured client number, new registration policy or complete Annex J claim is added.",
     "Standalone-client MS/TP LoopbackSerial tests in Tokio and DedicatedThread modes reuse the full-server/endpoint fixture: they decode complete broadcast DNER NNI frames behind the same positive FIFO fences, complete the client's own ReadProperty to the peer while a post-enqueue Number producer is held, and release the producer and serial owner on canceled stop and bare drop. Simulator evidence only, with no RS-485 timing or hardware claim.",
-    "The full server publishes the number it holds on NetworkLayer::local_network_number, where its event routing reads it without a lock; with a registered port the copy is taken from the port's state under the database write lock that changed it, so the two never disagree. The standalone client publishes its learned number on its own layer, which nothing in the client reads."
+    "The full server publishes the number it holds on NetworkLayer::local_network_number, where its senders read it without a lock; with a registered port the copy is taken from the port's state under the database write lock that changed it, so the two never disagree. The standalone client publishes its learned number on its own layer, where its routed requests and network broadcasts read it.",
+    "A destination naming the known local number goes as local traffic, with no DNET, on every path the full server and standalone client start: event and Audit notifications, writes in other devices, client requests and network broadcasts. A confirmed one is keyed to the MAC it went to, where its answer comes from.",
+    "NetworkLayer frames the destination its caller names and never rewrites it, so answers, and COV notifications to a subscriber, keep the route their request arrived by. The shared endpoint publishes no number, so its sends go as written."
    ]
   },
   {
