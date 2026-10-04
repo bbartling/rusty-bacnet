@@ -349,15 +349,32 @@ async fn who_is_and_who_has_with_trailing_octets_are_dropped() {
 #[tokio::test(start_paused = true)]
 async fn an_i_am_with_trailing_octets_binds_nothing() {
     let mut h = Harness::start(ServerConfig::default()).await;
+    use crate::server::binding_probes::WhoIsScope;
     let i_am = UnconfirmedServiceChoice::I_AM;
-    // Device 1234, max APDU 1476, no segmentation, vendor 42.
-    let body = [
-        0xC4, 0x02, 0x00, 0x04, 0xD2, 0x22, 0x05, 0xC4, 0x91, 0x03, 0x21, 0x2A,
-    ];
+    // Device `instance`, max APDU 1476, no segmentation, vendor 42.
+    let body = |instance: u16| {
+        let [high, low] = instance.to_be_bytes();
+        [
+            0xC4, 0x02, 0x00, high, low, 0x22, 0x05, 0xC4, 0x91, 0x03, 0x21, 0x2A,
+        ]
+    };
+    let device = |instance| ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
     let bindings = h.server.device_bindings.read().await.len();
-    unconfirmed(&h, i_am, &[&body[..], &[0x00]].concat()).await;
+    // Device 1235 with a trailing octet, then a well-formed I-Am from 1234,
+    // so a late bind of the first can't pass for the second's.
+    unconfirmed(&h, i_am, &[&body(1235)[..], &[0x00]].concat()).await;
     assert_eq!(h.server.device_bindings.read().await.len(), bindings);
-    unconfirmed(&h, i_am, &body).await;
-    assert_eq!(h.server.device_bindings.read().await.len(), bindings + 1);
+    unconfirmed(&h, i_am, &body(1234)).await;
+    let table = h.server.device_bindings.read().await;
+    assert_eq!(table.len(), bindings + 1);
+    assert!(matches!(
+        table.who_is_scope(&device(1234)),
+        WhoIsScope::Local
+    ));
+    assert!(matches!(
+        table.who_is_scope(&device(1235)),
+        WhoIsScope::Global
+    ));
+    drop(table);
     h.server.stop().await.unwrap();
 }

@@ -147,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_classifier_preflight_rejects_large_password_not_large_trailing_data() {
+    fn recovery_preflight_bounds_the_password_not_the_request_and_a_trailing_dcc_is_confirmed() {
         for charset in [0, 4, 5] {
             let mut data = BytesMut::from(&[0x19, 0][..]);
             tags::encode_tag(&mut data, 2, TagClass::Context, 1_000_001);

@@ -81,8 +81,9 @@ mod policy_precommit;
 /// priority, or values (Table 19-5). AUDIT_CONFIG and AUDIT_ALL admit file writes;
 /// priority filtering is irrelevant. Admission follows the service decoder's
 /// acceptance boundary, which refuses octets after the request's last member.
-/// Decoder rejections and configured payload/count budget Aborts remain silent. The Channel writes an inbound WriteGroup makes are
-/// not recorded, so complete WRITE coverage is not claimed.
+/// Decoder rejections and configured payload/count budget Aborts remain silent.
+/// The Channel writes an inbound WriteGroup makes are not recorded, so complete
+/// WRITE coverage is not claimed.
 ///
 /// READ covers completed, unsegmented RP/RPM responses, one record per
 /// returned property outcome in result order, including inline RPM errors.

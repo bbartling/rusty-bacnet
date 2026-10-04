@@ -9144,7 +9144,7 @@
        "The read handler clamps a record window to MAX_DECODED_ITEMS so one ACK never exceeds what the workspace decoder accepts, including files preloaded past the record cap. This is a recorded departure from the Clause 14.1 Service Procedure, which short-reads only when fewer records remain; the clamp adds a second local reason.",
        "Clause 14.1.3.1 makes End Of File data-independent, so a client that continues from start + Returned Record Count still reads the whole file. FileObject::set_data and set_records update File_Size and Record_Count only for the selected channel (any raw value other than RECORD_ACCESS is the stream channel for those local setters), while network property resize requires an exact named access method and set_file_access_method recomputes both on a switch; Record_Count remains present only under RECORD_ACCESS (Table 12-16 footnote 2).",
        "The AtomicReadFile and AtomicWriteFile request decoders refuse a file identifier, start position or record, count, file data or record under any tag but its application tag; the server answers SERVICES / OTHER and reads or writes nothing.",
-       "The AtomicReadFile and AtomicWriteFile request decoders refuse octets after an access frame's members or after the frame; the server answers SERVICES / OTHER and reads or writes nothing. In a record write frame, anything after the counted records is the count's TOO_MANY_ARGUMENTS Reject."
+       "The AtomicReadFile and AtomicWriteFile request decoders refuse octets after an access frame's members or after the frame (SERVICES / OTHER, nothing read or written); extra records in a record write draw the count's TOO_MANY_ARGUMENTS."
       ]
   },
   {
