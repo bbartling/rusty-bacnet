@@ -1,9 +1,8 @@
 //! One row per `BACnetObject` method: a call with fixed arguments, and its
 //! answer rendered as text. Capabilities render as the address they borrow.
 
-use super::probe::{
-    address, clock, day, monotonic, noon, oid, schedule_write, CUSTOM, CUSTOM_LIST,
-};
+use super::fixtures::{address, clock, day, monotonic, noon, oid, schedule_write};
+use super::probe::{CUSTOM, CUSTOM_LIST};
 use bacnet_objects::command::WriteFailure;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
