@@ -107,8 +107,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Once the client has learned its own network's number, a
     /// `dest_network` naming it is this network. After those checks the
     /// request goes to `dest_mac` as a local request, with no DNET and not
-    /// through `router_mac`, and its answer is expected from `dest_mac`
-    /// (#1358).
+    /// through `router_mac` (#1358). Only an answer from `dest_mac` with no
+    /// SNET completes it; one relayed back with `dest_network` as its SNET
+    /// matches nothing.
     pub async fn confirmed_request_routed(
         &self,
         router_mac: &[u8],

@@ -3278,8 +3278,11 @@ client's own network (#1358). A routed confirmed request to it, from any of
 the methods above or for a device added with `add_routed_device`, passes the
 checks above and then goes as a local request: a unicast to the DADR with no
 DNET, not through the router, so a non-routing peer there takes it. It holds
-no routed-path state, and its answer is expected from that MAC with no SNET.
-The peer's limits still come from its routed device-table row.
+no routed-path state, and `router_mac` is not used. Only an answer from the
+DADR, with no SNET, completes it: an answer relayed back by a router with that
+number as its SNET matches nothing, and the request is retried. The peer's
+limits still come from its routed device-table row, so a request past them is
+refused or segmented as for the routed peer.
 `broadcast_network_unconfirmed`, and `who_is_network` and a `write_group` to
 `WriteGroupDestination::RemoteBroadcast` built on it, send a broadcast for that
 number as a local broadcast. While the number is unknown, every destination goes as written.

@@ -94,6 +94,10 @@ pub(super) fn validate(
             route.as_ref(),
             config.max_apdu_length,
         )?;
+        // Set here, at prepare and finish, only. A local network number learned
+        // later can make a routed binding at the link broadcast MAC unusable
+        // (`RecipientRoute::localize`): notifications then find no route, but
+        // this flag keeps its startup value.
         db.get(selected)
             .unwrap()
             .audit_reporter_internal()

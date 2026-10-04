@@ -925,7 +925,7 @@
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_unicast_needs_one_remote_network_and_one_station",
      "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::path_apis_and_routed_requests_share_the_remote_dnet_bound",
      "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::add_routed_device_refuses_a_destination_no_request_could_reach",
-     "crates/bacnet-client/src/client/number_tests/local_routes.rs::a_routed_request_naming_this_network_goes_local_and_its_direct_answer_completes_it"
+     "crates/bacnet-client/src/client/number_tests/local_routes.rs::{a_routed_request_naming_this_network_goes_local_and_its_direct_answer_completes_it,a_routed_row_on_this_network_still_bounds_a_local_request,a_long_request_to_this_network_is_segmented_to_the_peer,an_answer_relayed_with_this_networks_snet_leaves_a_local_request_open}"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/npdu.rs::tests::reject_message_to_network_payload_requires_exact_length",
@@ -958,7 +958,7 @@
     "A client attached to a BACnetRouter through a LoopbackTransport port gets reason 4 rejects on its own NetworkLayer from the router's port MAC, so it needs no router-side receiver (#1175).",
     "Every MAC on a routed path holds to NpduAddress::MAX_MAC_LEN (18 octets). A routed request refuses a longer DADR or local source MAC, and an empty or longer router MAC, with Error::Encoding before it reserves or waits on the path; the path configuration methods refuse such a router MAC too (#1267).",
     "A routed confirmed request goes to one device: DNET 0, DNET 65535 or an empty DADR fails with Error::Encoding before the path or a TSM entry is taken. The path methods share that DNET check; add_routed_device and the endpoint requester apply the same rule. Unconfirmed sends keep remote and global broadcasts.",
-    "A routed target naming the client's learned local network number passes the routed checks and then goes as a local request to its DADR: it takes no path state and is keyed to that MAC."
+    "A routed target naming the client's learned local network number passes the routed checks and then goes as a local request to its DADR: it takes no path state, its limits come from the routed row, and only an answer from that MAC with no SNET completes it."
     ]
   },
   {
@@ -4099,7 +4099,7 @@
    ],
    "notes": [
     "A local member's datatype is that of its property's value; NULL, constructed values and remote members count as unknown and pass unchanged, `Lighting_Command` as a BACnetLightingCommand. Rule 3 bounds Unsigned and ENUMERATED at 2147483647.",
-    "Remote members are written one at a time (no DNET if bound via this network's number), after a Who-Is if unbound; a device silent to either fails later members unsent (one Who-Is, one write's retries). This Device's identifier is dropped.",
+    "Remote members are written one at a time (no DNET if bound via this network's number), after a Who-Is if unbound; a silent device fails its later members unsent (one Who-Is, one write's retries each). This Device's identifier is dropped.",
     "A whole `Execution_Delay` write takes exactly one delay per member (VALUE_OUT_OF_RANGE otherwise); index-0 and whole member-list writes resize both arrays. Caps are 1024 members and 64 control groups.",
     "A run that would start its own object again, or with more than eight runs above it, ends failed and its writer gets OBJECT / BUSY. `tick_schedules` runs a distribution; the bare handlers and `stop()` end it FAILED.",
     "Reliability names the first failed member: CONFIGURATION_ERROR for a value the Channel can't coerce (type or rule range) or an unknown-target or datatype refusal, COMMUNICATION_FAILURE for no binding, DCC or silence, else PROCESS_ERROR."
