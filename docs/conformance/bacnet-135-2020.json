@@ -6188,6 +6188,7 @@
     "crates/bacnet-server/src/server/local_encoded_writes_tests.rs::an_encoded_local_write_is_refused_as_a_network_write_is",
     "crates/bacnet-server/src/server/local_array_index_tests.rs::{write_local_checks_an_array_index_before_the_object_sees_the_value,a_command_write_whose_index_the_property_refuses_fails,a_channel_member_whose_index_the_property_refuses_is_a_configuration_failure}",
     "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_target_index_is_checked_as_write_property_checks_it",
+    "crates/bacnet-server/src/server/audit_reporter_indexed_absence_tests.rs::local_index_refusal_reaches_no_audit_record",
     "crates/rusty-bacnet/tests/test_local_array_index.py"
    ],
    "benchmarks": [],

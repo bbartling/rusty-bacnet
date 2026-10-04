@@ -201,3 +201,40 @@ async fn indexed_absence_served_wpm_audits_only_prefix_and_preserves_source_writ
     assert_eq!(emitted[1].notifications[0].result, None);
     fixture.server.stop().await.unwrap();
 }
+
+/// `write_local` refuses an index on a property that isn't an array before
+/// the Audit owner sees the write, as WriteProperty does (#1426).
+#[tokio::test]
+async fn local_index_refusal_reaches_no_audit_record() {
+    let mut fixture = server(reporter()).await;
+    let target = oid(ObjectType::ANALOG_INPUT, 1);
+    let write = |index| {
+        fixture.server.write_local(
+            &target,
+            PropertyIdentifier::DESCRIPTION,
+            index,
+            PropertyValue::CharacterString("local".into()),
+            None,
+            crate::LocalCommandSource::ServerDevice,
+        )
+    };
+    let error = write(Some(1)).await.unwrap_err();
+    assert!(
+        matches!(error, Error::Protocol { class, code }
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::PROPERTY_IS_NOT_AN_ARRAY.to_raw() as u32),
+        "{error:?}"
+    );
+    completed(&fixture).await;
+    settle().await;
+    assert!(notifications(&fixture.transport.sent).is_empty());
+
+    // The same write without the index is audited.
+    write(None).await.unwrap();
+    completed(&fixture).await;
+    settle().await;
+    let emitted = notifications(&fixture.transport.sent);
+    assert_eq!(emitted.len(), 1);
+    assert_eq!(emitted[0].notifications[0].target_object, Some(target));
+    fixture.server.stop().await.unwrap();
+}
