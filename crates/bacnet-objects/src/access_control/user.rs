@@ -5,16 +5,26 @@ use super::*;
 
 /// BACnet Access User object (type 35).
 ///
-/// Represents a person or entity that uses credentials to gain access. Its
-/// kind lives in User_Type; Table 12-38 has no Present_Value,
-/// Assigned_Access_Rights or Out_Of_Service row, so the object serves none of
-/// them (#1064).
+/// Stands for whoever or whatever is granted access (someone, a team, a
+/// tracked item) and the credentials it holds. Its kind lives in User_Type;
+/// Table 12-38 has no Present_Value, Assigned_Access_Rights or Out_Of_Service
+/// row, so the object serves none of them (#1064).
+///
+/// Credentials, Members and Member_Of are lists of
+/// `BACnetDeviceObjectReference` (Clauses 12.33.12 to 12.33.14; #1394), so an
+/// entry may name an object in another device. Credentials names the user's
+/// Access Credential objects. Members and Member_Of name other Access Users,
+/// one level down and one level up a hierarchy of users (a department and
+/// the people in it, say). The application sets all three; they are
+/// read-only over the network.
 pub struct AccessUserObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
     user_type: AccessUserType,
-    credentials: Vec<ObjectIdentifier>,
+    credentials: Vec<BACnetDeviceObjectReference>,
+    members: Vec<BACnetDeviceObjectReference>,
+    member_of: Vec<BACnetDeviceObjectReference>,
     status_flags: StatusFlags,
     reliability: Reliability,
 }
@@ -29,9 +39,48 @@ impl AccessUserObject {
             description: String::new(),
             user_type: AccessUserType::ASSET,
             credentials: Vec::new(),
+            members: Vec::new(),
+            member_of: Vec::new(),
             status_flags: StatusFlags::empty(),
             reliability: Reliability::NO_FAULT_DETECTED,
         })
+    }
+
+    /// Set Credentials, the Access Credential objects the user holds
+    /// (Clause 12.33.14). A reference with no device identifier names an
+    /// object in this device.
+    ///
+    /// Each reference has to name an Access Credential object, and its
+    /// device identifier, when given, a Device object; a list breaking either
+    /// rule is refused with VALUE_OUT_OF_RANGE and the credentials set before
+    /// are kept. The list is read-only over the network.
+    pub fn set_credentials(
+        &mut self,
+        credentials: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
+    ) -> Result<(), Error> {
+        self.credentials = references_to(ObjectType::ACCESS_CREDENTIAL, credentials)?;
+        Ok(())
+    }
+
+    /// Set Members, the Access Users one level below this one
+    /// (Clause 12.33.12), with the checks [`Self::set_credentials`] makes,
+    /// for Access User objects.
+    pub fn set_members(
+        &mut self,
+        members: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
+    ) -> Result<(), Error> {
+        self.members = references_to(ObjectType::ACCESS_USER, members)?;
+        Ok(())
+    }
+
+    /// Set Member_Of, the Access Users one level above this one
+    /// (Clause 12.33.13), with the checks [`Self::set_members`] makes.
+    pub fn set_member_of(
+        &mut self,
+        groups: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
+    ) -> Result<(), Error> {
+        self.member_of = references_to(ObjectType::ACCESS_USER, groups)?;
+        Ok(())
     }
 }
 
@@ -62,12 +111,15 @@ impl BACnetObject for AccessUserObject {
             p if p == PropertyIdentifier::USER_TYPE => {
                 Ok(PropertyValue::Enumerated(self.user_type.to_raw()))
             }
-            p if p == PropertyIdentifier::CREDENTIALS => Ok(PropertyValue::List(
-                self.credentials
-                    .iter()
-                    .map(|oid| PropertyValue::ObjectIdentifier(*oid))
-                    .collect(),
-            )),
+            p if p == PropertyIdentifier::CREDENTIALS => {
+                Ok(crate::device_reference::reference_list(&self.credentials))
+            }
+            p if p == PropertyIdentifier::MEMBERS => {
+                Ok(crate::device_reference::reference_list(&self.members))
+            }
+            p if p == PropertyIdentifier::MEMBER_OF => {
+                Ok(crate::device_reference::reference_list(&self.member_of))
+            }
             _ => Err(common::unknown_property_error()),
         }
     }

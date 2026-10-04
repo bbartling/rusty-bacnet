@@ -3131,7 +3131,36 @@ class BACnetServer:
         would refuse).
         """
         ...
-    def add_access_user(self, instance: int, name: str) -> None: ...
+    def add_access_user(
+        self,
+        instance: int,
+        name: str,
+        *,
+        credentials: Optional[
+            list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
+        ] = None,
+        members: Optional[
+            list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
+        ] = None,
+        member_of: Optional[
+            list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
+        ] = None,
+    ) -> None:
+        """Add an Access User object to the server (before starting).
+
+        ``credentials`` sets Credentials, the Access Credential objects the
+        user holds, and ``members`` and ``member_of`` set Members and
+        Member_Of, the Access Users one level below and above this one in a
+        hierarchy of users. All three are read-only over the network and
+        take the element forms ``add_access_door`` takes for
+        ``door_members``. A pair whose device isn't a Device object
+        identifier raises ValueError, and a reference to anything but an
+        Access Credential in ``credentials``, or an Access User in the other
+        two, raises BacnetProtocolError with VALUE_OUT_OF_RANGE; either way
+        nothing is registered. A whole read of a list returns the
+        references' octets as ``bytes``, or ``[]`` while it is empty.
+        """
+        ...
     def add_access_zone(
         self,
         instance: int,
