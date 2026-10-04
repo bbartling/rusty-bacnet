@@ -541,3 +541,44 @@ async fn a_server_stopped_mid_save_leaves_storage_with_the_served_rules() {
         [zone_rule(1)]
     );
 }
+
+/// Neither rule array nor Enable is commandable or holds a NULL, so a NULL
+/// written to one succeeds and leaves it as it was (#1396). The object
+/// stages and saves nothing for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_null_succeeds_unchanged_and_saves_nothing() {
+    let kept = AccessRightsSnapshot {
+        positive_access_rules: Some(vec![zone_rule(1)]),
+        enable: Some(false),
+        ..AccessRightsSnapshot::default()
+    };
+    let storage = holding(kept.clone());
+    let (fixture, rights) = served_by(&storage).await;
+    let null = || value(PropertyValue::Null);
+    for (property, index) in [
+        (P::LOG_ENABLE, None),
+        (P::POSITIVE_ACCESS_RULES, None),
+        (P::POSITIVE_ACCESS_RULES, Some(1)),
+        (P::NEGATIVE_ACCESS_RULES, Some(0)),
+    ] {
+        let request = write_property(rights, property, index, null());
+        assert_eq!(
+            wire(&fixture, ConfirmedServiceChoice::WRITE_PROPERTY, request).await,
+            SIMPLE_ACK_WRITE,
+            "{property:?} {index:?}"
+        );
+    }
+    let request = write_property_multiple(rights, vec![attempt(P::LOG_ENABLE, None, null())]);
+    assert_eq!(
+        wire(
+            &fixture,
+            ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+            request
+        )
+        .await,
+        SIMPLE_ACK_WPM
+    );
+    assert_eq!(reads(&fixture, rights).await, expected_reads(&kept));
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 0);
+    assert_eq!(storage.load_saved(), Some(kept));
+}
