@@ -4,7 +4,8 @@
 //! commanded and relinquished at once, and the refusals. Also the reference
 //! half of Reliability (#1086): a target that refuses the schedule's datatype
 //! faults the Schedule, which still writes its other targets, until the
-//! target takes a value or leaves the list.
+//! target takes a value or leaves the list. A target created after it was
+//! refused takes the unchanged value at the server's next pass (#1436).
 //!
 //! The harness is the one in `schedule_write_tests`: Tuesday 29 September
 //! 2026, 15:00; SCH-5 commands AV-1's Present_Value at priority 16 and
@@ -285,4 +286,48 @@ async fn a_schedule_recovers_once_its_target_takes_the_datatype() {
     .unwrap();
     assert_eq!(read(&h, bv2(), PV).await, PropertyValue::Enumerated(1));
     assert_reliability(&h, Reliability::NO_FAULT_DETECTED).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_target_created_later_takes_the_value_within_one_tick() {
+    use bacnet_services::object_mgmt::{CreateObjectRequest, ObjectSpecifier};
+
+    let mut h = start().await;
+    let ao9 = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 9).unwrap();
+    write_property(&mut h, LIST, None, present_values(&[av1(), ao9]))
+        .await
+        .unwrap();
+    // AO-9 doesn't exist.
+    assert_reliability(&h, Reliability::CONFIGURATION_ERROR).await;
+
+    // A client creates it. CreateObject doesn't run the Schedule; the fault
+    // stands until its next pass.
+    let mut body = BytesMut::new();
+    CreateObjectRequest {
+        object_specifier: ObjectSpecifier::Identifier(ao9),
+        list_of_initial_values: Vec::new(),
+    }
+    .encode(&mut body);
+    h.request(ConfirmedServiceChoice::CREATE_OBJECT, body).await;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while h.server.database().read().await.get(&ao9).is_none() {
+            h.settle().await;
+        }
+    })
+    .await
+    .expect("AO-9 was created");
+    assert_eq!(slot(&h, ao9, 16).await, PropertyValue::Null);
+    assert_reliability(&h, Reliability::CONFIGURATION_ERROR).await;
+
+    // The server's next pass, within a minute, offers the unchanged value to
+    // AO-9 again: it takes it and the fault clears. AV-1 keeps its value and
+    // its subscriber hears nothing, though a rewrite of the same 10.0 would
+    // send nothing either; `schedule::reference_retry_tests` shows that a
+    // retry goes to the refused references alone.
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    h.settle().await;
+    assert_eq!(slot(&h, ao9, 16).await, PropertyValue::Real(10.0));
+    assert_reliability(&h, Reliability::NO_FAULT_DETECTED).await;
+    assert_eq!(slot(&h, av1(), 16).await, PropertyValue::Real(10.0));
+    h.no_notification().await;
 }

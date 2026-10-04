@@ -59,9 +59,11 @@ pub use evaluation::{ScheduleTargetOutcome, ScheduleWrite};
 ///
 /// Reliability is CONFIGURATION_ERROR while the non-NULL values in the two
 /// schedules and Schedule_Default are not all of one datatype, or while a
-/// referenced property refused the schedule's datatype at its last write
-/// (Clause 12.24.13). Such a schedule still evaluates and writes its
-/// references.
+/// referenced property refused the schedule's datatype, or the reference
+/// itself, at its last write (Clause 12.24.13). Such a schedule still
+/// evaluates and writes its references, and each pass that has nothing else
+/// to send offers the current value again to the references that refused it,
+/// so the fault clears once its cause is gone.
 ///
 /// While Out_Of_Service is TRUE the calculation leaves Present_Value alone and
 /// a client may write it instead; each such write goes on to the references
@@ -82,8 +84,9 @@ pub struct ScheduleObject {
     /// own consistency check, either half, which may then clear it.
     owns_configuration_error: bool,
     /// References whose last write of a value in the schedule's datatype
-    /// failed for its datatype: the reference half of the consistency check
-    /// (`reliability.rs`, #1086).
+    /// was refused, for its datatype or as a reference: the reference half of
+    /// the consistency check (`reliability.rs`, #1086, #1433), and what a
+    /// pass with nothing else to send retries (#1436).
     refusing_references: Vec<BACnetObjectPropertyReference>,
     status_flags: StatusFlags,
     /// 7-day weekly schedule: index 0 = Monday, index 6 = Sunday.
@@ -565,7 +568,9 @@ impl BACnetObject for ScheduleObject {
         };
         let entered = !std::mem::replace(&mut self.in_effective_period, true);
         if !entered && !self.rewrite_owed && value == self.present_value {
-            return None;
+            // Nothing new for the list; offer the value again only to the
+            // references that refused it (`reliability.rs`, #1436).
+            return self.retry_refused();
         }
         self.present_value = value.clone();
         self.command(value)
@@ -586,6 +591,9 @@ mod out_of_service_tests;
 
 #[cfg(test)]
 mod reliability_tests;
+
+#[cfg(test)]
+mod retry_tests;
 
 #[cfg(test)]
 mod targets_tests;

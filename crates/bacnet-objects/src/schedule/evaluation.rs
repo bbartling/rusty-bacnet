@@ -41,6 +41,11 @@ pub struct ScheduleWrite {
     pub priority: u8,
     /// The complete local references, target array indices included.
     pub references: Vec<BACnetObjectPropertyReference>,
+    /// Whether this write only offers the value the references already owe
+    /// again, to those whose last write was refused (#1436). A Schedule makes
+    /// it on every pass with nothing else to send while a refusal stands, so
+    /// the server logs a target's failure of it at debug, not warn.
+    pub retry: bool,
 }
 
 /// How one target took a [`ScheduleWrite`], as the server reports it back
@@ -60,7 +65,9 @@ pub enum ScheduleTargetOutcome {
     ReferenceRefused,
     /// Any other failure. It says nothing about the configuration:
     /// WRITE_ACCESS_DENIED, for one, can come from the target's state
-    /// (Out_Of_Service, a lock) and pass with it.
+    /// (Out_Of_Service, a lock) and pass with it. On a
+    /// [`retry`](ScheduleWrite::retry) it ends the member's refusal, since
+    /// the target no longer refuses it (#1436).
     Failed,
 }
 

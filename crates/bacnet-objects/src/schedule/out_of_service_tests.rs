@@ -76,6 +76,7 @@ fn owed(value: PropertyValue) -> Option<ScheduleWrite> {
         value,
         priority: 9,
         references: vec![target()],
+        retry: false,
     })
 }
 

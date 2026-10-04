@@ -80,6 +80,7 @@ fn write(
         value,
         priority,
         references,
+        retry: false,
     }
 }
 

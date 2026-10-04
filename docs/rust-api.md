@@ -2207,8 +2207,9 @@ period it returns `None`. Time-values are typed (`BACnetTimeValue::value` is a
 primitive `PropertyValue`), so Present_Value and the target writes carry the
 scheduled value's own datatype. The public `BACnetObject::tick_schedule(today,
 time, calendar_active)` hook returns `Option<ScheduleWrite>` (value, priority,
-references): a changed value, or any value on entering the Effective_Period
-(start-up included). The server writes it to every reference at
+references, retry): a changed value, or any value on entering the
+Effective_Period (start-up included); with neither, the current value for the
+references that refused their last write, flagged `retry` (#1436). The server writes it to every reference at
 `Priority_For_Writing`, set with `set_priority_for_writing` (1 to 16, default
 16); a NULL relinquishes that slot, and leaves a target property that isn't
 commandable and has no NULL in its datatype as it is, the target counting as
@@ -2241,7 +2242,15 @@ DATATYPE_NOT_SUPPORTED, `ReferenceRefused` for UNKNOWN_OBJECT,
 UNKNOWN_PROPERTY, PROPERTY_IS_NOT_AN_ARRAY or INVALID_ARRAY_INDEX, `Failed`
 otherwise, WRITE_ACCESS_DENIED included) per reference. A refusal clears when
 that target later takes a value or leaves the list; a NULL, or an
-out-of-service value of another datatype, counts for nothing.
+out-of-service value of another datatype, counts for nothing. While a refusal
+stands, each pass with nothing else to send offers the current value again to
+the refused references alone (#1436): the 60-second tick, or the pass any
+committed write to the Schedule runs. So a target object created later, or an
+array grown to take the index, gets the value and clears the fault within one
+tick. A retry that fails otherwise (an out-of-range value, a denied write) ends
+the refusal as well, as that failure on a first write would never have raised
+it, and warns once; one still refused logs at debug. Retries skip a NULL value
+and a Schedule out of service or outside its period.
 
 List_Of_Object_Property_References and Priority_For_Writing are
 network-writable too (#1088), through the setters' checks. The list is written

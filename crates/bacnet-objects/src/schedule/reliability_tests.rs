@@ -361,6 +361,7 @@ fn only_a_value_of_the_schedules_datatype_counts() {
             value,
             priority: 16,
             references: refs.clone(),
+            retry: false,
         };
         assert!(!sched.complete_schedule_write(&other, &[DatatypeRefused, DatatypeRefused]));
         assert_fault(&sched, false, "a NULL or another datatype");
