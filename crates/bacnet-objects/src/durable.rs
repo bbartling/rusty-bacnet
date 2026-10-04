@@ -337,7 +337,11 @@ type DoneFn<S> = dyn Fn(&S, &Result<(), Error>) + Send + Sync;
 /// loads it.
 pub(crate) struct SaveWriter<S: Send + 'static> {
     shared: Arc<Shared<S>>,
-    thread: Option<JoinHandle<()>>,
+    /// Asserted unwind safe, as std's `JoinHandle` is not (#1428). That is
+    /// sound: only `enqueue`, which stores it, and the drop, which joins it,
+    /// touch the handle, both through `&mut self`, and a panic leaves it
+    /// either stored or not.
+    thread: Option<AssertUnwindSafe<JoinHandle<()>>>,
     name: String,
 }
 
@@ -345,8 +349,14 @@ struct Shared<S> {
     queue: Mutex<Queue<S>>,
     /// The thread has a job to run, or the writer is closing.
     work: Condvar,
-    save: Box<SaveFn<S>>,
-    done: Box<DoneFn<S>>,
+    // A boxed closure is not `RefUnwindSafe`, so these would take that trait
+    // and `UnwindSafe` from the objects that own a writer (#1428). Asserting
+    // them is sound: `run_job` is their only caller and catches a panic from
+    // each call, on the writer's thread or on the caller's when `enqueue`
+    // could not start one. No panic from them reaches the caller's frames,
+    // and one that panics fails only that save.
+    save: AssertUnwindSafe<Box<SaveFn<S>>>,
+    done: AssertUnwindSafe<Box<DoneFn<S>>>,
 }
 
 struct Queue<S> {
@@ -380,8 +390,8 @@ impl<S: Send + 'static> SaveWriter<S> {
                     idle_waits: Vec::new(),
                 }),
                 work: Condvar::new(),
-                save: Box::new(save),
-                done: Box::new(done),
+                save: AssertUnwindSafe(Box::new(save)),
+                done: AssertUnwindSafe(Box::new(done)),
             }),
             thread: None,
             name,
@@ -456,7 +466,7 @@ impl<S: Send + 'static> SaveWriter<S> {
                 .name(self.name.clone())
                 .spawn(move || run(&shared))
             {
-                Ok(handle) => self.thread = Some(handle),
+                Ok(handle) => self.thread = Some(AssertUnwindSafe(handle)),
                 Err(error) => {
                     // Without a thread the save runs here, as it did before
                     // saves left the caller's thread.
@@ -475,7 +485,7 @@ impl<S: Send + 'static> Drop for SaveWriter<S> {
     fn drop(&mut self) {
         lock(&self.shared.queue).closed = true;
         self.shared.work.notify_one();
-        if let Some(thread) = self.thread.take() {
+        if let Some(AssertUnwindSafe(thread)) = self.thread.take() {
             let _ = thread.join();
         }
     }
@@ -521,9 +531,9 @@ fn run<S>(shared: &Shared<S>) {
 /// it through an `Arc` holds the only reference once the save has run.
 fn run_job<S>(shared: &Shared<S>, job: Job<S>) {
     let Job { snapshot, ticket } = job;
-    let result = catch_unwind(AssertUnwindSafe(|| (shared.save)(&snapshot)))
+    let result = catch_unwind(AssertUnwindSafe(|| (shared.save.0)(&snapshot)))
         .unwrap_or_else(|_| Err(Error::Encoding("persistence panicked during a save".into())));
-    let _ = catch_unwind(AssertUnwindSafe(|| (shared.done)(&snapshot, &result)));
+    let _ = catch_unwind(AssertUnwindSafe(|| (shared.done.0)(&snapshot, &result)));
     drop(snapshot);
     if let Some(ticket) = ticket {
         ticket.complete(result);
