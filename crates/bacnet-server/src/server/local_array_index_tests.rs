@@ -173,7 +173,7 @@ async fn write_local_checks_an_array_index_before_the_object_sees_the_value() {
             P::OBJECT_NAME,
             None,
             text("BV-1"),
-            ErrorClass::OBJECT,
+            ErrorClass::PROPERTY,
             ErrorCode::DUPLICATE_NAME,
         ),
         (

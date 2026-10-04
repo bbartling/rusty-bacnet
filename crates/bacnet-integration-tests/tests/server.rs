@@ -109,6 +109,8 @@ mod channel_remote;
 mod command_remote;
 #[path = "server/dcc.rs"]
 mod dcc;
+#[path = "server/duplicate_name.rs"]
+mod duplicate_name;
 #[path = "server/error_cov.rs"]
 mod error_cov;
 #[path = "server/forwarder_subscriptions.rs"]

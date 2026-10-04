@@ -6577,7 +6577,9 @@
     "crates/bacnet-services/src/private_transfer/error.rs::tests::private_transfer_error_refuses_malformed_plain_and_mismatched",
     "crates/bacnet-services/src/virtual_terminal_error.rs::tests::vt_close_error_refuses_malformed_plain_and_mismatched",
     "crates/bacnet-client/src/client/tests/wpm_error_projection.rs::plain_error_projection_stays_class_and_code",
-    "crates/bacnet-server/src/handlers/tests/create_object_initial_values.rs::the_first_initial_value_that_fails_is_named_and_nothing_is_created"
+    "crates/bacnet-server/src/handlers/tests/create_object_initial_values.rs::the_first_initial_value_that_fails_is_named_and_nothing_is_created",
+    "crates/bacnet-integration-tests/tests/server/duplicate_name.rs::a_name_in_use_is_property_duplicate_name_over_wp_wpm_and_create_object",
+    "crates/rusty-bacnet/tests/test_duplicate_name.py::DuplicateNameTests::test_create_object_names_the_initial_value"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -6592,9 +6594,10 @@
     "Refs #1047, following #1026 (BACNET-15-LIST-ELEMENT-SEMANTICS), whose Error::ChangeList became the general Error::Structured; TsmResponse::Error carries detail: Option<ErrorDetail>. Breaking on the wire: CreateObject and SubscribeCOVPropertyMultiple errors used to be the plain class/code pair.",
     "The detail is boxed so Error stays 32 bytes. Since #1058 the SubscribeCOVPropertyMultiple server keeps the references processed before a refused one, as the service procedure does, and sends their initial notifications.",
     "A refusal of a whole subscription specification (unknown object, object without COV) names its first COV reference. COV table capacity is checked one reference at a time (#1059), so the reference past the recipient quota or the table capacity is named, as an oversized sample is.",
-    "A timestamped reference while the Device has no valid clock is named the same way, with SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (#1102). CreateObject keeps its refusal codes (an Object_Name in use is OBJECT / DUPLICATE_NAME); only the undecodable initial value changed from SERVICES / OTHER to PROPERTY / INVALID_DATA_ENCODING, and it is still a malformed request, not an audited execution.",
+    "A timestamped reference while the Device has no valid clock is named the same way, with SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (#1102). CreateObject keeps its refusal codes; only the undecodable initial value changed from SERVICES / OTHER to PROPERTY / INVALID_DATA_ENCODING, and it is still a malformed request, not an audited execution.",
     "ConfirmedPrivateTransfer-Error decodes the vendor identifier as u32, like the request and ACK types, where the production narrows it to Unsigned16. A VTClose-Error list that is present but empty decodes as an empty list.",
-    "CreateObject checks and decodes each initial value as WriteProperty does and names the first one it can't apply. One that doesn't decode is INVALID_DATA_ENCODING and isn't audited; no object is left behind."
+    "CreateObject checks and decodes each initial value as WriteProperty does and names the first one it can't apply. One that doesn't decode is INVALID_DATA_ENCODING and isn't audited; no object is left behind.",
+    "An initial Object_Name another object holds is PROPERTY / DUPLICATE_NAME at its position, the pair WriteProperty gives; CreateObject's own error table has no row for a name in use."
    ]
   },
   {
@@ -9326,7 +9329,8 @@
     "crates/bacnet-server/src/handlers/write_property.rs::commit_attempt",
     "crates/bacnet-server/src/server/local_writes.rs",
     "crates/bacnet-server/src/handlers/object_mgmt.rs::initialize",
-    "crates/bacnet-server/src/schedule.rs::deliver"
+    "crates/bacnet-server/src/schedule.rs::deliver",
+    "crates/bacnet-objects/src/database.rs::check_name_available"
    ],
    "positive_tests": [
     "crates/bacnet-objects/src/property_metadata_audit/unknown_writes.rs",
@@ -9349,7 +9353,12 @@
     "crates/bacnet-objects/src/command_source/tests.rs::command_source_invalid_writes_are_atomic_and_metadata_is_paired",
     "crates/bacnet-server/src/handlers/tests/noncommandable_null_writes.rs::{null_keeps_the_errors_its_checks_give,null_to_value_source_needs_the_command_owner}",
     "crates/rusty-bacnet/tests/test_noncommandable_null_writes.py::NoncommandableNullTests::test_a_read_only_property_still_refuses_a_null",
-    "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_target_index_is_checked_as_write_property_checks_it"
+    "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_target_index_is_checked_as_write_property_checks_it",
+    "crates/bacnet-objects/src/database/tests.rs::duplicate_name_rejected",
+    "crates/bacnet-server/src/handlers/tests/write_property_name.rs::{write_object_name_rejects_duplicate,event_enrollment_name_write_refreshes_index_and_rejects_duplicate,write_property_multiple_failed_attempt_is_mutation_free_and_prefix_index_stays_committed,create_object_duplicate_object_name_initial_value_rejected_and_rolled_back}",
+    "crates/bacnet-integration-tests/tests/server/duplicate_name.rs::a_name_in_use_is_property_duplicate_name_over_wp_wpm_and_create_object",
+    "crates/bacnet-integration-tests/tests/server/local_write_cov.rs::local_object_name_write_refreshes_name_index",
+    "crates/rusty-bacnet/tests/test_duplicate_name.py::DuplicateNameTests::{test_write_property_local,test_write_property_and_write_property_multiple,test_create_object_names_the_initial_value}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -9365,7 +9374,8 @@
     "The checks an object makes before the value keep their errors: unknown property, WRITE_ACCESS_DENIED (state included) and INVALID_ARRAY_INDEX. An array element is judged by its own datatype; index 0, the size, is an Unsigned.",
     "Over WP and WPM such a NULL is audited as a successful write; none gets COV, event, Schedule, Command or save work. Most objects take a NULL to Description or Out_Of_Service as a no-op themselves; the post-write checks then find no change.",
     "CreateObject initial values and a Schedule's target writes follow the same rule: such a NULL leaves the property as it is, the create goes on to its next value, and the Schedule counts the target as one that took the write.",
-    "The array index gate runs ahead of this rule on every path, typed write_local and Schedule targets included: a NULL with an index on a property that isn't an array is PROPERTY_IS_NOT_AN_ARRAY, and a Schedule counts that reference as one it can't write."
+    "The array index gate runs ahead of this rule on every path, typed write_local and Schedule targets included: a NULL with an index on a property that isn't an array is PROPERTY_IS_NOT_AN_ARRAY, and a Schedule counts that reference as one it can't write.",
+    "An Object_Name another object holds is PROPERTY / DUPLICATE_NAME over WP, WPM, write_local and Python write_property_local, and from ObjectDatabase::add: PROPERTY is the one class that code belongs to."
    ]
   },
   {
