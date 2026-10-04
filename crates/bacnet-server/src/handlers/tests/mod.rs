@@ -100,6 +100,7 @@ mod access_control_arrays;
 mod access_door_oos_writes;
 mod access_point_authorization_writes;
 mod access_required_rows;
+mod access_rights_rule_writes;
 mod access_rights_rules;
 mod access_typed_values;
 mod access_zone_oos_writes;

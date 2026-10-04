@@ -117,6 +117,10 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::CREDENTIAL_DISABLE,
         ]);
     }
+    // So does Table 12-39's Enable row, property 133 (#1332).
+    if kind == ObjectType::ACCESS_RIGHTS {
+        all.push(P::LOG_ENABLE);
+    }
     let optional: &[P] = match kind {
         ObjectType::ACCESS_CREDENTIAL => &[P::DESCRIPTION],
         ObjectType::ACCESS_USER => &[P::DESCRIPTION],
