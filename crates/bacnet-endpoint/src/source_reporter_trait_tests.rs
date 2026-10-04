@@ -10,7 +10,8 @@ use super::*;
 mod forwarding;
 
 use bacnet_types::enums::ObjectType;
-use forwarding::probe::{oid, take, CallLog, Probe};
+use forwarding::fixtures::oid;
+use forwarding::probe::{take, CallLog, Probe};
 use forwarding::rows::rows;
 
 /// What one row answered, and the calls the probe logged for it.
