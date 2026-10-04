@@ -163,3 +163,35 @@ fn pics_access_identity_property_metadata_is_exact() {
         }
     }
 }
+
+/// Accompaniment is a per-instance Table 12-39 O row (#1393): the PICS lists
+/// it, optional and writable, once any Access Rights object serves it.
+#[test]
+fn pics_access_rights_lists_accompaniment_once_an_object_serves_it() {
+    let row = |pics: &Pics| {
+        pics.supported_object_types[0]
+            .supported_properties
+            .iter()
+            .find(|row| row.property_id == P::ACCOMPANIMENT)
+            .map(|row| {
+                (
+                    row.access.readable,
+                    row.access.optional,
+                    row.access.writable,
+                )
+            })
+    };
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(AccessRightsObject::new(1, "AR-1").unwrap()))
+        .unwrap();
+    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+    assert_eq!(row(&pics), None);
+
+    let mut rights = AccessRightsObject::new(2, "AR-2").unwrap();
+    let credential = ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, 5).unwrap();
+    rights.set_accompaniment(Some(credential.into())).unwrap();
+    db.add(Box::new(rights)).unwrap();
+    let pics = generate_pics(&db, &ServerConfig::default(), &PicsConfig::default());
+    assert_eq!(pics.supported_object_types.len(), 1);
+    assert_eq!(row(&pics), Some((true, true, true)));
+}

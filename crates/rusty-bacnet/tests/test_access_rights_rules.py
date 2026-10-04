@@ -4,7 +4,8 @@ positive_access_rules=... and negative_access_rules=... set Access Rights'
 Positive_Access_Rules and Negative_Access_Rules (#1316), and enable=... its
 Enable row, property 133 (#1332). Peers can write all three (#1330), and
 storage_path=... keeps what they write across a restart (#1392; see
-test_access_rights_persistence.py).
+test_access_rights_persistence.py). accompaniment=... serves the optional
+Accompaniment row (#1393; see test_access_rights_accompaniment.py).
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ GROWN = bytes(
 )
 
 RULE_KEYWORDS = ["positive_access_rules", "negative_access_rules"]
-KEYWORDS = [*RULE_KEYWORDS, "enable", "storage_path"]
+KEYWORDS = [*RULE_KEYWORDS, "enable", "accompaniment", "storage_path"]
 
 
 def installed_stub_method(name: str) -> ast.FunctionDef:
@@ -101,6 +102,7 @@ class AccessRightsStubContractTests(unittest.TestCase):
             "positive_access_rules": None,
             "negative_access_rules": None,
             "enable": True,
+            "accompaniment": None,
             "storage_path": None,
         }
         for keyword in KEYWORDS:

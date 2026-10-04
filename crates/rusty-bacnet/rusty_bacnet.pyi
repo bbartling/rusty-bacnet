@@ -3083,6 +3083,9 @@ class BACnetServer:
         positive_access_rules: Optional[list[AccessRule]] = None,
         negative_access_rules: Optional[list[AccessRule]] = None,
         enable: bool = True,
+        accompaniment: Optional[
+            ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]
+        ] = None,
         storage_path: Optional[str] = None,
     ) -> None:
         """Add an Access Rights object to the server (before starting).
@@ -3099,16 +3102,29 @@ class BACnetServer:
         them. The server stores and serves the rules but doesn't evaluate
         them.
 
-        With ``storage_path``, a rule array or Enable that a client writes is
-        kept in that file across restarts, and wins over the keyword given
-        for it at the next start, which is then checked but not applied. A
+        ``accompaniment`` serves the optional Accompaniment row: the Access
+        Rights, Access Credential or Access User object that a second
+        credential, presented with the first, has to match. It takes an
+        ``ObjectIdentifier`` in this device or a ``(device, object)`` pair,
+        as ``door_members`` does; instance 4194303 asks for no
+        accompaniment. Left out, the object has no Accompaniment row and
+        clients can't add one; once served, clients can write it. A pair
+        whose device isn't a Device raises ValueError, and any other object
+        type raises BacnetProtocolError with VALUE_OUT_OF_RANGE. A read
+        returns the reference's octets as ``application_data``.
+
+        With ``storage_path``, a rule array, Enable or Accompaniment that a
+        client writes is kept in that file across restarts, and wins over the
+        keyword given for it at the next start, which is then checked but not
+        applied; a saved Accompaniment is served even without the keyword. A
         write that cannot be saved is refused with DEVICE /
         OPERATIONAL_PROBLEM and the old value stays. Without it, written
         values live in memory only. ``storage_path`` is a ``str``; a
         ``pathlib.Path`` raises TypeError. Give each object a file of its
         own: one that holds another object's state, or anything this backend
         did not write, makes this call raise BacnetError
-        (BacnetProtocolError for a saved rule the object would refuse).
+        (BacnetProtocolError for a saved rule or Accompaniment the object
+        would refuse).
         """
         ...
     def add_access_user(self, instance: int, name: str) -> None: ...
@@ -3123,6 +3139,7 @@ class BACnetServer:
         exit_points: Optional[
             list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
         ] = None,
+        alarm_values: Optional[list[int]] = None,
     ) -> None:
         """Add an Access Zone object to the server (before starting).
 
@@ -3133,6 +3150,14 @@ class BACnetServer:
         identifier raises ValueError, and a reference to anything but an
         Access Point raises BacnetProtocolError with VALUE_OUT_OF_RANGE;
         either way nothing is registered.
+
+        ``alarm_values`` sets the starting Alarm_Values, the occupancy states
+        the zone reports with a CHANGE_OF_STATE alarm after Time_Delay, as
+        BACnetAccessZoneOccupancyState numbers other than NORMAL (1 to 6, or
+        64 to 65535); peers can write it too. Any other number, NORMAL (0)
+        included, raises BacnetProtocolError with VALUE_OUT_OF_RANGE and
+        ``first_failed_element_number`` naming it, from 1, and nothing is
+        registered. Left out, the list starts empty.
         """
         ...
     def add_credential_data_input(

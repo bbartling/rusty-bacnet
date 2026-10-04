@@ -53,6 +53,7 @@ fn written_rules_and_enable_read_back_after_a_rebuild() {
         positive_access_rules: Some(positive.to_vec()),
         negative_access_rules: Some(negative.to_vec()),
         enable: Some(false),
+        accompaniment: None,
     };
     assert_eq!(storage.snapshot(), Some(expected));
     assert_eq!(storage.saves(), 4);
@@ -150,6 +151,7 @@ fn saved_values_win_over_configured_ones() {
             positive_access_rules: Some(written.to_vec()),
             negative_access_rules: None,
             enable: Some(true),
+            accompaniment: None,
         })
     );
 }
@@ -309,10 +311,16 @@ fn file_persistence_round_trips_each_member_and_refuses_bad_files() {
     assert_eq!(storage.path(), path);
     let rights = rights_oid(1);
     assert_eq!(storage.load(rights).unwrap(), None);
+    // Access User 3 in Device 99 (#1393).
+    let accompaniment = BACnetDeviceObjectReference {
+        device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 99).unwrap()),
+        object_identifier: ObjectIdentifier::new(ObjectType::ACCESS_USER, 3).unwrap(),
+    };
     let full = AccessRightsSnapshot {
         positive_access_rules: Some(vec![zone_rule(1), grown_rule()]),
         negative_access_rules: Some(vec![zone_rule(2)]),
         enable: Some(false),
+        accompaniment: Some(accompaniment.clone()),
     };
     // Each member may be absent, and an array may be empty.
     for saved in [
@@ -326,6 +334,10 @@ fn file_persistence_round_trips_each_member_and_refuses_bad_files() {
             enable: Some(true),
             ..AccessRightsSnapshot::default()
         },
+        AccessRightsSnapshot {
+            accompaniment: Some(accompaniment.object_identifier.into()),
+            ..AccessRightsSnapshot::default()
+        },
         AccessRightsSnapshot::default(),
     ] {
         storage.save(rights, &saved).unwrap();
@@ -337,7 +349,7 @@ fn file_persistence_round_trips_each_member_and_refuses_bad_files() {
     let good = std::fs::read(&path).unwrap();
     let header = &good[..12];
     let body = &good[12..];
-    // The body is the BACnet encoding of the three members in order.
+    // The body is the BACnet encoding of the four members in order.
     let mut expected = vec![0x0E];
     for rule in [zone_rule(1), grown_rule()] {
         let mut buf = BytesMut::new();
@@ -349,12 +361,18 @@ fn file_persistence_round_trips_each_member_and_refuses_bad_files() {
     encode_access_rule(&mut buf, &zone_rule(2));
     expected.extend_from_slice(&buf);
     expected.extend_from_slice(&[0x1F, 0x29, 0x00]);
+    // Accompaniment framed by context tag 3: device [0], then object [1].
+    let accompaniment_frame = [
+        0x3E, 0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x08, 0xC0, 0x00, 0x03, 0x3F,
+    ];
+    expected.extend_from_slice(&accompaniment_frame);
     assert_eq!(body, expected);
     assert_eq!(&header[..8], b"RBNACR01");
 
     let with_body = |body: &[u8]| [header, body].concat();
     let enable_only = [0x29, 0x01];
-    let negative_frame = &body[body.len() - 2 - (buf.len() + 2)..body.len() - 2];
+    let negative_end = body.len() - 2 - accompaniment_frame.len();
+    let negative_frame = &body[negative_end - (buf.len() + 2)..negative_end];
     let refusals = [
         // Cut short, inside a frame and inside a rule.
         with_body(&body[..body.len() - 1]),
@@ -367,6 +385,20 @@ fn file_persistence_round_trips_each_member_and_refuses_bad_files() {
         // An Enable that isn't a BOOLEAN of 0 or 1, and octets past the end.
         with_body(&[0x29, 0x02]),
         with_body(&[&enable_only[..], &[0x00]].concat()),
+        // Accompaniment before Enable, repeated, cut short, unclosed, or
+        // holding something other than one reference.
+        with_body(&[&accompaniment_frame[..], &enable_only[..]].concat()),
+        with_body(&[accompaniment_frame, accompaniment_frame].concat()),
+        with_body(&accompaniment_frame[..8]),
+        with_body(&accompaniment_frame[..11]),
+        with_body(&[0x3E, 0x21, 0x01, 0x3F]),
+        with_body(
+            &[
+                &accompaniment_frame[..11],
+                &[0x1C, 0x08, 0xC0, 0x00, 0x03, 0x3F],
+            ]
+            .concat(),
+        ),
         // Another object's identifier, and no valid header at all.
         [&header[..8], &rights_oid(9).encode()[..], body].concat(),
         b"not an access rights file".to_vec(),
@@ -455,10 +487,15 @@ fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
     encode_access_rule(&mut one, &longest);
     assert_eq!(one.len(), 40);
     let full_array = vec![longest; MAX_ACCESS_RULES];
+    // The longest Accompaniment too: one naming its device.
     let full = AccessRightsSnapshot {
         positive_access_rules: Some(full_array.clone()),
         negative_access_rules: Some(full_array.clone()),
         enable: Some(true),
+        accompaniment: Some(BACnetDeviceObjectReference {
+            device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 99).unwrap()),
+            object_identifier: ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, 5).unwrap(),
+        }),
     };
     storage.save(rights, &full).unwrap();
     let file_len = std::fs::metadata(&path).unwrap().len();

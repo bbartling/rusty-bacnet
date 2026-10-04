@@ -2,15 +2,15 @@
 //!
 //! A Notification Forwarder saves a written Recipient_List or
 //! Subscribed_Recipients, a Notification Class a written Recipient_List
-//! (#1315), an Access Rights object a written rule array or Enable (#1392),
-//! and an Audit Log a Log_Enable or Buffer_Size change, before serving it,
-//! and refuses the write if the save fails. So that the save
-//! never runs while the database guard is held, a request that makes such a
-//! write stages it first ([`DurableWrites`]): under the guard the object
-//! queues the save, the request awaits it with the guard dropped, and then
-//! runs as it always has, the object taking the saved state or refusing the
-//! write. The request releases what it staged in the critical section that
-//! makes the write. An application's Audit Log purge (#1238) is staged the
+//! (#1315), an Access Rights object a written rule array, Enable (#1392) or
+//! Accompaniment (#1393), and an Audit Log a Log_Enable or Buffer_Size
+//! change, before serving it, and refuses the write if the save fails. So
+//! that the save never runs while the database guard is held, a request
+//! that makes such a write stages it first ([`DurableWrites`]): under the
+//! guard the object queues the save, the request awaits it with the guard
+//! dropped, and then runs as it always has, the object taking the saved
+//! state or refusing the write. The request releases what it staged in the
+//! critical section that makes the write. An application's Audit Log purge (#1238) is staged the
 //! same way.
 //!
 //! A request stages once per object, handing it all of the request's writes
@@ -74,9 +74,9 @@ enum TargetValue {
 
 /// Whether a bundled object of `oid`'s type may save a write of `property`
 /// first. A Notification Class saves only its Recipient_List, and an Access
-/// Rights object its two rule arrays and Enable (property 133, named
-/// `LOG_ENABLE`); a forwarder and an Audit Log decide for themselves, any
-/// property.
+/// Rights object its two rule arrays, Enable (property 133, named
+/// `LOG_ENABLE`) and Accompaniment; a forwarder and an Audit Log decide for
+/// themselves, any property.
 ///
 /// An object type that takes up [`DurableWrites`] is listed here too, or
 /// the server never stages its writes and they save in place under the
@@ -92,6 +92,7 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
             PropertyIdentifier::POSITIVE_ACCESS_RULES
                 | PropertyIdentifier::NEGATIVE_ACCESS_RULES
                 | PropertyIdentifier::LOG_ENABLE
+                | PropertyIdentifier::ACCOMPANIMENT
         ),
         _ => false,
     }

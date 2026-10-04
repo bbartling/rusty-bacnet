@@ -2509,6 +2509,19 @@ server.add_access_door(
 )
 ```
 
+`add_access_zone` takes `alarm_values` too: the zone's starting Alarm_Values,
+as BACnetAccessZoneOccupancyState numbers other than NORMAL (1 to 6, or 64 to
+65535), which peers can also write. The zone raises a CHANGE_OF_STATE alarm
+once Occupancy_State has stayed in Alarm_Values for Time_Delay. Any other
+number, NORMAL (0) included, raises `BacnetProtocolError` (VALUE_OUT_OF_RANGE)
+whose `first_failed_element_number` names it, from 1, and nothing is
+registered. Left out, the list starts empty.
+
+```python
+# Alarm when the zone is above its upper limit (4) or counting is DISABLED (5).
+server.add_access_zone(instance=2, name="Building B", alarm_values=[4, 5])
+```
+
 `add_access_rights` takes `positive_access_rules` and `negative_access_rules`,
 lists of `AccessRule` mappings for Positive_Access_Rules and
 Negative_Access_Rules, and `enable` for the object's Enable flag:
@@ -2559,8 +2572,33 @@ its last rules. Writes get the same checks as the keywords, and a refused
 write leaves the array unchanged. The server stores and serves the rules and
 the flag; it doesn't evaluate them.
 
-With `storage_path`, the arrays and Enable that peers write are kept in that
-file and served again after a restart; without it they live in memory only:
+`accompaniment` serves the object's optional Accompaniment row: the Access
+Rights, Access Credential or Access User object a second credential,
+presented with the first, has to match. It takes the forms `door_members`
+does, and instance 4194303 asks for no accompaniment:
+
+```python
+# A holder of these rights needs Access User 7 of Device 99 alongside.
+server.add_access_rights(
+    instance=4,
+    name="Vault Escort",
+    accompaniment=(
+        ObjectIdentifier(ObjectType.DEVICE, 99),
+        ObjectIdentifier(ObjectType.ACCESS_USER, 7),
+    ),
+)
+```
+
+Without the keyword the object has no Accompaniment row, and a read or write
+of it gets UNKNOWN_PROPERTY. Once served, it is in Property_List and peers
+can write it as `PropertyValue.application_data` holding the reference's
+octets; a read returns those octets the same way. A pair whose device isn't a
+Device raises `ValueError`, and another object type raises
+`BacnetProtocolError` (VALUE_OUT_OF_RANGE), from the keyword or a write.
+
+With `storage_path`, the arrays, Enable and Accompaniment that peers write are
+kept in that file and served again after a restart; without it they live in
+memory only:
 
 ```python
 server.add_access_rights(
@@ -2573,20 +2611,20 @@ server.add_access_rights(
 )
 ```
 
-Each written array or Enable is saved before the object serves it, on a
-thread of its own while the server goes on answering other requests. A write
-that cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM, and
-nothing changes. Once a write has set an array or Enable, the saved value
-wins at every later start: the keyword for it is still checked, but not
-applied. A keyword whose property no write has set applies as usual, and
-keyword values alone are never saved, but a write saves the whole array it
-leaves, so an element write also saves the keyword rules it didn't touch.
-`storage_path` takes a `str` (a
+Each written array, Enable or Accompaniment is saved before the object serves
+it, on a thread of its own while the server goes on answering other requests.
+A write that cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM, and
+nothing changes. Once a write has set one of them, the saved value wins at
+every later start: the keyword for it is still checked, but not applied, and
+a saved Accompaniment is served even without the keyword. A keyword whose
+property no write has set applies as usual, and keyword values alone are
+never saved, but a write saves the whole array it leaves, so an element write
+also saves the keyword rules it didn't touch. `storage_path` takes a `str` (a
 `pathlib.Path` raises `TypeError`). Give each object its own file: the file
 records which object it belongs to, so two objects sharing a path fail to
 register after a restart. A file this backend did not write, or a corrupt
-one, makes `add_access_rights` raise `BacnetError`, and one holding a rule
-the object refuses raises `BacnetProtocolError`.
+one, makes `add_access_rights` raise `BacnetError`, and one holding a rule or
+an Accompaniment the object refuses raises `BacnetProtocolError`.
 
 Access Door, Access Point, Credential Data Input and Load Control take
 SubscribeCOV, and each report carries the values their Table 13-1 rows name:

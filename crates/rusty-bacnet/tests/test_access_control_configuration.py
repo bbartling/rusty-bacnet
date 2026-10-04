@@ -9,7 +9,8 @@ Priority_For_Writing, which are read-only over the network too (#1307).
 add_access_door also takes the door's starting Alarm_Values, Fault_Values and
 Masked_Alarm_Values, which keep Door_Alarm_State to the states they admit
 (#1149). A zone's Alarm_Values, written locally, refuses NORMAL as the door's
-lists do (#1401).
+lists do (#1401), and add_access_zone(alarm_values=...) sets its starting
+list with the same checks (#1421).
 """
 
 from __future__ import annotations
@@ -60,7 +61,7 @@ KEYWORDS = (
             "priority_for_writing",
         ],
     ),
-    ("add_access_zone", ["entry_points", "exit_points"]),
+    ("add_access_zone", ["entry_points", "exit_points", "alarm_values"]),
     ("add_credential_data_input", ["supported_formats"]),
 )
 
@@ -318,6 +319,44 @@ class AccessControlConfigurationTests(unittest.TestCase):
                 self.assert_value_out_of_range(raised.exception)
                 self.assertEqual(raised.exception.first_failed_element_number, element)
             self.assertEqual(await server.read_property(zone, alarms), states(4, 5, 6))
+        finally:
+            await server.stop()
+
+    def test_zone_alarm_values_keyword_sets_the_starting_list(self) -> None:
+        asyncio.run(self._zone_alarm_values_keyword())
+
+    async def _zone_alarm_values_keyword(self) -> None:
+        server = make_server()
+        # ABOVE_UPPER_LIMIT (4), DISABLED (5) and a proprietary 64.
+        server.add_access_zone(1, "Building A", alarm_values=[4, 5, 64])
+        server.add_access_zone(2, "Building B")
+        # NORMAL (#1401), a reserved state and one past 65535, each refused
+        # naming its element from 1, and registering nothing.
+        for values, element in (([4, 0], 2), ([0], 1), ([7], 1), ([65_536], 1)):
+            with self.subTest(values=values):
+                with self.assertRaises(BacnetProtocolError) as raised:
+                    server.add_access_zone(3, "Refused", alarm_values=values)
+                self.assert_value_out_of_range(raised.exception)
+                self.assertEqual(raised.exception.first_failed_element_number, element)
+        with self.assertRaises(TypeError):
+            server.add_access_zone(3, "Refused", alarm_values=["NORMAL"])
+        await server.start()
+        try:
+            alarms = PropertyIdentifier.ALARM_VALUES
+
+            def states(*raw: int) -> PropertyValue:
+                return PropertyValue.list([PropertyValue.enumerated(r) for r in raw])
+
+            zone = ObjectIdentifier(ObjectType.ACCESS_ZONE, 1)
+            self.assertEqual(await server.read_property(zone, alarms), states(4, 5, 64))
+            # Left out, the list starts empty.
+            bare = ObjectIdentifier(ObjectType.ACCESS_ZONE, 2)
+            self.assertEqual(await server.read_property(bare, alarms), states())
+            with self.assertRaises(BacnetProtocolError) as raised:
+                await server.read_property(
+                    ObjectIdentifier(ObjectType.ACCESS_ZONE, 3), alarms
+                )
+            self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
         finally:
             await server.stop()
 

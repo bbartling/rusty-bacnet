@@ -20,7 +20,7 @@ use crate::property_metadata::{
 // projection helper omits it while required_properties keeps it. Only
 // implemented rows are described: table rows the objects do not serve stay
 // absent until dispatch exists (user Global_Identifier W, user Members R,
-// rights Accompaniment O, CDI event/intrinsic rows). Shared
+// CDI event/intrinsic rows). Shared
 // conventions match metadata_topology.rs (Slice A): OI/ON/OT
 // RequiredRead/ReadOnly with the explicit Object_Name denial, Description
 // Optional/Always, Out_Of_Service RequiredRead/Always on Credential Data
@@ -50,7 +50,10 @@ use crate::property_metadata::{
 // carry the table R code with routed array arms (#1330), so
 // RequiredRead/Always, and Enable (#1332) follows the status rows, before
 // Property_List, with the table R code and a routed Boolean arm, so
-// RequiredRead/Always too. CDI Present_Value and Reliability carry the table R
+// RequiredRead/Always too. Rights Accompaniment (#1393) carries the table O
+// code with a routed reference arm, so Optional/Always; it is a per-instance
+// row, present once the application sets it, after Enable.
+// CDI Present_Value and Reliability carry the table R
 // code with footnote 1, and dispatch takes their writes only while
 // Out_Of_Service is TRUE (#1168), so RequiredRead/WhenOutOfService.
 // Update_Time and Supported_Formats carry the table R code with no arm, so
@@ -125,10 +128,20 @@ pub(super) fn for_access_user_object(_object: &AccessUserObject) -> Cow<'_, [Pro
     Cow::Borrowed(ACCESS_USER_BASE)
 }
 
-pub(super) fn for_access_rights_object(
-    _object: &AccessRightsObject,
-) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(ACCESS_RIGHTS_BASE)
+pub(super) fn for_access_rights_object(object: &AccessRightsObject) -> Cow<'_, [PropertyMetadata]> {
+    if object.accompaniment().is_none() {
+        return Cow::Borrowed(ACCESS_RIGHTS_BASE);
+    }
+    let mut rows = ACCESS_RIGHTS_BASE.to_vec();
+    let before_property_list = rows
+        .iter()
+        .position(|row| row.property_identifier == P::PROPERTY_LIST)
+        .expect("Property_List row");
+    rows.insert(
+        before_property_list,
+        PropertyMetadata::new(P::ACCOMPANIMENT, Optional, None, Always),
+    );
+    Cow::Owned(rows)
 }
 
 pub(super) fn for_credential_data_input_object(
@@ -743,8 +756,9 @@ mod tests {
         assert_unserved(&mut user, P::PRESENT_VALUE);
         assert_unserved(&mut user, P::ASSIGNED_ACCESS_RIGHTS);
         assert_unserved(&mut user, P::OUT_OF_SERVICE);
-        // Accompaniment and Reliability_Evaluation_Inhibit are Table 12-39 O
-        // rows with no read arm; Out_Of_Service is no Table 12-39 row (#1064).
+        // Accompaniment is a Table 12-39 O row served only once the
+        // application sets it (#1393); Reliability_Evaluation_Inhibit is one
+        // with no read arm; Out_Of_Service is no Table 12-39 row (#1064).
         let mut rights = AccessRightsObject::new(1, "AR-1").unwrap();
         assert_unserved(&mut rights, P::ACCOMPANIMENT);
         assert_unserved(&mut rights, P::RELIABILITY_EVALUATION_INHIBIT);

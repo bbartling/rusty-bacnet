@@ -6,13 +6,14 @@
 //! arguments are the Python route to it. The Access Point's policy count,
 //! supported authorization modes and Priority_For_Writing are read-only
 //! too, and take keyword arguments the same way (#1307). The Access Door's
-//! Alarm_Values, Fault_Values and Masked_Alarm_Values (#1149) are writable
-//! over the network as well; their keyword arguments set the starting
-//! lists.
+//! Alarm_Values, Fault_Values and Masked_Alarm_Values (#1149), and the
+//! Access Zone's Alarm_Values (#1421), are writable over the network as
+//! well; their keyword arguments set the starting lists.
 use super::super::*;
 use bacnet_types::constructed::BACnetAuthenticationFactorFormat;
 use bacnet_types::enums::{
-    AuthenticationFactorType, AuthorizationMode, DoorAlarmState, ErrorClass, ErrorCode,
+    AccessZoneOccupancyState, AuthenticationFactorType, AuthorizationMode, DoorAlarmState,
+    ErrorClass, ErrorCode,
 };
 use bacnet_types::error::Error;
 
@@ -191,17 +192,33 @@ impl BACnetServer {
     /// an Access Door's `door_members` takes; a pair whose device isn't a
     /// Device raises ValueError, and a reference to anything but an Access
     /// Point raises VALUE_OUT_OF_RANGE.
-    #[pyo3(signature = (instance, name, *, entry_points=None, exit_points=None))]
+    ///
+    /// `alarm_values` sets Alarm_Values (#1421) as
+    /// BACnetAccessZoneOccupancyState numbers other than NORMAL (1 to 6, or
+    /// 64 to 65535). Any other number raises VALUE_OUT_OF_RANGE naming the
+    /// element.
+    #[pyo3(signature = (
+        instance,
+        name,
+        *,
+        entry_points=None,
+        exit_points=None,
+        alarm_values=None
+    ))]
     fn add_access_zone(
         &self,
         instance: u32,
         name: &str,
         entry_points: Option<Vec<PyDeviceObjectReference>>,
         exit_points: Option<Vec<PyDeviceObjectReference>>,
+        alarm_values: Option<Vec<u32>>,
     ) -> PyResult<()> {
-        let entry = device_references(entry_points, "entry_points")?;
-        let exit = device_references(exit_points, "exit_points")?;
-        let obj = access_zone(instance, name, entry, exit).map_err(to_py_err)?;
+        let settings = ZoneSettings {
+            entry_points: device_references(entry_points, "entry_points")?,
+            exit_points: device_references(exit_points, "exit_points")?,
+            alarm_values,
+        };
+        let obj = access_zone(instance, name, settings).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }
 
@@ -293,20 +310,31 @@ fn access_point(
     Ok(obj)
 }
 
-/// Build an Access Zone, applying Entry_Points and Exit_Points through its
-/// validating setters.
+/// The optional `add_access_zone` keyword arguments; `None` keeps the
+/// zone's default.
+#[derive(Default)]
+struct ZoneSettings {
+    entry_points: Option<Vec<BACnetDeviceObjectReference>>,
+    exit_points: Option<Vec<BACnetDeviceObjectReference>>,
+    alarm_values: Option<Vec<u32>>,
+}
+
+/// Build an Access Zone, applying Entry_Points, Exit_Points and
+/// Alarm_Values through its validating setters.
 fn access_zone(
     instance: u32,
     name: &str,
-    entry: Option<Vec<BACnetDeviceObjectReference>>,
-    exit: Option<Vec<BACnetDeviceObjectReference>>,
+    settings: ZoneSettings,
 ) -> Result<AccessZoneObject, Error> {
     let mut obj = AccessZoneObject::new(instance, name)?;
-    if let Some(entry) = entry {
+    if let Some(entry) = settings.entry_points {
         obj.set_entry_points(entry)?;
     }
-    if let Some(exit) = exit {
+    if let Some(exit) = settings.exit_points {
         obj.set_exit_points(exit)?;
+    }
+    if let Some(values) = settings.alarm_values {
+        obj.set_alarm_values(values.into_iter().map(AccessZoneOccupancyState::from_raw))?;
     }
     Ok(obj)
 }
