@@ -223,7 +223,16 @@ fn rpm_lighting_output_indexed_reads_and_bytes_are_unchanged() {
                 Some(0),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::TRACKING_VALUE, None, Ok(&[0x44, 0x00, 0x00, 0x00, 0x00])),
+            // Tracking_Value follows Present_Value while In_Progress is IDLE.
+            (
+                P::TRACKING_VALUE,
+                None,
+                Ok(if configured {
+                    &[0x44, 0x42, 0x48, 0x00, 0x00]
+                } else {
+                    &[0x44, 0x00, 0x00, 0x00, 0x00]
+                }),
+            ),
             (
                 P::TRACKING_VALUE,
                 Some(0),

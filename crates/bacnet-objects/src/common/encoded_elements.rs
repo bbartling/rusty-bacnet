@@ -47,6 +47,33 @@ pub(crate) fn decode_elements<T>(
     Ok(elements)
 }
 
+/// Decode the one element a single-element value holds: a property holding
+/// one constructed value, or one array element written by index.
+///
+/// The value's chunks are joined first (see [`chunks`]): a value read back
+/// is one chunk, and a caller that split the octets at each member's tag
+/// hands over the same octets in pieces. On top of [`decode_element`]'s
+/// refusals, octets that hold no element at all, or anything after the one
+/// element, are INVALID_DATA_ENCODING: once the value has opened as the
+/// element, any count other than one is an encoding fault, whatever tag
+/// follows. A value whose datatype has an empty encoding checks for it
+/// before calling this.
+pub(crate) fn decode_single_element<T>(
+    value: &PropertyValue,
+    starts: fn(&Tag) -> bool,
+    decode: ElementDecoder<T>,
+) -> Result<T, Error> {
+    let bytes = chunks(value)?.concat();
+    if bytes.is_empty() {
+        return Err(super::invalid_data_encoding_error());
+    }
+    let (element, end) = decode_element(&bytes, 0, starts, decode)?;
+    if end != bytes.len() {
+        return Err(super::invalid_data_encoding_error());
+    }
+    Ok(element)
+}
+
 /// Decode the element at `offset`, with the errors [`decode_elements`]
 /// describes, returning it and the offset past it.
 pub(crate) fn decode_element<T>(

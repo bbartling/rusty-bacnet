@@ -774,6 +774,8 @@ mod life_safety_operation_tests;
 #[cfg(test)]
 mod lighting_command_member_tests;
 #[cfg(test)]
+mod lighting_present_value_tests;
+#[cfg(test)]
 mod list_element_event_tests;
 #[cfg(test)]
 mod local_network_number_tests;
@@ -797,6 +799,8 @@ mod notification_transactions_tests;
 mod pulse_converter_cov_tests;
 #[cfg(test)]
 mod rb07_provenance_tests;
+#[cfg(test)]
+mod reference_write_wire_tests;
 #[cfg(test)]
 mod remote_write_answer_tests;
 #[cfg(test)]

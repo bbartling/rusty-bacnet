@@ -152,6 +152,7 @@ mod life_safety_oos_writes;
 mod life_safety_operation;
 mod life_safety_reset;
 mod lighting_command_writes;
+mod lighting_present_value_writes;
 mod lighting_required_rows;
 mod list_element_edits;
 mod list_element_recipients;

@@ -2539,9 +2539,14 @@ Setpoint_Reference. Another datatype is INVALID_DATA_TYPE: the flat
 `[ObjectIdentifier, Enumerated, Unsigned?]` list these used to read as, Null
 on Setpoint_Reference, or the setpoint frame on a variable reference.
 Malformed octets, such as a Device member `[3]` the production lacks or an
-empty frame `0E 0F`, are INVALID_DATA_ENCODING. The `set_*_reference` setters
-still take a `BACnetObjectPropertyReference`. An application that follows the
-references decodes what it reads with
+empty frame `0E 0F`, are INVALID_DATA_ENCODING. These refusals are the device
+references' single-reference codes (#1395): anything after the one reference
+is INVALID_DATA_ENCODING whatever its tag, and a value passed to
+`write_property` as a list mixing raw chunks with decoded values is
+INVALID_DATA_TYPE. An empty list passed that way is the empty value: it is
+INVALID_DATA_ENCODING on a variable reference and clears Setpoint_Reference.
+The `set_*_reference` setters still take a `BACnetObjectPropertyReference`.
+An application that follows the references decodes what it reads with
 `bacnet_encoding::constructed::decode_object_property_reference`, or
 `decode_setpoint_reference`, which gives `None` for the empty value.
 
@@ -2809,6 +2814,13 @@ Lighting Output's `Default_Fade_Time`, `Default_Ramp_Rate` and
 A fade time outside 100 to 86,400,000 ms, or a rate or increment outside 0.1
 to 100.0, is refused with VALUE_OUT_OF_RANGE (Clauses 12.54.16 to 12.54.18).
 Both lighting objects serve `Current_Command_Priority`.
+
+Lighting Output's Present_Value and Relinquish_Default take a level from 0.0
+(off) to 100.0 percent. A level above 0.0 and below 1.0 is stored as 1.0, the
+dimmest on level (Clause 12.54.4), so the priority slot, Present_Value,
+Tracking_Value and COV reports all carry 1.0 (#1385). A level below 0.0 or
+above 100.0, NaN included, is refused with VALUE_OUT_OF_RANGE. Tracking_Value
+follows Present_Value, since In_Progress stays IDLE.
 
 Lighting Output's `Lighting_Command` holds a `BACnetLightingCommand`
 (`bacnet_types::constructed`): an operation plus an optional target level, ramp

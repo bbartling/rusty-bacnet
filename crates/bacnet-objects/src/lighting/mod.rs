@@ -17,7 +17,10 @@ use crate::traits::BACnetObject;
 /// BACnet Lighting Output object.
 ///
 /// Commandable output with a 16-level priority array controlling a
-/// floating-point present-value (0.0 to 100.0 percent).
+/// floating-point present-value (0.0 to 100.0 percent). A commanded level
+/// above 0.0 and below 1.0 is stored as 1.0, and so is such a
+/// Relinquish_Default (see [`set_relinquish_default`](Self::set_relinquish_default)).
+/// Tracking_Value follows Present_Value, since In_Progress stays IDLE.
 ///
 /// Lighting_Command takes a [`BACnetLightingCommand`] checked against its
 /// operation (see [`set_lighting_command`](Self::set_lighting_command)) and
@@ -88,22 +91,26 @@ impl LightingOutputObject {
     }
 
     /// Recalculate present-value from the priority array.
+    ///
+    /// Tracking_Value moves with it: the object runs no fade or ramp, so
+    /// In_Progress stays IDLE, and while it is IDLE the two are equal
+    /// (Clause 12.54.5).
     fn recalculate_present_value(&mut self) {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
+        self.tracking_value = self.present_value;
     }
 
     /// Set the Relinquish_Default (#270).
     ///
-    /// Validated the same way a commanded Present_Value is (finite Real
-    /// within the 0..=100 light level); after the store, Present_Value is
-    /// resolved anew from the priority array so an empty array falls back to
-    /// the new default immediately.
+    /// Checked the same way a commanded Present_Value is: a value outside
+    /// 0.0 to 100.0, or NaN, is refused with VALUE_OUT_OF_RANGE, and one
+    /// above 0.0 and below 1.0 is stored as 1.0, so Present_Value never falls
+    /// back to a level between off and the dimmest on level. After the store,
+    /// Present_Value is resolved anew from the priority array so an empty
+    /// array falls back to the new default immediately.
     pub fn set_relinquish_default(&mut self, value: f32) -> Result<(), Error> {
-        if !value.is_finite() || !(0.0..=100.0).contains(&value) {
-            return Err(common::value_out_of_range_error());
-        }
-        self.relinquish_default = value;
+        self.relinquish_default = normalized_level(value)?;
         self.recalculate_present_value();
         Ok(())
     }
@@ -166,6 +173,29 @@ impl LightingOutputObject {
         self.default_step_increment = lighting_percent(value)?;
         Ok(())
     }
+}
+
+/// Check a light level written to Present_Value or Relinquish_Default.
+///
+/// Both are percentages on the Clause 12.54 normalized scale: 0.0 is off,
+/// 1.0 is the dimmest on level and 100.0 the brightest, and no level lies
+/// strictly between 0.0 and 1.0. Clause 12.54.4 has a Present_Value write in
+/// that gap taken as 1.0, so such a level comes back as 1.0. 0.0 and levels
+/// from 1.0 to 100.0 come back unchanged. A level below 0.0 or above 100.0,
+/// NaN included, is VALUE_OUT_OF_RANGE. The blink-warn values -1.0 to -3.0
+/// are refused here with the rest until #1384 carries them out. -0.0 is off,
+/// so it comes back as 0.0 rather than keeping its sign on the wire.
+fn normalized_level(value: f32) -> Result<f32, Error> {
+    if !(0.0..=100.0).contains(&value) {
+        return Err(common::value_out_of_range_error());
+    }
+    Ok(if value == 0.0 {
+        0.0
+    } else if value < 1.0 {
+        1.0
+    } else {
+        value
+    })
 }
 
 /// The Default_Fade_Time range of Clause 12.54.16, in milliseconds, which a
@@ -259,17 +289,14 @@ impl BACnetObject for LightingOutputObject {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
-        // Commands update priority slots only through Present_Value.
+        // Commands update priority slots only through Present_Value. The
+        // level is normalized before it reaches the slot, so the slot,
+        // Present_Value, Tracking_Value and a COV report all see 1.0 for a
+        // write between 0.0 and 1.0.
         if property == PropertyIdentifier::PRESENT_VALUE {
             return write_priority_array!(self, value, priority, |v| {
                 match v {
-                    PropertyValue::Real(f) => {
-                        if !(0.0..=100.0).contains(&f) {
-                            Err(common::value_out_of_range_error())
-                        } else {
-                            Ok(f)
-                        }
-                    }
+                    PropertyValue::Real(f) => normalized_level(f),
                     _ => Err(common::invalid_data_type_error()),
                 }
             });
@@ -397,3 +424,6 @@ mod required_rows_tests;
 
 #[cfg(test)]
 mod command_tests;
+
+#[cfg(test)]
+mod present_value_tests;
