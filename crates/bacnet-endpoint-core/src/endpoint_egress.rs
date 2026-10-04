@@ -98,7 +98,9 @@ impl EndpointApduDestination {
     /// 6.5.1): a non-routing peer discards an APDU whose DNET names a network
     /// (Clause 6.5.2.1). A broadcast to that network is a local broadcast.
     /// Every other destination, and every one while the number is unknown,
-    /// is unchanged. A routed unicast's DADR is checked before this runs.
+    /// is unchanged. It checks nothing itself: the requester checks a routed
+    /// unicast's DADR before calling it, and source Audit applies its stricter
+    /// B/IP unicast check after.
     #[doc(hidden)]
     pub fn localized(self, local_network: Option<u16>) -> Self {
         let here = |network: u16| Some(network) == local_network;
