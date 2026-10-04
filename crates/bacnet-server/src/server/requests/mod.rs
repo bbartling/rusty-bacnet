@@ -345,7 +345,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             s if s == ConfirmedServiceChoice::GET_ALARM_SUMMARY => {
                 let db = db.read().await;
-                Self::alarm_summary_response(&db, invoke_id, config.get_alarm_summary_budget)
+                Self::alarm_summary_response(
+                    &db,
+                    invoke_id,
+                    &req.service_request,
+                    config.get_alarm_summary_budget,
+                )
             }
             s if s == ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY => {
                 let db = db.read().await;

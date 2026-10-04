@@ -328,10 +328,10 @@ pub(crate) fn handle_atomic_write_file_budgeted(
     handle_atomic_write_file_observed(db, service_data, buf, budget, |_, _, _| {})
 }
 
-/// Observe non-budget outcomes accepted by the existing service decoder, under
-/// the caller's database guard. This does not impose strict input consumption:
-/// tolerated trailing bytes retain their existing execution and response behavior.
-/// Decoder rejections and configured pre-execution overload never reach the hook.
+/// Observe non-budget outcomes accepted by the service decoder, under the
+/// caller's database guard. The decoder refuses a request with octets after
+/// its last member, so such a request writes nothing and never reaches the
+/// hook, like any other decoder rejection or configured pre-execution overload.
 pub(crate) fn handle_atomic_write_file_observed(
     db: &mut ObjectDatabase,
     service_data: &[u8],
