@@ -2,8 +2,9 @@
 //!
 //! A Notification Forwarder saves a written Recipient_List or
 //! Subscribed_Recipients, a Notification Class a written Recipient_List
-//! (#1315), and an Audit Log a Log_Enable or Buffer_Size change, before
-//! serving it, and refuses the write if the save fails. So that the save
+//! (#1315), an Access Rights object a written rule array or Enable (#1392),
+//! and an Audit Log a Log_Enable or Buffer_Size change, before serving it,
+//! and refuses the write if the save fails. So that the save
 //! never runs while the database guard is held, a request that makes such a
 //! write stages it first ([`DurableWrites`]): under the guard the object
 //! queues the save, the request awaits it with the guard dropped, and then
@@ -14,9 +15,9 @@
 //!
 //! A request stages once per object, handing it all of the request's writes
 //! to it in order. An Audit Log folds a WritePropertyMultiple's Log_Enable
-//! and Buffer_Size writes into one save; a forwarder or a Notification Class
-//! stages the first write it takes, and the request's later writes to it
-//! save in place.
+//! and Buffer_Size writes into one save; a forwarder, a Notification Class or
+//! an Access Rights object stages the first write it takes, and the
+//! request's later writes to it save in place.
 //!
 //! Other requests read and write the database while the save runs. One that
 //! stages a write to the same object waits for the first to land; requests
@@ -72,8 +73,10 @@ enum TargetValue {
 }
 
 /// Whether a bundled object of `oid`'s type may save a write of `property`
-/// first. A Notification Class saves only its Recipient_List; a forwarder
-/// and an Audit Log decide for themselves, any property.
+/// first. A Notification Class saves only its Recipient_List, and an Access
+/// Rights object its two rule arrays and Enable (property 133, named
+/// `LOG_ENABLE`); a forwarder and an Audit Log decide for themselves, any
+/// property.
 ///
 /// An object type that takes up [`DurableWrites`] is listed here too, or
 /// the server never stages its writes and they save in place under the
@@ -84,6 +87,12 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
     match oid.object_type() {
         ObjectType::NOTIFICATION_FORWARDER | ObjectType::AUDIT_LOG => true,
         ObjectType::NOTIFICATION_CLASS => property == PropertyIdentifier::RECIPIENT_LIST,
+        ObjectType::ACCESS_RIGHTS => matches!(
+            property,
+            PropertyIdentifier::POSITIVE_ACCESS_RULES
+                | PropertyIdentifier::NEGATIVE_ACCESS_RULES
+                | PropertyIdentifier::LOG_ENABLE
+        ),
         _ => false,
     }
 }

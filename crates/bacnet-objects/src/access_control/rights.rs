@@ -5,6 +5,13 @@ use bacnet_types::enums::{
 };
 
 use super::*;
+use crate::durable::DurableWrites;
+
+#[path = "rights_persistence.rs"]
+mod persistence;
+#[path = "rights_saving.rs"]
+mod saving;
+pub use persistence::{AccessRightsPersistence, AccessRightsSnapshot, FileAccessRightsPersistence};
 
 // AccessRightsObject (type 34)
 // ---------------------------------------------------------------------------
@@ -26,6 +33,17 @@ pub const MAX_ACCESS_RULES: usize = 1024;
 /// `PropertyIdentifier`) switches the whole object: while it is FALSE every
 /// rule in both arrays counts as disabled (Clause 12.34.8). The object stores
 /// the rules and the flag without evaluating them.
+///
+/// # Restarts
+///
+/// An object built with [`new`](Self::new) keeps everything in memory, so a
+/// restart brings back what the application configures. One built with
+/// [`with_persistence`](Self::with_persistence) saves each write of the two
+/// arrays and Enable in an [`AccessRightsPersistence`] before serving it, and
+/// serves the saved values when built again (#1392). A saved value wins over
+/// the configured one: the setter for a property a write set
+/// ([`property_saved`](Self::property_saved)) checks its argument but leaves
+/// the property alone. To change a saved value, write the property.
 pub struct AccessRightsObject {
     oid: ObjectIdentifier,
     name: String,
@@ -36,10 +54,19 @@ pub struct AccessRightsObject {
     negative_access_rules: Vec<BACnetAccessRule>,
     status_flags: StatusFlags,
     reliability: Reliability,
+    /// Where written rules and Enable are saved, with persistence.
+    storage: Option<saving::Storage>,
+    /// Saved writes taken, so a staged write can tell whether another came
+    /// between.
+    writes: u64,
+    /// The saved properties a write has set, now or before a restart.
+    written: saving::Written,
 }
 
 impl AccessRightsObject {
-    /// Create a new Access Rights object with no access rules, enabled.
+    /// Create a new Access Rights object with no access rules, enabled. It
+    /// keeps what peers write in memory only; see
+    /// [`with_persistence`](Self::with_persistence).
     pub fn new(instance: u32, name: impl Into<String>) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::ACCESS_RIGHTS, instance)?;
         Ok(Self {
@@ -52,6 +79,9 @@ impl AccessRightsObject {
             negative_access_rules: Vec::new(),
             status_flags: StatusFlags::empty(),
             reliability: Reliability::NO_FAULT_DETECTED,
+            storage: None,
+            writes: 0,
+            written: saving::Written::default(),
         })
     }
 
@@ -59,8 +89,14 @@ impl AccessRightsObject {
     /// 12.34.8) and leaves each rule's own enable flag alone, so TRUE again
     /// brings the rules back as they were. The default, TRUE, is a local
     /// choice; the standard names none.
+    ///
+    /// This configures the object and is not saved. With persistence, once
+    /// a write has set Enable and it was saved, the saved value wins and
+    /// this does nothing.
     pub fn set_enable(&mut self, enable: bool) {
-        self.enable = enable;
+        if !self.keeps_saved(PropertyIdentifier::LOG_ENABLE) {
+            self.enable = enable;
+        }
     }
 
     /// The stored Enable flag.
@@ -86,22 +122,32 @@ impl AccessRightsObject {
     /// identifier if it has one, carry instance 4194303. A SPECIFIED member
     /// may hold one, standing for nothing to match yet. The time range may
     /// name a property of any object; a Schedule's Present_Value is typical.
+    ///
+    /// This configures the object and is not saved. With persistence, once
+    /// a write has set the array and it was saved, the saved rules win: the
+    /// rules given here are still checked, but not stored.
     pub fn set_positive_access_rules(
         &mut self,
         rules: impl IntoIterator<Item = BACnetAccessRule>,
     ) -> Result<(), Error> {
-        self.positive_access_rules = checked_rules(rules)?;
+        let rules = checked_rules(rules)?;
+        if !self.keeps_saved(PropertyIdentifier::POSITIVE_ACCESS_RULES) {
+            self.positive_access_rules = rules;
+        }
         Ok(())
     }
 
     /// Replace Negative_Access_Rules, the rules that deny access, with the
-    /// same checks as
+    /// same checks, and the same rule for saved rules, as
     /// [`set_positive_access_rules`](Self::set_positive_access_rules).
     pub fn set_negative_access_rules(
         &mut self,
         rules: impl IntoIterator<Item = BACnetAccessRule>,
     ) -> Result<(), Error> {
-        self.negative_access_rules = checked_rules(rules)?;
+        let rules = checked_rules(rules)?;
+        if !self.keeps_saved(PropertyIdentifier::NEGATIVE_ACCESS_RULES) {
+            self.negative_access_rules = rules;
+        }
         Ok(())
     }
 
@@ -259,28 +305,13 @@ impl BACnetObject for AccessRightsObject {
             }
             // Table 12-39 makes Enable and both rule arrays R rows, so taking
             // their writes is this implementation's choice: a head end
-            // provisions access rights over the network.
-            p if p == PropertyIdentifier::LOG_ENABLE => {
-                if let PropertyValue::Boolean(enable) = value {
-                    self.enable = enable;
-                    Ok(())
-                } else {
-                    Err(common::invalid_data_type_error())
-                }
-            }
-            p if p == PropertyIdentifier::POSITIVE_ACCESS_RULES => {
-                super::rights_writes::write_rules(
-                    &mut self.positive_access_rules,
-                    array_index,
-                    value,
-                )
-            }
-            p if p == PropertyIdentifier::NEGATIVE_ACCESS_RULES => {
-                super::rights_writes::write_rules(
-                    &mut self.negative_access_rules,
-                    array_index,
-                    value,
-                )
+            // provisions access rights over the network. With persistence,
+            // each is saved before it is served.
+            p if p == PropertyIdentifier::LOG_ENABLE
+                || p == PropertyIdentifier::POSITIVE_ACCESS_RULES
+                || p == PropertyIdentifier::NEGATIVE_ACCESS_RULES =>
+            {
+                self.write_saved(property, array_index, value)
             }
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
@@ -297,10 +328,31 @@ impl BACnetObject for AccessRightsObject {
     fn property_list(&self) -> Cow<'static, [PropertyIdentifier]> {
         crate::property_metadata::property_list_from_metadata(self.property_metadata().as_ref())
     }
+
+    fn advance_monotonic_time_internal(&mut self, now: std::time::Duration) -> bool {
+        self.expire_staged_write(now);
+        false
+    }
+
+    fn durable_writes_internal(&mut self) -> Option<&mut dyn DurableWrites> {
+        Some(self)
+    }
 }
 
 #[cfg(test)]
 #[path = "rights_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "rights_test_storage.rs"]
+mod test_storage;
+
+#[cfg(test)]
+#[path = "rights_persistence_tests.rs"]
+mod persistence_tests;
+
+#[cfg(test)]
+#[path = "rights_staging_tests.rs"]
+mod staging_tests;
 
 // ---------------------------------------------------------------------------

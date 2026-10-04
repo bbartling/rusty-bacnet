@@ -87,7 +87,7 @@ async fn server(
 }
 
 /// Feed the server a confirmed `service` request carrying `request`.
-async fn send(
+pub(super) async fn send(
     inbound: &mpsc::Sender<ReceivedNpdu>,
     service: ConfirmedServiceChoice,
     request: Bytes,

@@ -139,7 +139,9 @@ impl NotificationClass {
             |_| common::protocol_error(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM);
         let base = self.list_writes;
         if let Some(claimed) = self
-            .with_storage(|storage| storage.claim(PropertyIdentifier::RECIPIENT_LIST, &value, base))
+            .with_storage(|storage| {
+                storage.claim(PropertyIdentifier::RECIPIENT_LIST, None, &value, base)
+            })
             .flatten()
         {
             self.install(claimed.map_err(refused)?);
@@ -197,6 +199,7 @@ impl DurableWrites for NotificationClass {
         let base = self.list_writes;
         self.storage.as_mut().expect("checked above").stage(
             property,
+            None,
             value.clone(),
             base,
             next,

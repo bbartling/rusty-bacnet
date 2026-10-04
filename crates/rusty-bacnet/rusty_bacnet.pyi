@@ -3083,6 +3083,7 @@ class BACnetServer:
         positive_access_rules: Optional[list[AccessRule]] = None,
         negative_access_rules: Optional[list[AccessRule]] = None,
         enable: bool = True,
+        storage_path: Optional[str] = None,
     ) -> None:
         """Add an Access Rights object to the server (before starting).
 
@@ -3097,6 +3098,17 @@ class BACnetServer:
         (NO_SPACE_TO_WRITE_PROPERTY). Nothing is registered after any of
         them. The server stores and serves the rules but doesn't evaluate
         them.
+
+        With ``storage_path``, a rule array or Enable that a client writes is
+        kept in that file across restarts, and wins over the keyword given
+        for it at the next start, which is then checked but not applied. A
+        write that cannot be saved is refused with DEVICE /
+        OPERATIONAL_PROBLEM and the old value stays. Without it, written
+        values live in memory only. ``storage_path`` is a ``str``; a
+        ``pathlib.Path`` raises TypeError. Give each object a file of its
+        own: one that holds another object's state, or anything this backend
+        did not write, makes this call raise BacnetError
+        (BacnetProtocolError for a saved rule the object would refuse).
         """
         ...
     def add_access_user(self, instance: int, name: str) -> None: ...

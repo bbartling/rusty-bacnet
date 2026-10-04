@@ -3322,9 +3322,54 @@
    ],
    "gaps": [
     "#1331: nothing evaluates the stored rules or Enable; the Clause 12.34.9.2 authorization check isn't modeled",
-    "#1344: Python reads each rule as application_data octets, not the AccessRule mapping add_access_rights takes",
-    "#1392: rules and Enable written over the network are lost when the server restarts"
+    "#1344: Python reads each rule as application_data octets, not the AccessRule mapping add_access_rights takes"
    ]
+  },
+  {
+   "id": "BACNET-12-ACCESS-RIGHTS-RESTART",
+   "standard_anchor": "Clause 12.34 and Table 12-39",
+   "priority": "P1",
+   "summary": "An Access Rights object built with persistence saves each written rule array and Enable before serving it and serves the saved values again after a restart.",
+   "status": "supported-with-clause-evidence",
+   "code_anchors": [
+    "crates/bacnet-objects/src/access_control/rights_persistence.rs::AccessRightsPersistence",
+    "crates/bacnet-objects/src/access_control/rights_persistence.rs::FileAccessRightsPersistence",
+    "crates/bacnet-objects/src/access_control/rights_saving.rs::AccessRightsObject::with_persistence",
+    "crates/bacnet-objects/src/durable/staged.rs::StagedSaves::claim",
+    "crates/bacnet-server/src/server/durable_writes.rs::may_save",
+    "crates/bacnet-server/src/server/durable_writes.rs::settle_forgotten",
+    "crates/rusty-bacnet/src/server/server_methods/access_rights_methods.rs::add_access_rights"
+   ],
+   "positive_tests": [
+    "crates/bacnet-objects/src/access_control/rights_persistence_tests.rs::{written_rules_and_enable_read_back_after_a_rebuild,an_index_zero_shrink_survives_a_rebuild,saved_values_win_over_configured_ones,configured_values_apply_at_every_start_until_a_write,a_saved_empty_array_still_wins,file_persistence_keeps_rules_across_a_rebuild}",
+    "crates/bacnet-objects/src/access_control/rights_staging_tests.rs::{a_staged_write_saves_while_the_object_serves_the_old_rules,indexed_index_zero_and_enable_writes_stage_too,a_staged_write_its_request_never_made_leaves_storage_with_the_served_state,an_operation_task_call_drops_a_forgotten_staged_write_once_its_lifetime_is_over,staging_skips_writes_the_object_does_not_save_or_will_refuse}",
+    "crates/bacnet-objects/src/access_control/rights_staging_tests.rs::{an_object_dropped_with_a_staged_write_puts_storage_back_to_the_served_state,an_object_dropped_while_its_staged_save_runs_puts_storage_back_after_it,settling_forgotten_writes_puts_storage_back_and_frees_the_object}",
+    "crates/bacnet-server/src/server/requests/access_rights_durable_tests.rs::{each_saved_write_property_saves_off_the_lock_and_survives_a_rebuild,a_write_property_multiple_with_several_rights_writes_survives_a_rebuild,a_write_local_saves_off_the_lock_and_survives_a_rebuild,a_write_property_multiple_stopped_before_its_rules_write_puts_storage_back,a_paused_clock_stands_still_while_a_rights_save_runs,a_server_stopped_mid_save_leaves_storage_with_the_served_rules,a_null_succeeds_unchanged_and_saves_nothing}",
+    "crates/rusty-bacnet/src/server/server_methods/access_rights_methods_tests.rs::python_storage_path_keeps_written_values_over_the_keywords",
+    "crates/rusty-bacnet/tests/test_access_rights_persistence.py::AccessRightsRestartTests::test_written_rules_and_enable_survive_a_restart",
+    "crates/rusty-bacnet/tests/test_access_rights_rules.py::AccessRightsStubContractTests::test_runtime_and_stub_expose_the_keywords"
+   ],
+   "negative_tests": [
+    "crates/bacnet-objects/src/access_control/rights_persistence_tests.rs::{a_write_that_cannot_be_saved_is_refused_and_changes_nothing,saved_state_the_setters_refuse_refuses_the_object,file_persistence_round_trips_each_member_and_refuses_bad_files,file_persistence_refuses_a_file_past_its_size_or_entry_caps}",
+    "crates/bacnet-objects/src/access_control/rights_staging_tests.rs::{a_staged_element_write_is_taken_only_by_a_write_at_its_index,a_staged_write_whose_save_fails_is_refused_and_the_old_state_stays,an_object_dropped_with_a_staged_write_whose_save_failed_leaves_storage_alone}",
+    "crates/bacnet-server/src/server/requests/access_rights_durable_tests.rs::a_state_that_cannot_be_saved_is_refused_on_every_path_and_nothing_changes",
+    "crates/rusty-bacnet/tests/test_access_rights_persistence.py::AccessRightsRestartTests::test_a_write_that_cannot_be_saved_is_refused_and_the_old_rules_stay",
+    "crates/rusty-bacnet/tests/test_access_rights_persistence.py::AccessRightsRegistrationTests::test_an_empty_storage_path_is_refused",
+    "crates/rusty-bacnet/tests/test_access_rights_persistence.py::AccessRightsRegistrationTests::test_storage_path_is_a_str_naming_a_file_this_backend_wrote"
+   ],
+   "benchmarks": [],
+   "public_claims": [
+    "docs/rust-api.md#access-control-7",
+    "docs/python-api.md#access-control"
+   ],
+   "notes": [
+    "Clause 12.34 sets no restart rule; the stack keeps written rules because peers provision Access Rights over the network. Configuration alone is never saved; a write saves the whole array it leaves.",
+    "Each array and Enable is saved once a write sets it, whole, by element or by an index-0 resize. From then on the saved value wins at every start, and that property's setter only checks.",
+    "The server stages WriteProperty, WritePropertyMultiple and `write_local` writes and saves with the database guard dropped; a request's later writes to the object, and WritePropertyMultiple under a mutation authorizer, save in place.",
+    "A state that cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM and nothing changes. A staged write never made puts storage back on release, after its lifetime, at `stop()`, or on drop.",
+    "`FileAccessRightsPersistence` writes `RBNACR01`: each written member BACnet-encoded, the arrays framed by context tags 0 and 1, Enable a BOOLEAN tagged 2. It refuses a file past 128 KiB, more than 1024 rules per array, or another object's."
+   ],
+   "gaps": []
   },
   {
    "id": "BACNET-12-LOOP-PROPERTY-SET",
