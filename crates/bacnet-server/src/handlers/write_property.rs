@@ -45,7 +45,7 @@ pub(crate) enum Applied {
 }
 
 /// Validate database-owned Object_Name uniqueness before mutation.
-fn check_and_prepare_name_write(
+pub(super) fn check_and_prepare_name_write(
     db: &ObjectDatabase,
     oid: &ObjectIdentifier,
     value: &PropertyValue,
@@ -275,7 +275,8 @@ pub(crate) fn handle_write_property_multiple_observed(
 /// [`relinquish::leaves_unchanged`]
 /// says so: the observer gets `committed`, so an Audit Reporter records the
 /// successful write, but not `applied`, since there is no change to capture.
-fn commit_attempt(
+/// CreateObject applies each initial value through here too, with no observer.
+pub(super) fn commit_attempt(
     db: &mut ObjectDatabase,
     mut observer: Option<&mut (dyn WriteCommitObserver + '_)>,
     target: WriteTarget<'_>,
