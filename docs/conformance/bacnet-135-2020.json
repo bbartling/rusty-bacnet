@@ -347,7 +347,7 @@
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-server/src/local_references.rs",
-    "crates/bacnet-objects/src/reference.rs",
+    "crates/bacnet-objects/src/device_reference.rs",
     "crates/bacnet-objects/src/averaging.rs"
    ],
    "positive_tests": [
