@@ -243,8 +243,7 @@ fn create(
 /// applies its value: the array index checked against the object, the value
 /// decoded whole with the object's list classification, the Object_Name kept
 /// unique, and a NULL the property leaves as it is taken as applied
-/// ([`relinquish`](super::relinquish)). The caller removes the object when
-/// this fails.
+/// ([`relinquish`]). The caller removes the object when this fails.
 fn initialize(
     db: &mut ObjectDatabase,
     created_oid: ObjectIdentifier,
