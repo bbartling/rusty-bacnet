@@ -133,9 +133,9 @@ Actions artifacts retained for seven days, with hidden files excluded.
 
 ### Maintainer sequence (not evidence of publication)
 
-1. Follow the [CI and merge-evidence policy](../docs/ci.md) for delivery. This
-   GitHub workflow describes publication mechanics; PR validation runs in
-   `.forgejo/workflows/docs.yml`. Do not infer live CI from local tests.
+1. Follow the [CI and merge-evidence policy](../docs/ci.md) for delivery. PR
+   validation is this workflow's `pull_request` run; publication is the
+   manual dispatch below. Do not infer live CI from local tests.
 2. Once the workflow is on the default branch, dispatch **validation only** from
    `dev`. `publish` defaults to false; `expected_sha` can be omitted:
 

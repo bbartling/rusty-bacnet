@@ -1,52 +1,54 @@
 # CI and merge evidence
 
-Forgejo is the primary forge. GitHub is its push mirror (sync on commit), so
-every branch and tag pushed to Forgejo reaches GitHub within a minute or so.
-Heavy work runs on Forgejo's fixed-cost runner VM; GitHub runs only what needs
-its native runners or its services.
+The repository, its pull requests and its CI live on
+[GitHub](https://github.com/jscott3201/rusty-bacnet), and every CI job runs on
+GitHub-hosted runners. Releases still run on the self-hosted Forgejo until
+the release pipeline moves to GitHub too (see [Release](#release)).
 
 | Host | Runs |
 | --- | --- |
-| Forgejo (self-hosted Linux runner) | Linux CI, [`.forgejo/workflows/ci.yml`](../.forgejo/workflows/ci.yml); website validation, [`docs.yml`](../.forgejo/workflows/docs.yml); releases and publishing to crates.io, PyPI and Forgejo, [`release.yml`](../.forgejo/workflows/release.yml) |
-| GitHub (hosted runners) | [Native macOS and Windows tests](#native-tests-github), [`.github/workflows/native-tests.yml`](../.github/workflows/native-tests.yml); the [release smoke test](#smoke-test) of the macOS and Windows artifacts, [`release-smoke.yml`](../.github/workflows/release-smoke.yml), which Forgejo's release workflow dispatches; the GitHub Pages docs deploy, [`docs-pages.yml`](../.github/workflows/docs-pages.yml); the GitHub release copy, which Forgejo's release workflow makes through GitHub's API |
+| GitHub (hosted runners) | Linux CI, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml); [native macOS and Windows tests](#native-tests-macos-and-windows), [`native-tests.yml`](../.github/workflows/native-tests.yml); website validation and the GitHub Pages deploy, [`docs-pages.yml`](../.github/workflows/docs-pages.yml); the [release smoke test](#smoke-test) of the macOS and Windows artifacts, [`release-smoke.yml`](../.github/workflows/release-smoke.yml), which Forgejo's release workflow dispatches; the GitHub release copy, which Forgejo's release workflow makes through GitHub's API |
+| Forgejo (self-hosted Linux runner) | Releases and publishing to crates.io, PyPI and Forgejo, [`release.yml`](../.forgejo/workflows/release.yml) |
 
 | Platform | Where it is checked |
 | --- | --- |
-| Linux amd64 | Forgejo CI: lint, clippy, rustdoc, tests, Python bindings, MSRV, audit and deny |
-| macOS arm64 | GitHub, native tests: tests, doctests, clippy, rustdoc, Python bindings. Forgejo CI: clippy and rustdoc for each published crate with default features, cross-checked |
-| Windows x86_64 (MSVC) | GitHub, native tests: tests, doctests, clippy, rustdoc, Python bindings. Forgejo CI: clippy and rustdoc for each published crate with default features, cross-checked |
+| Linux amd64 | CI: lint, clippy, rustdoc, tests, Python bindings, MSRV, audit and deny |
+| macOS arm64 | Native tests: tests, doctests, clippy, rustdoc, Python bindings. CI: clippy and rustdoc for each published crate with default features, cross-checked |
+| Windows x86_64 (MSVC) | Native tests: tests, doctests, clippy, rustdoc, Python bindings. CI: clippy and rustdoc for each published crate with default features, cross-checked |
 
-A PR merges only when both are green on its head SHA: `CI OK` on Forgejo and
-`Native OK` on GitHub, which passes only when every native job did (see
-[Merge evidence](#merge-evidence)).
+A PR merges only when both required checks are green on its head SHA: `CI OK`
+from `ci.yml` and `Native OK` from `native-tests.yml`, each of which passes
+only when every job under it did (see [Merge evidence](#merge-evidence)).
 
 ## Pipeline
 
 | Job | PR to `dev` | PR to `main` | Push to `dev` (merge) | Push to `main`, `v*` tag, weekly, manual |
 | --- | --- | --- | --- | --- |
-| CI image: build and push the job image if its tag is missing | ✓ | ✓ | ✓ | ✓ |
-| Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions, changelog fragments | ✓ | ✓ | ✓ | ✓ |
+| Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions, changelog fragments, the [tool pins](#tool-pins) | ✓ | ✓ | ✓ | ✓ |
 | Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS; the every-feature and PyO3 rustdoc runs include private items. Then `cargo check --locked` of each [standalone sample](#standalone-samples) | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ | ✓ |
-| Python bindings: `maturin develop` (maturin 1.15.0), then `python -m unittest discover -s crates/rusty-bacnet/tests` and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
-| MSRV 1.93, Linux native (`check-msrv.sh --linux-native`) |  | ✓ |  | ✓ |
+| Python bindings: `maturin develop` (maturin at its [pinned](#tool-pins) version), then `python -m unittest discover -s crates/rusty-bacnet/tests` and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
+| MSRV (`RUST_MSRV` in [`.github/ci-pins.env`](../.github/ci-pins.env)), Linux native (`check-msrv.sh --linux-native`) |  | ✓ |  | ✓ |
 | Cargo Audit + Cargo Deny |  | ✓ |  | ✓ |
 | **CI OK**: fails if any job above failed | ✓ | ✓ | ✓ | ✓ |
+| Prune caches, after a green run on `dev` ([Caches](#caches)) |  |  | ✓ | weekly, and manual on `dev` |
 
-`CI OK` is the single status to require in branch protection (its context is
-`CI / CI OK (pull_request)`); jobs skipped by tier count as passing. [`.forgejo/workflows/docs.yml`](../.forgejo/workflows/docs.yml)
-validates the website (Astro checks, unit tests, production build and Chromium
-tests) on PRs that change `website/**`.
+`CI OK` is the required check. MSRV and Cargo Audit + Deny count as passing
+when their tier skips them; a skipped Lean job fails it.
+[`docs-pages.yml`](../.github/workflows/docs-pages.yml) validates the website
+(Astro checks, unit tests, production build and Chromium tests) on PRs that
+change `website/**`.
 
 Merge pushes to `dev` run the Lean jobs, for two reasons (#904).
 
-- **Caches.** The runner scopes cache writes from `pull_request` events to that
-  PR. A PR's first run falls back only to caches from non-PR events: merges,
-  `main`, tags, the schedule or manual runs. Before this, those were rare, so
-  most new PRs started cold.
-- **Merge result.** A PR run checks out the PR head, not the merge. With the
-  repo's default merge commits, the `dev` run is the only test of the combined
-  code, and an outdated branch can still merge.
+- **Caches.** Only runs on `dev` save the Rust caches. A cache saved by a
+  `pull_request` run would be scoped to that PR, and a PR run restores from
+  its base branch and the default branch (`dev`), so `dev`'s caches seed
+  every PR.
+- **Merge result.** A PR run tests the PR head merged into its base as the
+  base stood when the run started (GitHub's `refs/pull/<n>/merge`). With the
+  repo's merge commits, the `dev` run is the only test of what actually
+  landed, after any merges since.
 
 A newer merge cancels the previous merge's run, since it tests a superset.
 **After merging, check the `dev` run.** It isn't a required status, so a red
@@ -57,8 +59,16 @@ too.
 Rust caches are keyed per job on the toolchain, `Cargo.lock`, the manifests,
 and, for Clippy and Test, `LINUX_FEATURES` (Clippy also on
 `DEFAULT_FEATURES_TARGETS` and the [standalone samples'](#standalone-samples)
-`Cargo.lock` files). They're saved even when a job fails.
-A new push to a PR cancels its superseded run.
+`Cargo.lock` files). Only a job that succeeded on `dev` saves its cache, so a
+failed or cancelled run can't leave a partial cache that later runs restore
+by exact key. The MSRV job's cache comes from the weekly run, the Heavy run on
+`dev`. A new push to a PR cancels its superseded run.
+
+The workflow sets `CARGO_INCREMENTAL=0` and drops native debug info from dev and
+test builds (`CARGO_PROFILE_{DEV,TEST}_DEBUG=0`) to cut codegen, link time and
+cache size. Optimization level, debug assertions, overflow checks and test
+selection keep their defaults, and there is no `RUSTFLAGS=-Dwarnings`: per-rule
+severity lives in `[workspace.lints]`.
 
 Tests run with [cargo-nextest](https://nexte.st), which gives each test its
 own process. Its settings live in [`.config/nextest.toml`](../.config/nextest.toml);
@@ -81,8 +91,8 @@ cargo nextest run -p bacnet-cli --no-default-features --locked --profile ci
 ```
 
 The Python job builds the PyO3 extension in debug mode into a fresh venv with
-the CI image's Python (3.12) and runs the unittest suite. The SC tests generate
-certificates with the `openssl` CLI. Cargo Deny covers the bindings'
+Ubuntu 24.04's own Python (3.12) and runs the unittest suite. The SC tests
+generate certificates with the `openssl` CLI. Cargo Deny covers the bindings'
 dependencies too; only `bacnet-benchmarks` is excluded.
 
 The same job then runs the crate's Rust tests, its lib unit tests and
@@ -91,11 +101,12 @@ The workspace doesn't turn on pyo3's `extension-module` feature, so these test
 binaries link libpython (#919); maturin turns the feature on for wheel and
 `maturin develop` builds from `crates/rusty-bacnet/pyproject.toml`. Linking
 needs the interpreter's shared library and its unversioned `.so` symlink, which
-the CI image gets from `libpython3-dev`. The step sets `PYO3_PYTHON=/usr/bin/python3`
-so it links the apt Python that package matches, whatever else is on `PATH`,
-and without depending on the venv from the maturin step. Tests that call into
-Python start the interpreter with `Python::initialize()` first, since nothing
-enables pyo3's `auto-initialize`.
+the job installs with `libpython3-dev`. The workflow sets
+`PYO3_PYTHON=/usr/bin/python3`, so every PyO3 build uses the apt Python that
+package matches, whatever else is on `PATH`, and the Rust tests don't depend
+on the venv from the maturin step. Tests that call into Python start the
+interpreter with `Python::initialize()` first, since nothing enables pyo3's
+`auto-initialize`.
 
 Use cargo-nextest 0.9.145 or later locally. Older releases on macOS could
 mark unrelated passing tests as leaky (#751), and the configuration warns
@@ -122,129 +133,150 @@ All the samples build into one target directory, `target/samples` (or
 samples' locks pin older releases of tokio, syn and other base crates than the
 workspace's `Cargo.lock`, so they reuse almost nothing the workspace build
 compiled. The step runs on every PR: the workflow has no path filters, and the
-samples depend on `crates/`, which nearly every PR changes. On the runner it
-took about 18 s from cold (October 2026). `target/samples` is inside
+samples depend on `crates/`, which nearly every PR changes. On the Forgejo
+runner it took about 18 s from cold (October 2026). `target/samples` is inside
 `target/`, so the job's Rust cache keeps it whenever the cache is saved.
-rust-cache saves only when its key misses, so the Clippy job's key also hashes
-the samples' `Cargo.lock` files: a lock refresh saves a new cache with the
-samples' dependencies built, and later runs check only the samples and their
-`bacnet-*` crates. rust-cache's cleanup keeps a dependency's build there only
-if the workspace depends on a crate of the same name, which holds for every
-crate the samples lock (October 2026). A new key restores nothing, so the
-first Clippy runs on it, the PR's and then the `dev` merge's, start cold and
-take about 3 minutes longer.
+rust-cache saves only when its key misses, and its own key covers only the
+workspace's lock and manifests. So the Clippy job sets `SAMPLES_LOCKS`, a hash
+of the samples' `Cargo.lock` files, and names it in rust-cache's `env-vars`,
+which puts it in the key's environment hash: a lock refresh merged to `dev`
+saves a new cache with the samples' dependencies built, and later runs check
+only the samples and their `bacnet-*` crates. A variable keeps the key's
+prefix the same for every Clippy cache, which [pruning](#caches) relies on.
+rust-cache's cleanup keeps a dependency's build there only if the workspace
+depends on a crate of the same name, which holds for every crate the samples
+lock (October 2026). The environment hash is part of the restore prefix, so a
+new one restores nothing, and the first Clippy runs on it, the PR's and then
+the `dev` merge's, start cold (about 3 minutes longer on the Forgejo runner).
 
 ### Runner
 
-Jobs run on a self-hosted Linux VM (8 vCPU, 32 GB) that is preemptible. It
-runs two runner daemons, set up in the infrastructure repository (forgejo-dev):
+Every Linux job runs on GitHub's `ubuntu-24.04` hosted runner, an x86_64 VM
+with 4 vCPUs, 16 GB of RAM and about 14 GB free on `/`. A job runs on the VM
+itself, not in a container, as the unprivileged `runner` user with
+passwordless `sudo`, and installs what it needs (see [Tool pins](#tool-pins)).
+Hosted runners take any PR, including one from a fork, which a self-hosted
+runner shouldn't.
 
-- **Main runner:** up to three jobs at once, every build and test job.
-- **Gate runner:** label `gate`, host mode, up to two jobs at once, this
-  repository only. It runs the seconds-long CI image and CI OK jobs, so a run
-  no longer waits for one of the three slots before its builds start and again
-  after they finish. When the CI image job has to build a new image, that build
-  runs alongside the main runner's three jobs.
+**Disk.** The largest job, Test, needs about 6 GB: about 3 GB of `target/` for
+the every-feature test build, which the doctests and the CLI's feature-off
+tests mostly reuse, 1 to 2 GB of Cargo registry (the downloaded crates and
+their unpacked sources) and under 1 GB of toolchain. Clippy's `target/` is about 1 GB for the host, plus the Windows and
+macOS check builds. Those `target/` sizes are from the same builds on macOS
+arm64 with the workflow's build settings (October 2026); Linux builds without
+debug info should come out about the same. So the jobs neither delete the image's
+preinstalled SDKs nor move `target/` to another disk. Each build job ends with
+a "Disk use and limits" step that logs `df`, the sizes of `target/`,
+`CARGO_HOME` and `RUSTUP_HOME`, and the descriptor limits. If a job ever runs
+short, remove the preinstalled SDKs no job uses (Android, .NET, GHC) in a step
+before the build.
 
-While no runner with the `gate` label is online, every run stops at CI image,
-and its `CI OK` status stays pending. The gate runner is listed under this
-repository's Settings → Actions → Runners.
+**Privileges and limits.** The Forgejo jobs ran as root in a Docker container
+whose soft limit on open files was 1024. On the hosted runner they run as
+`runner` on the VM's own network stack:
 
-`Swatinem/rust-cache` keeps Cargo state in the runner's cache. The cache lives
-on the VM, so a preemption starts the next run cold, and a preempted job must be
-re-run.
+- No test needs root or a capability. The tests that open AF_PACKET sockets
+  (`bacnet-integration-tests`' `ethernet_network_numbers`, `CAP_NET_RAW`) or
+  need an isolated IPv6 link (`bacnet-transport`'s `ipv6_selected_link*`) are
+  `#[ignore]`d and run only on a host set up for them. Otherwise the
+  `ethernet`, `serial` and `serial-gpio` features are compiled and
+  unit-tested without hardware; the serial-port listing test reads
+  `/sys/class/tty`, which the VM has.
+- The BACnet/SC hub capacity test needs about 2,100 descriptors and raises its
+  own soft limit to that, which needs no privilege below the hard limit. The
+  step above logs both limits.
+- Two tests skip themselves on a host that doesn't deliver what they test:
+  B/IP's `127.255.255.255` broadcast and B/IPv6's loopback multicast. Their
+  output says when they skipped.
 
-### CI image
+### Tool pins
 
-Every job except CI OK runs in one prebuilt image,
-`forgejo.taile9ca5.ts.net/jscott3201/rusty-bacnet-ci:<tag>`, built from
-[`.forgejo/ci-image/Dockerfile`](../.forgejo/ci-image/Dockerfile) (#904). It
-contains:
+The Linux jobs install their tools on the runner each time; there is no job
+image.
 
-- the runner's default `ghcr.io/catthehacker/ubuntu:act-24.04`, pinned by
-  digest;
-- Rust 1.99.0 with rustfmt and clippy, and the 1.93 MSRV toolchain;
-- cargo-nextest, cargo-audit, cargo-deny and maturin at pinned versions, each
-  download checked against its SHA-256;
-- the apt packages the jobs need;
-- for the [release](#release): zig and cargo-zigbuild, the
-  `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`
-  and `x86_64-pc-windows-msvc` Rust targets, a static libpcap for each Linux
-  release target with its licence, cargo-xwin with Microsoft's CRT and Windows
-  SDK in `/opt/xwin`, clang (for clang-cl) and nasm, Rust's `llvm-tools`
-  (llvm-ar for cargo-xwin, llvm-objdump and llvm-readobj for the artifact
-  test), uv for the artifact test's extra Pythons, and `qemu-aarch64-static`
-  with the aarch64 glibc to run the arm64 CLI. See
-  [macOS and Windows builds](#macos-and-windows-builds). The Clippy job's
-  per-crate default-features check uses the Windows and `aarch64-apple-darwin`
-  targets too.
+- **Rust.** The runner image ships rustup. Each job installs the channel that
+  `rust-toolchain.toml` pins, with the minimal profile plus the
+  components that file lists, makes it the default, and uninstalls the
+  image's own toolchains: rust-cache hashes every installed toolchain into its
+  key, and the image's `stable` moves with image updates, which would start
+  the jobs cold each time. The Clippy job adds the `x86_64-pc-windows-msvc` and
+  `aarch64-apple-darwin` standard libraries for the per-crate default-features
+  check (neither clippy nor rustdoc links, so nothing else is needed). The
+  MSRV job adds the MSRV toolchain and sets `RUSTUP_TOOLCHAIN` to it.
+- **Tools.** [`.github/ci-pins.env`](../.github/ci-pins.env) pins
+  cargo-nextest, cargo-deny, cargo-audit and maturin, each with the SHA-256 of
+  its Linux x86_64 release archive, and the MSRV and the native tests' Python
+  version. [`scripts/ci/install-tools.sh`](../scripts/ci/install-tools.sh)
+  downloads the tools a job names, checks each archive against its digest
+  before unpacking it, and puts the binaries in `~/.cargo/bin`.
+  `native-tests.yml` reads the cargo-nextest, maturin and Python versions from
+  the same file.
+- **apt.** Each job names its packages in `APT_PACKAGES` (`libpcap-dev` for
+  Clippy, Test and MSRV; `python3-venv` and `libpython3-dev` for the Python
+  job) and installs only those the image lacks, so a job whose packages are
+  all there skips `apt-get update`. The image already has the C toolchain,
+  `pkg-config`, CMake, Perl, `file`, `jq`, Python 3.12 and `openssl`. Nothing
+  needs libudev: `serialport` builds without it.
 
-The jobs no longer spend time on apt, rustup or tool downloads.
+The Lint job's "Check the pins" step fails when:
 
-The first job, **CI image**, runs on the gate runner (`gate` label) in host
-mode. It does three things:
+- a line of `.github/ci-pins.env` isn't a comment, blank, or `NAME=value` with
+  a plain value, or a name is set twice;
+- a `*_SHA256` value isn't 64 lowercase hex digits;
+- `rust-toolchain.toml`'s channel isn't an exact release;
+- `RUST_MSRV` differs from `Cargo.toml`'s `rust-version` or from
+  `scripts/ci/check-msrv.sh`'s default toolchain.
 
-1. **Tag.** Checks that `CI_IMAGE`'s tag equals the first 12 hex digits of the
-   Dockerfile's SHA-256, that `release.yml` uses the same `CI_IMAGE`, and that
-   `.forgejo/ci-image` holds nothing but the Dockerfile.
-2. **Pins.** Checks that the Dockerfile's `RUST_TOOLCHAIN` matches
-   `rust-toolchain.toml`, and that its `RUST_MSRV` matches `Cargo.toml`'s
-   `rust-version` and the MSRV job's `RUSTUP_TOOLCHAIN`.
-3. **Image.** Queries Forgejo's container registry for the tag:
-   - If the tag exists, it pulls the image into the VM's Docker. The registry
-     requires sign-in to pull, and the runner never pulls job images itself
-     (`force_pull: false`), so this pull is what gets the image onto a fresh VM
-     for the jobs that follow.
-   - If the tag is missing, it builds and pushes the image.
-   - Any other registry error fails the job.
+**Bumping a pin:**
 
-A PR that changes the Dockerfile therefore builds and tests its own image.
+- **Toolchain:** `rust-toolchain.toml` alone; both workflows install from it.
+- **MSRV:** `Cargo.toml`'s `rust-version`, `RUST_MSRV` and
+  `scripts/ci/check-msrv.sh` together.
+- **A tool:** its `*_VERSION` and `*_SHA256` together. The digest is of the
+  archive the comment above it names:
+  `curl -sSfL <url> | sha256sum`.
 
-**Changing the image** (a toolchain bump, a tool version, an apt package):
+The [release](#release) still builds in the Forgejo image from
+[`.forgejo/ci-image/Dockerfile`](../.forgejo/ci-image/Dockerfile), with its
+own copies of these pins; no CI job builds or checks that image now.
 
-1. Edit the Dockerfile.
-   - For a toolchain bump, also move `rust-toolchain.toml`.
-   - For an MSRV bump, also move `Cargo.toml`'s `rust-version`, the MSRV job's
-     `RUSTUP_TOOLCHAIN` and `scripts/ci/check-msrv.sh`.
-   - For a tool bump, update its `*_SHA256` along with its version.
-2. Set `CI_IMAGE`'s tag, in both `ci.yml` and `release.yml`, to
-   `$(sha256sum .forgejo/ci-image/Dockerfile | cut -c1-12)`.
+### Caches
 
-Never re-push an existing tag. Change the Dockerfile, even just a comment, to get
-a new one.
+GitHub gives the repository 10 GB of Actions cache. Past that it evicts the
+least recently used entries, which can be `dev`'s current ones, and it evicts
+any entry unused for seven days. On 4 October 2026 the caches had reached
+12.3 GB, mostly entries no run would restore again (#1471).
 
-**Credentials:** the image job logs in with the `CI_IMAGE_TOKEN` repository
-secret, a personal access token with only package read and write scope, used for
-both the pull and the push.
-- Forgejo's automatic job token can log in, but gets 401 on uploads.
-- The login uses a Docker config under `RUNNER_TEMP`, which the runner deletes
-  even if the job is cancelled.
-- The pull reaches the job containers because the gate runner shares the VM's
-  Docker with the main runner. If the runners ever span more than one VM, or
-  turn on `force_pull`, give the jobs `container.credentials` with a separate
-  read-only package token.
+- **Saves.** Only runs on `dev` save Rust caches: merges, the weekly run and
+  manual runs there. PR runs only restore them.
+- **Pruning.** After a green run on `dev`, each workflow's **Prune caches**
+  job runs [`scripts/ci/prune-caches.sh`](../scripts/ci/prune-caches.sh) with
+  `actions: write`. It keeps the two newest rust-cache entries of each family
+  (one job on one OS: the key without its environment and lock hashes, such
+  as `v0-rust-test-Linux-x64`) and every other entry on `dev`, such as
+  setup-node's, and deletes the rest: older Rust entries, and every entry on
+  another ref. It logs each deletion with its key, ref, size and reason, and
+  the total before and after.
+- **Out-of-order runs.** Runs on `dev` don't always finish in merge order,
+  so the newest entry of a family can come from an older merge. Only the run
+  for `dev`'s current head prunes (an older one logs that and stops), and
+  keeping two entries per family leaves the current head's in place even then. To see what it would delete, with `gh`
+  signed in: `bash scripts/ci/prune-caches.sh --dry-run jscott3201/rusty-bacnet`.
+- **Budget.** One set of Rust caches is about 2.3 GB: the four native jobs'
+  took 1.26 GB on 4 October 2026, and the four Linux jobs' about 1 GB, going
+  by the same jobs' caches on Forgejo (Clippy 320 MB, Test 300 MB, MSRV
+  245 MB, Python 170 MB). setup-node's cache on `dev` adds 110 MB. Keeping
+  two sets makes the steady state about 4.7 GB. A merge that changes
+  `Cargo.lock` or the toolchain saves a third set, which the prune after it
+  removes, so the peak is about 7 GB, plus 110 MB for each PR that changed
+  `website/**` since the last prune. That leaves about 3 GB of headroom.
 
-**Storage:** each image version takes space on Forgejo's data disk, and old tags
-stay cached on the runner VM until it's rebuilt. Keep the last few versions with
-a package cleanup rule, set in the owner's Settings → Packages.
-
-**Caches:** the image sets `CARGO_HOME=/usr/local/cargo`, so switching to it
-started every job with a cold Rust cache once. Later image changes keep the same
-paths, and the caches still hit while the toolchain stays the same.
-
-The workflow sets `CARGO_INCREMENTAL=0` and drops native debug info from dev and
-test builds (`CARGO_PROFILE_{DEV,TEST}_DEBUG=0`) to cut codegen, link time and
-cache size. Optimization level, debug assertions, overflow checks and test
-selection keep their defaults, and there is no `RUSTFLAGS=-Dwarnings`: per-rule
-severity lives in `[workspace.lints]`.
-
-## Native tests (GitHub)
+## Native tests (macOS and Windows)
 
 [`.github/workflows/native-tests.yml`](../.github/workflows/native-tests.yml)
 runs the tests, clippy and rustdoc natively on GitHub-hosted macOS
 (`macos-latest`, Apple Silicon) and Windows (`windows-latest`, the MSVC
-toolchain) runners (#950), which the Linux-only Forgejo runner can't. Each
-platform has two jobs, which run in parallel:
+toolchain) runners (#950). Each platform has two jobs, which run in parallel:
 
 - **Tests (macOS arm64)** and **Tests (Windows x86_64)**: the workspace tests,
   the stack guard and the doctests, which share one test build;
@@ -254,14 +286,11 @@ platform has two jobs, which run in parallel:
 
 **Native OK** waits for all four and passes only when every one succeeded. It
 runs even when a job failed or was cancelled, so it always reports, like
-Forgejo's `CI OK`. It is the one native check the merge gate reads.
+`ci.yml`'s `CI OK`. With `CI OK`, it is one of the two checks the merge gate
+reads.
 
-**Trigger.** Every push to any branch, and a manual dispatch. PRs live on
-Forgejo, so GitHub's `pull_request` event never fires; the push mirror brings
-every PR branch, and every merge to `dev`, to GitHub instead. `wip/` branches
-don't start the native jobs: they get their review before their first real
-push. Tag pushes don't run it. A newer push to a branch cancels that branch's
-running run.
+**Trigger.** Every PR to `dev` or `main`, every push to them (merges), and a
+manual dispatch. Tag pushes don't run it.
 
 **Steps.** `NATIVE_FEATURES` is the `features=` list in
 [`scripts/ci/local-macos.sh`](../scripts/ci/local-macos.sh), which the
@@ -287,8 +316,9 @@ cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --document-private-items --features "$NATIVE_FEATURES"
 RUSTDOCFLAGS="-D warnings" cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
 cargo nextest run -p bacnet-cli --locked --profile ci   # the CLI's feature-off tests
-# Python 3.12 from actions/setup-python, in a fresh venv
-python -m pip install maturin==1.15.0
+# Python $PYTHON_VERSION from actions/setup-python, in a fresh venv; the
+# versions come from .github/ci-pins.env
+python -m pip install "maturin==$MATURIN_VERSION"
 maturin develop -m crates/rusty-bacnet/Cargo.toml --locked
 python -m unittest discover -s crates/rusty-bacnet/tests
 cargo nextest run -p rusty-bacnet --locked --profile ci
@@ -304,7 +334,7 @@ selects every server, client, endpoint, integration and CLI test, the
 benchmark SC mTLS tests and bacnet-transport's BACnet/SC tests; the guard step
 runs `--no-run` first because rustc reads `RUST_MIN_STACK` too, and adds about
 two minutes to each Tests job. The per-crate default-feature checks
-(`scripts/ci/check-default-features.sh`) aren't here: Forgejo's Clippy job
+(`scripts/ci/check-default-features.sh`) aren't here: `ci.yml`'s Clippy job
 runs them for Windows and macOS too, cross-checked (see
 [Local checks](#local-checks)).
 
@@ -328,28 +358,30 @@ version to keep in step, and installs them with rustup's minimal profile. The
 file's default profile would add `rust-docs`, thousands of small files that
 took the step to about a minute on Windows, and up to three; without them it
 takes 10 to 20 seconds. cargo-nextest is a prebuilt binary from
-`taiki-e/install-action`, and maturin comes from PyPI, both at the CI image's
-versions. aws-lc-sys, which `sc-tls` pulls in, builds with the images' own C
-tools: on Windows, MSVC with the NASM and CMake already on `PATH`. The SC
-tests make certificates with the runner image's `openssl`.
+`taiki-e/install-action`, which checks the download against its own manifest,
+and maturin comes from PyPI; their versions, and Python's, come from
+[`.github/ci-pins.env`](../.github/ci-pins.env), as `ci.yml`'s do.
+aws-lc-sys, which `sc-tls` pulls in, builds with the images' own C tools: on
+Windows, MSVC with the NASM and CMake already on `PATH`. The SC tests make
+certificates with the runner image's `openssl`.
 
 **Efficiency.** The workflow can only read the repository
-(`permissions: contents: read`), and each job stops after 60 minutes. A newer
-push to a branch cancels that branch's running run. On `dev` each commit gets
-its own concurrency group, keyed by its SHA, so no run is cancelled or
-replaced while pending and every merge gets its own result.
-`Swatinem/rust-cache` keeps dependency builds, keyed per job and OS on the
-toolchain, `Cargo.lock`, the manifests and `NATIVE_FEATURES`. Only `dev` saves
-it, and only from a successful job, so a failed or cancelled run never leaves
-a partial cache that later runs would restore by exact key. GitHub lets a
-branch's run restore the default branch's (`dev`) cache, so every branch
-starts from the last good `dev` build. The cache holds dependencies only, so
-most of a job is compiling the workspace and its tests. In October 2026, with
-the jobs split, a run took about 11 to 12 minutes, cold or warm. The Windows
-Tests job, the usual floor, took 10 to 11.5 minutes; the macOS one 4.6 to 10.2,
-as macOS hosts vary widely in speed; the Lint and Python jobs 6 to 8 minutes
-warm and 8 to 11 cold. With one job per platform a run had taken a median
-18.4 minutes, Windows being the slowest.
+(`permissions: contents: read`; Prune caches alone can also write Actions
+caches), and each job stops after 60 minutes. A newer push to a PR cancels
+its running run. On `dev` each commit gets its own concurrency group, keyed by
+its SHA, so no run is cancelled or replaced while pending and every merge gets
+its own result. `Swatinem/rust-cache` keeps dependency builds, keyed per job
+and OS on the toolchain, `Cargo.lock`, the manifests and `NATIVE_FEATURES`.
+Only `dev` saves it, and only from a successful job, so a failed or cancelled
+run never leaves a partial cache that later runs would restore by exact key.
+GitHub lets a PR's run restore the default branch's (`dev`) cache, so every PR
+starts from the last good `dev` build; see [Caches](#caches) for pruning. The
+cache holds dependencies only, so most of a job is compiling the workspace and
+its tests. In October 2026, with the jobs split, a run took about 11 to 12
+minutes, cold or warm. The Windows Tests job, the usual floor, took 10 to 11.5
+minutes; the macOS one 4.6 to 10.2, as macOS hosts vary widely in speed; the
+Lint and Python jobs 6 to 8 minutes warm and 8 to 11 cold. With one job per
+platform a run had taken a median 18.4 minutes, Windows being the slowest.
 
 Two Windows build speedups were measured and left out. A ReFS Dev Drive for
 the target directory, `CARGO_HOME` and `RUSTUP_HOME` made the test build two
@@ -361,16 +393,16 @@ build took 3.6 to 5.1 minutes on different VMs).
 
 **macOS capacity.** GitHub's free plan runs at most 5 macOS jobs at once
 across the account, and the native tests already reach that cap: over 400
-runs on 3 and 4 October 2026, a macOS job waited a median 0.1 minutes to
-start, 7.3 at the 90th percentile and up to 28. Splitting macOS gives each run
-two macOS jobs and about 12% more macOS minutes. Replaying those runs' arrival
-times against the caps, with each job's time drawn from their history, the
-split came out ahead at 4 October's load (median 10.9 minutes to a result
-against 13.0; 90th percentile 11.8 against 15.3) and at the median over both
-days (11.4 against 13.7). It queued longer only in bursts of about 20 runs an
-hour, which fill the cap with either layout: over both days its 90th
-percentile was 24.7 minutes against 22.9, and over the busiest seven hours 36
-against 29.
+runs on 3 and 4 October 2026, when every pushed branch ran them, a macOS job
+waited a median 0.1 minutes to start, 7.3 at the 90th percentile and up to 28.
+Splitting macOS gives each run two macOS jobs and about 12% more macOS
+minutes. Replaying those runs' arrival times against the caps, with each job's
+time drawn from their history, the split came out ahead at 4 October's load
+(median 10.9 minutes to a result against 13.0; 90th percentile 11.8 against
+15.3) and at the median over both days (11.4 against 13.7). It queued longer
+only in bursts of about 20 runs an hour, which fill the cap with either
+layout: over both days its 90th percentile was 24.7 minutes against 22.9, and
+over the busiest seven hours 36 against 29.
 
 **Portable tests.** What the first Windows and macOS runs showed (#950):
 
@@ -409,20 +441,21 @@ against 29.
   listener costs the 250 ms attempt delay rather than 2 seconds; a test whose
   timing depends on a dial must allow for it.
 
-**Reading a run.** The run for a push appears once the mirror has the commit:
+**Reading a run** (either workflow):
 
 ```bash
-gh api repos/jscott3201/rusty-bacnet/branches/<branch> --jq .commit.sha
+gh pr checks <n> -R jscott3201/rusty-bacnet   # every check on a PR's head
 gh run list -R jscott3201/rusty-bacnet --workflow native-tests.yml --branch <branch>
 gh run view -R jscott3201/rusty-bacnet <run id> --log-failed
-gh workflow run native-tests.yml -R jscott3201/rusty-bacnet --ref <branch>  # re-run by hand
+gh workflow run native-tests.yml -R jscott3201/rusty-bacnet --ref <branch>  # run by hand
 ```
 
 ## Local checks
 
-Use Rust 1.99.0 from `rust-toolchain.toml`. The [native tests](#native-tests-github)
-now run the macOS tests, clippy and rustdoc on every push, so a local macOS run
-is optional: a quicker check before pushing changes that can affect macOS
+Use the Rust release that `rust-toolchain.toml` pins, which rustup selects in
+the checkout. The [native tests](#native-tests-macos-and-windows) run the
+macOS tests, clippy and rustdoc on every PR, so a local macOS run is
+optional: a quicker check before pushing changes that can affect macOS
 (transports, sockets, TLS, platform `cfg`, build scripts, dependencies). It
 isn't merge evidence.
 
@@ -446,7 +479,7 @@ the shared library.
 
 Clippy and rustdoc deny warnings (#902). Every public item must be documented:
 `missing_docs` is `deny`, and only the unpublished `bacnet-benchmarks` opts out.
-Clippy runs three ways:
+Clippy runs four ways:
 
 - the workspace with every feature;
 - the PyO3 crate on its own;
@@ -481,7 +514,7 @@ The individual gates are also runnable anywhere. `FEATURES` is
 `LINUX_FEATURES` from `ci.yml`, without the serial and ethernet entries on macOS:
 
 ```bash
-FEATURES=$(sed -n 's/^  LINUX_FEATURES: //p' .forgejo/workflows/ci.yml)
+FEATURES=$(sed -n 's/^  LINUX_FEATURES: //p' .github/workflows/ci.yml)
 cargo fmt --all --check
 cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$FEATURES" -- -D warnings
 cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
@@ -501,6 +534,7 @@ python3 -m unittest discover -s scripts/release
 python3 -m unittest discover -s scripts -p 'test_changelog.py'
 python3 scripts/changelog.py check
 python3 -m unittest discover -s scripts -p 'test_ledger_*.py'
+actionlint .github/workflows/*.yml          # after editing a workflow
 ```
 
 `changelog.py check` validates the [changelog fragments](../changelog.d/README.md)
@@ -513,7 +547,7 @@ a suspected path locally with `printf '%s' "$path" | git hash-object --stdin`.
 Run the file-size gate in its default strict mode, without `CHECK_FILE_SIZE_WARN=1`.
 
 `scripts/ci/check-msrv.sh --linux-native` needs a native Linux GNU host with
-Rust 1.93 installed, Python 3, a C toolchain, `pkg-config`, `libpcap-dev`,
+the MSRV toolchain (`RUST_MSRV`) installed, Python 3, a C toolchain, `pkg-config`, `libpcap-dev`,
 `cmake`, `perl`, `file` and `ldd`. It never installs tools or skips features.
 CI runs it on PRs to `main`; on a Mac, rely on that job.
 
@@ -521,16 +555,19 @@ CI runs it on PRs to `main`; on a Mac, rely on that job.
 
 Before merging a PR:
 
-- `CI OK` is green on Forgejo for the exact head being merged;
-- `Native OK`, the [native tests](#native-tests-github)' aggregate check, is
-  green on GitHub for the same head SHA;
+- `CI OK` and `Native OK`, the two required checks, are green on the PR for
+  the exact head SHA being merged;
 - existing review and merge-authorization rules are met.
 
 A `local-macos.sh` pass is optional and isn't needed to merge.
 
 A check that was not run, failed or does not apply is never reported as passed.
 Audit and deny read mutable advisory databases, so their result for a `main`
-merge comes from that PR's run, not an older one.
+merge comes from that PR's run, not an older one. On a PR from `dev` to
+`main`, the head commit also carries the `CI OK` of `dev`'s push run, which
+covers only the Lean jobs, so check that the `pull_request` run's `CI OK`,
+the one with MSRV and audit and deny, is green; the release rework will
+settle this.
 
 ## Release
 

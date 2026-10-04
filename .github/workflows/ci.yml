@@ -1,0 +1,419 @@
+name: CI
+
+# Linux CI on GitHub-hosted Ubuntu 24.04 runners (x86_64, 4 vCPU). The jobs run
+# on the runner itself, with no job container: each installs the toolchain that
+# rust-toolchain.toml pins, the tools pinned in .github/ci-pins.env (checked
+# against their SHA-256) and the apt packages it needs. The tests, clippy and
+# rustdoc also run natively on macOS and Windows, in native-tests.yml (#950).
+# See docs/ci.md.
+#
+#   Lean  — every PR to dev/main, push to dev/main, v* tags, weekly, manual:
+#           lint (fmt, file-size cap, no-secret scan, script regressions,
+#           changelog fragments, the pins),
+#           clippy and rustdoc with warnings denied (every feature, the PyO3
+#           crate, and each published crate alone with default features, for
+#           Linux, Windows and macOS; the every-feature and PyO3 rustdoc runs
+#           include private items), then cargo check --locked of each
+#           standalone sample in examples/rust/samples,
+#           every-feature Linux tests plus bacnet-cli's feature-off tests,
+#           and the Python bindings built with maturin, their unittest suite
+#           and the PyO3 crate's own Rust tests.
+#   Heavy — PRs to main, push to main, v* tags, weekly schedule, manual:
+#           MSRV (Linux native, incl. optional features and pcap link), audit, deny.
+#   CI OK — the required status; fails if any job above failed.
+#
+# Pushes to dev (PR merges) run the Lean jobs. Only runs on dev save the Rust
+# caches, which every PR restores (a PR run's own saves would be scoped to that
+# PR), and the merge result itself is tested (#904). After a green run on dev,
+# Prune caches deletes the entries no run will restore again, so the Linux and
+# native caches stay under the repository's 10 GB (#1471).
+
+on:
+  pull_request:
+    branches: [dev, main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [dev, main]
+    tags: ["v*"]
+  schedule:
+    # Advisory databases change without code changes.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Per event and ref: a scheduled or manual run never cancels a push to main,
+  # PR runs and dev-merge runs never cancel each other, and a newer merge to dev
+  # cancels the previous merge's run (the newer one tests a superset).
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # CI builds are from scratch or a restored cache; incremental state is dead weight.
+  CARGO_INCREMENTAL: "0"
+  # Test binaries without native debug info: less codegen, linking and cache.
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  # Every PyO3 build (clippy, rustdoc, maturin, the crate's Rust tests) uses
+  # Ubuntu's own Python 3.12, which libpython3-dev matches, whatever else is
+  # on PATH.
+  PYO3_PYTHON: /usr/bin/python3
+  # Every optional feature that builds on Linux, including per-crate features
+  # such as bacnet-endpoint/sc-tls and bacnet-cli/{sc-tls,pcap} that nothing
+  # else in the workspace turns on (#906). bacnet-benchmarks/console is left
+  # out: it needs tokio_unstable.
+  LINUX_FEATURES: bacnet-types/serde,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/serial-gpio,bacnet-transport/ethernet,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-integration-tests/ethernet,bacnet-cli/sc-tls,bacnet-cli/pcap
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The runner image ships rustup. This installs the channel that
+      # rust-toolchain.toml pins, with the minimal profile plus the components
+      # that file lists (its default profile adds rust-docs, which no job
+      # reads), and makes it the default. Then it removes the image's own
+      # toolchains: rust-cache hashes every installed toolchain into its key,
+      # and the image's stable moves with image updates, which would start the
+      # jobs cold each time.
+      - &toolchain
+        name: Install the pinned Rust toolchain
+        run: |
+          channel=$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)
+          components=$(sed -n 's/^components = \[\(.*\)\]$/\1/p' rust-toolchain.toml | tr -d '" ')
+          [[ $channel =~ ^[0-9A-Za-z.-]+$ && $components =~ ^[a-z,-]+$ ]] \
+            || { echo "::error::no channel or components line in rust-toolchain.toml"; exit 1; }
+          rustup toolchain install "$channel" --profile minimal --component "$components"
+          rustup default "$channel"
+          rustup toolchain list | awk -v ours="$channel-" 'index($1, ours) != 1 { print $1 }' \
+            | xargs -r -n1 rustup toolchain uninstall
+          rustup toolchain list
+          rustc -vV
+      # Every line of the pins file is a comment, blank or NAME=value with a
+      # plain value, once per name, and every *_SHA256 is a SHA-256 in hex; the
+      # toolchain pin is an exact release; and the MSRV is the same in the
+      # pins, Cargo.toml and check-msrv.sh.
+      - name: Check the pins
+        run: |
+          pins=.github/ci-pins.env
+          fail=0
+          if bad=$(grep -nvE '^(#.*|[A-Z0-9_]+=[0-9A-Za-z.]+)?$' "$pins"); then
+            echo "::error::malformed lines in $pins:"; echo "$bad"; fail=1
+          fi
+          if bad=$(grep -nE '^[A-Z0-9_]+_SHA256=' "$pins" | grep -vE '^[0-9]+:[A-Z0-9_]+_SHA256=[0-9a-f]{64}$'); then
+            echo "::error::digests in $pins that aren't 64 lowercase hex digits:"; echo "$bad"; fail=1
+          fi
+          if dup=$(grep -oE '^[A-Z0-9_]+=' "$pins" | sort | uniq -d | grep .); then
+            echo "::error::names set twice in $pins:"; echo "$dup"; fail=1
+          fi
+          channel=$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)
+          msrv=$(sed -n 's/^RUST_MSRV=//p' "$pins")
+          rust_version=$(sed -n 's/^rust-version *= *"\([^"]*\)".*/\1/p' Cargo.toml)
+          if ! [[ $channel =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::rust-toolchain.toml's channel is \"$channel\", not an exact release"; fail=1
+          fi
+          if [ -z "$msrv" ] || [ "$rust_version" != "$msrv" ]; then
+            echo "::error::Cargo.toml's rust-version is $rust_version, $pins's RUST_MSRV \"$msrv\""; fail=1
+          fi
+          if ! grep -qF "RUSTUP_TOOLCHAIN:-$msrv}" scripts/ci/check-msrv.sh; then
+            echo "::error::scripts/ci/check-msrv.sh's default toolchain is not $msrv"; fail=1
+          fi
+          exit $fail
+      - name: Rustfmt
+        run: cargo fmt --all --check
+      - name: File-size cap (700 LOC)
+        run: bash scripts/ci/check-file-size.sh
+      - name: No-secret scan
+        run: |
+          bash scripts/ci/test-check-no-secrets.sh
+          bash scripts/ci/check-no-secrets.sh
+      - name: MSRV script regressions
+        run: python3 scripts/ci/test-check-msrv.py
+      - name: Release script tests
+        run: python3 -m unittest discover -s scripts/release
+      # Entries are changelog.d/ fragments; [Unreleased] in CHANGELOG.md holds none.
+      - name: Changelog fragments
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_changelog.py'
+          python3 scripts/changelog.py check
+      - name: Conformance ledger script tests
+        run: python3 -m unittest discover -s scripts -p 'test_ledger_*.py'
+      - name: Conformance docs merge safety
+        run: python3 -m unittest discover -s scripts -p 'test_generate_conformance_docs.py'
+      - name: Conformance ledger style and links
+        run: |
+          python3 scripts/check_ledger_style.py
+          python3 scripts/check_ledger_links.py
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # The per-crate default-features check runs for these targets (#981):
+      # Windows and macOS compile different code behind their platform cfgs.
+      # In the cache key, so a change restarts the cache with their dependencies.
+      DEFAULT_FEATURES_TARGETS: x86_64-unknown-linux-gnu x86_64-pc-windows-msvc aarch64-apple-darwin
+      # pcap for bacnet-cli, whose build script loads libpcap.
+      APT_PACKAGES: libpcap-dev
+    steps:
+      - *checkout
+      # The packages in APT_PACKAGES that the runner image lacks, so a job
+      # whose packages are all there skips apt-get update.
+      - &apt
+        name: Install apt packages
+        run: |
+          missing=()
+          for package in $APT_PACKAGES; do
+            status=$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)
+            [ "$status" = "install ok installed" ] || missing+=("$package")
+          done
+          echo "missing: ${missing[*]:-none}"
+          if [ ${#missing[@]} -gt 0 ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends "${missing[@]}"
+          fi
+      - *toolchain
+      # Only their standard libraries: neither clippy nor rustdoc links.
+      - name: Add the default-features check's targets
+        run: |
+          # shellcheck disable=SC2086 # one argument per target
+          rustup target add $DEFAULT_FEATURES_TARGETS
+      # rust-cache saves only on a key miss, and its automatic key hashes only
+      # the workspace's Cargo.lock and manifests. SAMPLES_LOCKS, a hash of the
+      # samples' locks in env-vars, puts them in the key's environment hash, so
+      # a lock refresh saves a cache that holds their dependencies in
+      # target/samples. That hash is part of the restore prefix too, so the
+      # first runs on a new one (the PR's and the dev merge's) build from cold.
+      # It is a variable rather than part of `key` so that every Clippy cache
+      # keeps one prefix, which Prune caches relies on.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        env:
+          SAMPLES_LOCKS: ${{ hashFiles('examples/rust/samples/*/Cargo.lock') }}
+        with:
+          cache-bin: false
+          env-vars: LINUX_FEATURES DEFAULT_FEATURES_TARGETS SAMPLES_LOCKS
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
+      # Warnings are errors for workspace code only; dependencies are unaffected.
+      - name: Clippy (every feature)
+        run: cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$LINUX_FEATURES" -- -D warnings
+      # !cancelled(): report every configuration, not just the first failure.
+      - name: Clippy (PyO3 bindings)
+        if: ${{ !cancelled() }}
+        run: cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
+      # bacnet-cli without its default `tui` feature, which every other run turns on.
+      - name: Clippy (bacnet-cli, no default features)
+        if: ${{ !cancelled() }}
+        run: cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
+      # One cargo run per crate checks the targets side by side, which costs a
+      # few seconds more than Linux alone did.
+      - name: Clippy and rustdoc (each published crate, default features; no_std bacnet-types; Linux, Windows, macOS)
+        if: ${{ !cancelled() }}
+        run: |
+          # shellcheck disable=SC2086 # one argument per target
+          bash scripts/ci/check-default-features.sh $DEFAULT_FEATURES_TARGETS
+      # Private and pub(crate) items too, so their intra-doc links can't rot
+      # (#1164). This run still flags public docs that link to private items
+      # (rustdoc::private_intra_doc_links), so it replaces the public-only run.
+      - name: Rustdoc (every feature, private items)
+        if: ${{ !cancelled() }}
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --document-private-items --features "$LINUX_FEATURES"
+      # Every module of the PyO3 crate is private, so only this run checks its docs.
+      - name: Rustdoc (PyO3 bindings, private items)
+        if: ${{ !cancelled() }}
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
+      # The standalone samples in examples/rust/samples, outside the workspace
+      # with a Cargo.lock each, so no step above compiles them (#1406): fails on
+      # a sample that no longer builds or a stale lock. They share target/samples,
+      # so their common dependencies compile once.
+      - name: Samples (cargo check --locked)
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/check-samples.sh
+      # The runner has about 14 GB free on /, and the largest job needs about
+      # 6 GB (docs/ci.md, "Runner"). This logs the margin, and the limits the
+      # tests ran under.
+      - &disk
+        name: Disk use and limits
+        if: ${{ !cancelled() }}
+        run: |
+          df -h /
+          du -sh target "${CARGO_HOME:-$HOME/.cargo}" "${RUSTUP_HOME:-$HOME/.rustup}" 2>/dev/null || true
+          echo "user $(id -un), $(nproc) CPUs, open files: soft $(ulimit -Sn), hard $(ulimit -Hn)"
+
+  test:
+    name: Test (Linux, full features)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      APT_PACKAGES: libpcap-dev
+    steps:
+      - *checkout
+      - *apt
+      - *toolchain
+      # Only runs on dev save, and only from a successful job, so a failed or
+      # cancelled run can't leave a partial cache that later runs restore by
+      # exact key. PR runs restore dev's.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          env-vars: LINUX_FEATURES
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
+      - name: Install cargo-nextest
+        run: bash scripts/ci/install-tools.sh cargo-nextest
+      # nextest runs each test in its own process (.config/nextest.toml);
+      # it does not run doctests, so cargo test --doc covers those.
+      - run: cargo nextest run --workspace --exclude rusty-bacnet --locked --features "$LINUX_FEATURES" --profile ci
+      - run: cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$LINUX_FEATURES"
+      # Tests that exist only with a feature off (the CLI's rebuild advice for
+      # sc-tls and pcap); LINUX_FEATURES compiles them out.
+      - name: bacnet-cli tests (default features)
+        run: cargo nextest run -p bacnet-cli --locked --profile ci
+      # And with the default `tui` feature off too, where `bacnet tui` prints
+      # rebuild advice instead.
+      - name: bacnet-cli tests (no default features)
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p bacnet-cli --no-default-features --locked --profile ci
+      - *disk
+
+  python:
+    name: Python bindings
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # venv for the maturin build; libpython for the PyO3 crate's test binaries.
+      APT_PACKAGES: python3-venv libpython3-dev
+    steps:
+      - *checkout
+      - *apt
+      - *toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
+      - name: Install cargo-nextest and maturin
+        run: bash scripts/ci/install-tools.sh cargo-nextest maturin
+      # A debug extension builds faster, and the suite doesn't need release speed.
+      - name: Build the extension (maturin develop)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          . "$RUNNER_TEMP/venv/bin/activate"
+          python --version
+          maturin develop -m crates/rusty-bacnet/Cargo.toml --locked
+      # The SC tests make certificates with the openssl CLI.
+      - name: Python tests
+        run: |
+          . "$RUNNER_TEMP/venv/bin/activate"
+          openssl version
+          python -m unittest discover -s crates/rusty-bacnet/tests
+      # The crate's lib unit tests and integration tests, linked against
+      # PYO3_PYTHON's libpython (#919), not the venv's, so this step doesn't
+      # depend on the maturin build.
+      - name: Rust tests
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p rusty-bacnet --locked --profile ci
+      - *disk
+
+  msrv:
+    name: MSRV (Linux native)
+    # Skip PRs to dev and dev merges; any other event (main, tags, schedule on
+    # dev, manual, or a trigger added later) runs it.
+    if: ${{ (github.event_name != 'pull_request' || github.base_ref == 'main') && !(github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # check-msrv.sh needs pkg-config's libpcap for the linked pcap build.
+      APT_PACKAGES: libpcap-dev
+    steps:
+      - *checkout
+      - *apt
+      - *toolchain
+      # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml for the rest of the job,
+      # so the documented MSRV is what compiles. Lint checks that RUST_MSRV
+      # matches Cargo.toml and check-msrv.sh.
+      - name: Install the MSRV toolchain
+        run: |
+          msrv=$(sed -n 's/^RUST_MSRV=//p' .github/ci-pins.env)
+          [[ $msrv =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "::error::no RUST_MSRV in .github/ci-pins.env"; exit 1; }
+          rustup toolchain install "$msrv" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$msrv" >> "$GITHUB_ENV"
+      # The scheduled run on dev is the one that saves this cache.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
+      # Publishable crates with consumer-visible features, then the ethernet,
+      # serial and serial-gpio transport checks and a linked bacnet-cli pcap build.
+      - run: bash scripts/ci/check-msrv.sh --linux-native
+      - *disk
+
+  audit-deny:
+    name: Cargo Audit + Deny
+    # Skip PRs to dev and dev merges; any other event (main, tags, schedule on
+    # dev, manual, or a trigger added later) runs it.
+    if: ${{ (github.event_name != 'pull_request' || github.base_ref == 'main') && !(github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - *checkout
+      - *toolchain
+      - name: Install cargo-audit and cargo-deny
+        run: bash scripts/ci/install-tools.sh cargo-audit cargo-deny
+      - name: Cargo Audit
+        run: cargo audit --color always
+      - name: Cargo Deny
+        if: ${{ !cancelled() }}
+        run: cargo deny --all-features check
+
+  ci-ok:
+    name: CI OK
+    if: ${{ always() }}
+    needs: [lint, clippy, test, python, msrv, audit-deny]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Only the Heavy jobs may be skipped, by their tier; a skipped Lean job
+      # fails it.
+      - name: All required jobs succeeded or were skipped by tier
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'all(to_entries[];
+            .value.result == "success"
+            or (.value.result == "skipped" and (.key == "msrv" or .key == "audit-deny")))' >/dev/null
+
+  # After a green run on dev (a merge, the schedule or a manual run), delete
+  # the cache entries no run will restore again (#1471). native-tests.yml runs
+  # the same script after its own dev runs; see the script for what it keeps.
+  # The status check names CI OK alone: the implicit success() would also
+  # need msrv and audit-deny, which a dev merge skips by tier.
+  prune-caches:
+    name: Prune caches
+    needs: ci-ok
+    if: ${{ !cancelled() && needs.ci-ok.result == 'success' && github.ref == 'refs/heads/dev' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - name: Delete superseded cache entries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/prune-caches.sh

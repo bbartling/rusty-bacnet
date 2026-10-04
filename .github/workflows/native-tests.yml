@@ -1,36 +1,30 @@
 name: Native tests
 
 # Runs the tests, clippy and rustdoc natively on macOS (Apple Silicon) and
-# Windows (x86_64 MSVC), on GitHub-hosted runners (#950). Linux CI, releases and publishing run
-# on Forgejo (.forgejo/workflows/); GitHub only runs what needs its native
-# runners or services. See docs/ci.md.
+# Windows (x86_64 MSVC), on GitHub-hosted runners (#950). The Linux jobs are in
+# ci.yml. See docs/ci.md.
 #
 # Each platform runs two jobs in parallel: Tests (the workspace test build,
 # the stack guard and the doctests) and Lint and Python (clippy, rustdoc, the
 # CLI's default-feature tests, and the Python bindings with their tests).
-# Native OK waits for all four and passes only when every one succeeded: it is
-# the one check the merge gate reads.
+# Native OK waits for all four and passes only when every one succeeded: with
+# ci.yml's CI OK, it is one of the two checks a PR needs to merge.
 #
-# PRs live on Forgejo, so pull_request never fires here. The push mirror syncs
-# every branch Forgejo receives, so a push trigger covers every PR head and
-# every merge to dev. A PR merges only when Forgejo's CI OK and Native OK are
-# both green on its head SHA. Tag pushes don't run it: a branches filter
-# without a tags filter skips them.
-#
-# wip/ branches are drafts that get their review before their first real push,
-# so they don't start the native jobs. GitHub refuses branches and
-# branches-ignore on one event, hence the "!" pattern inside branches.
+# It runs on every PR to dev or main, on pushes to them (merges), whose runs
+# save the caches PRs restore, and by hand. Tag pushes don't run it.
 
 on:
+  pull_request:
+    branches: [dev, main]
   push:
-    branches: ["**", "!wip/**"]
+    branches: [dev, main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  # A newer push to a branch cancels that branch's superseded run. On dev each
+  # A newer push to a PR (or to main) cancels its superseded run. On dev each
   # commit gets a group of its own, so no run is cancelled or replaced while
   # pending, and every merge gets its own native result. (A shared group without
   # cancel-in-progress would still let a newer pending run replace an older one.)
@@ -39,15 +33,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Same build settings as Forgejo CI: no incremental state, and test binaries
+  # Same build settings as ci.yml: no incremental state, and test binaries
   # without native debug info (less codegen, linking and cache).
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
-  # The versions the Forgejo CI image pins (.forgejo/ci-image/Dockerfile).
-  NEXTEST_VERSION: 0.9.146
-  MATURIN_VERSION: 1.15.0
-  PYTHON_VERSION: "3.12"
   # The tests the stack guard step reruns with smaller stacks (#953): every
   # server, client, endpoint, integration and CLI test, the benchmark SC mTLS
   # tests, and bacnet-transport's BACnet/SC tests (node, TLS dial, direct
@@ -144,6 +134,17 @@ jobs:
           # Only feature names reach GITHUB_ENV.
           [[ $features =~ ^[A-Za-z0-9_/,-]+$ ]] || { echo "::error::unexpected characters in the feature list"; exit 1; }
           echo "NATIVE_FEATURES=$features" | tee -a "$GITHUB_ENV"
+      # The cargo-nextest and maturin versions that ci.yml installs too, and
+      # the Python version, from .github/ci-pins.env. rust-cache hashes none of
+      # these names into its key.
+      - &pins
+        name: Tool pins
+        run: |
+          for name in NEXTEST_VERSION MATURIN_VERSION PYTHON_VERSION; do
+            value=$(sed -n "s/^$name=//p" .github/ci-pins.env)
+            [[ $value =~ ^[0-9][0-9A-Za-z.]*$ ]] || { echo "::error::no single $name in .github/ci-pins.env"; exit 1; }
+            echo "$name=$value" | tee -a "$GITHUB_ENV"
+          done
       # The runner images ship rustup. This installs the channel that
       # rust-toolchain.toml pins, so there is no version to keep in sync here,
       # with the minimal profile plus the components that file lists. The
@@ -164,8 +165,8 @@ jobs:
           rustc -vV
       # Only dev saves the cache, and only from a successful job, so a failed or
       # cancelled first run can't leave a partial cache that later runs restore
-      # by exact key. Other branches restore dev's. The key includes the job id,
-      # so each job keeps its own.
+      # by exact key. PR runs restore dev's. The key includes the job id, so
+      # each job keeps its own.
       - &rust-cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -226,6 +227,7 @@ jobs:
       - *stop-appraiser
       - *checkout
       - *feature-set
+      - *pins
       - *toolchain
       - *rust-cache
       - *nextest
@@ -237,14 +239,14 @@ jobs:
           PYTHON_PATH: ${{ steps.python.outputs.python-path }}
         run: echo "PYO3_PYTHON=$PYTHON_PATH" >> "$GITHUB_ENV"
 
-      # Warnings are errors for workspace code only, as in Forgejo CI. Every
-      # later step runs even when an earlier one failed, to report each failure.
+      # Warnings are errors for workspace code only, as in ci.yml. Every later
+      # step runs even when an earlier one failed, to report each failure.
       - name: Clippy (every native feature)
         run: cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$NATIVE_FEATURES" -- -D warnings
       - name: Clippy (PyO3 bindings)
         if: ${{ !cancelled() }}
         run: cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
-      # Private items too, as in Forgejo CI (#1164).
+      # Private items too, as in ci.yml (#1164).
       - name: Rustdoc (every native feature, private items)
         if: ${{ !cancelled() }}
         env:
@@ -292,14 +294,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo nextest run -p rusty-bacnet --locked --profile ci
 
-  # The merge gate's one check: green only when every job above succeeded on
+  # The merge gate's native check: green only when every job above succeeded on
   # every platform. It runs even when one failed or was cancelled, so it always
-  # reports, the same pattern as Forgejo's CI OK.
+  # reports, the same pattern as ci.yml's CI OK.
   native-ok:
     name: Native OK
     if: ${{ always() }}
     needs: [tests, lint]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Every native job succeeded
@@ -308,3 +310,25 @@ jobs:
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' >/dev/null
+
+  # After a green run on dev, delete the cache entries no run will restore
+  # again (#1471), as ci.yml does after its own; see the script. The status
+  # check names Native OK's result alone, as ci.yml's does.
+  prune-caches:
+    name: Prune caches
+    needs: native-ok
+    if: ${{ !cancelled() && needs.native-ok.result == 'success' && github.ref == 'refs/heads/dev' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - name: Delete superseded cache entries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/prune-caches.sh
