@@ -376,22 +376,30 @@ pub(super) async fn saved(wait: SaveWait) {
 /// it serves, and the saves are awaited off the guard, so storage matches
 /// what the objects serve when `stop()` returns.
 ///
+/// A second pass takes what the first waited for: an Audit Log batch whose
+/// commit was still running, which the log takes once it has landed.
+///
 /// An application holding the database is not waited for, as with the
 /// Command runs `stop()` ends: the objects then settle from a task once it
 /// lets go, and in any case put storage back when they are dropped.
 pub(super) async fn settle_forgotten(db: &Arc<RwLock<ObjectDatabase>>) {
-    let waits = match db.try_write() {
-        Ok(mut db) => settle_all(&mut db),
-        Err(_) => {
-            let db = Arc::clone(db);
-            tokio::spawn(async move {
-                settle_all(&mut *db.write().await);
-            });
+    for _ in 0..2 {
+        let waits = match db.try_write() {
+            Ok(mut db) => settle_all(&mut db),
+            Err(_) => {
+                let db = Arc::clone(db);
+                tokio::spawn(async move {
+                    settle_all(&mut *db.write().await);
+                });
+                return;
+            }
+        };
+        if waits.is_empty() {
             return;
         }
-    };
-    for wait in waits {
-        saved(wait).await;
+        for wait in waits {
+            saved(wait).await;
+        }
     }
 }
 

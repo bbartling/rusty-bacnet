@@ -572,7 +572,7 @@ fn a_log_dropped_with_a_committed_batch_keeps_it_as_settling_would() {
 }
 
 #[test]
-fn settling_forgotten_writes_puts_storage_back_and_takes_a_committed_batch() {
+fn settling_forgotten_writes_puts_storage_back_and_takes_a_batch_once_committed() {
     let (mut log, storage) = log();
     let wait = stage_log_disable(&mut log);
     block_on(wait);
@@ -580,9 +580,17 @@ fn settling_forgotten_writes_puts_storage_back_and_takes_a_committed_batch() {
     block_on(log.settle_forgotten_writes().expect("the log commits"));
     assert!(storage.committed().log_enable);
     assert!(log.log_enable());
-    let batch = staged(log.stage_notification_batch(&[notification(1)], 3_000, None));
-    block_on(batch.saved());
+    // A batch whose commit still runs is left to land; settling again once
+    // it has landed takes it.
+    let (started, go) = storage.hold();
+    let _batch = staged(log.stage_notification_batch(&[notification(1)], 3_000, None));
+    started.recv_timeout(WAIT).unwrap();
+    let landing = log.settle_forgotten_writes().unwrap();
+    assert!(log.records().is_empty());
+    drop(go);
+    block_on(landing);
+    assert_eq!(storage.committed().records.len(), 1);
+    assert!(log.records().is_empty());
     block_on(log.settle_forgotten_writes().unwrap());
     assert_eq!(log.records().len(), 1);
-    assert_eq!(storage.committed().records.len(), 1);
 }
