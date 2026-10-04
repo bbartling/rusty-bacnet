@@ -817,7 +817,8 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
 /// property write, the array index fits the property
 /// ([`check_write_array_index`](crate::handlers::check_write_array_index))
 /// and a new Object_Name is free. A Command's or Channel's write takes this
-/// path too, so the index gate covers every local write that carries one.
+/// path too; a Schedule's target writes run the same index gate in
+/// `schedule::deliver`.
 fn precheck(
     db: &ObjectDatabase,
     oid: &ObjectIdentifier,
