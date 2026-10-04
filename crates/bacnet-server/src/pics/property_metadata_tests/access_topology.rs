@@ -20,7 +20,9 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::DOOR_MEMBERS, true, false),
             (P::STATUS_FLAGS, false, false),
             (P::OUT_OF_SERVICE, false, true),
-            (P::RELIABILITY, false, false),
+            // Writable while Out_Of_Service is TRUE: the FAULT_STATE check
+            // can move it (Clause 12.26.9, #1149).
+            (P::RELIABILITY, false, true),
             (P::EVENT_STATE, false, false),
             (P::PRIORITY_ARRAY, false, false),
             (P::RELINQUISH_DEFAULT, false, true),
@@ -28,6 +30,21 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::DOOR_EXTENDED_PULSE_TIME, false, true),
             (P::DOOR_OPEN_TOO_LONG_TIME, false, true),
             (P::CURRENT_COMMAND_PRIORITY, false, false),
+            // The rows #1149 added: the three alarm lists and the event
+            // configuration are writable, the event machinery keeps the
+            // rest.
+            (P::MASKED_ALARM_VALUES, true, true),
+            (P::TIME_DELAY, true, true),
+            (P::NOTIFICATION_CLASS, true, true),
+            (P::ALARM_VALUES, true, true),
+            (P::FAULT_VALUES, true, true),
+            (P::EVENT_ENABLE, true, true),
+            (P::ACKED_TRANSITIONS, true, false),
+            (P::NOTIFY_TYPE, true, true),
+            (P::EVENT_TIME_STAMPS, true, false),
+            (P::EVENT_MESSAGE_TEXTS, true, false),
+            (P::EVENT_DETECTION_ENABLE, true, true),
+            (P::TIME_DELAY_NORMAL, true, true),
             (P::PROPERTY_LIST, false, false),
         ],
         ObjectType::ACCESS_POINT => vec![

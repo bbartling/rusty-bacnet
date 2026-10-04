@@ -2483,6 +2483,25 @@ Active_Authentication_Policy (1 to the policy count) and the mode by writing
 Authorization_Mode (one of the supported modes). Another value is refused
 with VALUE_OUT_OF_RANGE, and another datatype with INVALID_DATA_TYPE.
 
+`add_access_door` also takes `alarm_values`, `fault_values` and
+`masked_alarm_values`, the door's starting Alarm_Values, Fault_Values and
+Masked_Alarm_Values as BACnetDoorAlarmState numbers other than NORMAL (1 to
+8, or 256 to 65535); peers can write all three. Any other number, NORMAL (0)
+included, raises VALUE_OUT_OF_RANGE. Door_Alarm_State stays
+NORMAL or a member of the alarm or fault values and never takes a masked
+state, so a client's simulated value outside them is refused, and masking the
+state the door is in returns it to NORMAL. The door raises a CHANGE_OF_STATE
+alarm once Door_Alarm_State has stayed in Alarm_Values for Time_Delay, and a
+fault value makes Reliability MULTI_STATE_FAULT. Deciding that the door is in
+alarm, DOOR_OPEN_TOO_LONG included, is up to the application.
+
+```python
+# Alarm on DOOR_OPEN_TOO_LONG (2) and FORCED_OPEN (3); fault on DOOR_FAULT (5).
+server.add_access_door(
+    instance=2, name="Side Entry", alarm_values=[2, 3], fault_values=[5]
+)
+```
+
 `add_access_rights` takes `positive_access_rules` and `negative_access_rules`,
 lists of `AccessRule` mappings for Positive_Access_Rules and
 Negative_Access_Rules, and `enable` for the object's Enable flag:

@@ -71,6 +71,17 @@ const ZONE_EVENT_ROWS: [P; 10] = [
     P::TIME_DELAY_NORMAL,
 ];
 
+/// The door's rows #1149 added, all optional, in metadata order: the
+/// masked list, then the zone's event rows with Fault_Values after
+/// Alarm_Values.
+fn door_alarm_rows() -> impl Iterator<Item = P> {
+    [P::MASKED_ALARM_VALUES]
+        .into_iter()
+        .chain(ZONE_EVENT_ROWS[..3].iter().copied())
+        .chain([P::FAULT_VALUES])
+        .chain(ZONE_EVENT_ROWS[3..].iter().copied())
+}
+
 fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
     let all = match kind {
         ObjectType::ACCESS_DOOR => vec![
@@ -95,7 +106,10 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::DOOR_EXTENDED_PULSE_TIME,
             P::DOOR_OPEN_TOO_LONG_TIME,
             P::CURRENT_COMMAND_PRIORITY,
-        ],
+        ]
+        .into_iter()
+        .chain(door_alarm_rows())
+        .collect(),
         ObjectType::ACCESS_POINT => vec![
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
@@ -150,7 +164,10 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
             P::SECURED_STATUS,
             P::DOOR_ALARM_STATE,
             P::DOOR_MEMBERS,
-        ],
+        ]
+        .into_iter()
+        .chain(door_alarm_rows())
+        .collect(),
         // Tables 12-36 and 12-37 have no Present_Value, and Table 12-37 no
         // Access_Doors (#1064).
         ObjectType::ACCESS_POINT => vec![P::DESCRIPTION],

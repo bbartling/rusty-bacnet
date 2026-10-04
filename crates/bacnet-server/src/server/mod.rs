@@ -660,6 +660,8 @@ pub use request_admission::{RequestAdmissionCounters, RequestAdmissionPolicy};
 mod shutdown;
 
 #[cfg(test)]
+mod access_door_event_tests;
+#[cfg(test)]
 mod access_door_pulse_task_tests;
 #[cfg(test)]
 mod access_zone_event_tests;
