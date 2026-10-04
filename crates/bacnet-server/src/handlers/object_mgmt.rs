@@ -256,11 +256,11 @@ fn create(
 }
 
 /// The Object_Name a new object starts with until an initial value names
-/// it: the type's name and the instance (`BINARY_VALUE-2`), or, when another object
-/// already holds that name, the same with the first free ` (n)` from 2 up
-/// (`BINARY_VALUE-2 (2)`) (#1437). Clause 15.3 leaves the value of a
-/// property the request doesn't give to the device, so a client renaming
-/// an object never makes the next create of its type fail.
+/// it: the type's name and the instance (`BINARY_VALUE-2`), or, when
+/// another object already holds that name, the same with the first free
+/// ` (n)` from 2 up (`BINARY_VALUE-2 (2)`) (#1437). Clause 15.3 leaves the
+/// value of a property the request doesn't give to the device, so a client
+/// renaming an object never makes the next create of its type fail.
 ///
 /// Each object holds one name, so one of the first `db.len() + 1`
 /// candidates is free.
