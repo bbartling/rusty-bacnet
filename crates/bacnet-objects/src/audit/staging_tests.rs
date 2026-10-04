@@ -13,7 +13,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, PropertyValue, Time};
 
 use crate::clock::{ClockFrame, ClockReader};
-use crate::durable::{DurableWrites, SaveWait, StageStep};
+use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use crate::traits::BACnetObject;
 
 use super::{
@@ -442,4 +442,147 @@ fn staging_skips_a_write_with_nothing_to_commit() {
     )));
     log.wait_for_commits();
     assert_eq!(storage.commits.load(Ordering::SeqCst), 1);
+}
+
+// A log can go while changes are still staged for a request that never came
+// back, as when the server stops mid-request and the database is dropped
+// (#1363). Storage then goes back to the log as it was served.
+
+fn reopen(storage: &Arc<SlowPersistence>) -> AuditLogObject {
+    AuditLogObject::new(1, "audit", 10, storage.clone()).unwrap()
+}
+
+fn stage_log_disable(log: &mut AuditLogObject) -> SaveWait {
+    staged_write(log.stage_write(
+        PropertyIdentifier::LOG_ENABLE,
+        None,
+        &PropertyValue::Boolean(false),
+    ))
+}
+
+#[test]
+fn a_log_dropped_with_a_staged_change_puts_storage_back_to_the_served_log() {
+    let (mut log, storage) = log();
+    let generation = log.generation();
+    let wait = stage_log_disable(&mut log);
+    block_on(wait);
+    assert!(!storage.committed().log_enable);
+    // The log goes before any lifetime check could drop the change.
+    drop(log);
+    let committed = storage.committed();
+    assert!(committed.log_enable);
+    assert!(committed.records.is_empty());
+    // The first commit, the staged one and the put-back.
+    assert_eq!(storage.commits.load(Ordering::SeqCst), 3);
+    let reopened = reopen(&storage);
+    assert!(reopened.log_enable());
+    assert_eq!(reopened.generation(), generation + 1);
+}
+
+#[test]
+fn a_log_dropped_after_its_staged_change_was_made_keeps_it() {
+    let (mut log, storage) = log();
+    let wait = stage_log_disable(&mut log);
+    block_on(wait.clone());
+    log.write_property(
+        PropertyIdentifier::LOG_ENABLE,
+        None,
+        PropertyValue::Boolean(false),
+        None,
+    )
+    .unwrap();
+    log.release_staged_write(&wait);
+    drop(log);
+    assert_eq!(storage.commits.load(Ordering::SeqCst), 2);
+    assert!(!reopen(&storage).log_enable());
+}
+
+#[test]
+fn a_log_dropped_with_a_staged_change_whose_commit_failed_leaves_storage_alone() {
+    let (mut log, storage) = log();
+    storage.fail.store(true, Ordering::SeqCst);
+    let wait = stage_log_disable(&mut log);
+    block_on(wait);
+    // Storage works again, so a commit at the drop would land and count.
+    storage.fail.store(false, Ordering::SeqCst);
+    drop(log);
+    assert_eq!(storage.commits.load(Ordering::SeqCst), 1);
+    assert!(reopen(&storage).log_enable());
+}
+
+#[test]
+fn a_log_dropped_part_way_through_staged_changes_keeps_the_steps_taken() {
+    let (mut log, storage) = log();
+    let generation = log.generation();
+    let wait = staged_write(log.stage_writes(&[
+        PendingWrite {
+            property: PropertyIdentifier::LOG_ENABLE,
+            array_index: None,
+            value: PropertyValue::Boolean(false),
+        },
+        PendingWrite {
+            property: PropertyIdentifier::BUFFER_SIZE,
+            array_index: None,
+            value: PropertyValue::Unsigned(5),
+        },
+    ]));
+    block_on(wait);
+    assert_eq!(storage.committed().capacity, 5);
+    // The request makes its first write, then goes before its second.
+    log.write_property(
+        PropertyIdentifier::LOG_ENABLE,
+        None,
+        PropertyValue::Boolean(false),
+        None,
+    )
+    .unwrap();
+    drop(log);
+    let reopened = reopen(&storage);
+    assert!(!reopened.log_enable());
+    assert_eq!(reopened.buffer_size(), 10);
+    assert_eq!(reopened.generation(), generation + 2);
+}
+
+#[test]
+fn a_log_dropped_while_its_staged_commit_runs_puts_storage_back_after_it() {
+    let (mut log, storage) = log();
+    let (started, go) = storage.hold();
+    let _forgotten = stage_log_disable(&mut log);
+    started.recv_timeout(WAIT).unwrap();
+    // The drop waits for the commits it queues, so it runs on a thread of
+    // its own while the staged commit is held.
+    let dropping = std::thread::spawn(move || drop(log));
+    drop(go);
+    dropping.join().unwrap();
+    assert!(storage.committed().log_enable);
+    assert_eq!(storage.commits.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn a_log_dropped_with_a_committed_batch_keeps_it_as_settling_would() {
+    let (mut log, storage) = log();
+    let batch = staged(log.stage_notification_batch(&[notification(1)], 3_000, None));
+    block_on(batch.saved());
+    assert!(log.records().is_empty());
+    // Settling takes a batch whose commit ran; storage already holds it,
+    // so the drop leaves it there.
+    drop(log);
+    assert_eq!(storage.commits.load(Ordering::SeqCst), 2);
+    assert_eq!(reopen(&storage).records().len(), 1);
+}
+
+#[test]
+fn settling_forgotten_writes_puts_storage_back_and_takes_a_committed_batch() {
+    let (mut log, storage) = log();
+    let wait = stage_log_disable(&mut log);
+    block_on(wait);
+    // What the server's stop() does once it has joined every request.
+    block_on(log.settle_forgotten_writes().expect("the log commits"));
+    assert!(storage.committed().log_enable);
+    assert!(log.log_enable());
+    let batch = staged(log.stage_notification_batch(&[notification(1)], 3_000, None));
+    block_on(batch.saved());
+    block_on(log.settle_forgotten_writes().unwrap());
+    assert_eq!(log.records().len(), 1);
+    assert_eq!(storage.committed().records.len(), 1);
 }

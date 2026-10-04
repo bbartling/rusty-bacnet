@@ -370,6 +370,47 @@ pub(super) async fn saved(wait: SaveWait) {
     }
 }
 
+/// Settle every staged write in `db` once no request is left to take or
+/// release one: `stop()` calls this after joining its requests (#1363).
+/// Each object drops what it holds staged and puts storage back to the state
+/// it serves, and the saves are awaited off the guard, so storage matches
+/// what the objects serve when `stop()` returns.
+///
+/// An application holding the database is not waited for, as with the
+/// Command runs `stop()` ends: the objects then settle from a task once it
+/// lets go, and in any case put storage back when they are dropped.
+pub(super) async fn settle_forgotten(db: &Arc<RwLock<ObjectDatabase>>) {
+    let waits = match db.try_write() {
+        Ok(mut db) => settle_all(&mut db),
+        Err(_) => {
+            let db = Arc::clone(db);
+            tokio::spawn(async move {
+                settle_all(&mut *db.write().await);
+            });
+            return;
+        }
+    };
+    for wait in waits {
+        saved(wait).await;
+    }
+}
+
+/// Settle every object's forgotten staged writes; the waits for the saves
+/// that are still to run.
+fn settle_all(db: &mut ObjectDatabase) -> Vec<SaveWait> {
+    let mut waits = Vec::new();
+    db.for_each_object_mut(|_, object| {
+        if let Some(wait) = object
+            .durable_writes_internal()
+            .and_then(|writes| writes.settle_forgotten_writes())
+            .filter(|wait| !wait.is_ready())
+        {
+            waits.push(wait);
+        }
+    });
+    waits
+}
+
 /// Stage `targets` and wait for their saves without holding the database
 /// guard. `targets` come in object order, so two requests never wait on each
 /// other.

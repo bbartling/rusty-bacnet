@@ -16,6 +16,18 @@
 //! once-a-second operation task ([`expire`](StagedSaves::expire)), which
 //! measures the lifetime on that task's monotonic clock. Either way the
 //! object then saves the state it serves.
+//!
+//! Neither check runs once the server has stopped, so two more cover the
+//! end of an object's life (#1363). The server's `stop()`, once it has
+//! joined every request, drops what is still staged
+//! ([`drop_forgotten`](StagedSaves::drop_forgotten)) and waits for the
+//! correcting save. And an object dropped with a write still staged puts
+//! storage back as it goes: `StagedSaves` keeps, beside the staged write,
+//! the state the object served at its latest storage call, and its `Drop`
+//! saves that state, unless the staged save failed, before the writer's own
+//! drop joins the thread. An object that stages through `StagedSaves` gets
+//! this without a `Drop` of its own; [`stage`](StagedSaves::stage) takes
+//! the served state, and [`correct`](StagedSaves::correct) keeps it current.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,8 +39,8 @@ use bacnet_types::primitives::PropertyValue;
 use super::{Event, SaveTicket, SaveWait, SaveWriter, StageStep, STAGED_WRITE_LIFETIME};
 
 /// A write staged for a request: the state `N` it leaves, saving on the
-/// writer.
-struct StagedWrite<N> {
+/// writer, and the snapshot `S` of the state the object serves meanwhile.
+struct StagedWrite<S, N> {
     property: PropertyIdentifier,
     value: PropertyValue,
     /// The object's write count when staged. The write takes the staged
@@ -36,6 +48,11 @@ struct StagedWrite<N> {
     base: u64,
     next: N,
     ticket: SaveTicket,
+    /// The state the object served at its latest storage call: what
+    /// storage goes back to if the staged write is dropped before
+    /// [`correct`](StagedSaves::correct) can ask for a fresh one, as when
+    /// the object itself is dropped.
+    served: S,
     /// Set when the staged write is taken or dropped, for a request that
     /// found the object busy.
     released: Arc<Event>,
@@ -49,14 +66,16 @@ struct StagedWrite<N> {
 ///
 /// The object owns the state it serves, so whatever needs it comes in as a
 /// closure: [`correct`](Self::correct) asks for the snapshot of the served
-/// state when a dropped staged write may have left storage ahead of it.
+/// state when a dropped staged write may have left storage ahead of it, or
+/// to keep the copy a staged write holds current.
 pub(crate) struct StagedSaves<S: Send + 'static, N> {
     writer: SaveWriter<S>,
-    staged: Option<StagedWrite<N>>,
+    staged: Option<StagedWrite<S, N>>,
     /// A staged write was dropped whose save did not fail, so storage may
-    /// hold a state the object never served; [`correct`](Self::correct)
-    /// saves the served one.
-    correction_due: bool,
+    /// hold a state the object never served: the served state that write
+    /// kept. [`correct`](Self::correct) saves a fresh snapshot instead; a
+    /// drop saves this one.
+    correction: Option<S>,
 }
 
 impl<S: Send + 'static, N> StagedSaves<S, N> {
@@ -65,7 +84,7 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         Self {
             writer,
             staged: None,
-            correction_due: false,
+            correction: None,
         }
     }
 
@@ -89,7 +108,8 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
 
     /// Queue a save of `snapshot` for a write of `value` to `property` made
     /// at write count `base` that leaves `next`, and keep `next` aside until
-    /// the write arrives.
+    /// the write arrives. `served` is the state the object serves now, which
+    /// storage goes back to should the staged write be dropped.
     pub(crate) fn stage(
         &mut self,
         property: PropertyIdentifier,
@@ -97,7 +117,12 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         base: u64,
         next: N,
         snapshot: S,
+        served: S,
     ) -> StageStep {
+        // A correction still due lands first, should this save fail.
+        if let Some(correction) = self.correction.take() {
+            self.writer.submit_coalescing(correction);
+        }
         let ticket = self.writer.submit(snapshot);
         let wait = ticket.wait();
         self.staged = Some(StagedWrite {
@@ -106,6 +131,7 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
             base,
             next,
             ticket,
+            served,
             released: Arc::default(),
             finished_seen_at: None,
         });
@@ -187,27 +213,53 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         // Unless its save failed, storage holds, or is about to hold, a state
         // the object never served.
         if staged.ticket.succeeded() != Some(false) {
-            self.correction_due = true;
+            self.correction = Some(staged.served);
         }
     }
 
     /// Whether a dropped staged write left a correction due, clearing it:
     /// for a caller that queues the correcting save its own way.
     pub(crate) fn take_correction(&mut self) -> bool {
-        std::mem::take(&mut self.correction_due)
+        self.correction.take().is_some()
     }
 
-    /// After a staged write was dropped, queue a save of `served`, the state
-    /// the object serves, at once. It lands after the dropped write's save,
-    /// since saves run in order.
+    /// After a storage call, with `served` giving the state the object
+    /// serves. If the call dropped a staged write, queue a save of that
+    /// state at once; it lands after the dropped write's save, since saves
+    /// run in order. If a write is still staged, keep the state with it
+    /// instead, for a drop of the object to put back.
     pub(crate) fn correct(&mut self, served: impl FnOnce() -> S) {
         if self.take_correction() {
             self.writer.submit_coalescing(served());
+        } else if let Some(staged) = self.staged.as_mut() {
+            staged.served = served();
         }
+    }
+
+    /// No request is left to take or release the staged write, as once the
+    /// server's `stop()` has joined its requests: drop it, queue the save of
+    /// `served` that leaves due, and return a wait that ends once every save
+    /// queued so far has run.
+    pub(crate) fn drop_forgotten(&mut self, served: impl FnOnce() -> S) -> SaveWait {
+        self.drop_staged();
+        self.correct(served);
+        self.writer.idle()
     }
 
     /// Block until every queued save has run.
     pub(crate) fn wait_idle(&self) {
         self.writer.wait_idle();
+    }
+}
+
+impl<S: Send + 'static, N> Drop for StagedSaves<S, N> {
+    /// The object is going away with nothing left to take a staged write.
+    /// Drop it as a release would, and put storage back to the served state
+    /// it kept before the writer, dropped next, joins its thread (#1363).
+    fn drop(&mut self) {
+        self.drop_staged();
+        if let Some(served) = self.correction.take() {
+            self.writer.put_back(served);
+        }
     }
 }

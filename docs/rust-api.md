@@ -2093,7 +2093,11 @@ the request, or an application dropped a `write_local` future) is dropped the
 same way once 10 s have passed since its save finished: by the next write
 that stages, or within a further second by the server's once-a-second
 operation task, which measures the time on its own monotonic clock. The
-forwarder's operation task applies the same bound. `wait_for_saves()` blocks until queued
+forwarder's operation task applies the same bound. Neither check runs once
+the server has stopped, so `stop()`, after joining its requests, drops a
+staged write still held and waits until storage holds the served list again,
+and a class dropped with one still held saves the served list as it goes,
+unless the staged save failed (#1363). `wait_for_saves()` blocks until queued
 saves have run, and dropping the class waits for them too. Like the forwarder,
 a `NotificationClass` is not `UnwindSafe` or `RefUnwindSafe`.
 
@@ -4332,7 +4336,12 @@ guard dropped and the log serves the new state only once storage holds it.
 A WritePropertyMultiple that turns Log_Enable off and then writes
 Buffer_Size stages the two together as one commit, made off the guard as
 well; the request takes each change as it reaches it, and if it stops
-between them, storage is set back to the state the log serves.
+between them, storage is set back to the state the log serves. That holds
+when the server stops mid-request too (#1363): `stop()`, once it has joined
+its requests, drops changes still staged and waits for the commit of the
+served state, and a log dropped with changes still staged commits the served
+state as it goes. A staged notification batch is left as it stands, since
+the log takes a batch whose commit succeeded.
 A commit that fails refuses the write or the purge with
 `DEVICE / OPERATIONAL_PROBLEM` and leaves the log as it was; a Log_Enable
 write whose commit fails is refused the same way. Changes to one log land one
@@ -4824,7 +4833,10 @@ server's DeleteObject drops a removed forwarder on a blocking thread after
 releasing the guard. A staged write its request never makes (an earlier
 WritePropertyMultiple attempt failed, say) is dropped, and the forwarder at
 once queues a save of the lists it serves, so storage never keeps a list the
-forwarder refused. The writer is a plain `std` thread with no Tokio runtime,
+forwarder refused. The same holds when the server stops mid-request (#1363):
+`stop()`, after joining its requests, drops a staged write still held and
+waits for that save, and a forwarder dropped with one still held saves the
+lists it serves before its writer stops. The writer is a plain `std` thread with no Tokio runtime,
 one per forwarder that has saved and parked while idle, and a `save` that
 panics counts as a failed save. Once its rename succeeds a
 file save has landed: a filesystem that cannot synchronize a directory is

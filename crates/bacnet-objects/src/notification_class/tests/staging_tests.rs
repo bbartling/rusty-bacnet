@@ -270,3 +270,120 @@ fn staging_skips_writes_the_class_does_not_save_or_will_refuse() {
     nc.wait_for_saves();
     assert_eq!(storage.saves(), 0);
 }
+
+// A class can go while a write is still staged for a request that never
+// came back, as when the server stops mid-request and the database is
+// dropped (#1363). Storage then goes back to the list the class served.
+
+#[test]
+fn a_class_dropped_with_a_staged_write_puts_storage_back_to_the_served_list() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nc = persistent(&storage);
+    let served = [make_dest_device(7)];
+    write(&mut nc, &served).unwrap();
+    let _forgotten = stage_saved(&mut nc, &[make_dest_device(9)]);
+    assert_eq!(storage.saved(), Some(vec![make_dest_device(9)]));
+    // The class goes before any lifetime check could drop the staged write.
+    drop(nc);
+    assert_eq!(storage.saved(), Some(served.to_vec()));
+    // The first write, the staged one and the put-back.
+    assert_eq!(storage.saves(), 3);
+    assert_eq!(persistent(&storage).recipient_list(), served);
+}
+
+#[test]
+fn a_class_dropped_with_a_staged_write_and_no_written_list_saves_none() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nc = persistent(&storage);
+    nc.add_destination(make_dest_device(1)).unwrap();
+    let _forgotten = stage_saved(&mut nc, &[make_dest_device(9)]);
+    drop(nc);
+    // No write set the list, so storage holds none and the configuration
+    // still applies at the next start.
+    assert_eq!(
+        storage.snapshot(),
+        Some(NotificationClassSnapshot {
+            recipient_list: None
+        })
+    );
+    assert!(!persistent(&storage).recipient_list_saved());
+}
+
+#[test]
+fn a_class_dropped_after_its_staged_write_was_made_keeps_the_new_list() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nc = persistent(&storage);
+    write(&mut nc, &[make_dest_device(7)]).unwrap();
+    let new = [make_dest_device(8)];
+    let wait = stage_saved(&mut nc, &new);
+    write(&mut nc, &new).unwrap();
+    nc.release_staged_write(&wait);
+    drop(nc);
+    assert_eq!(storage.saved(), Some(new.to_vec()));
+    assert_eq!(storage.saves(), 2);
+    assert_eq!(persistent(&storage).recipient_list(), new);
+}
+
+#[test]
+fn a_class_dropped_with_a_staged_write_whose_save_failed_leaves_storage_alone() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nc = persistent(&storage);
+    let served = [make_dest_device(7)];
+    write(&mut nc, &served).unwrap();
+    storage.fail.store(true, Ordering::SeqCst);
+    let _failed = stage_saved(&mut nc, &[make_dest_device(9)]);
+    // Storage works again, so a save at the drop would land and count.
+    storage.fail.store(false, Ordering::SeqCst);
+    drop(nc);
+    assert_eq!(storage.saved(), Some(served.to_vec()));
+    assert_eq!(storage.saves(), 1);
+    assert_eq!(persistent(&storage).recipient_list(), served);
+}
+
+#[test]
+fn a_class_dropped_while_its_staged_save_runs_puts_storage_back_after_it() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nc = persistent(&storage);
+    let served = [make_dest_device(7)];
+    write(&mut nc, &served).unwrap();
+    let held = storage.hold();
+    let _forgotten =
+        staged(nc.stage_write(P::RECIPIENT_LIST, None, &framed(&[make_dest_device(9)])));
+    held.started.recv_timeout(WAIT).unwrap();
+    // The drop waits for the saves it queues, so it runs on a thread of its
+    // own while the staged save is held.
+    let dropping = std::thread::spawn(move || drop(nc));
+    drop(held.go);
+    dropping.join().unwrap();
+    // The staged save landed first, then the put-back.
+    assert_eq!(storage.saved(), Some(served.to_vec()));
+    assert_eq!(storage.saves(), 3);
+}
+
+#[test]
+fn settling_forgotten_writes_puts_storage_back_and_frees_the_class() {
+    let storage = Arc::new(MemoryPersistence::default());
+    let mut nc = persistent(&storage);
+    let served = [make_dest_device(7)];
+    write(&mut nc, &served).unwrap();
+    let _forgotten = stage_saved(&mut nc, &[make_dest_device(9)]);
+    // What the server's stop() does once it has joined every request.
+    let settled = nc.settle_forgotten_writes().expect("the class saves");
+    block_on(&settled);
+    assert_eq!(storage.saved(), Some(served.to_vec()));
+    assert_eq!(nc.recipient_list(), served);
+    // The class is free: the next write stages at once.
+    let list = [make_dest_device(8)];
+    let wait = staged(nc.stage_write(P::RECIPIENT_LIST, None, &framed(&list)));
+    block_on(&wait);
+    write(&mut nc, &list).unwrap();
+    nc.release_staged_write(&wait);
+    nc.wait_for_saves();
+    assert_eq!(storage.saved(), Some(list.to_vec()));
+    // Nothing is staged now, and a class without storage has nothing to settle.
+    assert!(nc.settle_forgotten_writes().unwrap().is_ready());
+    assert!(NotificationClass::new(2, "NC-2")
+        .unwrap()
+        .settle_forgotten_writes()
+        .is_none());
+}

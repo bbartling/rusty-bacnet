@@ -29,6 +29,13 @@ async fn stop_producer(slot: &mut Option<JoinHandle<()>>) {
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Seal egress, join admitted work, and stop the owned transport.
     ///
+    /// Once its requests are joined, a write a Notification Forwarder,
+    /// Notification Class or Audit Log still holds staged for one of them is
+    /// dropped, and stop waits for storage to hold the state the object
+    /// serves again (#1363); see [`DurableWrites::settle_forgotten_writes`].
+    ///
+    /// [`DurableWrites::settle_forgotten_writes`]: bacnet_objects::durable::DurableWrites::settle_forgotten_writes
+    ///
     /// Cancelling this waiter leaves cleanup owned by the server. A later stop
     /// joins it; after transport cleanup begins, dropping the server lets that
     /// cleanup finish. Local mutation and broadcasts are rejected from the first
@@ -101,6 +108,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         stop_producer(&mut self.binary_lighting_operation_task).await;
         stop_producer(&mut self.cov_purge_task).await;
         stop_producer(&mut self.cov_revisit_task).await;
+        // No request is left to take or release a staged save, and the
+        // operation task that would drop one is gone: put storage back to
+        // what each object serves before stop returns (#1363).
+        super::durable_writes::settle_forgotten(&self.db).await;
         // Nothing can own a Command or Channel run any more. End the runs let
         // go of while the database was busy where they stood, then any run no
         // task took up, so none is left in progress (#1252). An application
