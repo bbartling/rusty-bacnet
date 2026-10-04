@@ -42,6 +42,9 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::CREDENTIALS, false, false),
             (P::STATUS_FLAGS, false, false),
             (P::RELIABILITY, false, false),
+            // Optional and read-only over the network (#1394).
+            (P::MEMBERS, true, false),
+            (P::MEMBER_OF, true, false),
             (P::PROPERTY_LIST, false, false),
         ],
         ObjectType::ACCESS_RIGHTS => vec![

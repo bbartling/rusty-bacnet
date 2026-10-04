@@ -12,8 +12,8 @@ use super::*;
 use bacnet_types::network_number::NetworkNumber;
 
 /// The number of the network this device is attached to.
-const THIS_NETWORK: u16 = 7;
-const REMOTE_NETWORK: u16 = 5;
+pub(super) const THIS_NETWORK: u16 = 7;
+pub(super) const REMOTE_NETWORK: u16 = 5;
 
 /// A reporter whose notifications are confirmed, so each one shows which
 /// peer its ACK has to come from.
@@ -39,7 +39,9 @@ async fn routed_logger(network: u16) -> Fixture {
     .unwrap()
 }
 
-fn publish(fixture: &Fixture, number: u16) {
+/// Publish `number` as this network's own, as the server's Number worker
+/// would.
+pub(super) fn publish(fixture: &Fixture, number: u16) {
     fixture
         .server
         .test_network()

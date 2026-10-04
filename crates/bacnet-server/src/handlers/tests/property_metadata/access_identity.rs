@@ -121,9 +121,13 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
     if kind == ObjectType::ACCESS_RIGHTS {
         all.push(P::LOG_ENABLE);
     }
+    // And Table 12-38's optional Members and Member_Of (#1394).
+    if kind == ObjectType::ACCESS_USER {
+        all.extend_from_slice(&[P::MEMBERS, P::MEMBER_OF]);
+    }
     let optional: &[P] = match kind {
         ObjectType::ACCESS_CREDENTIAL => &[P::DESCRIPTION],
-        ObjectType::ACCESS_USER => &[P::DESCRIPTION],
+        ObjectType::ACCESS_USER => &[P::DESCRIPTION, P::MEMBERS, P::MEMBER_OF],
         ObjectType::ACCESS_RIGHTS => &[P::DESCRIPTION],
         _ => &[P::DESCRIPTION, P::SUPPORTED_FORMAT_CLASSES],
     };

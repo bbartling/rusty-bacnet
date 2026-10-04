@@ -10,7 +10,9 @@ add_access_door also takes the door's starting Alarm_Values, Fault_Values and
 Masked_Alarm_Values, which keep Door_Alarm_State to the states they admit
 (#1149). A zone's Alarm_Values, written locally, refuses NORMAL as the door's
 lists do (#1401), and add_access_zone(alarm_values=...) sets its starting
-list with the same checks (#1421).
+list with the same checks (#1421). add_access_user(credentials=..., members=...,
+member_of=...) sets the user's lists of Access Credentials and Access Users
+(#1394).
 """
 
 from __future__ import annotations
@@ -44,6 +46,18 @@ LOBBY_POINT_REFERENCE = bytes([0x1C, 0x08, 0x40, 0x00, 0x01])
 REMOTE_POINT_REFERENCE = bytes(
     [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x08, 0x40, 0x00, 0x04]
 )
+BADGE = ObjectIdentifier(ObjectType.ACCESS_CREDENTIAL, 1)
+REMOTE_BADGE = ObjectIdentifier(ObjectType.ACCESS_CREDENTIAL, 4)
+TEAM_MEMBER = ObjectIdentifier(ObjectType.ACCESS_USER, 2)
+REMOTE_TEAM = ObjectIdentifier(ObjectType.ACCESS_USER, 5)
+BADGE_REFERENCE = bytes([0x1C, 0x08, 0x00, 0x00, 0x01])
+REMOTE_BADGE_REFERENCE = bytes(
+    [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x08, 0x00, 0x00, 0x04]
+)
+TEAM_MEMBER_REFERENCE = bytes([0x1C, 0x08, 0xC0, 0x00, 0x02])
+REMOTE_TEAM_REFERENCE = bytes(
+    [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x08, 0xC0, 0x00, 0x05]
+)
 
 
 # Each registration method and its keyword-only arguments.
@@ -62,6 +76,7 @@ KEYWORDS = (
         ],
     ),
     ("add_access_zone", ["entry_points", "exit_points", "alarm_values"]),
+    ("add_access_user", ["credentials", "members", "member_of"]),
     ("add_credential_data_input", ["supported_formats"]),
 )
 
@@ -287,6 +302,58 @@ class AccessControlConfigurationTests(unittest.TestCase):
             with self.assertRaises(BacnetProtocolError) as raised:
                 await server.read_property(
                     ObjectIdentifier(ObjectType.ACCESS_ZONE, 3), entry
+                )
+            self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
+        finally:
+            await server.stop()
+
+    def test_user_lists_reach_the_user_and_name_their_types(self) -> None:
+        asyncio.run(self._user_lists())
+
+    async def _user_lists(self) -> None:
+        server = make_server()
+        server.add_access_user(
+            1,
+            "Jane Doe",
+            credentials=[BADGE, (REMOTE_DEVICE, REMOTE_BADGE)],
+            members=[TEAM_MEMBER],
+            member_of=[(REMOTE_DEVICE, REMOTE_TEAM)],
+        )
+        server.add_access_user(2, "John Doe")
+        # Credentials names Access Credentials, the other two Access Users.
+        for settings in (
+            {"credentials": [TEAM_MEMBER]},
+            {"members": [BADGE]},
+            {"member_of": [(REMOTE_DEVICE, LOBBY_POINT)]},
+        ):
+            with self.subTest(settings=settings):
+                with self.assertRaises(BacnetProtocolError) as raised:
+                    server.add_access_user(3, "Refused", **settings)
+                self.assert_value_out_of_range(raised.exception)
+        with self.assertRaises(ValueError):
+            server.add_access_user(3, "Refused", credentials=[(REMOTE_DOOR, BADGE)])
+        await server.start()
+        try:
+            user = ObjectIdentifier(ObjectType.ACCESS_USER, 1)
+            credentials = PropertyIdentifier.CREDENTIALS
+            # A list of context-tagged references reads back as its octets.
+            for property, expected in (
+                (credentials, BADGE_REFERENCE + REMOTE_BADGE_REFERENCE),
+                (PropertyIdentifier.MEMBERS, TEAM_MEMBER_REFERENCE),
+                (PropertyIdentifier.MEMBER_OF, REMOTE_TEAM_REFERENCE),
+            ):
+                self.assertEqual((await server.read_property(user, property)).value, expected)
+            # A BACnetLIST takes no index.
+            with self.assertRaises(BacnetProtocolError) as raised:
+                await server.read_property(user, credentials, 1)
+            self.assertEqual(
+                raised.exception.error_code, ErrorCode.PROPERTY_IS_NOT_AN_ARRAY.to_raw()
+            )
+            bare = ObjectIdentifier(ObjectType.ACCESS_USER, 2)
+            self.assertEqual((await server.read_property(bare, credentials)).value, [])
+            with self.assertRaises(BacnetProtocolError) as raised:
+                await server.read_property(
+                    ObjectIdentifier(ObjectType.ACCESS_USER, 3), credentials
                 )
             self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_OBJECT.to_raw())
         finally:

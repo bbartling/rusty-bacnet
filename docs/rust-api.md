@@ -195,10 +195,13 @@ read-only; a sourced Present_Value NULL relinquishes the specified priority.
 
 The full server derives remote origins from direct network 0/source MAC or routed
 SNET/SADR, independently of Audit reporting. Address-to-Device correlation is a
-snapshot, not authentication. WP, WPM and CreateObject initial commands use that
-origin. Schedule commands name the initiating Schedule and preserve complete
-target references; Staging commands name the actual plan source after its existing
-generation check. Failed CreateObject initialization rolls back the new object;
+snapshot, not authentication. Once the server knows its own network number, a
+local binding, or a Device binding routed through that number, names a request
+from its MAC with no SNET and one a router relays with that number and MAC as
+SNET and SADR, for the command origin and the target Audit record alike (#1404).
+WP, WPM and CreateObject initial commands use that origin. Schedule commands name
+the initiating Schedule and preserve complete target references; Staging commands
+name the actual plan source after its existing generation check. Failed CreateObject initialization rolls back the new object;
 WPM retains its successful prefix and failed coordinate.
 
 `BACnetServer::write_local` requires a final `LocalCommandSource` argument:
@@ -1968,6 +1971,15 @@ framing, through the shared `bacnet-encoding` codecs.
   network. `AccessZoneObject::set_entry_points` and `set_exit_points` set
   them and return `Result`: a reference to anything but an Access Point is
   VALUE_OUT_OF_RANGE, and the points set before are kept.
+- **Access User `Credentials`, `Members` and `Member_Of`** (Clauses 12.33.12
+  to 12.33.14) are BACnetLISTs of `BACnetDeviceObjectReference`, read-only on
+  the network, so an index is PROPERTY_IS_NOT_AN_ARRAY. Credentials names the
+  user's Access Credentials, and Members and Member_Of the Access Users one
+  level below and above it. `AccessUserObject::set_credentials`,
+  `set_members` and `set_member_of` set them and return `Result`: a reference
+  to another object type (anything but an Access Credential for
+  Credentials, or an Access User for the other two) is VALUE_OUT_OF_RANGE,
+  and the list set before is kept.
 - **Access Rights rules**: `Positive_Access_Rules` and `Negative_Access_Rules`
   are BACnetARRAYs of `bacnet_types::constructed::BACnetAccessRule` (codec
   `bacnet_encoding::constructed::{encode_access_rule, decode_access_rule}`),
@@ -2015,6 +2027,7 @@ framing, through the shared `bacnet-encoding` codecs.
   what it held, whatever the instance number: `set_door_members`,
   `set_access_doors`, `set_access_event`'s credential,
   `AccessZoneObject::set_entry_points` and `set_exit_points`,
+  `AccessUserObject::set_credentials`, `set_members` and `set_member_of`,
   `AccessCredentialObject::set_assigned_access_rights`, the Access Rights
   rules, `StructuredViewObject::add_subordinate` and `set_subordinates`,
   `set_energy_meter_ref`, the Life Safety `add_member` and `add_zone_member`,

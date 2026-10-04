@@ -126,6 +126,26 @@ fn checked_reliability(reliability: Reliability) -> Result<Reliability, Error> {
     }
 }
 
+/// The references a setter of one of the reference lists or arrays stores,
+/// each naming an object of `object_type` in this device or in the Device its
+/// device identifier names. A reference to another object type, or one whose
+/// device identifier isn't a Device (the shared `check_device_member`), is
+/// VALUE_OUT_OF_RANGE, so the setter keeps what it held.
+fn references_to(
+    object_type: ObjectType,
+    references: impl IntoIterator<Item = impl Into<BACnetDeviceObjectReference>>,
+) -> Result<Vec<BACnetDeviceObjectReference>, Error> {
+    let references: Vec<BACnetDeviceObjectReference> =
+        references.into_iter().map(Into::into).collect();
+    for reference in &references {
+        crate::device_reference::check_device_member(reference.device_identifier)?;
+        if reference.object_identifier.object_type() != object_type {
+            return Err(common::value_out_of_range_error());
+        }
+    }
+    Ok(references)
+}
+
 // ---------------------------------------------------------------------------
 
 mod credential;
@@ -182,6 +202,8 @@ mod point_status_tests;
 mod tests;
 #[cfg(test)]
 mod typed_value_tests;
+#[cfg(test)]
+mod user_references_tests;
 #[cfg(test)]
 mod zone_event_tests;
 #[cfg(test)]

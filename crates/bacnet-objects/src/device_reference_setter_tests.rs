@@ -7,7 +7,9 @@ use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList, BACnetSta
 use bacnet_types::enums::{ErrorClass, EventType, ObjectType, PropertyIdentifier};
 
 use super::*;
-use crate::access_control::{AccessDoorObject, AccessPointObject, AccessZoneObject};
+use crate::access_control::{
+    AccessDoorObject, AccessPointObject, AccessUserObject, AccessZoneObject,
+};
 use crate::channel::ChannelObject;
 use crate::command::CommandObject;
 use crate::elevator::LiftObject;
@@ -125,7 +127,7 @@ fn action_command(device: Option<ObjectIdentifier>) -> BACnetActionCommand {
     }
 }
 
-const SETTERS: [Setter; 15] = [
+const SETTERS: [Setter; 18] = [
     Setter {
         name: "EventEnrollmentObject::set_object_property_reference",
         set: |device| {
@@ -255,6 +257,36 @@ const SETTERS: [Setter; 15] = [
             let zone = AccessZoneObject::new(1, "AZ-1").unwrap();
             outcome(zone, P::EXIT_POINTS, |zone| {
                 zone.set_exit_points([object_reference(ObjectType::ACCESS_POINT, device)])
+            })
+        },
+        remote: true,
+    },
+    Setter {
+        name: "AccessUserObject::set_credentials",
+        set: |device| {
+            let user = AccessUserObject::new(1, "AU-1").unwrap();
+            outcome(user, P::CREDENTIALS, |user| {
+                user.set_credentials([object_reference(ObjectType::ACCESS_CREDENTIAL, device)])
+            })
+        },
+        remote: true,
+    },
+    Setter {
+        name: "AccessUserObject::set_members",
+        set: |device| {
+            let user = AccessUserObject::new(1, "AU-1").unwrap();
+            outcome(user, P::MEMBERS, |user| {
+                user.set_members([object_reference(ObjectType::ACCESS_USER, device)])
+            })
+        },
+        remote: true,
+    },
+    Setter {
+        name: "AccessUserObject::set_member_of",
+        set: |device| {
+            let user = AccessUserObject::new(1, "AU-1").unwrap();
+            outcome(user, P::MEMBER_OF, |user| {
+                user.set_member_of([object_reference(ObjectType::ACCESS_USER, device)])
             })
         },
         remote: true,

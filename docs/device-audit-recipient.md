@@ -24,7 +24,10 @@ The standalone target uses immutable explicitly configured local or routed Devic
 bindings. A routed binding whose network is this device's own number, once the
 server knows it, names a device on the local network: each notification goes to
 the binding's final MAC with no DNET, not through its router, and a confirmed one
-is answered from that MAC (#1358). The route is resolved for each notification,
+is answered from that MAC (#1358). A request from that MAC is tied to the bound
+Device the same way, whether it comes with no SNET or through a router that adds
+this network's number and that MAC as SNET and SADR, so the records it causes
+name that Device as their source (#1404). The route is resolved for each notification,
 so a number learned after startup applies from the next one; a notification
 already queued or sent keeps its route. The endpoint source uses `BipEndpointBuilder::source_audit_device_binding`
 for direct IPv4 Device route facts. Observed I-Am entries are not eligible. An unresolved Device provision

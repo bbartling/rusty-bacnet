@@ -1,9 +1,10 @@
 //! Registration of the access-control objects whose arrays and lists the
 //! application configures: Access Door Door_Members, Access Point
 //! Access_Doors and Credential Data Input Supported_Formats with
-//! Supported_Format_Classes (#1249), and Access Zone Entry_Points and
-//! Exit_Points (#1306). Each is read-only over the network, so these keyword
-//! arguments are the Python route to it. The Access Point's policy count,
+//! Supported_Format_Classes (#1249), Access Zone Entry_Points and
+//! Exit_Points (#1306), and Access User Credentials, Members and Member_Of
+//! (#1394). Each is read-only over the network, so these keyword arguments
+//! are the Python route to it. The Access Point's policy count,
 //! supported authorization modes and Priority_For_Writing are read-only
 //! too, and take keyword arguments the same way (#1307). The Access Door's
 //! Alarm_Values, Fault_Values and Masked_Alarm_Values (#1149), and the
@@ -17,9 +18,10 @@ use bacnet_types::enums::{
 };
 use bacnet_types::error::Error;
 
-/// One element of Door_Members, Access_Doors, Entry_Points or Exit_Points as
-/// Python gives it: an object in this device, or a `(device, object)` pair
-/// naming an object in another device.
+/// One element of a reference array or list (Door_Members, Access_Doors,
+/// Entry_Points, Exit_Points and the Access User lists) as Python gives it:
+/// an object in this device, or a `(device, object)` pair naming an object
+/// in another device.
 #[derive(FromPyObject)]
 enum PyDeviceObjectReference {
     Local(PyObjectIdentifier),
@@ -222,6 +224,33 @@ impl BACnetServer {
         self.push_pending(Box::new(obj))
     }
 
+    /// Add an Access User object to the server (before starting).
+    ///
+    /// `credentials` sets Credentials, the Access Credential objects the
+    /// user holds, and `members` and `member_of` set Members and Member_Of,
+    /// the Access Users one level below and above this one, in the element
+    /// forms an Access Door's `door_members` takes (#1394). A pair whose
+    /// device isn't a Device raises ValueError, and a reference to anything
+    /// but an Access Credential in `credentials`, or an Access User in the
+    /// other two, raises VALUE_OUT_OF_RANGE.
+    #[pyo3(signature = (instance, name, *, credentials=None, members=None, member_of=None))]
+    fn add_access_user(
+        &self,
+        instance: u32,
+        name: &str,
+        credentials: Option<Vec<PyDeviceObjectReference>>,
+        members: Option<Vec<PyDeviceObjectReference>>,
+        member_of: Option<Vec<PyDeviceObjectReference>>,
+    ) -> PyResult<()> {
+        let settings = UserSettings {
+            credentials: device_references(credentials, "credentials")?,
+            members: device_references(members, "members")?,
+            member_of: device_references(member_of, "member_of")?,
+        };
+        let obj = access_user(instance, name, settings).map_err(to_py_err)?;
+        self.push_pending(Box::new(obj))
+    }
+
     /// Add a Credential Data Input object to the server (before starting).
     ///
     /// `supported_formats` sets Supported_Formats and Supported_Format_Classes
@@ -335,6 +364,35 @@ fn access_zone(
     }
     if let Some(values) = settings.alarm_values {
         obj.set_alarm_values(values.into_iter().map(AccessZoneOccupancyState::from_raw))?;
+    }
+    Ok(obj)
+}
+
+/// The optional `add_access_user` keyword arguments; `None` keeps the
+/// user's empty list.
+#[derive(Default)]
+struct UserSettings {
+    credentials: Option<Vec<BACnetDeviceObjectReference>>,
+    members: Option<Vec<BACnetDeviceObjectReference>>,
+    member_of: Option<Vec<BACnetDeviceObjectReference>>,
+}
+
+/// Build an Access User, applying its three reference lists through its
+/// validating setters.
+fn access_user(
+    instance: u32,
+    name: &str,
+    settings: UserSettings,
+) -> Result<AccessUserObject, Error> {
+    let mut obj = AccessUserObject::new(instance, name)?;
+    if let Some(credentials) = settings.credentials {
+        obj.set_credentials(credentials)?;
+    }
+    if let Some(members) = settings.members {
+        obj.set_members(members)?;
+    }
+    if let Some(groups) = settings.member_of {
+        obj.set_member_of(groups)?;
     }
     Ok(obj)
 }
