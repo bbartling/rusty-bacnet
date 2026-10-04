@@ -2579,7 +2579,9 @@ that cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM, and
 nothing changes. Once a write has set an array or Enable, the saved value
 wins at every later start: the keyword for it is still checked, but not
 applied. A keyword whose property no write has set applies as usual, and
-keyword values are never saved. `storage_path` takes a `str` (a
+keyword values alone are never saved, but a write saves the whole array it
+leaves, so an element write also saves the keyword rules it didn't touch.
+`storage_path` takes a `str` (a
 `pathlib.Path` raises `TypeError`). Give each object its own file: the file
 records which object it belongs to, so two objects sharing a path fail to
 register after a restart. A file this backend did not write, or a corrupt

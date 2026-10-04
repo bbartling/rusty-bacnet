@@ -3030,7 +3030,9 @@ puts storage back to the served state on release, after its lifetime, at
 configuration: once a write has set a property and it was saved,
 `property_saved(property)` is true, and that property's setter
 (`set_positive_access_rules`, `set_negative_access_rules` or `set_enable`)
-checks its argument without storing it. Configured values are never saved.
+checks its argument without storing it. Configuration alone is never saved,
+but a write saves the whole array it leaves: an element or index-0 write to
+an array no write has set yet saves the configured rules it didn't touch too.
 `wait_for_saves()` blocks until queued saves have run. Like a
 `NotificationClass`, an `AccessRightsObject` is not `UnwindSafe` or
 `RefUnwindSafe`.

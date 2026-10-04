@@ -3363,11 +3363,11 @@
     "docs/python-api.md#access-control"
    ],
    "notes": [
-    "Clause 12.34 sets no restart rule; the stack keeps written rules because peers provision Access Rights over the network. Configured rules and Enable are never saved.",
+    "Clause 12.34 sets no restart rule; the stack keeps written rules because peers provision Access Rights over the network. Configuration alone is never saved; a write saves the whole array it leaves.",
     "Each array and Enable is saved once a write sets it, whole, by element or by an index-0 resize. From then on the saved value wins at every start, and that property's setter only checks.",
     "The server stages WriteProperty, WritePropertyMultiple and `write_local` writes and saves with the database guard dropped; a request's later writes to the object, and WritePropertyMultiple under a mutation authorizer, save in place.",
     "A state that cannot be saved is refused with DEVICE / OPERATIONAL_PROBLEM and nothing changes. A staged write never made puts storage back on release, after its lifetime, at `stop()`, or on drop.",
-    "`FileAccessRightsPersistence` writes `RBNACR01`: each written member BACnet-encoded, the arrays framed by context tags 0 and 1, Enable a BOOLEAN tagged 2. It refuses a file past 128 KiB, 1024 rules per array, or another object's."
+    "`FileAccessRightsPersistence` writes `RBNACR01`: each written member BACnet-encoded, the arrays framed by context tags 0 and 1, Enable a BOOLEAN tagged 2. It refuses a file past 128 KiB, more than 1024 rules per array, or another object's."
    ],
    "gaps": []
   },

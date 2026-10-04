@@ -26,7 +26,9 @@
 //! A written value wins over what the application configures: once a write
 //! has set a property and it was saved, a rebuilt object serves the saved
 //! value, and that property's setter checks what it is given without
-//! storing it. Configured rules and a configured Enable are never saved.
+//! storing it. Configuration alone is never saved, but a write saves the
+//! whole array it leaves, so an element or index-0 write to an array no
+//! write has set yet also saves the configured rules it didn't touch.
 
 use std::sync::Arc;
 use std::time::Duration;
