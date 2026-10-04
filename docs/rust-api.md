@@ -2210,8 +2210,7 @@ the server has stopped, so `stop()`, after joining its requests, drops a
 staged write still held and waits until storage holds the served list again,
 and a class dropped with one still held saves the served list as it goes,
 unless the staged save failed (#1363). `wait_for_saves()` blocks until queued
-saves have run, and dropping the class waits for them too. Like the forwarder,
-a `NotificationClass` is not `UnwindSafe` or `RefUnwindSafe`.
+saves have run, and dropping the class waits for them too.
 
 A written list wins over `add_destination`, as on the forwarder:
 `NotificationClassSnapshot::recipient_list` stays `None` until a write sets
@@ -3113,9 +3112,7 @@ configuration: once a write has set a property and it was saved,
 `set_accompaniment`) checks its argument without storing it. Configuration alone is never saved,
 but a write saves the whole array it leaves: an element or index-0 write to
 an array no write has set yet saves the configured rules it didn't touch too.
-`wait_for_saves()` blocks until queued saves have run. Like a
-`NotificationClass`, an `AccessRightsObject` is not `UnwindSafe` or
-`RefUnwindSafe`.
+`wait_for_saves()` blocks until queued saves have run.
 
 Access Door, Access Point and Credential Data Input support COV (Table 13-1).
 A door's SubscribeCOV report carries Present_Value, Status_Flags and
