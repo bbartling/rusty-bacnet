@@ -105,7 +105,7 @@ async def present_value(server: BACnetServer, oid: ObjectIdentifier):
 
 async def first_seen(server: BACnetServer, expected: dict) -> dict:
     """Poll each object's Present_Value until it holds the expected value;
-    the monotonic time each was first seen holding it."""
+    the `time.perf_counter()` time each was first seen holding it."""
     seen: dict = {}
     deadline = time.monotonic() + DEADLINE
     while len(seen) < len(expected):
@@ -114,7 +114,7 @@ async def first_seen(server: BACnetServer, expected: dict) -> dict:
             raise AssertionError(f"{missing} never took their values")
         for oid, value in expected.items():
             if oid not in seen and await present_value(server, oid) == value:
-                seen[oid] = time.monotonic()
+                seen[oid] = time.perf_counter()
         await asyncio.sleep(0.01)
     return seen
 
@@ -237,7 +237,10 @@ class ChannelMembersTests(unittest.IsolatedAsyncioTestCase):
 
         async def check(client, address, read) -> None:
             self.assertEqual(await read(CH1, P.EXECUTION_DELAY), [0, delay_ms])
-            start = time.monotonic()
+            # perf_counter, not monotonic: on Windows before Python 3.13,
+            # monotonic moves in ~15.6 ms steps, so a difference of two
+            # readings can come out short of the delay (#1454).
+            start = time.perf_counter()
             await client.write_property(address, CH1, PV, PropertyValue.real(55.0))
             seen = await first_seen(self.server, {AO1: 55.0, AV1: 55.0})
             # The delay counts from the distribution's start, after `start`,
