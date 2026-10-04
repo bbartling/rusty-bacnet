@@ -25,7 +25,9 @@
 //! fixed-size context-tagged member (an object identifier, REAL, BOOLEAN, or
 //! any type read with [`decode_ctx_fixed`]) has its length checked against
 //! the header before its contents are read, so a wrong length is reported as
-//! such even when the data also stops early.
+//! such even when the data also stops early. So does a fixed-size
+//! application-tagged member read with [`decode_app_fixed`] or
+//! [`decode_app_object_id`].
 //!
 //! One exception remains: a member cut short inside a constructed frame is
 //! found while [`decode_ctx_constructed`] or `decode_framed_value` extracts
@@ -34,10 +36,11 @@
 //! fits.
 //!
 //! The helpers another crate needs are public: the peeks for an optional
-//! member, a frame's body, the context readers for contents, fixed-size
-//! contents, Unsigned or ENUMERATED values, REAL, BOOLEAN and object
-//! identifiers, the application readers, and the trailing-data check. The
-//! rest stay private to this crate.
+//! member, a frame's opening and closing tags and its body, the context
+//! readers for contents, fixed-size contents, Unsigned or ENUMERATED values,
+//! REAL, BOOLEAN, BIT STRING, OCTET STRING, CharacterString and object
+//! identifiers, the optional-member wrapper, the application readers, and
+//! the trailing-data check. The rest stay private to this crate.
 //!
 //! ```
 //! use bacnet_encoding::constructed::tagged::{decode_ctx_unsigned, expect_end, next_is_context};
@@ -88,6 +91,16 @@ pub fn next_is_opening(data: &[u8], offset: usize, tag: u8) -> Result<bool, Erro
     next_tag_is(data, offset, |t| t.is_opening_tag(tag))
 }
 
+/// Whether an application tag `number` (one of [`tags::app_tag`]) starts at
+/// `offset`; `false` at the end of the data, so an optional
+/// application-tagged member may be the last one. A malformed tag there is an
+/// error.
+pub fn next_is_application(data: &[u8], offset: usize, number: u8) -> Result<bool, Error> {
+    next_tag_is(data, offset, |t| {
+        t.class == TagClass::Application && t.number == number
+    })
+}
+
 /// Whether a closing context tag `tag` starts at `offset`, for walking the
 /// items inside a frame. Unlike [`next_is_context`], running out of data is
 /// an error: the frame never closed.
@@ -101,12 +114,7 @@ pub(crate) fn next_is_closing(data: &[u8], offset: usize, tag: u8) -> Result<boo
 
 /// Require an opening context tag `tag` at `offset`; return the offset of its
 /// content.
-pub(crate) fn expect_opening(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    what: &str,
-) -> Result<usize, Error> {
+pub fn expect_opening(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<usize, Error> {
     let (t, pos) = tags::decode_tag(data, offset)?;
     if !t.is_opening_tag(tag) {
         return Err(Error::decoding(
@@ -118,12 +126,7 @@ pub(crate) fn expect_opening(
 }
 
 /// Require a closing context tag `tag` at `offset`; return the offset past it.
-pub(crate) fn expect_closing(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    what: &str,
-) -> Result<usize, Error> {
+pub fn expect_closing(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<usize, Error> {
     let (t, pos) = tags::decode_tag(data, offset)?;
     if !t.is_closing_tag(tag) {
         return Err(Error::decoding(
@@ -327,7 +330,7 @@ pub fn decode_ctx_object_id(
 
 /// Require a primitive context tag `tag` at `offset` holding a BIT STRING;
 /// returns its unused-bit count and data octets.
-pub(crate) fn decode_ctx_bit_string(
+pub fn decode_ctx_bit_string(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -340,7 +343,7 @@ pub(crate) fn decode_ctx_bit_string(
 
 /// Require a primitive context tag `tag` at `offset` holding an OCTET STRING;
 /// returns a copy of its octets.
-pub(crate) fn decode_ctx_octet_string(
+pub fn decode_ctx_octet_string(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -353,7 +356,7 @@ pub(crate) fn decode_ctx_octet_string(
 
 /// Require a primitive context tag `tag` at `offset` holding a
 /// CharacterString.
-pub(crate) fn decode_ctx_character_string(
+pub fn decode_ctx_character_string(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -365,12 +368,14 @@ pub(crate) fn decode_ctx_character_string(
 
 /// Read the optional member under primitive context tag `tag` with `decode`
 /// when that tag comes next; otherwise `None` with the offset unchanged.
-pub(crate) fn decode_optional_ctx<T>(
-    data: &[u8],
+/// What `decode` returns may borrow from `data`, so [`decode_ctx_primitive`]
+/// yields the member's contents.
+pub fn decode_optional_ctx<'a, T>(
+    data: &'a [u8],
     offset: usize,
     tag: u8,
     what: &str,
-    decode: impl FnOnce(&[u8], usize, u8, &str) -> Result<(T, usize), Error>,
+    decode: impl FnOnce(&'a [u8], usize, u8, &str) -> Result<(T, usize), Error>,
 ) -> Result<(Option<T>, usize), Error> {
     if !next_is_context(data, offset, tag)? {
         return Ok((None, offset));
@@ -514,6 +519,14 @@ pub fn decode_app_primitive<'a>(
     number: u8,
     what: &str,
 ) -> Result<(&'a [u8], usize), Error> {
+    let (t, start) = app_header(data, offset, number, what)?;
+    contents(data, start, t.length)
+}
+
+/// Require an application tag `number` at `offset`; return its header and
+/// the offset of its contents. A BOOLEAN has none (see
+/// [`decode_app_primitive`]).
+fn app_header(data: &[u8], offset: usize, number: u8, what: &str) -> Result<(Tag, usize), Error> {
     if number == tags::app_tag::BOOLEAN {
         return Err(Error::decoding(
             offset,
@@ -527,7 +540,43 @@ pub fn decode_app_primitive<'a>(
             format!("{what}: expected application-tagged {}", app_kind(number)),
         ));
     }
-    contents(data, start, t.length)
+    Ok((t, start))
+}
+
+/// Require an application tag `number` at `offset` holding exactly `octets`
+/// contents octets; return them and the offset past them. As with
+/// [`decode_ctx_fixed`], a header announcing any other length is
+/// [`Error::Decoding`] even when the data also stops early.
+pub fn decode_app_fixed<'a>(
+    data: &'a [u8],
+    offset: usize,
+    number: u8,
+    octets: u32,
+    what: &str,
+) -> Result<(&'a [u8], usize), Error> {
+    let (t, start) = app_header(data, offset, number, what)?;
+    if t.length != octets {
+        return Err(Error::decoding(
+            offset,
+            format!(
+                "{what}: {} has {} contents octets, expected {octets}",
+                app_kind(number),
+                t.length
+            ),
+        ));
+    }
+    contents(data, start, octets)
+}
+
+/// Require an application-tagged object identifier, four contents octets,
+/// at `offset`.
+pub fn decode_app_object_id(
+    data: &[u8],
+    offset: usize,
+    what: &str,
+) -> Result<(ObjectIdentifier, usize), Error> {
+    let (octets, end) = decode_app_fixed(data, offset, tags::app_tag::OBJECT_IDENTIFIER, 4, what)?;
+    Ok((ObjectIdentifier::decode(octets)?, end))
 }
 
 /// Decode one application-tagged Unsigned that fits `T`. Leading zero octets
@@ -546,7 +595,7 @@ pub fn decode_app_unsigned<T: UnsignedWidth>(
 }
 
 /// Decode one application-tagged BIT STRING (`SEQUENCE OF BIT STRING` item).
-pub(crate) fn decode_app_bit_string(
+pub fn decode_app_bit_string(
     data: &[u8],
     offset: usize,
     what: &str,
@@ -599,7 +648,7 @@ fn narrow_app<T: UnsignedWidth>(
 }
 
 /// Decode one application-tagged CharacterString.
-pub(crate) fn decode_app_character_string(
+pub fn decode_app_character_string(
     data: &[u8],
     offset: usize,
     what: &str,
