@@ -145,7 +145,7 @@ pub(crate) fn with_sc_port(
 ///
 /// Truth direction stays identity-first: Device Object_List is seeded with
 /// Device + ports + extras upfront. Duplicate names map to ValueError (server
-/// parity: `ObjectDatabase::add` reports `Error::Protocol { OBJECT,
+/// parity: `ObjectDatabase::add` reports `Error::Protocol { PROPERTY,
 /// DUPLICATE_NAME }`, never an Encoding string).
 pub(crate) fn build_database(
     identity: &DeviceIdentity,
@@ -153,7 +153,7 @@ pub(crate) fn build_database(
 ) -> PyResult<ObjectDatabase> {
     build_database_with_extra(identity, extra).map_err(|e| match &e {
         bacnet_types::error::Error::Protocol { class, code }
-            if *class == u32::from(ErrorClass::OBJECT.to_raw())
+            if *class == u32::from(ErrorClass::PROPERTY.to_raw())
                 && *code == u32::from(ErrorCode::DUPLICATE_NAME.to_raw()) =>
         {
             PyValueError::new_err(format!("duplicate object name: {e}"))
