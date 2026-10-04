@@ -1,8 +1,9 @@
 //! GetAlarmSummary service per ASHRAE 135-2020 Clause 13.10 (deprecated).
 
+use bacnet_encoding::constructed::tagged::{
+    decode_app_bit_string, decode_app_enumerated, decode_app_object_id,
+};
 use bacnet_encoding::primitives;
-use bacnet_encoding::tags;
-use bacnet_encoding::tags::{app_tag, TagClass};
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::EventState;
 use bacnet_types::error::Error;
@@ -59,73 +60,19 @@ impl GetAlarmSummaryAck {
                 return Err(Error::decoding(offset, "AlarmSummaryAck too many entries"));
             }
 
-            // objectIdentifier (app)
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            if tag.class != TagClass::Application
-                || tag.number != app_tag::OBJECT_IDENTIFIER
-                || data[offset] & 0x07 > 5
-            {
-                return Err(Error::decoding(
-                    offset,
-                    "AlarmSummaryAck expected object-id application tag",
-                ));
-            }
-            let end = pos + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(
-                    pos,
-                    "AlarmSummaryAck truncated at object-id",
-                ));
-            }
-            let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-            offset = end;
-
-            // alarmState (app enumerated)
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            if tag.class != TagClass::Application
-                || tag.number != app_tag::ENUMERATED
-                || data[offset] & 0x07 > 5
-            {
-                return Err(Error::decoding(
-                    offset,
-                    "AlarmSummaryAck expected enumerated application tag",
-                ));
-            }
-            let end = pos + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(
-                    pos,
-                    "AlarmSummaryAck truncated at alarmState",
-                ));
-            }
-            let alarm_state = primitives::decode_unsigned(&data[pos..end])?;
-            let alarm_state = u32::try_from(alarm_state)
-                .map(EventState::from_raw)
-                .map_err(|_| Error::decoding(pos, "AlarmSummaryAck alarmState exceeds u32"))?;
-            offset = end;
-
-            // acknowledgedTransitions (app bitstring)
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            if tag.class != TagClass::Application
-                || tag.number != app_tag::BIT_STRING
-                || data[offset] & 0x07 > 5
-            {
-                return Err(Error::decoding(
-                    offset,
-                    "AlarmSummaryAck expected bit-string application tag",
-                ));
-            }
-            let end = pos + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(
-                    pos,
-                    "AlarmSummaryAck truncated at acknowledgedTransitions",
-                ));
-            }
-            let (unused_bits, transitions) = primitives::decode_bit_string(&data[pos..end])?;
+            // objectIdentifier, alarmState, acknowledgedTransitions (all
+            // application-tagged)
+            let (object_identifier, end) =
+                decode_app_object_id(data, offset, "AlarmSummaryAck object-id")?;
+            let (alarm_state, end) =
+                decode_app_enumerated::<u32>(data, end, "AlarmSummaryAck alarmState")?;
+            let alarm_state = EventState::from_raw(alarm_state);
+            let transitions_at = end;
+            let ((unused_bits, transitions), end) =
+                decode_app_bit_string(data, end, "AlarmSummaryAck acknowledgedTransitions")?;
             if unused_bits != 5 || transitions.len() != 1 || transitions[0] & 0x1F != 0 {
                 return Err(Error::decoding(
-                    pos,
+                    transitions_at,
                     "AlarmSummaryAck acknowledgedTransitions must contain three bits with zero padding",
                 ));
             }
@@ -146,6 +93,7 @@ impl GetAlarmSummaryAck {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_encoding::tags::{self, app_tag, TagClass};
     use bacnet_types::enums::ObjectType;
 
     fn ack_with_fields(state: &[u8], unused_bits: u8, transitions: &[u8]) -> BytesMut {

@@ -6536,9 +6536,14 @@
     "crates/bacnet-encoding/src/constructed/tests/tagged.rs::{application_primitives_read_any_type_and_name_the_expected_one,application_unsigned_values_narrow_to_their_width,an_application_boolean_has_no_contents_to_read,fixed_size_contents_check_their_length_first}",
     "crates/bacnet-services/src/truncated_member_tests.rs::{members_cut_short_are_a_short_buffer,fixed_size_members_of_the_wrong_length_stay_malformed_when_cut_short,confirmed_cov_notification_rejects_keep_their_reasons,reals_and_times_check_their_length_before_their_contents}",
     "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{service_parameters_cut_short_draw_services_other,subscribe_cov_property_multiple_process_cut_short_draws_the_general_error,malformed_and_cut_short_requests_draw_the_same_reply}",
-    "crates/bacnet-services/src/malformed_member_tests/object.rs::delete_object_request",
-    "crates/bacnet-services/src/malformed_member_tests/discovery.rs::i_have_request",
-    "crates/bacnet-server/src/server/mistagged_request_wire_tests.rs::mistagged_delete_object_draws_services_other"
+    "crates/bacnet-services/src/malformed_member_tests/object.rs::{read_property_request,read_property_ack,write_property_request,read_property_multiple_ack,create_object_request,delete_object_request,list_element_request}",
+    "crates/bacnet-services/src/malformed_member_tests/discovery.rs::{who_is_request,i_am_request,who_has_request,i_have_request,you_are_request}",
+    "crates/bacnet-services/src/malformed_member_tests/device.rs::{device_communication_control_request,reinitialize_device_request,time_synchronization_request,private_transfer_request_and_ack,text_message_request}",
+    "crates/bacnet-services/src/malformed_member_tests/summary.rs::{get_alarm_summary_ack,get_enrollment_summary_request,get_enrollment_summary_ack,vt_data_ack}",
+    "crates/bacnet-services/src/malformed_member_tests/file.rs::atomic_write_file_ack",
+    "crates/bacnet-encoding/src/constructed/tests/tagged.rs::{fixed_size_application_items_check_their_length_first,an_optional_primitive_yields_its_contents_or_nothing,an_application_peek_matches_only_its_own_type}",
+    "crates/bacnet-server/src/server/mistagged_request_wire_tests.rs::mistagged_delete_object_draws_services_other",
+    "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{inline_members_cut_short_draw_services_other,create_object_and_list_requests_cut_short_draw_their_formal_errors}"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -6554,9 +6559,11 @@
     "A fixed-size context member (object identifier, REAL, BOOLEAN, a lighting-command level) has its length checked before its contents, so a wrong length is Error::Decoding even when the data also stops early.",
     "A member cut short inside a constructed frame is caught when the frame is extracted (tags::extract_context_value), which reports Error::Decoding.",
     "The server answers a ReadPropertyMultiple, SubscribeCOVProperty or ConfirmedAuditNotification cut short with SERVICES / OTHER, and a SubscribeCOVPropertyMultiple with its general error, whichever kind the decoder reports.",
-    "A service parameter member that bacnet-services reads through the same public helpers (constructed::tagged) is Error::BufferTooShort when cut short; members it still reads inline report Error::Decoding.",
+    "bacnet-services reads its service parameter members with the same public helpers (constructed::tagged), so one cut short outside a constructed frame is Error::BufferTooShort; AtomicReadFile-ACK's application BOOLEAN has no contents to cut.",
     "A ReadProperty, WriteProperty, ReadRange, SubscribeCOV, SubscribeCOVProperty, AcknowledgeAlarm, GetEventInformation, LifeSafetyOperation or AuditLogQuery cut short draws SERVICES / OTHER from the server.",
-    "DeleteObject and I-Have requests refuse an object identifier or object name under any tag but its application tag; the server answers such a DeleteObject with SERVICES / OTHER and deletes nothing."
+    "DeleteObject and I-Have requests refuse an object identifier or object name under any tag but its application tag; the server answers such a DeleteObject with SERVICES / OTHER and deletes nothing.",
+    "A fixed-size application-tagged service member (an object identifier, Date or Time) has its length checked before its contents, as the context ones do; decode_application_value still reads contents first.",
+    "A DeviceCommunicationControl, ReinitializeDevice, ConfirmedTextMessage, GetEnrollmentSummary, DeleteObject, AtomicReadFile, AtomicWriteFile, CreateObject or list-service request cut short draws SERVICES / OTHER, or its formal error, from the server."
    ]
   },
   {

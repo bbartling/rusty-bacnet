@@ -267,7 +267,8 @@ fn dcc_configured_validation_retains_decode_password_unknown_mode_precedence() {
             &password,
             policy,
         );
-        assert!(matches!(invalid, Err(Error::Decoding { .. })));
+        // `[1]` announces one contents octet and holds none (#1374).
+        assert!(matches!(invalid, Err(Error::BufferTooShort { .. })));
         let unknown = &[0x19, 3];
         let error = handlers::handle_device_communication_control_with_policy(
             unknown, &state, &password, policy,

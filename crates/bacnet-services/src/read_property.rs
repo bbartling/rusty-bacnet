@@ -1,13 +1,15 @@
 //! ReadProperty service per ASHRAE 135-2020 Clause 15.5.
 
 use bacnet_encoding::primitives;
-use bacnet_encoding::tags::{self, TagClass};
+use bacnet_encoding::tags;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use bacnet_encoding::constructed::tagged::decode_ctx_unsigned;
+use bacnet_encoding::constructed::tagged::{
+    decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx, expect_end, expect_opening,
+};
 use bacnet_encoding::constructed::{extract_property_value, PropertyValueBoundary};
 
 // ---------------------------------------------------------------------------
@@ -41,50 +43,21 @@ impl ReadPropertyRequest {
 
     /// Decode the request from service-request octets; fails on malformed or truncated input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
         // [0] object-identifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(0) {
-            return Err(Error::decoding(
-                offset,
-                "ReadProperty request expected context tag 0 for object-id",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "ReadProperty request truncated at object-id",
-            ));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
+        let (object_identifier, offset) =
+            decode_ctx_object_id(data, 0, 0, "ReadProperty request object-id")?;
 
         // [1] property-identifier
-        let (prop_raw, end) =
+        let (prop_raw, offset) =
             decode_ctx_unsigned::<u32>(data, offset, 1, "ReadProperty request property-id")?;
         let property_identifier = PropertyIdentifier::from_raw(prop_raw);
-        offset = end;
 
-        // [2] propertyArrayIndex (optional)
+        // [2] propertyArrayIndex (optional), and nothing after it
         let mut property_array_index = None;
         if offset < data.len() {
-            let (tag, _) = tags::decode_tag(data, offset)?;
-            if !tag.is_context(2) {
-                return Err(Error::decoding(
-                    offset,
-                    "ReadProperty request expected context tag 2 for array-index",
-                ));
-            }
             let (index, end) =
                 decode_ctx_unsigned::<u32>(data, offset, 2, "ReadProperty request array-index")?;
-            if end != data.len() {
-                return Err(Error::decoding(
-                    end,
-                    "ReadProperty request has trailing data",
-                ));
-            }
+            expect_end(data, end, end, "ReadProperty request")?;
             property_array_index = Some(index);
         }
 
@@ -136,74 +109,29 @@ impl ReadPropertyACK {
     /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
     /// input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let mut offset = 0;
-
         // [0] object-identifier
-        let (tag, pos) = tags::decode_tag(data, offset)?;
-        if !tag.is_context(0) {
-            return Err(Error::decoding(
-                offset,
-                "ReadPropertyACK expected context tag 0 for object-id",
-            ));
-        }
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::decoding(
-                pos,
-                "ReadPropertyACK truncated at object-id",
-            ));
-        }
-        let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-        offset = end;
+        let (object_identifier, offset) =
+            decode_ctx_object_id(data, 0, 0, "ReadPropertyACK object-id")?;
 
         // [1] property-identifier
-        let (prop_raw, end) =
+        let (prop_raw, offset) =
             decode_ctx_unsigned::<u32>(data, offset, 1, "ReadPropertyACK property-id")?;
         let property_identifier = PropertyIdentifier::from_raw(prop_raw);
-        offset = end;
 
-        // [2] propertyArrayIndex (optional) or [3] opening tag
-        let mut property_array_index = None;
-        let (tag, tag_end) = tags::decode_tag(data, offset)?;
-        if tag.class == TagClass::Context && tag.number == 2 && !tag.is_opening && !tag.is_closing {
-            let (index, end) =
-                decode_ctx_unsigned::<u32>(data, offset, 2, "ReadPropertyACK array-index")?;
-            property_array_index = Some(index);
-            offset = end;
-            let (tag, tag_end) = tags::decode_tag(data, offset)?;
-            if !tag.is_opening_tag(3) {
-                return Err(Error::decoding(
-                    offset,
-                    "ReadPropertyACK expected opening tag 3",
-                ));
-            }
-            let (value_bytes, end) = extract_property_value(
-                data,
-                tag_end,
-                3,
-                property_identifier,
-                &[PropertyValueBoundary::End],
-            )?;
-            if end != data.len() {
-                return Err(Error::decoding(end, "ReadPropertyACK has trailing data"));
-            }
-            return Ok(Self {
-                object_identifier,
-                property_identifier,
-                property_array_index,
-                property_value: value_bytes.to_vec(),
-            });
-        }
+        // [2] propertyArrayIndex (optional)
+        let (property_array_index, offset) = decode_optional_ctx(
+            data,
+            offset,
+            2,
+            "ReadPropertyACK array-index",
+            decode_ctx_unsigned::<u32>,
+        )?;
 
-        if !tag.is_opening_tag(3) {
-            return Err(Error::decoding(
-                offset,
-                "ReadPropertyACK expected opening tag 3",
-            ));
-        }
+        // [3] propertyValue, and nothing after it
+        let content = expect_opening(data, offset, 3, "ReadPropertyACK property-value")?;
         let (value_bytes, end) = extract_property_value(
             data,
-            tag_end,
+            content,
             3,
             property_identifier,
             &[PropertyValueBoundary::End],
@@ -224,6 +152,7 @@ impl ReadPropertyACK {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bacnet_encoding::tags::TagClass;
     use bacnet_types::enums::ObjectType;
 
     fn object_id() -> ObjectIdentifier {

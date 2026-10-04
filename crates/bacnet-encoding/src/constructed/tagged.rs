@@ -36,10 +36,11 @@
 //! fits.
 //!
 //! The helpers another crate needs are public: the peeks for an optional
-//! member, a frame's body, the context readers for contents, fixed-size
-//! contents, Unsigned or ENUMERATED values, REAL, BOOLEAN and object
-//! identifiers, the application readers, and the trailing-data check. The
-//! rest stay private to this crate.
+//! member, a frame's opening and closing tags and its body, the context
+//! readers for contents, fixed-size contents, Unsigned or ENUMERATED values,
+//! REAL, BOOLEAN, CharacterString and object identifiers, the optional-member
+//! wrapper, the application readers, and the trailing-data check. The rest
+//! stay private to this crate.
 //!
 //! ```
 //! use bacnet_encoding::constructed::tagged::{decode_ctx_unsigned, expect_end, next_is_context};
@@ -90,6 +91,16 @@ pub fn next_is_opening(data: &[u8], offset: usize, tag: u8) -> Result<bool, Erro
     next_tag_is(data, offset, |t| t.is_opening_tag(tag))
 }
 
+/// Whether an application tag `number` (one of [`tags::app_tag`]) starts at
+/// `offset`; `false` at the end of the data, so an optional
+/// application-tagged member may be the last one. A malformed tag there is an
+/// error.
+pub fn next_is_application(data: &[u8], offset: usize, number: u8) -> Result<bool, Error> {
+    next_tag_is(data, offset, |t| {
+        t.class == TagClass::Application && t.number == number
+    })
+}
+
 /// Whether a closing context tag `tag` starts at `offset`, for walking the
 /// items inside a frame. Unlike [`next_is_context`], running out of data is
 /// an error: the frame never closed.
@@ -103,12 +114,7 @@ pub(crate) fn next_is_closing(data: &[u8], offset: usize, tag: u8) -> Result<boo
 
 /// Require an opening context tag `tag` at `offset`; return the offset of its
 /// content.
-pub(crate) fn expect_opening(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    what: &str,
-) -> Result<usize, Error> {
+pub fn expect_opening(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<usize, Error> {
     let (t, pos) = tags::decode_tag(data, offset)?;
     if !t.is_opening_tag(tag) {
         return Err(Error::decoding(
@@ -120,12 +126,7 @@ pub(crate) fn expect_opening(
 }
 
 /// Require a closing context tag `tag` at `offset`; return the offset past it.
-pub(crate) fn expect_closing(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    what: &str,
-) -> Result<usize, Error> {
+pub fn expect_closing(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<usize, Error> {
     let (t, pos) = tags::decode_tag(data, offset)?;
     if !t.is_closing_tag(tag) {
         return Err(Error::decoding(
@@ -355,7 +356,7 @@ pub(crate) fn decode_ctx_octet_string(
 
 /// Require a primitive context tag `tag` at `offset` holding a
 /// CharacterString.
-pub(crate) fn decode_ctx_character_string(
+pub fn decode_ctx_character_string(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -367,7 +368,7 @@ pub(crate) fn decode_ctx_character_string(
 
 /// Read the optional member under primitive context tag `tag` with `decode`
 /// when that tag comes next; otherwise `None` with the offset unchanged.
-pub(crate) fn decode_optional_ctx<T>(
+pub fn decode_optional_ctx<T>(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -592,7 +593,7 @@ pub fn decode_app_unsigned<T: UnsignedWidth>(
 }
 
 /// Decode one application-tagged BIT STRING (`SEQUENCE OF BIT STRING` item).
-pub(crate) fn decode_app_bit_string(
+pub fn decode_app_bit_string(
     data: &[u8],
     offset: usize,
     what: &str,

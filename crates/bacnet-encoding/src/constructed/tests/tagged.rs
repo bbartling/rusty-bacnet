@@ -324,6 +324,39 @@ fn an_optional_field_is_read_only_under_its_own_tag() {
 }
 
 #[test]
+fn an_optional_primitive_yields_its_contents_or_nothing() {
+    // What tags::decode_optional_context did, read with the peek and
+    // decode_ctx_primitive (#1374).
+    fn read(data: &[u8], tag: u8) -> Result<(Option<&[u8]>, usize), Error> {
+        if !next_is_context(data, 0, tag)? {
+            return Ok((None, 0));
+        }
+        let (contents, end) = decode_ctx_primitive(data, 0, tag, W)?;
+        Ok((Some(contents), end))
+    }
+    assert_eq!(read(&[0x09, 42], 0).unwrap(), (Some(&[42][..]), 2));
+    assert_eq!(read(&[0x19, 42], 0).unwrap(), (None, 0));
+    assert_eq!(read(&[], 0).unwrap(), (None, 0));
+    assert_eq!(short(read(&[0x0C, 0x01, 0x02], 0)), (5, 3));
+}
+
+#[test]
+fn an_application_peek_matches_only_its_own_type() {
+    // An application Unsigned, a context [2] and an application Date.
+    let data = [0x21, 0x05, 0x29, 0x05, 0xA4, 0x7E, 0x0A, 0x03, 0xFF];
+    assert!(next_is_application(&data, 0, 2).unwrap());
+    assert!(!next_is_application(&data, 0, 3).unwrap());
+    assert!(!next_is_application(&data, 2, 2).unwrap());
+    assert!(next_is_application(&data, 4, 10).unwrap());
+    assert!(!next_is_application(&data, data.len(), 10).unwrap());
+    // A reserved application length is a malformed tag, not a mismatch.
+    assert!(matches!(
+        next_is_application(&[0x26, 0x01], 0, 2),
+        Err(Error::Decoding { .. })
+    ));
+}
+
+#[test]
 fn an_input_must_end_where_its_value_does() {
     let data = [0x09, 0x01, 0xAA, 0xBB];
     assert!(expect_end(&data, 4, 4, W).is_ok());

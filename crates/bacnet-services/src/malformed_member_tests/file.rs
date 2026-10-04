@@ -2,10 +2,10 @@
 //! start position or record, counts and data are application-tagged (Clause
 //! 21's productions for Clauses 14.1 and 14.2), so any other tag is refused.
 //! The requests' trailing octets are tolerated, as the server's file handler
-//! documents.
+//! documents. AtomicWriteFile-ACK is a CHOICE of `[0]` and `[1]`.
 
 use super::*;
-use crate::file::{AtomicReadFileRequest, AtomicWriteFileRequest};
+use crate::file::{AtomicReadFileRequest, AtomicWriteFileAck, AtomicWriteFileRequest};
 
 /// FILE-1 as an application object identifier.
 const FILE_1: &[u8] = &[0xC4, 0x02, 0x80, 0x00, 0x01];
@@ -191,4 +191,19 @@ fn atomic_write_file_request() {
         ),
     ];
     check(decoder!(AtomicWriteFileRequest), rows);
+}
+
+#[test]
+fn atomic_write_file_ack() {
+    let rows: &[Row<'_>] = &[
+        ("stream", &[0x09, 0x05], Decodes),
+        ("record", &[0x19, 0x05], Decodes),
+        ("start as an application INTEGER", &[0x31, 0x05], Malformed),
+        ("choice [2]", &[0x29, 0x05], Malformed),
+        ("start cut short", &[0x0A, 0x05], Short),
+        // The tag is refused before its length is looked at.
+        ("choice [2] cut short", &[0x2A, 0x05], Malformed),
+        ("an octet after the start", &[0x09, 0x05, 0x00], Decodes),
+    ];
+    check(decoder!(AtomicWriteFileAck), rows);
 }

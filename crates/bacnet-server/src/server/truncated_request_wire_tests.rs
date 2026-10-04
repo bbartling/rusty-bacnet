@@ -1,16 +1,19 @@
 //! What a peer receives for a confirmed request whose contents stop before
-//! a member's header says they should (#1303, #1304).
+//! a member's header says they should (#1303, #1304, #1374).
 //!
 //! The decoders behind these services report such a member as a short
 //! buffer, where some used to call it malformed. The server answers both
 //! kinds alike, so each request here pins the reply a peer sees: SERVICES /
-//! OTHER, as the plain Error PDU or, for SubscribeCOVPropertyMultiple, as its
-//! general error choice. AV-1 is the Harness's Analog Value.
+//! OTHER, as the plain Error PDU or, for CreateObject, the list services and
+//! SubscribeCOVPropertyMultiple, as their formal error. AV-1 is the
+//! Harness's Analog Value.
 use super::*;
 use crate::server::cov_wire_test_support::Harness;
 use crate::server::test_transport::TestTransport;
 use bacnet_encoding::apdu::ErrorPdu;
 use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleError;
+use bacnet_services::list_manipulation::ChangeListError;
+use bacnet_services::object_mgmt::CreateObjectError;
 
 /// AV-1's object identifier as a primitive `[0]`.
 const AV_1: [u8; 5] = [0x0C, 0x00, 0x80, 0x00, 0x01];
@@ -189,5 +192,86 @@ async fn subscribe_cov_property_multiple_process_cut_short_draws_the_general_err
     let error = error_for(&mut h, service, &PROCESS_CUT).await;
     let formal = SubscribeCOVPropertyMultipleError::try_from(&error).unwrap();
     assert_eq!(formal.first_failed_subscription, None);
+    h.server.stop().await.unwrap();
+}
+
+/// The services whose members moved onto the shared readers with #1374, each
+/// cut short in the member named.
+#[tokio::test(start_paused = true)]
+async fn inline_members_cut_short_draw_services_other() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    let object_cut = [0x0C, 0x00, 0x80];
+    let cases: [(ConfirmedServiceChoice, &str, &[u8]); 9] = [
+        (
+            ConfirmedServiceChoice::READ_PROPERTY,
+            "[0] object",
+            &object_cut,
+        ),
+        (
+            ConfirmedServiceChoice::WRITE_PROPERTY,
+            "[0] object",
+            &object_cut,
+        ),
+        (
+            ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL,
+            "[1] enable-disable",
+            &[0x09, 0x05, 0x1A, 0x00],
+        ),
+        (
+            ConfirmedServiceChoice::REINITIALIZE_DEVICE,
+            "[0] state",
+            &[0x0A, 0x00],
+        ),
+        (
+            ConfirmedServiceChoice::CONFIRMED_TEXT_MESSAGE,
+            "[0] source device",
+            &[0x0C, 0x02, 0x00],
+        ),
+        (
+            ConfirmedServiceChoice::GET_ENROLLMENT_SUMMARY,
+            "[0] acknowledgment filter",
+            &[0x0A, 0x00],
+        ),
+        (
+            ConfirmedServiceChoice::DELETE_OBJECT,
+            "object",
+            &[0xC4, 0x00, 0x80],
+        ),
+        (
+            ConfirmedServiceChoice::ATOMIC_READ_FILE,
+            "file",
+            &[0xC4, 0x02, 0x80],
+        ),
+        (
+            ConfirmedServiceChoice::ATOMIC_WRITE_FILE,
+            "file",
+            &[0xC4, 0x02, 0x80],
+        ),
+    ];
+    for (service, member, body) in cases {
+        let error = error_for(&mut h, service, body).await;
+        assert!(error.error_data.is_empty(), "{service:?} {member}");
+    }
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn create_object_and_list_requests_cut_short_draw_their_formal_errors() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    // A [0] object type with one of two octets inside the specifier.
+    let create = ConfirmedServiceChoice::CREATE_OBJECT;
+    let error = error_for(&mut h, create, &[0x0E, 0x0A, 0x02]).await;
+    let formal = CreateObjectError::try_from(&error).unwrap();
+    assert_eq!(formal.first_failed_element_number, 0);
+    // AV-1, then a [1] property identifier with one of two octets.
+    let property_cut = [&AV_1[..], &[0x1A, 0x55]].concat();
+    for service in [
+        ConfirmedServiceChoice::ADD_LIST_ELEMENT,
+        ConfirmedServiceChoice::REMOVE_LIST_ELEMENT,
+    ] {
+        let error = error_for(&mut h, service, &property_cut).await;
+        let formal = ChangeListError::try_from(&error).unwrap();
+        assert_eq!(formal.first_failed_element_number, 0, "{service:?}");
+    }
     h.server.stop().await.unwrap();
 }

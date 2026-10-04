@@ -2,7 +2,7 @@
 
 use bacnet_encoding::constructed::tagged::{
     decode_app_object_id, decode_app_primitive, decode_app_unsigned, decode_ctx_constructed,
-    next_is_opening,
+    decode_ctx_primitive, next_is_context, next_is_opening,
 };
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -463,19 +463,18 @@ impl AtomicWriteFileAck {
     /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
     /// input.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        let (tag, pos) = tags::decode_tag(data, 0)?;
-        let end = pos + tag.length as usize;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        let access = if tag.is_context(0) {
-            let file_start_position = primitives::decode_signed(&data[pos..end])?;
+        let access = if next_is_context(data, 0, 0)? {
+            let (octets, _) =
+                decode_ctx_primitive(data, 0, 0, "AtomicWriteFileAck file-start-position")?;
             FileWriteAckMethod::Stream {
-                file_start_position,
+                file_start_position: primitives::decode_signed(octets)?,
             }
-        } else if tag.is_context(1) {
-            let file_start_record = primitives::decode_signed(&data[pos..end])?;
-            FileWriteAckMethod::Record { file_start_record }
+        } else if next_is_context(data, 0, 1)? {
+            let (octets, _) =
+                decode_ctx_primitive(data, 0, 1, "AtomicWriteFileAck file-start-record")?;
+            FileWriteAckMethod::Record {
+                file_start_record: primitives::decode_signed(octets)?,
+            }
         } else {
             return Err(Error::decoding(0, "Unknown write file ACK access method"));
         };

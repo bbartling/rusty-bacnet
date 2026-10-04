@@ -5,6 +5,7 @@ use super::decode_helpers::{
 use super::decode_timer::{decode_change_of_discrete_value, decode_change_of_timer};
 use super::structured::{decode_access_event, decode_complex_event_type};
 use super::*;
+use crate::constructed::tagged::decode_ctx_character_string;
 
 /// Decode one notification-parameter choice, with an optional enclosing `[12]` close.
 pub fn decode_notification_parameters(
@@ -521,33 +522,19 @@ pub(super) fn decode_bounded(
         }
         // [17] Change of characterstring
         17 => {
-            let mut pos = inner_start;
             // [0] changed-value
-            let (opt_data, new_pos) = tags::decode_optional_context(data, pos, 0)?;
-            let changed_value = match opt_data {
-                Some(content) => primitives::decode_character_string(content)?,
-                None => {
-                    return Err(Error::decoding(
-                        pos,
-                        "ChangeOfCharacterstring: missing changed_value",
-                    ))
-                }
-            };
-            pos = new_pos;
+            let (changed_value, pos) = decode_ctx_character_string(
+                data,
+                inner_start,
+                0,
+                "ChangeOfCharacterstring changed-value",
+            )?;
             // [1] status-flags
             let (status_flags, pos) =
                 decode_context_status_flags(data, pos, 1, "ChangeOfCharacterstring status-flags")?;
             // [2] alarm-value
-            let (opt_data, new_pos) = tags::decode_optional_context(data, pos, 2)?;
-            let alarm_value = match opt_data {
-                Some(content) => primitives::decode_character_string(content)?,
-                None => {
-                    return Err(Error::decoding(
-                        pos,
-                        "ChangeOfCharacterstring: missing alarm_value",
-                    ))
-                }
-            };
+            let (alarm_value, new_pos) =
+                decode_ctx_character_string(data, pos, 2, "ChangeOfCharacterstring alarm-value")?;
             finish_variant(
                 NotificationParameters::ChangeOfCharacterstring {
                     changed_value,

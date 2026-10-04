@@ -432,34 +432,6 @@ pub fn extract_raw_context(
     ))
 }
 
-/// Try to decode an optional context-tagged primitive value.
-///
-/// Peeks at the next tag; if it matches the expected context tag number,
-/// returns the content slice and advances the offset. Otherwise returns
-/// `(None, offset)` unchanged.
-pub fn decode_optional_context(
-    data: &[u8],
-    offset: usize,
-    tag_number: u8,
-) -> Result<(Option<&[u8]>, usize), Error> {
-    if offset >= data.len() {
-        return Ok((None, offset));
-    }
-
-    let (tag, new_pos) = decode_tag(data, offset)?;
-    if tag.is_context(tag_number) {
-        let end = new_pos
-            .checked_add(tag.length as usize)
-            .ok_or_else(|| Error::decoding(new_pos, "tag length overflow"))?;
-        if end > data.len() {
-            return Err(Error::buffer_too_short(end, data.len()));
-        }
-        Ok((Some(&data[new_pos..end]), end))
-    } else {
-        Ok((None, offset))
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -768,31 +740,6 @@ mod tests {
         assert!(!tag.is_context(1));
     }
 
-    #[test]
-    fn decode_optional_context_present() {
-        // Context tag 0, length 1, value byte 42
-        let data = [0x09, 42];
-        let (value, pos) = decode_optional_context(&data, 0, 0).unwrap();
-        assert_eq!(value, Some(&[42u8][..]));
-        assert_eq!(pos, 2);
-    }
-
-    #[test]
-    fn decode_optional_context_absent() {
-        // Context tag 1, but we're looking for tag 0
-        let data = [0x19, 42];
-        let (value, pos) = decode_optional_context(&data, 0, 0).unwrap();
-        assert!(value.is_none());
-        assert_eq!(pos, 0); // offset unchanged
-    }
-
-    #[test]
-    fn decode_optional_context_empty_buffer() {
-        let (value, pos) = decode_optional_context(&[], 0, 0).unwrap();
-        assert!(value.is_none());
-        assert_eq!(pos, 0);
-    }
-
     // --- Edge case tests ---
 
     #[test]
@@ -889,13 +836,6 @@ mod tests {
         let data = [0x0E, 0x25, 100, 0x01, 0x02, 0x0F];
         let result = extract_context_value(&data, 1, 0);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn decode_optional_context_content_overflows() {
-        // Context tag 0, length 4, but only 2 content bytes available
-        let data = [0x0C, 0x01, 0x02]; // ctx 0, len 4, only 2 bytes
-        assert!(decode_optional_context(&data, 0, 0).is_err());
     }
 
     #[test]

@@ -11,9 +11,11 @@
 use bacnet_types::enums::RejectReason;
 use bacnet_types::error::Error;
 
+mod device;
 mod discovery;
 mod file;
 mod object;
+mod summary;
 
 /// What a decoder makes of one input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,5 +1,9 @@
 //! ReadPropertyMultiple service per ASHRAE 135-2020 Clause 15.7.
 
+use bacnet_encoding::constructed::tagged::{
+    decode_app_enumerated, decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx,
+    expect_closing, expect_opening,
+};
 use bacnet_encoding::constructed::{
     decode_read_access_specification, encode_read_access_specification, extract_property_value,
     PropertyValueBoundary,
@@ -165,23 +169,11 @@ impl ReadPropertyMultipleACK {
             }
 
             // [0] object-identifier
-            let (tag, pos) = tags::decode_tag(data, offset)?;
-            if !tag.is_context(0) {
-                return Err(Error::decoding(offset, "RPM ACK expected context tag 0"));
-            }
-            let end = pos + tag.length as usize;
-            if end > data.len() {
-                return Err(Error::decoding(pos, "RPM ACK truncated at object-id"));
-            }
-            let object_identifier = ObjectIdentifier::decode(&data[pos..end])?;
-            offset = end;
+            let (object_identifier, end) =
+                decode_ctx_object_id(data, offset, 0, "RPM ACK object-id")?;
 
             // [1] list-of-results (opening tag 1)
-            let (tag, tag_end) = tags::decode_tag(data, offset)?;
-            if !tag.is_opening_tag(1) {
-                return Err(Error::decoding(offset, "RPM ACK expected opening tag 1"));
-            }
-            offset = tag_end;
+            offset = expect_opening(data, end, 1, "RPM ACK list-of-results")?;
 
             let mut elements = Vec::new();
             loop {
@@ -198,66 +190,23 @@ impl ReadPropertyMultipleACK {
                 }
 
                 // [2] property-identifier
-                if !tag.is_context(2) {
-                    return Err(Error::decoding(offset, "RPM ACK expected context tag 2"));
-                }
-                let end = tag_end + tag.length as usize;
-                if end > data.len() {
-                    return Err(Error::decoding(tag_end, "RPM ACK truncated at property-id"));
-                }
-                let prop_raw = primitives::decode_unsigned(&data[tag_end..end])?;
-                let prop_raw = u32::try_from(prop_raw)
-                    .map_err(|_| Error::decoding(tag_end, "RPM ACK property-id exceeds u32"))?;
+                let (prop_raw, end) =
+                    decode_ctx_unsigned::<u32>(data, offset, 2, "RPM ACK property-id")?;
                 let property_identifier = PropertyIdentifier::from_raw(prop_raw);
-                offset = end;
 
                 // [3] property-array-index (optional)
-                let mut array_index = None;
+                let (array_index, end) = decode_optional_ctx(
+                    data,
+                    end,
+                    3,
+                    "RPM ACK array-index",
+                    decode_ctx_unsigned::<u32>,
+                )?;
+                offset = end;
+
+                // [4] property-value or [5] property-access-error
                 let (tag, tag_end) = tags::decode_tag(data, offset)?;
-                if tag.is_context(3) {
-                    let end = tag_end + tag.length as usize;
-                    if end > data.len() {
-                        return Err(Error::decoding(tag_end, "RPM ACK truncated at array-index"));
-                    }
-                    let value = primitives::decode_unsigned(&data[tag_end..end])?;
-                    array_index = Some(u32::try_from(value).map_err(|_| {
-                        Error::decoding(tag_end, "RPM ACK array-index exceeds u32")
-                    })?);
-                    offset = end;
-                    let (tag, tag_end) = tags::decode_tag(data, offset)?;
-                    if tag.is_opening_tag(4) {
-                        let (value_bytes, new_offset) = extract_property_value(
-                            data,
-                            tag_end,
-                            4,
-                            property_identifier,
-                            &[
-                                PropertyValueBoundary::Context(2),
-                                PropertyValueBoundary::Closing(1),
-                            ],
-                        )?;
-                        elements.push(ReadResultElement {
-                            property_identifier,
-                            property_array_index: array_index,
-                            property_value: Some(value_bytes.to_vec()),
-                            error: None,
-                        });
-                        offset = new_offset;
-                    } else if tag.is_opening_tag(5) {
-                        let (error_class, error_code, new_offset) =
-                            decode_error_pair(data, tag_end)?;
-                        elements.push(ReadResultElement {
-                            property_identifier,
-                            property_array_index: array_index,
-                            property_value: None,
-                            error: Some((error_class, error_code)),
-                        });
-                        offset = new_offset;
-                    } else {
-                        return Err(Error::decoding(offset, "RPM ACK expected tag 4 or 5"));
-                    }
-                } else if tag.is_opening_tag(4) {
-                    // [4] property-value
+                if tag.is_opening_tag(4) {
                     let (value_bytes, new_offset) = extract_property_value(
                         data,
                         tag_end,
@@ -276,7 +225,6 @@ impl ReadPropertyMultipleACK {
                     });
                     offset = new_offset;
                 } else if tag.is_opening_tag(5) {
-                    // [5] property-access-error
                     let (error_class, error_code, new_offset) = decode_error_pair(data, tag_end)?;
                     elements.push(ReadResultElement {
                         property_identifier,
@@ -285,6 +233,8 @@ impl ReadPropertyMultipleACK {
                         error: Some((error_class, error_code)),
                     });
                     offset = new_offset;
+                } else if array_index.is_some() {
+                    return Err(Error::decoding(offset, "RPM ACK expected tag 4 or 5"));
                 } else {
                     return Err(Error::decoding(offset, "RPM ACK expected tag 3, 4, or 5"));
                 }
@@ -305,54 +255,14 @@ impl ReadPropertyMultipleACK {
 /// Decode an error-class + error-code pair from inside opening/closing tag 5,
 /// followed by consuming the closing tag.
 fn decode_error_pair(data: &[u8], offset: usize) -> Result<(ErrorClass, ErrorCode, usize), Error> {
-    // error-class: app-tagged enumerated
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
-        return Err(Error::decoding(
-            offset,
-            "RPM error class: expected application-tagged enumerated",
-        ));
-    }
-    let end = pos + tag.length as usize;
-    if end > data.len() {
-        return Err(Error::decoding(pos, "RPM error truncated at error-class"));
-    }
-    let error_class_raw = primitives::decode_unsigned(&data[pos..end])?;
-    let error_class_raw = u16::try_from(error_class_raw).map_err(|_| {
-        Error::decoding(
-            pos,
-            format!("RPM error class {error_class_raw} exceeds u16"),
-        )
-    })?;
-    let error_class = ErrorClass::from_raw(error_class_raw);
-    let mut offset = end;
-
-    // error-code: app-tagged enumerated
-    let (tag, pos) = tags::decode_tag(data, offset)?;
-    if tag.class != tags::TagClass::Application || tag.number != tags::app_tag::ENUMERATED {
-        return Err(Error::decoding(
-            offset,
-            "RPM error code: expected application-tagged enumerated",
-        ));
-    }
-    let end = pos + tag.length as usize;
-    if end > data.len() {
-        return Err(Error::decoding(pos, "RPM error truncated at error-code"));
-    }
-    let error_code_raw = primitives::decode_unsigned(&data[pos..end])?;
-    let error_code_raw = u16::try_from(error_code_raw).map_err(|_| {
-        Error::decoding(pos, format!("RPM error code {error_code_raw} exceeds u16"))
-    })?;
-    let error_code = ErrorCode::from_raw(error_code_raw);
-    offset = end;
-
-    // closing tag 5
-    let (tag, tag_end) = tags::decode_tag(data, offset)?;
-    if !tag.is_closing_tag(5) {
-        return Err(Error::decoding(offset, "RPM error expected closing tag 5"));
-    }
-
-    Ok((error_class, error_code, tag_end))
+    let (error_class, offset) = decode_app_enumerated::<u16>(data, offset, "RPM error class")?;
+    let (error_code, offset) = decode_app_enumerated::<u16>(data, offset, "RPM error code")?;
+    let end = expect_closing(data, offset, 5, "RPM error")?;
+    Ok((
+        ErrorClass::from_raw(error_class),
+        ErrorCode::from_raw(error_code),
+        end,
+    ))
 }
 
 #[cfg(test)]
