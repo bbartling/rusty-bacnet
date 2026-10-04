@@ -301,7 +301,7 @@ jobs:
     name: Native OK
     if: ${{ always() }}
     needs: [tests, lint]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Every native job succeeded
@@ -312,12 +312,13 @@ jobs:
           echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' >/dev/null
 
   # After a green run on dev, delete the cache entries no run will restore
-  # again (#1471), as ci.yml does after its own; see the script.
+  # again (#1471), as ci.yml does after its own; see the script. The status
+  # check names Native OK's result alone, as ci.yml's does.
   prune-caches:
     name: Prune caches
     needs: native-ok
-    if: ${{ github.ref == 'refs/heads/dev' }}
-    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.native-ok.result == 'success' && github.ref == 'refs/heads/dev' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       actions: write

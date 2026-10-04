@@ -27,13 +27,14 @@ only when every job under it did (see [Merge evidence](#merge-evidence)).
 | Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions, changelog fragments, the [tool pins](#tool-pins) | ✓ | ✓ | ✓ | ✓ |
 | Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS; the every-feature and PyO3 rustdoc runs include private items. Then `cargo check --locked` of each [standalone sample](#standalone-samples) | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ | ✓ |
-| Python bindings: `maturin develop` (maturin 1.15.0), then `python -m unittest discover -s crates/rusty-bacnet/tests` and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
-| MSRV 1.93, Linux native (`check-msrv.sh --linux-native`) |  | ✓ |  | ✓ |
+| Python bindings: `maturin develop` (maturin at its [pinned](#tool-pins) version), then `python -m unittest discover -s crates/rusty-bacnet/tests` and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
+| MSRV (`RUST_MSRV` in [`.github/ci-pins.env`](../.github/ci-pins.env)), Linux native (`check-msrv.sh --linux-native`) |  | ✓ |  | ✓ |
 | Cargo Audit + Cargo Deny |  | ✓ |  | ✓ |
 | **CI OK**: fails if any job above failed | ✓ | ✓ | ✓ | ✓ |
 | Prune caches, after a green run on `dev` ([Caches](#caches)) |  |  | ✓ | weekly, and manual on `dev` |
 
-`CI OK` is the required check; jobs skipped by tier count as passing.
+`CI OK` is the required check. MSRV and Cargo Audit + Deny count as passing
+when their tier skips them; a skipped Lean job fails it.
 [`docs-pages.yml`](../.github/workflows/docs-pages.yml) validates the website
 (Astro checks, unit tests, production build and Chromium tests) on PRs that
 change `website/**`.
@@ -194,7 +195,7 @@ The Linux jobs install their tools on the runner each time; there is no job
 image.
 
 - **Rust.** The runner image ships rustup. Each job installs the channel that
-  `rust-toolchain.toml` pins (1.99.0), with the minimal profile plus the
+  `rust-toolchain.toml` pins, with the minimal profile plus the
   components that file lists, makes it the default, and uninstalls the
   image's own toolchains: rust-cache hashes every installed toolchain into its
   key, and the image's `stable` moves with image updates, which would start
@@ -221,6 +222,7 @@ The Lint job's "Check the pins" step fails when:
 
 - a line of `.github/ci-pins.env` isn't a comment, blank, or `NAME=value` with
   a plain value, or a name is set twice;
+- a `*_SHA256` value isn't 64 lowercase hex digits;
 - `rust-toolchain.toml`'s channel isn't an exact release;
 - `RUST_MSRV` differs from `Cargo.toml`'s `rust-version` or from
   `scripts/ci/check-msrv.sh`'s default toolchain.
@@ -249,20 +251,25 @@ any entry unused for seven days. On 4 October 2026 the caches had reached
   manual runs there. PR runs only restore them.
 - **Pruning.** After a green run on `dev`, each workflow's **Prune caches**
   job runs [`scripts/ci/prune-caches.sh`](../scripts/ci/prune-caches.sh) with
-  `actions: write`. It keeps the newest rust-cache entry of each family (one
-  job on one OS: the key without its environment and lock hashes, such as
-  `v0-rust-test-Linux-x64`) and every other entry on `dev`, such as
-  setup-node's, and deletes the rest: superseded Rust entries, and every entry
-  on another ref. It logs each deletion with its key, ref, size and reason,
-  and the total before and after. To see what it would delete, with `gh`
+  `actions: write`. It keeps the two newest rust-cache entries of each family
+  (one job on one OS: the key without its environment and lock hashes, such
+  as `v0-rust-test-Linux-x64`) and every other entry on `dev`, such as
+  setup-node's, and deletes the rest: older Rust entries, and every entry on
+  another ref. It logs each deletion with its key, ref, size and reason, and
+  the total before and after.
+- **Out-of-order runs.** Runs on `dev` don't always finish in merge order,
+  so the newest entry of a family can come from an older merge. Only the run
+  for `dev`'s current head prunes (an older one logs that and stops), and
+  keeping two entries per family leaves the current head's in place even then. To see what it would delete, with `gh`
   signed in: `bash scripts/ci/prune-caches.sh --dry-run jscott3201/rusty-bacnet`.
 - **Budget.** One set of Rust caches is about 2.3 GB: the four native jobs'
   took 1.26 GB on 4 October 2026, and the four Linux jobs' about 1 GB, going
   by the same jobs' caches on Forgejo (Clippy 320 MB, Test 300 MB, MSRV
-  245 MB, Python 170 MB). setup-node's cache on `dev` adds 110 MB. A merge
-  that changes `Cargo.lock` holds a second set until the next prune, about
-  4.7 GB in all, and a PR that changes `website/**` adds its own setup-node
-  cache, 110 MB, until then. That leaves over 5 GB of headroom.
+  245 MB, Python 170 MB). setup-node's cache on `dev` adds 110 MB. Keeping
+  two sets makes the steady state about 4.7 GB. A merge that changes
+  `Cargo.lock` or the toolchain saves a third set, which the prune after it
+  removes, so the peak is about 7 GB, plus 110 MB for each PR that changed
+  `website/**` since the last prune. That leaves about 3 GB of headroom.
 
 ## Native tests (macOS and Windows)
 
@@ -309,8 +316,9 @@ cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --document-private-items --features "$NATIVE_FEATURES"
 RUSTDOCFLAGS="-D warnings" cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
 cargo nextest run -p bacnet-cli --locked --profile ci   # the CLI's feature-off tests
-# Python 3.12 from actions/setup-python, in a fresh venv
-python -m pip install maturin==1.15.0
+# Python $PYTHON_VERSION from actions/setup-python, in a fresh venv; the
+# versions come from .github/ci-pins.env
+python -m pip install "maturin==$MATURIN_VERSION"
 maturin develop -m crates/rusty-bacnet/Cargo.toml --locked
 python -m unittest discover -s crates/rusty-bacnet/tests
 cargo nextest run -p rusty-bacnet --locked --profile ci
@@ -444,8 +452,9 @@ gh workflow run native-tests.yml -R jscott3201/rusty-bacnet --ref <branch>  # ru
 
 ## Local checks
 
-Use Rust 1.99.0 from `rust-toolchain.toml`. The [native tests](#native-tests-macos-and-windows)
-run the macOS tests, clippy and rustdoc on every PR, so a local macOS run is
+Use the Rust release that `rust-toolchain.toml` pins, which rustup selects in
+the checkout. The [native tests](#native-tests-macos-and-windows) run the
+macOS tests, clippy and rustdoc on every PR, so a local macOS run is
 optional: a quicker check before pushing changes that can affect macOS
 (transports, sockets, TLS, platform `cfg`, build scripts, dependencies). It
 isn't merge evidence.
@@ -538,7 +547,7 @@ a suspected path locally with `printf '%s' "$path" | git hash-object --stdin`.
 Run the file-size gate in its default strict mode, without `CHECK_FILE_SIZE_WARN=1`.
 
 `scripts/ci/check-msrv.sh --linux-native` needs a native Linux GNU host with
-Rust 1.93 installed, Python 3, a C toolchain, `pkg-config`, `libpcap-dev`,
+the MSRV toolchain (`RUST_MSRV`) installed, Python 3, a C toolchain, `pkg-config`, `libpcap-dev`,
 `cmake`, `perl`, `file` and `ldd`. It never installs tools or skips features.
 CI runs it on PRs to `main`; on a Mac, rely on that job.
 
@@ -554,7 +563,11 @@ A `local-macos.sh` pass is optional and isn't needed to merge.
 
 A check that was not run, failed or does not apply is never reported as passed.
 Audit and deny read mutable advisory databases, so their result for a `main`
-merge comes from that PR's run, not an older one.
+merge comes from that PR's run, not an older one. On a PR from `dev` to
+`main`, the head commit also carries the `CI OK` of `dev`'s push run, which
+covers only the Lean jobs, so check that the `pull_request` run's `CI OK`,
+the one with MSRV and audit and deny, is green; the release rework will
+settle this.
 
 ## Release
 
