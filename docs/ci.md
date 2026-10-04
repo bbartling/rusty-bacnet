@@ -25,7 +25,7 @@ both jobs of the native tests on GitHub (see [Merge evidence](#merge-evidence)).
 | --- | --- | --- | --- | --- |
 | CI image: build and push the job image if its tag is missing | ✓ | ✓ | ✓ | ✓ |
 | Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions, changelog fragments | ✓ | ✓ | ✓ | ✓ |
-| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS; the every-feature and PyO3 rustdoc runs include private items | ✓ | ✓ | ✓ | ✓ |
+| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS; the every-feature and PyO3 rustdoc runs include private items. Then `cargo check --locked` of each [standalone sample](#standalone-samples) | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`) | ✓ | ✓ | ✓ | ✓ |
 | Python bindings: `maturin develop` (maturin 1.15.0), then `python -m unittest discover -s crates/rusty-bacnet/tests` and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
 | MSRV 1.93, Linux native (`check-msrv.sh --linux-native`) |  | ✓ |  | ✓ |
@@ -96,6 +96,31 @@ enables pyo3's `auto-initialize`.
 Use cargo-nextest 0.9.145 or later locally. Older releases on macOS could
 mark unrelated passing tests as leaky (#751), and the configuration warns
 about them.
+
+### Standalone samples
+
+The crates in `examples/rust/samples` sit outside the workspace, each with its
+own `Cargo.lock`, so none of the workspace runs compiles them. The Clippy job's
+last step, [`scripts/ci/check-samples.sh`](../scripts/ci/check-samples.sh),
+runs `cargo check --locked --all-targets` on each through its own manifest
+(#1406). It fails when a sample stops compiling or its lock is stale. A lock
+goes stale when a `bacnet-*` crate the sample uses by path gains a dependency,
+and on every workspace version bump, since the lock records those crates'
+versions. To refresh a stale lock without moving any locked registry version,
+run the command the script prints and commit the result:
+
+```bash
+cargo update --workspace --manifest-path examples/rust/samples/<name>/Cargo.toml
+```
+
+All the samples build into one target directory, `target/samples` (or
+`$CARGO_TARGET_DIR` if set), so the dependencies they share compile once. The
+samples' locks pin older releases of tokio, syn and other base crates than the
+workspace's `Cargo.lock`, so they reuse almost nothing the workspace build
+compiled. The step runs on every PR: the workflow has no path filters, and the
+samples depend on `crates/`, which nearly every PR changes. On the runner it
+took about 18 s from cold (October 2026). `target/samples` is inside
+`target/`, so the job's Rust cache keeps it whenever the cache is saved.
 
 ### Runner
 
@@ -403,6 +428,7 @@ cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --feature
 cargo clippy -p rusty-bacnet --all-targets --locked -- -D warnings
 cargo clippy -p bacnet-cli --no-default-features --all-targets --locked -- -D warnings
 bash scripts/ci/check-default-features.sh   # the host; or pass target triples, as CI does
+bash scripts/ci/check-samples.sh            # the standalone samples, each with its own lock
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude rusty-bacnet --no-deps --locked --document-private-items --features "$FEATURES"
 RUSTDOCFLAGS="-D warnings" cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
 cargo nextest run -p bacnet-cli --locked   # the CLI's feature-off tests
@@ -482,11 +508,13 @@ dispatch on GitHub.
 
 To release:
 
-1. Set the workspace version, assemble its `CHANGELOG.md` section from the
-   fragments, add release highlights by hand under the new heading if the
-   release has any, and merge:
+1. Set the workspace version and refresh the
+   [standalone samples'](#standalone-samples) locks, which record it. Assemble
+   the version's `CHANGELOG.md` section from the fragments, add release
+   highlights by hand under the new heading if the release has any, and merge:
 
    ```bash
+   for m in examples/rust/samples/*/Cargo.toml; do cargo update --workspace --manifest-path "$m"; done
    python3 scripts/changelog.py preview        # what the section will hold
    python3 scripts/changelog.py assemble --version 0.12.0 [--date 2026-10-02]
    ```
