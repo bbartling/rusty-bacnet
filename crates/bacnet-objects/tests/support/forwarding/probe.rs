@@ -4,16 +4,17 @@
 
 use std::borrow::Cow;
 use std::fmt::Debug;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use super::fixtures::{address, day, noon, oid, property_error, schedule_write};
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::audit::{
     AuditLogForwarding, AuditLogNotificationSink, AuditLogObject, AuditLogPersistence,
     AuditLogSnapshot, AuditLogStorage, AuditPolicyAuthority, AuditReporterAuthority,
     AuditReporterObject, AuditSendDelay, ObjectAuditPolicy,
 };
-use bacnet_objects::clock::{ClockFrame, ClockReader};
+use bacnet_objects::clock::ClockReader;
 use bacnet_objects::command::{CommandRun, RunPlan, WriteFailure};
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::device::{DeviceAuthority, DeviceConfig, DeviceObject};
@@ -94,65 +95,6 @@ pub type CallLog = Arc<Mutex<Vec<String>>>;
 /// Empty the log, returning what it held.
 pub fn take(log: &CallLog) -> Vec<String> {
     std::mem::take(&mut *log.lock().unwrap())
-}
-
-/// The day the probe's calendar is active, and the day schedule rows pass.
-pub fn day() -> SpecificDate {
-    SpecificDate::new(2026, 10, 2).unwrap()
-}
-
-pub fn noon() -> Time {
-    Time {
-        hour: 12,
-        minute: 0,
-        second: 0,
-        hundredths: 0,
-    }
-}
-
-pub fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
-    ObjectIdentifier::new(object_type, instance).unwrap()
-}
-
-pub fn property_error(code: ErrorCode) -> Error {
-    let class = ErrorClass::PROPERTY.to_raw() as u32;
-    Error::protocol(class, code.to_raw() as u32, None)
-}
-
-struct NoClock;
-
-impl ClockReader for NoClock {
-    fn read_clock(&self) -> Option<ClockFrame> {
-        None
-    }
-}
-
-// One instance of each clock, so a row passes the same handle to the probe
-// and to an adapter, and the log can name it by address.
-static CLOCK: LazyLock<Arc<dyn ClockReader>> = LazyLock::new(|| Arc::new(NoClock));
-static MONOTONIC: LazyLock<Arc<MonotonicClock>> =
-    LazyLock::new(|| Arc::new(|| Duration::from_secs(99)));
-
-pub fn clock() -> Arc<dyn ClockReader> {
-    CLOCK.clone()
-}
-
-pub fn monotonic() -> Arc<MonotonicClock> {
-    MONOTONIC.clone()
-}
-
-/// A capability or handle, rendered as the address it points at.
-pub fn address<T: ?Sized>(reference: &T) -> String {
-    format!("{:p}", std::ptr::from_ref(reference).cast::<()>())
-}
-
-pub fn schedule_write(value: u64) -> ScheduleWrite {
-    ScheduleWrite {
-        value: PropertyValue::Unsigned(value),
-        priority: 16,
-        references: Vec::new(),
-        retry: false,
-    }
 }
 
 struct NoPersistence;

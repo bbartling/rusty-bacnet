@@ -9,9 +9,11 @@
 //! and a row in `rows.rs`. The probe answers every row unlike the trait
 //! default and logs each call with its arguments, so an adapter that keeps a
 //! default, drops an argument or swaps the answer reads differently from the
-//! probe.
+//! probe. Values the probe and the rows share, such as identifiers, dates
+//! and clocks, are in `fixtures.rs`.
 
 pub mod defaults;
+pub mod fixtures;
 pub mod probe;
 pub mod rows;
 

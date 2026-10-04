@@ -4,7 +4,6 @@
 //! ObjectDatabase and returns the encoded response bytes.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use bacnet_encoding::npdu::NpduAddress;

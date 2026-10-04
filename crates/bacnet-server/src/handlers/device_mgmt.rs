@@ -32,51 +32,15 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// Handle a DeviceCommunicationControl request.
-///
-/// Updates the communication state and returns the requested state plus
-/// optional duration (minutes) for auto-revert.
-/// This unconfigured helper retains legacy optional-password authorization;
-/// configured servers apply their separate local DCC policy.
-pub fn handle_device_communication_control(
-    service_data: &[u8],
-    comm_state: &AtomicU8,
-    dcc_password: &Option<String>,
-) -> Result<(EnableDisable, Option<u16>), Error> {
-    handle_device_communication_control_with_policy(
-        service_data,
-        comm_state,
-        dcc_password,
-        crate::server::DccPolicy::LegacyPermissive,
-    )
-}
-
-pub(crate) fn handle_device_communication_control_with_policy(
-    service_data: &[u8],
-    comm_state: &AtomicU8,
-    dcc_password: &Option<String>,
-    policy: crate::server::DccPolicy,
-) -> Result<(EnableDisable, Option<u16>), Error> {
-    let (state, duration) =
-        validate_dcc(service_data, dcc_password, policy).map_err(|f| f.error)?;
-    let mode = EnableDisable::from(state);
-    // The caller's atomic holds the EnableDisable value: 0 or 2, as DISABLE
-    // is refused.
-    comm_state.store(mode.to_raw() as u8, Ordering::Release);
-    tracing::debug!(
-        "DeviceCommunicationControl: state set to {:?}, duration={:?} min",
-        mode,
-        duration
-    );
-    Ok((mode, duration))
-}
-
 pub(crate) struct DccFailure {
     pub error: Error,
     pub outcome: crate::server::dcc_outcomes::DccOutcome,
     pub metadata: crate::server::dcc_outcomes::DccMetadata,
 }
 
+/// Decode a DeviceCommunicationControl request and check its password, mode
+/// and the local policy, returning the state to commit and the duration in
+/// minutes. Nothing is stored here: `dcc_timer::replace` commits the result.
 pub(crate) fn validate_dcc(
     service_data: &[u8],
     dcc_password: &Option<String>,
