@@ -9,6 +9,7 @@
 use super::durable_write_wire_tests::{destination, HeldStorage, WAIT};
 use super::mutation_tests::wpm;
 use super::*;
+use crate::server::durable_writes::{slow_save_warnings, SLOW_SAVE_REPEAT, SLOW_SAVE_WARNING};
 use crate::server::test_transport::TestTransport;
 use bacnet_encoding::constructed::encode_destination_list;
 use bacnet_encoding::npdu::{encode_npdu, Npdu};
@@ -278,4 +279,49 @@ async fn a_stop_while_the_application_holds_the_database_puts_storage_back_once_
         served(&db, 1).await,
         PropertyValue::ApplicationData(encoded(&[destination(1)]))
     );
+}
+
+/// Move a paused clock a second at a time, at most a minute, until stop()
+/// has warned `count` times on `db`; how long that took.
+async fn until_warned(db: &Arc<RwLock<ObjectDatabase>>, count: usize) -> Duration {
+    let mut waited = Duration::ZERO;
+    while slow_save_warnings(db) < count {
+        assert!(waited < Duration::from_secs(60), "stop() never warned");
+        tokio::time::advance(Duration::from_secs(1)).await;
+        waited += Duration::from_secs(1);
+    }
+    waited
+}
+
+#[tokio::test(start_paused = true)]
+async fn stop_warns_while_storage_holds_a_save_and_waits_for_it() {
+    let storage = holding(&[destination(1)]);
+    let (server, inbound) = server(&[&storage]).await;
+    let (started, go) = storage.hold();
+    send(
+        &inbound,
+        ConfirmedServiceChoice::WRITE_PROPERTY,
+        write_property(1, &[destination(11)]),
+    )
+    .await;
+    save_started(started).await;
+    let db = Arc::clone(server.database());
+    let stopping = tokio::spawn(async move {
+        let mut server = server;
+        server.stop().await.unwrap();
+        server
+    });
+    // Storage holds the staged save, so stop() waits for it. The wait runs
+    // on the blocking pool, so only the test moves the paused clock.
+    assert!(until_warned(&db, 1).await >= SLOW_SAVE_WARNING);
+    // It warns again a while later, and still waits.
+    let again = until_warned(&db, 2).await;
+    assert!(again >= SLOW_SAVE_REPEAT - Duration::from_secs(1));
+    assert!(!stopping.is_finished());
+    // Once storage lets the saves through, stop() returns with the served
+    // list put back.
+    drop(go);
+    let server = stopping.await.unwrap();
+    assert_eq!(storage.load_saved(), Some(snapshot(&[destination(1)])));
+    drop(server);
 }

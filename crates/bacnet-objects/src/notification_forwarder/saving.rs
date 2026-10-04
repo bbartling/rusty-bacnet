@@ -14,7 +14,11 @@
 //! lists it does serve at once; a restart then serves those. That holds at
 //! the end too (#1363): the server's `stop()` drops a staged write still
 //! held and waits for that save, and a forwarder dropped with one still
-//! held saves the lists it serves before its writer stops.
+//! held saves the lists it serves before its writer stops. The drop has no
+//! chance to read the lists afresh, so it saves them as they stood at the
+//! forwarder's last storage call, at most one operation-task tick old: with
+//! a bound clock, an entry that lapsed since that tick can come back with a
+//! minute left. `stop()` reads them as they stand.
 //!
 //! Between writes Subscribed_Recipients still changes: entries lapse, and each
 //! entry's served minutes fall by one a minute. The operation task calls the

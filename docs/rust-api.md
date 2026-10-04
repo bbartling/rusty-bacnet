@@ -4397,6 +4397,14 @@ Async BACnet server that hosts objects and dispatches incoming requests.
 
 `BACnetServer::stop()` seals new local broadcasts and mutations, joins admitted
 server work, then stops the owned network and transport before returning success.
+Once its requests are joined, it drops any write a Notification Forwarder,
+Notification Class or Audit Log still holds staged for one of them and waits
+until every save those objects have queued has run, so storage holds what they
+serve (#1363). That wait has no limit: storage that stalls holds `stop()` up,
+and a warning naming the objects still saving is logged after 5 s and every
+30 s after that. `stop()` doesn't wait while the application holds the
+database; the objects then settle once it lets go, and put storage back when
+they are dropped.
 The target-Audit drain retains the ingress needed for acknowledgments until its
 existing completion/deadline boundary. Cancelling a stop waiter retains cleanup:
 call `stop()` again to join it. Transport cleanup errors retain the owner for retry;
@@ -4887,9 +4895,12 @@ once queues a save of the lists it serves, so storage never keeps a list the
 forwarder refused. The same holds when the server stops mid-request (#1363):
 `stop()`, after joining its requests, drops a staged write still held and
 waits for that save, and a forwarder dropped with one still held saves the
-lists it serves before its writer stops. The writer is a plain `std` thread with no Tokio runtime,
-one per forwarder that has saved and parked while idle, and a `save` that
-panics counts as a failed save. Once its rename succeeds a
+lists it serves before its writer stops. A drop without `stop()` saves the
+lists as they stood at the forwarder's last operation-task call, so an entry
+that lapsed within that last second can come back with a minute left;
+`stop()` saves them as they stand. The writer is a plain `std` thread with no
+Tokio runtime, one per forwarder that has saved and parked while idle, and a
+`save` that panics counts as a failed save. Once its rename succeeds a
 file save has landed: a filesystem that cannot synchronize a directory is
 passed over, and any other failure there is logged, not returned.
 

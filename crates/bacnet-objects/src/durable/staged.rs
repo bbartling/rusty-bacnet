@@ -119,7 +119,10 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         snapshot: S,
         served: S,
     ) -> StageStep {
-        // A correction still due lands first, should this save fail.
+        // A correction still due lands first, should this save fail. Today's
+        // callers can't reach this with one due: each stage follows a `busy`
+        // check through `correct`, which queues it. The check stays for a
+        // caller that stages without one.
         if let Some(correction) = self.correction.take() {
             self.writer.submit_coalescing(correction);
         }
