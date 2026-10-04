@@ -39,18 +39,23 @@ pub(in crate::server) fn encode_notification(
 
 pub(in crate::server) async fn deliver<T: TransportPort + 'static>(
     network: &NetworkLayer<T>,
-    comm_state: &AtomicU8,
     route: &ConfirmedRecipientRoute,
     bytes: &[u8],
     reserved: Option<NotificationReservation>,
     deadline: tokio::time::Instant,
 ) -> bool {
-    deliver_observed(network, comm_state, route, bytes, reserved, deadline, None).await
+    deliver_observed(network, route, bytes, reserved, deadline, None).await
 }
 
+/// Send one audit notification and report whether it was delivered.
+///
+/// No DeviceCommunicationControl state holds it back. Clause 16.1 leaves
+/// Confirmed- and UnconfirmedAuditNotification running under
+/// DISABLE_INITIATION, and the server refuses the deprecated DISABLE, so no
+/// state a peer can set stops audit traffic. Every audit sender in the server
+/// funnels through here or follows the same rule.
 pub(in crate::server) async fn deliver_observed<T: TransportPort + 'static>(
     network: &NetworkLayer<T>,
-    comm_state: &AtomicU8,
     route: &ConfirmedRecipientRoute,
     bytes: &[u8],
     reserved: Option<NotificationReservation>,
@@ -61,9 +66,6 @@ pub(in crate::server) async fn deliver_observed<T: TransportPort + 'static>(
     let confirmed = reserved.is_some();
     let send = || async {
         let _local = local.lock().unwrap().take();
-        if comm_state.load(Ordering::Acquire) != 0 {
-            return Err(Error::Encoding("audit initiation disabled".into()));
-        }
         match (&route.local_target, &route.remote) {
             (Some(mac), None) => {
                 network

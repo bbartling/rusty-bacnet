@@ -32,7 +32,8 @@ use crate::property_metadata::{
 // no write_object_name arm). Description carries the table O code with a
 // routed CharacterString write arm, so Optional/Always. Present_Value and
 // Lighting_Command carry the table W code and dispatch accepts the
-// commandable Real / OctetString routes, so RequiredWrite/Always.
+// commandable Real and the BACnetLightingCommand routes, so
+// RequiredWrite/Always.
 // Table-R served rows with no network write route stay RequiredRead/ReadOnly;
 // table-R rows with a write arm are RequiredRead/Always. Table-O served rows
 // are Optional, with Always exactly where dispatch accepts the write
@@ -267,7 +268,7 @@ mod tests {
         );
         assert_eq!(
             object.read_property(P::LIGHTING_COMMAND, None).unwrap(),
-            PropertyValue::OctetString(vec![])
+            PropertyValue::ApplicationData(vec![0x09, 0x00])
         );
         assert_eq!(
             object
@@ -430,6 +431,10 @@ mod tests {
                     let (value, index) = if p == P::PRIORITY_ARRAY {
                         let value = object.read_property(p, Some(8)).unwrap();
                         (value, Some(8))
+                    } else if p == P::LIGHTING_COMMAND {
+                        // It reads NONE until written, and NONE can't be
+                        // written (Table 12-67), so write STOP instead.
+                        (PropertyValue::ApplicationData(vec![0x09, 0x0A]), None)
                     } else {
                         let value = object.read_property(p, None).unwrap();
                         (value, None)
@@ -483,13 +488,13 @@ mod tests {
                 .write_property(
                     P::LIGHTING_COMMAND,
                     None,
-                    PropertyValue::OctetString(vec![0x01, 0x02]),
+                    PropertyValue::ApplicationData(vec![0x09, 0x0A]),
                     None,
                 )
                 .unwrap();
             assert_eq!(
                 object.read_property(P::LIGHTING_COMMAND, None).unwrap(),
-                PropertyValue::OctetString(vec![0x01, 0x02])
+                PropertyValue::ApplicationData(vec![0x09, 0x0A])
             );
             object
                 .write_property(
