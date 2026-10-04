@@ -504,10 +504,12 @@ fn configured(bindings: Vec<DeviceBinding>) -> DeviceBindingTable {
 }
 
 /// A binding routed through this network's own number is the local binding
-/// it is once that number is known (#1404): a direct request from its final
-/// MAC is its device's, and one relayed back with this network as its SNET is
-/// not, as for a local binding. With the number unknown, or for a binding
-/// routed to another network, only a request relayed from there matches.
+/// it is once that number is known (#1404). A local binding names a direct
+/// request from its MAC and, with the number known, one a router here relays
+/// back with this network and that MAC as SNET and SADR. With the number
+/// unknown, or for a binding routed to another network, a routed binding
+/// names only a request relayed from its own network. The router's own MAC
+/// names nobody.
 #[test]
 fn source_binding_takes_a_binding_routed_through_this_network_as_local() {
     use bacnet_objects::command_source::CommandDeviceBinding::{Unique, Unknown};
@@ -518,6 +520,7 @@ fn source_binding_takes_a_binding_routed_through_this_network_as_local() {
     };
     let here = routed(THIS_NETWORK, FINAL_PEER);
     let elsewhere = routed(REMOTE_NETWORK, FINAL_PEER);
+    let plain = configured(vec![DeviceBinding::local(device(1), FINAL_PEER).unwrap()]);
     // Bound through this network at its link broadcast MAC: no single node.
     let broadcast = routed(THIS_NETWORK, BROADCAST);
     let local = Some(THIS_NETWORK);
@@ -525,10 +528,15 @@ fn source_binding_takes_a_binding_routed_through_this_network_as_local() {
     let one = Unique(device(1));
     for (table, local_network, immediate, source, expected) in [
         (&here, local, FINAL_PEER, None, one),
-        (&here, local, ROUTER, Some(&from_here), Unknown),
+        (&here, local, ROUTER, Some(&from_here), one),
+        (&here, local, ROUTER, None, Unknown),
+        (&here, local, ROUTER, Some(&from_there), Unknown),
         (&here, None, FINAL_PEER, None, Unknown),
         (&here, None, ROUTER, Some(&from_here), one),
+        (&plain, local, ROUTER, Some(&from_here), one),
+        (&plain, None, ROUTER, Some(&from_here), Unknown),
         (&elsewhere, local, FINAL_PEER, None, Unknown),
+        (&elsewhere, local, ROUTER, Some(&from_here), Unknown),
         (&elsewhere, local, ROUTER, Some(&from_there), one),
         (&broadcast, local, BROADCAST, None, Unknown),
     ] {
@@ -541,21 +549,28 @@ fn source_binding_takes_a_binding_routed_through_this_network_as_local() {
 }
 
 /// A local binding and one routed through this network at the same MAC both
-/// name a direct request from there once the number is known, so it stays
-/// ambiguous. While the number is unknown only the local binding names it.
+/// name a request from there once the number is known, direct or relayed
+/// back with this network as its SNET, so it stays ambiguous. While the
+/// number is unknown the direct form names only the local binding and the
+/// relayed form only the routed one.
 #[test]
-fn source_binding_keeps_two_bindings_for_one_direct_source_ambiguous() {
+fn source_binding_keeps_two_bindings_for_one_source_ambiguous() {
     use bacnet_objects::command_source::CommandDeviceBinding::{Ambiguous, Unique};
     let table = configured(vec![
         DeviceBinding::local(device(1), FINAL_PEER).unwrap(),
         DeviceBinding::routed(device(2), THIS_NETWORK, FINAL_PEER, ROUTER).unwrap(),
     ]);
-    assert_eq!(
-        table.source_binding(FINAL_PEER, None, Some(THIS_NETWORK), test_broadcast),
-        Ambiguous
-    );
-    assert_eq!(
-        table.source_binding(FINAL_PEER, None, None, test_broadcast),
-        Unique(device(1))
-    );
+    let from_here = relayed(THIS_NETWORK);
+    for (immediate, source, local_network, expected) in [
+        (FINAL_PEER, None, Some(THIS_NETWORK), Ambiguous),
+        (ROUTER, Some(&from_here), Some(THIS_NETWORK), Ambiguous),
+        (FINAL_PEER, None, None, Unique(device(1))),
+        (ROUTER, Some(&from_here), None, Unique(device(2))),
+    ] {
+        assert_eq!(
+            table.source_binding(immediate, source, local_network, test_broadcast),
+            expected,
+            "{local_network:?} {immediate:?} {source:?}"
+        );
+    }
 }

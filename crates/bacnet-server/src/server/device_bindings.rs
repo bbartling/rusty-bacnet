@@ -199,13 +199,15 @@ impl DeviceBindingTable {
     }
 
     /// The Device whose binding names a request's source, when exactly one
-    /// does. A local binding names a request from its MAC that carries no
-    /// SNET; a routed one names a request relayed with its network and final
-    /// MAC as SNET and SADR. A binding routed through `local_network`, this
-    /// network's own number when known, is the local binding it is (#1404),
-    /// as sends to it take it ([`RecipientRoute::localize`], #1358): a node
-    /// on this network reaches us with no SNET (Clause 6.2.2), so the binding
-    /// names a request from its final MAC with none.
+    /// does. A routed binding names a request relayed with its network and
+    /// final MAC as SNET and SADR. A local binding names a request from its
+    /// MAC with no SNET (Clause 6.2.2), and, once `local_network`, this
+    /// network's own number, is known, one relayed with that number and its
+    /// MAC as SNET and SADR: a router here passing a peer's request back onto
+    /// this network adds that pair (Clause 6.5.4), and network numbers are
+    /// unique, so both forms name the same node. A binding routed through
+    /// `local_network` is the local binding it is (#1404), as sends to it
+    /// take it ([`RecipientRoute::localize`], #1358).
     pub(super) fn source_binding(
         &self,
         immediate: &[u8],
@@ -223,6 +225,9 @@ impl DeviceBindingTable {
             let matches = match (route, routed) {
                 (RecipientRoute::BoundLocalUnicast { mac, .. }, None) => {
                     mac.as_slice() == immediate
+                }
+                (RecipientRoute::BoundLocalUnicast { mac, .. }, Some(source)) => {
+                    Some(source.network) == local_network && mac == source.mac_address
                 }
                 (RecipientRoute::BoundRoutedUnicast { network, mac, .. }, Some(source)) => {
                     network == source.network && mac == source.mac_address
