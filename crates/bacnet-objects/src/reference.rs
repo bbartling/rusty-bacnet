@@ -15,23 +15,25 @@
 //! `BACnetSetpointReference` does have one: its only member is optional and
 //! an absent member encodes as nothing (Clause 20.2.16). An unset
 //! Setpoint_Reference therefore reads as an empty `ApplicationData`, writing
-//! the empty value clears it, and Null is a value of another datatype there.
+//! a value with no octets clears it, and Null is a value of another datatype
+//! there.
 //!
-//! A written value is one `ApplicationData` (the octets a WriteProperty
-//! carried, which the server hands over whole, or a value read back), or a
-//! list of `ApplicationData` chunks that join into one (the same octets split
-//! at each member's tag). The flat application-tagged list, any other kind of
-//! value, or octets that don't open the way the property's datatype does is
-//! PROPERTY / INVALID_DATA_TYPE. Octets that open right but don't decode in
-//! full, a list mixing chunks with decoded values, or a device-qualifying
-//! member \[3\] on a production without one is PROPERTY /
-//! INVALID_DATA_ENCODING.
+//! Any other written value holds one reference and is decoded by
+//! `common::decode_single_element`, the decoder behind the device references'
+//! single-reference rule (#1395; the codes are listed in
+//! [`crate::device_reference`]). Another kind of value, a list mixing raw
+//! chunks with decoded values, or octets that don't open the way the
+//! property's datatype does is PROPERTY / INVALID_DATA_TYPE. Octets that open
+//! right but aren't exactly one whole reference (none, one cut short, or
+//! anything after it) are PROPERTY / INVALID_DATA_ENCODING. The production
+//! has no device-qualifying member \[3\], so one counts as octets after the
+//! reference.
 
 use bacnet_encoding::constructed::{
     decode_object_property_reference, decode_setpoint_reference, encode_object_property_reference,
     encode_setpoint_reference,
 };
-use bacnet_encoding::tags;
+use bacnet_encoding::tags::Tag;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
@@ -86,49 +88,53 @@ pub(crate) fn decode_reference_write(
     value: &PropertyValue,
     frame: ReferenceFrame,
 ) -> Result<Option<BACnetObjectPropertyReference>, Error> {
-    let joined;
-    let bytes: &[u8] = match value {
-        PropertyValue::Null if frame != ReferenceFrame::Setpoint => return Ok(None),
-        PropertyValue::ApplicationData(bytes) => bytes,
-        PropertyValue::List(items)
-            if matches!(items.first(), Some(PropertyValue::ApplicationData(_))) =>
-        {
-            joined = join_chunks(items)?;
-            &joined
-        }
-        _ => return Err(common::invalid_data_type_error()),
-    };
-    if frame == ReferenceFrame::Setpoint && bytes.is_empty() {
-        return Ok(None);
-    }
-    match tags::decode_tag(bytes, 0) {
-        Ok((tag, _)) if frame == ReferenceFrame::Setpoint && tag.is_opening_tag(0) => {}
-        Ok((tag, _)) if frame != ReferenceFrame::Setpoint && tag.is_context(0) => {}
-        Ok(_) => return Err(common::invalid_data_type_error()),
-        Err(_) => return Err(common::invalid_data_encoding_error()),
-    }
     match frame {
-        ReferenceFrame::Bare => decode_object_property_reference(bytes)
-            .map(Some)
-            .map_err(|_| common::invalid_data_encoding_error()),
+        ReferenceFrame::Bare => match value {
+            PropertyValue::Null => Ok(None),
+            value => common::decode_single_element(value, opens_bare, decode_bare).map(Some),
+        },
         ReferenceFrame::Setpoint => {
-            decode_setpoint_reference(bytes).map_err(|_| common::invalid_data_encoding_error())
+            if common::chunks(value)?.iter().all(|chunk| chunk.is_empty()) {
+                return Ok(None);
+            }
+            common::decode_single_element(value, opens_setpoint, decode_setpoint).map(Some)
         }
     }
 }
 
-/// Join a list of `ApplicationData` chunks into one run of octets. A list
-/// that mixes chunks with decoded values can't be one encoding:
-/// INVALID_DATA_ENCODING.
-fn join_chunks(items: &[PropertyValue]) -> Result<Vec<u8>, Error> {
-    let mut bytes = Vec::new();
-    for item in items {
-        let PropertyValue::ApplicationData(part) = item else {
-            return Err(common::invalid_data_encoding_error());
-        };
-        bytes.extend_from_slice(part);
+/// The bare members open with the object identifier's primitive context
+/// tag 0.
+fn opens_bare(tag: &Tag) -> bool {
+    tag.is_context(0)
+}
+
+/// The setpoint frame opens with opening tag 0.
+fn opens_setpoint(tag: &Tag) -> bool {
+    tag.is_opening_tag(0)
+}
+
+/// The bare members from `offset` on. The shared codec takes them as a whole
+/// payload, so a reference it returns runs to the end of `bytes`; anything
+/// after the members fails the codec instead.
+fn decode_bare(
+    bytes: &[u8],
+    offset: usize,
+) -> Result<(BACnetObjectPropertyReference, usize), Error> {
+    let reference = decode_object_property_reference(&bytes[offset..])?;
+    Ok((reference, bytes.len()))
+}
+
+/// The setpoint frame from `offset` on, taken as a whole payload as in
+/// [`decode_bare`]. The frame has opened there, so the codec never sees the
+/// empty value that holds no reference.
+fn decode_setpoint(
+    bytes: &[u8],
+    offset: usize,
+) -> Result<(BACnetObjectPropertyReference, usize), Error> {
+    match decode_setpoint_reference(&bytes[offset..])? {
+        Some(reference) => Ok((reference, bytes.len())),
+        None => Err(Error::decoding(offset, "BACnetSetpointReference: no frame")),
     }
-    Ok(bytes)
 }
 
 #[cfg(test)]
