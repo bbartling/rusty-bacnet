@@ -486,3 +486,76 @@ fn who_is_scope_follows_the_last_observation_and_a_fruitless_probe_drops_it() {
     );
     assert_eq!(table.who_is_scope(&device(3)), WhoIsScope::Global);
 }
+
+/// The number of the network this device is attached to, and another one.
+const THIS_NETWORK: u16 = 7;
+const REMOTE_NETWORK: u16 = 5;
+
+/// The source of a request `ROUTER` relays from `FINAL_PEER` on `network`.
+fn relayed(network: u16) -> NpduAddress {
+    NpduAddress {
+        network,
+        mac_address: MacAddr::from_slice(FINAL_PEER),
+    }
+}
+
+fn configured(bindings: Vec<DeviceBinding>) -> DeviceBindingTable {
+    DeviceBindingTable::from_configured(bindings, test_broadcast).unwrap()
+}
+
+/// A binding routed through this network's own number is the local binding
+/// it is once that number is known (#1404): a direct request from its final
+/// MAC is its device's, and one relayed back with this network as its SNET is
+/// not, as for a local binding. With the number unknown, or for a binding
+/// routed to another network, only a request relayed from there matches.
+#[test]
+fn source_binding_takes_a_binding_routed_through_this_network_as_local() {
+    use bacnet_objects::command_source::CommandDeviceBinding::{Unique, Unknown};
+    let routed = |network, mac| {
+        configured(vec![
+            DeviceBinding::routed(device(1), network, mac, ROUTER).unwrap()
+        ])
+    };
+    let here = routed(THIS_NETWORK, FINAL_PEER);
+    let elsewhere = routed(REMOTE_NETWORK, FINAL_PEER);
+    // Bound through this network at its link broadcast MAC: no single node.
+    let broadcast = routed(THIS_NETWORK, BROADCAST);
+    let local = Some(THIS_NETWORK);
+    let (from_here, from_there) = (relayed(THIS_NETWORK), relayed(REMOTE_NETWORK));
+    let one = Unique(device(1));
+    for (table, local_network, immediate, source, expected) in [
+        (&here, local, FINAL_PEER, None, one),
+        (&here, local, ROUTER, Some(&from_here), Unknown),
+        (&here, None, FINAL_PEER, None, Unknown),
+        (&here, None, ROUTER, Some(&from_here), one),
+        (&elsewhere, local, FINAL_PEER, None, Unknown),
+        (&elsewhere, local, ROUTER, Some(&from_there), one),
+        (&broadcast, local, BROADCAST, None, Unknown),
+    ] {
+        assert_eq!(
+            table.source_binding(immediate, source, local_network, test_broadcast),
+            expected,
+            "{local_network:?} {immediate:?} {source:?}"
+        );
+    }
+}
+
+/// A local binding and one routed through this network at the same MAC both
+/// name a direct request from there once the number is known, so it stays
+/// ambiguous. While the number is unknown only the local binding names it.
+#[test]
+fn source_binding_keeps_two_bindings_for_one_direct_source_ambiguous() {
+    use bacnet_objects::command_source::CommandDeviceBinding::{Ambiguous, Unique};
+    let table = configured(vec![
+        DeviceBinding::local(device(1), FINAL_PEER).unwrap(),
+        DeviceBinding::routed(device(2), THIS_NETWORK, FINAL_PEER, ROUTER).unwrap(),
+    ]);
+    assert_eq!(
+        table.source_binding(FINAL_PEER, None, Some(THIS_NETWORK), test_broadcast),
+        Ambiguous
+    );
+    assert_eq!(
+        table.source_binding(FINAL_PEER, None, None, test_broadcast),
+        Unique(device(1))
+    );
+}

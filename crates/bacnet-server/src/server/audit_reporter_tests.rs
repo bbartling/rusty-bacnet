@@ -128,6 +128,7 @@ async fn audit_reporter_list_optional_values_are_validated_independently() {
             mac: SOURCE,
             network: None,
             invoke_id: 77,
+            local_network: None,
         },
     )
     .await;
@@ -683,6 +684,9 @@ mod empty_values;
 
 #[path = "audit_local_network_tests.rs"]
 mod local_network;
+
+#[path = "audit_local_source_tests.rs"]
+mod local_source;
 
 #[path = "audit_dcc_tests.rs"]
 mod dcc;

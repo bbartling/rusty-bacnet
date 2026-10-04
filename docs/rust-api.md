@@ -195,7 +195,11 @@ read-only; a sourced Present_Value NULL relinquishes the specified priority.
 
 The full server derives remote origins from direct network 0/source MAC or routed
 SNET/SADR, independently of Audit reporting. Address-to-Device correlation is a
-snapshot, not authentication. WP, WPM and CreateObject initial commands use that
+snapshot, not authentication. A Device binding routed through the server's own
+network number, once the server knows it, correlates as a local binding does: a
+request from its final MAC with no SNET is that Device's, for the command origin
+and the target Audit record alike (#1404). WP, WPM and CreateObject initial
+commands use that
 origin. Schedule commands name the initiating Schedule and preserve complete
 target references; Staging commands name the actual plan source after its existing
 generation check. Failed CreateObject initialization rolls back the new object;

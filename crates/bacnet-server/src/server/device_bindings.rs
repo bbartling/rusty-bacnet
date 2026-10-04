@@ -1,4 +1,5 @@
 use super::binding_probes::{BindingProbes, WhoIsScope};
+use super::event_recipient_route::RecipientRoute;
 use super::*;
 
 /// Maximum number of configured and observed device bindings held by a server.
@@ -160,11 +161,14 @@ pub(super) struct DeviceBindingTable {
 }
 
 impl DeviceBindingTable {
-    /// Snapshot original sender and correlation while holding only the binding guard.
+    /// Snapshot original sender and correlation while holding only the binding
+    /// guard. `local_network` is this network's own number, which
+    /// [`Self::source_binding`] matches against.
     pub(super) fn command_origin(
         &self,
         immediate: &[u8],
         routed: Option<&NpduAddress>,
+        local_network: Option<u16>,
         is_broadcast: impl Fn(&[u8]) -> bool,
     ) -> bacnet_objects::command_source::CommandOrigin {
         bacnet_objects::command_source::CommandOrigin::Remote {
@@ -175,7 +179,7 @@ impl DeviceBindingTable {
                     |source| source.mac_address.clone(),
                 ),
             },
-            binding: self.source_binding(immediate, routed, is_broadcast),
+            binding: self.source_binding(immediate, routed, local_network, is_broadcast),
         }
     }
 
@@ -185,34 +189,44 @@ impl DeviceBindingTable {
         &self,
         immediate: &[u8],
         routed: Option<&NpduAddress>,
+        local_network: Option<u16>,
         is_broadcast: impl Fn(&[u8]) -> bool,
     ) -> Option<ObjectIdentifier> {
-        match self.source_binding(immediate, routed, is_broadcast) {
+        match self.source_binding(immediate, routed, local_network, is_broadcast) {
             bacnet_objects::command_source::CommandDeviceBinding::Unique(device) => Some(device),
             _ => None,
         }
     }
 
+    /// The Device whose binding names a request's source, when exactly one
+    /// does. A local binding names a request from its MAC that carries no
+    /// SNET; a routed one names a request relayed with its network and final
+    /// MAC as SNET and SADR. A binding routed through `local_network`, this
+    /// network's own number when known, is the local binding it is (#1404),
+    /// as sends to it take it ([`RecipientRoute::localize`], #1358): a node
+    /// on this network reaches us with no SNET (Clause 6.2.2), so the binding
+    /// names a request from its final MAC with none.
     pub(super) fn source_binding(
         &self,
         immediate: &[u8],
         routed: Option<&NpduAddress>,
+        local_network: Option<u16>,
         is_broadcast: impl Fn(&[u8]) -> bool,
     ) -> bacnet_objects::command_source::CommandDeviceBinding {
         use bacnet_objects::command_source::CommandDeviceBinding;
         let now = Instant::now();
         let mut matched = None;
         for device in self.entries.keys() {
-            let matches = match (self.resolve_at(device, now, &is_broadcast), routed) {
-                (DeviceResolution::ResolvedLocal { peer_mac, .. }, None) => {
-                    peer_mac.as_slice() == immediate
+            let resolution = self.resolve_at(device, now, &is_broadcast);
+            let route = RecipientRoute::from_device_resolution(resolution)
+                .localize(local_network, &is_broadcast);
+            let matches = match (route, routed) {
+                (RecipientRoute::BoundLocalUnicast { mac, .. }, None) => {
+                    mac.as_slice() == immediate
                 }
-                (
-                    DeviceResolution::ResolvedRouted {
-                        network, final_mac, ..
-                    },
-                    Some(source),
-                ) => network == source.network && final_mac == source.mac_address,
+                (RecipientRoute::BoundRoutedUnicast { network, mac, .. }, Some(source)) => {
+                    network == source.network && mac == source.mac_address
+                }
                 _ => false,
             };
             if matches {
@@ -450,11 +464,14 @@ fn target_is_usable(target: &DeviceBindingTarget, is_broadcast: impl Fn(&[u8]) -
     }
 }
 
-/// Snapshot only services that can submit a tracked command, before the database lock.
+/// Snapshot only services that can submit a tracked command, before the
+/// database lock. `local_network` is this network's own number as read for
+/// the request.
 pub(super) async fn snapshot_command_origin(
     service: ConfirmedServiceChoice,
     immediate: &[u8],
     routed: Option<&NpduAddress>,
+    local_network: Option<u16>,
     bindings: &Arc<RwLock<DeviceBindingTable>>,
     transactions: &Arc<NotificationTransactions>,
 ) -> Option<bacnet_objects::command_source::CommandOrigin> {
@@ -470,7 +487,7 @@ pub(super) async fn snapshot_command_origin(
         bindings
             .read()
             .await
-            .command_origin(immediate, routed, |mac| {
+            .command_origin(immediate, routed, local_network, |mac| {
                 transactions
                     .audit_routes
                     .get()
