@@ -38,7 +38,14 @@ fn unsigned(values: &[u8]) -> Vec<u8> {
 }
 
 fn msi_db(alarm_values: Vec<u32>) -> (ObjectDatabase, ObjectIdentifier) {
-    let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
+    msi_db_with_states(3, alarm_values)
+}
+
+fn msi_db_with_states(
+    number_of_states: u32,
+    alarm_values: Vec<u32>,
+) -> (ObjectDatabase, ObjectIdentifier) {
+    let mut msi = MultiStateInputObject::new(1, "MSI-1", number_of_states).unwrap();
     msi.set_alarm_values(alarm_values);
     let oid = msi.object_identifier();
     let mut db = ObjectDatabase::new();
@@ -167,8 +174,9 @@ fn remove_list_element_malformed_tail_errors_without_partial_commit() {
 
 #[test]
 fn add_list_element_over_cap_returns_the_clause_15_1_error() {
-    // Fill to MAX_ALARM_VALUES (1024) so any new element trips the cap.
-    let (mut db, oid) = msi_db((0..1024).collect());
+    // Fill to MAX_ALARM_VALUES (1024) so any new element trips the cap. The
+    // object has a state for every value, so each is in range (#1429).
+    let (mut db, oid) = msi_db_with_states(2048, (1..=1024).collect());
     // Unsigned 2000 (0x22 0x07 0xD0) is not in the list. Clause 15.1 names
     // AddListElement's own error, not WriteProperty's
     // NO_SPACE_TO_WRITE_PROPERTY, and the element that did not fit.
@@ -193,7 +201,7 @@ fn add_list_element_over_cap_returns_the_clause_15_1_error() {
     );
     // Present elements alone still fit.
     add(&mut db, oid, &unsigned(&[7, 9])).unwrap();
-    assert_eq!(alarm_values(&db, oid), list_of(0..1024));
+    assert_eq!(alarm_values(&db, oid), list_of(1..=1024));
 }
 
 #[test]
@@ -248,6 +256,18 @@ fn add_list_element_names_the_new_element_the_object_refuses() {
 }
 
 #[test]
+fn add_list_element_names_an_alarm_state_past_the_count() {
+    // The Multi-state Input has three states; state 1 is present, so 4 is the
+    // element the object refuses, and nothing is added (#1429).
+    let (mut db, oid) = msi_db(vec![1]);
+    assert_eq!(
+        list_refusal(add(&mut db, oid, &unsigned(&[1, 2, 4]))),
+        (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, 3)
+    );
+    assert_eq!(alarm_values(&db, oid), list_of([1]));
+}
+
+#[test]
 fn add_list_element_rejects_array_index_on_alarm_values() {
     let (mut db, oid) = msi_db(vec![]);
     let request = request_indexed(oid, PropertyIdentifier::ALARM_VALUES, Some(1), &[0x21, 2]);
@@ -285,7 +305,7 @@ fn whole_list_write_property_decodes_all_elements() {
     // the whole write, names its element (#1048), and leaves the list
     // untouched.
     assert_eq!(
-        list_refusal(write(&mut db, vec![0x21, 4, 0x11]).map(|_| ())),
+        list_refusal(write(&mut db, vec![0x21, 3, 0x11]).map(|_| ())),
         (ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE, 2)
     );
     assert_eq!(
@@ -293,4 +313,11 @@ fn whole_list_write_property_decodes_all_elements() {
         list_of([2, 3]),
         "refused write leaves the list unchanged"
     );
+    // A state the object doesn't have (it has three) is out of range at its
+    // element (#1429).
+    assert_eq!(
+        list_refusal(write(&mut db, unsigned(&[1, 7])).map(|_| ())),
+        (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, 2)
+    );
+    assert_eq!(alarm_values(&db, oid), list_of([2, 3]));
 }

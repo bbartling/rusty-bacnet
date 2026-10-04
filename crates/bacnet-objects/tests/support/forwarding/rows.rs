@@ -153,6 +153,9 @@ pub const QUERIES: &[(&str, Query)] = &[
         )
     }),
     ("is_createable", |o| o.is_createable().to_string()),
+    ("creation_only_properties", |o| {
+        format!("{:?}", o.creation_only_properties())
+    }),
     ("is_deleteable", |o| o.is_deleteable().to_string()),
     ("required_properties", |o| {
         format!("{:?}", o.required_properties())
@@ -280,6 +283,10 @@ pub const COMMANDS: &[(&str, Command)] = &[
                 &origin
             )
         )
+    }),
+    ("initialize_property", |o| {
+        let value = PropertyValue::CharacterString("probe".into());
+        format!("{:?}", o.initialize_property(CUSTOM, value))
     }),
     ("bind_clock_internal", |o| {
         format!("{:?}", o.bind_clock_internal(Some(clock())))

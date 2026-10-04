@@ -1688,6 +1688,43 @@ index against the new object first, as WriteProperty does, and names the first
 initial value it can't apply by its position; one that doesn't decode is
 `PROPERTY/INVALID_DATA_ENCODING` there.
 
+A new object's Object_Name, until an initial value renames it, is its type
+and instance (`BINARY_VALUE-2`). When another object already holds that
+name, the server takes the first free `BINARY_VALUE-2 (n)` from n = 2, so a
+client that renamed an object to the next default name doesn't make the
+create fail (#1437). A few read-only properties take a CreateObject initial
+value: `BACnetObject::creation_only_properties` lists the ones an object sets
+whole only at creation, and the server gives such a value, sent without an
+array index, to `BACnetObject::initialize_property` instead of the write
+route (#1429). The built-in Analog Input and Analog Output take Units (an
+Enumerated up to 65535). The Multi-state Input, Output and Value take
+Number_Of_States (1 to `multistate::MAX_CREATED_NUMBER_OF_STATES`, 1024),
+which resizes State_Text, and State_Text written whole, which needs one
+CharacterString per state. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
+if a value the object holds would name a state past it. WriteProperty still
+answers `PROPERTY/WRITE_ACCESS_DENIED` for each. The PICS lists each
+createable type's set.
+
+On these objects the order of the initial values follows one rule: a
+Number_Of_States that passes its own checks (no array index, an Unsigned, 1
+to 1024) is applied before every other initial value, and everything else,
+including a Number_Of_States that fails those checks, is applied in request
+order. So Present_Value, Relinquish_Default, Alarm_Values and State_Text are
+judged against the requested count wherever it stands, and a bad value
+earlier in the list than a bad count is the one named. A refusal always
+names the value's own position: `[Relinquish_Default 2, Number_Of_States 1]`
+is refused at 1, the default being past the one state. With several good
+counts, the last one sets the states.
+
+A Multi-state Input or Value refuses an Alarm_Values entry past its
+Number_Of_States with `PROPERTY/VALUE_OUT_OF_RANGE` naming the element, over
+WriteProperty, WritePropertyMultiple, the list services and CreateObject
+alike (#1429). `set_alarm_values` stays unchecked for local configuration;
+on a Multi-state Value an entry past the count shows as CONFIGURATION_ERROR.
+A list holding such an entry has to lose it before AddListElement or
+RemoveListElement can change anything else, since each writes the whole list
+back.
+
 AddListElement and RemoveListElement edit only properties that
 `BACnetObject::is_list_property` reports as a BACnetLIST. The default follows the
 Clause 12 datatypes, including identifiers whose type depends on the object type

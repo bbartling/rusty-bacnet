@@ -397,8 +397,7 @@ fn create_object_with_object_name_initial_value_refreshes_index() {
     let created_oid = obj.object_identifier();
     assert_eq!(db.get(&created_oid).unwrap().object_name(), "Custom-Name");
     assert!(
-        db.find_by_name(&format!("{:?}-{}", ObjectType::BINARY_VALUE, 1))
-            .is_none(),
+        db.find_by_name("BINARY_VALUE-1").is_none(),
         "default name must be freed after rename"
     );
 }

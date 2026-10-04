@@ -143,6 +143,10 @@ impl MultiStateValueObject {
     }
 
     /// Set the alarm values and synchronously re-evaluate configuration Reliability.
+    ///
+    /// Unlike a network write, which refuses a state past Number_Of_States
+    /// (#1429), this takes any state; one past the count shows as
+    /// CONFIGURATION_ERROR.
     pub fn set_alarm_values(&mut self, values: Vec<u32>) {
         self.event_detector.alarm_values = values;
         let _ = self.recompute_reliability();
@@ -396,7 +400,7 @@ impl BACnetObject for MultiStateValueObject {
             }
         }
         if property == PropertyIdentifier::ALARM_VALUES {
-            let values = decode_alarm_values_write(array_index, value)?;
+            let values = decode_alarm_values_write(array_index, value, self.number_of_states)?;
             self.set_alarm_values(values);
             return Ok(());
         }
@@ -482,6 +486,28 @@ impl BACnetObject for MultiStateValueObject {
 
     fn is_createable(&self) -> bool {
         true
+    }
+    fn creation_only_properties(&self) -> &'static [PropertyIdentifier] {
+        CREATION_ONLY
+    }
+    fn initialize_property(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        let held = self.priority_array.iter().flatten().copied();
+        let held = held
+            .chain([self.present_value, self.relinquish_default])
+            .chain(self.event_detector.alarm_values.iter().copied());
+        initialize_states(
+            &mut self.number_of_states,
+            &mut self.state_text,
+            held,
+            property,
+            value,
+        )?;
+        let _ = self.recompute_reliability();
+        Ok(())
     }
     fn set_reliability_internal(&mut self, reliability: Reliability) -> Result<(), Error> {
         if self.out_of_service || self.reliability_inhibit.enabled() {

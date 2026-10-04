@@ -16,6 +16,22 @@ use crate::server::ServerConfig;
 
 const PROPERTY_CAPABILITIES_EXPLANATION: &str = "Property rows aggregate configured instances: a row or access flag means at least one instance supports it. Actual availability and access depend on the concrete object. Optional is the metadata conformance classification; a required declaration wins, and absent rows do not vote.";
 
+/// How the text and Markdown PICS introduce a type's
+/// [`ObjectTypeSupport::creation_only_properties`]: read-only to
+/// WriteProperty as a whole, but a CreateObject initial value sets them.
+const CREATION_ONLY_LABEL: &str = "Whole value set only by CreateObject";
+
+/// The type's creation-only properties, comma-separated, or `None` if it
+/// has none.
+fn creation_only_names(support: &ObjectTypeSupport) -> Option<String> {
+    let names: Vec<_> = support
+        .creation_only_properties
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    (!names.is_empty()).then(|| names.join(", "))
+}
+
 // ───────────────────────────── Data model ──────────────────────────────────
 
 /// Complete PICS document per ASHRAE 135-2020 Annex A.
@@ -135,6 +151,10 @@ pub struct ObjectTypeSupport {
     pub object_type: ObjectType,
     /// Whether the type can be created remotely with CreateObject.
     pub createable: bool,
+    /// The properties a CreateObject initial value may set whole on a type
+    /// that is createable, although WriteProperty can't change them later
+    /// (#1429). Empty when the type isn't createable.
+    pub creation_only_properties: Vec<PropertyIdentifier>,
     /// Whether the type can be deleted remotely with DeleteObject.
     pub deleteable: bool,
     /// Union of effective instance rows in ascending property-ID order.
@@ -386,10 +406,16 @@ impl<'a> PicsGenerator<'a> {
 
             let createable = representative.is_createable();
             let deleteable = representative.is_deleteable();
+            let creation_only_properties = if createable {
+                representative.creation_only_properties().to_vec()
+            } else {
+                Vec::new()
+            };
 
             result.push(ObjectTypeSupport {
                 object_type,
                 createable,
+                creation_only_properties,
                 deleteable,
                 supported_properties,
             });
@@ -567,6 +593,9 @@ impl Pics {
                 "\n  Object Type: {} (createable={}, deleteable={})\n",
                 ot.object_type, ot.createable, ot.deleteable
             ));
+            if let Some(names) = creation_only_names(ot) {
+                out.push_str(&format!("  {CREATION_ONLY_LABEL}: {names}\n"));
+            }
             out.push_str("  Properties:\n");
             for prop in &ot.supported_properties {
                 out.push_str(&format!(
@@ -672,9 +701,13 @@ impl Pics {
         out.push_str("\n\n");
         for ot in &self.supported_object_types {
             out.push_str(&format!(
-                "### {}\n\n- Createable: {}\n- Deleteable: {}\n\n",
+                "### {}\n\n- Createable: {}\n- Deleteable: {}\n",
                 ot.object_type, ot.createable, ot.deleteable
             ));
+            if let Some(names) = creation_only_names(ot) {
+                out.push_str(&format!("- {CREATION_ONLY_LABEL}: {names}\n"));
+            }
+            out.push('\n');
             out.push_str("| Property | Access |\n");
             out.push_str("|----------|--------|\n");
             for prop in &ot.supported_properties {
@@ -815,3 +848,6 @@ mod character_set_tests;
 
 #[cfg(test)]
 mod selected_device_tests;
+
+#[cfg(test)]
+mod creation_only_tests;
