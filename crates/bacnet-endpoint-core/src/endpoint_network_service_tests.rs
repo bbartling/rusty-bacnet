@@ -421,3 +421,94 @@ async fn routed_via_local_broadcast_accepts_confirmed_request_for_ultimate_unica
     endpoint.stop().await.unwrap();
     assert_eq!(handle.stops.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn only_destinations_on_the_known_local_network_are_localized() {
+    let station = || MacAddr::from_slice(&[0x30]);
+    let named = |network| {
+        [
+            EndpointApduDestination::Routed {
+                destination_network: network,
+                destination_mac: station(),
+                router_mac: MacAddr::from_slice(&[0x09]),
+            },
+            EndpointApduDestination::RoutedViaLocalBroadcast {
+                destination_network: network,
+                destination_mac: station(),
+            },
+            EndpointApduDestination::RemoteBroadcast {
+                destination_network: network,
+            },
+        ]
+    };
+    let direct = EndpointApduDestination::Direct {
+        destination_mac: station(),
+    };
+    let [unicast, via_broadcast, broadcast] = named(300);
+    assert_eq!(unicast.localized(Some(300)), direct);
+    assert_eq!(via_broadcast.localized(Some(300)), direct);
+    assert_eq!(
+        broadcast.localized(Some(300)),
+        EndpointApduDestination::LocalBroadcast
+    );
+    // Another network, and every network while the number is unknown, keeps
+    // its DNET; destinations naming no network never change.
+    for local_network in [Some(301), None] {
+        for destination in named(300) {
+            assert_eq!(destination.clone().localized(local_network), destination);
+        }
+    }
+    for destination in [
+        direct.clone(),
+        EndpointApduDestination::LocalBroadcast,
+        EndpointApduDestination::GlobalBroadcast,
+    ] {
+        assert_eq!(destination.clone().localized(Some(300)), destination);
+    }
+}
+
+/// The egress frames each destination as its caller names it, even one
+/// naming the published local number: answers keep the route their request
+/// arrived by, and only the senders that start traffic localize it (#1403).
+#[tokio::test]
+async fn the_egress_sends_a_destination_as_named_once_a_number_is_published() {
+    let (transport, mut handle) = capture_transport();
+    let mut endpoint = EndpointIngress::new(transport, 2);
+    let ingress = endpoint.start().await.unwrap();
+    let egress = ingress.egress;
+    let slot = egress.local_network_number().clone();
+    slot.publish(bacnet_types::network_number::NetworkNumber::configured(300).unwrap());
+    assert_eq!(egress.local_network_number().get(), Some(300));
+    let destination = NpduAddress {
+        network: 300,
+        mac_address: MacAddr::from_slice(&[0x30]),
+    };
+    egress
+        .send_apdu(
+            encoded_confirmed_request(),
+            EndpointApduDestination::Routed {
+                destination_network: destination.network,
+                destination_mac: destination.mac_address.clone(),
+                router_mac: MacAddr::from_slice(&[0x09]),
+            },
+            false,
+            NetworkPriority::NORMAL,
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let captured = timeout(WAIT, handle.sent.recv())
+        .await
+        .expect("routed send timed out")
+        .expect("capture channel closed");
+    assert_eq!(
+        captured.destination,
+        LinkDestination::Unicast(MacAddr::from_slice(&[0x09]))
+    );
+    assert_eq!(
+        decode_npdu(captured.npdu).unwrap().destination,
+        Some(destination)
+    );
+
+    endpoint.stop().await.unwrap();
+}

@@ -508,7 +508,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             }
         };
         if let Err(error) = self
-            .publish_registered_port(receivers.normal_bip_port)
+            .publish_registered_port(
+                receivers.normal_bip_port,
+                receivers.egress.local_network_number(),
+            )
             .await
         {
             let _ = self.stop().await;
@@ -966,6 +969,10 @@ mod registered_port_wire_tests;
 #[cfg(test)]
 #[path = "network_number_tests.rs"]
 mod network_number_tests;
+
+#[cfg(test)]
+#[path = "local_network_tests.rs"]
+mod local_network_tests;
 
 #[cfg(test)]
 #[path = "read_work_limit_tests.rs"]

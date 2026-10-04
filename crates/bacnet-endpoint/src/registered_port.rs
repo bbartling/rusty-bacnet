@@ -55,6 +55,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     pub(super) async fn publish_registered_port(
         &mut self,
         actual: Option<(SocketAddrV4, u16)>,
+        local_network: &bacnet_network::network_number::LocalNetworkNumber,
     ) -> Result<(), Error> {
         let Some(oid) = self.registered_network_port else {
             return Ok(());
@@ -68,6 +69,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .write()
             .await;
         db.publish_bip_port_internal(oid, address.ip().octets(), address.port(), capacity as u32)?;
+        // The port's configured number is the local network number from the
+        // start (#1403); the Number owner copies every later change from the
+        // port, as the full server's does.
+        if let Some(state) = db.network_number_internal(oid, None) {
+            local_network.publish(state);
+        }
         if let Some(identity) = &mut self.identity {
             identity.publish_registered_bip(oid, address);
         }

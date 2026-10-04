@@ -236,9 +236,12 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         let (egress_tx, egress_rx) = mpsc::channel(self.queue_capacity);
         let (cancel_tx, cancel_rx) = oneshot::channel();
         let egress_open = Arc::new(AtomicBool::new(true));
+        // The layer moves into the session task below; its number slot stays
+        // shared with the egress, where the endpoint's senders read it.
         let egress = EndpointEgress {
             commands: egress_tx,
             open: Arc::clone(&egress_open),
+            local_network: network.local_network_number().clone(),
         };
         let network = self
             .network

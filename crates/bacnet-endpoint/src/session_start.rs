@@ -22,7 +22,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 Error::Encoding("source Audit lost its B/IP capability at startup".into())
             })?;
             let mut routes = source_routes.take().expect("preflight routes");
-            routes.finalize(broadcast);
+            routes.finalize(broadcast, egress.local_network_number().clone());
             let (source, recipient) = crate::source_audit::SourceAudit::new(
                 Arc::clone(self.database.as_ref().expect("validated source database")),
                 selected,
@@ -91,6 +91,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.network_number_task = receivers.network_controls.map(|mut controls| {
             let egress = egress.clone();
             let registration_lease = self.registered_port_lease.upgrade();
+            // The owner copies its state into the layer's number slot after
+            // each control, where the requester and source routes read it
+            // (#1403).
             let mut owner = bacnet_server::network_number::NetworkNumberOwner::new(
                 self.registered_network_port.map(|oid| {
                     (
@@ -102,7 +105,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                         oid,
                     )
                 }),
-            );
+            )
+            .publishing_to(egress.local_network_number().clone());
             tokio::spawn(async move {
                 let _registration_lease = registration_lease;
                 while let Some(control) = controls.recv().await {

@@ -958,7 +958,8 @@
      "crates/bacnet-client/src/client/routed_path_limits_tests.rs::routed_unicast_needs_one_remote_network_and_one_station",
      "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::path_apis_and_routed_requests_share_the_remote_dnet_bound",
      "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::add_routed_device_refuses_a_destination_no_request_could_reach",
-     "crates/bacnet-client/src/client/number_tests/local_routes.rs::{a_routed_request_naming_this_network_goes_local_and_its_direct_answer_completes_it,a_routed_row_on_this_network_still_bounds_a_local_request,a_long_request_to_this_network_is_segmented_to_the_peer,an_answer_relayed_with_this_networks_snet_leaves_a_local_request_open}"
+     "crates/bacnet-client/src/client/number_tests/local_routes.rs::{a_routed_request_naming_this_network_goes_local_and_its_direct_answer_completes_it,a_routed_row_on_this_network_still_bounds_a_local_request,a_long_request_to_this_network_is_segmented_to_the_peer,an_answer_relayed_with_this_networks_snet_leaves_a_local_request_open}",
+     "crates/bacnet-endpoint/src/local_network_tests.rs::routed_reads_naming_this_network_go_local_and_the_direct_answer_completes_them"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/npdu.rs::tests::reject_message_to_network_payload_requires_exact_length",
@@ -977,7 +978,8 @@
      "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::routed_confirmed_request_to_no_single_device_fails_before_any_state",
      "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::path_apis_and_routed_requests_share_the_remote_dnet_bound",
      "crates/bacnet-client/src/client/routed_path_dnet_bound_tests.rs::add_routed_device_refuses_a_destination_no_request_could_reach",
-     "crates/bacnet-client/src/endpoint_requester_tests.rs::routed_destination_to_no_single_device_fails_before_registration"
+     "crates/bacnet-client/src/endpoint_requester_tests.rs::routed_destination_to_no_single_device_fails_before_registration",
+     "crates/bacnet-endpoint/src/local_network_tests.rs::routed_reads_keep_their_dnet_for_another_network_or_an_unknown_number"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -991,7 +993,8 @@
     "A client attached to a BACnetRouter through a LoopbackTransport port gets reason 4 rejects on its own NetworkLayer from the router's port MAC, so it needs no router-side receiver (#1175).",
     "Every MAC on a routed path holds to NpduAddress::MAX_MAC_LEN (18 octets). A routed request refuses a longer DADR or local source MAC, and an empty or longer router MAC, with Error::Encoding before it reserves or waits on the path; the path configuration methods refuse such a router MAC too (#1267).",
     "A routed confirmed request goes to one device: DNET 0, DNET 65535 or an empty DADR fails with Error::Encoding before the path or a TSM entry is taken. The path methods share that DNET check; add_routed_device and the endpoint requester apply the same rule. Unconfirmed sends keep remote and global broadcasts.",
-    "A routed target naming the client's learned local network number passes the routed checks and then goes as a local request to its DADR: it takes no path state, its limits come from the routed row, and only an answer from that MAC with no SNET completes it."
+    "A routed target naming the client's learned local network number passes the routed checks and then goes as a local request to its DADR: it takes no path state, its limits come from the routed row, and only an answer from that MAC with no SNET completes it.",
+    "The endpoint requester does the same with its session's known number: a Routed or RoutedViaLocalBroadcast destination naming it passes the routed checks, goes to the DADR with no DNET and is keyed to that MAC."
     ]
   },
   {
@@ -5652,7 +5655,8 @@
     "crates/bacnet-endpoint/src/source_rpm_congestion_tests.rs::source_rpm_default_queue_accounts_local_losses_and_recovers_summary",
     "crates/rusty-bacnet/tests/test_endpoint_rpm.py",
     "crates/bacnet-endpoint/src/source_reporter_trait_tests.rs::every_bacnet_object_method_has_a_forwarding_row",
-    "crates/bacnet-endpoint/src/source_reporter_trait_tests.rs::every_method_reaches_the_wrapped_object"
+    "crates/bacnet-endpoint/src/source_reporter_trait_tests.rs::every_method_reaches_the_wrapped_object",
+    "crates/bacnet-endpoint/src/local_network_source_tests.rs::source_records_for_an_address_on_this_network_go_without_a_dnet"
    ],
    "negative_tests": [
     "crates/bacnet-endpoint/src/source_property_identity_tests.rs::source_read_alias_failure_keeps_requested_identity_without_trusting_bad_ack",
@@ -5694,7 +5698,8 @@
     "crates/bacnet-endpoint/src/source_rpm_lifecycle_tests.rs::endpoint_rpm_prewire_profile_and_byte_bounds_with_and_without_source",
     "crates/bacnet-endpoint/src/source_rpm_lifecycle_tests.rs::source_rpm_raw_ack_bound_and_segmented_terminal_fanout",
     "crates/bacnet-endpoint/src/source_rpm_lifecycle_tests.rs::source_rpm_drop_releases_pending_operation_and_database",
-    "crates/bacnet-endpoint/src/source_rpm_congestion_tests.rs::source_rpm_full_queue_summary_wait_is_owned_and_stop_cancels"
+    "crates/bacnet-endpoint/src/source_rpm_congestion_tests.rs::source_rpm_full_queue_summary_wait_is_owned_and_stop_cancels",
+    "crates/bacnet-endpoint/src/local_network_source_tests.rs::source_routes_refuse_another_network_and_an_unknown_number"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -5705,7 +5710,8 @@
     "docs/python-api.md#readrange shared endpoint ReadRange API",
     "crates/rusty-bacnet/rusty_bacnet.pyi ReadRangeResult",
     "docs/python-api.md#endpoint-readpropertymultiple Endpoint ReadPropertyMultiple",
-    "crates/rusty-bacnet/rusty_bacnet.pyi EndpointClient.read_property_multiple"
+    "crates/rusty-bacnet/rusty_bacnet.pyi EndpointClient.read_property_multiple",
+    "CHANGELOG.md Unreleased Fixed entry for #1403 (the shared endpoint's local network number), from changelog.d/1403-endpoint-local-network-number.md"
    ],
    "notes": [
     "Partial RB-21 source READ slice, Refs #727 and #345; broader Audit family status is unchanged. Standard 135-2020 Clause 18.7 pp. 795-799, Tables 19-3/19-4/19-5 pp. 819-828 and Clause 12.63 reviewed; 2024-04-29 errata introduces no source READ field/outcome change.",
@@ -5746,7 +5752,8 @@
     "Typed synchronous egress QueueFull is known local resource loss and joins existing High Volume coalescing; Closed/shutdown and attempted transport/ACK failures are not counted. A summary rejected by QueueFull is restored into the same bounded generation-fenced batch and awaits egress capacity without ordinary retries, recursive counts or unbounded waiters; stop owns its cancellation.",
     "Default16-slot congestion and128-slot full-success fixtures distinguish admission from delivery, while per-permit saturation counts only dropped occurrences. Source remains direct B/IP/Rust-configured, Python conversion matches standalone results, server scalar-error index producer issue remains #789, and broader Audit #345 stays open. No row status/global pin promotion.",
     "Refs #1097: the source Reporter adapter hands every BACnetObject method to the object it wraps. Its test reads the method list from the trait's source and runs each method through the adapter against a probe that logs its calls, comparing arguments and answers with the probe's own; only deletion is answered by an active source itself.",
-    "#1204: with several Devices the source identity is the lowest (ObjectDatabase::local_device). Source audit starts beside other Devices and names it as Source_Device; a session identity naming another Device fails preflight."
+    "#1204: with several Devices the source identity is the lowest (ObjectDatabase::local_device). Source audit starts beside other Devices and names it as Source_Device; a session identity naming another Device fails preflight.",
+    "An Address recipient naming the session's known network number resolves as a network-0 one: records go to its MAC with no DNET. A read routed to that number is audited as a direct read. Another network, or an unknown number, has no route."
    ]
   },
   {
@@ -9289,7 +9296,10 @@
     "crates/bacnet-transport/src/bip/io.rs",
     "crates/bacnet-network/src/network_number.rs::LocalNetworkNumber",
     "crates/bacnet-client/src/client/transaction_peer.rs::ConfirmedTarget::localized",
-    "crates/bacnet-client/src/client/requests.rs::broadcast_network_unconfirmed"
+    "crates/bacnet-client/src/client/requests.rs::broadcast_network_unconfirmed",
+    "crates/bacnet-endpoint-core/src/endpoint_egress.rs::EndpointApduDestination::localized",
+    "crates/bacnet-endpoint-core/src/endpoint_egress.rs::EndpointEgress::local_network_number",
+    "crates/bacnet-endpoint/src/registered_port.rs::publish_registered_port"
    ],
    "positive_tests": [
     "crates/bacnet-integration-tests/tests/ethernet_network_numbers.rs",
@@ -9338,7 +9348,9 @@
     "crates/bacnet-network/src/network_number/tests.rs::a_published_number_leaves_routed_sends_as_named",
     "crates/bacnet-client/src/client/number_tests/local_routes.rs::{a_routed_request_naming_this_network_goes_local_and_its_direct_answer_completes_it,a_device_added_as_routed_on_this_network_is_written_locally,a_who_is_on_this_network_by_number_goes_as_a_local_broadcast}",
     "crates/bacnet-client/src/client/transaction_peer.rs::tests::only_a_routed_target_on_the_known_local_network_is_localized",
-    "crates/bacnet-server/src/server/local_network_outbound_tests.rs::an_answer_to_a_request_routed_from_this_network_goes_back_by_its_route"
+    "crates/bacnet-server/src/server/local_network_outbound_tests.rs::an_answer_to_a_request_routed_from_this_network_goes_back_by_its_route",
+    "crates/bacnet-endpoint/src/local_network_tests.rs::{routed_reads_naming_this_network_go_local_and_the_direct_answer_completes_them,a_registered_ports_configured_number_is_local_from_startup,answers_keep_the_route_their_request_arrived_by}",
+    "crates/bacnet-endpoint-core/src/endpoint_network_service_tests.rs::{only_destinations_on_the_known_local_network_are_localized,the_egress_sends_a_destination_as_named_once_a_number_is_published}"
    ],
    "negative_tests": [
     "crates/bacnet-endpoint/tests/mstp_network_numbers.rs::mstp_number_server_tokio_wire",
@@ -9364,14 +9376,16 @@
     "crates/bacnet-endpoint/tests/bip_network_numbers/support.rs",
     "crates/bacnet-endpoint/tests/sc_client_network_numbers.rs",
     "crates/bacnet-integration-tests/tests/client_ipv6_network_numbers.rs",
-    "crates/bacnet-integration-tests/tests/client_bip_network_numbers.rs"
+    "crates/bacnet-integration-tests/tests/client_bip_network_numbers.rs",
+    "crates/bacnet-endpoint/src/local_network_tests.rs::routed_reads_keep_their_dnet_for_another_network_or_an_unknown_number"
    ],
    "benchmarks": [],
    "public_claims": [
     "README.md#conformance general pointer to this ledger; no row-specific claim",
     "docs/rust-api.md#local-network-number-controls Local Network Number controls",
     "docs/python-api.md#local-network-number-controls Local Network Number controls",
-    "CHANGELOG.md Unreleased Fixed entry for #1358 (the local network number on outbound paths), from changelog.d/1358-local-number-outbound.md"
+    "CHANGELOG.md Unreleased Fixed entry for #1358 (the local network number on outbound paths), from changelog.d/1358-local-number-outbound.md",
+    "CHANGELOG.md Unreleased Fixed entry for #1403 (the shared endpoint's local network number), from changelog.d/1403-endpoint-local-network-number.md"
    ],
    "notes": [
     "Refs #875 and #879: SC, B/IPv6, MS/TP, B/IP BBMD/foreign and Linux Ethernet slices plus standalone-client ownership, with no remaining built-in link profile. Clauses 6.4.19 (What-Is-Network-Number) and 6.4.20 (Network-Number-Is) carry these messages in the 2020 edition, where 6.4.14-6.4.15 are deleted clauses; earlier rows and comments cited the deleted numbers.",
@@ -9414,7 +9428,8 @@
     "Standalone-client MS/TP LoopbackSerial tests in Tokio and DedicatedThread modes reuse the full-server/endpoint fixture: they decode complete broadcast DNER NNI frames behind the same positive FIFO fences, complete the client's own ReadProperty to the peer while a post-enqueue Number producer is held, and release the producer and serial owner on canceled stop and bare drop. Simulator evidence only, with no RS-485 timing or hardware claim.",
     "The full server publishes the number it holds on NetworkLayer::local_network_number, where its senders read it without a lock; with a registered port the copy is taken from the port's state under the database write lock that changed it, so the two never disagree. The standalone client publishes its learned number on its own layer, where its routed requests and network broadcasts read it.",
     "A destination naming the known local number goes as local traffic, with no DNET, on every path the full server and standalone client start: event and Audit notifications, writes in other devices, client requests and network broadcasts. A confirmed one is keyed to the MAC it went to, where its answer comes from.",
-    "NetworkLayer frames the destination its caller names and never rewrites it, so answers, and COV notifications to a subscriber, keep the route their request arrived by. The shared endpoint publishes no number, so its sends go as written."
+    "NetworkLayer frames the destination its caller names and never rewrites it, so answers, and COV notifications to a subscriber, keep the route their request arrived by.",
+    "The shared endpoint session publishes its Number owner's state on its layer, and a registered port's number from startup. Its requester and source Audit routes send to that number as local traffic; answers keep their route."
    ]
   },
   {
