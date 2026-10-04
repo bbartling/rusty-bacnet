@@ -107,10 +107,10 @@ ev = ErrorCode.UNKNOWN_PROPERTY
 
 ### EnableDisable
 
-For `device_communication_control`. Constants: `ENABLE`, `DISABLE`, `DISABLE_INITIATION`.
+For `device_communication_control`, and what `BACnetServer.comm_state()` returns. Constants: `ENABLE`, `DISABLE`, `DISABLE_INITIATION`. `DISABLE` is deprecated, and a rusty-bacnet server refuses it under every DCC policy.
 
 ```python
-ed = EnableDisable.DISABLE
+ed = EnableDisable.DISABLE_INITIATION
 ```
 
 ### ReinitializedState
@@ -864,7 +864,7 @@ await client.delete_object(
 ```python
 await client.device_communication_control(
     "192.168.1.100:47808",
-    EnableDisable.DISABLE,
+    EnableDisable.DISABLE_INITIATION,
     time_duration=60,       # minutes
     password="secret",
 )
@@ -2937,17 +2937,27 @@ then left as it was. A server that is not running raises `RuntimeError`.
 await server.purge_audit_log(ObjectIdentifier(ObjectType.AUDIT_LOG, 1))
 ```
 
-#### `comm_state() -> int`
+#### `comm_state() -> EnableDisable`
 
 Get the server's current DeviceCommunicationControl state.
 
 ```python
 state = await server.comm_state()
-# 0 = Enable, 2 = DisableInitiation
+if state == EnableDisable.DISABLE_INITIATION:
+    ...  # the server is holding back what it would start
 ```
 
-The value is the `EnableDisable` number. The server refuses the deprecated
-Disable (1), so `comm_state()` never returns it.
+The result is `EnableDisable.ENABLE` or `EnableDisable.DISABLE_INITIATION`,
+the same class `device_communication_control` takes. The server refuses the
+deprecated `DISABLE`, so `comm_state()` never returns it.
+
+- `EnableDisable` doesn't compare equal to an `int`, and it is truthy in both
+  states, so `if await server.comm_state():` can't tell them apart. Compare
+  with the constants; `state.to_raw()` gives the number.
+- `copy.copy`, `copy.deepcopy` and `pickle` raise `TypeError` on it. Keep
+  `state.to_raw()` and rebuild with `EnableDisable.from_raw()` instead.
+
+`comm_state()` raises `RuntimeError` before start and after stop.
 
 #### `cov_counters() -> CovCounters`
 

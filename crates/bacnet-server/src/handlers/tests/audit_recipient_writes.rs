@@ -5,7 +5,7 @@ use super::*;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
 use std::borrow::Cow;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 const PROPERTY: PropertyIdentifier = PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT;

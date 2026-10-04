@@ -348,10 +348,10 @@ raw `alarms` response is not a guided source for these values.
 
 ```bash
 # Communication control
-bacnet control 192.168.1.100 disable --duration 5
+bacnet control 192.168.1.100 disable-initiation --duration 5
 bacnet control 192.168.1.100 disable-initiation
 bacnet control 192.168.1.100 enable
-bacnet control 192.168.1.100 disable --password secret
+bacnet control 192.168.1.100 disable-initiation --password secret
 
 # Reinitialize
 bacnet reinit 192.168.1.100 coldstart
@@ -360,7 +360,8 @@ bacnet reinit 192.168.1.100 start-backup
 bacnet reinit 192.168.1.100 activate-changes
 ```
 
-**Control actions:** `enable`, `disable`, `disable-initiation`
+**Control actions:** `enable`, `disable`, `disable-initiation`. `disable` is
+deprecated, and a rusty-bacnet server refuses it under every DCC policy.
 
 **Control flags:**
 

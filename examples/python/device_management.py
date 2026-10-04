@@ -85,7 +85,7 @@ async def main():
         print("Device initiation disabled")
 
         state = await server.comm_state()
-        print(f"Server comm_state: {state} (2 = initiation disabled)")
+        print(f"Server comm_state: {state!r}")  # EnableDisable.DISABLE_INITIATION
 
         # Re-enable
         await client.device_communication_control(

@@ -813,7 +813,7 @@ class AuditOperation:
 
 
 class EnableDisable:
-    """BACnet DeviceCommunicationControl enable/disable options (Clause 16.4)."""
+    """BACnet DeviceCommunicationControl enable/disable options (Clause 16.1)."""
 
     ENABLE: EnableDisable
     DISABLE: EnableDisable
@@ -828,7 +828,7 @@ class EnableDisable:
 
 
 class ReinitializedState:
-    """BACnet ReinitializeDevice state options (Clause 16.5)."""
+    """BACnet ReinitializeDevice state options (Clause 16.4)."""
 
     COLDSTART: ReinitializedState
     WARMSTART: ReinitializedState
@@ -3459,10 +3459,12 @@ class BACnetServer:
         """
         ...
 
-    def comm_state(self) -> Awaitable[int]:
-        """Get the DeviceCommunicationControl state: 0=Enable or 2=DisableInitiation.
+    def comm_state(self) -> Awaitable[EnableDisable]:
+        """Get the DeviceCommunicationControl state.
 
-        The server refuses the deprecated Disable (1), so it never reports it.
+        Returns ``EnableDisable.ENABLE`` or ``EnableDisable.DISABLE_INITIATION``;
+        the server refuses the deprecated ``DISABLE``, so it never reports it.
+        Raises RuntimeError before start and after stop.
         """
         ...
 
