@@ -368,3 +368,40 @@ fn alarm_values_take_occupancy_states_over_the_wire() {
     handle_remove_list_element(&mut db, &list_request(oid, &[0x91, 4, 0x91, 1])).unwrap();
     assert_eq!(read_bytes(&db, oid, ALARM), [0x91, 2]);
 }
+
+#[test]
+fn alarm_values_refuse_normal_over_the_wire() {
+    const ALARM: PropertyIdentifier = PropertyIdentifier::ALARM_VALUES;
+    const HELD: [u8; 6] = [0x91, 4, 0x91, 5, 0x91, 6];
+    let (mut db, oid) = zone_db();
+    // ABOVE_UPPER_LIMIT, DISABLED and NOT_SUPPORTED may all alarm (#1401).
+    write_property(&mut db, oid, ALARM, HELD.to_vec()).unwrap();
+    assert_eq!(read_bytes(&db, oid, ALARM), HELD);
+    // NORMAL (0) may not, over any service: the refusal names the element
+    // and leaves the list alone.
+    let refused = [
+        (
+            "WriteProperty",
+            write_property(&mut db, oid, ALARM, vec![0x91, 3, 0x91, 0]),
+            2,
+        ),
+        (
+            "WritePropertyMultiple",
+            write_property_multiple(&mut db, oid, &[(ALARM, vec![0x91, 0])]),
+            1,
+        ),
+        (
+            "AddListElement",
+            handle_add_list_element(&mut db, &list_request(oid, &[0x91, 2, 0x91, 0])),
+            2,
+        ),
+    ];
+    for (service, result, element) in refused {
+        assert_eq!(
+            list_refusal(result),
+            (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, element),
+            "{service}"
+        );
+    }
+    assert_eq!(read_bytes(&db, oid, ALARM), HELD);
+}
