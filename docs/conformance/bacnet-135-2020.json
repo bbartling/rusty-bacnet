@@ -6015,6 +6015,7 @@
     "crates/bacnet-objects/src/audit/staging_tests.rs::staging_skips_a_write_with_nothing_to_commit",
     "crates/bacnet-server/src/server/audit_notification_staging_tests.rs::a_confirmed_notification_commits_while_the_database_stays_available",
     "crates/bacnet-server/src/server/audit_local_network_tests.rs::{audit_notifications_to_a_binding_routed_through_this_network_go_without_a_dnet,audit_notifications_to_a_binding_routed_to_another_network_keep_its_dnet}",
+    "crates/bacnet-server/src/server/audit_local_source_tests.rs::{a_direct_write_from_a_binding_routed_through_this_network_names_its_device,a_write_relayed_with_this_networks_snet_names_the_device_bound_here,a_direct_write_names_its_address_while_the_number_is_unknown_or_bound_elsewhere}",
     "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_to_a_parent_routed_through_this_network_goes_without_a_dnet",
     "crates/bacnet-server/src/server/audit_dcc_tests.rs::{audit_notifications_start_under_disable_initiation_and_keep_the_reporter_healthy,audit_owing_writes_commit_and_notify_under_disable_initiation,send_now_under_disable_initiation_flushes_the_queue_once,a_resource_drop_under_disable_initiation_is_summarized}",
     "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_goes_out_under_disable_initiation",
@@ -6111,7 +6112,8 @@
     "crates/bacnet-encoding/src/constructed/tests/audit_notification.rs::{an_object_identifier_of_the_wrong_length_is_malformed_even_when_cut_short,an_object_identifier_cut_short_is_a_short_buffer}",
     "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::confirmed_audit_notification_cut_short_draws_services_other",
     "crates/bacnet-server/src/server/audit_dcc_tests.rs::disable_initiation_still_holds_back_cov_and_events_beside_audit",
-    "crates/bacnet-objects/src/audit/staging_tests.rs::a_log_dropped_with_a_staged_change_whose_commit_failed_leaves_storage_alone"
+    "crates/bacnet-objects/src/audit/staging_tests.rs::a_log_dropped_with_a_staged_change_whose_commit_failed_leaves_storage_alone",
+    "crates/bacnet-server/src/server/audit_local_source_tests.rs::a_direct_write_named_by_two_bindings_stays_ambiguous"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -6121,7 +6123,8 @@
     "docs/target-audit-reporters.md#target-audit-reporters",
     "docs/python-api.md#target-audit-reporters",
     "docs/audit-log-forwarding.md#configuration-health-and-resource-bounds",
-    "CHANGELOG.md Unreleased Fixed entry for #1358 (the local network number on outbound paths), from changelog.d/1358-local-number-outbound.md"
+    "CHANGELOG.md Unreleased Fixed entry for #1358 (the local network number on outbound paths), from changelog.d/1358-local-number-outbound.md",
+    "CHANGELOG.md Unreleased Fixed entry for #1404 (requests from a binding routed through the local network number), from changelog.d/1404-local-routed-binding-source.md"
    ],
    "target_write_immediate": "RB-21a/b/c narrow slices only, Refs #345 (remains open). Clause 12.63 / Table 12-82 and Clause 19.6 / Tables 19-3, 19-4, 19-5; Standard 135-2020 PDF pp. 621-624 and 819-828 inspected, including table footnotes; 2024-04-29 errata checked, with commandable-priority footnotes visually verified on errata p. 4. Failed target-operation reporting is implementation-defined; Monitored_Objects and batching are optional. One elected configured Reporter emits separate successful WP/WPM elements after authorization and commit. RB-21b reports execution errors at the existing observed object-write boundary, after decode/semantic prechecks and authorization: WP emits at most one failed record with the actual response-mapped BACnet Error in Result; WPM emits each committed-prefix success, one failed-element record, then halts without attempting or reporting later elements. Authorization/policy denials remain silent by owner decision; decode/pre-execution failures and unknown/timeout/Reject/Abort outcomes are not recast as execution failures. Disabled NONE emits no ordinary records; AUDIT_CONFIG locally designates non-Present_Value properties as configuration, and proprietary levels use AUDIT_ALL behavior. The same filters apply to success and failure records. Commandable Present_Value uses the object's Priority_Array capability and omitted priority 16; other properties are not priority-filtered. External Reporter writes emit once when enabled even with WRITE disabled, while internal status changes cannot recurse. Records include pre-write current value when available, target value, object/property/index, incoming invoke ID, source address or unambiguous known Device identity, local target Device and execution-completion timestamp; successes still omit Result and all target records omit source timestamp. Values over 32 encoded octets are omitted. The target Device owns Audit_Notification_Recipient; configured local/routed Device bindings remain immutable route authority and passive discovery is ineligible. The separate mandatory recipient-change path is described in target_device_recipient. Delivery is best-effort: 64 active slots, no waiting queue, one total three-second send/ACK deadline, no retries, no outbound segmentation, and complete APDU size bounded by the server limit. Encoding/size/admission/send/ACK failures do not change protocol responses or roll back writes and expose COMMUNICATION_FAILURE; an unresolved configured Device destination exposes CONFIGURATION_ERROR; missing local Device or provision rejects startup. Saturation and deadline tests cover both delivery modes without queued replay or recursive records; real UDP tests deliver successes and failures to an Audit Log and query them separately. There is no durable delivery guarantee. Source operations beyond the bounded endpoint READ slice in BACNET-19-SOURCE-READ-PROPERTY, non-WP/WPM production (including ordinary direct local/schedule writes), per-object audit overrides, Maximum_Send_Delay/Send_Now/batching, AUDITING_FAILURE drop records, parent forwarding/outbox/receipt changes (RB-22), and Python parity (RB-23) are explicitly deferred. Corrected RB-20 query contracts are untouched; no full Reporter, BIBB, BTL, or #345 completion claim. Public scope: CHANGELOG.md RB-21a/b/c and AuditReportersConfig Rust API docs. Audit family status is not promoted. #809 narrows the historical best-effort response statement for eligible actual built-in AV/BV Audit setting changes only: object_owned_av_bv_policy.mandatory_precommit_admission records the local atomic reject-before-change contract.",
    "target_write_monitored_objects": "RB-21c, Refs #345. Clause 12.63 / Table 12-82 (PDF pp. 621-623, printed 619-621), Clause 19.6.2 (PDF p. 821, printed 819), Clause 21 BACnetObjectSelector (PDF p. 921, printed 919), and Clause 12.1.5.1 (PDF p. 164, printed 162) inspected. The 2024-04-29 errata do not change selector semantics; item 4 Property_List exclusions are preserved. Local Rust set_monitored_objects(None) omits the optional property and selects nominal catch-all membership. Some(empty) or all-NULL selects no ordinary targets; exact ObjectIdentifier and ObjectType alternatives select matching targets, ignoring NULL and admitting at most one record per attempted element despite duplicates. Selection precedes pending-record creation for both successful and failed WP/WPM elements and never changes execution, response, committed-prefix ordering, reliability, or delivery bounds. Enabled Reporter-target writes bypass selection and existing WRITE/priority filters. Network WP/WPM cannot mutate the property; denied Reporter execution produces one failure record under the existing rule, without recursive delivery records. Effective optional/read-only metadata, Property_List, RP/RPM (including array count/index errors), and runtime PICS reflect local property presence without a metadata-schema change. Existing application primitive codecs encode the untagged NULL/ObjectIdentifier/Enumerated CHOICE and concatenated array; independent byte vectors and real UDP selected success/failure receipt are tested. Multiple target association and overlap health are qualified separately by target_multiple_reporters; no broader support claim.",
@@ -6151,6 +6154,7 @@
     "Storage holds a staged batch a moment before the log serves it: the commit returns on the writer thread, then the request applies the batch under the guard. A query made after the SimpleACK sees the batch.",
     "A Buffer_Size write and `purge_audit_log` stage the same way. A Log_Enable or Buffer_Size write, or a purge, whose commit fails is refused with DEVICE / OPERATIONAL_PROBLEM.",
     "A configured Device binding routed through the known local network number is a local route for target notifications and Audit Log forwarding: no DNET, answered from the final MAC. Target routes are resolved for each notification, so a number learned after startup applies from the next one; a queued or sent notification keeps its route.",
+    "A request from the final MAC of a binding routed through the known local network number, direct or relayed with that number as SNET, names the Device as source. With the number unknown, or two bindings at that MAC, it names the address.",
     "Audit notifications, AUDITING_FAILURE summaries and Audit Log forwards go out under DISABLE_INITIATION (Clause 16.1). DCC never holds one back, marks a Reporter COMMUNICATION_FAILURE or refuses a write that owes one; COV and events stay held.",
     "The endpoint has no DeviceCommunicationControl service, so nothing gates its source audit notifications on DCC.",
     "`stop()` drops Log_Enable, Buffer_Size or purge changes still staged and waits for the commit of the served state; a log dropped with some still staged commits it as it goes. A staged batch is left, since the log takes a committed batch."
@@ -7053,7 +7057,9 @@
     "crates/bacnet-server/src/server/staging_local_writes_tests.rs::staging_writes_bo_bv_blo_at_priority_skips_wildcard_and_notifies_target",
     "crates/bacnet-server/src/server/life_safety_cov_tests/schedule.rs::schedule_unindexed_command_retains_fixed_priority_sixteen",
     "crates/bacnet-endpoint/src/source_reporter_command_tests.rs::command_source_decorator_forwards_exact_origin_and_preserves_active_gate",
-    "crates/rusty-bacnet/tests/test_command_source.py::test_six_family_local_source_owner_and_atomic_correction"
+    "crates/rusty-bacnet/tests/test_command_source.py::test_six_family_local_source_owner_and_atomic_correction",
+    "crates/bacnet-server/src/server/device_bindings_tests.rs::source_binding_takes_a_binding_routed_through_this_network_as_local",
+    "crates/bacnet-server/src/server/audit_local_source_tests.rs::{a_direct_write_from_a_binding_routed_through_this_network_names_its_device,a_write_relayed_with_this_networks_snet_names_the_device_bound_here,a_direct_write_names_its_address_while_the_number_is_unknown_or_bound_elsewhere}"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/command_source/tests.rs::command_source_invalid_writes_are_atomic_and_metadata_is_paired",
@@ -7061,13 +7067,16 @@
     "crates/bacnet-server/src/server/active_cov_subscriptions_tests/command_source.rs::command_source_wire_wpm_prefix_and_create_initial_values_rollback",
     "crates/bacnet-objects/src/command_source/tests.rs::remote_origin_mac_holds_to_the_bacnet_address_bound",
     "crates/bacnet-server/src/server/requests/recipient_mac_bound_tests.rs::write_property_of_a_value_source_mac_past_the_bound_is_invalid_data_type",
-    "crates/bacnet-objects/src/command_source/tests.rs::command_source_correction_refuses_a_stranger_before_its_value"
+    "crates/bacnet-objects/src/command_source/tests.rs::command_source_correction_refuses_a_stranger_before_its_value",
+    "crates/bacnet-server/src/server/device_bindings_tests.rs::source_binding_keeps_two_bindings_for_one_source_ambiguous",
+    "crates/bacnet-server/src/server/audit_local_source_tests.rs::a_direct_write_named_by_two_bindings_stays_ambiguous"
    ],
    "benchmarks": [],
    "public_claims": [
     "docs/rust-api.md#command-source-tracking Command-source tracking",
     "docs/python-api.md#write_property_localobject_id-property_id-value-prioritynone-array_indexnone--source_object write_property_local",
-    "CHANGELOG.md six-family command-source producer"
+    "CHANGELOG.md six-family command-source producer",
+    "CHANGELOG.md Unreleased Fixed entry for #1404 (requests from a binding routed through the local network number), from changelog.d/1404-local-routed-binding-source.md"
    ],
    "notes": [
     "Refs #824. This bounded six-family profile enables paired Value_Source, Value_Source_Array and Last_Command_Time metadata/Property_List/REQUIRED RPM/PICS. Actual origins validate source syntax; generic correction payload grammar stays broader.",
@@ -7079,7 +7088,8 @@
     "Endpoint inbound allowlist and custom default writer semantics are unchanged; writable decorators forward source authority. Specialized source-property COV is evidenced separately by BACNET-13-VALUE-SOURCE-COV.",
     "No Command_Time_Array, broader object-family support or authentication claim. AV/BV/MSV tracking applies to commandable instances; their noncommandable construction modes are qualified separately by BACNET-12-VALUE-PRESENT-VALUE-ACCESS.",
     "#1156: a remote origin's MAC must fit BACnetAddress::MAX_MAC_LEN (it was 255 octets), so the address Value_Source it publishes always encodes; a correction carrying a longer address does not decode and fails with PROPERTY / INVALID_DATA_TYPE, leaving the source unchanged.",
-    "A Value_Source correction checks the slot owner before decoding the value, so a requester other than the owner gets WRITE_ACCESS_DENIED whatever it wrote, a NULL included."
+    "A Value_Source correction checks the slot owner before decoding the value, so a requester other than the owner gets WRITE_ACCESS_DENIED whatever it wrote, a NULL included.",
+    "With the local network number known, a local binding or one routed through that number names a request from its MAC with no SNET and one relayed with that number and MAC as SNET and SADR."
    ]
   },
   {

@@ -205,6 +205,10 @@ pub(super) struct RequestSource<'s> {
     pub(super) mac: &'s [u8],
     pub(super) network: Option<&'s NpduAddress>,
     pub(super) invoke_id: u8,
+    /// This network's own number as read for the request, the one its
+    /// command origin was matched against too, so a binding routed through
+    /// it names a direct request from its final MAC (#1404).
+    pub(super) local_network: Option<u16>,
 }
 
 pub(super) struct WriteAudit<'a, T: TransportPort> {
@@ -262,6 +266,7 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
             mac: source_mac,
             network: source_network,
             invoke_id,
+            local_network,
         } = request;
         // Entries were checked against the concrete link at configuration or
         // observation admission. Correlation needs no caller code under locks.
@@ -269,7 +274,7 @@ impl<'a, T: TransportPort + 'static> WriteAudit<'a, T> {
             bindings
                 .read()
                 .await
-                .source_device(source_mac, source_network, |mac| {
+                .source_device(source_mac, source_network, local_network, |mac| {
                     transactions
                         .audit_routes
                         .get()

@@ -149,12 +149,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         let mut ack_buf = BytesMut::with_capacity(512);
+        // One reading of this network's number for the command origin and the
+        // Audit source, so both tie the request to the same Device (#1404).
+        let local_network = network.local_network_number().get();
         // Snapshot actual original sender and correlation independently of Audit;
         // the binding guard is gone before any object mutation takes place.
         let command_origin = device_bindings::snapshot_command_origin(
             service_choice,
             source_mac,
             source_network.as_ref(),
+            local_network,
             device_bindings,
             notification_transactions,
         )
@@ -177,6 +181,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 mac: source_mac,
                 network: source_network.as_ref(),
                 invoke_id,
+                local_network,
             },
         )
         .await;
