@@ -9292,7 +9292,7 @@
     "Direct matrix covers NULL/ordinary inputs and present read-only controls; Rust observed WPM proves exact coordinate and retained DESCRIPTION prefix. Installed Python exposes class/code and prefix through real localhost WP/WPM, not a new failed-coordinate API. This narrow evidence does not claim full object or service conformance.",
     "Over WP, WPM and local writes, a NULL succeeds unchanged on a property that isn't commandable here and has no application NULL in its datatype: the object is asked first, and its INVALID_DATA_TYPE refusal of the NULL becomes the success.",
     "The checks an object makes before the value keep their errors: unknown property, WRITE_ACCESS_DENIED (state included) and INVALID_ARRAY_INDEX. An array element is judged by its own datatype; index 0, the size, is an Unsigned.",
-    "Such a NULL is audited as a successful write and gets no COV, event, Schedule, Command or save work. Most objects take a NULL to Description or Out_Of_Service as a no-op themselves; the post-write checks then find no change.",
+    "Over WP and WPM such a NULL is audited as a successful write; none gets COV, event, Schedule, Command or save work. Most objects take a NULL to Description or Out_Of_Service as a no-op themselves; the post-write checks then find no change.",
     "CreateObject initial values and a Schedule's target writes follow the same rule: such a NULL leaves the property as it is, the create goes on to its next value, and the Schedule counts the target as one that took the write."
    ]
   },

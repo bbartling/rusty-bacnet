@@ -1661,10 +1661,13 @@ not writable in the object's state, or an array index out of range is refused as
 before. An object's own Present_Value relinquish, and a property that stores a
 NULL, never reach the rule. The rule covers an array element too, judged against
 the element's datatype once the index checks out. Nothing follows such a write as
-a change (no COV report, event pass or save); an Audit Reporter records it as a
-successful write. A CreateObject goes on to its next initial value, and a
-Schedule counts the target as one that took its write. A custom object should therefore check access and state before
-the value's datatype, as the built-in objects do.
+a change (no COV report, event pass or save). Over WriteProperty and
+WritePropertyMultiple an Audit Reporter records it as a successful write; a
+CreateObject is audited once, as its CREATE, and a Schedule's target writes
+aren't audited. A CreateObject goes on to its next initial value, and a
+Schedule counts the target as one that took its write. A custom object should
+therefore check access and state before the value's datatype, as the built-in
+objects do.
 
 WriteProperty and WritePropertyMultiple give a property that
 `BACnetObject::is_list_property` reports as a BACnetLIST, written whole, to the
