@@ -4349,8 +4349,9 @@ a cleanup-task panic remains an error on later calls.
 server-owned even if its caller stops waiting. Shutdown cancels and joins it;
 retained handles reject new sends and do not prolong the transport lifetime.
 While DeviceCommunicationControl restricts initiation, a send goes nowhere and
-fails with `SERVICES` / `COMMUNICATION_DISABLED` (see [Discovery answers under
-DeviceCommunicationControl](#discovery-answers-under-devicecommunicationcontrol)).
+fails with `SERVICES` / `COMMUNICATION_DISABLED` (see [Discovery under
+DeviceCommunicationControl](#discovery-under-devicecommunicationcontrol)); an
+announce loop should treat that error as a skipped announcement.
 Local mutation methods reject before changing objects once shutdown starts.
 `read_local()`, PICS, counters and database inspection remain available after
 Rust server stop. `local_mac()` retains the last bound address snapshot; it does
@@ -4707,12 +4708,13 @@ the notification:
 A write a Command or Channel makes in another device follows the same rule
 (see [Building Control](#building-control-7)).
 
-### Discovery answers under DeviceCommunicationControl
+### Discovery under DeviceCommunicationControl
 
 Of the discovery messages, Clause 16.1 lets a device whose initiation is
 disabled send only the I-Am that answers a Who-Is (#1388). Under
 DISABLE_INITIATION the server therefore still answers Who-Is, but a Who-Has
-gets no I-Have, and `broadcast_i_am()` sends nothing and returns `SERVICES` /
+gets no I-Have, and an I-Am announcement through `broadcast_i_am()` or an
+`IAmBroadcaster` sends nothing and returns `SERVICES` /
 `COMMUNICATION_DISABLED`. The state is read just before the I-Have would go
 out, ahead of the discovery limiter, so a held-back Who-Has costs no rate
 budget and leaves nothing to coalesce: the same request is answered once
