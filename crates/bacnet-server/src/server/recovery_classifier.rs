@@ -1,6 +1,6 @@
 //! Local admission classification only; never authorizes or mutates DCC state.
 use super::Class;
-use bacnet_encoding::constructed::tagged::{decode_ctx_primitive, next_is_context};
+use bacnet_encoding::constructed::tagged::{decode_ctx_primitive, decode_optional_ctx};
 use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
 use bacnet_types::enums::{ConfirmedServiceChoice, EnableDisable};
 use bacnet_types::error::Error;
@@ -26,19 +26,16 @@ pub(in crate::server) fn confirmed_class(service: ConfirmedServiceChoice, data: 
 // password storage. There is deliberately no total-request-length cutoff.
 fn bounded_password(data: &[u8]) -> bool {
     let read = || -> Result<bool, Error> {
-        let mut offset = 0;
-        if next_is_context(data, offset, 0)? {
-            (_, offset) = decode_ctx_primitive(data, offset, 0, "")?;
-        }
+        let (_, offset) = decode_optional_ctx(data, 0, 0, "", decode_ctx_primitive)?;
         let (_, end) = decode_ctx_primitive(data, offset, 1, "")?;
-        if !next_is_context(data, end, 2)? {
-            return Ok(true);
-        }
-        let (password, _) = decode_ctx_primitive(data, end, 2, "")?;
-        Ok(match password.first() {
-            Some(0 | 5) => password.len() <= 21,
-            Some(4) => password.len() <= 41,
-            _ => false,
+        let (password, _) = decode_optional_ctx(data, end, 2, "", decode_ctx_primitive)?;
+        Ok(match password {
+            None => true,
+            Some(content) => match content.first() {
+                Some(0 | 5) => content.len() <= 21,
+                Some(4) => content.len() <= 41,
+                _ => false,
+            },
         })
     };
     read().unwrap_or(false)

@@ -325,14 +325,10 @@ fn an_optional_field_is_read_only_under_its_own_tag() {
 
 #[test]
 fn an_optional_primitive_yields_its_contents_or_nothing() {
-    // What tags::decode_optional_context did, read with the peek and
-    // decode_ctx_primitive (#1374).
+    // What tags::decode_optional_context did (#1374): the contents come
+    // back borrowed from the input.
     fn read(data: &[u8], tag: u8) -> Result<(Option<&[u8]>, usize), Error> {
-        if !next_is_context(data, 0, tag)? {
-            return Ok((None, 0));
-        }
-        let (contents, end) = decode_ctx_primitive(data, 0, tag, W)?;
-        Ok((Some(contents), end))
+        decode_optional_ctx(data, 0, tag, W, decode_ctx_primitive)
     }
     assert_eq!(read(&[0x09, 42], 0).unwrap(), (Some(&[42][..]), 2));
     assert_eq!(read(&[0x19, 42], 0).unwrap(), (None, 0));

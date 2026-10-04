@@ -3,7 +3,7 @@
 use bacnet_encoding::constructed::tagged::{
     decode_app_enumerated, decode_app_object_id, decode_app_unsigned, decode_ctx_constructed,
     decode_ctx_primitive, decode_ctx_unsigned, decode_optional_ctx, expect_end,
-    next_is_application, next_is_context, next_is_opening,
+    next_is_application, next_is_opening,
 };
 use bacnet_encoding::constructed::{check_encoded_mac_len, decode_recipient, encode_recipient};
 use bacnet_encoding::primitives;
@@ -174,17 +174,23 @@ impl GetEnrollmentSummaryRequest {
         }
 
         // [2] eventStateFilter (optional)
-        let mut event_state_filter = None;
-        if next_is_context(data, offset, 2)? {
-            let (content, end) =
-                decode_ctx_primitive(data, offset, 2, "EnrollmentSummary eventStateFilter")?;
-            let value = decode_closed_enumeration(
-                content,
-                EnrollmentSummaryEventStateFilter::ACTIVE.to_raw(),
-            )?;
-            event_state_filter = Some(EnrollmentSummaryEventStateFilter::from_raw(value));
-            offset = end;
-        }
+        let (event_state, new_offset) = decode_optional_ctx(
+            data,
+            offset,
+            2,
+            "EnrollmentSummary eventStateFilter",
+            decode_ctx_primitive,
+        )?;
+        let event_state_filter = match event_state {
+            Some(content) => Some(EnrollmentSummaryEventStateFilter::from_raw(
+                decode_closed_enumeration(
+                    content,
+                    EnrollmentSummaryEventStateFilter::ACTIVE.to_raw(),
+                )?,
+            )),
+            None => None,
+        };
+        offset = new_offset;
 
         // [3] eventTypeFilter (optional)
         let (event_type, new_offset) = decode_optional_ctx(

@@ -86,6 +86,8 @@ async fn mistagged_file_requests_draw_services_other() {
     }
     let before = contents(&h).await;
 
+    // The writes below carry 0x42 where the served ones above wrote 0x41, so
+    // any of them carried out would change a file.
     let cases: [(ConfirmedServiceChoice, &str, Vec<u8>); 9] = [
         (
             READ,
@@ -113,30 +115,30 @@ async fn mistagged_file_requests_draw_services_other() {
         (
             WRITE,
             "start as an Unsigned and file data as a CharacterString",
-            request(FILE_1, &[0x0E, 0x21, 0x05, 0x72, 0x00, 0x41, 0x0F]),
+            request(FILE_1, &[0x0E, 0x21, 0x05, 0x72, 0x00, 0x42, 0x0F]),
         ),
         (
             WRITE,
             "file data as a CharacterString",
-            request(FILE_1, &[0x0E, 0x31, 0x05, 0x72, 0x00, 0x41, 0x0F]),
+            request(FILE_1, &[0x0E, 0x31, 0x05, 0x72, 0x00, 0x42, 0x0F]),
         ),
         (
             WRITE,
             "file identifier as an application Unsigned",
             [
-                0x24, 0x02, 0x80, 0x00, 0x01, 0x0E, 0x31, 0x05, 0x62, 0x00, 0x41, 0x0F,
+                0x24, 0x02, 0x80, 0x00, 0x01, 0x0E, 0x31, 0x05, 0x62, 0x00, 0x42, 0x0F,
             ]
             .to_vec(),
         ),
         (
             WRITE,
             "a record as a context [0]",
-            request(FILE_2, &[0x1E, 0x31, 0x00, 0x21, 0x01, 0x09, 0x41, 0x1F]),
+            request(FILE_2, &[0x1E, 0x31, 0x00, 0x21, 0x01, 0x09, 0x42, 0x1F]),
         ),
         (
             WRITE,
             "the first of two records as an application Unsigned",
-            request(FILE_2, &[0x1E, 0x31, 0x00, 0x21, 0x02, 0x21, 0x41, 0x1F]),
+            request(FILE_2, &[0x1E, 0x31, 0x00, 0x21, 0x02, 0x21, 0x42, 0x1F]),
         ),
     ];
     for (service, what, body) in &cases {

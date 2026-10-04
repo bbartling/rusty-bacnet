@@ -38,9 +38,9 @@
 //! The helpers another crate needs are public: the peeks for an optional
 //! member, a frame's opening and closing tags and its body, the context
 //! readers for contents, fixed-size contents, Unsigned or ENUMERATED values,
-//! REAL, BOOLEAN, CharacterString and object identifiers, the optional-member
-//! wrapper, the application readers, and the trailing-data check. The rest
-//! stay private to this crate.
+//! REAL, BOOLEAN, BIT STRING, OCTET STRING, CharacterString and object
+//! identifiers, the optional-member wrapper, the application readers, and
+//! the trailing-data check. The rest stay private to this crate.
 //!
 //! ```
 //! use bacnet_encoding::constructed::tagged::{decode_ctx_unsigned, expect_end, next_is_context};
@@ -330,7 +330,7 @@ pub fn decode_ctx_object_id(
 
 /// Require a primitive context tag `tag` at `offset` holding a BIT STRING;
 /// returns its unused-bit count and data octets.
-pub(crate) fn decode_ctx_bit_string(
+pub fn decode_ctx_bit_string(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -343,7 +343,7 @@ pub(crate) fn decode_ctx_bit_string(
 
 /// Require a primitive context tag `tag` at `offset` holding an OCTET STRING;
 /// returns a copy of its octets.
-pub(crate) fn decode_ctx_octet_string(
+pub fn decode_ctx_octet_string(
     data: &[u8],
     offset: usize,
     tag: u8,
@@ -368,12 +368,14 @@ pub fn decode_ctx_character_string(
 
 /// Read the optional member under primitive context tag `tag` with `decode`
 /// when that tag comes next; otherwise `None` with the offset unchanged.
-pub fn decode_optional_ctx<T>(
-    data: &[u8],
+/// What `decode` returns may borrow from `data`, so [`decode_ctx_primitive`]
+/// yields the member's contents.
+pub fn decode_optional_ctx<'a, T>(
+    data: &'a [u8],
     offset: usize,
     tag: u8,
     what: &str,
-    decode: impl FnOnce(&[u8], usize, u8, &str) -> Result<(T, usize), Error>,
+    decode: impl FnOnce(&'a [u8], usize, u8, &str) -> Result<(T, usize), Error>,
 ) -> Result<(Option<T>, usize), Error> {
     if !next_is_context(data, offset, tag)? {
         return Ok((None, offset));
