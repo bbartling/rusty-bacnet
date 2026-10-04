@@ -27,7 +27,8 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_server::server::{BACnetServer, IAmBroadcaster};
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_transport::bvll::encode_bip_mac;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use clap::Parser;
 use tokio::sync::RwLock;
@@ -270,6 +271,14 @@ fn verify_server_mac(device_ip: Ipv4Addr, port: u16, mac: &[u8]) {
     }
 }
 
+/// Whether an announcement failed only because a remote DeviceCommunicationControl
+/// has disabled initiation: an expected state while it lasts, not a fault.
+fn held_back_by_dcc(error: &Error) -> bool {
+    matches!(error, Error::Protocol { class, code }
+        if *class == ErrorClass::SERVICES.to_raw() as u32
+            && *code == ErrorCode::COMMUNICATION_DISABLED.to_raw() as u32)
+}
+
 async fn iam_announcement_task(
     announcer: IAmBroadcaster<bacnet_transport::bip::BipTransport>,
     instance: u32,
@@ -282,6 +291,9 @@ async fn iam_announcement_task(
         tokio::time::sleep(Duration::from_secs(interval_secs)).await;
         match announcer.broadcast_i_am().await {
             Ok(()) => info!("I-Am announcement sent for device {instance}"),
+            Err(e) if held_back_by_dcc(&e) => {
+                debug!("I-Am announcement skipped: DeviceCommunicationControl disabled initiation")
+            }
             Err(e) => warn!("I-Am announcement failed: {e}"),
         }
     }
@@ -537,10 +549,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log_discovery_help(&net, args.port, args.instance);
 
     if args.announce_interval > 0 {
-        if let Err(e) = announcer.broadcast_i_am().await {
-            warn!("startup I-Am broadcast failed: {e}");
-        } else {
-            info!("startup I-Am broadcast sent for device {}", args.instance);
+        match announcer.broadcast_i_am().await {
+            Ok(()) => info!("startup I-Am broadcast sent for device {}", args.instance),
+            Err(e) if held_back_by_dcc(&e) => {
+                info!("startup I-Am broadcast skipped: DeviceCommunicationControl disabled initiation")
+            }
+            Err(e) => warn!("startup I-Am broadcast failed: {e}"),
         }
         tokio::spawn(iam_announcement_task(
             announcer.clone(),
