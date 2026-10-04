@@ -2,8 +2,9 @@
 //! the references that refused it (#1436), so a configuration fault clears
 //! once its cause is gone, though the Schedule's value never changes. The
 //! retry goes to those references alone, so a Command or Channel that took
-//! the value is not run again, and a target that still refuses keeps the
-//! fault and logs nothing above debug.
+//! the value is not run again. A target that still refuses keeps the fault
+//! and logs nothing above debug; one that now fails otherwise ends it and
+//! warns once, as it would have from the start.
 //!
 //! The databases come from `schedule_reference_reliability_tests`: Monday
 //! 5 October 2026, 09:00, inside every Schedule's period. The clock is
@@ -258,4 +259,38 @@ async fn a_reference_still_refused_keeps_the_fault_and_logs_only_at_debug() {
         assert_eq!(above_debug, 0, "a retry logs nothing above debug");
         assert!(debug >= 2, "the retry and its refusal log at debug");
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_retry_that_fails_otherwise_ends_the_fault_and_warns_once() {
+    let log = ScheduleLog::default();
+    let _guard = log.install();
+    let five = || PropertyValue::Unsigned(5);
+    let msv9 = || Box::new(MultiStateValueObject::new(9, "MSV-9", 3).unwrap());
+
+    // With MSV-9 there from the start, state 5 of 3 is out of range: a
+    // failure, not a configuration fault, and it warns.
+    let db = database(five(), vec![reference(msv(9), P::PRESENT_VALUE)]);
+    db.write().await.add(msv9()).unwrap();
+    tick_schedules(&db).await;
+    assert_eq!(health(&db).await, HEALTHY);
+    assert_eq!(log.take().1, 1);
+
+    // Created after the Schedule found it missing, MSV-9 ends the same way.
+    let db = database(five(), vec![reference(msv(9), P::PRESENT_VALUE)]);
+    tick_schedules(&db).await;
+    assert_eq!(health(&db).await, FAULTED, "MSV-9 is missing");
+    log.take();
+    db.write().await.add(msv9()).unwrap();
+    tick_schedules(&db).await;
+    assert_eq!(health(&db).await, HEALTHY);
+    assert_eq!(log.take().1, 1, "the retry's new failure warns once");
+    assert_eq!(
+        read(&*db.read().await, msv(9), P::PRESENT_VALUE),
+        PropertyValue::Unsigned(1)
+    );
+    // MSV-9 no longer refuses, so no retry follows, and nothing is logged.
+    tick_schedules(&db).await;
+    assert_eq!(health(&db).await, HEALTHY);
+    assert_eq!(log.take(), (0, 0));
 }

@@ -321,7 +321,9 @@ async fn a_target_created_later_takes_the_value_within_one_tick() {
 
     // The server's next pass, within a minute, offers the unchanged value to
     // AO-9 again: it takes it and the fault clears. AV-1 keeps its value and
-    // reports nothing.
+    // its subscriber hears nothing, though a rewrite of the same 10.0 would
+    // send nothing either; `schedule::reference_retry_tests` shows that a
+    // retry goes to the refused references alone.
     tokio::time::sleep(Duration::from_secs(60)).await;
     h.settle().await;
     assert_eq!(slot(&h, ao9, 16).await, PropertyValue::Real(10.0));

@@ -2233,10 +2233,13 @@ otherwise, WRITE_ACCESS_DENIED included) per reference. A refusal clears when
 that target later takes a value or leaves the list; a NULL, or an
 out-of-service value of another datatype, counts for nothing. While a refusal
 stands, each pass with nothing else to send offers the current value again to
-the refused references alone (#1436), so a target object created later, or an
+the refused references alone (#1436): the 60-second tick, or the pass any
+committed write to the Schedule runs. So a target object created later, or an
 array grown to take the index, gets the value and clears the fault within one
-tick. Those retries skip a NULL value and a Schedule out of service or outside
-its period, and the server logs their failures at debug.
+tick. A retry that fails otherwise (an out-of-range value, a denied write) ends
+the refusal as well, as that failure on a first write would never have raised
+it, and warns once; one still refused logs at debug. Retries skip a NULL value
+and a Schedule out of service or outside its period.
 
 List_Of_Object_Property_References and Priority_For_Writing are
 network-writable too (#1088), through the setters' checks. The list is written

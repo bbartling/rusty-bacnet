@@ -1,13 +1,14 @@
 //! A pass with nothing else to send retries the references that refused the
 //! Schedule's value (#1436), so a configuration fault can clear once its
 //! cause is gone: the current value goes to those references alone, the slots
-//! the Schedule holds stay as they were, and a NULL value, Out_Of_Service and
-//! a day outside Effective_Period retry nothing.
+//! the Schedule holds stay as they were, a retry that fails otherwise ends the
+//! refusal too, and a NULL value, Out_Of_Service and a day outside
+//! Effective_Period retry nothing.
 
 use super::*;
 use bacnet_types::calendar::SpecificDate;
 
-use ScheduleTargetOutcome::{Accepted, DatatypeRefused, ReferenceRefused};
+use ScheduleTargetOutcome::{Accepted, DatatypeRefused, Failed, ReferenceRefused};
 
 /// Monday 14 September 2026.
 fn monday() -> SpecificDate {
@@ -104,6 +105,26 @@ fn a_datatype_refusal_is_retried_too() {
     assert_eq!(retry, retry_to_av9());
     assert!(sched.complete_schedule_write(&retry, &[Accepted]));
     assert!(!faulted(&sched));
+}
+
+#[test]
+fn a_retry_that_fails_otherwise_ends_the_refusal() {
+    for refusal in [ReferenceRefused, DatatypeRefused] {
+        let mut sched = refused_by_av9(refusal);
+        // A write that isn't a retry and fails otherwise leaves the refusal.
+        let write = ScheduleWrite {
+            retry: false,
+            ..retry_to_av9()
+        };
+        assert!(!sched.complete_schedule_write(&write, &[Failed]));
+        assert!(faulted(&sched), "{refusal:?}: not a retry");
+        // A retry that fails otherwise, say out of range for the object
+        // created since, ends it: AV-9 stands as if that were its first write.
+        let retry = tick(&mut sched, at(9, 1)).expect("a retry");
+        assert!(sched.complete_schedule_write(&retry, &[Failed]));
+        assert!(!faulted(&sched), "{refusal:?}: the retry failed otherwise");
+        assert_eq!(tick(&mut sched, at(9, 2)), None);
+    }
 }
 
 #[test]

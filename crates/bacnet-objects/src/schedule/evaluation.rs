@@ -65,7 +65,9 @@ pub enum ScheduleTargetOutcome {
     ReferenceRefused,
     /// Any other failure. It says nothing about the configuration:
     /// WRITE_ACCESS_DENIED, for one, can come from the target's state
-    /// (Out_Of_Service, a lock) and pass with it.
+    /// (Out_Of_Service, a lock) and pass with it. On a
+    /// [`retry`](ScheduleWrite::retry) it ends the member's refusal, since
+    /// the target no longer refuses it (#1436).
     Failed,
 }
 

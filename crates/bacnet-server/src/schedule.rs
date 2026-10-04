@@ -18,9 +18,11 @@
 //! #1086), as does a reference naming a missing object or property or an
 //! array index the property can't take (#1433). While such a refusal stands,
 //! a pass with nothing else to send for that Schedule offers its value again
-//! to the refused references alone (#1436), so the fault clears within one
-//! tick of its cause going away: the object created, say, or the array grown.
-//! Those retries log at debug, since they repeat every tick.
+//! to the refused references alone (#1436): the 60-second tick, or the pass a
+//! committed write to the Schedule runs, of any property. So the fault clears
+//! within one tick of its cause going away: the object created, say, or the
+//! array grown. A retry still refused logs at debug, since it repeats every
+//! pass; one that fails otherwise ends the refusal and warns once.
 //!
 //! A NULL relinquishes the Schedule's slot in a commandable target. On a
 //! target property that isn't commandable and has no NULL in its datatype,
@@ -232,6 +234,7 @@ fn deliver(
                 origin.as_ref(),
             )
         });
+        let outcome = ScheduleTargetOutcome::of(&result);
         match &result {
             Ok(()) => commit.changed(target_oid),
             // A NULL on a target property that isn't commandable and can't
@@ -249,13 +252,24 @@ fn deliver(
                 outcomes.push(ScheduleTargetOutcome::Accepted);
                 continue;
             }
-            // A retry repeats every pass while the refusal stands (#1436).
-            Err(e) if write.retry => debug!(
-                target = %target_oid,
-                property = prop_id,
-                error = %e,
-                "Schedule retry failed to write to controlled property"
-            ),
+            // A retry still refused repeats every pass while the refusal
+            // stands (#1436). One failing otherwise ends the refusal, so it
+            // warns once, as a first write failing that way does.
+            Err(e)
+                if write.retry
+                    && matches!(
+                        outcome,
+                        ScheduleTargetOutcome::DatatypeRefused
+                            | ScheduleTargetOutcome::ReferenceRefused
+                    ) =>
+            {
+                debug!(
+                    target = %target_oid,
+                    property = prop_id,
+                    error = %e,
+                    "Schedule retry still refused by controlled property"
+                )
+            }
             Err(e) => warn!(
                 target = %target_oid,
                 property = prop_id,
@@ -263,7 +277,7 @@ fn deliver(
                 "Schedule failed to write to controlled property"
             ),
         }
-        outcomes.push(ScheduleTargetOutcome::of(&result));
+        outcomes.push(outcome);
     }
     let reliability_changed = db_w
         .get_mut(&initiator)

@@ -409,8 +409,8 @@
     "crates/bacnet-endpoint/src/source_reporter_schedule_tests.rs::source_reporter_forwards_complete_schedule_targets",
     "crates/bacnet-objects/src/schedule/reliability_tests.rs::a_reference_the_target_cannot_write_faults_the_schedule_until_it_takes_one",
     "crates/bacnet-server/src/schedule_reference_reliability_tests.rs::{a_reference_its_target_can_never_write_faults_the_schedule,the_fault_clears_once_the_reference_is_fixed,a_missing_object_created_later_takes_the_value_at_the_next_pass}",
-    "crates/bacnet-objects/src/schedule/retry_tests.rs::{a_pass_with_nothing_else_to_send_retries_only_the_refused_reference,a_datatype_refusal_is_retried_too,a_retry_leaves_the_held_slots_alone,a_new_value_goes_to_the_whole_list_not_as_a_retry}",
-    "crates/bacnet-server/src/schedule_reference_retry_tests.rs::{a_state_text_index_that_becomes_valid_clears_the_fault,a_retry_runs_no_command_or_channel_member_again}",
+    "crates/bacnet-objects/src/schedule/retry_tests.rs::{a_pass_with_nothing_else_to_send_retries_only_the_refused_reference,a_datatype_refusal_is_retried_too,a_retry_that_fails_otherwise_ends_the_refusal,a_retry_leaves_the_held_slots_alone,a_new_value_goes_to_the_whole_list_not_as_a_retry}",
+    "crates/bacnet-server/src/schedule_reference_retry_tests.rs::{a_state_text_index_that_becomes_valid_clears_the_fault,a_retry_runs_no_command_or_channel_member_again,a_retry_that_fails_otherwise_ends_the_fault_and_warns_once}",
     "crates/bacnet-server/src/server/schedule_reference_write_tests.rs::a_target_created_later_takes_the_value_within_one_tick"
    ],
    "negative_tests": [
@@ -435,7 +435,8 @@
     "#1086: the second condition of 12.24.13, that every referenced property accept the datatype, is judged from the writes (the issue's option B) rather than checked beforehand: the objects publish no datatype per property, so an eager check would have to guess from a target's current value or probe it with a write.",
     "The cost is that the fault shows at the first write rather than at configuration time; 12.24.13 already lets a remote member's fault wait for a write. Local choices: only a refusal of a value whose datatype the schedule itself holds counts, so a NULL, or an out-of-service value of another datatype, raises nothing; any other failure leaves a member's standing as it was; the flag combines with the contents check under the one ownership rule, so a Reliability set by the application or a client simulation is never cleared by it.",
     "A reference the target can't write whatever the value (a missing object or property, or an array index the property can't take) faults the Schedule as a datatype refusal does, and clears the same way. A denied write doesn't: it can be the target's state.",
-    "While a refusal of either kind stands, each pass with nothing else to send offers Present_Value again to the refused members only, so the fault clears within a tick of its cause going away. NULL isn't retried; failures log at debug."
+    "While a refusal of either kind stands, each pass with nothing else to send offers Present_Value again to the refused members only, so the fault clears within a tick of its cause going away. NULL isn't retried; refusals log at debug.",
+    "A retry that fails otherwise (out of range, denied) ends that member's refusal and warns once, as the same failure on a first write raises nothing. After a write that isn't a retry, the next retry settles the member."
    ]
   },
   {
