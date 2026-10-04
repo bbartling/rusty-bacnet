@@ -254,27 +254,27 @@ async fn dcc_source_denied_enable_still_occupies_recovery() {
 
 #[test]
 fn dcc_configured_validation_retains_decode_password_unknown_mode_precedence() {
+    use crate::server::dcc_outcomes::DccOutcome;
     for policy in [
         DccPolicy::DenyAll,
         DccPolicy::RequirePassword,
         DccPolicy::LegacyPermissive,
     ] {
-        let state = std::sync::atomic::AtomicU8::new(2);
         let password = Some("required".to_owned());
-        let invalid = handlers::handle_device_communication_control_with_policy(
-            &[0x19],
-            &state,
-            &password,
-            policy,
-        );
+        let validate = |data: &[u8]| {
+            handlers::device_mgmt::validate_dcc(data, &password, policy)
+                .expect_err("each request here is refused")
+        };
         // `[1]` announces one contents octet and holds none (#1374).
-        assert!(matches!(invalid, Err(Error::BufferTooShort { .. })));
-        let unknown = &[0x19, 3];
-        let error = handlers::handle_device_communication_control_with_policy(
-            unknown, &state, &password, policy,
-        );
-        assert!(matches!(error, Err(Error::Protocol { class, code })
+        let failure = validate(&[0x19]);
+        assert!(matches!(failure.error, Error::BufferTooShort { .. }));
+        assert!(matches!(failure.outcome, DccOutcome::Malformed));
+        // The password is checked before the mode, so an unknown mode with
+        // no password is a password failure.
+        let failure = validate(&[0x19, 3]);
+        assert!(matches!(failure.error, Error::Protocol { class, code }
             if class == ErrorClass::SECURITY.to_raw() as u32 && code == ErrorCode::PASSWORD_FAILURE.to_raw() as u32));
+        assert!(matches!(failure.outcome, DccOutcome::PasswordFailure));
         let mut data = BytesMut::new();
         DeviceCommunicationControlRequest {
             time_duration: None,
@@ -283,11 +283,9 @@ fn dcc_configured_validation_retains_decode_password_unknown_mode_precedence() {
         }
         .encode(&mut data)
         .unwrap();
-        let error = handlers::handle_device_communication_control_with_policy(
-            &data, &state, &password, policy,
-        );
-        assert!(matches!(error, Err(Error::Encoding(m)) if m == "unknown EnableDisable value"));
-        assert_eq!(state.load(Ordering::Acquire), 2);
+        let failure = validate(&data);
+        assert!(matches!(failure.error, Error::Encoding(m) if m == "unknown EnableDisable value"));
+        assert!(matches!(failure.outcome, DccOutcome::Malformed));
     }
 }
 

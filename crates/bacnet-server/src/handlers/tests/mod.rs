@@ -110,7 +110,6 @@ mod acknowledge_alarm_ee;
 mod alarm_summary_projection;
 mod alert_enrollment;
 mod array_index_gating;
-mod async_dcc;
 mod atomic_read_file_budget;
 mod atomic_write_file_budget;
 mod audit_log_query;

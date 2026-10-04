@@ -4,7 +4,7 @@ import socket
 import unittest
 from typing import Any
 
-from rusty_bacnet import BACnetServer
+from rusty_bacnet import BACnetServer, EnableDisable
 
 
 class RecoveryConstructorTests(unittest.TestCase):
@@ -85,15 +85,15 @@ class RecoveryNativeTests(unittest.IsolatedAsyncioTestCase):
                 # DISABLE_INITIATION for the native recovery transition.
                 reply, counters = await exchange(1, 2, "required")
                 self.assertEqual(reply[0] >> 4, 2)
-                self.assertEqual(await server.comm_state(), 2)
+                self.assertEqual(await server.comm_state(), EnableDisable.DISABLE_INITIATION)
                 self.assertEqual(counters["recovery_admitted_total"], 0)
                 for invoke, password in [(2, None), (3, "wrong")]:
                     reply, counters = await exchange(invoke, 0, password)
                     self.assertEqual(reply[0] >> 4, 5)  # authoritative handler Error
-                    self.assertEqual(await server.comm_state(), 2)
+                    self.assertEqual(await server.comm_state(), EnableDisable.DISABLE_INITIATION)
                 reply, counters = await exchange(4, 0, "required")
                 self.assertEqual(reply[0] >> 4, 2)
-                self.assertEqual(await server.comm_state(), 0)
+                self.assertEqual(await server.comm_state(), EnableDisable.ENABLE)
                 self.assertEqual(counters["confirmed_admitted_total"], 4)
                 self.assertEqual(counters["recovery_admitted_total"], 3 if reserve else 0)
                 self.assertEqual(counters["confirmed_overloaded_total"], 0)

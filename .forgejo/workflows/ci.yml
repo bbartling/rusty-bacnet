@@ -16,7 +16,8 @@ name: CI
 #           clippy and rustdoc with warnings denied (every feature, the PyO3
 #           crate, and each published crate alone with default features, for
 #           Linux, Windows and macOS; the every-feature and PyO3 rustdoc runs
-#           include private items),
+#           include private items), then cargo check --locked of each
+#           standalone sample in examples/rust/samples,
 #           every-feature Linux tests plus bacnet-cli's feature-off tests,
 #           and the Python bindings built with maturin, their unittest suite
 #           and the PyO3 crate's own Rust tests.
@@ -205,6 +206,13 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p rusty-bacnet --no-deps --locked --document-private-items
+      # The standalone samples in examples/rust/samples, outside the workspace
+      # with a Cargo.lock each, so no step above compiles them (#1406): fails on
+      # a sample that no longer builds or a stale lock. They share target/samples,
+      # so their common dependencies compile once.
+      - name: Samples (cargo check --locked)
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/check-samples.sh
 
   test:
     name: Test (Linux, full features)

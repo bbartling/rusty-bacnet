@@ -151,60 +151,6 @@ fn get_event_information_ack(
 }
 
 #[test]
-fn device_communication_control_handler() {
-    let comm_state = AtomicU8::new(0);
-
-    let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
-        time_duration: Some(60),
-        enable_disable: EnableDisable::DISABLE_INITIATION,
-        password: None,
-    };
-    let mut buf = BytesMut::new();
-    request.encode(&mut buf).unwrap();
-
-    let (state, duration) = handle_device_communication_control(&buf, &comm_state, &None).unwrap();
-    assert_eq!(state, EnableDisable::DISABLE_INITIATION);
-    assert_eq!(duration, Some(60));
-    assert_eq!(comm_state.load(Ordering::Acquire), 2);
-}
-
-#[test]
-fn device_communication_control_enable() {
-    let comm_state = AtomicU8::new(1); // start disabled
-
-    let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
-        time_duration: None,
-        enable_disable: EnableDisable::ENABLE,
-        password: None,
-    };
-    let mut buf = BytesMut::new();
-    request.encode(&mut buf).unwrap();
-
-    let (state, duration) = handle_device_communication_control(&buf, &comm_state, &None).unwrap();
-    assert_eq!(state, EnableDisable::ENABLE);
-    assert_eq!(duration, None);
-    assert_eq!(comm_state.load(Ordering::Acquire), 0);
-}
-
-#[test]
-fn device_communication_control_disable_initiation() {
-    let comm_state = AtomicU8::new(0);
-
-    let request = bacnet_services::device_mgmt::DeviceCommunicationControlRequest {
-        time_duration: None,
-        enable_disable: EnableDisable::DISABLE_INITIATION,
-        password: None,
-    };
-    let mut buf = BytesMut::new();
-    request.encode(&mut buf).unwrap();
-
-    let (state, duration) = handle_device_communication_control(&buf, &comm_state, &None).unwrap();
-    assert_eq!(state, EnableDisable::DISABLE_INITIATION);
-    assert_eq!(duration, None);
-    assert_eq!(comm_state.load(Ordering::Acquire), 2);
-}
-
-#[test]
 fn reinitialize_device_handler() {
     let request = bacnet_services::device_mgmt::ReinitializeDeviceRequest {
         reinitialized_state: bacnet_types::enums::ReinitializedState::WARMSTART,

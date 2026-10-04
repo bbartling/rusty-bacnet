@@ -1,7 +1,7 @@
 //! Who-Is, I-Am, Who-Has, I-Have and You-Are. I-Am, I-Have and You-Are are
 //! all application-tagged (Clause 21), so any other tag is refused; Who-Is
-//! and Who-Has read context tags. Who-Is, I-Am, Who-Has and I-Have leave
-//! octets after their members unread.
+//! and Who-Has read context tags. All five refuse octets after their last
+//! member (#1411); a receiver drops such a request, as it can't answer one.
 
 use super::*;
 use crate::who_am_i::YouAreRequest;
@@ -25,18 +25,30 @@ fn who_is_request() {
         ("low limit cut short", &[0x0A, 0x01], Short),
         ("high limit cut short", &[0x09, 0x01, 0x1A, 0x0A], Short),
         ("low limit above high", &[0x09, 0x0A, 0x19, 0x01], Malformed),
-        // One limit, or limits under other tags, read as no limits.
+        // One limit alone reads as no limits.
         ("only the low limit", &[0x09, 0x01], Decodes),
-        ("a context [2] alone", &[0x29, 0x00], Decodes),
+        ("only the high limit", &[0x19, 0x0A], Decodes),
+        // Anything the limits leave unread refuses the request.
+        ("a context [2] alone", &[0x29, 0x00], Malformed),
         (
             "limits as application Unsigneds",
             &[0x21, 0x01, 0x21, 0x0A],
-            Decodes,
+            Malformed,
+        ),
+        (
+            "limits in the wrong order",
+            &[0x19, 0x0A, 0x09, 0x01],
+            Malformed,
+        ),
+        (
+            "an octet after the low limit alone",
+            &[0x09, 0x01, 0x00],
+            Malformed,
         ),
         (
             "an octet after the limits",
             &cat(&[LIMITS, &[0x00]]),
-            Decodes,
+            Malformed,
         ),
     ];
     check(decoder!(WhoIsRequest), rows);
@@ -77,7 +89,7 @@ fn i_am_request() {
         (
             "an octet after the vendor",
             &cat(&[DEVICE_1234, rest, &[0x00]]),
-            Decodes,
+            Malformed,
         ),
     ];
     check(decoder!(IAmRequest), rows);
@@ -103,7 +115,21 @@ fn who_has_request() {
             Malformed,
         ),
         ("object as [4]", &[0x49, 0x01], Malformed),
-        ("an octet after the object", &cat(&[av_1, &[0x00]]), Decodes),
+        (
+            "an octet after the identifier",
+            &cat(&[av_1, &[0x00]]),
+            Malformed,
+        ),
+        (
+            "an octet after the name",
+            &[0x3A, 0x00, 0x54, 0x00],
+            Malformed,
+        ),
+        (
+            "both the identifier and the name",
+            &cat(&[av_1, &[0x3A, 0x00, 0x54]]),
+            Malformed,
+        ),
     ];
     check(decoder!(WhoHasRequest), rows);
 }
@@ -147,7 +173,7 @@ fn i_have_request() {
         (
             "an octet after the name",
             &cat(&[DEVICE_1234, AI_1, NAME_T, &[0x00]]),
-            Decodes,
+            Malformed,
         ),
     ];
     check(decoder!(IHaveRequest), rows);

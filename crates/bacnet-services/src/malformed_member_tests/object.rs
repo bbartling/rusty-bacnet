@@ -277,7 +277,12 @@ fn delete_object_request() {
         (
             "an octet after the identifier",
             &cat(&[AV_1_APP, &[0x00]]),
-            Decodes,
+            Malformed,
+        ),
+        (
+            "a second identifier",
+            &cat(&[AV_1_APP, &[0xC4, 0x00, 0x80, 0x00, 0x02]]),
+            Malformed,
         ),
     ];
     check(decoder!(DeleteObjectRequest), rows);

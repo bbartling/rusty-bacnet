@@ -52,8 +52,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if req.service_choice == UnconfirmedServiceChoice::I_AM {
             let i_am = match IAmRequest::decode(&req.service_request) {
                 Ok(request) => request,
-                Err(_) => {
-                    debug!("Ignoring malformed I-Am observation");
+                Err(e) => {
+                    // A peer whose I-Am carries extra octets never binds, so
+                    // say so where it can be seen (#1411).
+                    warn!(error = %e, source = ?received.source_mac, "Failed to decode IAm");
                     return;
                 }
             };

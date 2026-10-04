@@ -107,10 +107,10 @@ ev = ErrorCode.UNKNOWN_PROPERTY
 
 ### EnableDisable
 
-For `device_communication_control`. Constants: `ENABLE`, `DISABLE`, `DISABLE_INITIATION`.
+For `device_communication_control`, and what `BACnetServer.comm_state()` returns. Constants: `ENABLE`, `DISABLE`, `DISABLE_INITIATION`. `DISABLE` is deprecated, and a rusty-bacnet server refuses it under every DCC policy.
 
 ```python
-ed = EnableDisable.DISABLE
+ed = EnableDisable.DISABLE_INITIATION
 ```
 
 ### ReinitializedState
@@ -864,7 +864,7 @@ await client.delete_object(
 ```python
 await client.device_communication_control(
     "192.168.1.100:47808",
-    EnableDisable.DISABLE,
+    EnableDisable.DISABLE_INITIATION,
     time_duration=60,       # minutes
     password="secret",
 )
@@ -1072,17 +1072,22 @@ await client.remove_list_element(
 
 ### Private Transfer
 
-#### `confirmed_private_transfer(address, vendor_id, service_number, service_parameters=None) -> bytes`
+#### `confirmed_private_transfer(address, vendor_id, service_number, service_parameters=None) -> dict`
 
-Send a vendor-specific confirmed service request.
+Send a vendor-specific confirmed service request. The result is a dict with
+`vendor_id`, `service_number` and `result_block` (`bytes`, or `None` when the
+ACK carries no block). A device error raises `BacnetProtocolError` with
+`vendor_id`, `service_number` and `error_parameters` set; an ACK that is
+malformed, cut short or has octets after its last member raises `BacnetError`.
 
 ```python
-raw = await client.confirmed_private_transfer(
+ack = await client.confirmed_private_transfer(
     "192.168.1.100:47808",
     vendor_id=999,
     service_number=1,
     service_parameters=b"\x01\x02\x03",
 )
+block = ack["result_block"]
 ```
 
 #### `unconfirmed_private_transfer(address, vendor_id, service_number, service_parameters=None)`
@@ -1102,20 +1107,21 @@ await client.unconfirmed_private_transfer(
 
 ### Text Messages
 
-#### `confirmed_text_message(address, source_device, message_priority, message, message_class_type=None, message_class_value=None) -> bytes`
+#### `confirmed_text_message(address, source_device, message_priority, message, message_class_type=None, message_class_value=None)`
 
-Send a confirmed text message to a device.
+Send a confirmed text message to a device. It returns `None` once the device
+acknowledges the message.
 
 ```python
 from rusty_bacnet import MessagePriority
 
-raw = await client.confirmed_text_message(
+await client.confirmed_text_message(
     "192.168.1.100:47808",
     source_device=ObjectIdentifier(ObjectType.DEVICE, 1234),
     message_priority=MessagePriority.URGENT,
     message="Fire alarm on floor 3",
-    message_class_type="numeric",     # "numeric" or "string"
-    message_class_value=1,            # int for numeric, str for string
+    message_class_type="numeric",     # "numeric" or "text"
+    message_class_value=1,            # int for numeric, str for text
 )
 ```
 
@@ -2931,17 +2937,27 @@ then left as it was. A server that is not running raises `RuntimeError`.
 await server.purge_audit_log(ObjectIdentifier(ObjectType.AUDIT_LOG, 1))
 ```
 
-#### `comm_state() -> int`
+#### `comm_state() -> EnableDisable`
 
 Get the server's current DeviceCommunicationControl state.
 
 ```python
 state = await server.comm_state()
-# 0 = Enable, 2 = DisableInitiation
+if state == EnableDisable.DISABLE_INITIATION:
+    ...  # the server is holding back what it would start
 ```
 
-The value is the `EnableDisable` number. The server refuses the deprecated
-Disable (1), so `comm_state()` never returns it.
+The result is `EnableDisable.ENABLE` or `EnableDisable.DISABLE_INITIATION`,
+the same class `device_communication_control` takes. The server refuses the
+deprecated `DISABLE`, so `comm_state()` never returns it.
+
+- `EnableDisable` doesn't compare equal to an `int`, and it is truthy in both
+  states, so `if await server.comm_state():` can't tell them apart. Compare
+  with the constants; `state.to_raw()` gives the number.
+- `copy.copy`, `copy.deepcopy` and `pickle` raise `TypeError` on it. Keep
+  `state.to_raw()` and rebuild with `EnableDisable.from_raw()` instead.
+
+`comm_state()` raises `RuntimeError` before start and after stop.
 
 #### `cov_counters() -> CovCounters`
 

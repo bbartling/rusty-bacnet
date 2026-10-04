@@ -33,9 +33,6 @@ RequirePassword with absent or empty configuration fails before startup/dial
 (Python constructor: `ValueError`; Rust startup/build: configuration error).
 DenyAll and LegacyPermissive introduce no password-length restrictions.
 
-The public unconfigured Rust
-`handlers::handle_device_communication_control` keeps its legacy optional-password
-API and behavior. It does not inherit the configured server default.
 ReinitializeDevice's separate password and handler are unchanged.
 
 ## Ordering and side effects

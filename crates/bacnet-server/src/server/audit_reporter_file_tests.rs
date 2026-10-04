@@ -192,10 +192,9 @@ async fn audit_reporter_atomic_write_file_preserves_decoder_acceptance_boundary(
     for record in [false, true] {
         let mut fixture = file_server(record).await;
         let target = oid(ObjectType::FILE, 1);
-        let mut accepted = request(target, access(record, -1)).to_vec();
-        accepted.extend_from_slice(&[0, 0]);
+        let accepted = request(target, access(record, -1));
         assert!(AtomicWriteFileRequest::decode(&accepted).is_ok());
-        let response = dispatch(&fixture.server, SERVICE, Bytes::from(accepted)).await;
+        let response = dispatch(&fixture.server, SERVICE, accepted).await;
         assert_ack(&response, record, 77, 2);
         assert_eq!(
             contents(&fixture, record).await,
@@ -217,6 +216,12 @@ async fn audit_reporter_atomic_write_file_preserves_decoder_acceptance_boundary(
             {
                 let mut bytes = request(target, access(record, -1)).to_vec();
                 bytes.pop();
+                Bytes::from(bytes)
+            },
+            // Trailing octets (#1411): the append would change the file.
+            {
+                let mut bytes = request(target, access(record, -1)).to_vec();
+                bytes.extend_from_slice(&[0, 0]);
                 Bytes::from(bytes)
             },
             request(
