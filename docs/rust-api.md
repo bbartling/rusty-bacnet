@@ -2907,14 +2907,15 @@ the database, such as one a write made straight into the database queued.
 `stop()` doesn't wait for a database the application holds: those runs end as
 soon as it lets go.
 
-A run doesn't need `stop()` to end when the `write_local` that started it is
-dropped after its write committed, by a timeout or a `select!` (#1324). The
-write stays made, and the run, which hadn't reached its task yet, ends as if
-none of its writes were made: In_Process FALSE with every command
-unsuccessful, or a Channel's Write_Status FAILED with Reliability
-PROCESS_ERROR. It ends at once, or as soon as a database the application holds
-is free. The COV and event work the dropped call hadn't done yet is skipped
-(#1367).
+A `write_local` dropped after its write committed, by a timeout, a `select!`
+or a cancelled Python task, skips nothing (#1367): the commit hands its
+database guard, and the event pass, COV fanout, Schedule fanout, Staging plan
+and runs the write owes, to a task of its own in the server's request task
+set, which the call only waits for. The run the write started goes ahead and
+reports its end. `stop()` aborts that task with the other request tasks, and
+a run it hadn't started then ends as if none of its writes were made (#1324):
+In_Process FALSE with every command unsuccessful, or a Channel's Write_Status
+FAILED with Reliability PROCESS_ERROR.
 
 Whatever commits a Present_Value write owns the run it starts and finishes it,
 so no path leaves a Command in process (#1178). Without a server,
@@ -3305,8 +3306,8 @@ WriteGroup's, carry the priority, and Audit_Priority_Filter applies to them
 endpoint responder ignores WriteGroup.
 
 Channel runs are owned as Command runs are (#1178). A `write_local` dropped
-after the Channel took its value ends the distribution FAILED without
-`stop()`, as it ends a Command's run (#1324). Without a server,
+after the Channel took its value leaves the distribution running, as it does
+a Command's run (#1367). Without a server,
 `tick_schedules` runs a distribution its Schedule writes start before it
 returns, delays included, and ends it FAILED if its future is dropped first.
 The bare `handle_write_property` and `handle_write_property_multiple` handlers
@@ -5546,7 +5547,10 @@ fixes them, and the warning logged with each skip gives the finer reason:
 
 ### Concurrency
 
-- Lock ordering: always `db` before `cov_table`
+- Lock ordering: always `db` before `cov_table`, and `db` before the device
+  binding table, which a read of Device_Address_Binding samples after the
+  COV table's guard is gone (#1369); no binding-table guard is held across
+  a send or a wait
 - `seg_receivers` capped at 128 (DoS prevention)
 - `cov_in_flight` semaphore: max 255 concurrent confirmed COV notifications
 - `comm_state`: `Arc<CommState>`, a lock-free DCC state that only the DCC
