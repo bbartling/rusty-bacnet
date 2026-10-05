@@ -1,9 +1,10 @@
 //! Trend Log's acquisition rows (#1354): Logging_Type limited to POLLED and
-//! TRIGGERED until COV acquisition exists, Log_Interval's mode rules
+//! TRIGGERED until COV acquisition exists (#1480), Log_Interval's mode rules
 //! (Clause 12.25.9), Trigger and the clock-alignment rows. The window is in
 //! `crate::log_window_tests`, shared with the Event Log.
 
 use super::*;
+use crate::clock::ClockFrame;
 use bacnet_types::constructed::LogDatum;
 use bacnet_types::primitives::{Date, Time};
 
@@ -54,9 +55,11 @@ fn record() -> BACnetLogRecord {
 fn logging_type_takes_polled_or_triggered_and_refuses_cov_for_now() {
     let mut log = TrendLogObject::new(1, "TL-1", 8).unwrap();
     log.set_log_interval(500).unwrap();
-    // Clause 12.25.26 allows COV, but this device has no COV acquisition, so
-    // COV is refused rather than served unacted on; so is a value outside
-    // BACnetLoggingType. Through the wire and the setter alike.
+    // Clause 12.25.26 allows COV, but this device has no COV acquisition
+    // (#1480), so COV is refused rather than served unacted on, with the
+    // error that clause gives for a value the object doesn't support; so is
+    // a value outside BACnetLoggingType. Through the wire and the setter
+    // alike.
     for raw in [LoggingType::COV.to_raw(), 3, 255] {
         assert_refused(
             write(
@@ -65,12 +68,12 @@ fn logging_type_takes_polled_or_triggered_and_refuses_cov_for_now() {
                 PropertyValue::Enumerated(raw),
             ),
             ErrorClass::PROPERTY,
-            ErrorCode::VALUE_OUT_OF_RANGE,
+            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
         );
         assert_refused(
             log.set_logging_type(LoggingType::from_raw(raw)),
             ErrorClass::PROPERTY,
-            ErrorCode::VALUE_OUT_OF_RANGE,
+            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
         );
     }
     assert_refused(
@@ -149,12 +152,12 @@ fn a_polled_interval_written_to_zero_is_a_refused_switch_to_cov() {
             PropertyValue::Unsigned(0),
         ),
         ErrorClass::PROPERTY,
-        ErrorCode::VALUE_OUT_OF_RANGE,
+        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
     );
     assert_refused(
         log.set_log_interval(0),
         ErrorClass::PROPERTY,
-        ErrorCode::VALUE_OUT_OF_RANGE,
+        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
     );
     assert_eq!(interval(&log), PropertyValue::Unsigned(300));
     assert_eq!(
@@ -258,6 +261,57 @@ fn trigger_asks_a_triggered_log_for_one_record() {
         read(&log, PropertyIdentifier::TRIGGER),
         PropertyValue::Boolean(false)
     );
+}
+
+#[test]
+fn a_record_the_log_ignores_still_serves_the_trigger() {
+    struct Nine;
+    impl ClockReader for Nine {
+        fn read_clock(&self) -> Option<ClockFrame> {
+            Some(ClockFrame {
+                local_date: record().date,
+                local_time: record().time,
+                utc_offset: 0,
+                daylight_savings_status: false,
+            })
+        }
+    }
+    let mut log = TrendLogObject::new(1, "TL-1", 8).unwrap();
+    log.bind_clock_internal(Some(Arc::new(Nine)));
+    log.set_logging_type(LoggingType::TRIGGERED).unwrap();
+    let trigger = |log: &TrendLogObject| read(log, PropertyIdentifier::TRIGGER);
+
+    // Enable FALSE: the record is ignored, but the acquisition was made.
+    write(
+        &mut log,
+        PropertyIdentifier::LOG_ENABLE,
+        PropertyValue::Boolean(false),
+    )
+    .unwrap();
+    log.trigger().unwrap();
+    log.add_record(record()).unwrap();
+    assert_eq!(trigger(&log), PropertyValue::Boolean(false));
+    assert!(log
+        .records()
+        .iter()
+        .all(|r| matches!(r.log_datum, LogDatum::LogStatus(_))));
+
+    // Outside the window, the same.
+    write(
+        &mut log,
+        PropertyIdentifier::LOG_ENABLE,
+        PropertyValue::Boolean(true),
+    )
+    .unwrap();
+    let (date, time) = (record().date, record().time);
+    log.set_start_time(date, Time { hour: 10, ..time }).unwrap();
+    log.trigger().unwrap();
+    log.add_record(record()).unwrap();
+    assert_eq!(trigger(&log), PropertyValue::Boolean(false));
+    assert!(log
+        .records()
+        .iter()
+        .all(|r| matches!(r.log_datum, LogDatum::LogStatus(_))));
 }
 
 #[test]

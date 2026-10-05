@@ -72,6 +72,21 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         self.refresh_window_at(now)
     }
 
+    /// Set Start_Time or Stop_Time as local configuration, checked as
+    /// [`LogWindow::set`] checks it. Nothing is recorded for the change
+    /// itself, but the window is looked at right away, so a client's write
+    /// that opens or shuts it afterwards is recorded even before the next
+    /// pass. Without a valid clock the look waits for the next one.
+    pub(crate) fn configure_window(
+        &mut self,
+        property: P,
+        value: (Date, Time),
+    ) -> Result<(), Error> {
+        self.window.configure(property, value)?;
+        self.refresh_window();
+        Ok(())
+    }
+
     /// The local time a look at the window needs, or `None` when the clock
     /// can't give one. A window open at both ends that wasn't shut at the
     /// last look can't change and needs no time, so the clock isn't read

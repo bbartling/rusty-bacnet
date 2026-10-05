@@ -27,11 +27,11 @@ use crate::event_log::EventLogObject;
 use crate::traits::BACnetObject;
 use crate::trend::{TrendLogMultipleObject, TrendLogObject};
 
-struct Clock(Mutex<ClockFrame>);
+struct Clock(Mutex<Option<ClockFrame>>);
 
 impl ClockReader for Clock {
     fn read_clock(&self) -> Option<ClockFrame> {
-        Some(*self.0.lock().unwrap())
+        *self.0.lock().unwrap()
     }
 }
 
@@ -79,116 +79,134 @@ enum Kind {
 
 const KINDS: [Kind; 3] = [Kind::Trend, Kind::Event, Kind::Multiple];
 
+/// A log of each kind as its own type, so its local setters can be called.
+enum Object {
+    Trend(TrendLogObject),
+    Event(EventLogObject),
+    Multiple(TrendLogMultipleObject),
+}
+
 /// One log of `kind` bound to a clock reading 09:00.
 struct Log {
     kind: Kind,
-    object: Box<dyn BACnetObject>,
+    object: Object,
     clock: Arc<Clock>,
 }
-
-/// A window the local setters give: Start_Time, then Stop_Time.
-type Window = ((Date, Time), (Date, Time));
 
 impl Log {
     /// A log whose window is open at both ends, as built.
     fn new(kind: Kind) -> Self {
-        Self::build(kind, None).unwrap()
+        let object = match kind {
+            Kind::Trend => Object::Trend(TrendLogObject::new(1, "TL-1", 16).unwrap()),
+            Kind::Event => Object::Event(EventLogObject::new(1, "EL-1", 16).unwrap()),
+            Kind::Multiple => {
+                Object::Multiple(TrendLogMultipleObject::new(1, "TLM-1", 16).unwrap())
+            }
+        };
+        let mut log = Self {
+            kind,
+            object,
+            clock: Arc::new(Clock(Mutex::new(None))),
+        };
+        log.set_clock(at(9, 0));
+        let clock = log.clock.clone();
+        log.object_mut().bind_clock_internal(Some(clock));
+        log
     }
 
     /// A log whose window the local setters gave, or their refusal.
     fn configured(kind: Kind, start: (Date, Time), stop: (Date, Time)) -> Result<Self, Error> {
-        Self::build(kind, Some((start, stop)))
+        let mut log = Self::new(kind);
+        log.set_end(P::START_TIME, start)?;
+        log.set_end(P::STOP_TIME, stop)?;
+        Ok(log)
     }
 
-    fn build(kind: Kind, window: Option<Window>) -> Result<Self, Error> {
-        let mut object: Box<dyn BACnetObject> = match kind {
-            Kind::Trend => {
-                let mut log = TrendLogObject::new(1, "TL-1", 16)?;
-                if let Some(((start_date, start_time), (stop_date, stop_time))) = window {
-                    log.set_start_time(start_date, start_time)?;
-                    log.set_stop_time(stop_date, stop_time)?;
-                }
-                Box::new(log)
-            }
-            Kind::Event => {
-                let mut log = EventLogObject::new(1, "EL-1", 16)?;
-                if let Some(((start_date, start_time), (stop_date, stop_time))) = window {
-                    log.set_start_time(start_date, start_time)?;
-                    log.set_stop_time(stop_date, stop_time)?;
-                }
-                Box::new(log)
-            }
-            Kind::Multiple => {
-                let mut log = TrendLogMultipleObject::new(1, "TLM-1", 16)?;
-                if let Some(((start_date, start_time), (stop_date, stop_time))) = window {
-                    log.set_start_time(start_date, start_time)?;
-                    log.set_stop_time(stop_date, stop_time)?;
-                }
-                Box::new(log)
-            }
-        };
-        let (local_date, local_time) = at(9, 0);
-        let clock = Arc::new(Clock(Mutex::new(ClockFrame {
+    /// Set Start_Time or Stop_Time through the object's local setter.
+    fn set_end(&mut self, property: P, (date, time): (Date, Time)) -> Result<(), Error> {
+        let start = property == P::START_TIME;
+        match &mut self.object {
+            Object::Trend(log) if start => log.set_start_time(date, time),
+            Object::Trend(log) => log.set_stop_time(date, time),
+            Object::Event(log) if start => log.set_start_time(date, time),
+            Object::Event(log) => log.set_stop_time(date, time),
+            Object::Multiple(log) if start => log.set_start_time(date, time),
+            Object::Multiple(log) => log.set_stop_time(date, time),
+        }
+    }
+
+    fn object(&self) -> &dyn BACnetObject {
+        match &self.object {
+            Object::Trend(log) => log,
+            Object::Event(log) => log,
+            Object::Multiple(log) => log,
+        }
+    }
+
+    fn object_mut(&mut self) -> &mut dyn BACnetObject {
+        match &mut self.object {
+            Object::Trend(log) => log,
+            Object::Event(log) => log,
+            Object::Multiple(log) => log,
+        }
+    }
+
+    fn set_clock(&self, (local_date, local_time): (Date, Time)) {
+        *self.clock.0.lock().unwrap() = Some(ClockFrame {
             local_date,
             local_time,
             utc_offset: 0,
             daylight_savings_status: false,
-        })));
-        object.bind_clock_internal(Some(clock.clone()));
-        Ok(Self {
-            kind,
-            object,
-            clock,
-        })
+        });
     }
 
-    fn set_clock(&self, (date, time): (Date, Time)) {
-        let mut frame = self.clock.0.lock().unwrap();
-        frame.local_date = date;
-        frame.local_time = time;
+    /// Take the clock away, so no look can tell the time.
+    fn clear_clock(&self) {
+        *self.clock.0.lock().unwrap() = None;
     }
 
     fn write(&mut self, property: P, value: PropertyValue) -> Result<(), Error> {
-        self.object.write_property(property, None, value, None)
+        self.object_mut()
+            .write_property(property, None, value, None)
     }
 
     fn read(&self, property: P) -> PropertyValue {
-        self.object.read_property(property, None).unwrap()
+        self.object().read_property(property, None).unwrap()
     }
 
     /// The look the poller's pass makes; whether it logged a change.
     fn pass(&mut self) -> bool {
-        self.object.refresh_log_window_internal()
+        self.object_mut().refresh_log_window_internal()
     }
 
     /// Offer an ordinary record taken at `(date, time)`.
     fn add(&mut self, (date, time): (Date, Time)) {
-        match self.kind {
-            Kind::Trend => self.object.add_trend_record(BACnetLogRecord {
+        let kind = self.kind;
+        let object = self.object_mut();
+        match kind {
+            Kind::Trend => object.add_trend_record(BACnetLogRecord {
                 date,
                 time,
                 log_datum: LogDatum::RealValue(1.5),
                 status_flags: None,
             }),
-            Kind::Event => self.object.add_event_log_record(BACnetEventLogRecord {
+            Kind::Event => object.add_event_log_record(BACnetEventLogRecord {
                 date,
                 time,
                 log_datum: EventLogDatum::TimeChange(1.5),
             }),
-            Kind::Multiple => self
-                .object
-                .add_trend_multiple_record(BACnetLogMultipleRecord {
-                    date,
-                    time,
-                    log_data: LogData::Values(vec![LogValue::RealValue(1.5)]),
-                }),
+            Kind::Multiple => object.add_trend_multiple_record(BACnetLogMultipleRecord {
+                date,
+                time,
+                log_data: LogData::Values(vec![LogValue::RealValue(1.5)]),
+            }),
         }
         .unwrap();
     }
 
     /// The resident records, as ReadRange serves them.
     fn seen(&self) -> Vec<Seen> {
-        let records = self.object.log_buffer_internal().unwrap();
+        let records = self.object().log_buffer_internal().unwrap();
         (0..records.record_count())
             .map(|index| {
                 let mut bytes = BytesMut::new();
@@ -364,5 +382,48 @@ fn a_local_window_is_configuration_and_its_opening_is_logged() {
         log.set_clock(at(11, 0));
         assert!(log.pass(), "{kind:?}");
         assert_eq!(log.seen(), [ENABLED, DISABLED], "{kind:?}");
+    }
+}
+
+#[test]
+fn a_window_opened_at_both_ends_logs_its_opening_at_the_write() {
+    for kind in KINDS {
+        // With a clock, the write that leaves both ends open logs it.
+        let mut log = Log::new(kind);
+        log.write(P::START_TIME, datetime(at(10, 0))).unwrap();
+        log.write(P::START_TIME, datetime(UNSPECIFIED_DATETIME))
+            .unwrap();
+        assert_eq!(log.seen(), [DISABLED, ENABLED], "{kind:?}");
+        assert!(!log.pass(), "{kind:?}");
+    }
+}
+
+#[test]
+fn a_window_opened_at_both_ends_without_a_clock_logs_it_at_the_next_pass() {
+    for kind in KINDS {
+        // No valid clock at the write: the first pass with one logs it.
+        let mut log = Log::new(kind);
+        log.write(P::START_TIME, datetime(at(10, 0))).unwrap();
+        log.clear_clock();
+        log.write(P::START_TIME, datetime(UNSPECIFIED_DATETIME))
+            .unwrap();
+        assert!(!log.pass(), "{kind:?}");
+        assert_eq!(log.seen(), [DISABLED], "{kind:?}");
+        log.set_clock(at(9, 30));
+        assert!(log.pass(), "{kind:?}");
+        assert_eq!(log.seen(), [DISABLED, ENABLED], "{kind:?}");
+    }
+}
+
+#[test]
+fn a_client_write_after_a_local_setter_logs_the_change() {
+    for kind in KINDS {
+        // The setter notes the window open at 09:00 without a record, so the
+        // client's write that shuts it is logged with no pass between.
+        let mut log = Log::new(kind);
+        log.set_end(P::STOP_TIME, at(10, 0)).unwrap();
+        assert!(log.seen().is_empty(), "{kind:?}");
+        log.write(P::STOP_TIME, datetime(at(8, 0))).unwrap();
+        assert_eq!(log.seen(), [DISABLED], "{kind:?}");
     }
 }

@@ -176,14 +176,23 @@ impl ObjectDatabase {
     /// avoids a zero-delay loop. These bounds are local policy, not real-time
     /// guarantees. Clock, object reads and insertion hooks must remain bounded.
     pub fn poll_trend_logs(&mut self) -> Duration {
-        self.refresh_log_windows();
+        let mut logs = self.find_by_type(ObjectType::TREND_LOG);
+        logs.extend(self.find_by_type(ObjectType::TREND_LOG_MULTIPLE));
+        let trend_logs = logs.len();
+        logs.extend(self.find_by_type(ObjectType::EVENT_LOG));
+        // Every log looks at its window, Event Logs included, whether or not
+        // a monotonic clock drives acquisition.
+        for oid in &logs {
+            if let Some(log) = self.get_mut(oid) {
+                log.refresh_log_window_internal();
+            }
+        }
+        logs.truncate(trend_logs);
         let Some(monotonic) = self.monotonic_clock.clone() else {
             return RECONCILE;
         };
         let mut eligible = HashSet::new();
         let local = self.local_device();
-        let mut logs = self.find_by_type(ObjectType::TREND_LOG);
-        logs.extend(self.find_by_type(ObjectType::TREND_LOG_MULTIPLE));
         for oid in logs {
             // Exclusive access prevents structural change after selection.
             let Some(configuration) = self.get(&oid).and_then(configuration) else {
@@ -214,22 +223,6 @@ impl ObjectDatabase {
             Duration::from_millis(1)
         } else {
             remaining
-        }
-    }
-
-    /// Let every log look at its Start_Time / Stop_Time window against its
-    /// bound clock, recording an opening or closing.
-    fn refresh_log_windows(&mut self) {
-        for object_type in [
-            ObjectType::TREND_LOG,
-            ObjectType::TREND_LOG_MULTIPLE,
-            ObjectType::EVENT_LOG,
-        ] {
-            for oid in self.find_by_type(object_type) {
-                if let Some(log) = self.get_mut(&oid) {
-                    log.refresh_log_window_internal();
-                }
-            }
         }
     }
 

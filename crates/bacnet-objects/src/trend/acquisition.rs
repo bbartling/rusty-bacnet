@@ -21,12 +21,15 @@ pub const DEFAULT_LOG_INTERVAL: u32 = 6_000;
 pub(super) enum Rules {
     /// Trend Log (Clause 12.25). It may log by COV, and a Log_Interval write
     /// is how older clients move it between POLLED and COV (12.25.9). This
-    /// device has no COV acquisition yet, so both ways into COV are refused
-    /// with VALUE_OUT_OF_RANGE: a Logging_Type of COV, and a POLLED log's
-    /// nonzero Log_Interval written to zero.
+    /// device has no COV acquisition yet (#1480), so both ways into COV are
+    /// refused with PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the
+    /// answer Clause 12.25.26 gives for a Logging_Type the object doesn't
+    /// support: a Logging_Type of COV (or any value but POLLED and
+    /// TRIGGERED), and a POLLED log's nonzero Log_Interval written to zero.
     TrendLog,
-    /// Trend Log Multiple (Clause 12.30), which never logs by COV; a zero
-    /// Log_Interval just leaves a POLLED log idle.
+    /// Trend Log Multiple (Clause 12.30), which never logs by COV: COV, like
+    /// any value but POLLED and TRIGGERED, is PROPERTY / VALUE_OUT_OF_RANGE
+    /// (12.30.12), and a zero Log_Interval just leaves a POLLED log idle.
     TrendLogMultiple,
 }
 
@@ -114,11 +117,11 @@ impl Acquisition {
     }
 
     /// Choose POLLED or TRIGGERED acquisition (Clauses 12.25.26 and
-    /// 12.30.12). COV and any other value are PROPERTY / VALUE_OUT_OF_RANGE
-    /// and change nothing: see [`Rules`] for why each object refuses COV.
-    /// POLLED with a zero Log_Interval sets [`DEFAULT_LOG_INTERVAL`];
-    /// TRIGGERED sets Log_Interval to zero. Leaving TRIGGERED drops a Trigger
-    /// not yet acted on.
+    /// 12.30.12). COV and any other value change nothing and are refused
+    /// with the error [`Rules`] gives each object type. POLLED with a zero
+    /// Log_Interval sets [`DEFAULT_LOG_INTERVAL`]; TRIGGERED sets
+    /// Log_Interval to zero. Leaving TRIGGERED drops a Trigger not yet acted
+    /// on.
     pub(super) fn set_logging_type(&mut self, logging_type: LoggingType) -> Result<(), Error> {
         match logging_type {
             LoggingType::POLLED => {
@@ -128,7 +131,7 @@ impl Acquisition {
                 self.trigger = false;
             }
             LoggingType::TRIGGERED => self.log_interval = 0,
-            _ => return Err(common::value_out_of_range_error()),
+            _ => return Err(self.unsupported_logging_type()),
         }
         self.logging_type = logging_type;
         Ok(())
@@ -145,17 +148,30 @@ impl Acquisition {
 
     /// Store a Log_Interval written while it is writable. A POLLED Trend Log
     /// whose interval goes from nonzero to zero is being asked to log by COV
-    /// (Clause 12.25.9), which is refused as a COV Logging_Type is.
+    /// (Clause 12.25.9): zero is a valid interval, but COV is a function this
+    /// device lacks, so it is refused as a COV Logging_Type is.
     fn store_log_interval(&mut self, hundredths: u32) -> Result<(), Error> {
         if self.rules == Rules::TrendLog
             && self.logging_type == LoggingType::POLLED
             && self.log_interval != 0
             && hundredths == 0
         {
-            return Err(common::value_out_of_range_error());
+            return Err(self.unsupported_logging_type());
         }
         self.log_interval = hundredths;
         Ok(())
+    }
+
+    /// The refusal of a Logging_Type this object doesn't carry out (see
+    /// [`Rules`]).
+    fn unsupported_logging_type(&self) -> Error {
+        match self.rules {
+            Rules::TrendLog => common::protocol_error(
+                ErrorClass::PROPERTY,
+                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+            ),
+            Rules::TrendLogMultiple => common::value_out_of_range_error(),
+        }
     }
 
     pub(super) fn set_align_intervals(&mut self, align: bool) {

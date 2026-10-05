@@ -2444,21 +2444,24 @@ writable (#1235, #1353, #1354); Event Log serves Start_Time and Stop_Time
 (#1353). Each row has a local setter on the object, returning `Result` where
 a write can be refused:
 
-- **Logging_Type** is POLLED or TRIGGERED. COV and any other value are
-  PROPERTY / VALUE_OUT_OF_RANGE, through `set_logging_type(LoggingType)` as
-  over the wire: a Trend Log Multiple never logs by COV (Clause 12.30.12),
-  and a Trend Log could (Clause 12.25.26) but this stack has no COV
-  acquisition, so it refuses COV rather than serve a mode it doesn't carry
-  out. POLLED with a zero Log_Interval sets
+- **Logging_Type** is POLLED or TRIGGERED, through
+  `set_logging_type(LoggingType)` as over the wire. A Trend Log Multiple
+  never logs by COV, so COV and any other value are PROPERTY /
+  VALUE_OUT_OF_RANGE (Clause 12.30.12). A Trend Log could, but this stack has
+  no COV acquisition yet (#1480), so it refuses COV rather than serve a mode
+  it doesn't carry out: COV and any other value are PROPERTY /
+  OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, the answer Clause 12.25.26 gives for a
+  value the object doesn't support. POLLED with a zero Log_Interval sets
   `trend::DEFAULT_LOG_INTERVAL` (6000 hundredths, one minute); TRIGGERED sets
   Log_Interval to 0 and makes it read-only, so a write or
   `set_log_interval` then is WRITE_ACCESS_DENIED. On a POLLED Trend Log, a
   nonzero Log_Interval written to 0 is the older way to ask for COV logging
-  (Clause 12.25.9), and is refused the same way; a Trend Log Multiple just
-  stops polling at 0.
+  (Clause 12.25.9) and gets the same OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED; a
+  Trend Log Multiple just stops polling at 0.
 - **Trigger** written TRUE (or `trigger()`) asks a TRIGGERED log for one
-  acquisition; it reads TRUE until the poller's record is accepted, and
-  `add_record` clears it. TRUE on a POLLED log is PROPERTY /
+  acquisition; it reads TRUE until the poller's record is accepted, and a
+  successful `add_record` clears it, even when the log ignores the record
+  (Enable FALSE, or outside the window). TRUE on a POLLED log is PROPERTY /
   NOT_CONFIGURED_FOR_TRIGGERED_LOGGING; FALSE is accepted and changes nothing.
 - **Start_Time / Stop_Time** (`set_start_time`, `set_stop_time`) are
   BACnetDateTime values, served as an application Date then Time. Every field
@@ -2471,8 +2474,9 @@ a write can be refused:
   records it, LOG_DISABLED on closing and a clear status on opening; a write
   records it at once, and the poller's next pass records a change that time
   brings. Enable changes while the window is shut leave logging off, so they
-  add no record. The local setters are configuration: the first
-  look afterwards notes the window without a record. The poller looks at
+  add no record. The local setters are configuration: the log notes where
+  the window stands without a record, so a client's write that then opens or
+  shuts it is recorded. The poller looks at
   every log's window on each pass, an Event Log's included, so an opening or
   closing is recorded even when no record arrives.
 - **Align_Intervals / Interval_Offset** (`set_align_intervals`,

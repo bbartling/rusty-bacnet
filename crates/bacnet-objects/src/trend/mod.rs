@@ -81,8 +81,10 @@ impl TrendLogObject {
     /// and a record outside the Start_Time / Stop_Time window are ignored,
     /// zero-capacity logging may only count, and a stop-before-full
     /// transition records status instead. Missing/invalid status clocks fail
-    /// atomically with DEVICE / OPERATIONAL_PROBLEM. An accepted record
-    /// serves a pending Trigger, which reads FALSE again.
+    /// atomically with DEVICE / OPERATIONAL_PROBLEM. A successful call serves
+    /// a pending Trigger, which reads FALSE again, even when the record is
+    /// ignored (Enable FALSE, or outside the window): the acquisition was
+    /// made.
     pub fn add_record(&mut self, record: BACnetLogRecord) -> Result<(), Error> {
         self.lifecycle().try_add_ordinary(record)?;
         self.acquisition.acquired();
@@ -145,10 +147,10 @@ impl TrendLogObject {
     }
 
     /// Set Logging_Type, as a client's write does: POLLED or TRIGGERED. This
-    /// device has no COV acquisition, so COV, like any other value, is
-    /// PROPERTY / VALUE_OUT_OF_RANGE and changes nothing. POLLED with a zero
-    /// Log_Interval sets [`DEFAULT_LOG_INTERVAL`]; TRIGGERED sets
-    /// Log_Interval to zero.
+    /// device has no COV acquisition yet (#1480), so COV, like any other
+    /// value, is PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED (Clause
+    /// 12.25.26) and changes nothing. POLLED with a zero Log_Interval sets
+    /// [`DEFAULT_LOG_INTERVAL`]; TRIGGERED sets Log_Interval to zero.
     pub fn set_logging_type(&mut self, logging_type: LoggingType) -> Result<(), Error> {
         self.acquisition.set_logging_type(logging_type)
     }
@@ -157,28 +159,30 @@ impl TrendLogObject {
     /// While Logging_Type is TRIGGERED it is read-only and this is PROPERTY /
     /// WRITE_ACCESS_DENIED. A POLLED log's nonzero interval set to zero would
     /// switch it to COV logging (Clause 12.25.9), which is refused with
-    /// PROPERTY / VALUE_OUT_OF_RANGE.
+    /// PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, as COV itself is.
     pub fn set_log_interval(&mut self, hundredths: u32) -> Result<(), Error> {
         self.acquisition.set_log_interval(hundredths)
     }
 
     /// Set Start_Time, the local date and time from which records are kept,
-    /// as local configuration: nothing is recorded for the change itself.
-    /// Every field unspecified leaves the start open. Any other value has to
-    /// name an actual date and time, or it is PROPERTY / VALUE_OUT_OF_RANGE:
-    /// the weekday may stay unspecified, and unspecified seconds or
-    /// hundredths count as zero.
+    /// as local configuration: nothing is recorded for the change itself,
+    /// but the log notes at once where the window stands, so a client's
+    /// write that then opens or shuts it is recorded. Every field
+    /// unspecified leaves the start open. Any other value has to name an
+    /// actual date and time, or it is PROPERTY / VALUE_OUT_OF_RANGE: the
+    /// weekday may stay unspecified, and unspecified seconds or hundredths
+    /// count as zero.
     pub fn set_start_time(&mut self, date: Date, time: Time) -> Result<(), Error> {
-        self.window
-            .configure(PropertyIdentifier::START_TIME, (date, time))
+        self.lifecycle()
+            .configure_window(PropertyIdentifier::START_TIME, (date, time))
     }
 
     /// Set Stop_Time, the local date and time from which records are no
     /// longer kept, under the same rules as
     /// [`set_start_time`](Self::set_start_time).
     pub fn set_stop_time(&mut self, date: Date, time: Time) -> Result<(), Error> {
-        self.window
-            .configure(PropertyIdentifier::STOP_TIME, (date, time))
+        self.lifecycle()
+            .configure_window(PropertyIdentifier::STOP_TIME, (date, time))
     }
 
     /// Set Align_Intervals: whether a POLLED log acquires at clock-aligned

@@ -1316,7 +1316,7 @@
     "crates/bacnet-objects/src/log_lifecycle.rs::LogLifecycle::refresh_window",
     "crates/bacnet-objects/src/trend/acquisition.rs::Acquisition",
     "crates/bacnet-objects/src/trend/acquisition.rs::Rules",
-    "crates/bacnet-objects/src/database/trend_poll.rs::ObjectDatabase::refresh_log_windows",
+    "crates/bacnet-objects/src/log_lifecycle.rs::LogLifecycle::configure_window",
     "crates/bacnet-objects/src/database/trend_poll/alignment.rs::Alignment",
     "crates/bacnet-objects/src/traits.rs::BACnetObject::refresh_log_window_internal",
     "crates/rusty-bacnet/src/server/server_methods/trend_log_methods.rs::trend_log_multiple",
@@ -1381,7 +1381,12 @@
     "crates/bacnet-objects/src/database/trend_poll/trend_log_tests.rs::a_trigger_on_a_trend_log_without_a_reference_logs_a_failure",
     "crates/bacnet-objects/src/database/trend_poll/trend_log_tests.rs::an_aligned_trend_log_acquires_on_each_boundary",
     "crates/bacnet-objects/src/database/trend_poll/trend_log_tests.rs::each_pass_records_a_trend_log_window_opening_and_closing",
-    "crates/bacnet-objects/src/database/trend_poll/trend_log_tests.rs::each_pass_records_an_event_log_window_opening_and_closing"
+    "crates/bacnet-objects/src/database/trend_poll/trend_log_tests.rs::each_pass_records_an_event_log_window_opening_and_closing",
+    "crates/bacnet-objects/src/log_window_tests.rs::a_window_opened_at_both_ends_logs_its_opening_at_the_write",
+    "crates/bacnet-objects/src/log_window_tests.rs::a_window_opened_at_both_ends_without_a_clock_logs_it_at_the_next_pass",
+    "crates/bacnet-objects/src/log_window_tests.rs::a_client_write_after_a_local_setter_logs_the_change",
+    "crates/bacnet-objects/src/trend/options_tests.rs::a_record_the_log_ignores_still_serves_the_trigger",
+    "crates/bacnet-server/src/handlers/tests/trend_log_options.rs::trend_log_and_event_log_windows_take_a_date_and_time"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/trend_log_clock_tests.rs::unusable_acquisition_clock_preserves_records_and_schedule_then_retries",
@@ -1411,7 +1416,8 @@
     "crates/rusty-bacnet/tests/test_trend_log_multiple.py::TrendLogMultipleStubContractTests::test_runtime_and_stub_take_the_same_keyword_arguments",
     "crates/bacnet-objects/src/log_window_tests.rs::window_values_that_name_no_moment_are_value_out_of_range",
     "crates/bacnet-objects/src/trend/options_tests.rs::logging_type_takes_polled_or_triggered_and_refuses_cov_for_now",
-    "crates/bacnet-objects/src/trend/options_tests.rs::a_polled_interval_written_to_zero_is_a_refused_switch_to_cov"
+    "crates/bacnet-objects/src/trend/options_tests.rs::a_polled_interval_written_to_zero_is_a_refused_switch_to_cov",
+    "crates/bacnet-server/src/handlers/tests/trend_log_options.rs::trend_log_logging_type_refuses_cov_and_steers_log_interval"
    ],
    "benchmarks": [],
    "public_claims": [],
@@ -1435,8 +1441,9 @@
      "Both pollers log a value with no alternative of its own (CharacterString, Double, Date, ObjectIdentifier, OctetString, a whole array, a framed constructed value) as any-value holding the encoding a ReadProperty of it carries. A BitString logs as bitstring-value, and only a NULL value logs as null-value (#1236).",
      "An any-value holds at most ANY_VALUE_MAX_OCTETS (256) octets; a longer value logs PROPERTY / VALUE_TOO_LONG and one no record could carry logs SERVICES / OTHER, so the log never refuses a polled record.",
      "A client's change to Log_DeviceObjectProperty purges the log and records BUFFER_PURGED, as a zero Record_Count write does; the poller then samples the references written.",
-     "Trend Log and Trend Log Multiple Logging_Type is writable, POLLED or TRIGGERED; COV or any other value is PROPERTY / VALUE_OUT_OF_RANGE, also through set_logging_type. TRIGGERED zeroes Log_Interval and makes it read-only; POLLED at zero takes 6000.",
-     "A Trend Log refuses COV because this stack has no COV acquisition, so a log never reports a mode it doesn't carry out. A POLLED Trend Log's nonzero Log_Interval written to zero, the Clause 12.25.9 switch to COV, is refused the same way.",
+     "Trend Log and Trend Log Multiple Logging_Type is writable, POLLED or TRIGGERED, also through set_logging_type. Any other value, COV included, is PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED on a Trend Log (Clause 12.25.26) and PROPERTY / VALUE_OUT_OF_RANGE on a Trend Log Multiple (Clause 12.30.12). TRIGGERED zeroes Log_Interval and makes it read-only; POLLED at zero takes 6000.",
+     "A Trend Log refuses COV because this stack has no COV acquisition, so a log never reports a mode it doesn't carry out. A POLLED Trend Log's nonzero Log_Interval written to zero, the Clause 12.25.9 switch to COV, gets the same PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.",
+     "A local Start_Time or Stop_Time setter records nothing but notes where the window stands, so a client's write that then opens or shuts it is recorded. A successful add_record serves a pending Trigger even when the record is ignored.",
      "A TRUE Trigger write on a TRIGGERED trend log makes one poller acquisition; Trigger reads TRUE until the record is accepted. TRUE on a POLLED log is PROPERTY / NOT_CONFIGURED_FOR_TRIGGERED_LOGGING. A Trend Log with no reference logs PROPERTY / NO_PROPERTY_SPECIFIED for it.",
      "Start_Time / Stop_Time on all three log objects gate records, each judged at its own timestamp; an opening or closing while Enable is TRUE is logged at a write and on the poller's next pass, Event Logs included. Unspecified seconds or hundredths count as zero; other partial ends are VALUE_OUT_OF_RANGE.",
      "An aligned POLLED trend log whose Log_Interval divides a day acquires when the Device clock's time of day is Interval_Offset, modulo the interval, past a multiple of it.",
@@ -1445,7 +1452,7 @@
      "A Python member is an (object, property[, array_index]) tuple or a mapping, as add_channel takes; one naming the server's own Device is stored without it."
     ],
    "gaps": [
-    "Trend Log COV acquisition is not built: a COV Logging_Type, or a POLLED log's Log_Interval set from nonzero to zero, is refused with VALUE_OUT_OF_RANGE (no issue)"
+    "#1480: Trend Log COV acquisition is not built; a COV Logging_Type, or a POLLED log's Log_Interval set from nonzero to zero, is refused with PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED"
    ]
   },
   {
