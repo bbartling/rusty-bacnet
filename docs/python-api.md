@@ -76,7 +76,7 @@ asyncio.run(main())
 
 ## Enums
 
-All enums have class-level named constants, plus `from_raw(int)` and `to_raw()` for raw access. They support `==`, `hash()`, and `repr()`.
+All enums have class-level named constants, plus `from_raw(int)` and `to_raw()` for raw access. They support `==`, `hash()`, and `repr()`, and `copy.copy`, `copy.deepcopy` and `pickle`, which rebuild a value with `from_raw(value.to_raw())` (#1456).
 
 ### ObjectType
 
@@ -3113,8 +3113,8 @@ deprecated `DISABLE`, so `comm_state()` never returns it.
 - `EnableDisable` doesn't compare equal to an `int`, and it is truthy in both
   states, so `if await server.comm_state():` can't tell them apart. Compare
   with the constants; `state.to_raw()` gives the number.
-- `copy.copy`, `copy.deepcopy` and `pickle` raise `TypeError` on it. Keep
-  `state.to_raw()` and rebuild with `EnableDisable.from_raw()` instead.
+- Like every enum class here, it can be copied with `copy.copy` and
+  `copy.deepcopy` and pickled; each rebuilds the value with `from_raw`.
 
 `comm_state()` raises `RuntimeError` before start and after stop.
 
