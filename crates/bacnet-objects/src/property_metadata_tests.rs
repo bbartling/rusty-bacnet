@@ -225,7 +225,7 @@ fn property_metadata_contract_time_value() {
 fn property_metadata_contract_binary_input() {
     let object = BinaryInputObject::new(1, "BI-1").unwrap();
     assert_unique_and_canonical(&object);
-    assert_eq!(object.property_metadata().len(), 24);
+    assert_eq!(object.property_metadata().len(), 27);
 
     let present_value = metadata_row(&object, PropertyIdentifier::PRESENT_VALUE);
     assert_eq!(present_value.conformance, PropertyConformance::RequiredRead);
@@ -392,6 +392,9 @@ fn property_metadata_contract_property_list_projection_excludes_property_list() 
                 PropertyIdentifier::ACKED_TRANSITIONS,
                 PropertyIdentifier::EVENT_TIME_STAMPS,
                 PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+                PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG,
+                PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF,
+                PropertyIdentifier::EVENT_ALGORITHM_INHIBIT,
                 PropertyIdentifier::OUT_OF_SERVICE,
                 PropertyIdentifier::POLARITY,
                 PropertyIdentifier::RELIABILITY,

@@ -2675,7 +2675,33 @@ the Event Logs like any other notification; those logs take no notifications,
 so it can't count toward their own next report. A purge restarts Records_Since_Notification at the BUFFER_PURGED
 record but leaves the threshold counting from Last_Notify_Record;
 Event_Detection_Enable TRUE again restarts both from the current count.
-Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair aren't served.
+While Event_Algorithm_Inhibit is TRUE no report goes out; the records keep
+counting, so one falls due as soon as it clears.
+
+Every object here that reports intrinsically (the analog, binary and
+multi-state families, Access Door, Access Zone and the three logs) also
+serves Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair
+(#1329), all three writable:
+
+- Event_Message_Texts_Config holds one CharacterString per transition,
+  TO_OFFNORMAL, TO_FAULT and TO_NORMAL. A non-empty entry replaces the
+  server's own Message Text for that transition, in the notification and in
+  Event_Message_Texts; an empty one, the default, leaves it. The text goes
+  out as written: the stack defines no substitution codes.
+- Event_Algorithm_Inhibit TRUE stops the event algorithm but not fault
+  detection (Clause 13.2.2.1): no offnormal or normal transition of its own,
+  any time delay under way dropped, and an offnormal object back to NORMAL at
+  once. Once it is FALSE, a condition has to last its whole Time_Delay again.
+  A client writes it while Event_Detection_Enable is TRUE and there is no
+  reference.
+- Event_Algorithm_Inhibit_Ref names a Boolean or BinaryPV property of this
+  device (the datatype has no device member) for the inhibit to follow, and
+  the inhibit is then read-only. The server reads the property, through
+  `ObjectDatabase::follow_event_algorithm_inhibit`, each time it evaluates
+  the object: on a write to it and on the one-second tick, so a change
+  reaches the inhibit within a second. ACTIVE and TRUE inhibit; INACTIVE,
+  FALSE, a missing property or another datatype don't. Unset, it reads as
+  Binary Value 4194303's Present_Value, and writing that clears it.
 
 Every Trend Log samples a BACnet property, so its Start_Time, Stop_Time,
 Log_Interval and Log_DeviceObjectProperty are classed required (Table 12-29
@@ -3415,7 +3441,8 @@ CHANGE_OF_STATE algorithm (Clause 12.32). It serves the event rows the
 Multi-state Input does: Time_Delay, Notification_Class, Alarm_Values,
 Event_Enable, Acked_Transitions, Notify_Type, Event_Time_Stamps,
 Event_Message_Texts, Event_Detection_Enable and Time_Delay_Normal, the
-configuration writable over the network. Alarm_Values is a list of
+configuration writable over the network, and the message texts and inhibit
+rows every intrinsic reporter serves (#1329). Alarm_Values is a list of
 BACnetAccessZoneOccupancyState values other than NORMAL (named, or
 proprietary from 64 to 65535; anything else, NORMAL included, is
 VALUE_OUT_OF_RANGE naming the element), which

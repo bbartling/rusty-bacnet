@@ -286,6 +286,13 @@ impl BACnetObject for MultiStateInputObject {
             }
             return Err(common::invalid_data_type_error());
         }
+        // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+        if let Some(result) =
+            self.event_history
+                .write(property, array_index, &value, self.event_detection_enable)
+        {
+            return result;
+        }
         if let Some(result) = write_generic_event_properties!(self, property, value) {
             return result;
         }

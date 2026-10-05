@@ -56,7 +56,13 @@ fn property_metadata_analog_exact_required_and_instance_projections() {
         P::ACKED_TRANSITIONS,
         P::EVENT_TIME_STAMPS,
     ];
-    let intrinsic_permitted = [P::TIME_DELAY_NORMAL, P::EVENT_MESSAGE_TEXTS];
+    let intrinsic_permitted = [
+        P::TIME_DELAY_NORMAL,
+        P::EVENT_MESSAGE_TEXTS,
+        P::EVENT_MESSAGE_TEXTS_CONFIG,
+        P::EVENT_ALGORITHM_INHIBIT_REF,
+        P::EVENT_ALGORITHM_INHIBIT,
+    ];
     let base = [
         P::OBJECT_IDENTIFIER,
         P::OBJECT_NAME,
@@ -83,6 +89,9 @@ fn property_metadata_analog_exact_required_and_instance_projections() {
         P::ACKED_TRANSITIONS,
         P::EVENT_TIME_STAMPS,
         P::EVENT_MESSAGE_TEXTS,
+        P::EVENT_MESSAGE_TEXTS_CONFIG,
+        P::EVENT_ALGORITHM_INHIBIT_REF,
+        P::EVENT_ALGORITHM_INHIBIT,
     ];
     for configuration in 0..8 {
         for object in analog_objects(configuration) {
@@ -234,6 +243,9 @@ fn property_metadata_analog_write_capabilities_match_dispatch() {
                     | P::NOTIFICATION_CLASS
                     | P::TIME_DELAY
                     | P::TIME_DELAY_NORMAL
+                    | P::EVENT_MESSAGE_TEXTS_CONFIG
+                    | P::EVENT_ALGORITHM_INHIBIT_REF
+                    | P::EVENT_ALGORITHM_INHIBIT
                     | P::RELIABILITY_EVALUATION_INHIBIT => PropertyWriteCapability::Always,
                     _ => PropertyWriteCapability::ReadOnly,
                 };

@@ -3,6 +3,7 @@ use std::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
+use crate::event::options::REPORTING_OPTION_METADATA;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
@@ -20,9 +21,10 @@ use crate::property_metadata::{
 // exactly three rows, and Property_List is appended so the projection helper
 // omits it while required_properties keeps it. Only implemented rows are
 // described: table rows the objects do not serve (Door_Unlock_Delay_Time,
-// Maintenance_Required, the point's event rows, the door's and zone's
-// Event_Message_Texts_Config and Event_Algorithm_Inhibit pair,
-// audit/tag/profile rows) stay absent until dispatch exists. The required door rows #1073
+// Maintenance_Required, the point's event rows, audit/tag/profile rows)
+// stay absent until dispatch exists. The door and the zone serve
+// Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329)
+// after Event_Message_Texts. The required door rows #1073
 // added follow Relinquish_Default: Door_Pulse_Time, Door_Extended_Pulse_Time
 // and Door_Open_Too_Long_Time carry the table R code with routed Unsigned32
 // arms, so RequiredRead/Always, and Current_Command_Priority, derived from
@@ -181,6 +183,10 @@ const ACCESS_DOOR_BASE: &[PropertyMetadata] = &[
         Some(IntrinsicReportingOptional),
         ReadOnly,
     ),
+    // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+    REPORTING_OPTION_METADATA[0],
+    REPORTING_OPTION_METADATA[1],
+    REPORTING_OPTION_METADATA[2],
     PropertyMetadata::new(
         P::EVENT_DETECTION_ENABLE,
         Optional,
@@ -304,6 +310,10 @@ const ACCESS_ZONE_BASE: &[PropertyMetadata] = &[
         Some(IntrinsicReportingOptional),
         ReadOnly,
     ),
+    // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+    REPORTING_OPTION_METADATA[0],
+    REPORTING_OPTION_METADATA[1],
+    REPORTING_OPTION_METADATA[2],
     PropertyMetadata::new(
         P::EVENT_DETECTION_ENABLE,
         Optional,

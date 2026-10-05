@@ -639,7 +639,8 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
             .filter(|property| property.access.writable)
             .map(|property| property.property_id)
             .collect::<Vec<_>>();
-        // Each log's BUFFER_READY configuration is writable too (#1347).
+        // Each log's BUFFER_READY configuration is writable too (#1347),
+        // as are the message texts and the inhibit pair (#1329).
         let reporting = [
             PropertyIdentifier::NOTIFICATION_THRESHOLD,
             PropertyIdentifier::NOTIFICATION_CLASS,
@@ -647,12 +648,17 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
             PropertyIdentifier::NOTIFY_TYPE,
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
         ];
+        let options = [
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG,
+            PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF,
+            PropertyIdentifier::EVENT_ALGORITHM_INHIBIT,
+        ];
         assert_eq!(
             writable.len(),
-            expected.len() + reporting.len(),
+            expected.len() + reporting.len() + options.len(),
             "{object_type:?}"
         );
-        for property in expected.iter().chain(&reporting) {
+        for property in expected.iter().chain(&reporting).chain(&options) {
             assert!(writable.contains(property), "{object_type:?} {property:?}");
         }
         // A Trend Log samples a BACnet property, so Table 12-29 footnotes 1
@@ -706,7 +712,9 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
             );
         }
         let texts = PropertyIdentifier::EVENT_MESSAGE_TEXTS;
-        assert_eq!(optional(texts), Some(true), "{object_type:?}");
+        for property in options.iter().chain([&texts]) {
+            assert_eq!(optional(*property), Some(true), "{object_type:?}");
+        }
     }
 }
 

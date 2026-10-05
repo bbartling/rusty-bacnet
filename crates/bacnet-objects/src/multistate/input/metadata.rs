@@ -3,6 +3,7 @@ use std::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
+use crate::event::options::REPORTING_OPTION_METADATA;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
@@ -74,6 +75,10 @@ const BASE: &[PropertyMetadata] = &[
         Some(IntrinsicReportingOptional),
         ReadOnly,
     ),
+    // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+    REPORTING_OPTION_METADATA[0],
+    REPORTING_OPTION_METADATA[1],
+    REPORTING_OPTION_METADATA[2],
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
     // No write of its own: a whole State_Text write sets it (#1443).
     PropertyMetadata::new(
@@ -160,6 +165,9 @@ mod tests {
             P::ACKED_TRANSITIONS,
             P::EVENT_TIME_STAMPS,
             P::EVENT_MESSAGE_TEXTS,
+            P::EVENT_MESSAGE_TEXTS_CONFIG,
+            P::EVENT_ALGORITHM_INHIBIT_REF,
+            P::EVENT_ALGORITHM_INHIBIT,
             P::OUT_OF_SERVICE,
             P::NUMBER_OF_STATES,
             P::RELIABILITY,
@@ -191,7 +199,7 @@ mod tests {
             // value below.
             requires.extend(INTRINSIC_REQUIRED);
             if commandable {
-                expected.splice(18..18, commands);
+                expected.splice(21..21, commands);
             }
             if output {
                 expected.insert(5, P::FEEDBACK_VALUE);
@@ -238,9 +246,11 @@ mod tests {
                         }
                         p if INTRINSIC_REQUIRED.contains(&p) => Some(IntrinsicReportingRequired),
                         P::ALARM_VALUES | P::FEEDBACK_VALUE => Some(IntrinsicReportingRequired),
-                        P::TIME_DELAY_NORMAL | P::EVENT_MESSAGE_TEXTS => {
-                            Some(IntrinsicReportingOptional)
-                        }
+                        P::TIME_DELAY_NORMAL
+                        | P::EVENT_MESSAGE_TEXTS
+                        | P::EVENT_MESSAGE_TEXTS_CONFIG
+                        | P::EVENT_ALGORITHM_INHIBIT_REF
+                        | P::EVENT_ALGORITHM_INHIBIT => Some(IntrinsicReportingOptional),
                         _ => None,
                     };
                     assert_eq!(row.presence_condition, condition, "{kind:?} {p:?}");
@@ -318,6 +328,16 @@ mod tests {
                         None,
                     )
                     .unwrap();
+                // Event_Algorithm_Inhibit takes a write only while detection is
+                // on, which an output doesn't start with (#1329).
+                object
+                    .write_property(
+                        P::EVENT_DETECTION_ENABLE,
+                        None,
+                        PropertyValue::Boolean(true),
+                        None,
+                    )
+                    .unwrap();
                 for row in object.property_metadata().into_owned() {
                     let p = row.property_identifier;
                     let capability = match p {
@@ -342,7 +362,10 @@ mod tests {
                         | P::RELIABILITY_EVALUATION_INHIBIT
                         | P::STATE_TEXT
                         | P::ALARM_VALUES
-                        | P::FEEDBACK_VALUE => Always,
+                        | P::FEEDBACK_VALUE
+                        | P::EVENT_MESSAGE_TEXTS_CONFIG
+                        | P::EVENT_ALGORITHM_INHIBIT_REF
+                        | P::EVENT_ALGORITHM_INHIBIT => Always,
                         _ => ReadOnly,
                     };
                     assert_eq!(row.write_capability, capability, "{p:?}");

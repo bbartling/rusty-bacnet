@@ -29,7 +29,12 @@ const COMMON_REQUIRED: [P; 6] = [
 ];
 
 /// The served rows every one of these tables only permits.
-const COMMON_PERMITTED: [P; 1] = [P::EVENT_MESSAGE_TEXTS];
+const COMMON_PERMITTED: [P; 4] = [
+    P::EVENT_MESSAGE_TEXTS,
+    P::EVENT_MESSAGE_TEXTS_CONFIG,
+    P::EVENT_ALGORITHM_INHIBIT_REF,
+    P::EVENT_ALGORITHM_INHIBIT,
+];
 
 /// One object type: a representative, the rows its table requires of an
 /// intrinsic reporter beyond [`COMMON_REQUIRED`], and the served rows it

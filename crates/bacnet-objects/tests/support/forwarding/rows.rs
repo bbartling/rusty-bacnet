@@ -238,6 +238,9 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("buffer_ready_report_internal", |o| {
         format!("{:?}", o.buffer_ready_report_internal())
     }),
+    ("event_algorithm_inhibit_reference_internal", |o| {
+        format!("{:?}", o.event_algorithm_inhibit_reference_internal())
+    }),
 ];
 
 pub const COMMANDS: &[(&str, Command)] = &[
@@ -464,6 +467,9 @@ pub const COMMANDS: &[(&str, Command)] = &[
     }),
     ("set_input_usable_internal", |o| {
         format!("{:?}", o.set_input_usable_internal(false))
+    }),
+    ("follow_event_algorithm_inhibit_internal", |o| {
+        format!("{:?}", o.follow_event_algorithm_inhibit_internal(true))
     }),
     ("take_input_reading_internal", |o| {
         let reading = InputReading {

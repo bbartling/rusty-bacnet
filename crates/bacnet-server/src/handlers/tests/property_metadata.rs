@@ -247,6 +247,9 @@ fn rpm_metadata_selectors_are_exact_for_binary_input() {
             PropertyIdentifier::ACKED_TRANSITIONS,
             PropertyIdentifier::EVENT_TIME_STAMPS,
             PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG,
+            PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF,
+            PropertyIdentifier::EVENT_ALGORITHM_INHIBIT,
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::POLARITY,
             PropertyIdentifier::RELIABILITY,
@@ -286,6 +289,9 @@ fn rpm_metadata_selectors_are_exact_for_binary_input() {
             // Footnote 7 alone only permits these two.
             PropertyIdentifier::TIME_DELAY_NORMAL,
             PropertyIdentifier::EVENT_MESSAGE_TEXTS,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG,
+            PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF,
+            PropertyIdentifier::EVENT_ALGORITHM_INHIBIT,
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT,
             PropertyIdentifier::ACTIVE_TEXT,
@@ -376,6 +382,9 @@ fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
         P::RELIABILITY,
         P::RELIABILITY_EVALUATION_INHIBIT,
         P::EVENT_MESSAGE_TEXTS,
+        P::EVENT_MESSAGE_TEXTS_CONFIG,
+        P::EVENT_ALGORITHM_INHIBIT_REF,
+        P::EVENT_ALGORITHM_INHIBIT,
     ];
     for configuration in 0..8 {
         let mut ai = AnalogInputObject::new(1, "AI-1", 62).unwrap();
@@ -499,6 +508,9 @@ fn rpm_metadata_binary_required_optional_and_budgeted_bytes_agree() {
         P::ACKED_TRANSITIONS,
         P::EVENT_TIME_STAMPS,
         P::EVENT_MESSAGE_TEXTS,
+        P::EVENT_MESSAGE_TEXTS_CONFIG,
+        P::EVENT_ALGORITHM_INHIBIT_REF,
+        P::EVENT_ALGORITHM_INHIBIT,
         P::OUT_OF_SERVICE,
         P::PRIORITY_ARRAY,
         P::RELINQUISH_DEFAULT,
@@ -528,7 +540,7 @@ fn rpm_metadata_binary_required_optional_and_budgeted_bytes_agree() {
                 ];
                 requires.extend(INTRINSIC_REQUIRED);
                 if oid.object_type() == ObjectType::BINARY_OUTPUT {
-                    all.insert(20, P::POLARITY);
+                    all.insert(23, P::POLARITY);
                     all.insert(5, P::FEEDBACK_VALUE);
                     requires.extend([
                         P::PRIORITY_ARRAY,
@@ -623,6 +635,9 @@ fn rpm_metadata_multistate_required_optional_and_budgeted_bytes_agree() {
         P::ACKED_TRANSITIONS,
         P::EVENT_TIME_STAMPS,
         P::EVENT_MESSAGE_TEXTS,
+        P::EVENT_MESSAGE_TEXTS_CONFIG,
+        P::EVENT_ALGORITHM_INHIBIT_REF,
+        P::EVENT_ALGORITHM_INHIBIT,
         P::OUT_OF_SERVICE,
         P::NUMBER_OF_STATES,
         P::RELIABILITY,
@@ -651,7 +666,7 @@ fn rpm_metadata_multistate_required_optional_and_budgeted_bytes_agree() {
                 P::CURRENT_COMMAND_PRIORITY,
             ];
             if kind != ObjectType::MULTI_STATE_INPUT {
-                all.splice(18..18, commands);
+                all.splice(21..21, commands);
             }
             if kind == ObjectType::MULTI_STATE_OUTPUT {
                 all.insert(5, P::FEEDBACK_VALUE);

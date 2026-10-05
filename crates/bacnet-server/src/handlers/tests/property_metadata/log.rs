@@ -151,7 +151,11 @@ fn expected_rows(kind: ObjectType, triggered: bool) -> Vec<(P, bool, bool)> {
         (P::NOTIFY_TYPE, false, true),
         (P::EVENT_TIME_STAMPS, false, false),
         (P::EVENT_MESSAGE_TEXTS, true, false),
+        // The message texts and the inhibit pair, only permitted (#1329).
+        (P::EVENT_MESSAGE_TEXTS_CONFIG, true, true),
         (P::EVENT_DETECTION_ENABLE, false, true),
+        (P::EVENT_ALGORITHM_INHIBIT_REF, true, true),
+        (P::EVENT_ALGORITHM_INHIBIT, true, true),
     ]);
     rows.push((P::PROPERTY_LIST, false, false));
     rows

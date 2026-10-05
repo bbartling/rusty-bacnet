@@ -3,6 +3,7 @@ use std::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
+use crate::event::options::REPORTING_OPTION_METADATA;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
@@ -82,6 +83,10 @@ const BASE: &[PropertyMetadata] = &[
         Some(IntrinsicReportingOptional),
         ReadOnly,
     ),
+    // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+    REPORTING_OPTION_METADATA[0],
+    REPORTING_OPTION_METADATA[1],
+    REPORTING_OPTION_METADATA[2],
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
     // No write of its own: a whole State_Text write sets it (#1443).
     PropertyMetadata::new(

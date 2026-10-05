@@ -17,7 +17,7 @@ fn assert_error(error: Error, expected: ErrorCode) {
 
 /// The intrinsic-reporting rows of the zone (#1305) and the door (#1149),
 /// in metadata order.
-const EVENT_ROWS: [P; 10] = [
+const EVENT_ROWS: [P; 13] = [
     P::TIME_DELAY,
     P::NOTIFICATION_CLASS,
     P::ALARM_VALUES,
@@ -26,13 +26,22 @@ const EVENT_ROWS: [P; 10] = [
     P::NOTIFY_TYPE,
     P::EVENT_TIME_STAMPS,
     P::EVENT_MESSAGE_TEXTS,
+    P::EVENT_MESSAGE_TEXTS_CONFIG,
+    P::EVENT_ALGORITHM_INHIBIT_REF,
+    P::EVENT_ALGORITHM_INHIBIT,
     P::EVENT_DETECTION_ENABLE,
     P::TIME_DELAY_NORMAL,
 ];
 
 /// The event rows Tables 12-30 and 12-37 only permit, by footnote 5 or 7
 /// alone, rather than require of an object that reports intrinsically.
-const PERMITTED_EVENT_ROWS: [P; 2] = [P::EVENT_MESSAGE_TEXTS, P::TIME_DELAY_NORMAL];
+const PERMITTED_EVENT_ROWS: [P; 5] = [
+    P::EVENT_MESSAGE_TEXTS,
+    P::EVENT_MESSAGE_TEXTS_CONFIG,
+    P::EVENT_ALGORITHM_INHIBIT_REF,
+    P::EVENT_ALGORITHM_INHIBIT,
+    P::TIME_DELAY_NORMAL,
+];
 
 /// The rows the table requires of an object that reports intrinsically:
 /// the event rows but the permitted ones, and `extra`.
@@ -452,6 +461,10 @@ fn property_metadata_access_trio_write_capabilities_match_dispatch() {
                 P::NOTIFY_TYPE,
                 P::EVENT_DETECTION_ENABLE,
                 P::TIME_DELAY_NORMAL,
+                // The message texts and the inhibit pair (#1329).
+                P::EVENT_MESSAGE_TEXTS_CONFIG,
+                P::EVENT_ALGORITHM_INHIBIT_REF,
+                P::EVENT_ALGORITHM_INHIBIT,
             ],
             // Table 12-30 footnote 1 (#1131), and Reliability, which the
             // FAULT_STATE check can move (Clause 12.26.9, #1149).
@@ -489,6 +502,10 @@ fn property_metadata_access_trio_write_capabilities_match_dispatch() {
                 P::NOTIFY_TYPE,
                 P::EVENT_DETECTION_ENABLE,
                 P::TIME_DELAY_NORMAL,
+                // The message texts and the inhibit pair (#1329).
+                P::EVENT_MESSAGE_TEXTS_CONFIG,
+                P::EVENT_ALGORITHM_INHIBIT_REF,
+                P::EVENT_ALGORITHM_INHIBIT,
             ],
             // Table 12-37 footnote 1 (#1247).
             &[P::OCCUPANCY_COUNT, P::RELIABILITY],

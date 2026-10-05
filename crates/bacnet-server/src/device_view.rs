@@ -421,6 +421,9 @@ impl BACnetObject for DeviceReadView<'_> {
     fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
         self.object.buffer_ready_report_internal()
     }
+    fn event_algorithm_inhibit_reference_internal(&self) -> Option<BACnetObjectPropertyReference> {
+        self.object.event_algorithm_inhibit_reference_internal()
+    }
 }
 
 #[cfg(test)]

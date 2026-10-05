@@ -29,7 +29,7 @@ use crate::property_metadata::{
 // to ask for an acquisition. The log reports BUFFER_READY (#1347), so the
 // intrinsic reporting rows footnote 4 asks for come last, each marked as
 // present for that reason.
-const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 32] {
+const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 35] {
     let r = BUFFER_READY_METADATA;
     [
         PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
@@ -63,12 +63,15 @@ const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 32] {
         r[7],
         r[8],
         r[9],
+        r[10],
+        r[11],
+        r[12],
         PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
     ]
 }
 
-const WRITABLE_INTERVAL: [PropertyMetadata; 32] = rows(Always);
-const READ_ONLY_INTERVAL: [PropertyMetadata; 32] = rows(ReadOnly);
+const WRITABLE_INTERVAL: [PropertyMetadata; 35] = rows(Always);
+const READ_ONLY_INTERVAL: [PropertyMetadata; 35] = rows(ReadOnly);
 
 pub(super) fn for_object(object: &TrendLogObject) -> Cow<'_, [PropertyMetadata]> {
     Cow::Borrowed(if object.acquisition.log_interval_writable() {
@@ -100,8 +103,10 @@ mod tests {
     /// The rows only the two trend objects serve (#1235, #1354).
     const TREND_ONLY: [P; 3] = [P::ALIGN_INTERVALS, P::INTERVAL_OFFSET, P::TRIGGER];
 
-    /// Every log's BUFFER_READY rows, last before Property_List (#1347).
-    const REPORTING: [P; 10] = [
+    /// Every log's BUFFER_READY rows, last before Property_List (#1347),
+    /// with the message texts and the inhibit pair where the tables put
+    /// them (#1329).
+    const REPORTING: [P; 13] = [
         P::NOTIFICATION_THRESHOLD,
         P::RECORDS_SINCE_NOTIFICATION,
         P::LAST_NOTIFY_RECORD,
@@ -111,16 +116,30 @@ mod tests {
         P::NOTIFY_TYPE,
         P::EVENT_TIME_STAMPS,
         P::EVENT_MESSAGE_TEXTS,
+        P::EVENT_MESSAGE_TEXTS_CONFIG,
         P::EVENT_DETECTION_ENABLE,
+        P::EVENT_ALGORITHM_INHIBIT_REF,
+        P::EVENT_ALGORITHM_INHIBIT,
+    ];
+
+    /// The BUFFER_READY rows the tables only permit (#1485, #1329).
+    const REPORTING_PERMITTED: [P; 4] = [
+        P::EVENT_MESSAGE_TEXTS,
+        P::EVENT_MESSAGE_TEXTS_CONFIG,
+        P::EVENT_ALGORITHM_INHIBIT_REF,
+        P::EVENT_ALGORITHM_INHIBIT,
     ];
 
     /// The BUFFER_READY rows a client may write.
-    const REPORTING_WRITABLE: [P; 5] = [
+    const REPORTING_WRITABLE: [P; 8] = [
         P::NOTIFICATION_THRESHOLD,
         P::NOTIFICATION_CLASS,
         P::EVENT_ENABLE,
         P::NOTIFY_TYPE,
         P::EVENT_DETECTION_ENABLE,
+        P::EVENT_MESSAGE_TEXTS_CONFIG,
+        P::EVENT_ALGORITHM_INHIBIT_REF,
+        P::EVENT_ALGORITHM_INHIBIT,
     ];
 
     struct FixedClock;
@@ -224,8 +243,12 @@ mod tests {
                         required.extend(WINDOW);
                     }
                     // Intrinsic reporting requires every BUFFER_READY row but
-                    // Event_Message_Texts, which it only permits (#1485).
-                    required.extend(REPORTING.iter().filter(|&&p| p != P::EVENT_MESSAGE_TEXTS));
+                    // the ones it only permits (#1485).
+                    required.extend(
+                        REPORTING
+                            .iter()
+                            .filter(|p| !REPORTING_PERMITTED.contains(p)),
+                    );
                     required.push(P::PROPERTY_LIST);
                     assert_eq!(object.property_list().as_ref(), all);
                     assert_eq!(object.required_properties().as_ref(), required);
@@ -239,7 +262,7 @@ mod tests {
                     for row in metadata.iter() {
                         let p = row.property_identifier;
                         let reporting = REPORTING.contains(&p);
-                        let condition = if p == P::EVENT_MESSAGE_TEXTS {
+                        let condition = if REPORTING_PERMITTED.contains(&p) {
                             PropertyPresenceCondition::IntrinsicReportingOptional
                         } else {
                             PropertyPresenceCondition::IntrinsicReportingRequired

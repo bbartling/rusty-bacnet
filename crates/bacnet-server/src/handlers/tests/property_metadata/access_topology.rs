@@ -59,7 +59,7 @@ fn access_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
 /// The zone's intrinsic-reporting rows (#1305), in metadata order. All but
 /// [`PERMITTED_EVENT_ROWS`] are required of a zone that reports
 /// intrinsically (#1485).
-const ZONE_EVENT_ROWS: [P; 10] = [
+const ZONE_EVENT_ROWS: [P; 13] = [
     P::TIME_DELAY,
     P::NOTIFICATION_CLASS,
     P::ALARM_VALUES,
@@ -68,12 +68,21 @@ const ZONE_EVENT_ROWS: [P; 10] = [
     P::NOTIFY_TYPE,
     P::EVENT_TIME_STAMPS,
     P::EVENT_MESSAGE_TEXTS,
+    P::EVENT_MESSAGE_TEXTS_CONFIG,
+    P::EVENT_ALGORITHM_INHIBIT_REF,
+    P::EVENT_ALGORITHM_INHIBIT,
     P::EVENT_DETECTION_ENABLE,
     P::TIME_DELAY_NORMAL,
 ];
 
 /// The event rows Tables 12-30 and 12-37 only permit (#1485).
-const PERMITTED_EVENT_ROWS: [P; 2] = [P::EVENT_MESSAGE_TEXTS, P::TIME_DELAY_NORMAL];
+const PERMITTED_EVENT_ROWS: [P; 5] = [
+    P::EVENT_MESSAGE_TEXTS,
+    P::EVENT_MESSAGE_TEXTS_CONFIG,
+    P::EVENT_ALGORITHM_INHIBIT_REF,
+    P::EVENT_ALGORITHM_INHIBIT,
+    P::TIME_DELAY_NORMAL,
+];
 
 /// The door's rows #1149 added, in metadata order: the masked list, then
 /// the zone's event rows with Fault_Values after Alarm_Values.

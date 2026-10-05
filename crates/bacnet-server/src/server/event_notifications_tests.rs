@@ -18,6 +18,9 @@ mod history_tests;
 #[path = "event_message_policy_tests.rs"]
 mod message_policy_tests;
 
+#[path = "event_options_tests.rs"]
+mod options_tests;
+
 #[path = "event_notifications_priority_tests.rs"]
 mod priority_tests;
 

@@ -168,6 +168,13 @@ fn pics_projects_migrated_property_metadata() {
             true,
             false,
         ),
+        // Only permitted too, and writable (#1329).
+        (
+            ObjectType::BINARY_INPUT,
+            PropertyIdentifier::EVENT_ALGORITHM_INHIBIT,
+            true,
+            true,
+        ),
         (
             ObjectType::EVENT_ENROLLMENT,
             PropertyIdentifier::EVENT_TIME_STAMPS,
@@ -383,6 +390,9 @@ fn pics_analog_property_metadata_is_exact_for_each_configuration() {
         (P::ACKED_TRANSITIONS, false, false),
         (P::EVENT_TIME_STAMPS, false, false),
         (P::EVENT_MESSAGE_TEXTS, true, false),
+        (P::EVENT_MESSAGE_TEXTS_CONFIG, true, true),
+        (P::EVENT_ALGORITHM_INHIBIT_REF, true, true),
+        (P::EVENT_ALGORITHM_INHIBIT, true, true),
         (P::PROPERTY_LIST, false, false),
     ];
     for configuration in 0..8 {
@@ -498,6 +508,9 @@ fn pics_binary_commandable_property_metadata_is_exact() {
         (P::ACKED_TRANSITIONS, false, false),
         (P::EVENT_TIME_STAMPS, false, false),
         (P::EVENT_MESSAGE_TEXTS, true, false),
+        (P::EVENT_MESSAGE_TEXTS_CONFIG, true, true),
+        (P::EVENT_ALGORITHM_INHIBIT_REF, true, true),
+        (P::EVENT_ALGORITHM_INHIBIT, true, true),
         (P::OUT_OF_SERVICE, false, true),
         (P::RELIABILITY, true, true),
         (P::RELIABILITY_EVALUATION_INHIBIT, true, true),
@@ -603,6 +616,9 @@ fn pics_multistate_property_metadata_is_exact() {
         (P::ACKED_TRANSITIONS, false, false),
         (P::EVENT_TIME_STAMPS, false, false),
         (P::EVENT_MESSAGE_TEXTS, true, false),
+        (P::EVENT_MESSAGE_TEXTS_CONFIG, true, true),
+        (P::EVENT_ALGORITHM_INHIBIT_REF, true, true),
+        (P::EVENT_ALGORITHM_INHIBIT, true, true),
         (P::OUT_OF_SERVICE, false, true),
         // Writable through a whole State_Text write (#1443).
         (P::NUMBER_OF_STATES, false, true),

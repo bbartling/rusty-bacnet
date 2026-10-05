@@ -1909,6 +1909,15 @@ write Notification_Threshold (and Notification_Class) with
 recipients hear each time that many more records have been collected. Zero,
 the default, reports nothing.
 
+Every object that reports intrinsically also takes Event_Message_Texts_Config
+(three strings, the Message Text of the TO_OFFNORMAL, TO_FAULT and TO_NORMAL
+transitions in place of the server's own; an empty string leaves it) and
+Event_Algorithm_Inhibit, which suspends the event algorithm but not fault
+reporting (#1329). Write them with `write_property_local`; there are no
+`add_*` keyword arguments for them. Event_Algorithm_Inhibit_Ref makes the
+inhibit follow a local Boolean or BinaryPV property, read each time the
+server evaluates the object.
+
 An Audit Log's `storage_path` is application-owned and produces two sibling
 snapshot files with `.slot0` and `.slot1` suffixes. Reuse the same path when
 reopening that Audit Log; the server does not infer a global or
