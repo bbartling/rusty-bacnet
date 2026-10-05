@@ -18,13 +18,16 @@ def invalid_write_groups():
     yield 1, 8, [(5, 17, REAL_72)]  # override priority above 16
     yield 1, 8, [(5, None, b"")]  # no value
     yield 1, 8, [(5, None, b"\x00\x00")]  # two values
-    yield 1, 8, [(5, None, b"\x2e" + REAL_72 + b"\x2f")]  # wrapped in context tag 2
+    # Context tag 2 frames a colour command (#1474), and a bare REAL isn't one.
+    yield 1, 8, [(5, None, b"\x2e" + REAL_72 + b"\x2f")]
     yield 1, 8, [(5, None, b"\x44\x42\x90")]  # truncated REAL
     # A PropertyValue that isn't one primitive (#1359).
     two = PropertyValue.list([PropertyValue.null(), PropertyValue.null()])
     yield 1, 8, [(5, None, two)]  # two values
     yield 1, 8, [(5, None, PropertyValue.list([]))]  # no value
-    yield 1, 8, [(5, None, PropertyValue.application_data(b"\x2e\x21\x01\x2f"))]  # constructed
+    # Octets in context tag 2 that hold an Unsigned, not a colour command's
+    # operation: the frame is a valid alternative, its contents aren't.
+    yield 1, 8, [(5, None, PropertyValue.application_data(b"\x2e\x21\x01\x2f"))]
     # An xy colour of one REAL, and a colour command with no operation (#1474).
     yield 1, 8, [(5, None, b"\x1e" + REAL_72 + b"\x1f")]
     yield 1, 8, [(5, None, b"\x2e\x2a\x0a\x8c\x2f")]

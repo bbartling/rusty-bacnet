@@ -390,3 +390,84 @@ fn with_no_clock_a_fade_waits_on_logical_time() {
     assert_eq!(in_progress(&color), 0);
     assert_xy(&color, P::TRACKING_VALUE, 0.5, 0.5);
 }
+
+#[test]
+fn cct_commands_without_their_field_take_the_written_defaults() {
+    let (mut ct, clock) = temperature();
+    for (p, value) in [
+        (P::DEFAULT_FADE_TIME, 2_000),
+        (P::DEFAULT_RAMP_RATE, 250),
+        (P::DEFAULT_STEP_INCREMENT, 75),
+    ] {
+        ct.write_property(p, None, PropertyValue::Unsigned(value), None)
+            .unwrap();
+    }
+    // FADE_TO_CCT 4000 K with no fade time takes the 2,000 ms default.
+    ct.set_color_command(cct(Op::FADE_TO_CCT, Some(4_000)))
+        .unwrap();
+    clock.set(1_000);
+    assert_eq!(kelvin(&ct, P::TRACKING_VALUE), 3_500);
+    clock.set(1_999);
+    assert_eq!(in_progress(&ct), 1);
+    clock.set(2_000);
+    assert_eq!(in_progress(&ct), 0);
+    // RAMP_TO_CCT 3000 K with no rate moves at the 250 K/s default: 1000 K
+    // in 4 s.
+    ct.set_color_command(cct(Op::RAMP_TO_CCT, Some(3_000)))
+        .unwrap();
+    clock.set(4_000);
+    assert_eq!(kelvin(&ct, P::TRACKING_VALUE), 3_500);
+    clock.set(5_999);
+    assert_eq!(in_progress(&ct), 2);
+    clock.set(6_000);
+    assert_eq!(in_progress(&ct), 0);
+    // The steps with no increment move the 75 K default.
+    ct.set_color_command(BACnetColorCommand::new(Op::STEP_UP_CCT))
+        .unwrap();
+    assert_eq!(kelvin(&ct, P::PRESENT_VALUE), 3_075);
+    for _ in 0..2 {
+        ct.set_color_command(BACnetColorCommand::new(Op::STEP_DOWN_CCT))
+            .unwrap();
+    }
+    assert_eq!(kelvin(&ct, P::PRESENT_VALUE), 2_925);
+}
+
+#[test]
+fn transition_fade_makes_a_temperature_write_fade() {
+    let (mut ct, clock) = temperature();
+    for (p, value) in [
+        (P::TRANSITION, PropertyValue::Enumerated(1)),
+        (P::DEFAULT_FADE_TIME, PropertyValue::Unsigned(1_000)),
+    ] {
+        ct.write_property(p, None, value, None).unwrap();
+    }
+    ct.write_property(P::PRESENT_VALUE, None, PropertyValue::Unsigned(2_000), None)
+        .unwrap();
+    assert_eq!(kelvin(&ct, P::PRESENT_VALUE), 2_000);
+    assert_eq!(kelvin(&ct, P::TRACKING_VALUE), 3_000);
+    assert_eq!(in_progress(&ct), 1);
+    clock.set(500);
+    assert_eq!(kelvin(&ct, P::TRACKING_VALUE), 2_500);
+    clock.set(1_000);
+    assert_eq!(in_progress(&ct), 0);
+    assert_eq!(kelvin(&ct, P::TRACKING_VALUE), 2_000);
+}
+
+#[test]
+fn limits_that_leave_out_a_fades_target_halt_it() {
+    let (mut ct, clock) = temperature();
+    let fade = BACnetColorCommand {
+        fade_time: Some(10_000),
+        ..cct(Op::FADE_TO_CCT, Some(5_000))
+    };
+    ct.set_color_command(fade).unwrap();
+    clock.set(1_000);
+    assert_eq!(kelvin(&ct, P::TRACKING_VALUE), 3_200);
+    // 5000 K lies past the new maximum: Present_Value moves to 4000 K at
+    // once, and the fade ends.
+    ct.set_min_max(2_000, 4_000).unwrap();
+    assert_eq!(kelvin(&ct, P::PRESENT_VALUE), 4_000);
+    assert_eq!(kelvin(&ct, P::TRACKING_VALUE), 4_000);
+    assert_eq!(in_progress(&ct), 0);
+    assert_eq!(ct.next_monotonic_deadline_internal(), None);
+}

@@ -6,14 +6,23 @@
 //!
 //! CH-1 (channel 11) has one member, CLR-1's Present_Value; CH-2 (channel
 //! 12) has one, CT-1's Color_Command. Neither has a delay. The Channel
-//! writes go over the wire; the members are read from the database. The
-//! clock is paused.
+//! writes go over the wire; the members are read from the database.
+//!
+//! CH-21 (channel 41) and CH-22 (channel 42) name the same two properties
+//! in Device 9, bound to the harness peer, whose answers are given by hand.
+//! A colour member's datatype follows from its object type and property, so
+//! the server never reads it first.
+//!
+//! The clock is paused.
+use super::channel_remote_write_tests::{next_request, reliability, sent_reads, start_with};
 use super::channel_wire_tests::{ch, channel, member, settled, write_channel};
 use super::command_action_wire_tests::{read_db, read_wire};
+use super::command_remote_write_tests::{ack, device, sent_writes};
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::color::{ColorObject, ColorTemperatureObject};
-use bacnet_types::enums::WriteStatus;
+use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
+use bacnet_types::enums::{Reliability, WriteStatus};
 
 /// x 0.5 (0x3F000000) and y 0.25 (0x3E800000), framed in context tag 1.
 const XY: [u8; 12] = [
@@ -114,4 +123,65 @@ async fn each_colour_value_goes_to_its_own_datatype_only() {
             PropertyValue::Real(0.3290)
         ])
     );
+}
+
+/// `object`'s `property` in Device 9.
+fn remote(
+    object: ObjectIdentifier,
+    property: PropertyIdentifier,
+) -> BACnetDeviceObjectPropertyReference {
+    BACnetDeviceObjectPropertyReference {
+        device_identifier: Some(device(9)),
+        ..member(object, property)
+    }
+}
+
+async fn start_remote() -> Harness {
+    start_with(|db| {
+        let pv = PropertyIdentifier::PRESENT_VALUE;
+        db.add(Box::new(channel(21, 41, vec![(remote(clr1(), pv), 0)])))
+            .unwrap();
+        let cc = PropertyIdentifier::COLOR_COMMAND;
+        db.add(Box::new(channel(22, 42, vec![(remote(ct1(), cc), 0)])))
+            .unwrap();
+    })
+    .await
+}
+
+#[tokio::test(start_paused = true)]
+async fn colour_values_reach_members_in_another_device_unread() {
+    let mut h = start_remote().await;
+    // The xy colour goes to CLR-1's Present_Value as its two REALs, and the
+    // colour command to CT-1's Color_Command without its frame. Neither
+    // write follows a read.
+    for (instance, value, object) in [(21, &XY[..], clr1()), (22, &STEP_UP[..], ct1())] {
+        write_channel(&mut h, instance, &octets(value), None)
+            .await
+            .unwrap();
+        let (invoke_id, written) = next_request(&h, object).await;
+        assert_eq!(written, value[1..value.len() - 1]);
+        assert!(sent_reads(&h).is_empty());
+        h.respond(ack(invoke_id)).await;
+        assert_eq!(settled(&mut h, instance).await, WriteStatus::SUCCESSFUL);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_real_for_a_colour_member_in_another_device_fails_unsent() {
+    let mut h = start_remote().await;
+    // A REAL fits neither member, and their datatypes need no read to say
+    // so: nothing is sent, and the distribution fails as a configuration
+    // error.
+    for instance in [21, 22] {
+        write_channel(&mut h, instance, &PropertyValue::Real(0.5), None)
+            .await
+            .unwrap();
+        assert_eq!(settled(&mut h, instance).await, WriteStatus::FAILED);
+        assert_eq!(
+            reliability(&mut h, instance).await,
+            Reliability::CONFIGURATION_ERROR
+        );
+    }
+    assert!(sent_reads(&h).is_empty());
+    assert!(sent_writes(&h).is_empty());
 }

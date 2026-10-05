@@ -514,7 +514,8 @@ an opening and a closing context tag 0; its priority, when present, must be 1
 to 16. The colour alternatives frame the `encode_xy_color` and
 `encode_color_command` octets in tags 1 and 2 the same way.
 `bacnet_encoding::constructed::constructed_channel_value` says which
-constructed alternative some octets hold.
+constructed alternative some octets hold, as a `ConstructedChannelValue`
+(`LightingCommand`, `XyColor` or `ColorCommand`), or `None` for anything else.
 `encode` is fallible: it rejects priorities outside 1 to 16, an empty change list and
 a value that is not a single BACnetChannelValue with `Error::Encoding`, leaving the
 buffer unchanged. `decode` enforces the same rules and rejects trailing data.
@@ -3281,6 +3282,9 @@ or ramp runs, and Present_Value holds its target from the moment it starts:
   with none running it changes nothing. Any other command, or a Present_Value
   write, ends the one in progress too (Clauses 12.X.6.1 and 12.Y.6.1), and a
   new fade or ramp starts from where Tracking_Value stood.
+
+In_Progress reads as an ENUMERATED `ColorOperationInProgress` and Transition
+as an ENUMERATED `ColorTransition`, both in `bacnet_types::enums`.
 
 Present_Value is writable on both (Tables 12-X and 12-Y code it W), and
 `set_present_value` takes a value the same way. A Color object takes an xy
