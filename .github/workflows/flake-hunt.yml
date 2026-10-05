@@ -1,0 +1,448 @@
+name: Flake hunt
+
+# Runs tests over and over to catch failures too rare for a PR's single run,
+# such as a deadlock that fails about 3 runs in 1,000: the Python suite N
+# times, and nextest stress runs of the crates where concurrency flakes live,
+# each on Linux x86_64 and macOS arm64. When a hunt job fails, Hunt: report
+# opens the issue "Nightly flake hunt: failures", or comments on it while it
+# is open. See docs/ci.md, "Flake hunt".
+#
+#   nightly       on dev (the default branch): 20 Python rounds and 20 minutes
+#                 of stress per platform
+#   manual        the same by default; the inputs take bigger values, and each
+#                 job's timeout grows to fit them
+#   pull request  only a PR that changes this file or its script, with small
+#                 values (2 rounds, 2 minutes); its report is a dry run that
+#                 writes nothing
+#
+# No check here is required for merging. Every job's name starts with
+# "Hunt:", so none can pass for CI OK or Native OK, and
+# scripts/release/ci_gate.py reads only ci.yml and native-tests.yml runs.
+# The jobs restore the Rust caches of the ci.yml and native-tests.yml jobs
+# that build the same way, and save none.
+
+on:
+  schedule:
+    # Nightly, off the hour.
+    - cron: "37 7 * * *"
+  workflow_dispatch:
+    inputs:
+      python_rounds:
+        description: Python suite rounds per platform (1 to 300)
+        type: number
+        default: 20
+      stress_duration:
+        description: nextest --stress-duration per platform, such as 20m or 2h (up to 5h)
+        type: string
+        default: 20m
+      stress_count:
+        description: nextest --stress-count per platform instead (1 to 1000); empty runs for the duration
+        type: string
+        default: ""
+  pull_request:
+    branches: [dev, main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/flake-hunt.yml
+      - scripts/ci/flake-hunt.py
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push to a PR cancels its superseded run. Nightly and manual runs
+  # are never cancelled; a manual run waits for the one before it.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The same as in ci.yml and native-tests.yml. rust-cache hashes every
+  # CARGO*, RUST*, CC*, CFLAGS*, CXX* and CMAKE* variable into its key, so a
+  # job here restores the cache of the CI job it builds like only while these
+  # match. Don't add another variable with one of those prefixes.
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  # A Python round runs about a minute; one still running after this many
+  # seconds is stopped and recorded as a hang.
+  ROUND_TIMEOUT_SECONDS: "600"
+  # The stress runs' crates.
+  STRESS_PACKAGES: bacnet-server bacnet-client bacnet-endpoint bacnet-network
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # The nightly defaults, a manual run's inputs, or a PR's small values,
+  # checked once, with each hunt job's timeout sized to fit them.
+  settings:
+    name: "Hunt: settings"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      python_rounds: ${{ steps.settings.outputs.python_rounds }}
+      python_timeout: ${{ steps.settings.outputs.python_timeout }}
+      stress_flag: ${{ steps.settings.outputs.stress_flag }}
+      stress_value: ${{ steps.settings.outputs.stress_value }}
+      stress_timeout: ${{ steps.settings.outputs.stress_timeout }}
+      description: ${{ steps.settings.outputs.description }}
+    steps:
+      - &checkout-scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      # The inputs reach the script as environment variables, which it checks.
+      - id: settings
+        name: Check the settings
+        env:
+          PYTHON_ROUNDS: ${{ github.event_name == 'pull_request' && '2' || inputs.python_rounds || '20' }}
+          STRESS_DURATION: ${{ github.event_name == 'pull_request' && '2m' || inputs.stress_duration || '20m' }}
+          STRESS_COUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.stress_count || '' }}
+        run: python3 scripts/ci/flake-hunt.py settings
+
+  # The Python suite, built and run as ci.yml's Python bindings job (Linux)
+  # and native-tests.yml's Lint and Python job (macOS) do, round after round.
+  # A failing round doesn't stop the loop. Each round's failing tests are
+  # recorded with the round, and its output is kept; a round still running
+  # after ROUND_TIMEOUT_SECONDS is a hang. -v names each test as it starts,
+  # so a hang or crash names the test it happened in, and -X faulthandler
+  # prints every thread's Python stack when the hang is stopped.
+  python:
+    name: "Hunt: Python suite (${{ matrix.name }})"
+    needs: settings
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ fromJSON(needs.settings.outputs.python_timeout) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # cache: the CI job whose Rust cache this one restores.
+          - os: ubuntu-24.04
+            name: Linux x86_64
+            slug: linux
+            cache: python # ci.yml, Python bindings
+          - os: macos-latest
+            name: macOS arm64
+            slug: macos
+            cache: lint # native-tests.yml, Lint and Python
+    env:
+      JOB_LABEL: Python suite (${{ matrix.name }})
+      ROUNDS: ${{ needs.settings.outputs.python_rounds }}
+      TIMEOUT_MINUTES: ${{ needs.settings.outputs.python_timeout }}
+    steps:
+      - name: Note the start
+        run: echo "HUNT_STARTED=$(date +%s)" >>"$GITHUB_ENV"
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # So a job that fails before its hunt finishes still reports why.
+      - &begin
+        name: Start the records
+        run: python3 scripts/ci/flake-hunt.py begin --job "$JOB_LABEL" --out "$RUNNER_TEMP/flake-hunt"
+      - name: Install apt packages (Linux)
+        if: runner.os == 'Linux'
+        env:
+          APT_PACKAGES: python3-venv libpython3-dev
+        run: |
+          missing=()
+          for package in $APT_PACKAGES; do
+            status=$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)
+            [ "$status" = "install ok installed" ] || missing+=("$package")
+          done
+          echo "missing: ${missing[*]:-none}"
+          if [ ${#missing[@]} -gt 0 ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends "${missing[@]}"
+          fi
+      # native-tests.yml's feature list, which its rust-cache key includes.
+      - &native-features
+        name: Feature set (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          features=$(sed -n 's/^features=//p' scripts/ci/local-macos.sh)
+          [ -n "$features" ] || { echo "::error::no features= line in scripts/ci/local-macos.sh"; exit 1; }
+          # Only feature names reach GITHUB_ENV.
+          [[ $features =~ ^[A-Za-z0-9_/,-]+$ ]] || { echo "::error::unexpected characters in the feature list"; exit 1; }
+          echo "NATIVE_FEATURES=$features" | tee -a "$GITHUB_ENV"
+      - &pins
+        name: Tool pins (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for name in NEXTEST_VERSION MATURIN_VERSION PYTHON_VERSION; do
+            value=$(sed -n "s/^$name=//p" .github/ci-pins.env)
+            [[ $value =~ ^[0-9][0-9A-Za-z.]*$ ]] || { echo "::error::no single $name in .github/ci-pins.env"; exit 1; }
+            echo "$name=$value" | tee -a "$GITHUB_ENV"
+          done
+      # ci.yml's step: the pinned channel, and no other toolchain, which
+      # rust-cache would hash into its key.
+      - &toolchain-linux
+        name: Install the pinned Rust toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          channel=$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)
+          components=$(sed -n 's/^components = \[\(.*\)\]$/\1/p' rust-toolchain.toml | tr -d '" ')
+          [[ $channel =~ ^[0-9A-Za-z.-]+$ && $components =~ ^[a-z,-]+$ ]] \
+            || { echo "::error::no channel or components line in rust-toolchain.toml"; exit 1; }
+          rustup toolchain install "$channel" --profile minimal --component "$components"
+          rustup default "$channel"
+          rustup toolchain list | awk -v ours="$channel-" 'index($1, ours) != 1 { print $1 }' \
+            | xargs -r -n1 rustup toolchain uninstall
+          rustup toolchain list
+          rustc -vV
+      # native-tests.yml's step.
+      - &toolchain-macos
+        name: Install the pinned Rust toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          channel=$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)
+          components=$(sed -n 's/^components = \[\(.*\)\]$/\1/p' rust-toolchain.toml | tr -d '" ')
+          [[ $channel =~ ^[0-9A-Za-z.-]+$ && $components =~ ^[a-z,-]+$ ]] \
+            || { echo "::error::no channel or components line in rust-toolchain.toml"; exit 1; }
+          rustup toolchain install "$channel" --profile minimal --component "$components"
+          rustc -vV
+      # Restores the cache that matrix.cache saves on dev, under its key
+      # (key + add-job-id-key: false names that job instead of this one), and
+      # never saves: only CI's runs on dev do (docs/ci.md, "Caches").
+      - &rust-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.cache }}
+          add-job-id-key: false
+          cache-bin: false
+          env-vars: LINUX_FEATURES NATIVE_FEATURES
+          save-if: false
+
+      # Linux: as ci.yml's Python bindings job.
+      - name: Install maturin (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          bash scripts/ci/install-tools.sh maturin
+          echo "PYO3_PYTHON=/usr/bin/python3" >>"$GITHUB_ENV"
+      - name: Build the extension (maturin develop, Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          . "$RUNNER_TEMP/venv/bin/activate"
+          python --version
+          maturin develop -m crates/rusty-bacnet/Cargo.toml --locked
+
+      # macOS: as native-tests.yml's Lint and Python job.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: runner.os == 'macOS'
+        id: python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Point PyO3 at that interpreter (macOS)
+        if: runner.os == 'macOS'
+        env:
+          PYTHON_PATH: ${{ steps.python.outputs.python-path }}
+        run: echo "PYO3_PYTHON=$PYTHON_PATH" >> "$GITHUB_ENV"
+      - name: Build the extension (maturin develop, macOS)
+        if: runner.os == 'macOS'
+        run: |
+          venv=$RUNNER_TEMP/venv
+          bin=$venv/bin
+          python -m venv "$venv"
+          echo "VIRTUAL_ENV=$venv" >> "$GITHUB_ENV"
+          echo "$bin" >> "$GITHUB_PATH"
+          export VIRTUAL_ENV=$venv
+          "$bin/python" --version
+          "$bin/python" -m pip install --disable-pip-version-check "maturin==$MATURIN_VERSION"
+          "$bin/maturin" develop -m crates/rusty-bacnet/Cargo.toml --locked
+
+      # Rounds stop early, with a warning, when the next could overrun the
+      # job's timeout less 5 minutes for the upload.
+      - name: Python suite, round after round
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then . "$RUNNER_TEMP/venv/bin/activate"; fi
+          openssl version
+          python --version
+          deadline=$((HUNT_STARTED + (TIMEOUT_MINUTES - 5) * 60))
+          python scripts/ci/flake-hunt.py python-rounds --job "$JOB_LABEL" --out "$RUNNER_TEMP/flake-hunt" \
+            --rounds "$ROUNDS" --round-timeout "$ROUND_TIMEOUT_SECONDS" --deadline "$deadline" \
+            -- python -X faulthandler -m unittest discover -s crates/rusty-bacnet/tests -v
+      - &upload
+        name: Upload the records
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flake-hunt-${{ github.job }}-${{ matrix.slug }}
+          path: ${{ runner.temp }}/flake-hunt
+          retention-days: 14
+          if-no-files-found: warn
+
+  # nextest's stress mode over STRESS_PACKAGES with the features CI tests
+  # them with (ci.yml's LINUX_FEATURES, native-tests.yml's macOS list) and
+  # CI's profile, which runs every iteration however many fail. Each failing
+  # test is recorded with its iteration.
+  stress:
+    name: "Hunt: nextest stress (${{ matrix.name }})"
+    needs: settings
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ fromJSON(needs.settings.outputs.stress_timeout) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            name: Linux x86_64
+            slug: linux
+            cache: test # ci.yml, Test (Linux, full features)
+          - os: macos-latest
+            name: macOS arm64
+            slug: macos
+            cache: tests # native-tests.yml, Tests (macOS arm64)
+    env:
+      JOB_LABEL: nextest stress (${{ matrix.name }})
+      STRESS_FLAG: ${{ needs.settings.outputs.stress_flag }}
+      STRESS_VALUE: ${{ needs.settings.outputs.stress_value }}
+    steps:
+      - *checkout
+      - *begin
+      # ci.yml's list, which its Test job's rust-cache key includes.
+      - name: Feature set (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          features=$(sed -n 's/^  LINUX_FEATURES: //p' .github/workflows/ci.yml)
+          [[ $features =~ ^[A-Za-z0-9_/,-]+$ ]] || { echo "::error::no LINUX_FEATURES line in ci.yml"; exit 1; }
+          echo "LINUX_FEATURES=$features" | tee -a "$GITHUB_ENV"
+      - *native-features
+      - *pins
+      - *toolchain-linux
+      - *toolchain-macos
+      - *rust-cache
+      - name: Install cargo-nextest (Linux)
+        if: runner.os == 'Linux'
+        run: bash scripts/ci/install-tools.sh cargo-nextest
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        if: runner.os == 'macOS'
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      # Cargo refuses a feature of a crate outside the build, such as
+      # bacnet-cli or bacnet-integration-tests, so this keeps those of the
+      # library crates.
+      - name: The stress run's features
+        run: |
+          features=$(tr , '\n' <<<"${LINUX_FEATURES:-$NATIVE_FEATURES}" \
+            | grep -E '^bacnet-(types|encoding|services|transport|network|endpoint-core|objects|client|server|endpoint)/' \
+            | paste -sd , -)
+          echo "HUNT_FEATURES=$features" | tee -a "$GITHUB_ENV"
+      - name: Build the tests
+        run: |
+          args=(--locked --features "$HUNT_FEATURES" --profile ci)
+          for package in $STRESS_PACKAGES; do args+=(-p "$package"); done
+          cargo nextest run "${args[@]}" --no-run
+      # --status-level slow leaves out each passing test, so the log shows
+      # the iterations, slow tests and failures. nextest finishes the
+      # iteration that is running when the duration is up.
+      - name: Stress
+        id: stress
+        run: |
+          args=(--locked --features "$HUNT_FEATURES" --profile ci)
+          for package in $STRESS_PACKAGES; do args+=(-p "$package"); done
+          set +e
+          cargo nextest run "${args[@]}" --status-level slow "$STRESS_FLAG" "$STRESS_VALUE" 2>&1 \
+            | tee "$RUNNER_TEMP/flake-hunt/nextest.log"
+          code=${PIPESTATUS[0]}
+          echo "$code" >"$RUNNER_TEMP/flake-hunt/nextest.exit"
+          exit "$code"
+      # The failing tests from the log, with their iterations. A missing exit
+      # code means the run was stopped: the job timed out or was cancelled.
+      - name: Record the failures
+        if: always() && steps.stress.outcome != 'skipped'
+        run: |
+          code=$(cat "$RUNNER_TEMP/flake-hunt/nextest.exit" 2>/dev/null || true)
+          python3 scripts/ci/flake-hunt.py nextest --job "$JOB_LABEL" --out "$RUNNER_TEMP/flake-hunt" \
+            --log "$RUNNER_TEMP/flake-hunt/nextest.log" --exit-code "$code"
+      - *upload
+
+  # When a hunt job failed, or timed out in a run nobody cancelled: one issue
+  # collects the failures. A PR's run always gets here and only reads.
+  report:
+    name: "Hunt: report"
+    needs: [settings, python, stress]
+    if: >-
+      ${{ always() && (github.event_name == 'pull_request'
+      || needs.python.result == 'failure' || needs.stress.result == 'failure'
+      || (!cancelled() && (needs.python.result == 'cancelled' || needs.stress.result == 'cancelled'))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    # One report at a time, so a second can't open a second issue before the
+    # first one's is listed. A PR's dry run has a group of its own.
+    concurrency:
+      group: ${{ github.workflow }}-report-${{ github.event_name == 'pull_request' && github.run_id || 'issue' }}
+      cancel-in-progress: false
+    env:
+      ISSUE_TITLE: "Nightly flake hunt: failures"
+      ISSUE_LABEL: flake-hunt
+      DRY_RUN: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - *checkout-scripts
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: flake-hunt-*
+          path: ${{ runner.temp }}/results
+      # Test names come from test output: they reach the issue only through
+      # the records' files and inside a code block, never a shell command.
+      - name: Write the report
+        if: ${{ !cancelled() }}
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          SETTINGS: ${{ needs.settings.outputs.description }}
+          DOCS_URL: ${{ github.server_url }}/${{ github.repository }}/blob/dev/docs/ci.md#flake-hunt
+        run: python3 scripts/ci/flake-hunt.py report --results "$RUNNER_TEMP/results" --out "$RUNNER_TEMP/report"
+      # The open issue is the oldest open one with the label, or else with
+      # the exact title. The label is created the first time it's needed.
+      - name: Open or update the issue
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          report=$RUNNER_TEMP/report
+          cat "$report/comment.md" >>"$GITHUB_STEP_SUMMARY"
+          # A PR's run only says what it would write.
+          act() {
+            if [ "$DRY_RUN" = true ]; then echo "dry run, would run: $*"; else "$@"; fi
+          }
+          have_label=false
+          if gh api "repos/$GH_REPO/labels/$ISSUE_LABEL" --silent 2>/dev/null; then
+            have_label=true
+          elif echo "no $ISSUE_LABEL label yet" && act gh label create "$ISSUE_LABEL" --color D93F0B \
+            --description "Failures found by the nightly flake hunt (flake-hunt.yml)"; then
+            [ "$DRY_RUN" = true ] || have_label=true
+          else
+            echo "::warning::could not create the $ISSUE_LABEL label; going on without it"
+          fi
+          number=''
+          by_title=false
+          if $have_label; then
+            number=$(gh issue list --state open --label "$ISSUE_LABEL" --limit 100 --json number \
+              --jq 'map(.number) | min // empty')
+          fi
+          if [ -z "$number" ]; then
+            number=$(gh issue list --state open --search "\"$ISSUE_TITLE\" in:title" --limit 100 --json number,title \
+              | jq -r --arg title "$ISSUE_TITLE" '[.[] | select(.title == $title) | .number] | min // empty')
+            by_title=true
+          fi
+          if [ -n "$number" ]; then
+            echo "Commenting on #$number"
+            act gh issue comment "$number" --body-file "$report/comment.md"
+            if $have_label && $by_title; then act gh issue edit "$number" --add-label "$ISSUE_LABEL"; fi
+          else
+            echo "Opening \"$ISSUE_TITLE\""
+            labels=()
+            if $have_label; then labels=(--label "$ISSUE_LABEL"); fi
+            act gh issue create --title "$ISSUE_TITLE" "${labels[@]}" --body-file "$report/issue.md"
+          fi
