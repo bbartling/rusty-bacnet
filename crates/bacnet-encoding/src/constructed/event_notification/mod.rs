@@ -18,6 +18,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, StatusFlags, Time};
 use bytes::BytesMut;
 
+use super::tagged::{misplaced_tag, unclosed_kind};
 use super::{
     decode_bacnet_property_value_in_list, encode_bacnet_property_value, validate_tlv_sequence,
     MAX_FRAMED_ITEMS,
@@ -219,7 +220,9 @@ pub fn decode_event_notification(data: &[u8]) -> Result<EventNotificationRequest
     if offset < data.len() {
         let (opening, inner_start) = tags::decode_tag(data, offset)?;
         if !opening.is_opening_tag(12) {
-            return Err(Error::decoding(
+            return Err(misplaced_tag(
+                &opening,
+                Some(12),
                 offset,
                 "EventNotification expected opening tag 12 for eventValues",
             ));
@@ -227,7 +230,7 @@ pub fn decode_event_notification(data: &[u8]) -> Result<EventNotificationRequest
         let closing_offset = data
             .len()
             .checked_sub(1)
-            .ok_or_else(|| Error::decoding(offset, "EventNotification missing closing tag 12"))?;
+            .ok_or_else(|| Error::missing(offset, "EventNotification missing closing tag 12"))?;
         if closing_offset < inner_start {
             return Err(Error::decoding(
                 inner_start,

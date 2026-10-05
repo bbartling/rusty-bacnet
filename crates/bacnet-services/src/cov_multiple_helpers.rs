@@ -1,4 +1,4 @@
-use bacnet_encoding::constructed::tagged::decode_ctx_boolean;
+use bacnet_encoding::constructed::tagged::{decode_ctx_boolean, misplaced_kind};
 use bacnet_encoding::tags;
 use bacnet_types::enums::{PropertyIdentifier, RejectReason};
 use bacnet_types::error::Error;
@@ -11,6 +11,11 @@ pub(super) fn reject(reason: RejectReason, _message: &'static str) -> Error {
     }
 }
 
+/// The required context-tagged BOOLEAN `context_tag` at `offset`. A missing
+/// member, a tag that doesn't fit or a header that doesn't decode, and
+/// contents cut short take the reasons every confirmed request gets
+/// (#1446); contents other than 0 or 1, or of another length, are
+/// INVALID_DATA_ENCODING.
 pub(super) fn decode_required_bool(
     data: &[u8],
     offset: usize,
@@ -23,23 +28,27 @@ pub(super) fn decode_required_bool(
             "required Boolean is missing",
         ));
     }
-    let (tag, _) = tags::decode_tag(data, offset).map_err(|_| {
-        reject(
-            RejectReason::INVALID_DATA_ENCODING,
-            "required Boolean tag is malformed",
-        )
+    let (tag, _) = tags::decode_tag(data, offset).map_err(|error| Error::Reject {
+        reason: error
+            .reject_reason()
+            .unwrap_or(RejectReason::OTHER)
+            .to_raw(),
     })?;
     if !tag.is_context(context_tag) {
         return Err(reject(
-            RejectReason::MISSING_REQUIRED_PARAMETER,
-            "required Boolean is missing",
+            misplaced_kind(&tag, Some(context_tag)).reject_reason(),
+            "required Boolean is missing or under another tag",
         ));
     }
-    decode_ctx_boolean(data, offset, context_tag, field).map_err(|_| {
-        reject(
+    decode_ctx_boolean(data, offset, context_tag, field).map_err(|error| match error {
+        Error::BufferTooShort { .. } => reject(
+            RejectReason::MISSING_REQUIRED_PARAMETER,
+            "required Boolean is cut short",
+        ),
+        _ => reject(
             RejectReason::INVALID_DATA_ENCODING,
             "required Boolean value is malformed",
-        )
+        ),
     })
 }
 

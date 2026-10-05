@@ -241,17 +241,13 @@ async fn sc_dcc_mtls_global_burst_enable_exemption_and_uncharged_failures() {
                     None,
                 )
                 .await;
-            let Apdu::Error(error) = response else {
-                panic!("expected malformed DCC Error")
+            // An empty DCC is missing its enable-disable (#1446).
+            let Apdu::Reject(reject) = response else {
+                panic!("expected malformed DCC Reject")
             };
-            assert_eq!(error.invoke_id, id);
             assert_eq!(
-                error.service_choice,
-                ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL
-            );
-            assert_eq!(
-                (error.error_class, error.error_code),
-                (ErrorClass::SERVICES, ErrorCode::OTHER)
+                (reject.invoke_id, reject.reject_reason),
+                (id, RejectReason::MISSING_REQUIRED_PARAMETER)
             );
             assert_eq!(
                 f.server().dcc_outcome_counters(),

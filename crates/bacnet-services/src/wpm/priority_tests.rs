@@ -61,18 +61,20 @@ fn wpm_priority_range_failure_keeps_kind_stage_offset_and_indexed_reference() {
 
 #[test]
 fn wpm_priority_malformed_unsigned_is_syntax_not_numeric_range() {
-    for priority in [
-        &[0x39][..],
-        &[0x3a, 1],
-        &[0x38],
-        &[0x3d, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    // A priority cut short is missing octets (#1446); one of no octets or of
+    // nine is an invalid encoding.
+    for (priority, reason) in [
+        (&[0x39][..], RejectReason::MISSING_REQUIRED_PARAMETER),
+        (&[0x3a, 1], RejectReason::MISSING_REQUIRED_PARAMETER),
+        (&[0x38], RejectReason::INVALID_DATA_ENCODING),
+        (
+            &[0x3d, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            RejectReason::INVALID_DATA_ENCODING,
+        ),
     ] {
         let (bytes, _) = request(priority);
         let error = cursor_error(&bytes);
-        assert_eq!(
-            error.kind,
-            WritePropertyMultipleFailureKind::Syntax(RejectReason::INVALID_DATA_ENCODING)
-        );
+        assert_eq!(error.kind, WritePropertyMultipleFailureKind::Syntax(reason));
         assert_eq!(error.stage, WritePropertyMultipleDecodeStage::Priority);
         assert_eq!(
             error

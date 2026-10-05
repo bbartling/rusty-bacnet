@@ -49,7 +49,7 @@ pub(crate) fn validate_dcc(
     use crate::server::dcc_outcomes::{DccMetadata, DccOutcome};
     let request =
         DeviceCommunicationControlRequest::decode(service_data).map_err(|error| DccFailure {
-            error,
+            error: error.into_request_reject(),
             outcome: DccOutcome::Malformed,
             metadata: DccMetadata::default(),
         })?;
@@ -106,7 +106,8 @@ pub fn handle_reinitialize_device(
     service_data: &[u8],
     reinit_password: &Option<String>,
 ) -> Result<(), Error> {
-    let request = ReinitializeDeviceRequest::decode(service_data)?;
+    let request =
+        ReinitializeDeviceRequest::decode(service_data).map_err(Error::into_request_reject)?;
     validate_password(reinit_password, &request.password)?;
     Ok(())
 }

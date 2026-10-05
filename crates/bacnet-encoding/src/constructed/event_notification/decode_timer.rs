@@ -9,7 +9,9 @@ fn decode_date_time(
 ) -> Result<((Date, Time), usize), Error> {
     let (opening, mut pos) = tags::decode_tag(data, offset)?;
     if !opening.is_opening_tag(context_tag) {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            &opening,
+            Some(context_tag),
             offset,
             format!("{field} expected opening tag {context_tag}"),
         ));
@@ -55,7 +57,8 @@ fn decode_date_time(
 
     let (closing, next) = tags::decode_tag(data, pos)?;
     if !closing.is_closing_tag(context_tag) {
-        return Err(Error::decoding(
+        return Err(Error::decoding_kind(
+            unclosed_kind(&closing),
             pos,
             format!("{field} expected closing tag {context_tag}"),
         ));

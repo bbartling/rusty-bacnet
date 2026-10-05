@@ -1,7 +1,8 @@
 //! COV (Change of Value) services per ASHRAE 135-2020 Clauses 13.6, 13.7, 13.14 and 13.15.
 
 use bacnet_encoding::constructed::tagged::{
-    decode_ctx_boolean, decode_ctx_object_id, decode_ctx_real, decode_ctx_unsigned, next_is_context,
+    decode_ctx_boolean, decode_ctx_object_id, decode_ctx_real, decode_ctx_unsigned, expect_end,
+    misplaced_tag, next_is_context, unclosed_kind,
 };
 use bacnet_encoding::constructed::{decode_property_reference, encode_bacnet_property_value};
 use bacnet_encoding::primitives;
@@ -100,9 +101,7 @@ impl SubscribeCOVRequest {
             lifetime = Some(value);
             offset = end;
         }
-        if offset != data.len() {
-            return Err(Error::decoding(offset, "SubscribeCOV has trailing data"));
-        }
+        expect_end(data, offset, offset, "SubscribeCOV")?;
 
         Ok(Self {
             subscriber_process_identifier,
@@ -228,7 +227,9 @@ impl SubscribeCOVPropertyRequest {
         // [4] monitoredPropertyIdentifier (BACnetPropertyReference)
         let (tag, pos) = tags::decode_tag(data, offset)?;
         if !tag.is_opening_tag(4) {
-            return Err(Error::decoding(
+            return Err(misplaced_tag(
+                &tag,
+                Some(4),
                 offset,
                 "SubscribeCOVProperty expected opening tag 4",
             ));
@@ -237,7 +238,8 @@ impl SubscribeCOVPropertyRequest {
         offset = end;
         let (tag, end) = tags::decode_tag(data, offset)?;
         if !tag.is_closing_tag(4) {
-            return Err(Error::decoding(
+            return Err(Error::decoding_kind(
+                unclosed_kind(&tag),
                 offset,
                 "SubscribeCOVProperty expected closing tag 4",
             ));
@@ -252,12 +254,7 @@ impl SubscribeCOVPropertyRequest {
             cov_increment = Some(increment);
             offset = end;
         }
-        if offset != data.len() {
-            return Err(Error::decoding(
-                offset,
-                "SubscribeCOVProperty has trailing data",
-            ));
-        }
+        expect_end(data, offset, offset, "SubscribeCOVProperty")?;
 
         Ok(Self {
             subscriber_process_identifier,
@@ -466,9 +463,17 @@ mod tests {
                 .reject_reason(),
             RejectReason::MISSING_REQUIRED_PARAMETER
         );
-        // Context [7] cannot begin this service request.
+        // Context [7] where the [0] process identifier is due: the members
+        // before it are missing (#1446).
         assert_eq!(
             COVNotificationRequest::decode_detailed(&[0x79, 0x01])
+                .unwrap_err()
+                .reject_reason(),
+            RejectReason::MISSING_REQUIRED_PARAMETER
+        );
+        // An application tag cannot begin this service request.
+        assert_eq!(
+            COVNotificationRequest::decode_detailed(&[0x21, 0x01])
                 .unwrap_err()
                 .reject_reason(),
             RejectReason::INVALID_TAG
@@ -529,7 +534,9 @@ mod tests {
         let mut buf = BytesMut::new();
         req.encode(&mut buf);
         let list_start = buf.iter().position(|byte| *byte == 0x4E).unwrap();
-        buf[list_start + 1] = 0x79;
+        // An application Unsigned where the value's [0] property identifier
+        // is due.
+        buf[list_start + 1] = 0x21;
 
         assert_eq!(
             COVNotificationRequest::decode_detailed(&buf)

@@ -38,12 +38,29 @@
 //!   short, which [`tags::decode_tag`] refuses, and a frame whose closing tag
 //!   never comes.
 //!
+//! An [`Error::Decoding`] carries the [`DecodingKind`] of the fault, which a
+//! responder turns into a Reject reason (#1446):
+//!
+//! - [`DecodingKind::Missing`]: the data ends where a required member, a
+//!   tag header's remaining octets or a frame's closing tag is due, or the
+//!   tag found there shows the member was left out (see [`misplaced_tag`]);
+//! - [`DecodingKind::InvalidTag`]: any other tag that doesn't fit where it
+//!   stands, or a malformed tag header;
+//! - [`DecodingKind::Trailing`]: octets after the last member of a value
+//!   that must fill its input ([`expect_end`]) or close its frame
+//!   ([`expect_closing`]), unless they open with a closing tag or a header
+//!   that doesn't decode, which is [`DecodingKind::InvalidTag`];
+//! - [`DecodingKind::Malformed`]: everything else, such as a wrong length, a
+//!   value too large for its field or contents that don't fit their type.
+//!
 //! The helpers another crate needs are public: the peeks for an optional
 //! member, a frame's opening and closing tags and its body, the context
 //! readers for contents, fixed-size contents, Unsigned or ENUMERATED values,
 //! REAL, BOOLEAN, BIT STRING, OCTET STRING, CharacterString and object
-//! identifiers, the optional-member wrapper, the application readers, and
-//! the trailing-data check. The rest stay private to this crate.
+//! identifiers, the optional-member wrapper, the application readers, the
+//! trailing-data check, and the kinds a misplaced tag is ([`misplaced_kind`],
+//! [`misplaced_tag`], [`unclosed_kind`]). The rest stay private to this
+//! crate.
 //!
 //! ```
 //! use bacnet_encoding::constructed::tagged::{decode_ctx_unsigned, expect_end, next_is_context};
@@ -62,7 +79,7 @@
 //! # Ok::<(), Error>(())
 //! ```
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodingKind, Error};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::MAX_FRAMED_ITEMS;
@@ -115,12 +132,56 @@ pub(crate) fn next_is_closing(data: &[u8], offset: usize, tag: u8) -> Result<boo
 // Frames and whole inputs
 // ---------------------------------------------------------------------------
 
+/// The kind of fault the tag `found` is where a required member is due.
+///
+/// `expected` is the member's context tag number, or `None` for an
+/// application-tagged member or a CHOICE none of whose alternatives came. A
+/// closing tag shows the enclosing frame ended before the member:
+/// [`DecodingKind::Missing`]. So does a context tag numbered above
+/// `expected`, since members follow in tag order: the member was left out
+/// and a later one came. Any other tag doesn't fit there:
+/// [`DecodingKind::InvalidTag`].
+pub fn misplaced_kind(found: &Tag, expected: Option<u8>) -> DecodingKind {
+    let later = expected.is_some_and(|number| {
+        found.class == TagClass::Context && !found.is_closing && found.number > number
+    });
+    if found.is_closing || later {
+        DecodingKind::Missing
+    } else {
+        DecodingKind::InvalidTag
+    }
+}
+
+/// The error for the tag `found` at `offset` where a required member is
+/// due, of the kind [`misplaced_kind`] gives.
+pub fn misplaced_tag(
+    found: &Tag,
+    expected: Option<u8>,
+    offset: usize,
+    message: impl Into<String>,
+) -> Error {
+    Error::decoding_kind(misplaced_kind(found, expected), offset, message)
+}
+
+/// The kind of fault the tag `found` is where a frame's closing tag is due:
+/// another closing tag is [`DecodingKind::InvalidTag`]; any other tag is a
+/// member the frame holds beyond its last one, [`DecodingKind::Trailing`].
+pub fn unclosed_kind(found: &Tag) -> DecodingKind {
+    if found.is_closing {
+        DecodingKind::InvalidTag
+    } else {
+        DecodingKind::Trailing
+    }
+}
+
 /// Require an opening context tag `tag` at `offset`; return the offset of its
 /// content.
 pub fn expect_opening(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<usize, Error> {
     let (t, pos) = tags::decode_tag(data, offset)?;
     if !t.is_opening_tag(tag) {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            &t,
+            Some(tag),
             offset,
             format!("{what}: expected opening tag [{tag}]"),
         ));
@@ -129,10 +190,12 @@ pub fn expect_opening(data: &[u8], offset: usize, tag: u8, what: &str) -> Result
 }
 
 /// Require a closing context tag `tag` at `offset`; return the offset past it.
+/// Any other tag there is of the kind [`unclosed_kind`] gives.
 pub fn expect_closing(data: &[u8], offset: usize, tag: u8, what: &str) -> Result<usize, Error> {
     let (t, pos) = tags::decode_tag(data, offset)?;
     if !t.is_closing_tag(tag) {
-        return Err(Error::decoding(
+        return Err(Error::decoding_kind(
+            unclosed_kind(&t),
             offset,
             format!("{what}: expected closing tag [{tag}]"),
         ));
@@ -196,6 +259,11 @@ pub(crate) fn decode_framed_value(
 
 /// Require a value that stopped at `end` to have used all of `data`.
 ///
+/// Octets left over are [`DecodingKind::Trailing`], arguments past the
+/// value's last member, unless they open with a closing tag, which closes
+/// nothing, or with a tag header that doesn't decode: those are
+/// [`DecodingKind::InvalidTag`].
+///
 /// `at` is the offset the error reports: `end` itself when `data` is the
 /// whole input, or the frame's own offset in the larger input when `data` is
 /// a frame body sliced out of it (offsets into the slice would mislead).
@@ -203,7 +271,12 @@ pub fn expect_end(data: &[u8], end: usize, at: usize, what: &str) -> Result<(), 
     if end == data.len() {
         return Ok(());
     }
-    Err(Error::decoding(
+    let kind = match tags::decode_tag(data, end) {
+        Ok((tag, _)) if !tag.is_closing => DecodingKind::Trailing,
+        _ => DecodingKind::InvalidTag,
+    };
+    Err(Error::decoding_kind(
+        kind,
         at,
         format!(
             "{what}: {} trailing byte(s)",
@@ -244,7 +317,9 @@ fn ctx_header(
     let (t, start) = tags::decode_tag(data, offset)?;
     if !t.is_context(tag) {
         let space = if kind.is_empty() { "" } else { " " };
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            &t,
+            Some(tag),
             offset,
             format!("{what}: expected context tag [{tag}]{space}{kind}"),
         ));
@@ -538,7 +613,9 @@ fn app_header(data: &[u8], offset: usize, number: u8, what: &str) -> Result<(Tag
     }
     let (t, start) = tags::decode_tag(data, offset)?;
     if t.class != TagClass::Application || t.number != number {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            &t,
+            None,
             offset,
             format!("{what}: expected application-tagged {}", app_kind(number)),
         ));

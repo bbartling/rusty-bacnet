@@ -1,5 +1,6 @@
 use super::AuditNotificationRequest;
 use crate::common::MAX_DECODED_ITEMS;
+use bacnet_encoding::constructed::tagged::{expect_end, misplaced_tag};
 use bacnet_encoding::constructed::{decode_audit_notification_at, encode_audit_notification};
 use bacnet_encoding::tags;
 use bacnet_types::error::Error;
@@ -28,18 +29,15 @@ pub(super) fn encode(request: &AuditNotificationRequest, buf: &mut BytesMut) -> 
 pub(super) fn decode(data: &[u8]) -> Result<AuditNotificationRequest, Error> {
     let (outer, body_start) = tags::decode_tag(data, 0)?;
     if !outer.is_opening_tag(NOTIFICATIONS_TAG) {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            &outer,
+            Some(NOTIFICATIONS_TAG),
             0,
             "AuditNotification expected notifications opening tag [0]",
         ));
     }
     let (body, end) = tags::extract_context_value(data, body_start, NOTIFICATIONS_TAG)?;
-    if end != data.len() {
-        return Err(Error::decoding(
-            end,
-            "AuditNotification has trailing service data",
-        ));
-    }
+    expect_end(data, end, end, "AuditNotification")?;
     if body.is_empty() {
         return Err(Error::decoding(
             body_start,

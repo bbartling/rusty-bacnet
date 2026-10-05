@@ -153,12 +153,12 @@ impl GetEnrollmentSummaryRequest {
             let (recipient_content, recipient_end) =
                 decode_ctx_constructed(content, 0, 0, "EnrollmentSummary recipient")?;
             let (recipient, recipient_choice_end) = decode_recipient(recipient_content, 0)?;
-            if recipient_choice_end != recipient_content.len() {
-                return Err(Error::decoding(
-                    offset,
-                    "EnrollmentSummary recipient has trailing data",
-                ));
-            }
+            expect_end(
+                recipient_content,
+                recipient_choice_end,
+                offset,
+                "EnrollmentSummary recipient",
+            )?;
             let (process_identifier, process_end) = decode_ctx_unsigned::<u32>(
                 content,
                 recipient_end,
@@ -235,12 +235,7 @@ impl GetEnrollmentSummaryRequest {
             decode_ctx_unsigned::<u32>,
         )?;
         offset = new_offset;
-        if offset != data.len() {
-            return Err(Error::decoding(
-                offset,
-                "EnrollmentSummary has unexpected or trailing data",
-            ));
-        }
+        expect_end(data, offset, offset, "EnrollmentSummary")?;
 
         Ok(Self {
             acknowledgment_filter,

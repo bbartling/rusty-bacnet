@@ -13,7 +13,9 @@ pub(super) fn decode_context<'a>(
 ) -> Result<(&'a [u8], usize), Error> {
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if !tag.is_context(expected_tag) {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            &tag,
+            Some(expected_tag),
             offset,
             format!("{field} expected context tag {expected_tag}"),
         ));
@@ -99,7 +101,7 @@ pub(super) fn closing_tag_start(
     let width = if tag_number > 14 { 2 } else { 1 };
     let start = end
         .checked_sub(width)
-        .ok_or_else(|| Error::decoding(end, format!("{field} missing closing tag")))?;
+        .ok_or_else(|| Error::missing(end, format!("{field} missing closing tag")))?;
     let (tag, next) = tags::decode_tag(data, start)?;
     if !tag.is_closing_tag(tag_number) || next != end {
         return Err(Error::decoding(

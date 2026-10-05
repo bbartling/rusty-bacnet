@@ -9,7 +9,8 @@ use bytes::BytesMut;
 
 use bacnet_encoding::constructed::tagged::{
     decode_app_primitive, decode_canonical_unsigned, decode_ctx_canonical_unsigned,
-    decode_ctx_object_id, decode_ctx_primitive, next_is_context, next_is_opening,
+    decode_ctx_object_id, decode_ctx_primitive, expect_end, misplaced_tag, next_is_context,
+    next_is_opening,
 };
 
 use super::{AuditLogQueryRequest, BACnetAuditLogQueryParameters};
@@ -147,7 +148,9 @@ pub(super) fn decode(data: &[u8]) -> Result<AuditLogQueryRequest, Error> {
 
     let (wrapper_tag, wrapper_start) = tags::decode_tag(data, offset)?;
     if !wrapper_tag.is_opening_tag(1) {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            &wrapper_tag,
+            Some(1),
             offset,
             "AuditLogQuery query-parameters expected opening tag 1",
         ));
@@ -171,9 +174,7 @@ pub(super) fn decode(data: &[u8]) -> Result<AuditLogQueryRequest, Error> {
     let (requested_count, end) =
         decode_ctx_canonical_unsigned::<u16>(data, offset, 3, "AuditLogQuery requested-count")?;
     offset = end;
-    if offset != data.len() {
-        return Err(Error::decoding(offset, "AuditLogQuery has trailing data"));
-    }
+    expect_end(data, offset, offset, "AuditLogQuery")?;
 
     Ok(AuditLogQueryRequest {
         audit_log,
@@ -192,17 +193,19 @@ fn decode_query_parameters(data: &[u8]) -> Result<BACnetAuditLogQueryParameters,
         let (content, end) = tags::extract_context_value(data, content_start, 1)?;
         (decode_by_source(content)?, end)
     } else {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            &choice,
+            None,
             0,
             "AuditLogQuery query-parameters expected by-target [0] or by-source [1]",
         ));
     };
-    if choice_end != data.len() {
-        return Err(Error::decoding(
-            choice_end,
-            "AuditLogQuery query-parameters has trailing data",
-        ));
-    }
+    expect_end(
+        data,
+        choice_end,
+        choice_end,
+        "AuditLogQuery query-parameters",
+    )?;
     Ok(parameters)
 }
 
@@ -289,12 +292,7 @@ fn decode_by_target(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
         7,
         "AuditLogQuery by-target successful-actions-only",
     )?;
-    if offset != data.len() {
-        return Err(Error::decoding(
-            offset,
-            "AuditLogQuery by-target has trailing data",
-        ));
-    }
+    expect_end(data, offset, offset, "AuditLogQuery by-target")?;
 
     Ok(BACnetAuditLogQueryParameters::ByTarget {
         target_device_identifier,
@@ -349,12 +347,7 @@ fn decode_by_source(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
         4,
         "AuditLogQuery by-source successful-actions-only",
     )?;
-    if offset != data.len() {
-        return Err(Error::decoding(
-            offset,
-            "AuditLogQuery by-source has trailing data",
-        ));
-    }
+    expect_end(data, offset, offset, "AuditLogQuery by-source")?;
 
     Ok(BACnetAuditLogQueryParameters::BySource {
         source_device_identifier,
@@ -373,7 +366,9 @@ fn decode_address(
 ) -> Result<(BACnetAddress, usize), Error> {
     let (opening, content_start) = tags::decode_tag(data, offset)?;
     if !opening.is_opening_tag(expected_tag) {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            &opening,
+            Some(expected_tag),
             offset,
             format!("{field} expected opening tag {expected_tag}"),
         ));
@@ -398,12 +393,7 @@ fn decode_address(
         &format!("{field} mac-address"),
     )?;
     check_decoded_mac_len(mac_address.len(), content_start + mac_offset, field)?;
-    if inner_offset != content.len() {
-        return Err(Error::decoding(
-            offset + inner_offset,
-            format!("{field} has trailing data"),
-        ));
-    }
+    expect_end(content, inner_offset, offset + inner_offset, field)?;
 
     Ok((
         BACnetAddress {

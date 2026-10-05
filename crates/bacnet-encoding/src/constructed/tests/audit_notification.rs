@@ -29,7 +29,9 @@ fn an_object_identifier_of_the_wrong_length_is_malformed_even_when_cut_short() {
     // [3] says three octets and holds one.
     let data = with_source_object(&[0x3B, 0x02]);
     match decode_audit_notification_at(&data, 0) {
-        Err(Error::Decoding { offset, message }) => {
+        Err(Error::Decoding {
+            offset, message, ..
+        }) => {
             assert_eq!(offset, 7);
             assert_eq!(
                 message,

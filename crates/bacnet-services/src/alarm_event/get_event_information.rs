@@ -1,7 +1,7 @@
 use super::*;
 use bacnet_encoding::constructed::tagged::{
     decode_app_unsigned, decode_ctx_boolean, decode_ctx_object_id, decode_ctx_primitive,
-    decode_ctx_unsigned,
+    decode_ctx_unsigned, expect_end, misplaced_tag, unclosed_kind,
 };
 use bacnet_types::bitstring::EventTransitionBits;
 
@@ -52,12 +52,7 @@ impl GetEventInformationRequest {
             0,
             "GetEventInformation last-received-object-identifier",
         )?;
-        if end != data.len() {
-            return Err(Error::decoding(
-                end,
-                "GetEventInformation request contains trailing data",
-            ));
-        }
+        expect_end(data, end, end, "GetEventInformation")?;
         Ok(Self {
             last_received_object_identifier: Some(object_identifier),
         })
@@ -97,7 +92,9 @@ impl GetEventInformationAck {
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let (tag, mut offset) = tags::decode_tag(data, 0)?;
         if !tag.is_opening_tag(0) {
-            return Err(Error::decoding(
+            return Err(misplaced_tag(
+                &tag,
+                Some(0),
                 0,
                 "GetEventInformation ACK expected opening tag 0",
             ));
@@ -136,7 +133,9 @@ impl GetEventInformationAck {
 
             let (tag, next) = tags::decode_tag(data, offset)?;
             if !tag.is_opening_tag(3) {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    &tag,
+                    Some(3),
                     offset,
                     "GetEventInformation ACK expected opening tag 3 for event-timestamps",
                 ));
@@ -154,7 +153,8 @@ impl GetEventInformationAck {
             }
             let (tag, next) = tags::decode_tag(data, offset)?;
             if !tag.is_closing_tag(3) {
-                return Err(Error::decoding(
+                return Err(Error::decoding_kind(
+                    unclosed_kind(&tag),
                     offset,
                     "GetEventInformation ACK expected closing tag 3 for event-timestamps",
                 ));
@@ -176,7 +176,9 @@ impl GetEventInformationAck {
 
             let (tag, next) = tags::decode_tag(data, offset)?;
             if !tag.is_opening_tag(6) {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    &tag,
+                    Some(6),
                     offset,
                     "GetEventInformation ACK expected opening tag 6 for event-priorities",
                 ));
@@ -194,7 +196,8 @@ impl GetEventInformationAck {
             }
             let (tag, next) = tags::decode_tag(data, offset)?;
             if !tag.is_closing_tag(6) {
-                return Err(Error::decoding(
+                return Err(Error::decoding_kind(
+                    unclosed_kind(&tag),
                     offset,
                     "GetEventInformation ACK expected closing tag 6 for event-priorities",
                 ));
@@ -214,12 +217,7 @@ impl GetEventInformationAck {
 
         let (more_events, end) =
             decode_ctx_boolean(data, offset, 1, "GetEventInformation ACK more-events")?;
-        if end != data.len() {
-            return Err(Error::decoding(
-                end,
-                "GetEventInformation ACK contains trailing data",
-            ));
-        }
+        expect_end(data, end, end, "GetEventInformation ACK")?;
 
         Ok(Self {
             list_of_event_summaries,

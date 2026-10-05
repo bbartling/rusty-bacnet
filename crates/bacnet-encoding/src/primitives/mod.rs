@@ -7,6 +7,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, PropertyValue, Time};
 use bytes::{BufMut, BytesMut};
 
+use crate::constructed::tagged::{misplaced_tag, unclosed_kind};
 use crate::tags::{self, app_tag, TagClass};
 
 // ===========================================================================
@@ -65,10 +66,10 @@ pub fn unsigned_len(value: u64) -> u32 {
 /// Decode an unsigned integer from big-endian bytes (1-8 bytes).
 pub fn decode_unsigned(data: &[u8]) -> Result<u64, Error> {
     if data.is_empty() || data.len() > 8 {
-        return Err(Error::Decoding {
-            offset: 0,
-            message: format!("unsigned requires 1-8 bytes, got {}", data.len()),
-        });
+        return Err(Error::decoding(
+            0,
+            format!("unsigned requires 1-8 bytes, got {}", data.len()),
+        ));
     }
     let mut value: u64 = 0;
     for &b in data {
@@ -126,10 +127,10 @@ pub fn signed_len(value: i32) -> u32 {
 /// Decode a signed integer from two's-complement big-endian bytes (1-4 bytes).
 pub fn decode_signed(data: &[u8]) -> Result<i32, Error> {
     if data.is_empty() || data.len() > 4 {
-        return Err(Error::Decoding {
-            offset: 0,
-            message: format!("signed requires 1-4 bytes, got {}", data.len()),
-        });
+        return Err(Error::decoding(
+            0,
+            format!("signed requires 1-4 bytes, got {}", data.len()),
+        ));
     }
     let sign_extend = if data[0] & 0x80 != 0 { 0xFF } else { 0x00 };
     let mut bytes = [sign_extend; 4];
@@ -227,24 +228,19 @@ pub fn character_string_len(value: &str) -> Result<u32, Error> {
 /// Other charsets return an error.
 pub fn decode_character_string(data: &[u8]) -> Result<String, Error> {
     if data.is_empty() {
-        return Err(Error::Decoding {
-            offset: 0,
-            message: "CharacterString requires at least 1 byte for charset".into(),
-        });
+        return Err(Error::decoding(
+            0,
+            "CharacterString requires at least 1 byte for charset",
+        ));
     }
     let charset_id = data[0];
     let payload = &data[1..];
     match charset_id {
-        charset::UTF8 => String::from_utf8(payload.to_vec()).map_err(|e| Error::Decoding {
-            offset: 1,
-            message: format!("invalid UTF-8: {e}"),
-        }),
+        charset::UTF8 => String::from_utf8(payload.to_vec())
+            .map_err(|e| Error::decoding(1, format!("invalid UTF-8: {e}"))),
         charset::UCS2 => {
             if !payload.len().is_multiple_of(2) {
-                return Err(Error::Decoding {
-                    offset: 1,
-                    message: "UCS-2 data must have even length".into(),
-                });
+                return Err(Error::decoding(1, "UCS-2 data must have even length"));
             }
             let mut s = String::new();
             for (i, chunk) in payload.as_chunks::<2>().0.iter().enumerate() {
@@ -252,23 +248,17 @@ pub fn decode_character_string(data: &[u8]) -> Result<String, Error> {
                 if let Some(c) = char::from_u32(code_point as u32) {
                     s.push(c);
                 } else {
-                    return Err(Error::Decoding {
-                        offset: 1 + i * 2,
-                        message: "invalid UCS-2 code point".into(),
-                    });
+                    return Err(Error::decoding(1 + i * 2, "invalid UCS-2 code point"));
                 }
             }
             Ok(s)
         }
         charset::ISO_8859_1 => Ok(payload.iter().map(|&b| b as char).collect()),
-        charset::IBM_MICROSOFT_DBCS | charset::JIS_X_0208 | charset::UCS4 => Err(Error::Decoding {
-            offset: 0,
-            message: format!("unsupported charset: {charset_id}"),
-        }),
-        other => Err(Error::Decoding {
-            offset: 0,
-            message: format!("unknown charset: {other}"),
-        }),
+        charset::IBM_MICROSOFT_DBCS | charset::JIS_X_0208 | charset::UCS4 => Err(Error::decoding(
+            0,
+            format!("unsupported charset: {charset_id}"),
+        )),
+        other => Err(Error::decoding(0, format!("unknown charset: {other}"))),
     }
 }
 
@@ -285,17 +275,17 @@ pub fn encode_bit_string(buf: &mut BytesMut, unused_bits: u8, data: &[u8]) {
 /// Returns `(unused_bits, data)`.
 pub fn decode_bit_string(data: &[u8]) -> Result<(u8, Vec<u8>), Error> {
     if data.is_empty() {
-        return Err(Error::Decoding {
-            offset: 0,
-            message: "BitString requires at least 1 byte for unused-bits count".into(),
-        });
+        return Err(Error::decoding(
+            0,
+            "BitString requires at least 1 byte for unused-bits count",
+        ));
     }
     let unused = data[0];
     if unused > 7 {
-        return Err(Error::Decoding {
-            offset: 0,
-            message: format!("BitString unused_bits must be 0-7, got {unused}"),
-        });
+        return Err(Error::decoding(
+            0,
+            format!("BitString unused_bits must be 0-7, got {unused}"),
+        ));
     }
     Ok((unused, data[1..].to_vec()))
 }
@@ -510,7 +500,7 @@ pub fn decode_application_value(
             ));
         }
         if tag.is_closing {
-            return Err(Error::decoding(offset, "unexpected closing tag"));
+            return Err(Error::invalid_tag(offset, "unexpected closing tag"));
         }
         let content_end = new_offset
             .checked_add(tag.length as usize)
@@ -524,7 +514,7 @@ pub fn decode_application_value(
         ));
     }
     if tag.is_opening || tag.is_closing {
-        return Err(Error::decoding(offset, "unexpected opening/closing tag"));
+        return Err(Error::invalid_tag(offset, "unexpected opening/closing tag"));
     }
 
     if tag.number == app_tag::NULL && tag.length != 0 {
@@ -815,7 +805,9 @@ pub fn decode_timestamp_choice(
         };
         return Ok((date_time, end));
     }
-    Err(Error::decoding(
+    Err(misplaced_tag(
+        &inner_tag,
+        None,
         offset,
         "BACnetTimeStamp: unexpected inner choice tag",
     ))
@@ -848,7 +840,9 @@ pub fn decode_timestamp(
 ) -> Result<(BACnetTimeStamp, usize), Error> {
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if !tag.is_opening_tag(tag_number) {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            &tag,
+            Some(tag_number),
             offset,
             format!("expected opening tag {tag_number} for BACnetTimeStamp"),
         ));
@@ -858,7 +852,8 @@ pub fn decode_timestamp(
 
     let (close, final_pos) = tags::decode_tag(data, after_inner)?;
     if !close.is_closing_tag(tag_number) {
-        return Err(Error::decoding(
+        return Err(Error::decoding_kind(
+            unclosed_kind(&close),
             after_inner,
             format!("expected closing tag {tag_number} for BACnetTimeStamp"),
         ));

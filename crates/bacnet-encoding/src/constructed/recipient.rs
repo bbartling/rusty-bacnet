@@ -45,6 +45,7 @@ use crate::tags::{self, TagClass};
 
 use super::tagged::{
     contents, decode_app_bit_string, decode_app_unsigned, decode_ctx_object_id, expect_closing,
+    misplaced_tag,
 };
 use super::MAX_FRAMED_ITEMS;
 
@@ -187,7 +188,9 @@ pub fn decode_recipient(data: &[u8], offset: usize) -> Result<(BACnetRecipient, 
             end,
         ));
     }
-    Err(Error::decoding(
+    Err(misplaced_tag(
+        &tag,
+        None,
         offset,
         format!(
             "{what}: expected [0] (device) or [1] (address), got {}",

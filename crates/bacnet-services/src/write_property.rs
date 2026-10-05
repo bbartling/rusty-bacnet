@@ -107,11 +107,16 @@ impl WritePropertyRequest {
 
         // [4] priority (optional), and nothing after it. Read at full width
         // so a value past 16 draws the range error, not a width error.
+        let (prio, end) = decode_optional_ctx(
+            data,
+            offset,
+            4,
+            "WriteProperty priority",
+            decode_ctx_unsigned::<u64>,
+        )?;
+        expect_end(data, end, end, "WriteProperty")?;
         let mut priority = None;
-        if offset < data.len() {
-            let (prio, end) =
-                decode_ctx_unsigned::<u64>(data, offset, 4, "WriteProperty priority")?;
-            expect_end(data, end, end, "WriteProperty")?;
+        if let Some(prio) = prio {
             if !(1..=16).contains(&prio) {
                 return Err(Error::Protocol {
                     class: ErrorClass::SERVICES.to_raw() as u32,

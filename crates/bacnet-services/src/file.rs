@@ -5,8 +5,8 @@ use bacnet_encoding::constructed::tagged::{
     decode_ctx_primitive, expect_end, next_is_context, next_is_opening,
 };
 use bacnet_encoding::{primitives, tags};
+use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
-use bacnet_types::{enums::RejectReason, error::Error};
 use bytes::BytesMut;
 
 use crate::common::MAX_DECODED_ITEMS;
@@ -230,9 +230,10 @@ impl AtomicWriteFileRequest {
             let mut file_record_data = Vec::new();
             for i in 0..record_count {
                 if inner >= content.len() {
-                    return Err(Error::Reject {
-                        reason: RejectReason::MISSING_REQUIRED_PARAMETER.to_raw(),
-                    });
+                    return Err(Error::missing(
+                        inner,
+                        format!("AtomicWriteFile record: record {i} of the count is missing"),
+                    ));
                 }
                 let (record, new_inner) = decode_app_primitive(
                     content,
@@ -243,11 +244,7 @@ impl AtomicWriteFileRequest {
                 file_record_data.push(record.to_vec());
                 inner = new_inner;
             }
-            if inner < content.len() {
-                return Err(Error::Reject {
-                    reason: RejectReason::TOO_MANY_ARGUMENTS.to_raw(),
-                });
-            }
+            expect_end(content, inner, inner, "AtomicWriteFile record")?;
             let access = FileWriteAccessMethod::Record {
                 file_start_record,
                 record_count,
@@ -361,11 +358,7 @@ impl AtomicReadFileAck {
                 tags::app_tag::OCTET_STRING,
                 "AtomicReadFileAck stream file-data",
             )?;
-            if inner != content.len() {
-                return Err(Error::Reject {
-                    reason: RejectReason::TOO_MANY_ARGUMENTS.to_raw(),
-                });
-            }
+            expect_end(content, inner, inner, "AtomicReadFileAck stream")?;
             let file_data = slice.to_vec();
             (
                 FileReadAckMethod::Stream {
@@ -390,9 +383,10 @@ impl AtomicReadFileAck {
             let mut file_record_data = Vec::new();
             for i in 0..returned_record_count {
                 if inner >= content.len() {
-                    return Err(Error::Reject {
-                        reason: RejectReason::MISSING_REQUIRED_PARAMETER.to_raw(),
-                    });
+                    return Err(Error::missing(
+                        inner,
+                        format!("AtomicReadFileAck record: record {i} of the count is missing"),
+                    ));
                 }
                 let (slice, new_inner) = decode_app_primitive(
                     content,
@@ -403,11 +397,7 @@ impl AtomicReadFileAck {
                 file_record_data.push(slice.to_vec());
                 inner = new_inner;
             }
-            if inner != content.len() {
-                return Err(Error::Reject {
-                    reason: RejectReason::TOO_MANY_ARGUMENTS.to_raw(),
-                });
-            }
+            expect_end(content, inner, inner, "AtomicReadFileAck record")?;
             (
                 FileReadAckMethod::Record {
                     file_start_record,
@@ -422,11 +412,7 @@ impl AtomicReadFileAck {
                 "Unknown read file ACK access method",
             ));
         };
-        if access_end != data.len() {
-            return Err(Error::Reject {
-                reason: RejectReason::TOO_MANY_ARGUMENTS.to_raw(),
-            });
-        }
+        expect_end(data, access_end, access_end, "AtomicReadFileAck")?;
 
         Ok(Self {
             end_of_file,

@@ -394,7 +394,8 @@ pub(crate) fn handle_rpm_budgeted_observed(
         Option<(ErrorClass, ErrorCode)>,
     ),
 ) -> Result<(), ReadFailure> {
-    let request = ReadPropertyMultipleRequest::decode(data).map_err(ReadFailure::Service)?;
+    let request = ReadPropertyMultipleRequest::decode(data)
+        .map_err(|error| ReadFailure::Service(error.into_request_reject()))?;
     RpmPlan::new(db, &request, budget.max_result_elements, None)?.read_observed(
         db,
         None,

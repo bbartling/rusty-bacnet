@@ -87,7 +87,7 @@ pub fn handle_read_property(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
-    let request = ReadPropertyRequest::decode(service_data)?;
+    let request = ReadPropertyRequest::decode(service_data).map_err(Error::into_request_reject)?;
     let lookup_oid = resolve_read_target(db, &request.object_identifier, None);
     let plan = plan_read_property(
         db,
@@ -294,7 +294,8 @@ pub fn handle_read_property_multiple(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
-    let request = ReadPropertyMultipleRequest::decode(service_data)?;
+    let request =
+        ReadPropertyMultipleRequest::decode(service_data).map_err(Error::into_request_reject)?;
 
     let mut results = Vec::new();
     for spec in &request.list_of_read_access_specs {

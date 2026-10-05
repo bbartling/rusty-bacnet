@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use crate::constructed::BACnetObjectPropertyReference;
 use crate::data_link::DataLink;
-use crate::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
+use crate::enums::{ErrorClass, ErrorCode, PropertyIdentifier, RejectReason};
 
 fn format_protocol_error(class: u32, code: u32) -> String {
     let class_name = ErrorClass::ALL_NAMED
@@ -108,6 +108,8 @@ pub enum Error {
     Decoding {
         /// Byte offset where the error occurred.
         offset: usize,
+        /// Which kind of fault the decoder found.
+        kind: DecodingKind,
         /// Description of what went wrong.
         message: String,
     },
@@ -135,13 +137,44 @@ pub enum Error {
         have: usize,
     },
 
-    /// Invalid tag encountered during decode.
-    #[error("invalid tag: {0}")]
-    InvalidTag(String),
-
     /// Value out of valid range.
     #[error("value out of range: {0}")]
     OutOfRange(String),
+}
+
+/// Which fault a decoder found in the data it refused, so a responder can
+/// name it (#1446). [`Error::reject_reason`] gives the Clause 18.9 Reject
+/// reason each kind draws when the data was a confirmed request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DecodingKind {
+    /// A fault the other kinds don't name: contents that don't fit their
+    /// type or range, a wrong length, a reserved choice, too many items, or
+    /// nesting too deep.
+    Malformed,
+    /// A tag that doesn't fit where it stands: another number, class or form
+    /// than the member there needs, a closing tag that matches no opening
+    /// one, or a tag header that is itself malformed.
+    InvalidTag,
+    /// The data ends, or the enclosing frame closes, where a required member
+    /// or a frame's closing tag is due: a member is missing.
+    Missing,
+    /// Octets are left after the last member of a value that must fill its
+    /// input: arguments beyond those the production has.
+    Trailing,
+}
+
+impl DecodingKind {
+    /// The Clause 18.9 Reject reason that names this fault in a confirmed
+    /// request: OTHER, INVALID_TAG, MISSING_REQUIRED_PARAMETER or
+    /// TOO_MANY_ARGUMENTS.
+    pub fn reject_reason(self) -> RejectReason {
+        match self {
+            Self::Malformed => RejectReason::OTHER,
+            Self::InvalidTag => RejectReason::INVALID_TAG,
+            Self::Missing => RejectReason::MISSING_REQUIRED_PARAMETER,
+            Self::Trailing => RejectReason::TOO_MANY_ARGUMENTS,
+        }
+    }
 }
 
 /// The fields a Clause 21 error production adds to the error class and code,
@@ -248,11 +281,69 @@ impl Error {
         }
     }
 
-    /// Create a decoding error at the given byte offset.
+    /// Create a [`DecodingKind::Malformed`] decoding error at the given byte
+    /// offset.
     pub fn decoding(offset: usize, message: impl Into<String>) -> Self {
+        Self::decoding_kind(DecodingKind::Malformed, offset, message)
+    }
+
+    /// Create a decoding error of `kind` at the given byte offset.
+    pub fn decoding_kind(kind: DecodingKind, offset: usize, message: impl Into<String>) -> Self {
         Self::Decoding {
             offset,
+            kind,
             message: message.into(),
+        }
+    }
+
+    /// Create a [`DecodingKind::InvalidTag`] decoding error: a tag at
+    /// `offset` that doesn't fit there.
+    pub fn invalid_tag(offset: usize, message: impl Into<String>) -> Self {
+        Self::decoding_kind(DecodingKind::InvalidTag, offset, message)
+    }
+
+    /// Create a [`DecodingKind::Missing`] decoding error: a required member
+    /// due at `offset` isn't there.
+    pub fn missing(offset: usize, message: impl Into<String>) -> Self {
+        Self::decoding_kind(DecodingKind::Missing, offset, message)
+    }
+
+    /// Create a [`DecodingKind::Trailing`] decoding error: octets from
+    /// `offset` on that the value leaves unread.
+    pub fn trailing(offset: usize, message: impl Into<String>) -> Self {
+        Self::decoding_kind(DecodingKind::Trailing, offset, message)
+    }
+
+    /// The Reject reason a responder answers a confirmed request with when
+    /// this error refused it as a syntax fault (Clauses 18.9 and 20.1.8):
+    /// the reason itself for [`Error::Reject`], the kind's reason for
+    /// [`Error::Decoding`] (see [`DecodingKind::reject_reason`]), and
+    /// MISSING_REQUIRED_PARAMETER for [`Error::BufferTooShort`], a member cut
+    /// short because the data ran out before it was complete. `None` for any
+    /// other error, which isn't a syntax fault.
+    pub fn reject_reason(&self) -> Option<RejectReason> {
+        match self {
+            Self::Reject { reason } => Some(RejectReason::from_raw(*reason)),
+            Self::Decoding { kind, .. } => Some(kind.reject_reason()),
+            Self::BufferTooShort { .. } => Some(RejectReason::MISSING_REQUIRED_PARAMETER),
+            _ => None,
+        }
+    }
+
+    /// This error, met decoding a confirmed request's own parameters, as the
+    /// [`Error::Reject`] a responder answers with: the
+    /// [`reject_reason`](Self::reject_reason) when it is a syntax fault, the
+    /// error unchanged otherwise.
+    ///
+    /// A responder converts only the request's decode with this. A decoding
+    /// error met later, once the service has started to run, is no reason to
+    /// reject the request (Clause 20.1.8), so it stays as it is.
+    pub fn into_request_reject(self) -> Self {
+        match self.reject_reason() {
+            Some(reason) => Self::Reject {
+                reason: reason.to_raw(),
+            },
+            None => self,
         }
     }
 
@@ -354,6 +445,51 @@ mod tests {
         let err = Error::decoding(42, "unexpected tag");
         assert!(err.to_string().contains("offset 42"));
         assert!(err.to_string().contains("unexpected tag"));
+    }
+
+    #[test]
+    fn syntax_faults_name_their_reject_reasons() {
+        for (error, reason) in [
+            (Error::decoding(1, "bad"), RejectReason::OTHER),
+            (Error::invalid_tag(1, "tag"), RejectReason::INVALID_TAG),
+            (
+                Error::missing(1, "gone"),
+                RejectReason::MISSING_REQUIRED_PARAMETER,
+            ),
+            (Error::trailing(1, "more"), RejectReason::TOO_MANY_ARGUMENTS),
+            (
+                Error::buffer_too_short(9, 4),
+                RejectReason::MISSING_REQUIRED_PARAMETER,
+            ),
+            (
+                Error::Reject { reason: 8 },
+                RejectReason::UNDEFINED_ENUMERATION,
+            ),
+        ] {
+            assert_eq!(error.reject_reason(), Some(reason), "{error}");
+        }
+        for error in [
+            Error::Protocol { class: 5, code: 0 },
+            Error::Encoding("x".into()),
+            Error::OutOfRange("x".into()),
+            Error::Abort { reason: 1 },
+        ] {
+            assert_eq!(error.reject_reason(), None, "{error}");
+        }
+        // A request's decode error becomes its Reject; any other error stays.
+        assert!(matches!(
+            Error::trailing(3, "more").into_request_reject(),
+            Error::Reject { reason } if reason == RejectReason::TOO_MANY_ARGUMENTS.to_raw()
+        ));
+        assert!(matches!(
+            Error::OutOfRange("x".into()).into_request_reject(),
+            Error::OutOfRange(_)
+        ));
+        // The kind doesn't show in the message.
+        assert_eq!(
+            Error::trailing(3, "two trailing byte(s)").to_string(),
+            "decoding error at offset 3: two trailing byte(s)"
+        );
     }
 
     #[test]

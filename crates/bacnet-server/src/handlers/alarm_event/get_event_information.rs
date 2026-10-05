@@ -127,7 +127,8 @@ pub(crate) fn handle_get_event_information_with_budget(
     buf: &mut BytesMut,
     max_service_ack_bytes: Option<usize>,
 ) -> Result<(), Error> {
-    let request = GetEventInformationRequest::decode(service_data)?;
+    let request =
+        GetEventInformationRequest::decode(service_data).map_err(Error::into_request_reject)?;
     let cursor = request
         .last_received_object_identifier
         .map(|identifier| identifier.encode());

@@ -41,7 +41,7 @@ pub(crate) fn handle_audit_log_query_observed(
     service_data: &[u8],
     completed: impl FnOnce(ObjectIdentifier, &Result<AuditLogQueryPage, Error>),
 ) -> Result<(ObjectIdentifier, AuditLogQueryPage), Error> {
-    let request = AuditLogQueryRequest::decode(service_data)?;
+    let request = AuditLogQueryRequest::decode(service_data).map_err(Error::into_request_reject)?;
     let result = query(db, &request);
     completed(request.audit_log, &result);
     result.map(|page| (request.audit_log, page))

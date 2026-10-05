@@ -3,18 +3,16 @@
 //! level or inside a constructed frame (#1333).
 //!
 //! The decoders behind these services report such a member as a short
-//! buffer, where some used to call it malformed. The server answers both
-//! kinds alike, so each request here pins the reply a peer sees: SERVICES /
-//! OTHER, as the plain Error PDU or, for CreateObject, the list services and
-//! SubscribeCOVPropertyMultiple, as their formal error. AV-1 is the
-//! Harness's Analog Value.
+//! buffer: the data ran out before an argument was complete. The server
+//! rejects it as MISSING_REQUIRED_PARAMETER, as it does a request that
+//! stops before a member starts (#1446), whatever the service: CreateObject,
+//! the list services and SubscribeCOVPropertyMultiple, which answer other
+//! refusals with their formal error, included. AV-1 is the Harness's Analog
+//! Value.
 use super::*;
 use crate::server::cov_wire_test_support::Harness;
 use crate::server::test_transport::TestTransport;
-use bacnet_encoding::apdu::ErrorPdu;
-use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleError;
-use bacnet_services::list_manipulation::ChangeListError;
-use bacnet_services::object_mgmt::CreateObjectError;
+use bacnet_types::error::DecodingKind;
 
 /// AV-1's object identifier as a primitive `[0]`.
 const AV_1: [u8; 5] = [0x0C, 0x00, 0x80, 0x00, 0x01];
@@ -57,59 +55,58 @@ pub(super) async fn answer_to(
     .expect("an answer to the request")
 }
 
-/// Send `body` as one confirmed `service` request and return the Error PDU
-/// answering it, failing on any other answer.
-pub(super) async fn error_for(
+/// Send `body` as one confirmed `service` request and require a Reject with
+/// `reason` in answer.
+pub(super) async fn reject_for(
     h: &mut Harness,
     service: ConfirmedServiceChoice,
     body: &[u8],
-) -> ErrorPdu {
+    reason: RejectReason,
+) {
     match answer_to(h, service, body).await {
-        Apdu::Error(error) => {
-            assert_eq!(error.service_choice, service);
-            assert_eq!(
-                (error.error_class, error.error_code),
-                (ErrorClass::SERVICES, ErrorCode::OTHER),
-                "{service:?} {body:02X?}"
-            );
-            error
+        Apdu::Reject(reject) => {
+            assert_eq!(reject.reject_reason, reason, "{service:?} {body:02X?}");
         }
         other => panic!("{service:?} {body:02X?} drew {other:?}"),
     }
 }
 
+/// Send `body` and require the MISSING_REQUIRED_PARAMETER Reject a request
+/// cut short draws.
+async fn cut_short(h: &mut Harness, service: ConfirmedServiceChoice, body: &[u8]) {
+    reject_for(h, service, body, RejectReason::MISSING_REQUIRED_PARAMETER).await;
+}
+
 #[tokio::test(start_paused = true)]
-async fn read_property_multiple_cut_short_draws_services_other() {
+async fn read_property_multiple_cut_short_is_rejected() {
     let mut h = Harness::start(ServerConfig::default()).await;
     let service = ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE;
     // The object identifier with three of its four octets, then AV-1 with a
     // property identifier that says two octets and holds one.
     let reference_cut = [&AV_1[..], &[0x1E, 0x0A, 0x55]].concat();
     for body in [&AV_1[..4], &reference_cut] {
-        let error = error_for(&mut h, service, body).await;
-        assert!(error.error_data.is_empty());
+        cut_short(&mut h, service, body).await;
     }
     h.server.stop().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
-async fn subscribe_cov_property_cut_short_draws_services_other() {
+async fn subscribe_cov_property_cut_short_is_rejected() {
     let mut h = Harness::start(ServerConfig::default()).await;
     // Process 1 and AV-1 as `[1]`, then the `[4]` property reference cut
     // short.
     let body = [0x09, 0x01, 0x1C, 0x00, 0x80, 0x00, 0x01, 0x4E, 0x0A, 0x55];
-    let error = error_for(
+    cut_short(
         &mut h,
         ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY,
         &body,
     )
     .await;
-    assert!(error.error_data.is_empty());
     h.server.stop().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
-async fn subscribe_cov_property_multiple_cut_short_draws_the_general_error() {
+async fn subscribe_cov_property_multiple_cut_short_is_rejected() {
     let mut h = Harness::start(ServerConfig::default()).await;
     // Process 1, unconfirmed, then one specification for AV-1 whose first
     // `[0]` property reference is cut short.
@@ -120,86 +117,104 @@ async fn subscribe_cov_property_multiple_cut_short_draws_the_general_error() {
     ]
     .concat();
     let service = ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE;
-    let error = error_for(&mut h, service, &body).await;
-    let formal = SubscribeCOVPropertyMultipleError::try_from(&error).unwrap();
-    assert_eq!(formal.first_failed_subscription, None);
+    cut_short(&mut h, service, &body).await;
     h.server.stop().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
-async fn confirmed_audit_notification_cut_short_draws_services_other() {
+async fn confirmed_audit_notification_cut_short_or_misshapen_is_rejected() {
     let mut h = Harness::start(ServerConfig::default()).await;
     let service = ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION;
     // `[0]` around one notification: source-device Device 1 in `[2]`, then a
     // source-object `[3]` of three octets, or of four with two present.
     let device = [0x2E, 0x0C, 0x02, 0x00, 0x00, 0x01, 0x2F];
     let three_octets = [&[0x0E][..], &device, &[0x3B, 0x00, 0x80, 0x00, 0x0F]].concat();
-    let cut_short = [&[0x0E][..], &device, &[0x3C, 0x00, 0x80]].concat();
-    for body in [three_octets, cut_short] {
-        let error = error_for(&mut h, service, &body).await;
-        assert!(error.error_data.is_empty());
-    }
+    let cut = [&[0x0E][..], &device, &[0x3C, 0x00, 0x80]].concat();
+    // A wrong length is a syntax fault the Reject reasons don't name.
+    reject_for(&mut h, service, &three_octets, RejectReason::OTHER).await;
+    cut_short(&mut h, service, &cut).await;
     h.server.stop().await.unwrap();
 }
 
-/// The mapping every refused confirmed request goes through answers a
-/// decoder's two refusal kinds alike, whatever the service.
+/// A request's decode error, turned into its Reject where the handler
+/// decodes the request, draws the Reject naming the fault, whatever the
+/// service, the formal-error ones included (#1446). The same error met once
+/// the service is running is no fault of the request's syntax, so it keeps
+/// the Error PDU the service answers other refusals with.
 #[test]
-fn malformed_and_cut_short_requests_draw_the_same_reply() {
+fn request_syntax_faults_draw_the_reject_naming_them_for_every_service() {
+    let reply = |service, error: &Error| {
+        BACnetServer::<TestTransport>::error_apdu_from_error(7, service, error)
+    };
     for raw in 0..=u8::MAX {
         let service = ConfirmedServiceChoice::from_raw(raw);
-        let reply =
-            |error: Error| BACnetServer::<TestTransport>::error_apdu_from_error(7, service, &error);
-        assert_eq!(
-            reply(Error::decoding(3, "malformed")),
-            reply(Error::buffer_too_short(9, 4)),
-            "{service:?}"
-        );
+        for (error, reason) in [
+            (Error::decoding(3, "malformed"), RejectReason::OTHER),
+            (Error::invalid_tag(3, "tag"), RejectReason::INVALID_TAG),
+            (
+                Error::missing(3, "missing"),
+                RejectReason::MISSING_REQUIRED_PARAMETER,
+            ),
+            (Error::trailing(3, "more"), RejectReason::TOO_MANY_ARGUMENTS),
+            (
+                Error::buffer_too_short(9, 4),
+                RejectReason::MISSING_REQUIRED_PARAMETER,
+            ),
+        ] {
+            let what = format!("{service:?} {error}");
+            assert!(matches!(reply(service, &error), Apdu::Error(_)), "{what}");
+            assert_eq!(
+                reply(service, &error.into_request_reject()),
+                Apdu::Reject(RejectPdu {
+                    invoke_id: 7,
+                    reject_reason: reason,
+                }),
+                "{what}"
+            );
+        }
     }
+    // A refusal that isn't about syntax keeps its Error PDU.
+    let refusal = Error::OutOfRange("too large".into()).into_request_reject();
+    let service = ConfirmedServiceChoice::READ_PROPERTY;
+    assert!(matches!(reply(service, &refusal), Apdu::Error(_)));
+    assert_eq!(DecodingKind::Malformed.reject_reason(), RejectReason::OTHER);
 }
 
 /// A `[0]` Unsigned announcing two contents octets and holding one.
 const PROCESS_CUT: [u8; 2] = [0x0A, 0x01];
 
 #[tokio::test(start_paused = true)]
-async fn service_parameters_cut_short_draw_services_other() {
+async fn service_parameters_cut_short_are_rejected() {
     let mut h = Harness::start(ServerConfig::default()).await;
     // AV-1, then a `[1]` property identifier cut the same way; and a `[0]`
     // object identifier with two of its four octets.
     let property_cut = [&AV_1[..], &[0x1A, 0x55]].concat();
     let object_cut = [0x0C, 0x00, 0x80];
-    let cases: [(ConfirmedServiceChoice, &[u8]); 9] = [
+    let cases: [(ConfirmedServiceChoice, &[u8]); 10] = [
         (ConfirmedServiceChoice::READ_PROPERTY, &property_cut),
         (ConfirmedServiceChoice::WRITE_PROPERTY, &property_cut),
         (ConfirmedServiceChoice::READ_RANGE, &object_cut),
         (ConfirmedServiceChoice::SUBSCRIBE_COV, &PROCESS_CUT),
         (ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY, &PROCESS_CUT),
+        (
+            ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+            &PROCESS_CUT,
+        ),
         (ConfirmedServiceChoice::ACKNOWLEDGE_ALARM, &PROCESS_CUT),
         (ConfirmedServiceChoice::GET_EVENT_INFORMATION, &object_cut),
         (ConfirmedServiceChoice::LIFE_SAFETY_OPERATION, &PROCESS_CUT),
         (ConfirmedServiceChoice::AUDIT_LOG_QUERY, &object_cut),
     ];
     for (service, body) in cases {
-        let error = error_for(&mut h, service, body).await;
-        assert!(error.error_data.is_empty(), "{service:?}");
+        cut_short(&mut h, service, body).await;
     }
-    h.server.stop().await.unwrap();
-}
-
-#[tokio::test(start_paused = true)]
-async fn subscribe_cov_property_multiple_process_cut_short_draws_the_general_error() {
-    let mut h = Harness::start(ServerConfig::default()).await;
-    let service = ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE;
-    let error = error_for(&mut h, service, &PROCESS_CUT).await;
-    let formal = SubscribeCOVPropertyMultipleError::try_from(&error).unwrap();
-    assert_eq!(formal.first_failed_subscription, None);
     h.server.stop().await.unwrap();
 }
 
 /// The services whose members moved onto the shared readers with #1374, each
 /// cut short in the member named.
 #[tokio::test(start_paused = true)]
-async fn inline_members_cut_short_draw_services_other() {
+async fn inline_members_cut_short_are_rejected() {
     let mut h = Harness::start(ServerConfig::default()).await;
     let object_cut = [0x0C, 0x00, 0x80];
     let cases: [(ConfirmedServiceChoice, &str, &[u8]); 9] = [
@@ -250,19 +265,26 @@ async fn inline_members_cut_short_draw_services_other() {
         ),
     ];
     for (service, member, body) in cases {
-        let error = error_for(&mut h, service, body).await;
-        assert!(error.error_data.is_empty(), "{service:?} {member}");
+        match answer_to(&mut h, service, body).await {
+            Apdu::Reject(reject) => assert_eq!(
+                reject.reject_reason,
+                RejectReason::MISSING_REQUIRED_PARAMETER,
+                "{service:?} {member}"
+            ),
+            other => panic!("{service:?} {member} drew {other:?}"),
+        }
     }
     h.server.stop().await.unwrap();
 }
 
-/// A member cut short inside a constructed frame, which the decoders now
-/// report as a short buffer too (#1333), draws the same reply.
+/// A member cut short inside a constructed frame, which the decoders report
+/// as a short buffer too (#1333), draws the same reply.
 #[tokio::test(start_paused = true)]
-async fn members_cut_short_inside_a_frame_draw_services_other() {
+async fn members_cut_short_inside_a_frame_are_rejected() {
     let mut h = Harness::start(ServerConfig::default()).await;
     let file = [0xC4, 0x02, 0x80, 0x00, 0x01];
-    let cases: [(ConfirmedServiceChoice, &str, Vec<u8>); 6] = [
+    let elements_cut = [&AV_1[..], &[0x19, 0x55, 0x3E, 0x22, 0x01]].concat();
+    let cases: [(ConfirmedServiceChoice, &str, Vec<u8>); 9] = [
         (
             ConfirmedServiceChoice::WRITE_PROPERTY,
             "a REAL in the [3] value",
@@ -293,46 +315,54 @@ async fn members_cut_short_inside_a_frame_draw_services_other() {
             "the target device in [1] by-target",
             vec![0x0C, 0x0F, 0x40, 0x00, 0x01, 0x1E, 0x0E, 0x0C, 0x02, 0x00],
         ),
+        // The formal-error services: an initial value's property identifier
+        // in CreateObject's [1] list, and a list element in [3].
+        (
+            ConfirmedServiceChoice::CREATE_OBJECT,
+            "an initial value's property identifier in [1]",
+            vec![0x0E, 0x09, 0x02, 0x0F, 0x1E, 0x0A, 0x00],
+        ),
+        (
+            ConfirmedServiceChoice::ADD_LIST_ELEMENT,
+            "an element in [3]",
+            elements_cut.clone(),
+        ),
+        (
+            ConfirmedServiceChoice::REMOVE_LIST_ELEMENT,
+            "an element in [3]",
+            elements_cut,
+        ),
     ];
     for (service, member, body) in cases {
-        let error = error_for(&mut h, service, &body).await;
-        assert!(error.error_data.is_empty(), "{service:?} {member}");
-    }
-    // The formal-error services: an initial value's property identifier in
-    // CreateObject's [1] list, and a list element in [3].
-    let create = ConfirmedServiceChoice::CREATE_OBJECT;
-    let body = [0x0E, 0x09, 0x02, 0x0F, 0x1E, 0x0A, 0x00];
-    let formal = CreateObjectError::try_from(&error_for(&mut h, create, &body).await).unwrap();
-    assert_eq!(formal.first_failed_element_number, 0);
-    let elements_cut = [&AV_1[..], &[0x19, 0x55, 0x3E, 0x22, 0x01]].concat();
-    for service in [
-        ConfirmedServiceChoice::ADD_LIST_ELEMENT,
-        ConfirmedServiceChoice::REMOVE_LIST_ELEMENT,
-    ] {
-        let error = error_for(&mut h, service, &elements_cut).await;
-        let formal = ChangeListError::try_from(&error).unwrap();
-        assert_eq!(formal.first_failed_element_number, 0, "{service:?}");
+        match answer_to(&mut h, service, &body).await {
+            Apdu::Reject(reject) => assert_eq!(
+                reject.reject_reason,
+                RejectReason::MISSING_REQUIRED_PARAMETER,
+                "{service:?} {member}"
+            ),
+            other => panic!("{service:?} {member} drew {other:?}"),
+        }
     }
     h.server.stop().await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
-async fn create_object_and_list_requests_cut_short_draw_their_formal_errors() {
+async fn create_object_and_list_requests_cut_short_are_rejected() {
     let mut h = Harness::start(ServerConfig::default()).await;
     // A [0] object type with one of two octets inside the specifier.
-    let create = ConfirmedServiceChoice::CREATE_OBJECT;
-    let error = error_for(&mut h, create, &[0x0E, 0x0A, 0x02]).await;
-    let formal = CreateObjectError::try_from(&error).unwrap();
-    assert_eq!(formal.first_failed_element_number, 0);
+    cut_short(
+        &mut h,
+        ConfirmedServiceChoice::CREATE_OBJECT,
+        &[0x0E, 0x0A, 0x02],
+    )
+    .await;
     // AV-1, then a [1] property identifier with one of two octets.
     let property_cut = [&AV_1[..], &[0x1A, 0x55]].concat();
     for service in [
         ConfirmedServiceChoice::ADD_LIST_ELEMENT,
         ConfirmedServiceChoice::REMOVE_LIST_ELEMENT,
     ] {
-        let error = error_for(&mut h, service, &property_cut).await;
-        let formal = ChangeListError::try_from(&error).unwrap();
-        assert_eq!(formal.first_failed_element_number, 0, "{service:?}");
+        cut_short(&mut h, service, &property_cut).await;
     }
     h.server.stop().await.unwrap();
 }

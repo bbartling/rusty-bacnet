@@ -1,7 +1,7 @@
 use super::*;
 use bacnet_encoding::constructed::tagged::{
     decode_ctx_boolean, decode_ctx_object_id, decode_ctx_primitive, decode_ctx_unsigned,
-    next_is_context,
+    expect_end, misplaced_tag, next_is_context,
 };
 use bacnet_encoding::constructed::{encode_event_notification, validate_tlv_sequence};
 use bytes::Bytes;
@@ -82,7 +82,7 @@ impl ForwardedEventNotification {
             (_, offset) =
                 decode_ctx_unsigned::<u32>(data, offset, 10, "EventNotification fromState")?;
         } else if notify_type != NotifyType::ACK_NOTIFICATION {
-            return Err(Error::decoding(
+            return Err(Error::missing(
                 offset,
                 "EventNotification missing fromState",
             ));
@@ -95,18 +95,21 @@ impl ForwardedEventNotification {
             // the request ends at the closing tag that matches its opening one.
             let (opening, inner) = tags::decode_tag(data, offset)?;
             if !opening.is_opening_tag(12) {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    &opening,
+                    Some(12),
                     offset,
                     "EventNotification expected eventValues after toState",
                 ));
             }
             let (values, end) = tags::extract_context_value(data, inner, 12)?;
-            if values.is_empty() || end != data.len() {
+            if values.is_empty() {
                 return Err(Error::decoding(
                     offset,
-                    "EventNotification expected eventValues to close the request",
+                    "EventNotification eventValues are empty",
                 ));
             }
+            expect_end(data, end, end, "EventNotification")?;
         }
         Ok(Self {
             process_identifier,

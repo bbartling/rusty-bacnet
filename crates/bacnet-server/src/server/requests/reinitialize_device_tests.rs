@@ -128,17 +128,22 @@ async fn reinitialize_device_malformed_request_precedes_password_and_refusal() {
     for data in [
         &[][..],                    // Missing state.
         &[0x09][..],                // Truncated state.
-        &[0x19, 0x00][..],          // Wrong state tag.
+        &[0x19, 0x00][..],          // The password where the state is due.
         &[0x09, 0x01, 0x1a, 0][..], // Truncated password.
     ] {
         assert!(ReinitializeDeviceRequest::decode(data).is_err());
         for configured in [None, Some("reinit-pw")] {
             for initial in [DccState::Enable, DccState::DisableInitiation] {
-                // Preserve the server's existing decode-error mapping.
-                assert_error(
-                    dispatch(Bytes::copy_from_slice(data), configured, initial).await,
-                    ErrorClass::SERVICES,
-                    ErrorCode::OTHER,
+                // Each is missing a parameter, which the server rejects
+                // (#1446).
+                let response = dispatch(Bytes::copy_from_slice(data), configured, initial).await;
+                let Apdu::Reject(reject) = response else {
+                    panic!("expected a Reject, got {response:?}")
+                };
+                assert_eq!(
+                    (reject.invoke_id, reject.reject_reason),
+                    (42, RejectReason::MISSING_REQUIRED_PARAMETER),
+                    "{data:02X?}"
                 );
             }
         }

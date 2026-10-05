@@ -5,7 +5,7 @@
 
 use bacnet_encoding::constructed::tagged::{
     decode_app_object_id, decode_ctx_object_id, decode_ctx_unsigned, expect_closing, expect_end,
-    expect_opening, next_is_context,
+    expect_opening, misplaced_tag, next_is_context, next_is_opening,
 };
 use bacnet_encoding::constructed::{
     decode_bacnet_property_value_in_list, encode_bacnet_property_value,
@@ -85,7 +85,12 @@ impl CreateObjectRequest {
                 decode_ctx_object_id(data, offset, 1, "CreateObject object-identifier")?;
             (ObjectSpecifier::Identifier(oid), end)
         } else {
-            return Err(Error::decoding(
+            // Neither alternative: the frame closes empty, or another tag
+            // stands there.
+            let (found, _) = tags::decode_tag(data, offset)?;
+            return Err(misplaced_tag(
+                &found,
+                None,
                 offset,
                 "CreateObject expected context tag 0 or 1 inside object-specifier",
             ));
@@ -94,14 +99,11 @@ impl CreateObjectRequest {
 
         // [1] list-of-initial-values (optional, opening tag 1)
         let mut values = Vec::new();
-        if offset < data.len() {
+        if next_is_opening(data, offset, 1)? {
             offset = expect_opening(data, offset, 1, "CreateObject list-of-initial-values")?;
             loop {
                 if offset >= data.len() {
-                    return Err(Error::decoding(
-                        offset,
-                        "CreateObject missing closing tag 1",
-                    ));
+                    return Err(Error::missing(offset, "CreateObject missing closing tag 1"));
                 }
                 let (tag, closing_end) = tags::decode_tag(data, offset)?;
                 if tag.is_closing_tag(1) {
@@ -117,9 +119,7 @@ impl CreateObjectRequest {
             }
         }
 
-        if offset != data.len() {
-            return Err(Error::decoding(offset, "CreateObject has trailing data"));
-        }
+        expect_end(data, offset, offset, "CreateObject")?;
 
         Ok(Self {
             object_specifier,

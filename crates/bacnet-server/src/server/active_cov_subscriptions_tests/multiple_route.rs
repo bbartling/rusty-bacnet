@@ -264,17 +264,21 @@ async fn multiple_route_rejected_wire_renewals_preserve_live_context() {
         error(wire.send(&router_b(), request).await, class, code);
         assert_live_unchanged(&wire, &before).await;
     }
-    error(
-        wire.send(
+    // A tag header cut short: the request is rejected as missing a
+    // parameter (#1446).
+    let response = wire
+        .send(
             &router_b(),
             (
                 ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
                 BytesMut::from(&[0xff][..]),
             ),
         )
-        .await,
-        ErrorClass::SERVICES,
-        ErrorCode::OTHER,
+        .await;
+    assert!(
+        matches!(&response, Apdu::Reject(reject)
+            if reject.reject_reason == RejectReason::MISSING_REQUIRED_PARAMETER),
+        "{response:?}"
     );
     assert_live_unchanged(&wire, &before).await;
     changed_value_uses(&wire, &routed(), av(1), 21.0).await;

@@ -13,7 +13,8 @@ use bytes::BytesMut;
 
 use crate::common::MAX_DECODED_ITEMS;
 use bacnet_encoding::constructed::tagged::{
-    decode_ctx_object_id, decode_ctx_real, decode_ctx_unsigned, next_is_context,
+    decode_ctx_object_id, decode_ctx_real, decode_ctx_unsigned, expect_end, misplaced_tag,
+    next_is_context, unclosed_kind,
 };
 use bacnet_types::constructed::PropertyReference;
 
@@ -201,7 +202,9 @@ impl SubscribeCOVPropertyMultipleRequest {
         // [4] listOfCovSubscriptionSpecifications — opening tag 4
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         if !tag.is_opening_tag(4) {
-            return Err(Error::decoding(
+            return Err(misplaced_tag(
+                &tag,
+                Some(4),
                 offset,
                 "SubscribeCOVPropertyMultiple expected opening tag 4",
             ));
@@ -212,7 +215,7 @@ impl SubscribeCOVPropertyMultipleRequest {
         let mut total_references = 0usize;
         loop {
             if offset >= data.len() {
-                return Err(Error::decoding(
+                return Err(Error::missing(
                     offset,
                     "SubscribeCOVPropertyMultiple missing closing tag 4",
                 ));
@@ -237,7 +240,9 @@ impl SubscribeCOVPropertyMultipleRequest {
             // [1] listOfCovReferences — opening tag 1
             let (tag, tag_end) = tags::decode_tag(data, offset)?;
             if !tag.is_opening_tag(1) {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    &tag,
+                    Some(1),
                     offset,
                     "SubscribeCOVPropertyMultiple expected opening tag 1",
                 ));
@@ -247,7 +252,7 @@ impl SubscribeCOVPropertyMultipleRequest {
             let mut refs = Vec::new();
             loop {
                 if offset >= data.len() {
-                    return Err(Error::decoding(
+                    return Err(Error::missing(
                         offset,
                         "SubscribeCOVPropertyMultiple missing closing tag 1",
                     ));
@@ -272,7 +277,9 @@ impl SubscribeCOVPropertyMultipleRequest {
 
                 // [0] monitoredProperty — opening tag 0
                 if !tag.is_opening_tag(0) {
-                    return Err(Error::decoding(
+                    return Err(misplaced_tag(
+                        &tag,
+                        Some(0),
                         offset,
                         "SubscribeCOVPropertyMultiple expected opening tag 0 for property ref",
                     ));
@@ -285,7 +292,8 @@ impl SubscribeCOVPropertyMultipleRequest {
                 offset = new_off;
                 let (tag, tag_end) = tags::decode_tag(data, offset)?;
                 if !tag.is_closing_tag(0) {
-                    return Err(Error::decoding(
+                    return Err(Error::decoding_kind(
+                        unclosed_kind(&tag),
                         offset,
                         "SubscribeCOVPropertyMultiple expected closing tag 0",
                     ));
@@ -327,12 +335,7 @@ impl SubscribeCOVPropertyMultipleRequest {
                 list_of_cov_references: refs,
             });
         }
-        if offset != data.len() {
-            return Err(Error::decoding(
-                offset,
-                "SubscribeCOVPropertyMultiple has trailing data",
-            ));
-        }
+        expect_end(data, offset, offset, "SubscribeCOVPropertyMultiple")?;
 
         Ok(Self {
             subscriber_process_identifier,

@@ -1,7 +1,8 @@
 //! LifeSafetyOperation service per ASHRAE 135-2020 Clause 13.13.
 
 use bacnet_encoding::constructed::tagged::{
-    decode_ctx_object_id, decode_ctx_primitive, decode_ctx_unsigned,
+    decode_ctx_object_id, decode_ctx_primitive, decode_ctx_unsigned, decode_optional_ctx,
+    expect_end,
 };
 use bacnet_encoding::primitives;
 use bacnet_types::enums::LifeSafetyOperation;
@@ -79,19 +80,14 @@ impl LifeSafetyOperationRequest {
         offset = end;
 
         // [3] objectIdentifier (optional)
-        let mut object_identifier = None;
-        if offset < data.len() {
-            let (oid, end) =
-                decode_ctx_object_id(data, offset, 3, "LifeSafetyOp objectIdentifier")?;
-            object_identifier = Some(oid);
-            offset = end;
-        }
-        if offset != data.len() {
-            return Err(Error::decoding(
-                offset,
-                "LifeSafetyOp trailing data after request",
-            ));
-        }
+        let (object_identifier, end) = decode_optional_ctx(
+            data,
+            offset,
+            3,
+            "LifeSafetyOp objectIdentifier",
+            decode_ctx_object_id,
+        )?;
+        expect_end(data, end, end, "LifeSafetyOp")?;
 
         Ok(Self {
             requesting_process_identifier,

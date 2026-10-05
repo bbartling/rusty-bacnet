@@ -180,7 +180,8 @@ fn decode_request(
     service: &str,
     service_request: &Bytes,
 ) -> Result<bacnet_services::audit::AuditNotificationRequest, Error> {
-    let request = bacnet_services::audit::AuditNotificationRequest::decode(service_request)?;
+    let request = bacnet_services::audit::AuditNotificationRequest::decode(service_request)
+        .map_err(Error::into_request_reject)?;
     if request.notifications.len() > MAX_AUDIT_NOTIFICATIONS {
         return Err(Error::OutOfRange(format!(
             "{service} list exceeds {MAX_AUDIT_NOTIFICATIONS} items"

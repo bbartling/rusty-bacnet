@@ -78,11 +78,11 @@ impl WhoIsRequest {
                 Err(Error::decoding(0, "WhoIs low_limit exceeds high_limit"))
             }
             (Some(low), Some(high)) => Ok(Self::range(low, high)),
-            (Some(_), None) => Err(Error::decoding(
+            (Some(_), None) => Err(Error::missing(
                 end,
                 "WhoIs low-limit needs the high-limit [1] with it",
             )),
-            (None, Some(_)) => Err(Error::decoding(
+            (None, Some(_)) => Err(Error::missing(
                 0,
                 "WhoIs high-limit needs the low-limit [0] before it",
             )),

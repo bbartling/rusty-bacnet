@@ -163,6 +163,25 @@ impl Harness {
         assert_reply(data, source, expected);
     }
 
+    /// Require a Reject naming a syntax fault (#1446), and return its reason.
+    async fn reject(&mut self, source: Option<NpduAddress>) -> u8 {
+        let (data, mac) = timeout(Duration::from_secs(2), self.output.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(mac.as_ref(), PEER);
+        let npdu = decode_npdu(data).unwrap();
+        assert_eq!(npdu.destination, source);
+        let [0x60, INVOKE, reason] = npdu.payload[..] else {
+            panic!("expected a Reject, got {:02X?}", npdu.payload);
+        };
+        assert!(
+            [0, 4, 5, 7].contains(&reason),
+            "reason {reason} names no syntax fault"
+        );
+        reason
+    }
+
     // An ordered request/response fence proves prior dispatch completed without
     // depending on sleeps or treating a timeout as evidence of wire silence.
     async fn fence(&mut self) {
@@ -349,7 +368,7 @@ async fn other_malformed_fields_are_rejected_or_silently_dropped_without_deliver
             h.send(inbound(request(data, confirmed, false), remote()))
                 .await;
             if confirmed {
-                h.reply(remote(), &[0x60, INVOKE, 3]).await;
+                h.reject(remote()).await;
             }
             h.fence().await;
             assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
@@ -371,7 +390,7 @@ async fn truncations_do_not_escape_validation_after_text_tolerance() {
         }
         h.send(inbound(request(data.slice(..len), true, false), None))
             .await;
-        h.reply(None, &[0x60, INVOKE, 3]).await;
+        h.reject(None).await;
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
     }
     h.client.stop().await.unwrap();
@@ -437,7 +456,9 @@ async fn immediate_reply_and_closed_channel_fallback_preserve_event_responses() 
         for closed in [false, true] {
             for (data, segmented, expected, publish) in [
                 (payload(Some(&[0, 0xff])), false, [0x20, INVOKE, 2], true),
-                (payload(Some(&[])), false, [0x60, INVOKE, 3], false),
+                // Message text with no character set: a malformed value,
+                // rejected as OTHER (#1446).
+                (payload(Some(&[])), false, [0x60, INVOKE, 0], false),
                 (payload(None), true, [0x71, INVOKE, 4], false),
             ] {
                 let (tx, reply) = oneshot::channel();

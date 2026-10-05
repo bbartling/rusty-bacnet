@@ -97,6 +97,18 @@ Error PDU, and each body has its own type for encoding and decoding:
 `cov_multiple::SubscribeCOVPropertyMultipleError`,
 `private_transfer::PrivateTransferError` and `virtual_terminal::VTCloseError`.
 
+`Error::Decoding { offset, kind, message }` carries the `DecodingKind` of the
+fault a decoder found: `Malformed`, `InvalidTag` (a tag that doesn't fit),
+`Missing` (the data or the frame ends where a member is due) or `Trailing`
+(octets after the last member). Contents cut short are
+`Error::BufferTooShort`. `Error::reject_reason()` names the Reject reason each
+draws when it refuses a confirmed request: OTHER, INVALID_TAG,
+MISSING_REQUIRED_PARAMETER, TOO_MANY_ARGUMENTS, and MISSING_REQUIRED_PARAMETER
+for a short buffer. `Error::into_request_reject()` turns a request's decode
+error into that `Error::Reject`; the bundled server answers every confirmed
+request it can't decode that way, and keeps the Error PDU for a decoding
+error met once a service runs (#1446).
+
 `Error::UnsupportedTransport { required, actual }` reports an operation the
 endpoint's data link cannot carry, such as a BBMD request through an
 `AnyTransport` that is not B/IP. Both fields are a
@@ -5114,7 +5126,8 @@ The server executes ConfirmedEventNotification, so it acknowledges every
 well-formed one once it decodes, before any copy is sent and whatever
 forwarding then finds, including one no forwarder takes. A received
 notification that no forwarder takes counts in `received_not_forwarded`. One
-that does not decode is rejected with INVALID_PARAMETER_DATA_TYPE.
+that does not decode is rejected with the reason naming its fault, as the
+client rejects one (#1446).
 
 The server remembers each ConfirmedEventNotification that decodes for 60
 seconds, at most 256 at once with the oldest dropped first, keyed by source

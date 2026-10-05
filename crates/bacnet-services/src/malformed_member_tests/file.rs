@@ -183,20 +183,22 @@ fn atomic_write_file_request() {
             &file(&[0x1E, 0x31, 0x00, 0x21, 0x02, 0x21, 0x05, 0x1F]),
             Malformed,
         ),
+        // The count's missing and extra records keep their Reject reasons
+        // (see reject_reason_tests).
         (
             "fewer records than counted",
             &file(&[0x1E, 0x31, 0x00, 0x21, 0x02, 0x61, 0xAA, 0x1F]),
-            Kind::Reject(RejectReason::MISSING_REQUIRED_PARAMETER),
+            Malformed,
         ),
         (
             "more records than counted",
             &file(&[0x1E, 0x31, 0x00, 0x21, 0x01, 0x61, 0xAA, 0x61, 0xBB, 0x1F]),
-            Kind::Reject(RejectReason::TOO_MANY_ARGUMENTS),
+            Malformed,
         ),
         (
             "an Unsigned after the counted records",
             &file(&[0x1E, 0x31, 0x00, 0x21, 0x01, 0x61, 0xAA, 0x21, 0x05, 0x1F]),
-            Kind::Reject(RejectReason::TOO_MANY_ARGUMENTS),
+            Malformed,
         ),
         (
             "an octet after the stream frame",

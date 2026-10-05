@@ -303,7 +303,12 @@ async fn audit_reporter_list_malformed_elements_and_services_are_silent() {
                     list_request(target, PropertyIdentifier::ALARM_VALUES, None, delta),
                 )
                 .await;
-                assert!(matches!(response, Apdu::Error(_)), "{response:?}");
+                // A REAL whose contents run past the list frame is a syntax
+                // fault of the request, rejected (#1446).
+                assert!(
+                    matches!(response, Apdu::Error(_) | Apdu::Reject(_)),
+                    "{response:?}"
+                );
                 assert_eq!(
                     values(&fixture).await,
                     PropertyValue::List(vec![PropertyValue::Unsigned(1)])
@@ -323,7 +328,7 @@ async fn audit_reporter_list_malformed_elements_and_services_are_silent() {
         }] {
             assert!(matches!(
                 dispatch(&fixture.server, service, data).await,
-                Apdu::Error(_)
+                Apdu::Reject(_)
             ));
         }
         settle().await;

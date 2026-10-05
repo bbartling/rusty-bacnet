@@ -78,7 +78,7 @@ pub fn decode_read_access_specification(
     let mut list_of_property_references = Vec::new();
     loop {
         if offset >= data.len() {
-            return Err(Error::decoding(
+            return Err(Error::missing(
                 offset,
                 format!("{WHAT} missing closing tag 1"),
             ));

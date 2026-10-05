@@ -1,7 +1,11 @@
 //! Detailed confirmed-COV decoding and Reject classification.
 
-use bacnet_encoding::constructed::decode_bacnet_property_value_in_list;
-use bacnet_encoding::constructed::tagged::{decode_canonical_unsigned, decode_ctx_primitive};
+use bacnet_encoding::constructed::tagged::{
+    decode_canonical_unsigned, decode_ctx_primitive, expect_end, misplaced_tag,
+};
+use bacnet_encoding::constructed::{
+    decode_bacnet_property_value_in_list_detailed, PropertyValueDecodeFailure,
+};
 use bacnet_encoding::tags;
 use bacnet_types::enums::RejectReason;
 use bacnet_types::error::Error;
@@ -46,10 +50,18 @@ fn failure(error: Error, reject_reason: RejectReason) -> COVNotificationDecodeEr
     COVNotificationDecodeError::new(error, reject_reason)
 }
 
+/// A syntax fault with the reason the server's rule gives it (#1446): the
+/// data ending where a member or closing tag is due, or a member cut short,
+/// is MISSING_REQUIRED_PARAMETER; a tag that doesn't fit, INVALID_TAG;
+/// octets past the end, TOO_MANY_ARGUMENTS.
+fn syntax(error: Error) -> COVNotificationDecodeError {
+    let reject_reason = error.reject_reason().unwrap_or(RejectReason::OTHER);
+    failure(error, reject_reason)
+}
+
 /// The contents of the required primitive context tag `expected_tag` at
-/// `offset`. A missing member is MISSING_REQUIRED_PARAMETER; contents that run
-/// past the end of the data (the reader's only [`Error::BufferTooShort`]) are
-/// INVALID_DATA_ENCODING; any other fault in the tag is INVALID_TAG.
+/// `offset`, with [`syntax`]'s reasons for a missing member, one cut short
+/// or a tag that doesn't fit.
 fn decode_required_context<'a>(
     data: &'a [u8],
     offset: usize,
@@ -57,18 +69,12 @@ fn decode_required_context<'a>(
     field: &str,
 ) -> COVDecodeResult<(&'a [u8], usize)> {
     if offset >= data.len() {
-        return Err(failure(
-            Error::decoding(offset, format!("{field} is missing")),
-            RejectReason::MISSING_REQUIRED_PARAMETER,
-        ));
+        return Err(syntax(Error::missing(
+            offset,
+            format!("{field} is missing"),
+        )));
     }
-    decode_ctx_primitive(data, offset, expected_tag, field).map_err(|error| {
-        let reject_reason = match error {
-            Error::BufferTooShort { .. } => RejectReason::INVALID_DATA_ENCODING,
-            _ => RejectReason::INVALID_TAG,
-        };
-        failure(error, reject_reason)
-    })
+    decode_ctx_primitive(data, offset, expected_tag, field).map_err(syntax)
 }
 
 fn decode_required_u32(
@@ -87,26 +93,6 @@ fn decode_required_u32(
         )
     })?;
     Ok((value, end))
-}
-
-fn property_value_reject_reason(error: &Error) -> RejectReason {
-    match error {
-        Error::InvalidTag(_) => RejectReason::INVALID_TAG,
-        Error::OutOfRange(_) => RejectReason::PARAMETER_OUT_OF_RANGE,
-        Error::BufferTooShort { .. } => RejectReason::INVALID_DATA_ENCODING,
-        Error::Decoding { message, .. }
-            if message.contains("expected context tag")
-                || message.contains("expected opening tag")
-                || message.contains("expected closing tag") =>
-        {
-            RejectReason::INVALID_TAG
-        }
-        Error::Decoding { message, .. } if message.contains("out of range") => {
-            RejectReason::PARAMETER_OUT_OF_RANGE
-        }
-        Error::Decoding { .. } => RejectReason::INVALID_DATA_ENCODING,
-        _ => RejectReason::OTHER,
-    }
 }
 
 impl COVNotificationRequest {
@@ -135,31 +121,31 @@ impl COVNotificationRequest {
         offset = end;
 
         if offset >= data.len() {
-            return Err(failure(
-                Error::decoding(offset, "COVNotification list-of-values is missing"),
-                RejectReason::MISSING_REQUIRED_PARAMETER,
-            ));
+            return Err(syntax(Error::missing(
+                offset,
+                "COVNotification list-of-values is missing",
+            )));
         }
-        let (tag, tag_end) = tags::decode_tag(data, offset)
-            .map_err(|error| failure(error, RejectReason::INVALID_TAG))?;
+        let (tag, tag_end) = tags::decode_tag(data, offset).map_err(syntax)?;
         if !tag.is_opening_tag(4) {
-            return Err(failure(
-                Error::decoding(offset, "COVNotification expected opening tag 4"),
-                RejectReason::INVALID_TAG,
-            ));
+            return Err(syntax(misplaced_tag(
+                &tag,
+                Some(4),
+                offset,
+                "COVNotification expected opening tag 4",
+            )));
         }
         offset = tag_end;
 
         let mut values = Vec::new();
         loop {
             if offset >= data.len() {
-                return Err(failure(
-                    Error::decoding(offset, "COVNotification missing closing tag 4"),
-                    RejectReason::INVALID_TAG,
-                ));
+                return Err(syntax(Error::missing(
+                    offset,
+                    "COVNotification missing closing tag 4",
+                )));
             }
-            let (tag, tag_end) = tags::decode_tag(data, offset)
-                .map_err(|error| failure(error, RejectReason::INVALID_TAG))?;
+            let (tag, tag_end) = tags::decode_tag(data, offset).map_err(syntax)?;
             if tag.is_closing_tag(4) {
                 offset = tag_end;
                 break;
@@ -170,11 +156,16 @@ impl COVNotificationRequest {
                     RejectReason::BUFFER_OVERFLOW,
                 ));
             }
-            let (pv, new_offset) =
-                decode_bacnet_property_value_in_list(data, offset, 4).map_err(|error| {
-                    let reject_reason = property_value_reject_reason(&error);
-                    failure(error, reject_reason)
-                })?;
+            let (pv, new_offset) = decode_bacnet_property_value_in_list_detailed(data, offset, 4)
+                .map_err(|failed| {
+                let reject_reason = match failed.kind {
+                    PropertyValueDecodeFailure::Syntax(reason) => reason,
+                    PropertyValueDecodeFailure::PriorityOutOfRange => {
+                        RejectReason::PARAMETER_OUT_OF_RANGE
+                    }
+                };
+                failure(failed.error, reject_reason)
+            })?;
             values.push(pv);
             offset = new_offset;
         }
@@ -187,18 +178,7 @@ impl COVNotificationRequest {
                 RejectReason::PARAMETER_OUT_OF_RANGE,
             ));
         }
-        if offset != data.len() {
-            let reject_reason = match tags::decode_tag(data, offset) {
-                Ok((tag, _)) if !tag.is_opening && !tag.is_closing => {
-                    RejectReason::TOO_MANY_ARGUMENTS
-                }
-                _ => RejectReason::INVALID_TAG,
-            };
-            return Err(failure(
-                Error::decoding(offset, "COVNotification has trailing data"),
-                reject_reason,
-            ));
-        }
+        expect_end(data, offset, offset, "COVNotification").map_err(syntax)?;
 
         Ok(Self {
             subscriber_process_identifier,

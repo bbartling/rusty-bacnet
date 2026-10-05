@@ -1,12 +1,14 @@
 //! Incremental WritePropertyMultiple request grammar.
 
+use bacnet_encoding::constructed::tagged::misplaced_kind;
 use bacnet_encoding::constructed::{
     decode_bacnet_property_value_in_list_detailed, PropertyValueDecodeError,
     PropertyValueDecodeFailure, PropertyValueDecodeStage,
 };
-use bacnet_encoding::tags::{self, TagClass};
+use bacnet_encoding::tags;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::RejectReason;
+use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::common::MAX_DECODED_ITEMS;
@@ -157,7 +159,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
                         return self.fail(self.syntax_error(
                             self.offset,
                             WritePropertyMultipleDecodeStage::PropertyIdentifier,
-                            RejectReason::INVALID_DATA_ENCODING,
+                            tag_reason(&error),
                             None,
                             error.to_string(),
                         ));
@@ -216,21 +218,16 @@ impl<'a> WritePropertyMultipleCursor<'a> {
             self.syntax_error(
                 start,
                 WritePropertyMultipleDecodeStage::ObjectIdentifier,
-                RejectReason::INVALID_DATA_ENCODING,
+                tag_reason(&error),
                 None,
                 error.to_string(),
             )
         })?;
         if !tag.is_context(0) {
-            let reason = if tag.class == TagClass::Application {
-                RejectReason::INVALID_PARAMETER_DATA_TYPE
-            } else {
-                RejectReason::INVALID_TAG
-            };
             return Err(self.syntax_error(
                 start,
                 WritePropertyMultipleDecodeStage::ObjectIdentifier,
-                reason,
+                misplaced_kind(&tag, Some(0)).reject_reason(),
                 None,
                 "WPM object identifier must use primitive context tag 0",
             ));
@@ -242,7 +239,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
                 self.syntax_error(
                     content_start,
                     WritePropertyMultipleDecodeStage::ObjectIdentifier,
-                    RejectReason::INVALID_DATA_ENCODING,
+                    RejectReason::MISSING_REQUIRED_PARAMETER,
                     None,
                     "WPM object identifier payload is truncated",
                 )
@@ -284,7 +281,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
             self.syntax_error(
                 start,
                 WritePropertyMultipleDecodeStage::PropertyList,
-                RejectReason::INVALID_DATA_ENCODING,
+                tag_reason(&error),
                 None,
                 error.to_string(),
             )
@@ -293,11 +290,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
             return Err(self.syntax_error(
                 start,
                 WritePropertyMultipleDecodeStage::PropertyList,
-                if tag.class == TagClass::Application {
-                    RejectReason::INVALID_PARAMETER_DATA_TYPE
-                } else {
-                    RejectReason::INVALID_TAG
-                },
+                misplaced_kind(&tag, Some(1)).reject_reason(),
                 None,
                 "WPM expected opening tag 1 for the property list",
             ));
@@ -379,6 +372,13 @@ impl<'a> WritePropertyMultipleCursor<'a> {
         self.state = State::Failed;
         Err(error)
     }
+}
+
+/// The Reject reason for a tag header that didn't decode: the data ended
+/// (MISSING_REQUIRED_PARAMETER) or the header is malformed (INVALID_TAG), the
+/// reasons every confirmed request gets (#1446).
+fn tag_reason(error: &Error) -> RejectReason {
+    error.reject_reason().unwrap_or(RejectReason::INVALID_TAG)
 }
 
 #[cfg(test)]
@@ -513,11 +513,13 @@ mod tests {
         let mut object_bytes = BytesMut::new();
         primitives::encode_ctx_object_id(&mut object_bytes, 0, &object);
 
+        // A later member where the [0] object identifier is due: it is
+        // missing (#1446).
         let mut wrong_context = object_bytes.clone();
         wrong_context[0] = 0x1c;
         assert_eq!(
             first_error(&wrong_context).kind,
-            WritePropertyMultipleFailureKind::Syntax(RejectReason::INVALID_TAG)
+            WritePropertyMultipleFailureKind::Syntax(RejectReason::MISSING_REQUIRED_PARAMETER)
         );
 
         assert_eq!(
@@ -525,16 +527,18 @@ mod tests {
             WritePropertyMultipleFailureKind::Syntax(RejectReason::MISSING_REQUIRED_PARAMETER)
         );
 
+        // An application tag there doesn't fit, and an identifier cut short
+        // is missing octets, as for every confirmed request (#1446).
         let mut wrong_type = BytesMut::new();
         primitives::encode_app_object_id(&mut wrong_type, &object);
         assert_eq!(
             first_error(&wrong_type).kind,
-            WritePropertyMultipleFailureKind::Syntax(RejectReason::INVALID_PARAMETER_DATA_TYPE)
+            WritePropertyMultipleFailureKind::Syntax(RejectReason::INVALID_TAG)
         );
 
         assert_eq!(
             first_error(&[0x0c, 0, 0, 0]).kind,
-            WritePropertyMultipleFailureKind::Syntax(RejectReason::INVALID_DATA_ENCODING)
+            WritePropertyMultipleFailureKind::Syntax(RejectReason::MISSING_REQUIRED_PARAMETER)
         );
 
         let invalid_priority = encode(vec![WriteAccessSpecification {
@@ -573,10 +577,18 @@ mod tests {
             PropertyIdentifier::DESCRIPTION.to_raw() as u64,
         );
         tags::encode_opening_tag(&mut malformed_value, 2);
-        malformed_value.extend_from_slice(&[0x75, 10, b'x', 0x2f, 0x1f]);
+        let mut cut_value = malformed_value.clone();
+        cut_value.extend_from_slice(&[0x75, 10, b'x', 0x2f, 0x1f]);
+        assert_eq!(
+            first_error(&cut_value).kind,
+            WritePropertyMultipleFailureKind::Syntax(RejectReason::MISSING_REQUIRED_PARAMETER)
+        );
+        // A value nested deeper than the decoder walks holds an opening tag
+        // it can't take.
+        malformed_value.extend_from_slice(&[0x3E; 40]);
         assert_eq!(
             first_error(&malformed_value).kind,
-            WritePropertyMultipleFailureKind::Syntax(RejectReason::INVALID_DATA_ENCODING)
+            WritePropertyMultipleFailureKind::Syntax(RejectReason::INVALID_TAG)
         );
     }
 
