@@ -46,10 +46,20 @@ impl CanonicalPeer {
     /// SNET/SADR (Clause 6.5.4), and network numbers are unique, so the
     /// source is that station: the same direct peer as an NPDU from its MAC
     /// with no SNET (#1465), as the server already reads a request's source
-    /// (#1404). Only that exact pairing changes anything, and the invoke ID
-    /// and peer still have to match the transaction. Any other SNET, and
-    /// every SNET while the number is unknown, stays a routed peer. A routed
-    /// source with no SADR names no station, so the immediate MAC stands.
+    /// (#1404). Any other SNET, and every SNET while the number is unknown,
+    /// stays a routed peer. A routed source with no SADR names no station, so
+    /// the immediate MAC stands.
+    ///
+    /// This changes what a direct transaction trusts. Before, an answer
+    /// completed one only when its link source was the station's own MAC.
+    /// Now any node that can put a frame on this link, including any peer
+    /// the hub admits on BACnet/SC, can complete it by naming this network
+    /// as SNET and the station as SADR, provided the invoke ID, service and
+    /// owner match. The link source of such an answer is not checked. That
+    /// is the trust every routed transaction already places in a claimed
+    /// SNET/SADR, whichever router relays it, and the trust the server's
+    /// request-source rule (#1404) places in the same pairing. SNET/SADR is
+    /// never a credential here.
     pub fn from_source(
         immediate_mac: &[u8],
         routed_source: Option<&NpduAddress>,
@@ -63,6 +73,24 @@ impl CanonicalPeer {
             Some(source) => Self::routed(source.network, &source.mac_address),
             None => Self::direct(immediate_mac),
         }
+    }
+
+    /// The routed form of a source that [`Self::from_source`] reads as the
+    /// direct station: `Routed(SNET, SADR)` when SNET is the known
+    /// `local_network` and SADR is not empty, otherwise `None`. A request
+    /// routed to this network while its number was still unknown is keyed to
+    /// that form, and keeps that key once the number is learned, so its
+    /// relayed answer has to find it there (#1465). It is exactly the peer
+    /// such an answer matched before the number was known.
+    pub fn routed_alias(
+        routed_source: Option<&NpduAddress>,
+        local_network: Option<u16>,
+    ) -> Option<Self> {
+        routed_source
+            .filter(|source| {
+                !source.mac_address.is_empty() && Some(source.network) == local_network
+            })
+            .map(|source| Self::routed(source.network, &source.mac_address))
     }
 }
 
@@ -452,6 +480,33 @@ impl OutboundTransactionCoordinator {
         }))
     }
 
+    /// [`Self::admit`] for an answer, by its envelope: the link MAC, the
+    /// SNET/SADR, and `local_network`, the receiving link's known network
+    /// number. The answer is matched against [`CanonicalPeer::from_source`].
+    /// Only when that misses on the peer, and the answer has a
+    /// [`CanonicalPeer::routed_alias`], is the alias tried: a lease reserved
+    /// while the number was unknown then gets the answer it would have
+    /// matched before (#1465). The admission's metadata names the peer that
+    /// matched, which the owner keys its completion to.
+    pub fn admit_from_source(
+        &self,
+        immediate_mac: &[u8],
+        routed_source: Option<&NpduAddress>,
+        local_network: Option<u16>,
+        apdu: &Apdu,
+    ) -> Result<AdmissionOutcome, CoordinatorError> {
+        let peer = CanonicalPeer::from_source(immediate_mac, routed_source, local_network);
+        match self.admit(&peer, apdu)? {
+            AdmissionOutcome::PeerMismatch => {
+                match CanonicalPeer::routed_alias(routed_source, local_network) {
+                    Some(alias) => self.admit(&alias, apdu),
+                    None => Ok(AdmissionOutcome::PeerMismatch),
+                }
+            }
+            outcome => Ok(outcome),
+        }
+    }
+
     /// Releases a lease after its admitted terminal has been delivered.
     pub fn complete(&self, token: LeaseToken) -> Result<ReleaseOutcome, CoordinatorError> {
         self.release_token(token)
@@ -495,7 +550,9 @@ impl OutboundTransactionCoordinator {
     }
 }
 
-fn response_invoke_id(apdu: &Apdu) -> Option<u8> {
+/// The invoke ID an answer carries, or `None` for a request, which no
+/// outbound lease owns.
+pub fn response_invoke_id(apdu: &Apdu) -> Option<u8> {
     match apdu {
         Apdu::SimpleAck(pdu) => Some(pdu.invoke_id),
         Apdu::ComplexAck(pdu) => Some(pdu.invoke_id),
@@ -580,3 +637,7 @@ fn validate_service(
 #[cfg(test)]
 #[path = "coordinator_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "coordinator_peer_tests.rs"]
+mod peer_tests;

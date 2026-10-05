@@ -340,7 +340,9 @@ impl NotificationTransactions {
     /// Admit and complete one terminal answer to a notification lease.
     /// `local_network` is this device's known network number, if any: an
     /// answer relayed with it as SNET matches like one sent straight from
-    /// its SADR ([`CanonicalPeer::from_source`], #1465).
+    /// its SADR, or a lease reserved for the routed form while the number
+    /// was unknown
+    /// ([`OutboundTransactionCoordinator::admit_from_source`], #1465).
     #[doc(hidden)]
     pub fn admit_terminal(
         &self,
@@ -462,8 +464,13 @@ impl NotificationCore {
         local_network: Option<u16>,
         apdu: &Apdu,
     ) -> bool {
-        let peer = CanonicalPeer::from_source(immediate_source, routed_source, local_network);
-        let admission = match self.coordinator.admit(&peer, apdu) {
+        let admitted = self.coordinator.admit_from_source(
+            immediate_source,
+            routed_source,
+            local_network,
+            apdu,
+        );
+        let admission = match admitted {
             Ok(AdmissionOutcome::Admitted(admission))
                 if admission.kind() == AdmissionKind::Terminal =>
             {

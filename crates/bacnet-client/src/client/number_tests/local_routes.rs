@@ -442,3 +442,31 @@ async fn with_the_number_unknown_a_relayed_answer_leaves_a_local_request_open() 
     assert!(took >= Duration::from_secs(5), "{took:?}");
     client.stop().await.unwrap();
 }
+
+/// A request routed to this network while its number was unknown goes
+/// through the router with the DNET and keeps that routed key. When the
+/// number is learned before its answer comes back, the answer the router
+/// relays with this network as its SNET still completes it at once, as it
+/// would have before the number was known (#1465).
+#[tokio::test(start_paused = true)]
+async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed_answer() {
+    let (mut client, inbound, mut outbound) = client(false).await;
+    let peer = async {
+        let sent = outbound.recv().await.unwrap();
+        assert_eq!(sent.destination.as_slice(), ROUTER, "through the router");
+        let npdu = decode_npdu(sent.npdu).unwrap();
+        assert_eq!(npdu.destination.map(|to| to.network), Some(THIS_NETWORK));
+        let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
+            panic!("a confirmed request")
+        };
+        inject(&inbound, &number(THIS_NETWORK, 0), true).await;
+        inject(&inbound, QUERY, false).await;
+        reply(&mut outbound, THIS_NETWORK).await;
+        let relayed = relayed_from(THIS_NETWORK, &PEER);
+        send_to_client(&inbound, &simple_ack(&request), &ROUTER, relayed).await;
+    };
+    let took = write_answered_by(&client, true, peer).await;
+    assert!(took < Duration::from_secs(5), "{took:?}");
+    assert!(outbound.try_recv().is_err(), "sent once");
+    client.stop().await.unwrap();
+}

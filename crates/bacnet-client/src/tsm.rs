@@ -749,6 +749,12 @@ impl Tsm {
     pub fn pending_count(&self) -> usize {
         self.pending.len()
     }
+
+    /// Whether a transaction keyed to `tsm_mac` with `invoke_id` is pending.
+    pub(crate) fn has_transaction(&self, tsm_mac: &[u8], invoke_id: u8) -> bool {
+        self.pending
+            .contains_key(&(MacAddr::from_slice(tsm_mac), invoke_id))
+    }
 }
 
 #[cfg(test)]

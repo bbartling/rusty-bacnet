@@ -3521,7 +3521,12 @@ number as its SNET and the DADR as its SADR (#1465): network numbers are
 unique, so both name the same station. That holds for any request to a station
 on this network. A relayed answer still has to carry the request's invoke ID,
 one naming another network or another station completes nothing, and while
-the number is unknown only the direct answer counts. The peer's
+the number is unknown only the direct answer counts. The link source of a
+relayed answer is not checked, so any node on this link could complete the
+request by claiming that SNET and SADR with the right invoke ID; a routed
+request already trusts a claimed SNET/SADR the same way. A request routed to
+this network before the number was learned keeps its routed key, and its
+relayed answer still completes it. The peer's
 limits still come from its routed device-table row, so a request past them is
 refused or segmented as for the routed peer.
 `broadcast_network_unconfirmed`, and `who_is_network` and a `write_group` to

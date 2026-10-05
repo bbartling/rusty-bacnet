@@ -402,12 +402,14 @@ impl EndpointRequester {
 
     /// Handles a response already admitted by the shared coordinator.
     ///
-    /// Direct and routed responses are both accepted: the TSM key and
-    /// canonical peer are derived from the received envelope
-    /// (`source_mac` + `source_network`) and the endpoint's known network
-    /// number, as the session derived them for its admission
-    /// ([`TransactionPeer::of_answer`]), so equal inbound/outbound numeric
-    /// invoke IDs stay unambiguous via the classifier + coordinator admission.
+    /// Direct and routed responses are both accepted. The TSM key and
+    /// canonical peer are the peer the admission matched
+    /// ([`OutboundTransactionCoordinator::admit_from_source`]), not a second
+    /// reading of the envelope: the endpoint's network number cannot change
+    /// between the two, and a lease matched by its routed alias (#1465)
+    /// completes under the key it was registered with. Equal inbound and
+    /// outbound numeric invoke IDs stay unambiguous via the classifier and
+    /// that admission.
     /// Link-group, attributes, ingress-network and
     /// provenance are preserved structurally (threaded, never used for a new
     /// decision).
@@ -429,11 +431,7 @@ impl EndpointRequester {
         let TransactionPeer {
             tsm_mac,
             canonical: peer,
-        } = TransactionPeer::of_answer(
-            &received.source_mac,
-            received.source_network.as_ref(),
-            self.inner.egress.local_network_number().get(),
-        );
+        } = TransactionPeer::of(admission.metadata().peer().clone());
         match admission.kind() {
             AdmissionKind::Terminal => {
                 let response = match &apdu {

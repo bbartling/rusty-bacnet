@@ -419,6 +419,29 @@ async fn with_the_number_unknown_a_relayed_answer_leaves_a_direct_read_open() {
     }
 }
 
+/// A read routed to this network while its number was unknown goes through
+/// the router with the DNET and keeps that routed key. When the number is
+/// learned before the answer comes back, the answer the router relays with
+/// this network as its SNET still completes it, as it would have before
+/// (#1465).
+#[tokio::test]
+async fn a_read_routed_before_the_number_was_learned_completes_on_its_relayed_answer() {
+    for role in [SessionRole::ClientOnly, SessionRole::Both] {
+        let mut endpoint = Endpoint::started(role, false).await;
+        let read = endpoint.read(routed_read(THIS_NETWORK));
+        let (route, request) = endpoint.request().await;
+        assert_eq!(route, routed(mac(ROUTER), THIS_NETWORK), "{role:?}");
+        endpoint.learn(THIS_NETWORK).await;
+        endpoint
+            .deliver_apdu(ack(&request, 9), mac(ROUTER), peer_on(THIS_NETWORK))
+            .await;
+        let answer = bounded(read).await.unwrap().unwrap();
+        assert_eq!(answer.property_value, [0x21, 9], "{role:?}");
+        assert_eq!(endpoint.session.active_leases(), 0);
+        endpoint.stop().await;
+    }
+}
+
 #[tokio::test]
 async fn routed_reads_keep_their_dnet_for_another_network_or_an_unknown_number() {
     for role in [SessionRole::ClientOnly, SessionRole::Both] {

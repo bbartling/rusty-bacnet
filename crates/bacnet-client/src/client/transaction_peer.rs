@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_endpoint_core::coordinator::response_invoke_id;
 
 /// The peer a confirmed transaction is keyed to: its canonical identity and
 /// the TSM key derived from it. The standalone client and the endpoint
@@ -36,6 +37,37 @@ impl TransactionPeer {
             source_network,
             local_network,
         ))
+    }
+
+    /// [`Self::of_answer`] for an answer to `apdu`, checked against the
+    /// pending transactions in `tsm`. A request routed to this network while
+    /// its number was unknown stays keyed to the routed form once the number
+    /// is learned. When no transaction with the answer's invoke ID is keyed
+    /// to the direct station and one is keyed to that routed form
+    /// ([`CanonicalPeer::routed_alias`]), the answer belongs to it, as it did
+    /// before the number was known (#1465). The TSM is locked only for an
+    /// answer relayed with this network's number as SNET.
+    pub(crate) async fn of_answer_in(
+        tsm: &Mutex<Tsm>,
+        source_mac: &[u8],
+        source_network: Option<&NpduAddress>,
+        local_network: Option<u16>,
+        apdu: &Apdu,
+    ) -> Self {
+        let answer = Self::of_answer(source_mac, source_network, local_network);
+        let alias = CanonicalPeer::routed_alias(source_network, local_network);
+        let (Some(invoke_id), Some(alias)) = (response_invoke_id(apdu), alias) else {
+            return answer;
+        };
+        let alias = Self::of(alias);
+        let tsm = tsm.lock().await;
+        if !tsm.has_transaction(&answer.tsm_mac, invoke_id)
+            && tsm.has_transaction(&alias.tsm_mac, invoke_id)
+        {
+            alias
+        } else {
+            answer
+        }
     }
 }
 

@@ -265,8 +265,9 @@ impl ClientRoleHandle {
     /// than 18 octets, fails with [`Error::Encoding`] before a transaction
     /// is reserved, as does a broadcast destination. Once the session knows
     /// its own network's number, a routed destination naming it goes to its
-    /// MAC with no DNET, and only the answer from that MAC completes the read
-    /// (#1403).
+    /// MAC with no DNET (#1403). The answer from that MAC completes the read,
+    /// and so does one a router relays back with that number as its SNET and
+    /// that MAC as its SADR (#1465).
     pub async fn read_property_with_destination(
         &self,
         destination: EndpointApduDestination,
@@ -544,27 +545,6 @@ impl ServerRoleHandle {
         self.responder.handle(received).await
     }
 
-    /// Admits one terminal response for a server notification lease.
-    ///
-    /// Standalone admit path (tries the shared coordinator once). Session
-    /// dispatch prefers [`Self::complete_notification_pre_admitted`] after
-    /// its single [`admit_once`] to avoid double-admit. Returns `false` after
-    /// shutdown or when no lease is available. `local_network` is the
-    /// session's known network number, as [`admit_once`] takes it.
-    pub fn admit_notification_terminal(
-        &self,
-        immediate_source: &[u8],
-        routed_source: Option<&bacnet_encoding::npdu::NpduAddress>,
-        local_network: Option<u16>,
-        apdu: &Apdu,
-    ) -> bool {
-        if self.check_open().is_err() {
-            return false;
-        }
-        self.notifications
-            .admit_terminal(immediate_source, routed_source, local_network, apdu)
-    }
-
     /// Completes one already-admitted notification lease (dispatch only).
     ///
     /// The session's single [`admit_once`] owns exact-once claim; this
@@ -634,12 +614,12 @@ pub fn is_requester_lease(admission: &bacnet_endpoint_core::coordinator::Admissi
 }
 
 /// Single-admit helper for session dispatch: exactly one
-/// [`OutboundTransactionCoordinator::admit`] per received terminal APDU.
+/// [`OutboundTransactionCoordinator::admit_from_source`] per received
+/// terminal APDU, with `local_network`, the session's known network number.
 ///
 /// Returns the coordinator outcome without releasing the lease; the selected
-/// role completes it exactly once via its pre-admitted path. `local_network`
-/// is the session's known network number, read as the requester reads it
-/// for its own completion.
+/// role completes it exactly once via its pre-admitted path, keyed to the
+/// peer the admission matched.
 #[doc(hidden)]
 pub fn admit_once(
     coordinator: &OutboundTransactionCoordinator,
@@ -647,6 +627,10 @@ pub fn admit_once(
     local_network: Option<u16>,
     apdu: &Apdu,
 ) -> Result<AdmissionOutcome, bacnet_endpoint_core::coordinator::CoordinatorError> {
-    let peer = inbound_canonical_peer(received, local_network);
-    coordinator.admit(&peer, apdu)
+    coordinator.admit_from_source(
+        received.source_mac.as_slice(),
+        received.source_network.as_ref(),
+        local_network,
+        apdu,
+    )
 }
