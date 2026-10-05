@@ -153,7 +153,10 @@ async fn commands_from_keys_reach_the_worker() {
     let Ok(Command::WhoIs { spec, .. }) = h.commands.try_recv() else {
         panic!("no WhoIs command");
     };
-    assert_eq!(spec.range, Some((7, 7)));
+    assert_eq!(
+        spec.range,
+        Some(bacnet_services::who_is::DeviceInstanceRange::single(7).unwrap())
+    );
 }
 
 #[tokio::test(start_paused = true)]

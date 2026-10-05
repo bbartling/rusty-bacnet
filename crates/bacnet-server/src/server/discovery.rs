@@ -15,7 +15,7 @@ use bacnet_encoding::npdu::NpduAddress;
 use bacnet_network::layer::{NetworkLayer, ReceivedApdu};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
-use bacnet_services::who_is::{IAmRequest, WhoIsRequest};
+use bacnet_services::who_is::{DeviceInstanceRange, IAmRequest, WhoIsRequest};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ErrorClass, ErrorCode, NetworkPriority, UnconfirmedServiceChoice};
 use bacnet_types::error::Error;
@@ -123,6 +123,10 @@ pub struct DiscoveryCounters {
     pub responses_throttled_global: u64,
     /// Total directed unicast discovery responses sent.
     pub directed_responses_sent: u64,
+    /// Who-Is and Who-Has requests dropped because they didn't decode, such
+    /// as one with a single limit or octets after its last member. They are
+    /// dropped before any other work and count in neither received total.
+    pub malformed_dropped: u64,
 }
 
 #[derive(Debug, Default)]
@@ -136,6 +140,7 @@ pub(crate) struct AtomicDiscoveryCounters {
     pub(crate) responses_throttled_source: AtomicU64,
     pub(crate) responses_throttled_global: AtomicU64,
     pub(crate) directed_responses_sent: AtomicU64,
+    pub(crate) malformed_dropped: AtomicU64,
 }
 
 impl AtomicDiscoveryCounters {
@@ -150,6 +155,7 @@ impl AtomicDiscoveryCounters {
             responses_throttled_source: self.responses_throttled_source.load(Ordering::Relaxed),
             responses_throttled_global: self.responses_throttled_global.load(Ordering::Relaxed),
             directed_responses_sent: self.directed_responses_sent.load(Ordering::Relaxed),
+            malformed_dropped: self.malformed_dropped.load(Ordering::Relaxed),
         }
     }
 
@@ -459,12 +465,10 @@ impl DiscoveryLimiter {
             .map(|s| s.byte_tokens)
     }
 
-    fn check_instance_in_range(&self, low: Option<u32>, high: Option<u32>) -> bool {
-        match (self.device_instance.load(Ordering::Acquire), low, high) {
-            (Some(inst), Some(l), Some(h)) => inst >= l && inst <= h,
-            (Some(_), _, _) => true,
-            (None, _, _) => false,
-        }
+    fn check_instance_in_range(&self, range: Option<DeviceInstanceRange>) -> bool {
+        self.device_instance
+            .load(Ordering::Acquire)
+            .is_some_and(|instance| range.is_none_or(|range| range.contains(instance)))
     }
 
     pub(crate) fn pre_check_who_is(
@@ -477,12 +481,15 @@ impl DiscoveryLimiter {
         let _ = received.provenance;
         let who_is = match WhoIsRequest::decode(req_bytes) {
             Ok(w) => w,
-            Err(_) => return PreCheckDecision::DecodeError,
+            Err(_) => {
+                self.counters.inc(&self.counters.malformed_dropped);
+                return PreCheckDecision::DecodeError;
+            }
         };
 
         self.counters.inc(&self.counters.who_is_received);
 
-        if !self.check_instance_in_range(who_is.low_limit, who_is.high_limit) {
+        if !self.check_instance_in_range(who_is.range) {
             return PreCheckDecision::OutOfRange;
         }
 
@@ -572,12 +579,15 @@ impl DiscoveryLimiter {
         let _ = received.provenance;
         let who_has = match WhoHasRequest::decode(req_bytes) {
             Ok(w) => w,
-            Err(_) => return PreCheckDecision::DecodeError,
+            Err(_) => {
+                self.counters.inc(&self.counters.malformed_dropped);
+                return PreCheckDecision::DecodeError;
+            }
         };
 
         self.counters.inc(&self.counters.who_has_received);
 
-        if !self.check_instance_in_range(who_has.low_limit, who_has.high_limit) {
+        if !self.check_instance_in_range(who_has.range) {
             return PreCheckDecision::OutOfRange;
         }
 

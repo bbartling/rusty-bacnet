@@ -5,8 +5,7 @@ pub(super) async fn handle_discover<T: TransportPort + 'static>(
     args: &[String],
     format: OutputFormat,
 ) {
-    let mut low = None;
-    let mut high = None;
+    let mut range = None;
     let mut wait_secs = 3;
     let mut target: Option<String> = None;
     let mut dnet: Option<u16> = None;
@@ -61,24 +60,11 @@ pub(super) async fn handle_discover<T: TransportPort + 'static>(
                 return;
             }
             _ => {
-                // Try parsing as range "low-high".
-                if let Some((lo, hi)) = args[i].split_once('-') {
-                    match (lo.parse::<u32>(), hi.parse::<u32>()) {
-                        (Ok(l), Ok(h)) => {
-                            if l > h {
-                                output::print_error(&format!(
-                                    "invalid range: low ({l}) > high ({h})"
-                                ));
-                                return;
-                            }
-                            low = Some(l);
-                            high = Some(h);
-                        }
-                        _ => {
-                            output::print_error(&format!(
-                                "invalid range: '{}', expected 'low-high'",
-                                args[i]
-                            ));
+                if args[i].contains('-') {
+                    match crate::core::range::parse_discover_range(Some(&args[i])) {
+                        Ok(parsed) => range = parsed,
+                        Err(e) => {
+                            output::print_error(&e.to_string());
                             return;
                         }
                     }
@@ -97,8 +83,7 @@ pub(super) async fn handle_discover<T: TransportPort + 'static>(
     let result = if let Some(target_str) = &target {
         match resolve::parse_target(target_str) {
             Ok(resolve::Target::Mac(mac)) => {
-                commands::discover::discover_directed(client, &mac, low, high, wait_secs, format)
-                    .await
+                commands::discover::discover_directed(client, &mac, range, wait_secs, format).await
             }
             Ok(_) => {
                 output::print_error(
@@ -112,9 +97,9 @@ pub(super) async fn handle_discover<T: TransportPort + 'static>(
             }
         }
     } else if let Some(network) = dnet {
-        commands::discover::discover_network(client, network, low, high, wait_secs, format).await
+        commands::discover::discover_network(client, network, range, wait_secs, format).await
     } else {
-        commands::discover::discover(client, low, high, wait_secs, format).await
+        commands::discover::discover(client, range, wait_secs, format).await
     };
 
     if let Err(e) = result {

@@ -10,7 +10,7 @@ use bacnet_encoding::apdu::{
 };
 use bacnet_network::layer::NetworkLayer;
 use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
-use bacnet_services::who_is::IAmRequest;
+use bacnet_services::who_is::{DeviceInstanceRange, IAmRequest};
 use bacnet_transport::bip::BipTransport;
 use bacnet_types::enums::{
     ConfirmedServiceChoice, NetworkPriority, ObjectType, PropertyIdentifier, Segmentation,
@@ -131,8 +131,11 @@ async fn who_is_broadcast() {
         .unwrap();
 
     // WhoIs is fire-and-forget, so it should succeed immediately
-    client.who_is(None, None).await.unwrap();
-    client.who_is(Some(1000), Some(2000)).await.unwrap();
+    client.who_is(None).await.unwrap();
+    client
+        .who_is(Some(DeviceInstanceRange::new(1000, 2000).unwrap()))
+        .await
+        .unwrap();
 
     client.stop().await.unwrap();
 }

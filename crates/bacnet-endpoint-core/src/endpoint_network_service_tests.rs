@@ -134,7 +134,37 @@ impl TransportPort for CaptureTransport {
     fn local_mac(&self) -> &[u8] {
         &self.local_mac
     }
+
+    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
+        mac == BROADCAST_MAC
+    }
+
+    /// Its broadcast MAC, and every group form a B/IP link with broadcast
+    /// address 192.168.1.255 recognises (#1479).
+    fn is_group_destination(&self, mac: &[u8]) -> bool {
+        mac == BROADCAST_MAC
+            || bacnet_transport::bip::BipTransport::new(
+                std::net::Ipv4Addr::LOCALHOST,
+                0xBAC0,
+                std::net::Ipv4Addr::new(192, 168, 1, 255),
+            )
+            .is_group_destination(mac)
+    }
 }
+
+/// The capture link's broadcast MAC, as on MS/TP.
+const BROADCAST_MAC: [u8; 1] = [0xff];
+
+/// The B/IP group forms the capture link recognises: the limited broadcast
+/// and the configured broadcast IP at this port and another, and IPv4
+/// multicast.
+const BIP_GROUPS: [[u8; 6]; 5] = [
+    [255, 255, 255, 255, 0xBA, 0xC0],
+    [255, 255, 255, 255, 0xBA, 0xC1],
+    [192, 168, 1, 255, 0xBA, 0xC1],
+    [224, 0, 0, 1, 0xBA, 0xC0],
+    [239, 255, 255, 250, 0x07, 0x6C],
+];
 
 fn encoded_unconfirmed_request() -> Vec<u8> {
     let mut encoded = BytesMut::new();
@@ -352,7 +382,17 @@ async fn effective_group_destinations_reject_confirmed_and_malformed_apdus_witho
             destination_network: 400,
         },
         EndpointApduDestination::GlobalBroadcast,
-    ] {
+    ]
+    .into_iter()
+    // With no DNET, the link's broadcast MAC, or any other group address, is
+    // a local broadcast (#1479).
+    .chain(
+        std::iter::once(&BROADCAST_MAC[..])
+            .chain(BIP_GROUPS.iter().map(|mac| &mac[..]))
+            .map(|mac| EndpointApduDestination::Direct {
+                destination_mac: MacAddr::from_slice(mac),
+            }),
+    ) {
         for apdu in [encoded_confirmed_request(), vec![0xff]] {
             assert!(matches!(
                 egress
@@ -373,8 +413,99 @@ async fn effective_group_destinations_reject_confirmed_and_malformed_apdus_witho
         Err(mpsc::error::TryRecvError::Empty)
     ));
 
+    // An Unconfirmed-Request still goes to the broadcast MAC.
+    egress
+        .send_apdu(
+            encoded_unconfirmed_request(),
+            EndpointApduDestination::Direct {
+                destination_mac: MacAddr::from_slice(&BROADCAST_MAC),
+            },
+            false,
+            NetworkPriority::NORMAL,
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let captured = timeout(WAIT, handle.sent.recv()).await.unwrap().unwrap();
+    assert_eq!(
+        captured.destination,
+        LinkDestination::Unicast(MacAddr::from_slice(&BROADCAST_MAC))
+    );
+
     endpoint.stop().await.unwrap();
     assert_eq!(handle.stops.load(Ordering::SeqCst), 1);
+}
+
+/// A routed destination with no DADR is a remote broadcast, so a confirmed
+/// request to it is refused by the network layer, naming its PDU type, and
+/// nothing goes out (#1479). The routed form through a known router still
+/// sends an Unconfirmed-Request there; the local-broadcast form refuses an
+/// empty DADR outright and points to the remote-broadcast send.
+#[tokio::test]
+async fn routed_destinations_without_a_dadr_refuse_all_but_an_unconfirmed_request() {
+    let (transport, mut handle) = capture_transport();
+    let mut endpoint = EndpointIngress::new(transport, 8);
+    let ingress = endpoint.start().await.unwrap();
+    let egress = ingress.egress;
+    let routed = EndpointApduDestination::Routed {
+        destination_network: 400,
+        destination_mac: MacAddr::new(),
+        router_mac: MacAddr::from_slice(&[0x40]),
+    };
+    let via_broadcast = EndpointApduDestination::RoutedViaLocalBroadcast {
+        destination_network: 400,
+        destination_mac: MacAddr::new(),
+    };
+    let send = |apdu, destination| {
+        egress.send_apdu(
+            apdu,
+            destination,
+            false,
+            NetworkPriority::NORMAL,
+            Vec::new(),
+        )
+    };
+    for (apdu, destination, refusal) in [
+        (
+            encoded_confirmed_request(),
+            routed.clone(),
+            "not PDU type CONFIRMED_REQUEST",
+        ),
+        (
+            encoded_confirmed_request(),
+            via_broadcast.clone(),
+            "use broadcast_to_network",
+        ),
+        (
+            encoded_unconfirmed_request(),
+            via_broadcast,
+            "use broadcast_to_network",
+        ),
+    ] {
+        let message = send(apdu, destination).await.unwrap_err().to_string();
+        assert!(message.contains(refusal), "{message}");
+    }
+    assert!(matches!(
+        handle.sent.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+
+    send(encoded_unconfirmed_request(), routed).await.unwrap();
+    let captured = timeout(WAIT, handle.sent.recv()).await.unwrap().unwrap();
+    assert_eq!(
+        captured.destination,
+        LinkDestination::Unicast(MacAddr::from_slice(&[0x40]))
+    );
+    let npdu = decode_npdu(captured.npdu).unwrap();
+    assert_eq!(
+        npdu.destination,
+        Some(NpduAddress {
+            network: 400,
+            mac_address: MacAddr::new(),
+        })
+    );
+
+    endpoint.stop().await.unwrap();
 }
 
 #[tokio::test]

@@ -280,6 +280,34 @@ impl<S: SerialPort + 'static> TransportPort for AnyTransport<S> {
             Self::Loopback(t) => t.is_broadcast_mac(mac),
         }
     }
+
+    fn is_group_destination(&self, mac: &[u8]) -> bool {
+        match self {
+            Self::Bip(t) => t.is_group_destination(mac),
+            Self::Mstp(t) => t.is_group_destination(mac),
+            #[cfg(feature = "ipv6")]
+            Self::Bip6(t) => t.is_group_destination(mac),
+            #[cfg(all(feature = "ethernet", target_os = "linux"))]
+            Self::Ethernet(t) => t.is_group_destination(mac),
+            #[cfg(feature = "sc-tls")]
+            Self::Sc(t) => t.is_group_destination(mac),
+            Self::Loopback(t) => t.is_group_destination(mac),
+        }
+    }
+
+    fn group_destinations(&self) -> crate::port::GroupDestinations {
+        match self {
+            Self::Bip(t) => t.group_destinations(),
+            Self::Mstp(t) => t.group_destinations(),
+            #[cfg(feature = "ipv6")]
+            Self::Bip6(t) => t.group_destinations(),
+            #[cfg(all(feature = "ethernet", target_os = "linux"))]
+            Self::Ethernet(t) => t.group_destinations(),
+            #[cfg(feature = "sc-tls")]
+            Self::Sc(t) => t.group_destinations(),
+            Self::Loopback(t) => t.group_destinations(),
+        }
+    }
 }
 
 impl<S: SerialPort + 'static> AnyTransport<S> {

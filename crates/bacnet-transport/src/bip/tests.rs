@@ -811,3 +811,35 @@ fn is_broadcast_mac_requires_configured_ip_and_port() {
     assert!(!transport.is_broadcast_mac(&[192, 168, 1, 7, 0xBA, 0xC0]));
     assert!(!transport.is_broadcast_mac(&[192, 168, 1, 255]));
 }
+
+/// #1479: a group destination is any address that reaches more than one
+/// node, at any port: the limited broadcast, the configured broadcast IP and
+/// IPv4 multicast, beside this link's broadcast MAC. `is_broadcast_mac`
+/// keeps its narrower answer, and the owned rule agrees with the live one.
+#[test]
+fn group_destinations_cover_every_broadcast_and_multicast_address() {
+    let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0xBAC0, Ipv4Addr::new(192, 168, 1, 255));
+    let owned = transport.group_destinations();
+    for (mac, group) in [
+        ([192, 168, 1, 255, 0xBA, 0xC0], true),
+        ([192, 168, 1, 255, 0xBA, 0xC1], true),
+        ([255, 255, 255, 255, 0xBA, 0xC0], true),
+        ([255, 255, 255, 255, 0x12, 0x34], true),
+        ([224, 0, 0, 1, 0xBA, 0xC0], true),
+        ([239, 255, 255, 250, 0xBA, 0xC0], true),
+        ([192, 168, 1, 7, 0xBA, 0xC0], false),
+        ([127, 0, 0, 1, 0xBA, 0xC1], false),
+        ([223, 255, 255, 255, 0xBA, 0xC0], false),
+    ] {
+        assert_eq!(transport.is_group_destination(&mac), group, "{mac:?}");
+        assert_eq!(owned.contains(&mac), group, "{mac:?}");
+    }
+    assert!(!transport.is_group_destination(&[255, 255, 255, 255]));
+    assert!(!transport.is_broadcast_mac(&[255, 255, 255, 255, 0xBA, 0xC0]));
+
+    // Loopback tests name a unicast address as the broadcast one; it stays a
+    // group only at this link's port, so requests to other ports still go.
+    let looped = BipTransport::new(Ipv4Addr::LOCALHOST, 0xBAC0, Ipv4Addr::LOCALHOST);
+    assert!(looped.is_group_destination(&[127, 0, 0, 1, 0xBA, 0xC0]));
+    assert!(!looped.is_group_destination(&[127, 0, 0, 1, 0xBA, 0xC1]));
+}

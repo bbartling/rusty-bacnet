@@ -850,6 +850,10 @@ mod transport {
             mac == ETHERNET_BROADCAST
         }
 
+        fn group_destinations(&self) -> crate::port::GroupDestinations {
+            crate::port::GroupDestinations::new(|mac| mac == ETHERNET_BROADCAST)
+        }
+
         fn egress_apdu_limit(&self) -> u16 {
             1476
         }

@@ -1,7 +1,8 @@
 //! Who-Is, I-Am, Who-Has, I-Have and You-Are. I-Am, I-Have and You-Are are
 //! all application-tagged (Clause 21), so any other tag is refused; Who-Is
-//! and Who-Has read context tags. All five refuse octets after their last
-//! member (#1411); a receiver drops such a request, as it can't answer one.
+//! and Who-Has read context tags, and take their two limits together or not
+//! at all (#1447, #1483). All five refuse octets after their last member
+//! (#1411); a receiver drops such a request, as it can't answer one.
 
 use super::*;
 use crate::who_am_i::YouAreRequest;
@@ -102,6 +103,22 @@ fn who_has_request() {
         ("by identifier", &cat(&[LIMITS, av_1]), Decodes),
         ("by name", &[0x3A, 0x00, 0x54], Decodes),
         ("low limit cut short", &[0x0A, 0x01], Short),
+        // One limit needs the other, as in a Who-Is (#1483).
+        (
+            "only the low limit",
+            &cat(&[&[0x09, 0x01], av_1]),
+            Malformed,
+        ),
+        (
+            "only the high limit",
+            &cat(&[&[0x19, 0x0A], av_1]),
+            Malformed,
+        ),
+        (
+            "low limit above high",
+            &cat(&[&[0x09, 0x0A, 0x19, 0x01], av_1]),
+            Malformed,
+        ),
         ("identifier cut short", &[0x2C, 0x00, 0x80], Short),
         (
             "identifier of three octets",

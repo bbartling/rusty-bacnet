@@ -396,9 +396,23 @@ use bacnet_services::cov_multiple::{
 ### Discovery
 
 ```rust
-use bacnet_services::who_is::{WhoIsRequest, IAmRequest};
+use bacnet_services::who_is::{DeviceInstanceRange, WhoIsRequest, IAmRequest};
 use bacnet_services::who_has::{WhoHasRequest, WhoHasObject, IHaveRequest};
 ```
+
+`WhoIsRequest` and `WhoHasRequest` carry their device-instance limits as one
+`range: Option<DeviceInstanceRange>`, `None` asking every device (Clauses 16.9
+and 16.10, #1483). A range holds both limits, so a request with one alone can't
+be built, and `DeviceInstanceRange::new` refuses a low limit above the high one,
+or a limit past `ObjectIdentifier::MAX_INSTANCE` (4194303), with
+`Error::OutOfRange`. `DeviceInstanceRange::single(n)` asks one instance,
+`DeviceInstanceRange::device(oid)` one device's instance, and
+`DeviceInstanceRange::from_limits(low, high)` turns two optional limits into a
+range, refusing one without the other. Both decoders refuse a request with one
+limit, or with its low limit above its high one, and the server drops it
+unanswered, counting it in `DiscoveryCounters::malformed_dropped`. A decoder
+takes a limit past 4194303 as written, since some devices send one to mean
+every device.
 
 ### Device Management
 
@@ -1633,6 +1647,24 @@ before anything is sent (#1314, #1340, #1380). A global broadcast goes out only
 through `broadcast_global_apdu`, with DLEN 0 and the broadcast MAC, so that
 every router on the network can pass it on (Clause 6.3.2); a unicast would
 reach a single router.
+
+A broadcast carries only an Unconfirmed-Request APDU (Clause 6.3). Any other
+PDU type fails with an `Error::Encoding` naming it, before anything is sent,
+from `broadcast_apdu`, `broadcast_global_apdu` and `broadcast_to_network`, and
+from a routed or on-issuance send with an empty DADR (a remote broadcast), in
+every `_with_data_attributes` form too (#1479).
+`send_apdu_routed_via_local_broadcast` names one device, so it refuses an
+empty DADR for every PDU type: a remote network's broadcast goes through
+`broadcast_to_network`. A send naming one device takes any PDU type, even when
+its link DA is the broadcast MAC. `send_apdu` to the MAC the transport reports
+as its broadcast, or any other group address the medium carries
+(`TransportPort::is_group_destination`: on B/IP the limited broadcast, the
+configured broadcast IP or a multicast address at any port, on B/IPv6 any
+multicast group), is a local broadcast too, but the layer doesn't ask the
+transport on every unicast: `BACnetClient`'s confirmed requests, the
+endpoint's egress and its requester, which take caller-chosen MACs, refuse
+anything but an Unconfirmed-Request there themselves. `is_broadcast_mac` keeps
+its narrower meaning, this link's own broadcast.
 
 ---
 
@@ -4360,8 +4392,9 @@ the bundled server materializes an empty subscription context.
 ### Discovery
 
 ```rust
-client.who_is(None, None).await?;                       // broadcast
-client.who_has(WhoHasObject::Name("Zone Temp".into()), None, None).await?;
+client.who_is(None).await?;                             // every device, globally
+client.who_is(Some(DeviceInstanceRange::new(1000, 2000)?)).await?; // a range
+client.who_has(WhoHasObject::Name("Zone Temp".into()), None).await?;
 
 let devices = client.discovered_devices().await;         // Vec<DiscoveredDevice>
 let device = client.get_device(1234).await;              // Option<DiscoveredDevice>

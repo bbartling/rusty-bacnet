@@ -299,7 +299,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             debug!("WhoIs throttled: global rate/byte limit exceeded");
                             return;
                         }
-                        PreCheckDecision::DecodeError => {}
+                        // Nothing can answer it: drop it here, before a
+                        // task is spawned and it is decoded again.
+                        PreCheckDecision::DecodeError => {
+                            debug!("Malformed WhoIs dropped");
+                            return;
+                        }
                     }
                 } else if req.service_choice == UnconfirmedServiceChoice::WHO_HAS {
                     match discovery_limiter.pre_check_who_has(&req.service_request, &received, now)
@@ -321,7 +326,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             debug!("WhoHas throttled: global rate/byte limit exceeded");
                             return;
                         }
-                        PreCheckDecision::DecodeError => {}
+                        PreCheckDecision::DecodeError => {
+                            debug!("Malformed WhoHas dropped");
+                            return;
+                        }
                     }
                 }
 

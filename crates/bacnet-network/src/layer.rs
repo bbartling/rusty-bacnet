@@ -87,7 +87,7 @@
 use crate::network_number::LocalNetworkNumber;
 use bacnet_encoding::npdu::{encode_npdu, Npdu, NpduAddress};
 use bacnet_transport::port::{DataAttribute, TransportPort, TransportProvenance};
-use bacnet_types::enums::NetworkPriority;
+use bacnet_types::enums::{NetworkPriority, PduType};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
@@ -276,6 +276,26 @@ pub(crate) fn check_destination(network: u16, local_form: &str) -> Result<(), Er
     }
 }
 
+/// Refuse an APDU that a broadcast may not carry, before anything is encoded
+/// or sent. Clause 6.3 lets only an Unconfirmed-Request PDU go to a broadcast
+/// network address, whether local, remote or global: any other PDU names one
+/// peer's transaction, and every device reached would have to answer it or
+/// act on it (#1479). `what` names the broadcast for the error, which also
+/// names the PDU type the APDU's first octet gives (Clause 20.1).
+pub(crate) fn check_broadcast_apdu(apdu: &[u8], what: &str) -> Result<(), Error> {
+    let pdu_type = match apdu.first() {
+        Some(&first) if PduType::from_raw(first >> 4) == PduType::UNCONFIRMED_REQUEST => {
+            return Ok(())
+        }
+        Some(&first) => format!("PDU type {}", PduType::from_raw(first >> 4)),
+        None => "an empty APDU".to_string(),
+    };
+    Err(Error::Encoding(format!(
+        "{what} carries only an UNCONFIRMED_REQUEST APDU (Clause 6.3), not {pdu_type}; \
+         send anything else to one device"
+    )))
+}
+
 pub(crate) fn is_group_delivery(link_layer_group: bool, destination: Option<&NpduAddress>) -> bool {
     match destination {
         None => link_layer_group,
@@ -334,6 +354,13 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     }
 
     /// Send an APDU to a specific local destination by MAC address.
+    ///
+    /// With no DNET, the link's broadcast MAC
+    /// ([`TransportPort::is_broadcast_mac`]) makes this a local broadcast,
+    /// which may carry only an Unconfirmed-Request APDU (Clause 6.3). This
+    /// layer doesn't ask the transport on every unicast, so that is the
+    /// caller's to keep: `BACnetClient` and the endpoint's egress, which take
+    /// caller-chosen MACs, refuse anything else to it (#1479).
     pub async fn send_apdu(
         &self,
         apdu: &[u8],
@@ -372,7 +399,9 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             .await
     }
 
-    /// Broadcast an APDU on the local network.
+    /// Broadcast an APDU on the local network. Anything but an
+    /// Unconfirmed-Request APDU is refused before it is sent (Clause 6.3,
+    /// #1479).
     pub async fn broadcast_apdu(
         &self,
         apdu: &[u8],
@@ -391,6 +420,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
+        check_broadcast_apdu(apdu, "a local broadcast")?;
         let npdu = Npdu {
             is_network_message: false,
             expecting_reply,
@@ -413,6 +443,8 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     ///
     /// Unlike `broadcast_apdu()` which only reaches the local subnet, this
     /// sets DNET=0xFFFF so routers will forward to all reachable networks.
+    /// Anything but an Unconfirmed-Request APDU is refused before it is sent
+    /// (Clause 6.3, #1479).
     pub async fn broadcast_global_apdu(
         &self,
         apdu: &[u8],
@@ -431,6 +463,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
+        check_broadcast_apdu(apdu, "a global broadcast")?;
         let npdu = Npdu {
             is_network_message: false,
             expecting_reply,
@@ -456,7 +489,11 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     ///
     /// Like `broadcast_global_apdu()` but targets a single network number
     /// instead of all networks (DNET=0xFFFF). Refuses `dest_network` 0 and
-    /// 0xFFFF without sending anything.
+    /// 0xFFFF, and anything but an Unconfirmed-Request APDU (Clause 6.3,
+    /// #1479), without sending anything. This is the one send that puts a
+    /// remote network's broadcast on the link's broadcast MAC;
+    /// [`Self::send_apdu_routed`] with an empty `dest_mac` sends it to a
+    /// known router instead.
     pub async fn broadcast_to_network(
         &self,
         apdu: &[u8],
@@ -484,6 +521,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
         check_destination(dest_network, "use broadcast_apdu for the local network")?;
+        check_broadcast_apdu(apdu, "a broadcast to one network")?;
         let npdu = Npdu {
             is_network_message: false,
             expecting_reply,
@@ -514,6 +552,11 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// [`Self::send_apdu_routed_via_local_broadcast`] share that check. A
     /// global broadcast unicast to one router would reach only that router's
     /// networks, so it goes through [`Self::broadcast_global_apdu`] instead.
+    ///
+    /// An empty `dest_mac` (DLEN 0) asks the router to broadcast on
+    /// `dest_network`, a remote broadcast, so it carries only an
+    /// Unconfirmed-Request APDU (Clause 6.3); anything else is refused
+    /// without sending anything (#1479).
     pub async fn send_apdu_routed(
         &self,
         apdu: &[u8],
@@ -546,6 +589,13 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
+        check_destination(target.network, "use send_apdu for a local device")?;
+        if target.mac.is_empty() {
+            check_broadcast_apdu(
+                apdu,
+                "a routed send with an empty dest_mac (a remote broadcast)",
+            )?;
+        }
         let buf = Self::encode_routed_npdu_buf(
             apdu,
             target.network,
@@ -569,8 +619,11 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// address, not the link DA: a link broadcast carrying a one-device
     /// DNET/DADR is fine for any PDU type, so this send form stays
     /// conformant. DNET 0xFFFF would make it a global broadcast, which this
-    /// form neither means nor checks the PDU type for, so it refuses that
-    /// DNET as [`Self::send_apdu_routed`] does.
+    /// form doesn't mean, so it refuses that DNET as [`Self::send_apdu_routed`]
+    /// does. An empty `dest_mac` would make it a broadcast on `dest_network`,
+    /// which [`Self::broadcast_to_network`] already sends, so this form
+    /// refuses it too and points there, leaving one way to send a remote
+    /// broadcast with the link's broadcast MAC (#1479).
     pub async fn send_apdu_routed_via_local_broadcast(
         &self,
         apdu: &[u8],
@@ -600,6 +653,13 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
+        check_destination(dest_network, "use send_apdu for a local device")?;
+        if dest_mac.is_empty() {
+            return Err(Error::Encoding(format!(
+                "an empty dest_mac addresses the broadcast on network {dest_network}, \
+                 not one device; use broadcast_to_network for a remote broadcast"
+            )));
+        }
         let buf =
             Self::encode_routed_npdu_buf(apdu, dest_network, dest_mac, expecting_reply, priority)?;
         self.transport
@@ -677,7 +737,8 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     }
 
     /// Encode an APDU into an NPDU whose destination is `dest_network` /
-    /// `dest_mac`, ready for whichever link send the caller chooses.
+    /// `dest_mac`, ready for whichever link send the caller chooses. Each
+    /// caller checks the DNET, and what an empty `dest_mac` may carry, first.
     fn encode_routed_npdu_buf(
         apdu: &[u8],
         dest_network: u16,
@@ -685,7 +746,6 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         expecting_reply: bool,
         priority: NetworkPriority,
     ) -> Result<BytesMut, Error> {
-        check_destination(dest_network, "use send_apdu for a local device")?;
         let npdu = Npdu {
             is_network_message: false,
             expecting_reply,
@@ -970,3 +1030,7 @@ mod admission_tests;
 #[cfg(test)]
 #[path = "layer_sc_data_options_tests.rs"]
 mod sc_data_options_tests;
+
+#[cfg(test)]
+#[path = "broadcast_pdu_tests.rs"]
+mod broadcast_pdu_tests;

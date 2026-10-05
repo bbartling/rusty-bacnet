@@ -74,8 +74,7 @@ fn build_who_is_npdu(
 ) -> ReceivedNpdu {
     let mut apdu_buf = BytesMut::new();
     let who_is = WhoIsRequest {
-        low_limit: low,
-        high_limit: high,
+        range: DeviceInstanceRange::from_limits(low, high).unwrap(),
     };
     let mut service_buf = BytesMut::new();
     who_is.encode(&mut service_buf);
@@ -95,8 +94,7 @@ fn build_who_has_npdu(
     routed: Option<(u16, &[u8])>,
 ) -> ReceivedNpdu {
     let who_has = WhoHasRequest {
-        low_limit: low,
-        high_limit: high,
+        range: DeviceInstanceRange::from_limits(low, high).unwrap(),
         object,
     };
     let mut service_buf = BytesMut::new();
@@ -607,8 +605,7 @@ fn mock_received(
 fn encode_who_is_req(low: Option<u32>, high: Option<u32>) -> Vec<u8> {
     let mut buf = BytesMut::new();
     WhoIsRequest {
-        low_limit: low,
-        high_limit: high,
+        range: DeviceInstanceRange::from_limits(low, high).unwrap(),
     }
     .encode(&mut buf);
     buf.to_vec()

@@ -28,6 +28,7 @@ mod access;
 mod bbmd_start;
 mod bvlc_response;
 mod fanout;
+mod groups;
 mod socket;
 use bbmd_start::{
     initial_bbmd_state, refresh_own_address, warn_if_broadcast_may_leave_another_interface,
@@ -854,6 +855,15 @@ impl TransportPort for BipTransport {
         mac.len() == 6
             && mac[..4] == self.broadcast_address.octets()
             && mac[4..] == self.port.to_be_bytes()
+    }
+
+    fn is_group_destination(&self, mac: &[u8]) -> bool {
+        self.groups().contains(mac)
+    }
+
+    fn group_destinations(&self) -> crate::port::GroupDestinations {
+        let groups = self.groups();
+        crate::port::GroupDestinations::new(move |mac| groups.contains(mac))
     }
 }
 

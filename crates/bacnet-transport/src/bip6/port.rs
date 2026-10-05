@@ -526,6 +526,21 @@ impl TransportPort for Bip6Transport {
         .iter()
         .any(|group| mac[..16] == group.octets())
     }
+
+    fn is_group_destination(&self, mac: &[u8]) -> bool {
+        is_bip6_group(mac)
+    }
+
+    fn group_destinations(&self) -> crate::port::GroupDestinations {
+        crate::port::GroupDestinations::new(is_bip6_group)
+    }
+}
+
+/// Whether a B/IPv6 MAC names an IPv6 multicast group (ff00::/8) at any
+/// port: the BACnet groups [`TransportPort::is_broadcast_mac`] knows and
+/// any other, such as ff02::1, all of which reach more than one node (#1479).
+fn is_bip6_group(mac: &[u8]) -> bool {
+    mac.len() == 18 && mac[0] == 0xFF
 }
 
 impl Drop for Bip6Transport {

@@ -820,6 +820,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
         mac == BROADCAST_VMAC
     }
+
+    fn group_destinations(&self) -> crate::port::GroupDestinations {
+        crate::port::GroupDestinations::new(|mac| mac == BROADCAST_VMAC)
+    }
 }
 
 #[cfg(test)]

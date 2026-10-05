@@ -217,24 +217,17 @@ async fn send_who_is<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     spec: &WhoIsSpec,
 ) -> Result<(), Error> {
-    let (low, high) = match spec.range {
-        Some((low, high)) => (Some(low), Some(high)),
-        None => (None, None),
-    };
+    let range = spec.range;
     match &spec.scope {
         WhoIsScope::Local => {
             let mut buf = BytesMut::new();
-            WhoIsRequest {
-                low_limit: low,
-                high_limit: high,
-            }
-            .encode(&mut buf);
+            WhoIsRequest { range }.encode(&mut buf);
             client
                 .broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf)
                 .await
         }
-        WhoIsScope::Global => client.who_is(low, high).await,
-        WhoIsScope::Directed { mac, .. } => client.who_is_directed(mac, low, high).await,
-        WhoIsScope::Network(dnet) => client.who_is_network(*dnet, low, high).await,
+        WhoIsScope::Global => client.who_is(range).await,
+        WhoIsScope::Directed { mac, .. } => client.who_is_directed(mac, range).await,
+        WhoIsScope::Network(dnet) => client.who_is_network(*dnet, range).await,
     }
 }

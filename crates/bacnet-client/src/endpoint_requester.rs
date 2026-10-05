@@ -262,8 +262,9 @@ impl EndpointRequester {
         if !self.inner.open.load(Ordering::Acquire) {
             return Err(shutdown_error());
         }
-        // Broadcast destinations never carry a confirmed request (§6.3 guard
-        // lives in the egress path; fail fast here without allocating a lease).
+        // Broadcast destinations never carry a confirmed request (Clause 6.3).
+        // The egress refuses one too, but only once a transaction is taken, so
+        // fail fast here, before any lease or invoke ID is allocated.
         if matches!(
             destination,
             EndpointApduDestination::LocalBroadcast
@@ -296,6 +297,17 @@ impl EndpointRequester {
         // comes from there with no SNET, or through a router with this
         // network as its SNET, and either completes it (#1465).
         let destination = destination.localized(self.inner.egress.local_network_number().get());
+        // A direct destination, as named or as localized, that reaches a group
+        // of nodes is a local broadcast (#1479).
+        if let EndpointApduDestination::Direct { destination_mac } = &destination {
+            if self.inner.egress.is_group_destination(destination_mac) {
+                return Err(Error::Encoding(
+                    "endpoint requester cannot send confirmed requests to a broadcast or group \
+                     address"
+                        .into(),
+                ));
+            }
+        }
 
         let service_data = self.encode_operation(&request)?;
         let service = request.service();

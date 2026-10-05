@@ -83,11 +83,7 @@ fn write_present_value(invoke_id: u8, value: f32) -> Apdu {
 
 fn who_is() -> Apdu {
     let mut request = BytesMut::new();
-    WhoIsRequest {
-        low_limit: None,
-        high_limit: None,
-    }
-    .encode(&mut request);
+    WhoIsRequest { range: None }.encode(&mut request);
     Apdu::UnconfirmedRequest(UnconfirmedRequest {
         service_choice: UnconfirmedServiceChoice::WHO_IS,
         service_request: request.freeze(),
