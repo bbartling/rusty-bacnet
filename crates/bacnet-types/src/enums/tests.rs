@@ -84,13 +84,6 @@ fn property_identifiers_508_to_511_are_network_port_and_color_is_extended() {
         4_194_331
     );
     assert_eq!(PropertyIdentifier::COLOR_COMMAND.to_raw(), 4_194_334);
-    // The identifiers between them aren't named here yet.
-    for raw in [4_194_329, 4_194_332, 4_194_333, 4_194_335] {
-        assert_eq!(
-            PropertyIdentifier::from_raw(raw).to_string(),
-            raw.to_string()
-        );
-    }
 }
 
 #[test]

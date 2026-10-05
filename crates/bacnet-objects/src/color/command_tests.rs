@@ -342,7 +342,7 @@ fn color_temperature_object_takes_the_cct_operations_and_stop() {
 }
 
 #[test]
-fn color_objects_no_longer_answer_to_508_to_510() {
+fn color_objects_no_longer_answer_to_508_to_511() {
     // 508 to 510 name Network Port properties (#887); the colour properties
     // moved past 4194303.
     let objects: [Box<dyn BACnetObject>; 2] = [

@@ -93,14 +93,14 @@ class EndpointGroupRegistrationTests(unittest.TestCase):
                             endpoint.add_group(3, "Refused", members)
                 # Any property identifier, those ASHRAE assigns past 4194303
                 # included (#887), and any unsigned32 index, are accepted.
-                past_22_bits = [
+                wide_identifiers = [
                     (PropertyIdentifier.from_raw(raw), 0)
                     for raw in (4_194_303, 4_194_304, (1 << 32) - 1)
                 ]
                 endpoint.add_group(
                     4,
                     "Edges",
-                    [(AI_1, [*past_22_bits, (PropertyIdentifier.DEFAULT_COLOR, None), (PV, (1 << 32) - 1)])],
+                    [(AI_1, [*wide_identifiers, (PropertyIdentifier.DEFAULT_COLOR, None), (PV, (1 << 32) - 1)])],
                 )
                 # Indexes outside unsigned32 fail conversion, as for read_property_multiple specs.
                 for index in (-1, 1 << 32):

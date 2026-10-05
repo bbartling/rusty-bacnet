@@ -554,9 +554,9 @@ bacnet_enum! {
     /// 135-2020ca).
     const DEFAULT_COLOR_TEMPERATURE = 4194331;
     /// The BACnetColorCommand of a Color or Color Temperature object
-    /// (Addendum 135-2020ca). The addendum's Clause 21 list leaves this
-    /// property unnumbered; 4194334 is the value bacnet-stack, Wireshark and
-    /// BACnet4J use.
+    /// (Addendum 135-2020ca). The addendum itself left this property out of
+    /// its Clause 21 list; its errata of 2023-01-05 (item 1) number it, and
+    /// bacnet-stack, Wireshark and BACnet4J use the same value.
     const COLOR_COMMAND = 4194334;
 }
 

@@ -1,8 +1,9 @@
-//! Color and Color Temperature over WriteProperty and ReadProperty (#887,
-//! #1386): Color_Command takes and serves a BACnetColorCommand as written,
-//! refuses other datatypes and broken encodings, and checks what each object
-//! allows (Addendum 135-2020ca); the colour properties answer to their
-//! standard identifiers past 4194303, and 508 to 510 no longer reach them.
+//! Color and Color Temperature over WriteProperty, WritePropertyMultiple,
+//! ReadProperty and ReadPropertyMultiple (#887, #1386): Color_Command takes
+//! and serves a BACnetColorCommand as written, refuses other datatypes and
+//! broken encodings, and checks what each object allows (Addendum
+//! 135-2020ca); the colour properties answer to their standard identifiers
+//! past 4194303, and 508 to 511 no longer reach them.
 //!
 //! Field octets: the operation is context tag 0 (`09` with one octet), the
 //! target colour two application REALs (`44`) between `1E` and `1F`, and the
@@ -12,6 +13,9 @@
 use super::lighting_required_rows::{assert_refused, db_with, read_wire, write_wire};
 use super::*;
 use bacnet_objects::color::{ColorObject, ColorTemperatureObject};
+use bacnet_services::common::BACnetPropertyValue;
+use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
+use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 
 const CC: PropertyIdentifier = PropertyIdentifier::COLOR_COMMAND;
 
@@ -276,5 +280,123 @@ fn color_objects_no_longer_answer_to_508_to_511() {
             ErrorCode::UNKNOWN_PROPERTY,
         );
         assert_eq!(read_wire(&db, oid, CC), [0x09, 0x00]);
+    }
+}
+
+/// WritePropertyMultiple of `(property, octets)` pairs to `oid`.
+fn write_multiple(
+    db: &mut ObjectDatabase,
+    oid: ObjectIdentifier,
+    writes: &[(PropertyIdentifier, &[u8])],
+) -> Result<(), Error> {
+    let mut request = BytesMut::new();
+    WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![WriteAccessSpecification {
+            object_identifier: oid,
+            list_of_properties: writes
+                .iter()
+                .map(|&(property_identifier, value)| BACnetPropertyValue {
+                    property_identifier,
+                    property_array_index: None,
+                    value: value.to_vec(),
+                    priority: None,
+                })
+                .collect(),
+        }],
+    }
+    .encode(&mut request)
+    .unwrap();
+    handle_write_property_multiple(db, &request).map(|_| ())
+}
+
+#[test]
+fn color_command_over_write_property_multiple() {
+    // FADE_TO_COLOR to (0.5, 0.25) over 2,000 ms, beside Default_Fade_Time
+    // 1,000 ms; both commit.
+    let fade: &[u8] = &[
+        0x09, 0x01, 0x1E, 0x44, 0x3F, 0x00, 0x00, 0x00, 0x44, 0x3E, 0x80, 0x00, 0x00, 0x1F, 0x3A,
+        0x07, 0xD0,
+    ];
+    let (mut db, oid) = color();
+    write_multiple(
+        &mut db,
+        oid,
+        &[
+            (CC, fade),
+            (PropertyIdentifier::DEFAULT_FADE_TIME, &[0x22, 0x03, 0xE8]),
+        ],
+    )
+    .unwrap();
+    assert_eq!(read_wire(&db, oid, CC), fade);
+    assert_eq!(
+        read_wire(&db, oid, PropertyIdentifier::DEFAULT_FADE_TIME),
+        [0x22, 0x03, 0xE8]
+    );
+    // STOP commits before NONE is refused, as WritePropertyMultiple keeps the
+    // prefix it wrote.
+    assert_refused(
+        write_multiple(&mut db, oid, &[(CC, &[0x09, 0x06]), (CC, &[0x09, 0x00])]),
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+    assert_eq!(read_wire(&db, oid, CC), [0x09, 0x06]);
+
+    let (mut db, oid) = color_temperature();
+    // The old OCTET STRING form is refused; RAMP_TO_CCT to 6,500 K is taken.
+    assert_refused(
+        write_multiple(&mut db, oid, &[(CC, &[0x62, 0x09, 0x06])]),
+        ErrorCode::INVALID_DATA_TYPE,
+    );
+    let ramp: &[u8] = &[0x09, 0x03, 0x2A, 0x19, 0x64];
+    write_multiple(&mut db, oid, &[(CC, ramp)]).unwrap();
+    assert_eq!(read_wire(&db, oid, CC), ramp);
+}
+
+#[test]
+fn color_properties_over_read_property_multiple() {
+    let (db, oid) = color();
+    let references = [4_194_330, 4_194_334, 4_194_331, 510].map(|raw| PropertyReference {
+        property_identifier: PropertyIdentifier::from_raw(raw),
+        property_array_index: None,
+    });
+    let mut request = BytesMut::new();
+    ReadPropertyMultipleRequest {
+        list_of_read_access_specs: vec![ReadAccessSpecification {
+            object_identifier: oid,
+            list_of_property_references: references.to_vec(),
+        }],
+    }
+    .encode(&mut request)
+    .unwrap();
+    // Color 1 is 0x0FC00001. Each identifier past 4194303 takes three
+    // octets under tag [0]; 510 (0x01FE) takes two.
+    assert_eq!(
+        request.as_ref(),
+        [
+            0x0C, 0x0F, 0xC0, 0x00, 0x01, 0x1E, 0x0B, 0x40, 0x00, 0x1A, 0x0B, 0x40, 0x00, 0x1E,
+            0x0B, 0x40, 0x00, 0x1B, 0x0A, 0x01, 0xFE, 0x1F,
+        ]
+    );
+    let mut response = BytesMut::new();
+    handle_read_property_multiple(&db, &request, &mut response).unwrap();
+    let ack = ReadPropertyMultipleACK::decode(&response).unwrap();
+    let results = &ack.list_of_read_access_results[0].list_of_results;
+    let properties: Vec<_> = results.iter().map(|r| r.property_identifier).collect();
+    assert_eq!(properties, references.map(|r| r.property_identifier));
+    // Default_Color is the D65 xy colour and Color_Command NONE.
+    assert_eq!(
+        results[0].property_value.as_deref(),
+        Some(&[0x44, 0x3E, 0xA0, 0x1A, 0x37, 0x44, 0x3E, 0xA8, 0x72, 0xB0][..])
+    );
+    assert_eq!(
+        results[1].property_value.as_deref(),
+        Some(&[0x09, 0x00][..])
+    );
+    // A Color has no Default_Color_Temperature, and 510 is a Network Port
+    // property.
+    for result in &results[2..] {
+        assert_eq!(
+            result.error,
+            Some((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY))
+        );
     }
 }

@@ -4894,14 +4894,14 @@
    ],
    "positive_tests": [
     "crates/bacnet-types/src/enums/tests.rs::property_identifiers_508_to_511_are_network_port_and_color_is_extended",
-    "crates/bacnet-encoding/src/constructed/tests/color_command.rs::{color_command_golden_vectors_round_trip_for_each_operation,xy_color_is_two_application_reals,color_command_decodes_at_an_offset_and_stops_at_the_next_other_tag,color_command_keeps_any_value_that_fits}",
+    "crates/bacnet-encoding/src/constructed/tests/color_command.rs::{color_command_golden_vectors_round_trip_for_each_operation,color_command_round_trips_every_combination_of_optional_fields,xy_color_is_two_application_reals,color_command_decodes_at_an_offset_and_stops_at_the_next_other_tag,color_command_keeps_any_value_that_fits}",
     "crates/bacnet-objects/src/color/command_tests.rs::color_commands_start_at_none_and_serve_what_was_written",
-    "crates/bacnet-server/src/handlers/tests/color_command_writes.rs::{color_command_reads_none_until_written_then_what_was_written,color_properties_answer_to_their_standard_identifiers}",
+    "crates/bacnet-server/src/handlers/tests/color_command_writes.rs::{color_command_reads_none_until_written_then_what_was_written,color_properties_answer_to_their_standard_identifiers,color_command_over_write_property_multiple,color_properties_over_read_property_multiple}",
     "crates/bacnet-objects/src/group/group_members_tests.rs::add_member_takes_property_identifiers_past_22_bits"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/tests/color_command.rs::{color_command_cut_inside_a_field_is_a_short_buffer,color_command_wrong_tags_and_lengths_are_malformed,color_command_fields_too_wide_for_their_type_are_out_of_range,color_command_unsigned_past_four_octets_with_a_leading_zero_is_malformed}",
-    "crates/bacnet-objects/src/color/command_tests.rs::{color_commands_refuse_other_datatypes_and_broken_encodings,color_object_takes_fade_to_color_and_stop_only,color_temperature_object_takes_the_cct_operations_and_stop,color_objects_no_longer_answer_to_508_to_510}",
+    "crates/bacnet-objects/src/color/command_tests.rs::{color_commands_refuse_other_datatypes_and_broken_encodings,color_object_takes_fade_to_color_and_stop_only,color_temperature_object_takes_the_cct_operations_and_stop,color_objects_no_longer_answer_to_508_to_511}",
     "crates/bacnet-server/src/handlers/tests/color_command_writes.rs::{color_command_refuses_other_datatypes_and_broken_encodings,color_command_checks_what_each_object_takes,color_objects_no_longer_answer_to_508_to_511}"
    ],
    "benchmarks": [],
@@ -4909,7 +4909,7 @@
     "docs/rust-api.md#lighting--color-5"
    ],
    "notes": [
-    "`DEFAULT_COLOR` is 4194330 and `DEFAULT_COLOR_TEMPERATURE` 4194331 (135-2020ca). The addendum leaves `COLOR_COMMAND` unnumbered; it is 4194334, the value bacnet-stack, Wireshark and BACnet4J use.",
+    "`DEFAULT_COLOR` is 4194330 and `DEFAULT_COLOR_TEMPERATURE` 4194331 (135-2020ca). `COLOR_COMMAND` is 4194334, numbered by the addendum's 2023-01-05 errata; bacnet-stack, Wireshark and BACnet4J agree.",
     "508 to 511 are the Network Port identifiers of 135-2020cc; no object serves them. Any `u32` is a property identifier, so Group members and Event Enrollment references take those past 4194303.",
     "A Color object takes FADE_TO_COLOR, with a target colour whose coordinates are 0.0 to 1.0, and STOP. A Color Temperature object takes the four CCT operations and STOP, targets 1000 to 30000 K.",
     "Fade time is 100 to 86,400,000 ms and ramp rate and step increment 1 to 30000 where the operation uses them; unused fields are kept unchecked. A missing target is VALUE_OUT_OF_RANGE, as on Lighting Output.",

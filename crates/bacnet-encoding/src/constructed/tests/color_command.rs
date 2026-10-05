@@ -93,6 +93,47 @@ fn color_command_golden_vectors_round_trip_for_each_operation() {
 }
 
 #[test]
+fn color_command_round_trips_every_combination_of_optional_fields() {
+    // Each optional field with its independently worked octets, in tag
+    // order: (0.5, 0.25), 2,700 K (0x0A8C), 2,000 ms (0x07D0), 30,000 K/s
+    // (0x7530) and 1 K.
+    let target: [u8; 12] = [
+        0x1E, 0x44, 0x3F, 0x00, 0x00, 0x00, 0x44, 0x3E, 0x80, 0x00, 0x00, 0x1F,
+    ];
+    let fields: [&[u8]; 5] = [
+        &target,
+        &[0x2A, 0x0A, 0x8C],
+        &[0x3A, 0x07, 0xD0],
+        &[0x4A, 0x75, 0x30],
+        &[0x59, 0x01],
+    ];
+    for mask in 0u32..32 {
+        let has = |bit: u32| mask & (1 << bit) != 0;
+        let value = BACnetColorCommand {
+            target_color: has(0).then_some(BACnetXyColor::new(0.5, 0.25)),
+            target_color_temperature: has(1).then_some(2_700),
+            fade_time: has(2).then_some(2_000),
+            ramp_rate: has(3).then_some(30_000),
+            step_increment: has(4).then_some(1),
+            ..command(Op::FADE_TO_COLOR)
+        };
+        let mut expected = vec![0x09, 0x01];
+        for (bit, octets) in (0..).zip(fields) {
+            if has(bit) {
+                expected.extend_from_slice(octets);
+            }
+        }
+        assert_eq!(encode(&value), expected, "mask {mask:05b}");
+        assert_eq!(
+            decode_color_command(&expected, 0).unwrap(),
+            (value, expected.len()),
+            "mask {mask:05b}"
+        );
+        assert_eq!(decode_color_command_value(&expected).unwrap(), value);
+    }
+}
+
+#[test]
 fn xy_color_is_two_application_reals() {
     // D65 white: 0.3127 is 0x3EA01A37 and 0.3290 0x3EA872B0.
     let d65 = [0x44, 0x3E, 0xA0, 0x1A, 0x37, 0x44, 0x3E, 0xA8, 0x72, 0xB0];
