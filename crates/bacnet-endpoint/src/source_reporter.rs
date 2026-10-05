@@ -493,7 +493,10 @@ impl BACnetObject for SourceReporter {
         self.wrapped.set_input_usable_internal(usable)
     }
 
-    fn take_input_reading_internal(&mut self, reading: Option<i128>) -> bool {
+    fn take_input_reading_internal(
+        &mut self,
+        reading: Option<bacnet_objects::accumulator::InputReading>,
+    ) -> bool {
         self.wrapped.take_input_reading_internal(reading)
     }
 

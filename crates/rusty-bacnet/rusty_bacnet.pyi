@@ -3242,7 +3242,16 @@ class BACnetServer:
     ) -> None: ...
     def add_event_enrollment(
         self, instance: int, name: str, event_type: EventType = ...
-    ) -> None: ...
+    ) -> None:
+        """Add an Event Enrollment (Clause 12.12) to the server (before starting).
+
+        Object_Property_Reference, read-only to peers, reads as Analog Input
+        4194303's Present_Value while the enrollment has no reference.
+        Fault_Parameters reads as the context-tagged ``none`` choice while no
+        fault algorithm is set, and writing that clears it; a null written to
+        it succeeds and changes nothing.
+        """
+        ...
 
     # --- Building/transportation ---
     def add_elevator_group(
@@ -3301,7 +3310,13 @@ class BACnetServer:
     def add_bit_string_value(self, instance: int, name: str) -> None: ...
 
     # --- Counters/accumulators ---
-    def add_accumulator(self, instance: int, name: str, units: int = 62) -> None: ...
+    def add_accumulator(self, instance: int, name: str, units: int = 62) -> None:
+        """Add an Accumulator (Clause 12.61) to the server (before starting).
+
+        No Prescale is configured this way, so the object doesn't serve that
+        optional property: a read of it is UNKNOWN_PROPERTY.
+        """
+        ...
     def add_pulse_converter(self, instance: int, name: str, units: int = 62) -> None:
         """Add a Pulse Converter (Clause 12.23) to the server (before starting).
 
@@ -3311,8 +3326,10 @@ class BACnetServer:
         unsets it. A null written to it succeeds and changes nothing.
         While the reference names a missing object, or a property that isn't
         an Unsigned or INTEGER, Reliability reads CONFIGURATION_ERROR and
-        Status_Flags FAULT. The running server counts each increase of the
-        named property into Count, once a second.
+        Status_Flags FAULT; out of service, Reliability is writable for
+        simulation. The running server counts each increase of the named
+        property into Count at least once a second, across an Accumulator's
+        wrap at Max_Pres_Value.
         """
         ...
 

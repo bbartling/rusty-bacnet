@@ -133,8 +133,8 @@ fn only_unsigned_and_integer_properties_are_inputs() {
         ),
         (
             indexed(integer_value, P::PRIORITY_ARRAY, 0),
-            true,
-            "an array's size, an Unsigned",
+            false,
+            "an array's size, which counts no pulses",
         ),
         (
             indexed(integer_value, P::PRIORITY_ARRAY, 17),
@@ -206,48 +206,160 @@ fn count(db: &ObjectDatabase) -> PropertyValue {
         .unwrap()
 }
 
-/// Accumulator 1 with `value` as its Present_Value.
-fn accumulator(value: u64) -> Box<AccumulatorObject> {
-    let mut object = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+/// Accumulator `instance` with `value` as its Present_Value and 99 as its
+/// Max_Pres_Value.
+fn accumulator(instance: u32, value: u64) -> Box<AccumulatorObject> {
+    let mut object = AccumulatorObject::new(instance, format!("ACC-{instance}"), 95).unwrap();
+    object
+        .write_property(P::MAX_PRES_VALUE, None, PropertyValue::Unsigned(99), None)
+        .unwrap();
     object.set_present_value(value);
     Box::new(object)
 }
 
 #[test]
-fn each_increase_of_the_input_is_counted_into_count() {
+fn each_increase_of_an_accumulator_is_counted_across_its_wrap() {
     let mut db = ObjectDatabase::new();
-    db.add(accumulator(100)).unwrap();
+    db.add(accumulator(1, 80)).unwrap();
     db.add(converter(Some(present_value(acc1())))).unwrap();
     // The first reading only sets the baseline.
     assert!(db.count_pulse_inputs().is_empty());
     assert_eq!(count(&db), PropertyValue::Unsigned(0));
-    db.add(accumulator(107)).unwrap();
+    db.add(accumulator(1, 87)).unwrap();
     assert_eq!(db.count_pulse_inputs(), [pc1()]);
     assert_eq!(count(&db), PropertyValue::Unsigned(7));
     // No increase, nothing counted.
     assert!(db.count_pulse_inputs().is_empty());
-    // A reading below the last one sets the baseline again without counting.
-    db.add(accumulator(3)).unwrap();
-    assert!(db.count_pulse_inputs().is_empty());
-    db.add(accumulator(5)).unwrap();
+    // The Accumulator counts modulo Max_Pres_Value + 1 (Clause 12.61.4): from
+    // 87 to 99 is 12 pulses, one more to 0, and 5 more to 5.
+    db.add(accumulator(1, 5)).unwrap();
     assert_eq!(db.count_pulse_inputs(), [pc1()]);
-    assert_eq!(count(&db), PropertyValue::Unsigned(9));
+    assert_eq!(count(&db), PropertyValue::Unsigned(25));
     // Nothing to read drops the baseline, so the object's return counts
     // from its first reading again.
     db.remove(&acc1()).unwrap();
     assert!(db.count_pulse_inputs().is_empty());
-    db.add(accumulator(50)).unwrap();
+    db.add(accumulator(1, 50)).unwrap();
     assert!(db.count_pulse_inputs().is_empty());
-    db.add(accumulator(51)).unwrap();
+    db.add(accumulator(1, 51)).unwrap();
     assert_eq!(db.count_pulse_inputs(), [pc1()]);
-    assert_eq!(count(&db), PropertyValue::Unsigned(10));
-    // A new reference starts its own baseline.
+    assert_eq!(count(&db), PropertyValue::Unsigned(26));
+    // A new reference starts its own baseline, even at a larger value.
+    db.add(accumulator(2, 90)).unwrap();
+    write_reference(&mut db, &present_value(oid(ObjectType::ACCUMULATOR, 2)));
+    assert!(db.count_pulse_inputs().is_empty());
+    assert_eq!(count(&db), PropertyValue::Unsigned(26));
+}
+
+#[test]
+fn a_decrease_of_any_other_source_only_sets_the_baseline_again() {
+    // ACC-1's Max_Pres_Value is an Unsigned with no wrap of its own.
+    let mut db = ObjectDatabase::new();
+    db.add(accumulator(1, 0)).unwrap();
+    let max = BACnetObjectPropertyReference::new(acc1(), P::MAX_PRES_VALUE.to_raw());
+    db.add(converter(Some(max))).unwrap();
+    let set_max = |db: &mut ObjectDatabase, value| {
+        db.get_mut(&acc1())
+            .unwrap()
+            .write_property(
+                P::MAX_PRES_VALUE,
+                None,
+                PropertyValue::Unsigned(value),
+                None,
+            )
+            .unwrap();
+    };
+    assert!(db.count_pulse_inputs().is_empty());
+    set_max(&mut db, 120);
+    assert_eq!(db.count_pulse_inputs(), [pc1()]);
+    assert_eq!(count(&db), PropertyValue::Unsigned(21));
+    set_max(&mut db, 10);
+    assert!(db.count_pulse_inputs().is_empty());
+    set_max(&mut db, 14);
+    assert_eq!(db.count_pulse_inputs(), [pc1()]);
+    assert_eq!(count(&db), PropertyValue::Unsigned(25));
+}
+
+#[test]
+fn a_priority_array_slot_is_judged_by_the_commanded_datatype() {
+    let mut db = ObjectDatabase::new();
     db.add(Box::new(IntegerValueObject::new(1, "IV-1").unwrap()))
         .unwrap();
-    write_reference(&mut db, &present_value(oid(ObjectType::INTEGER_VALUE, 1)));
-    db.add(accumulator(60)).unwrap();
+    let integer_value = oid(ObjectType::INTEGER_VALUE, 1);
+    let slot =
+        BACnetObjectPropertyReference::new_indexed(integer_value, P::PRIORITY_ARRAY.to_raw(), 8);
+    db.add(converter(Some(slot))).unwrap();
+    // Relinquished for now, but an INTEGER Value commands INTEGERs: no fault,
+    // and nothing to count.
+    assert_eq!(reliability(&db, pc1()), Reliability::NO_FAULT_DETECTED);
     assert!(db.count_pulse_inputs().is_empty());
-    assert_eq!(count(&db), PropertyValue::Unsigned(10));
+    let origin = crate::command_source::CommandOrigin::Local {
+        owner_device: oid(ObjectType::DEVICE, 1),
+        initiating_object: None,
+    };
+    for value in [3, 10] {
+        db.get_mut(&integer_value)
+            .unwrap()
+            .write_property_from(
+                P::PRESENT_VALUE,
+                None,
+                PropertyValue::Signed(value),
+                Some(8),
+                &origin,
+            )
+            .unwrap();
+        db.count_pulse_inputs();
+    }
+    assert_eq!(count(&db), PropertyValue::Unsigned(7));
+    assert_eq!(reliability(&db, pc1()), Reliability::NO_FAULT_DETECTED);
+}
+
+#[test]
+fn the_counting_pass_judges_a_reference_changed_past_the_server() {
+    let mut db = ObjectDatabase::new();
+    db.add(accumulator(1, 0)).unwrap();
+    db.add(Box::new(AnalogInputObject::new(1, "AI-1", 95).unwrap()))
+        .unwrap();
+    db.add(converter(Some(present_value(acc1())))).unwrap();
+    assert_eq!(reliability(&db, pc1()), Reliability::NO_FAULT_DETECTED);
+    // Written on the object directly, so nothing judged it as it committed.
+    db.get_mut(&pc1())
+        .unwrap()
+        .write_property(
+            P::INPUT_REFERENCE,
+            None,
+            octets(&present_value(oid(ObjectType::ANALOG_INPUT, 1))),
+            None,
+        )
+        .unwrap();
+    assert_eq!(reliability(&db, pc1()), Reliability::NO_FAULT_DETECTED);
+    // The next pass does, and owes COV for the change.
+    assert_eq!(db.count_pulse_inputs(), [pc1()]);
+    assert_eq!(reliability(&db, pc1()), Reliability::CONFIGURATION_ERROR);
+    assert!(db.count_pulse_inputs().is_empty());
+}
+
+#[test]
+fn reliability_takes_a_clients_value_out_of_service_until_the_return() {
+    let mut db = ObjectDatabase::new();
+    db.add(converter(Some(present_value(acc1())))).unwrap();
+    assert_eq!(reliability(&db, pc1()), Reliability::CONFIGURATION_ERROR);
+    let write = |db: &mut ObjectDatabase, property, value| {
+        db.get_mut(&pc1())
+            .unwrap()
+            .write_property(property, None, value, None)
+    };
+    let simulated = PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw());
+    // In service the verdict owns it (Clause 12.23.10).
+    assert!(write(&mut db, P::RELIABILITY, simulated.clone()).is_err());
+    write(&mut db, P::OUT_OF_SERVICE, PropertyValue::Boolean(true)).unwrap();
+    write(&mut db, P::RELIABILITY, simulated).unwrap();
+    assert_eq!(reliability(&db, pc1()), Reliability::OVER_RANGE);
+    // A pass while out of service leaves the client's value.
+    db.count_pulse_inputs();
+    assert_eq!(reliability(&db, pc1()), Reliability::OVER_RANGE);
+    write(&mut db, P::OUT_OF_SERVICE, PropertyValue::Boolean(false)).unwrap();
+    assert_eq!(reliability(&db, pc1()), Reliability::CONFIGURATION_ERROR);
 }
 
 #[test]

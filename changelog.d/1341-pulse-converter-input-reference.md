@@ -1,7 +1,7 @@
 ---
 section: Fixed
 ---
-- **Wire:** a Pulse Converter reports CONFIGURATION_ERROR while its
-  Input_Reference names a missing object or a property that isn't Unsigned or
-  INTEGER, re-checked as objects are created and deleted, and a running server
-  counts the named property's increases into Count (#1341).
+- **Wire:** a Pulse Converter reports a configuration fault while its
+  Input_Reference names a property it can't count from, re-checked as objects
+  come and go, takes a simulated Reliability out of service, and a running
+  server counts that property's increases into Count (#1341).

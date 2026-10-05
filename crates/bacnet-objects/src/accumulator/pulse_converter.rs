@@ -14,17 +14,23 @@
 //! judges the reference (`ObjectDatabase::check_input_reference`, #1341) and
 //! hands the verdict over through `set_input_usable_internal`. An unset
 //! reference is no fault: the object then stands for the physical input
-//! itself (Clause 12.23.6). While Out_Of_Service is TRUE, Reliability stays
-//! where it was (Clause 12.23.10); the verdict is kept, and the return to
-//! service applies it.
+//! itself (Clause 12.23.6). While Out_Of_Service is TRUE, Reliability is
+//! decoupled from the verdict and takes a client's value, for simulation
+//! (Clause 12.23.10); the verdict is kept, and the return to service applies
+//! it.
 //!
 //! A running server also counts from the property (Clause 12.23.14 leaves
-//! the means local): once a second the database reads it
-//! (`ObjectDatabase::count_pulse_inputs`) and adds each increase over the
-//! last reading to Count, as `add_pulses` would. The first reading after the
-//! reference is set or becomes readable only sets the baseline, and a
-//! reading below the last one, the source reset or wrapped, sets it again
-//! without counting.
+//! the means local): at least once a second the database reads it
+//! (`ObjectDatabase::count_pulse_inputs`), judging the reference again as it
+//! does, and adds each increase over the last reading to Count, as
+//! `add_pulses` would. The first reading after the reference is set, changed
+//! or becomes readable only sets the baseline, so pointing the reference at
+//! a property holding a larger value counts nothing. A reading below the last
+//! one is a wrap when the source is an Accumulator's Present_Value, which
+//! counts modulo Max_Pres_Value + 1 (Clause 12.61.4): the pulses up to the
+//! maximum, round to zero and on to the reading are counted. From any other
+//! source such a reading, a reset or a wrap whose bound is unknown, only
+//! sets the baseline again.
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
@@ -39,6 +45,20 @@ use crate::reference::{self, ReferenceFrame};
 use crate::traits::BACnetObject;
 
 mod metadata;
+
+/// One reading of the property a Pulse Converter counts from (#1341), which
+/// the database hands over through
+/// [`BACnetObject::take_input_reading_internal`].
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputReading {
+    /// The property's value, an Unsigned or INTEGER widened to `i128`.
+    pub value: i128,
+    /// The largest value the source holds before it wraps to zero, for a
+    /// source that counts modulo a bound: an Accumulator's Present_Value and
+    /// its Max_Pres_Value (Clause 12.61.4). `None` for any other source.
+    pub wraps_after: Option<u64>,
+}
 
 /// BACnet Pulse Converter object — converts accumulated pulses to an analog value.
 pub struct PulseConverterObject {
@@ -299,7 +319,8 @@ impl BACnetObject for PulseConverterObject {
             if self.out_of_service && !was_out_of_service {
                 self.decoupled_present_value = in_service_value;
             }
-            // Back in service, Reliability follows the input reference again.
+            // Back in service, Reliability follows the input reference
+            // again, whatever a client simulated meanwhile.
             if was_out_of_service && !self.out_of_service {
                 self.reliability = self.evaluated_reliability();
             }
@@ -341,6 +362,23 @@ impl BACnetObject for PulseConverterObject {
                 } else {
                     Err(common::invalid_data_type_error())
                 }
+            }
+            // Reliability can leave NO_FAULT_DETECTED (the input reference's
+            // CONFIGURATION_ERROR), so it takes a client's value while out of
+            // service (Clause 12.23.10) and is read-only otherwise.
+            p if p == PropertyIdentifier::RELIABILITY => {
+                if !self.out_of_service {
+                    return Err(common::write_access_denied_error());
+                }
+                let PropertyValue::Enumerated(raw) = value else {
+                    return Err(common::invalid_data_type_error());
+                };
+                let reliability = Reliability::from_raw(raw);
+                if !common::is_reliability_value_valid(reliability) {
+                    return Err(common::value_out_of_range_error());
+                }
+                self.reliability = reliability;
+                Ok(())
             }
             // Input_Reference is BACnetObjectPropertyReference (Table
             // 12-27): its context-tagged members, the unset form clearing it.
@@ -390,18 +428,29 @@ impl BACnetObject for PulseConverterObject {
         std::mem::replace(&mut self.reliability, reliability) != reliability
     }
 
-    fn take_input_reading_internal(&mut self, reading: Option<i128>) -> bool {
+    fn take_input_reading_internal(&mut self, reading: Option<InputReading>) -> bool {
         let Some(reading) = reading else {
             self.last_input = None;
             return false;
         };
-        match self.last_input.replace(reading) {
-            Some(last) if reading > last => {
-                let pulses = u64::try_from(reading - last).unwrap_or(u64::MAX);
-                self.add_pulses(pulses).is_ok()
+        let Some(last) = self.last_input.replace(reading.value) else {
+            return false;
+        };
+        let pulses = if reading.value >= last {
+            reading.value - last
+        } else {
+            match reading.wraps_after.map(i128::from) {
+                // Up to the maximum, one more round to zero, then on to the
+                // reading.
+                Some(max) if last <= max => max - last + 1 + reading.value,
+                _ => return false,
             }
-            _ => false,
+        };
+        if pulses == 0 {
+            return false;
         }
+        self.add_pulses(u64::try_from(pulses).unwrap_or(u64::MAX))
+            .is_ok()
     }
 }
 

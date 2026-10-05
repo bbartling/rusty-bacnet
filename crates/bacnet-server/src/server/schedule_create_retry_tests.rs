@@ -112,6 +112,9 @@ async fn create_object_retries_the_refusal_before_its_answer() {
         schedule_reliability(&db).await,
         Reliability::CONFIGURATION_ERROR
     );
+    // Without the waker the background task never takes the queue, so only
+    // the request's own settle, under its guard, can make the retry.
+    db.write().await.set_membership_waker_internal(None);
     let mut body = BytesMut::new();
     CreateObjectRequest {
         object_specifier: ObjectSpecifier::Identifier(msv(9)),

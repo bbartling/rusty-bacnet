@@ -1,7 +1,7 @@
 use super::*;
 use crate::property_metadata::PropertyWriteCapability;
 use crate::traits::BACnetObject;
-use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::enums::{ErrorClass, ErrorCode, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 use std::collections::HashSet;
@@ -56,7 +56,7 @@ const REQUIRED: [P; 15] = [
 ];
 
 /// Rows with no network write route; a write of their own readback is denied.
-const READ_ONLY: [P; 9] = [
+const READ_ONLY: [P; 8] = [
     P::UNITS,
     P::COUNT,
     P::UPDATE_TIME,
@@ -65,7 +65,6 @@ const READ_ONLY: [P; 9] = [
     P::COV_PERIOD,
     P::STATUS_FLAGS,
     P::EVENT_STATE,
-    P::RELIABILITY,
 ];
 
 #[test]
@@ -185,7 +184,7 @@ fn property_metadata_pulse_converter_write_capabilities_match_dispatch() {
             let p = row.property_identifier;
             let capability = if always.contains(&p) {
                 PropertyWriteCapability::Always
-            } else if p == P::PRESENT_VALUE {
+            } else if p == P::PRESENT_VALUE || p == P::RELIABILITY {
                 PropertyWriteCapability::WhenOutOfService
             } else {
                 PropertyWriteCapability::ReadOnly
@@ -222,6 +221,64 @@ fn property_metadata_pulse_converter_write_capabilities_match_dispatch() {
         );
         assert_eq!(object.property_metadata().as_ref(), original);
     }
+}
+
+#[test]
+fn property_metadata_pulse_converter_reliability_oos_gate_pins() {
+    // Reliability can report the Input_Reference CONFIGURATION_ERROR, so it
+    // takes a client's value out of service (Clause 12.23.10, #1341). In
+    // service the write is denied before the value is judged.
+    let mut object = PulseConverterObject::new(1, "PC-1", 62).unwrap();
+    let over_range = PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw());
+    for value in [
+        over_range.clone(),
+        PropertyValue::Unsigned(2),
+        PropertyValue::Null,
+    ] {
+        assert_error(
+            object
+                .write_property(P::RELIABILITY, None, value, None)
+                .unwrap_err(),
+            ErrorCode::WRITE_ACCESS_DENIED,
+        );
+    }
+    object
+        .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
+        .unwrap();
+    object
+        .write_property(P::RELIABILITY, None, over_range.clone(), None)
+        .unwrap();
+    assert_eq!(
+        object.read_property(P::RELIABILITY, None).unwrap(),
+        over_range
+    );
+    for (value, code) in [
+        (PropertyValue::Unsigned(2), ErrorCode::INVALID_DATA_TYPE),
+        (PropertyValue::Null, ErrorCode::INVALID_DATA_TYPE),
+        (
+            PropertyValue::Enumerated(70_000),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+    ] {
+        assert_error(
+            object
+                .write_property(P::RELIABILITY, None, value, None)
+                .unwrap_err(),
+            code,
+        );
+    }
+    assert_eq!(
+        object.read_property(P::RELIABILITY, None).unwrap(),
+        over_range
+    );
+    // The return to service restores the evaluated value.
+    object
+        .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(false), None)
+        .unwrap();
+    assert_eq!(
+        object.read_property(P::RELIABILITY, None).unwrap(),
+        PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
+    );
 }
 
 #[test]

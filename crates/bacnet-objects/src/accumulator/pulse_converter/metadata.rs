@@ -42,7 +42,9 @@ use crate::property_metadata::{
 // object reports COV (supports_cov and cov_increment). COV_Period is served
 // as a constant 0 with no write arm (Optional/ReadOnly): zero means no
 // periodic notifications (Clause 13.1), which the server does not send.
-// Reliability is table O with no arm (Optional/ReadOnly).
+// Reliability is table O, and since it can report the Input_Reference
+// CONFIGURATION_ERROR its arm takes a client's value while Out_Of_Service is
+// TRUE (Clause 12.23.10), so Optional/WhenOutOfService.
 // Presence is None throughout: the implementation models no commandable,
 // intrinsic-reporting, or paired-text gating. The object is not createable at
 // runtime (the network factory builds only the eight analog/binary/
@@ -72,7 +74,7 @@ const PULSE_CONVERTER_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::RELIABILITY, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 

@@ -2,8 +2,8 @@
 //! the database as the write commits (Clause 12.23.9, #1341): Reliability
 //! reads CONFIGURATION_ERROR, and Status_Flags FAULT, while the reference
 //! names a property the converter can't count from, and clears once it
-//! names one it can. Over WriteProperty, WritePropertyMultiple and a
-//! CreateObject's initial values alike.
+//! names one it can. Over WriteProperty and WritePropertyMultiple alike;
+//! CreateObject builds no Pulse Converter.
 
 use super::*;
 use bacnet_objects::accumulator::{AccumulatorObject, PulseConverterObject};
@@ -135,4 +135,102 @@ fn deleting_and_recreating_the_named_object_moves_the_fault() {
         .unwrap();
     assert_eq!(state(&db), (Reliability::NO_FAULT_DETECTED, 0));
     assert_eq!(db.take_membership_work_internal().changed, [pc1()]);
+}
+
+/// WriteProperty of `octets` to `property` of `object`, its result.
+fn write_to(
+    db: &mut ObjectDatabase,
+    object: ObjectIdentifier,
+    property: PropertyIdentifier,
+    octets: &[u8],
+) -> Result<ObjectIdentifier, Error> {
+    let request = WritePropertyRequest {
+        object_identifier: object,
+        property_identifier: property,
+        property_array_index: None,
+        property_value: octets.to_vec(),
+        priority: None,
+    };
+    let mut bytes = BytesMut::new();
+    request.encode(&mut bytes).unwrap();
+    handle_write_property(db, &bytes)
+}
+
+fn refused_with(result: Result<ObjectIdentifier, Error>, expected: ErrorCode) {
+    assert!(
+        matches!(result, Err(Error::Protocol { class, code })
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == expected.to_raw() as u32),
+        "expected PROPERTY / {expected:?}, got {result:?}"
+    );
+}
+
+#[test]
+fn reliability_takes_a_simulated_value_only_out_of_service() {
+    let mut db = database();
+    write(&mut db, &AI_1_PV);
+    assert_eq!(state(&db), (Reliability::CONFIGURATION_ERROR, FAULT));
+    // Enumerated OVER_RANGE (2), application-tagged.
+    let over_range = [0x91, 0x02];
+    let reliability = PropertyIdentifier::RELIABILITY;
+    refused_with(
+        write_to(&mut db, pc1(), reliability, &over_range),
+        ErrorCode::WRITE_ACCESS_DENIED,
+    );
+    // Out of service a client simulates it (Clause 12.23.10), and a NULL is
+    // the Clause 15.9.2 no-op.
+    let out_of_service = PropertyIdentifier::OUT_OF_SERVICE;
+    write_to(&mut db, pc1(), out_of_service, &[0x11]).unwrap();
+    write_to(&mut db, pc1(), reliability, &over_range).unwrap();
+    write_to(&mut db, pc1(), reliability, &[0x00]).unwrap();
+    // FAULT and OUT_OF_SERVICE.
+    assert_eq!(state(&db), (Reliability::OVER_RANGE, FAULT | 0x10));
+    // Back in service, the judged value returns.
+    write_to(&mut db, pc1(), out_of_service, &[0x10]).unwrap();
+    assert_eq!(state(&db), (Reliability::CONFIGURATION_ERROR, FAULT));
+}
+
+#[test]
+fn an_accumulator_serves_prescale_only_once_set() {
+    let mut db = database();
+    let acc = ObjectIdentifier::new(ObjectType::ACCUMULATOR, 1).unwrap();
+    let prescale = PropertyIdentifier::PRESCALE;
+    let read = |db: &ObjectDatabase, property| {
+        let request = ReadPropertyRequest {
+            object_identifier: acc,
+            property_identifier: property,
+            property_array_index: None,
+        };
+        let mut bytes = BytesMut::new();
+        request.encode(&mut bytes);
+        let mut ack = BytesMut::new();
+        handle_read_property(db, &bytes, &mut ack)
+            .map(|_| ReadPropertyACK::decode(&ack).unwrap().property_value)
+    };
+    // Optional and without a value for none (BACnetPrescale has no NULL):
+    // absent, from reads, Property_List and writes, a NULL included.
+    refused_with(
+        read(&db, prescale).map(|_| acc),
+        ErrorCode::UNKNOWN_PROPERTY,
+    );
+    let list = read(&db, PropertyIdentifier::PROPERTY_LIST).unwrap();
+    assert!(!list
+        .chunks(2)
+        .any(|enumerated| enumerated == [0x91, prescale.to_raw() as u8]));
+    refused_with(
+        write_to(&mut db, acc, prescale, &[0x00]),
+        ErrorCode::UNKNOWN_PROPERTY,
+    );
+    // Set by the application: served and read-only, so a NULL is denied.
+    let mut configured = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+    configured.set_prescale(bacnet_types::constructed::BACnetPrescale {
+        multiplier: 5,
+        modulo_divide: 100,
+    });
+    db.add(Box::new(configured)).unwrap();
+    assert_eq!(read(&db, prescale).unwrap(), [0x21, 5, 0x21, 100]);
+    refused_with(
+        write_to(&mut db, acc, prescale, &[0x00]),
+        ErrorCode::WRITE_ACCESS_DENIED,
+    );
 }

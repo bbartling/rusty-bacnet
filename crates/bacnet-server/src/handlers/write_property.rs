@@ -320,8 +320,10 @@ pub(super) fn commit_attempt(
         db.update_name_index(&target.oid);
     }
     // A Pulse Converter judges its new Input_Reference against the database
-    // as the write commits, so Reliability reads right at once (#1341). The
-    // written object's own COV pass carries the change.
+    // as a WriteProperty or WritePropertyMultiple commits it, so Reliability
+    // reads right at once (#1341). The written object's own COV pass carries
+    // the change. (CreateObject's initial values come through here too, but
+    // CreateObject builds no Pulse Converter.)
     if applied == Applied::Written && target.property == PropertyIdentifier::INPUT_REFERENCE {
         db.check_input_reference(&target.oid);
     }

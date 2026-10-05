@@ -458,6 +458,11 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
                 PropertyValue::Boolean(true),
             ),
             (PropertyIdentifier::PRESENT_VALUE, PropertyValue::Real(10.0)),
+            // Out of service, as above (Clause 12.23.10, #1341).
+            (
+                PropertyIdentifier::RELIABILITY,
+                PropertyValue::Enumerated(0),
+            ),
             (PropertyIdentifier::SCALE_FACTOR, PropertyValue::Real(1.5)),
             (PropertyIdentifier::ADJUST_VALUE, PropertyValue::Real(2.0)),
             (PropertyIdentifier::COV_INCREMENT, PropertyValue::Real(0.5)),
@@ -473,10 +478,6 @@ fn is_writable_property_matches_write_property_on_pulse_converter_and_averaging(
                 PropertyValue::CharacterString("renamed".into()),
             ),
             (PropertyIdentifier::UNITS, PropertyValue::Enumerated(95)),
-            (
-                PropertyIdentifier::RELIABILITY,
-                PropertyValue::Enumerated(0),
-            ),
             (
                 PropertyIdentifier::EVENT_STATE,
                 PropertyValue::Enumerated(0),

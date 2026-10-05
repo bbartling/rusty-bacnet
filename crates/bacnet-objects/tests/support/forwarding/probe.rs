@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::fixtures::{address, day, noon, oid, property_error, schedule_write};
+use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::audit::{
     AuditLogForwarding, AuditLogNotificationSink, AuditLogObject, AuditLogPersistence,
@@ -599,7 +600,7 @@ impl BACnetObject for Probe {
         self.called("set_input_usable_internal", (usable,));
         true
     }
-    fn take_input_reading_internal(&mut self, reading: Option<i128>) -> bool {
+    fn take_input_reading_internal(&mut self, reading: Option<InputReading>) -> bool {
         self.called("take_input_reading_internal", (reading,));
         true
     }

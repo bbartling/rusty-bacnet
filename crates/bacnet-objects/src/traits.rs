@@ -1183,12 +1183,15 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
 
     /// Take a reading of the property
     /// [`input_reference_internal`](Self::input_reference_internal) names,
-    /// as an Unsigned or INTEGER widened to `i128`, or `None` when there is
-    /// nothing to read. A Pulse Converter counts each increase over the last
-    /// reading into Count (Clause 12.23.14). Returns whether a readable
+    /// or `None` when there is nothing to read. A Pulse Converter counts each
+    /// increase over the last reading into Count (Clause 12.23.14), across a
+    /// wrap when the reading carries its bound. Returns whether a readable
     /// property changed, so a caller owes COV. The default counts nothing.
     #[doc(hidden)]
-    fn take_input_reading_internal(&mut self, _reading: Option<i128>) -> bool {
+    fn take_input_reading_internal(
+        &mut self,
+        _reading: Option<crate::accumulator::InputReading>,
+    ) -> bool {
         false
     }
 

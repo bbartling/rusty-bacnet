@@ -3413,6 +3413,10 @@ as the device's.
 | `AccumulatorObject` | `::new(instance, name, units)` |
 | `PulseConverterObject` | `::new(instance, name, units)` |
 
+An Accumulator serves the optional Prescale only once `set_prescale` gives
+it one: BACnetPrescale has no NULL, so until then the property is absent from
+Property_List and the PICS, and a read is UNKNOWN_PROPERTY (#1417).
+
 A Pulse Converter's Input_Reference, set with `set_input_reference`, reads and
 takes writes like the Loop's variable references: the context-tagged
 `BACnetObjectPropertyReference` in a `PropertyValue::ApplicationData`, with
@@ -3423,19 +3427,27 @@ Accumulator 4194303's Present_Value, and writing a reference to instance
 The database judges the reference (`ObjectDatabase::check_input_reference`,
 #1341): Reliability reads CONFIGURATION_ERROR, with Status_Flags FAULT, while
 it names a missing object or a property that doesn't read as an Unsigned or
-INTEGER (an index on a property that isn't an array, or the converter's own
-property, included), and NO_FAULT_DETECTED once it names one that does or is
-unset (Clause 12.23.9). The verdict is taken as a write of the reference
-commits (WriteProperty, WritePropertyMultiple, a CreateObject initial value
-or `write_local`), when the converter is added, and whenever
+INTEGER, and NO_FAULT_DETECTED once it names one that does or is unset
+(Clause 12.23.9). An index on a property that isn't an array, index 0 (an
+array's size) and the converter's own properties are faults too. A
+Priority_Array slot is judged by the datatype the object is commanded in,
+its Relinquish_Default's, so a slot that is NULL for now is no fault but has
+nothing to count. The verdict is taken as a write of the reference commits
+(WriteProperty, WritePropertyMultiple or `write_local`; the object isn't one
+CreateObject builds), when the converter is added, whenever
 `ObjectDatabase::add` or `remove` adds, replaces or removes the object it
-names; the server fans COV out for a converter that changes. While
-Out_Of_Service is TRUE, Reliability keeps its value and the return to service
-applies the latest verdict. A running server also counts from the property
-once a second (`ObjectDatabase::count_pulse_inputs`): each increase over the
-last reading goes into Count as `add_pulses` would, the first reading only
-sets the baseline, and a reading below the last one sets it again. The
-application can still feed Count with `add_pulses`.
+names, and on every counting pass; the server fans COV out for a converter
+that changes. While Out_Of_Service is TRUE, Reliability takes a client's
+value (Clause 12.23.10), and the return to service applies the latest
+verdict. A running server also counts from the property at least once a
+second (`ObjectDatabase::count_pulse_inputs`, on every wake of its monotonic
+operation task): each increase over the last reading goes into Count as
+`add_pulses` would, and the first reading after the reference is set or
+changed only sets the baseline, so re-pointing it at a larger value counts
+nothing. A reading below the last one counts the wrap when the source is an
+Accumulator's Present_Value, modulo its Max_Pres_Value + 1 (Clause 12.61.4);
+from any other source it only sets the baseline again. The application can
+still feed Count with `add_pulses`.
 
 #### System (3)
 

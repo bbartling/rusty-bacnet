@@ -31,7 +31,9 @@ use crate::property_metadata::{
 // (Max_Pres_Value is table R with an arm, so RequiredRead/Always; Pulse_Rate
 // and Limit_Monitoring_Interval are table O with arms, so Optional/Always;
 // Prescale, Reliability, Value_Before_Change, and Value_Set have no arm, so
-// Optional/ReadOnly).
+// Optional/ReadOnly). Prescale is present only once the application sets
+// one; without it the row is left out, so the property reads as unknown
+// rather than as a NULL its datatype doesn't have.
 // Present_Value is the one deliberate dispatch-first deviation: Table 12-79
 // codes it R with footnote 1, and both that footnote and §12.61 require it to
 // accept writes while Out_Of_Service is TRUE, but the write arm
@@ -72,8 +74,20 @@ const ACCUMULATOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
-pub(super) fn for_accumulator_object(_object: &AccumulatorObject) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(ACCUMULATOR_BASE)
+/// The rows, Prescale's left out until the application sets one: the
+/// property is optional and BACnetPrescale has no value for none.
+pub(super) fn for_accumulator_object(object: &AccumulatorObject) -> Cow<'_, [PropertyMetadata]> {
+    if object.has_prescale() {
+        Cow::Borrowed(ACCUMULATOR_BASE)
+    } else {
+        Cow::Owned(
+            ACCUMULATOR_BASE
+                .iter()
+                .filter(|row| row.property_identifier != P::PRESCALE)
+                .copied()
+                .collect(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -97,7 +111,6 @@ mod tests {
 
     fn assert_exact_sets(object: &dyn BACnetObject, all: &[P], required: &[P]) {
         let metadata = object.property_metadata();
-        assert!(matches!(metadata, Cow::Borrowed(_)));
         assert_eq!(metadata.len(), all.len() + 1);
         assert_eq!(object.property_list().as_ref(), all);
         assert_eq!(object.required_properties().as_ref(), required);
@@ -159,7 +172,13 @@ mod tests {
 
     #[test]
     fn property_metadata_accumulator_exact_sets_readable_rows_and_indexed_list() {
-        let object = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        let mut object = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+        // Prescale is served only once the application sets one.
+        let without_prescale = AccumulatorObject::new(2, "ACC-2", 95).unwrap();
+        object.set_prescale(bacnet_types::constructed::BACnetPrescale {
+            multiplier: 1,
+            modulo_divide: 100,
+        });
         let all = [
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
@@ -194,6 +213,9 @@ mod tests {
         ];
         assert_exact_sets(&object, &all, &required);
         assert_indexed_property_list(&object, &all);
+        let all_without: Vec<_> = all.into_iter().filter(|p| *p != P::PRESCALE).collect();
+        assert_exact_sets(&without_prescale, &all_without, &required);
+        assert_indexed_property_list(&without_prescale, &all_without);
         assert_eq!(
             object.read_property(P::PRESENT_VALUE, None).unwrap(),
             PropertyValue::Unsigned(0)
@@ -204,7 +226,10 @@ mod tests {
         );
         assert_eq!(
             object.read_property(P::PRESCALE, None).unwrap(),
-            PropertyValue::Null
+            PropertyValue::List(vec![
+                PropertyValue::Unsigned(1),
+                PropertyValue::Unsigned(100)
+            ])
         );
         // Scale, Prescale, and Property_List-adjacent scalars are not
         // BACnetARRAY rows, so the service gate rejects an index on them.
@@ -291,6 +316,10 @@ mod tests {
     fn property_metadata_accumulator_writes_store_verbatim_with_range_gates() {
         for out_of_service in [false, true] {
             let mut object = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
+            object.set_prescale(bacnet_types::constructed::BACnetPrescale {
+                multiplier: 1,
+                modulo_divide: 100,
+            });
             object
                 .write_property(
                     P::OUT_OF_SERVICE,
@@ -407,5 +436,8 @@ mod tests {
         assert_unserved(&mut acc, P::DEVICE_TYPE);
         assert_unserved(&mut acc, P::VALUE_CHANGE_TIME);
         assert_unserved(&mut acc, P::COUNT);
+        // Prescale until the application sets one: a NULL written to it is
+        // refused as for any property the object doesn't have.
+        assert_unserved(&mut acc, P::PRESCALE);
     }
 }

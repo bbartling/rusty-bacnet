@@ -177,14 +177,20 @@ fn pulse_converter_write_framed_indexed_input_reference_lands() {
     );
     // Null is no reference, so it is refused as another datatype and the
     // reference stays (#1417).
-    assert!(pc
+    let refusal = pc
         .write_property(
             PropertyIdentifier::INPUT_REFERENCE,
             None,
             PropertyValue::Null,
             None,
         )
-        .is_err());
+        .unwrap_err();
+    assert!(
+        matches!(refusal, Error::Protocol { class, code }
+            if class == bacnet_types::enums::ErrorClass::PROPERTY.to_raw() as u32
+                && code == bacnet_types::enums::ErrorCode::INVALID_DATA_TYPE.to_raw() as u32),
+        "{refusal:?}"
+    );
     assert_eq!(
         pc.read_property(PropertyIdentifier::INPUT_REFERENCE, None)
             .unwrap(),

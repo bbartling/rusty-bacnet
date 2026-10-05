@@ -3,6 +3,7 @@
 
 use super::fixtures::{address, clock, day, monotonic, noon, oid, schedule_write};
 use super::probe::{CUSTOM, CUSTOM_LIST};
+use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::command::WriteFailure;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
@@ -448,7 +449,11 @@ pub const COMMANDS: &[(&str, Command)] = &[
         format!("{:?}", o.set_input_usable_internal(false))
     }),
     ("take_input_reading_internal", |o| {
-        format!("{:?}", o.take_input_reading_internal(Some(-41)))
+        let reading = InputReading {
+            value: -41,
+            wraps_after: Some(99),
+        };
+        format!("{:?}", o.take_input_reading_internal(Some(reading)))
     }),
     ("set_audit_log_parent_internal", |o| {
         let parent = BACnetDeviceObjectReference {

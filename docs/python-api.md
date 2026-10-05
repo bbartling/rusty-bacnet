@@ -2334,16 +2334,32 @@ null write cleared them. Treat a reference whose object instance is 4194303
 as unset, and write the unset form (for example the octets a fresh object
 reads) to clear one.
 
+An Event Enrollment's Object_Property_Reference, which peers can only read,
+reads as Analog Input 4194303's Present_Value (`0c 00 3f ff ff 19 55`) while
+the enrollment has no reference, instead of null (#1417). Its
+Fault_Parameters reads as the context-tagged `none` choice (`08`) while no
+fault algorithm is set, and writing that clears it; a null written to it,
+which used to clear it, now succeeds and changes nothing.
+
+An Accumulator serves Prescale only once one is configured; until then a
+read is UNKNOWN_PROPERTY and Property_List leaves it out, instead of a null
+read.
+
 A Pulse Converter checks what its Input_Reference names (#1341). Reliability
 reads CONFIGURATION_ERROR (10), and Status_Flags FAULT, while the reference
 names a missing object or a property that isn't an Unsigned or INTEGER, and
-NO_FAULT_DETECTED once it names one that is, or is unset. The server checks
-it when a peer or `write_property_local` writes the reference and when the
-object it names is created or deleted, and reports the Status_Flags change
-to COV subscribers. While the converter is out of service, Reliability stays
-as it was until it returns. Once a second the running server reads the
-named property and adds each increase over the previous reading to Count; a
-reading lower than the previous one only resets that baseline.
+NO_FAULT_DETECTED once it names one that is, or is unset; an array index of
+0 (the size) is a fault too. The server checks it when a peer or
+`write_property_local` writes the reference, when the object it names is
+created or deleted, and on each counting pass, and reports the Status_Flags
+change to COV subscribers. While the converter is out of service, peers and
+`write_property_local` can write Reliability to simulate a fault, and the
+return to service puts back the checked value. At least once a second the
+running server reads the named property and adds each increase over the
+previous reading to Count. When the reference names an Accumulator's
+Present_Value, a lower reading is counted as its wrap past Max_Pres_Value;
+from any other property, or after the reference changes, a reading only
+sets the baseline.
 
 A running server samples an Averaging object's Object_Property_Reference
 itself, every Window_Interval / Window_Samples seconds but never more often

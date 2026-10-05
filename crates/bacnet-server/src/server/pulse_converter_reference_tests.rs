@@ -105,6 +105,13 @@ async fn create_object_and_delete_object_report_the_fault_they_move() {
     let mut h = Harness::start_with(ServerConfig::default(), with_converter).await;
     subscribe(&mut h).await;
     assert_eq!(flags(&h.cov_notification().await), FAULT);
+    // Without the waker the background task never takes the queue, so only
+    // each request's own settle, under its guard, can report the change.
+    h.server
+        .database()
+        .write()
+        .await
+        .set_membership_waker_internal(None);
 
     let mut body = BytesMut::new();
     CreateObjectRequest {
