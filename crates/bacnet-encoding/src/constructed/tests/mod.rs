@@ -35,6 +35,7 @@ mod property_access_result;
 mod property_value;
 mod read_access;
 mod recipient;
+mod scale;
 mod schedule;
 mod shed_level;
 mod staging;

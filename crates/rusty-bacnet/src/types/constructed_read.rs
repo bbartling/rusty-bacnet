@@ -16,8 +16,9 @@ use bacnet_encoding::constructed::{
     decode_access_rule, decode_action_list, decode_authentication_factor_format,
     decode_calendar_entry, decode_cov_subscription, decode_daily_schedule, decode_date_range,
     decode_destination, decode_device_object_property_reference, decode_device_object_reference,
-    decode_port_permission, decode_property_access_result, decode_read_access_specification,
-    decode_recipient, decode_special_event, decode_stage_limit_value, decode_value_source,
+    decode_port_permission, decode_prescale, decode_property_access_result,
+    decode_read_access_specification, decode_recipient, decode_scale, decode_special_event,
+    decode_stage_limit_value, decode_value_source,
 };
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_encoding::tags;
@@ -76,6 +77,11 @@ pub(crate) enum Element {
     CovSubscription,
     /// A command source: `None`, an object reference, or an address mapping.
     ValueSource,
+    /// An Accumulator's Scale: a `float` for a float scale, an `int` for a
+    /// power-of-ten scale.
+    Scale,
+    /// An Accumulator's Prescale, as `(multiplier, modulo_divide)`.
+    Prescale,
 }
 
 /// How a property holds its elements.
@@ -132,6 +138,8 @@ pub(crate) fn element(
         (O::SCHEDULE, P::EFFECTIVE_PERIOD) => (Element::DateRange, Single),
         (O::CALENDAR, P::DATE_LIST) => (Element::CalendarEntry, Collection),
         (O::DEVICE, P::ACTIVE_COV_SUBSCRIPTIONS) => (Element::CovSubscription, Collection),
+        (O::ACCUMULATOR, P::SCALE) => (Element::Scale, Single),
+        (O::ACCUMULATOR, P::PRESCALE) => (Element::Prescale, Single),
         // Every object type that has these properties gives them one datatype.
         (_, P::EVENT_TIME_STAMPS | P::COMMAND_TIME_ARRAY) => (Element::TimeStamp, Collection),
         (_, P::LAST_COMMAND_TIME) => (Element::TimeStamp, Single),
@@ -208,6 +216,8 @@ impl Element {
             Self::TimeStamp => "timestamp",
             Self::CovSubscription => "cov_subscription",
             Self::ValueSource => "value_source",
+            Self::Scale => "scale",
+            Self::Prescale => "prescale",
         }
     }
 
@@ -299,6 +309,8 @@ impl Element {
                 Decoded::CovSubscription,
             ),
             Self::ValueSource => with(decode_value_source(octets, offset), Decoded::ValueSource),
+            Self::Scale => with(decode_scale(octets, offset), Decoded::Scale),
+            Self::Prescale => with(decode_prescale(octets, offset), Decoded::Prescale),
         }
     }
 }
@@ -355,3 +367,7 @@ mod tests;
 #[cfg(test)]
 #[path = "constructed_read_more_tests.rs"]
 mod more_tests;
+
+#[cfg(test)]
+#[path = "constructed_read_scale_tests.rs"]
+mod scale_tests;

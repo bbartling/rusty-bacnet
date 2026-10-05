@@ -8,12 +8,14 @@ its ReadPropertyMultiple, and the local BACnetServer.read_property in the
 form their add_* keywords take, and the Device's Audit_Notification_Recipient
 in the form configure_audit_recipient takes. A Schedule's Weekly_Schedule,
 Exception_Schedule and Effective_Period, a Calendar's Date_List and
-Event_Time_Stamps read as typed values too. Each typed read writes back as
-the octets it was read from.
+Event_Time_Stamps read as typed values too, and an Accumulator's Scale and
+Prescale as the values add_accumulator takes (#1487). Each typed read writes
+back as the octets it was read from.
 """
 
 from __future__ import annotations
 
+import inspect
 import unittest
 from typing import Any
 
@@ -21,7 +23,9 @@ from rusty_bacnet import (
     BACnetClient,
     BACnetServer,
     BACnetTimeStamp,
+    BacnetProtocolError,
     BipEndpoint,
+    ErrorCode,
     ObjectIdentifier,
     ObjectType,
     PropertyIdentifier,
@@ -38,6 +42,9 @@ USER_1 = ObjectIdentifier(ObjectType.ACCESS_USER, 1)
 SCHED_1 = ObjectIdentifier(ObjectType.SCHEDULE, 1)
 CAL_1 = ObjectIdentifier(ObjectType.CALENDAR, 1)
 AI_1 = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
+ACC_1 = ObjectIdentifier(ObjectType.ACCUMULATOR, 1)
+ACC_2 = ObjectIdentifier(ObjectType.ACCUMULATOR, 2)
+ACC_3 = ObjectIdentifier(ObjectType.ACCUMULATOR, 3)
 LOBBY = ObjectIdentifier(ObjectType.ACCESS_POINT, 2)
 REMOTE_POINT = ObjectIdentifier(ObjectType.ACCESS_POINT, 4)
 REMOTE_ZONE = ObjectIdentifier(ObjectType.ACCESS_ZONE, 3)
@@ -115,6 +122,9 @@ def make_server(instance: int = DEVICE) -> BACnetServer:
     server.add_schedule(1, "SCHED-1")
     server.add_calendar(1, "CAL-1")
     server.add_analog_input(1, "AI-1")
+    server.add_accumulator(1, "kWh", 70, scale=2.5, prescale=(5, 100))
+    server.add_accumulator(2, "Pulses", scale=-2)
+    server.add_accumulator(3, "Plain")
     return server
 
 
@@ -246,6 +256,18 @@ class TypedConstructedReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(one.tag, "timestamp")
         self.assertEqual(one.value, stamps.value[1])
 
+    async def test_accumulator_scale_and_prescale_read_as_configured(self) -> None:
+        scale = await self.assert_single(ACC_1, P.SCALE, 2.5, "scale")
+        self.assertIsInstance(scale.value, float)
+        await self.assert_single(ACC_1, P.PRESCALE, (5, 100), "prescale")
+        power = await self.assert_single(ACC_2, P.SCALE, -2, "scale")
+        self.assertIsInstance(power.value, int)
+        # The default is a float scale of 1.0, and no Prescale is served.
+        await self.assert_single(ACC_3, P.SCALE, 1.0, "scale")
+        with self.assertRaises(BacnetProtocolError) as raised:
+            await self.server.read_property(ACC_3, P.PRESCALE)
+        self.assertEqual(raised.exception.error_code, ErrorCode.UNKNOWN_PROPERTY.to_raw())
+
     async def test_typed_reads_write_back_unchanged(self) -> None:
         for oid, prop in (
             (RIGHTS_1, P.POSITIVE_ACCESS_RULES),
@@ -277,7 +299,36 @@ class TypedConstructedReadTests(unittest.IsolatedAsyncioTestCase):
                              members=await value(USER_1, P.MEMBERS),
                              member_of=await value(USER_1, P.MEMBER_OF))
         copy.configure_audit_recipient(await value(DEVICE_ID, P.AUDIT_NOTIFICATION_RECIPIENT))
-        self.assertEqual(copy._pending_registration_count(), 3)
+        copy.add_accumulator(1, "kWh", 70, scale=await value(ACC_1, P.SCALE),
+                             prescale=await value(ACC_1, P.PRESCALE))
+        copy.add_accumulator(2, "Pulses", scale=await value(ACC_2, P.SCALE))
+        self.assertEqual(copy._pending_registration_count(), 5)
+
+
+class AccumulatorKeywordTests(unittest.TestCase):
+    def test_scale_and_prescale_are_keyword_only(self) -> None:
+        parameters = inspect.signature(BACnetServer.add_accumulator).parameters
+        self.assertEqual(list(parameters), ["self", "instance", "name", "units", "scale",
+                                            "prescale"])
+        for keyword in ("scale", "prescale"):
+            self.assertIs(parameters[keyword].kind, inspect.Parameter.KEYWORD_ONLY)
+            self.assertIsNone(parameters[keyword].default)
+
+    def test_values_outside_the_types_raise(self) -> None:
+        server = BACnetServer(DEVICE + 3, interface="127.0.0.1", port=0)
+        for keywords, error in (
+            ({"scale": True}, TypeError),
+            ({"scale": "2"}, TypeError),
+            ({"scale": 2**31}, OverflowError),
+            ({"scale": float("inf")}, ValueError),
+            ({"prescale": (5,)}, ValueError),
+            ({"prescale": "5/100"}, TypeError),
+            ({"prescale": (-1, 100)}, OverflowError),
+            ({"prescale": (1, 2**32)}, OverflowError),
+        ):
+            with self.subTest(keywords=keywords), self.assertRaises(error):
+                server.add_accumulator(1, "Refused", **keywords)
+        self.assertEqual(server._pending_registration_count(), 0)
 
 
 if __name__ == "__main__":

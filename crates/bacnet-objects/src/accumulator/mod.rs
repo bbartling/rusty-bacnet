@@ -2,10 +2,12 @@
 //!
 //! Per ASHRAE 135-2020 §12.61 Table 12-79 (Accumulator) and §12.23 Table 12-27 (PulseConverter).
 
+use bacnet_encoding::constructed::{encode_prescale, encode_scale};
 use bacnet_types::constructed::{BACnetPrescale, BACnetScale};
 use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
+use bytes::BytesMut;
 use std::borrow::Cow;
 
 use crate::common::{self, read_common_properties};
@@ -122,19 +124,20 @@ impl BACnetObject for AccumulatorObject {
             p if p == PropertyIdentifier::MAX_PRES_VALUE => {
                 Ok(PropertyValue::Unsigned(self.max_pres_value))
             }
-            p if p == PropertyIdentifier::SCALE => match &self.scale {
-                BACnetScale::FloatScale(v) => {
-                    Ok(PropertyValue::List(vec![PropertyValue::Real(*v)]))
-                }
-                BACnetScale::IntegerScale(v) => {
-                    Ok(PropertyValue::List(vec![PropertyValue::Signed(*v)]))
-                }
-            },
+            // Both are constructed productions (Clause 21): Scale a CHOICE of
+            // a float [0] or an integer [1], Prescale its two Unsigneds under
+            // [0] and [1], served as their context-tagged octets (#1487).
+            p if p == PropertyIdentifier::SCALE => {
+                let mut encoded = BytesMut::new();
+                encode_scale(&mut encoded, &self.scale);
+                Ok(PropertyValue::ApplicationData(encoded.to_vec()))
+            }
             p if p == PropertyIdentifier::PRESCALE => match &self.prescale {
-                Some(ps) => Ok(PropertyValue::List(vec![
-                    PropertyValue::Unsigned(ps.multiplier as u64),
-                    PropertyValue::Unsigned(ps.modulo_divide as u64),
-                ])),
+                Some(prescale) => {
+                    let mut encoded = BytesMut::new();
+                    encode_prescale(&mut encoded, prescale);
+                    Ok(PropertyValue::ApplicationData(encoded.to_vec()))
+                }
                 None => Err(common::unknown_property_error()),
             },
             p if p == PropertyIdentifier::PULSE_RATE => Ok(PropertyValue::Real(self.pulse_rate)),
@@ -270,17 +273,25 @@ mod tests {
 
     #[test]
     fn accumulator_read_scale_float() {
+        // float-scale [0], a four-octet REAL (#1487).
         let acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
         let val = acc.read_property(PropertyIdentifier::SCALE, None).unwrap();
-        assert_eq!(val, PropertyValue::List(vec![PropertyValue::Real(1.0)]));
+        assert_eq!(
+            val,
+            PropertyValue::ApplicationData(vec![0x0C, 0x3F, 0x80, 0x00, 0x00])
+        );
     }
 
     #[test]
     fn accumulator_read_scale_integer() {
+        // integer-scale [1], a signed INTEGER (#1487).
         let mut acc = AccumulatorObject::new(1, "ACC-1", 95).unwrap();
         acc.set_scale(BACnetScale::IntegerScale(10));
         let val = acc.read_property(PropertyIdentifier::SCALE, None).unwrap();
-        assert_eq!(val, PropertyValue::List(vec![PropertyValue::Signed(10)]));
+        assert_eq!(val, PropertyValue::ApplicationData(vec![0x19, 0x0A]));
+        acc.set_scale(BACnetScale::IntegerScale(-2));
+        let val = acc.read_property(PropertyIdentifier::SCALE, None).unwrap();
+        assert_eq!(val, PropertyValue::ApplicationData(vec![0x19, 0xFE]));
     }
 
     #[test]
@@ -309,12 +320,10 @@ mod tests {
         let val = acc
             .read_property(PropertyIdentifier::PRESCALE, None)
             .unwrap();
+        // The multiplier under [0], the modulo divide under [1] (#1487).
         assert_eq!(
             val,
-            PropertyValue::List(vec![
-                PropertyValue::Unsigned(5),
-                PropertyValue::Unsigned(100),
-            ])
+            PropertyValue::ApplicationData(vec![0x09, 0x05, 0x19, 0x64])
         );
     }
 

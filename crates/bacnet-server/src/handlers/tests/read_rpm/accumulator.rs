@@ -147,6 +147,7 @@ fn rpm_accumulator_indexed_reads_and_bytes_are_unchanged() {
             object
                 .write_property(P::PULSE_RATE, None, PropertyValue::Real(2.5), None)
                 .unwrap();
+            object.set_scale(bacnet_types::constructed::BACnetScale::IntegerScale(-2));
             object
                 .write_property(
                     P::LIMIT_MONITORING_INTERVAL,
@@ -166,11 +167,18 @@ fn rpm_accumulator_indexed_reads_and_bytes_are_unchanged() {
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
-        // Independent application-value bytes pin the existing projection.
-        // Scale is a BACnetLIST-style List production and Prescale a pair of
-        // Unsigneds, so an index is PROPERTY_IS_NOT_AN_ARRAY on both.
-        // 2.5f32 encodes as 0x40200000; 1.0f32 as 0x3F800000.
-        let prescale: ExpectedRead = Ok(&[0x21, 5, 0x21, 100]);
+        // Independent bytes pin the projection. Scale is a CHOICE of a REAL
+        // under context tag 0 or an INTEGER under context tag 1, and Prescale
+        // its multiplier under context tag 0 then its modulo divide under
+        // context tag 1 (Clause 21, #1487); neither is an array, so an index
+        // is PROPERTY_IS_NOT_AN_ARRAY on both. 2.5f32 encodes as 0x40200000;
+        // 1.0f32 as 0x3F800000; -2 as the one octet 0xFE.
+        let prescale: ExpectedRead = Ok(&[0x09, 5, 0x19, 100]);
+        let scale: ExpectedRead = Ok(if configured {
+            &[0x19, 0xFE]
+        } else {
+            &[0x0C, 0x3F, 0x80, 0x00, 0x00]
+        });
         let cases: &[(P, Option<u32>, ExpectedRead)] = &[
             (P::OBJECT_TYPE, None, Ok(&[0x91, 23])),
             (
@@ -202,7 +210,7 @@ fn rpm_accumulator_indexed_reads_and_bytes_are_unchanged() {
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            (P::SCALE, None, Ok(&[0x44, 0x3F, 0x80, 0x00, 0x00])),
+            (P::SCALE, None, scale),
             (P::SCALE, Some(1), Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY)),
             (P::PRESCALE, None, prescale),
             (

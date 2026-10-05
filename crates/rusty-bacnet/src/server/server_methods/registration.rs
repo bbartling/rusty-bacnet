@@ -627,10 +627,29 @@ impl BACnetServer {
     // Pattern B: new(instance, name, extra_param) — three-param constructors
     // -----------------------------------------------------------------------
 
-    /// Add an Accumulator object to the server (before starting).
-    #[pyo3(signature = (instance, name, units=62))]
-    fn add_accumulator(&self, instance: u32, name: &str, units: u32) -> PyResult<()> {
-        let obj = AccumulatorObject::new(instance, name, units).map_err(to_py_err)?;
+    /// Add an Accumulator object to the server (before starting). `scale`
+    /// sets Scale: a float for a float scale, an int for a power-of-ten
+    /// scale. `prescale`, a `(multiplier, modulo_divide)` pair, serves the
+    /// optional Prescale (#1487).
+    #[pyo3(signature = (instance, name, units=62, *, scale=None, prescale=None))]
+    fn add_accumulator(
+        &self,
+        instance: u32,
+        name: &str,
+        units: u32,
+        scale: Option<&Bound<'_, PyAny>>,
+        prescale: Option<(u32, u32)>,
+    ) -> PyResult<()> {
+        let mut obj = AccumulatorObject::new(instance, name, units).map_err(to_py_err)?;
+        if let Some(scale) = scale {
+            obj.set_scale(crate::types::scale_from_py(scale)?);
+        }
+        if let Some((multiplier, modulo_divide)) = prescale {
+            obj.set_prescale(bacnet_types::constructed::BACnetPrescale {
+                multiplier,
+                modulo_divide,
+            });
+        }
         self.push_pending(Box::new(obj))
     }
 

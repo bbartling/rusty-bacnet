@@ -1373,8 +1373,10 @@ class PropertyValue:
       Exception_Schedule (``"special_event"``), Effective_Period
       (``"date_range"``), Date_List (``"calendar_entry"``), timestamps
       (``"timestamp"``: a ``BACnetTimeStamp``), Active_COV_Subscriptions
-      (``"cov_subscription"``), and Value_Source and Value_Source_Array
-      (``"value_source"``). Each element keeps its octets, so the value
+      (``"cov_subscription"``), Value_Source and Value_Source_Array
+      (``"value_source"``), and an Accumulator's Scale (``"scale"``: a
+      ``float`` or an ``int``) and Prescale (``"prescale"``: ``(multiplier,
+      modulo_divide)``). Each element keeps its octets, so the value
       writes back unchanged. A value that isn't those elements, to the last
       octet, follows the rules below.
     - Other context-tagged content (a Load Control's shed levels, an Event
@@ -1449,7 +1451,7 @@ class PropertyValue:
         'stage_limit_value', 'access_rule', 'device_object_property_reference',
         'property_access_result', 'recipient', 'daily_schedule',
         'special_event', 'calendar_entry', 'date_range', 'timestamp',
-        'cov_subscription', 'value_source'."""
+        'cov_subscription', 'value_source', 'scale', 'prescale'."""
         ...
 
     @property
@@ -3381,11 +3383,28 @@ class BACnetServer:
     def add_bit_string_value(self, instance: int, name: str) -> None: ...
 
     # --- Counters/accumulators ---
-    def add_accumulator(self, instance: int, name: str, units: int = 62) -> None:
+    def add_accumulator(
+        self,
+        instance: int,
+        name: str,
+        units: int = 62,
+        *,
+        scale: float | int | None = None,
+        prescale: Optional[tuple[int, int]] = None,
+    ) -> None:
         """Add an Accumulator (Clause 12.61) to the server (before starting).
 
-        No Prescale is configured this way, so the object doesn't serve that
-        optional property: a read of it is UNKNOWN_PROPERTY.
+        ``scale`` sets Scale: a ``float`` is a float scale, sent as a
+        single-precision REAL that multiplies Present_Value, and an ``int``
+        an integer scale, the power of ten Present_Value is multiplied by.
+        Left out, Scale is the float scale 1.0. ``prescale``, a
+        ``(multiplier, modulo_divide)`` pair of unsigned32 values, serves the
+        optional Prescale; left out, the object doesn't serve it and a read
+        of it is UNKNOWN_PROPERTY. Both read back as these values (tags
+        ``"scale"`` and ``"prescale"``). A bool or another type raises
+        TypeError, an integer outside its type OverflowError, a float that
+        isn't finite as a REAL or a ``prescale`` of another length
+        ValueError; nothing is registered then.
         """
         ...
     def add_pulse_converter(self, instance: int, name: str, units: int = 62) -> None:

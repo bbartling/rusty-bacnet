@@ -8,9 +8,9 @@ use bacnet_types::constructed::{
     AccessResult, BACnetAccessRule, BACnetActionCommand, BACnetActionList,
     BACnetAuthenticationFactorFormat, BACnetCOVSubscription, BACnetCalendarEntry, BACnetDateRange,
     BACnetDestination, BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
-    BACnetPortPermission, BACnetPropertyAccessResult, BACnetRecipient, BACnetSpecialEvent,
-    BACnetStageLimitValue, BACnetTimeValue, BACnetValueSource, ReadAccessSpecification,
-    SpecialEventPeriod,
+    BACnetPortPermission, BACnetPrescale, BACnetPropertyAccessResult, BACnetRecipient, BACnetScale,
+    BACnetSpecialEvent, BACnetStageLimitValue, BACnetTimeValue, BACnetValueSource,
+    ReadAccessSpecification, SpecialEventPeriod,
 };
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
@@ -49,6 +49,8 @@ pub(super) enum Decoded {
     TimeStamp(BACnetTimeStamp),
     CovSubscription(BACnetCOVSubscription),
     ValueSource(BACnetValueSource),
+    Scale(BACnetScale),
+    Prescale(BACnetPrescale),
 }
 
 impl Decoded {
@@ -118,6 +120,9 @@ impl Decoded {
                     dict.into_any().unbind()
                 }
             },
+            Self::Scale(BACnetScale::FloatScale(factor)) => any(py, f64::from(factor))?,
+            Self::Scale(BACnetScale::IntegerScale(power)) => any(py, power)?,
+            Self::Prescale(prescale) => any(py, (prescale.multiplier, prescale.modulo_divide))?,
         })
     }
 }

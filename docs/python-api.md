@@ -301,7 +301,8 @@ targets only, and a value the object's own checks refuse, which raises as it
 would if written by hand. Where it has no typed write, the form is the one
 the table gives. A whole read of a list or array is a list of the elements,
 and a read of a single value (Accompaniment, Audit_Notification_Recipient,
-Effective_Period, Last_Command_Time, Value_Source) the element itself. An
+Effective_Period, Last_Command_Time, Value_Source, Scale, Prescale) the
+element itself. An
 empty collection is `PropertyValue.list([])`. Each element keeps the octets it
 was read from, so writing the value back (`write_property`,
 `write_property_local`) sends them unchanged. `PropertyValue.list` of
@@ -334,6 +335,8 @@ its octets.
 | Calendar | Date_List | `"calendar_entry"` | `{"kind": "date", "date"}`, `{"kind": "date_range", "start_date", "end_date"}` or `{"kind": "week_n_day", "month", "week_of_month", "day_of_week"}` | none |
 | any | Event_Time_Stamps, Command_Time_Array; Last_Command_Time (one value) | `"timestamp"` | a `BACnetTimeStamp` | none |
 | any | Value_Source_Array; Value_Source (one value) | `"value_source"` | `None` (none), an `ObjectIdentifier` or `(device, object)` (an object), or `{"network_number", "mac_address"}` (an address) | none |
+| Accumulator | Scale (one value) | `"scale"` | a `float` for a float scale, an `int` for a power-of-ten scale | `add_accumulator(scale=...)` |
+| Accumulator | Prescale (one value) | `"prescale"` | `(multiplier, modulo_divide)` | `add_accumulator(prescale=...)` |
 
 A date in these forms is a `(year, month, day, day_of_week)` tuple with the
 full year, as `BACnetTimeStamp` takes it, and 255 in any field left
@@ -2865,6 +2868,8 @@ server.add_date_time_pattern_value(instance=1, name="Schedule Pattern")
 
 ```python
 server.add_accumulator(instance=1, name="kWh Meter", units=70)      # 70 = kilowatt-hours
+# Present_Value x 10**-2 in units, and one count per 100 pulses.
+server.add_accumulator(instance=2, name="Gas Meter", units=80, scale=-2, prescale=(1, 100))
 server.add_pulse_converter(instance=1, name="Pulse Count", units=95) # 95 = counts
 server.add_file(instance=1, name="Config File", file_type="text/plain")
 server.set_file_data(instance=1, data=b"mode=occupied\n")
@@ -2873,6 +2878,16 @@ server.add_file(instance=2, name="Record File")
 server.set_file_access_method(instance=2, access_method="record")
 server.set_file_records(instance=2, records=[b"first", b"second"])
 ```
+
+`add_accumulator`'s keyword-only `scale` sets Scale: a `float` is a float
+scale, a single-precision REAL that multiplies Present_Value, and an `int` an
+integer scale, the power of ten that does. Left out, Scale is the float scale
+1.0. `prescale`, a `(multiplier, modulo_divide)` pair of unsigned32 values,
+serves the optional Prescale, which is absent (a read is UNKNOWN_PROPERTY)
+without it. Both go out in their context-tagged Clause 21 forms and read back
+as these values (#1487). A bool or another type raises `TypeError`, an
+integer outside its type `OverflowError`, and a float that isn't finite as a
+REAL or a `prescale` of another length `ValueError`.
 
 #### Configured Network Port snapshots
 

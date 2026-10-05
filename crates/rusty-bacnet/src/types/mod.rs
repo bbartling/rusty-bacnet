@@ -52,6 +52,7 @@ pub use cov::{PyCovNotification, PyCovNotificationIterator};
 pub(crate) use destination::destination as destination_from_py;
 pub use device::PyDiscoveredDevice;
 pub use enums::*;
+pub(crate) use mapping::scale as scale_from_py;
 pub use object_identifier::PyObjectIdentifier;
 pub(crate) use property_reference::{
     check_device, local_device, localize, property_references_from_py,

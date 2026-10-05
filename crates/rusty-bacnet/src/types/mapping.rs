@@ -2,10 +2,11 @@
 //! key is checked against the allowed set, every value is type-checked, and
 //! each error names the field it came from.
 
+use bacnet_types::constructed::BACnetScale;
 use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBool, PyBytes, PyInt, PyMapping, PyString};
+use pyo3::types::{PyAny, PyBool, PyBytes, PyFloat, PyInt, PyMapping, PyString};
 
 use super::PyObjectIdentifier;
 
@@ -113,6 +114,26 @@ pub(crate) fn bytes(value: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<u8>> {
         .cast::<PyBytes>()
         .map(|value| value.as_bytes().to_vec())
         .map_err(|_| PyTypeError::new_err(format!("{name} must be bytes")))
+}
+
+/// An Accumulator's Scale (#1487): a float is a float scale and an int a
+/// power-of-ten scale. A bool or any other type raises TypeError, an int
+/// outside INTEGER's 32 bits OverflowError, and a float that isn't finite
+/// once rounded to a REAL ValueError.
+pub(crate) fn scale(value: &Bound<'_, PyAny>) -> PyResult<BACnetScale> {
+    if value.is_instance_of::<PyInt>() && !value.is_instance_of::<PyBool>() {
+        return Ok(BACnetScale::IntegerScale(value.extract()?));
+    }
+    if value.is_instance_of::<PyFloat>() {
+        let factor = value.extract::<f64>()? as f32;
+        if !factor.is_finite() {
+            return Err(PyValueError::new_err(
+                "scale must be finite as a single-precision REAL",
+            ));
+        }
+        return Ok(BACnetScale::FloatScale(factor));
+    }
+    Err(PyTypeError::new_err("scale must be a float or an int"))
 }
 
 pub(crate) fn object_identifier(
