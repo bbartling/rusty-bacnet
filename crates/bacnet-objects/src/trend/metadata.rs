@@ -8,7 +8,7 @@ use crate::log_lifecycle::{LOG_ENABLE_METADATA, RECORD_COUNT_METADATA, STOP_WHEN
 use crate::log_reporting::BUFFER_READY_METADATA;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
-    PropertyMetadata,
+    PropertyMetadata, PropertyWriteCapability,
     PropertyWriteCapability::{Always, ReadOnly},
 };
 
@@ -18,16 +18,18 @@ use crate::property_metadata::{
 // footnotes 1 and 8 require them of a log that samples a BACnet property,
 // and sampling one is the only thing a Trend Log here does (#1481). So they
 // are classed required: Start_Time and Stop_Time as writable ones (footnote
-// 2), Log_Interval as writable while POLLED and read-only while TRIGGERED
-// (footnote 3), and Log_DeviceObjectProperty as readable, though this device
-// takes writes of it held to this device (#1234). There is no Out_Of_Service
+// 2), and Log_Interval and Log_DeviceObjectProperty as readable. Log_Interval
+// has to be writable only while POLLED (footnote 3), so, as on a Trend Log
+// Multiple, its write capability follows Logging_Type rather than its class;
+// this device also takes Log_DeviceObjectProperty writes held to this device
+// (#1234). There is no Out_Of_Service
 // row (#985), and Reliability stays read-only. Logging_Type takes POLLED or
 // TRIGGERED. The device supports clock-aligned logging, so Align_Intervals
 // and Interval_Offset are present (footnote 5) and writable, as Trigger is,
 // to ask for an acquisition. The log reports BUFFER_READY (#1347), so the
 // intrinsic reporting rows footnote 4 asks for come last, each marked as
 // present for that reason.
-const fn rows(log_interval: PropertyMetadata) -> [PropertyMetadata; 32] {
+const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 32] {
     let r = BUFFER_READY_METADATA;
     [
         PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
@@ -35,7 +37,7 @@ const fn rows(log_interval: PropertyMetadata) -> [PropertyMetadata; 32] {
         PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
         PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
         LOG_ENABLE_METADATA,
-        log_interval,
+        PropertyMetadata::new(P::LOG_INTERVAL, RequiredRead, None, log_interval),
         STOP_WHEN_FULL_METADATA,
         BUFFER_SIZE_METADATA,
         LOG_BUFFER_METADATA,
@@ -65,18 +67,8 @@ const fn rows(log_interval: PropertyMetadata) -> [PropertyMetadata; 32] {
     ]
 }
 
-const WRITABLE_INTERVAL: [PropertyMetadata; 32] = rows(PropertyMetadata::new(
-    P::LOG_INTERVAL,
-    RequiredWrite,
-    None,
-    Always,
-));
-const READ_ONLY_INTERVAL: [PropertyMetadata; 32] = rows(PropertyMetadata::new(
-    P::LOG_INTERVAL,
-    RequiredRead,
-    None,
-    ReadOnly,
-));
+const WRITABLE_INTERVAL: [PropertyMetadata; 32] = rows(Always);
+const READ_ONLY_INTERVAL: [PropertyMetadata; 32] = rows(ReadOnly);
 
 pub(super) fn for_object(object: &TrendLogObject) -> Cow<'_, [PropertyMetadata]> {
     Cow::Borrowed(if object.acquisition.log_interval_writable() {
@@ -248,12 +240,11 @@ mod tests {
                             row.presence_condition,
                             reporting.then_some(PropertyPresenceCondition::IntrinsicReporting)
                         );
-                        // A Trend Log's window has to be writable, and its
-                        // Log_Interval while POLLED (Table 12-29 footnotes
-                        // 2 and 3).
-                        let trend_write = kind == ObjectType::TREND_LOG
-                            && (WINDOW.contains(&p)
-                                || p == P::LOG_INTERVAL && logging_type == LoggingType::POLLED);
+                        // A Trend Log's window has to be writable (Table
+                        // 12-29 footnote 2); Log_Interval only while POLLED,
+                        // which its capability carries, as on a Trend Log
+                        // Multiple (footnote 3, Table 12-35 footnote 2).
+                        let trend_write = kind == ObjectType::TREND_LOG && WINDOW.contains(&p);
                         let conformance =
                             if matches!(p, P::LOG_ENABLE | P::RECORD_COUNT) || trend_write {
                                 RequiredWrite

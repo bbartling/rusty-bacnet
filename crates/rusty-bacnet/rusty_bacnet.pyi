@@ -2823,7 +2823,7 @@ class BACnetServer:
         The log records each event notification the server builds. With
         ``log_received_notifications`` it also records the Confirmed and
         UnconfirmedEventNotifications the server receives, unicast or
-        broadcast, as they arrived; each source is held to a few records a
+        broadcast, as they decoded; each source is held to a few records a
         second, and the rest show in ``event_notification_counters()`` as
         ``received_not_logged``.
 

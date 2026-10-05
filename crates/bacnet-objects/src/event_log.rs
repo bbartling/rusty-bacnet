@@ -136,7 +136,7 @@ impl EventLogObject {
     }
 
     /// Have the log take the Confirmed and UnconfirmedEventNotifications the
-    /// device receives, unicast or broadcast, each kept as it arrived, or
+    /// device receives, unicast or broadcast, each kept as it decoded, or
     /// stop it doing so. Clause 12.27 leaves the choice to the device, and
     /// it's off by default. A running server holds what it logs to a small
     /// number of records per source each second; see

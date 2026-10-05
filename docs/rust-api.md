@@ -2529,11 +2529,14 @@ with `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`). The rules:
   notification distribution produced.
 - Notifications the server receives are logged only by the Event Logs that
   opt in (below).
-- No log takes a notification about an Event Log: one whose event object is an
-  Event Log, or one from an Event Enrollment of this device monitoring a
-  property of an Event Log. Logging such a report anywhere would add a record
-  that changes what it watches, so reports could prompt each other without end,
-  directly or crosswise between two logs.
+- No log takes a BUFFER_READY report whose Buffer_Property names an Event Log,
+  nor any report from an Event Enrollment of this device monitoring a property
+  of an Event Log here. Logging either would add a record that changes what it
+  watches, so reports could prompt each other without end, directly or
+  crosswise between two logs. The second rule is wider because an enrollment
+  running any algorithm on, say, Total_Record_Count answers each record. An
+  acknowledgment of a log's report, and a Trend Log's or Trend Log Multiple's
+  report, are logged like any other notification.
 - Each log applies its own Enable, Start_Time / Stop_Time window,
   Buffer_Size and Stop_When_Full handling.
 - Without a valid Device clock nothing is logged, since a record needs a
@@ -2548,25 +2551,36 @@ opts it in (#1346; off by default, as Clause 12.27 leaves the choice to the
 device). Both receive paths hand each one that decodes in full, unicast or
 broadcast, to `ObjectDatabase::log_received_event_notification` before the
 Notification Forwarders see it, holding no other lock; a confirmed one is
-logged at its first receipt only. The record keeps the notification as it
-arrived, Process Identifier included, and goes through the log's lifecycle like
-any other: Enable, the window, Buffer_Size and Stop_When_Full apply, and it
-counts toward Notification_Threshold. A received notification about an Event
-Log isn't logged, so two devices' logs can't prompt each other's BUFFER_READY
-reports, and nor is one whose Initiating Device Identifier names this device.
+logged at its first receipt only. The record holds the notification as it
+decoded, Process Identifier included; a message text in a character set the
+stack can't read is left out, as `decode_event_notification_tolerant` reads
+it, and a notification whose event values use a choice the codec doesn't know
+isn't logged. The record goes through the log's lifecycle like any other:
+Enable, the window, Buffer_Size and Stop_When_Full apply, and it counts toward
+Notification_Threshold. A received BUFFER_READY report whose Buffer_Property
+names an Event Log isn't logged, whichever object made it (another vendor's
+Event Enrollment may run the algorithm on its log), so an opted-in log here and
+a log in another device can't keep prompting each other's reports. Any other
+notification about a remote Event Log is logged. Nor is one whose Initiating
+Device Identifier names this device logged. A remote enrollment watching some
+other property of a log here could still answer each record it causes, at most
+at its source's rate.
 
 The server holds each source to `RECEIVED_EVENT_LOG_RATE` (5) records in each
 one-second window, shared by every opted-in log. A source is its network
 address as `CanonicalPeer::from_source` reads it, not the Initiating Device
 Identifier the sender writes, which a flooding node could vary freely.
 `RECEIVED_EVENT_LOG_SOURCES` (32) sources hold an allowance of their own at a
-time; a new one takes the place of one silent for a whole window, and while
-none has been, every other source shares one more allowance. So however many
-sources send, the logs take at most 33 x 5 = 165 received records a second
-(up to twice that in a second that straddles two windows), and a flood can't
-push the device's own records out faster than that. Each notification past
-its source's allowance is counted in
-`EventNotificationCounters::received_not_logged`.
+time. A new one takes the place of one that has sent nothing for a whole
+window since its last notification, and while none has been that quiet,
+every other source shares one more allowance. So however many sources send,
+the logs take at most 33 x 5 = 165 received records a window (up to twice
+that in a second that straddles two windows), and a flood can't push the
+device's own records out faster than that. Each notification past its
+source's allowance is counted in
+`EventNotificationCounters::received_not_logged`. With no Event Log opted in,
+a received notification isn't even decoded for logging; the opt-in lives on
+each log, so the check still takes the database read lock.
 
 Event Log, Trend Log and Trend Log Multiple report intrinsically with the
 BUFFER_READY algorithm (Clause 13.3.7, #1347). Each serves Notification_Threshold,
@@ -2582,9 +2596,11 @@ Last_Notify_Record, and the recipients of the log's Notification Class get a
 BUFFER_READY notification naming the log's Log_Buffer in this device with the
 previous and current Total_Record_Count. Records that arrive within one pass
 make one report spanning them all. Event_Enable's TO_NORMAL flag (set by
-default) decides whether it goes out; Notify_Type defaults to EVENT. The
-report adds no record to any log, its own included, so it never counts toward
-the next. A purge restarts Records_Since_Notification at the BUFFER_PURGED
+default) decides whether it goes out; Notify_Type defaults to EVENT. An
+Event Log's report goes in no log, its own included, so it never counts
+toward its next one. A Trend Log's or Trend Log Multiple's report is logged in
+the Event Logs like any other notification; those logs take no notifications,
+so it can't count toward their own next report. A purge restarts Records_Since_Notification at the BUFFER_PURGED
 record but leaves the threshold counting from Last_Notify_Record;
 Event_Detection_Enable TRUE again restarts both from the current count.
 Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair aren't served.
@@ -2592,7 +2608,8 @@ Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair aren't served.
 Every Trend Log samples a BACnet property, so its Start_Time, Stop_Time,
 Log_Interval and Log_DeviceObjectProperty are classed required (Table 12-29
 footnotes 1 and 8, #1481): RPM with REQUIRED returns them, and the PICS lists
-them as required.
+them as required. Log_Interval is classed as on a Trend Log Multiple: a
+required readable row whose write capability follows Logging_Type.
 
 Every record kind, the Audit Log's included, carries a log status as the
 typed `bacnet_types::bitstring::LogStatus` flags (`LOG_DISABLED`,

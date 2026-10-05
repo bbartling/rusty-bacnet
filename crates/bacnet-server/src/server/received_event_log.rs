@@ -13,16 +13,19 @@
 //! allowance goes into each of them, and one past it into none, counted in
 //! [`EventNotificationCounters::received_not_logged`](super::EventNotificationCounters::received_not_logged).
 //! [`RECEIVED_EVENT_LOG_SOURCES`] sources hold an allowance of their own at a
-//! time; while the table is full, a new source takes the place of one silent
-//! for a whole window, and when none has been, it shares one more allowance
-//! with every other source left out. So however many sources send, the logs
-//! take at most (32 + 1) x 5 = 165 received records a second, and at most
-//! twice that in any one second straddling two windows, whatever a log's
-//! Buffer_Size. Normal traffic, a few notifications a second from any one
-//! device, is logged in full.
+//! time. While the table is full, a new source takes the place of one that
+//! has sent nothing for a whole window since its last notification, whose
+//! window has therefore ended; when none has been that quiet, the new source
+//! shares one more allowance with every other source left out. Each of those
+//! 33 allowances opens a window only after its last one ended, so however
+//! many sources send, the logs take at most (32 + 1) x 5 = 165 received
+//! records in a window, and at most twice that in any one second straddling
+//! two windows, whatever a log's Buffer_Size. Normal traffic, a few
+//! notifications a second from any one device, is logged in full.
 //!
 //! Nothing is spent on a notification no log would take: when no Event Log
-//! has opted in, or it is one the logs keep out (see
+//! has opted in, which is found before the notification is decoded, or when
+//! it is one the logs keep out (see
 //! [`ObjectDatabase::log_received_event_notification`]).
 
 use std::sync::Mutex;
@@ -47,11 +50,13 @@ pub const RECEIVED_EVENT_LOG_SOURCES: usize = 32;
 
 const WINDOW: Duration = Duration::from_secs(1);
 
-/// One allowance: the records taken in the window that opened at `opened`.
+/// One allowance: the records taken in the window that opened at `opened`,
+/// and when its source last sent a notification, taken or not.
 #[derive(Debug, Default, Clone, Copy)]
 struct Allowance {
     opened: Option<Instant>,
     taken: u32,
+    last: Option<Instant>,
 }
 
 impl Allowance {
@@ -61,14 +66,20 @@ impl Allowance {
             .is_none_or(|opened| now.saturating_duration_since(opened) >= WINDOW)
     }
 
+    /// Whether the source has sent nothing for a whole window. Its window
+    /// opened at or before its last notification, so it has ended too.
+    fn idle(&self, now: Instant) -> bool {
+        self.last
+            .is_none_or(|last| now.saturating_duration_since(last) >= WINDOW)
+    }
+
     /// Take one record, opening a new window first if the last has run out.
     fn take(&mut self, now: Instant) -> bool {
         if self.lapsed(now) {
-            *self = Self {
-                opened: Some(now),
-                taken: 0,
-            };
+            self.opened = Some(now);
+            self.taken = 0;
         }
+        self.last = Some(now);
         let within = self.taken < RECEIVED_EVENT_LOG_RATE;
         if within {
             self.taken += 1;
@@ -92,9 +103,10 @@ impl Allowances {
         } else if self.sources.len() < RECEIVED_EVENT_LOG_SOURCES {
             self.sources.push((source.clone(), Allowance::default()));
             self.sources.len() - 1
-        } else if let Some(at) = self.sources.iter().position(|(_, a)| a.lapsed(now)) {
-            // A lapsed allowance has no records left in its window to give,
-            // so handing it over adds none to the bound.
+        } else if let Some(at) = self.sources.iter().position(|(_, a)| a.idle(now)) {
+            // An idle source's window has ended, so handing its place over
+            // adds nothing to the bound, and a source still sending keeps
+            // its place even once its window has run out.
             self.sources[at] = (source.clone(), Allowance::default());
             at
         } else {
@@ -129,14 +141,17 @@ impl ReceivedEventLog {
     }
 }
 
-/// Log a received event notification, `service_request` as it arrived from
+/// Log a received event notification, `service_request` as it came from
 /// `source`, into each Event Log that collects them, within `source`'s
 /// allowance. One past it is counted in `suppressions` instead.
 ///
 /// The database is locked twice, and nothing else is held with it: read to
-/// ask whether any log takes the notification, then written to log it. The
-/// allowance's own lock is taken between the two, so the server's lock order
-/// (ObjectDatabase before COVTable) is untouched.
+/// ask whether any log collects received notifications and would take this
+/// one, then written to log it. The allowance's own lock is taken between the
+/// two, so the server's lock order (ObjectDatabase before COVTable) is
+/// untouched. With no log collecting, the notification isn't even decoded.
+/// The opt-in lives on each Event Log, which the application can change
+/// through the database at any time, so there is no cheaper flag to read.
 pub(super) async fn log_received_event_notification(
     db: &RwLock<ObjectDatabase>,
     allowances: &ReceivedEventLog,
@@ -144,17 +159,20 @@ pub(super) async fn log_received_event_notification(
     source: CanonicalPeer,
     service_request: &[u8],
 ) {
-    let Ok(notification) = decode_event_notification_tolerant(service_request) else {
-        debug!("Received event notification doesn't decode in full; not logged");
-        return;
+    let notification = {
+        let db = db.read().await;
+        if !db.collects_received_event_notifications() {
+            return;
+        }
+        let Ok(notification) = decode_event_notification_tolerant(service_request) else {
+            debug!("Received event notification doesn't decode in full; not logged");
+            return;
+        };
+        if !db.takes_received_event_notification(&notification) {
+            return;
+        }
+        notification
     };
-    if !db
-        .read()
-        .await
-        .takes_received_event_notification(&notification)
-    {
-        return;
-    }
     if !allowances.admit(&source, Instant::now()) {
         suppressions.record(EventSuppression::ReceivedNotLogged);
         debug!(

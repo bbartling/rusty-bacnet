@@ -1476,7 +1476,7 @@
     "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_local_alarm_and_its_return_to_normal_are_logged_and_read_back,an_acknowledgment_notification_is_logged,a_notification_no_recipient_takes_is_still_logged,stop_when_full_stops_logging_before_the_buffer_fills}",
     "crates/bacnet-objects/src/database/event_log_tests.rs::{every_event_log_records_the_notification_at_the_device_clock_time,stop_when_full_stops_the_log_before_it_fills}",
     "crates/bacnet-objects/src/database/trend_poll/trend_log_tests.rs::each_pass_records_an_event_log_window_opening_and_closing",
-    "crates/bacnet-server/src/server/received_event_log_wire_tests.rs::{a_collecting_log_records_what_arrives_and_reports_it,every_two_records_make_one_report_that_adds_no_record}",
+    "crates/bacnet-server/src/server/received_event_log_wire_tests.rs::{a_collecting_log_records_what_arrives_and_reports_it,every_two_records_make_one_report_that_adds_no_record,trend_log_reports_follow_their_class_and_are_logged}",
     "crates/bacnet-objects/src/log_reporting_tests.rs::{every_threshold_of_records_proposes_one_report_on_each_log,a_purge_restarts_records_since_notification_only,the_count_runs_on_across_the_wrap}",
     "crates/bacnet-objects/src/database/event_log_tests.rs::only_a_log_that_opts_in_records_received_notifications"
    ],
@@ -1485,9 +1485,11 @@
     "crates/bacnet-server/src/server/received_event_log_wire_tests.rs::a_flood_from_one_source_is_held_to_its_allowance",
     "crates/bacnet-server/src/server/received_event_log_tests.rs::{each_source_gets_its_rate_in_each_window,a_flood_of_sources_shares_one_allowance_past_the_table,the_ceiling_holds_window_after_window}",
     "crates/bacnet-objects/src/log_reporting_tests.rs::{no_threshold_or_detection_off_proposes_nothing,only_a_report_to_normal_commits}",
-    "crates/bacnet-objects/src/database/event_log_tests.rs::received_reports_about_event_logs_and_this_devices_own_go_in_no_log",
+    "crates/bacnet-objects/src/database/event_log_tests.rs::received_reports_on_event_log_buffers_and_this_devices_own_go_in_no_log",
+    "crates/bacnet-server/src/server/received_event_log_tests.rs::a_source_that_sent_late_in_its_window_keeps_its_place",
+    "crates/bacnet-server/src/server/received_event_log_wire_tests.rs::a_retransmitted_confirmed_notification_is_logged_once",
     "crates/bacnet-server/src/server/event_log_notification_tests.rs::{a_report_on_an_event_log_is_logged_nowhere,enrollments_watching_each_others_logs_do_not_feed_each_other}",
-    "crates/bacnet-objects/src/database/event_log_tests.rs::{a_notification_about_an_event_log_goes_in_no_log,an_enrollment_notification_about_any_local_event_log_goes_in_no_log,nothing_is_logged_without_a_valid_device_clock,a_disabled_log_ignores_the_notification,a_log_that_refuses_the_record_leaves_the_others_logging}"
+    "crates/bacnet-objects/src/database/event_log_tests.rs::{only_a_report_on_an_event_log_buffer_goes_in_no_log,an_enrollment_notification_about_any_local_event_log_goes_in_no_log,nothing_is_logged_without_a_valid_device_clock,a_disabled_log_ignores_the_notification,a_log_that_refuses_the_record_leaves_the_others_logging}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -1497,12 +1499,13 @@
    "notes": [
     "Each intrinsic, Event Enrollment or acknowledgment notification is logged with Process Identifier 0, also when the Notification Class selects nobody: the Recipient_List picks network recipients, not local objects.",
     "No record, as a local choice, for a transition that Event_Enable suppresses or that DCC stops, nor for one whose recipient lookup fails closed: a missing Notification Class, or an unreadable, invalid or over-cap Recipient_List.",
-    "An opted-in log keeps each received notification that decodes, as it arrived. Each source, by network address, gets 5 records a second; 32 are tracked and the rest share one allowance, so at most 165 a second get in.",
-    "No log takes a notification about an Event Log, nor a received one naming this device. So reports can't prompt each other through a log, directly, crosswise or between devices.",
-    "BUFFER_READY runs on Total_Record_Count at each intrinsic pass and after a write; a report adds no record anywhere. Without a valid Device clock nothing is logged."
+    "Local choices on received notifications: opt-in per log, off by default; 5 records per source address a second, 32 sources tracked and the rest sharing one allowance (at most 165 a window); none naming this device.",
+    "No Event Log takes a BUFFER_READY report whose Buffer_Property names an Event Log, in any device; so an Event Log's reports can't feed a log's next report, here or across devices. Other reports about a remote Event Log are logged.",
+    "Own reports from an Event Enrollment watching a local Event Log are kept out too, whatever the algorithm. BUFFER_READY runs on Total_Record_Count at each intrinsic pass and after a write. No valid Device clock: nothing is logged."
    ],
    "gaps": [
-    "Event_Message_Texts_Config and Event_Algorithm_Inhibit(_Ref), optional on the three logs, are not served (no issue)"
+    "Event_Message_Texts_Config and Event_Algorithm_Inhibit(_Ref), optional on the three logs, are not served (no issue)",
+    "A received message text in a character set the stack can't read is logged without the text, and event values in a choice the codec doesn't know aren't logged at all (no issue)"
    ]
   },
   {

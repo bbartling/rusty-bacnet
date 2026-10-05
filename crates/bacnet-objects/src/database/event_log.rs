@@ -3,7 +3,7 @@
 
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventLogRecord, EventLogDatum,
-    EventNotificationRequest,
+    EventNotificationRequest, NotificationParameters,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
@@ -25,12 +25,16 @@ impl ObjectDatabase {
     /// its oldest record or, with Stop_When_Full, stops and records that
     /// instead.
     ///
-    /// No log takes a notification about an Event Log: one whose
-    /// event-initiating object is an Event Log, or an Event Enrollment of this
-    /// device monitoring a property of one. Logging it anywhere would add a
-    /// record that changes what such reports watch, so a report could prompt
-    /// the next without end, through the log it watches or crosswise through
-    /// another log watched in turn.
+    /// Two kinds go in no log, so that a report can't prompt the next without
+    /// end, through the log it watches or crosswise through another log
+    /// watched in turn. One is a BUFFER_READY report on an Event Log's buffer
+    /// (see `reports_an_event_log_buffer`), as for received notifications. The
+    /// other is any report from an Event Enrollment of this device monitoring
+    /// a property of an Event Log here: whatever its algorithm, it watches
+    /// something each record changes, such as Total_Record_Count, so it isn't
+    /// only BUFFER_READY that would answer its own record. A Trend Log's or
+    /// Trend Log Multiple's report is logged like any other notification:
+    /// those logs take no notifications, so it can't count toward the next.
     ///
     /// Without a valid Device clock no record can carry its timestamp, so
     /// nothing is logged. A log that refuses the record keeps its state; the
@@ -42,14 +46,25 @@ impl ObjectDatabase {
         if logs.is_empty() {
             return;
         }
-        if self.reports_on_an_event_log(notification.event_object_identifier) {
+        if reports_an_event_log_buffer(notification)
+            || self.enrollment_watches_an_event_log(notification.event_object_identifier)
+        {
             debug!(
                 event_object = %notification.event_object_identifier,
-                "Notification about an Event Log not logged"
+                "Report on an Event Log not logged"
             );
             return;
         }
         self.log_notification(logs, notification);
+    }
+
+    /// Whether any Event Log has opted in to the notifications the device
+    /// receives. The server asks before it decodes one.
+    pub fn collects_received_event_notifications(&self) -> bool {
+        self.find_by_type(ObjectType::EVENT_LOG).iter().any(|oid| {
+            self.get(oid)
+                .is_some_and(|log| log.logs_received_event_notifications_internal())
+        })
     }
 
     /// Whether [`log_received_event_notification`](Self::log_received_event_notification)
@@ -60,10 +75,10 @@ impl ObjectDatabase {
         &self,
         notification: &EventNotificationRequest,
     ) -> bool {
-        !self.received_notification_logs().is_empty() && self.may_log_received(notification)
+        self.collects_received_event_notifications() && self.may_log_received(notification)
     }
 
-    /// Record an event notification this device received, as it arrived, in
+    /// Record an event notification this device received, as it decoded, in
     /// each Event Log that has opted in with
     /// [`EventLogObject::set_log_received_notifications`](crate::event_log::EventLogObject::set_log_received_notifications),
     /// stamped with the Device clock's local date and time. Each log's
@@ -71,12 +86,14 @@ impl ObjectDatabase {
     /// notifications, and each record counts toward the log's
     /// Notification_Threshold.
     ///
-    /// Two kinds are kept out. A notification about an Event Log isn't
-    /// logged, as for the device's own: logging another device's
-    /// BUFFER_READY report could prompt a report here that, logged there in
-    /// turn, prompts the next. And one whose Initiating Device Identifier
-    /// names this device isn't logged a second time: the device logged it
-    /// when it built it.
+    /// Two kinds are kept out. A BUFFER_READY report on an Event Log's buffer
+    /// in any device isn't logged (see `reports_an_event_log_buffer`), whatever
+    /// object reports it: another vendor's Event Enrollment running the
+    /// algorithm on its Event Log names the log only there. Logging it could
+    /// prompt a report here that, logged there in turn, prompts the next. Any
+    /// other notification about an Event Log is logged. And one whose
+    /// Initiating Device Identifier names this device isn't logged a second
+    /// time: the device logged it when it built it.
     ///
     /// This records whatever it is given. The server calls it only for a
     /// notification that decoded in full, after holding each source to a few
@@ -99,10 +116,11 @@ impl ObjectDatabase {
         logs
     }
 
-    /// Whether a received notification is one a log may take: it isn't
-    /// about an Event Log, and doesn't claim to come from this device.
+    /// Whether a received notification is one a log may take: it isn't a
+    /// BUFFER_READY report on an Event Log's buffer, and doesn't claim to
+    /// come from this device.
     fn may_log_received(&self, notification: &EventNotificationRequest) -> bool {
-        notification.event_object_identifier.object_type() != ObjectType::EVENT_LOG
+        !reports_an_event_log_buffer(notification)
             && self.local_device().identifier() != Some(notification.initiating_device_identifier)
     }
 
@@ -144,12 +162,10 @@ impl ObjectDatabase {
         }
     }
 
-    /// Whether a notification about `event_object` reports on an Event Log of
-    /// this device: `event_object` is an Event Log, or an Event Enrollment
-    /// whose Object_Property_Reference names one here.
-    fn reports_on_an_event_log(&self, event_object: ObjectIdentifier) -> bool {
+    /// Whether `event_object` is an Event Enrollment of this device whose
+    /// Object_Property_Reference names an Event Log here.
+    fn enrollment_watches_an_event_log(&self, event_object: ObjectIdentifier) -> bool {
         match event_object.object_type() {
-            ObjectType::EVENT_LOG => true,
             ObjectType::EVENT_ENROLLMENT => self
                 .get(&event_object)
                 .and_then(|enrollment| {
@@ -167,6 +183,19 @@ impl ObjectDatabase {
             _ => false,
         }
     }
+}
+
+/// Whether `notification` is a BUFFER_READY report whose Buffer_Property
+/// names an Event Log, in this device or any other. No Event Log records one:
+/// each record a log takes moves its Total_Record_Count, so a log taking
+/// reports on a log's buffer could set off the next report, here or in the
+/// other device, and that report the next, without end.
+fn reports_an_event_log_buffer(notification: &EventNotificationRequest) -> bool {
+    matches!(
+        &notification.event_values,
+        Some(NotificationParameters::BufferReady { buffer_property, .. })
+            if buffer_property.object_identifier.object_type() == ObjectType::EVENT_LOG
+    )
 }
 
 /// The trait default's answer: an object of type Event Log that has no

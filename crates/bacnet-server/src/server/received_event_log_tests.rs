@@ -54,9 +54,9 @@ fn a_flood_of_sources_shares_one_allowance_past_the_table() {
     assert_eq!(taken(&log, &peer(0), now, 1), 0);
 }
 
-/// Once a tracked source has been silent for a whole window, a new source
-/// takes its place, with a fresh allowance of its own; a source still
-/// inside its window keeps its place.
+/// Once a tracked source has sent nothing for a whole window, a new source
+/// takes its place, with a fresh allowance of its own; a source that sent
+/// within the last window keeps its place.
 #[test]
 fn a_new_source_takes_the_place_of_one_silent_for_a_window() {
     let log = ReceivedEventLog::default();
@@ -96,4 +96,33 @@ fn the_ceiling_holds_window_after_window() {
         assert!(total <= ceiling, "window {window}: {total}");
         assert!(total > 0);
     }
+}
+
+/// A source that sent late in its window keeps its place once that window
+/// runs out: a new source has to wait a whole window after the last
+/// notification of the source it replaces, and shares the spare allowance
+/// until then.
+#[test]
+fn a_source_that_sent_late_in_its_window_keeps_its_place() {
+    let log = ReceivedEventLog::default();
+    let start = Instant::now();
+    let late = start + Duration::from_millis(900);
+    let tracked = RECEIVED_EVENT_LOG_SOURCES as u32;
+    for n in 0..tracked {
+        assert_eq!(taken(&log, &peer(n), start, 1), 1);
+        assert_eq!(taken(&log, &peer(n), late, 1), 1);
+    }
+    let newcomer = peer(tracked);
+    assert_eq!(taken(&log, &newcomer, start + WINDOW, 1), 1);
+    {
+        let allowances = log.0.lock().unwrap();
+        assert!(allowances.sources.iter().all(|(p, _)| *p != newcomer));
+        assert!(allowances.sources.iter().any(|(p, _)| *p == peer(0)));
+        assert_eq!(allowances.shared.taken, 1);
+    }
+    // A whole window after their last notification, the quiet ones give way.
+    assert_eq!(taken(&log, &newcomer, late + WINDOW, 1), 1);
+    let allowances = log.0.lock().unwrap();
+    assert!(allowances.sources.iter().any(|(p, _)| *p == newcomer));
+    assert_eq!(allowances.sources.len(), RECEIVED_EVENT_LOG_SOURCES);
 }

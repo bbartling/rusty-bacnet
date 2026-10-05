@@ -1802,17 +1802,20 @@ Once the server runs with a valid Device clock, every event notification it
 generates (an intrinsic or Event Enrollment transition, or an acknowledgment)
 is recorded in each Event Log, stamped with that clock, even when no recipient
 takes it. A client reads the records with `read_range` on `LOG_BUFFER`. Not
-logged: notifications about an Event Log (from the log or from an Event
-Enrollment watching one), and transitions whose Notification Class is missing
-or unreadable. The Rust API's Logging & Trending notes give the details.
+logged: an Event Log's BUFFER_READY reports, reports from an Event Enrollment
+watching an Event Log, and transitions whose Notification Class is missing or
+unreadable. The Rust API's Logging & Trending notes give the details.
 
 An Event Log added with `log_received_notifications=True` also records the
 Confirmed and UnconfirmedEventNotifications the server receives, unicast or
-broadcast, each as it arrived (#1346). The option is off by default. Each
-source, by network address, gets 5 records a second across the collecting
-logs; past that a notification isn't logged and counts in
-`event_notification_counters()["received_not_logged"]`. At most 33 sources'
-worth, 165 records a second, get in however many send.
+broadcast, each as it decoded, Process Identifier included (#1346). The option
+is off by default. Each source, by network address, gets 5 records a second
+across the collecting logs; past that a notification isn't logged and counts
+in `event_notification_counters()["received_not_logged"]`. At most 33
+sources' worth, 165 records a second, get in however many send, and up to
+twice that within a second that straddles two windows. A received
+BUFFER_READY report on an Event Log's buffer, and one claiming this device as
+its source, are not logged.
 
 Event Logs, Trend Logs and Trend Log Multiples report BUFFER_READY (#1347):
 write Notification_Threshold (and Notification_Class) with

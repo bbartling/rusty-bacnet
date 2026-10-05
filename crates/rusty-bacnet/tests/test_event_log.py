@@ -110,7 +110,7 @@ class EventLogLiveServerTests(unittest.TestCase):
                             break
                         await asyncio.sleep(0.05)
                 self.assertEqual(result["item_count"], 1)
-                # The record keeps the notification as it arrived, inside
+                # The record re-encodes the decoded notification, inside
                 # the notification choice [1] of the record's datum [1].
                 self.assertIn(NOTIFICATION, result["item_data"])
                 plain = await client.read_range(
