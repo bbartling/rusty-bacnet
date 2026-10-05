@@ -7,8 +7,9 @@
 # With the runner's own C toolchain and linker (Xcode's on macOS, MSVC on
 # Windows) and the Rust toolchain that rust-toolchain.toml pins, which the job
 # installs first, it builds:
-# 1. a wheel for each <python> (an interpreter's path) into dist/, with maturin
-#    at its pinned version, which it installs into a venv of the first one;
+# 1. a wheel for each <python> (an interpreter's path) into dist/, with the
+#    maturin wheel that maturin-requirements.txt pins by version and sha256,
+#    installed into a venv of the first one;
 # 2. the CLI with sc-tls into out/<cli asset name>.
 #
 # macOS: MACOSX_DEPLOYMENT_TARGET must be set. It is the binaries' minimum
@@ -26,14 +27,6 @@ fail() { echo "error: build_native.sh: $*" >&2; exit 1; }
 target=$1 cli=$2
 shift 2
 root=$(cd "$(dirname "$0")/../.." && pwd)
-pins=$root/.github/ci-pins.env
-
-pin() {
-  local value
-  value=$(sed -n "s/^$1=//p" "$pins")
-  [[ $value =~ ^[0-9A-Za-z.]+$ ]] || fail "no single $1 in $pins"
-  printf '%s\n' "$value"
-}
 
 # D:/a/... paths on Windows, which both bash and native programs accept.
 native_path() { if command -v cygpath >/dev/null; then cygpath -m "$1"; else printf '%s\n' "$1"; fi; }
@@ -65,7 +58,9 @@ venv=$tmp/maturin-venv
 "${interpreters[0]}" -m venv "$venv"
 bin=$venv/bin
 if [ -d "$venv/Scripts" ]; then bin=$venv/Scripts; fi
-"$bin/python" -m pip install -q --disable-pip-version-check "maturin==$(pin MATURIN_VERSION)"
+"$bin/python" -m pip install -q --disable-pip-version-check --require-hashes --only-binary :all: \
+  -r scripts/release/maturin-requirements.txt
+"$bin/maturin" --version
 
 echo "::group::Wheels"
 RUSTFLAGS=$wheel_flags "$bin/maturin" build --release --locked --target "$target" -i "${interpreters[@]}" \

@@ -16,8 +16,9 @@
 #    libpcap.so.1, so no single dynamically linked binary runs on both.
 #    LIBPCAP_VER tells the crate's build script the version, which it would
 #    otherwise load a shared libpcap to ask;
-# 3. builds a wheel for each CPython in PYTHONS into dist/, with maturin at its
-#    pinned version: --compatibility manylinux2014 tags them manylinux_2_17,
+# 3. builds a wheel for each CPython in PYTHONS into dist/, with the maturin
+#    wheel that maturin-requirements.txt pins by version and sha256:
+#    --compatibility manylinux2014 tags them manylinux_2_17,
 #    and --auditwheel check fails the build on a symbol or library outside that
 #    policy instead of copying a library into the wheel;
 # 4. builds the CLI with sc-tls and pcap into out/bacnet-linux-<amd64|arm64>.
@@ -96,7 +97,8 @@ echo "::endgroup::"
 echo "::group::Wheels (CPython $pythons)"
 maturin_python=/opt/python/cp312-cp312/bin/python
 "$maturin_python" -m pip install -q --disable-pip-version-check --root-user-action=ignore \
-  "maturin==$(pin MATURIN_VERSION)"
+  --require-hashes --only-binary :all: -r scripts/release/maturin-requirements.txt
+"$(dirname "$maturin_python")/maturin" --version
 interpreters=()
 for py in $pythons; do
   tag=cp${py/./}

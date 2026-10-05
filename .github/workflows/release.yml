@@ -7,10 +7,11 @@ name: Release
 # with MSVC. Each is then checked and run on its platform before anything is
 # published. See docs/ci.md, "Release".
 #
-#   v* tag pushed     Validate, the CI gate (CI OK and Native OK on the tag's
-#                     commit), build, check and smoke-test every artifact, then
-#                     one step at a time: stage the GitHub draft, publish to
-#                     crates.io, publish to PyPI, publish the GitHub draft.
+#   v* tag pushed     Validate, the CI gate (the tag's own CI run and Native OK
+#                     on its commit), a check that PyPI trusts this workflow,
+#                     build, check and smoke-test every artifact, then one step
+#                     at a time: stage the GitHub draft, publish to crates.io,
+#                     publish to PyPI, publish the GitHub draft.
 #   manual dispatch   dry_run (default true) builds and tests everything,
 #                     plans the publish steps read only and publishes nothing.
 #                     dry_run=false is accepted only on a v* tag, and runs that
@@ -42,8 +43,10 @@ on:
       - scripts/release/**
       - Cargo.toml
       - Cargo.lock
+      - crates/*/Cargo.toml
       - rust-toolchain.toml
       - crates/rusty-bacnet/pyproject.toml
+      - scripts/changelog*.py
 
 # Each job asks for what it needs.
 permissions: {}
@@ -127,8 +130,11 @@ jobs:
           fi
           if [ -n "$tag" ]; then
             [ "$tag" = "v$version" ] || { echo "::error::tag $tag does not match the workspace version $version"; exit 1; }
-            git merge-base --is-ancestor HEAD origin/dev || git merge-base --is-ancestor HEAD origin/main \
-              || { echo "::error::$tag ($commit) is on neither dev nor main"; exit 1; }
+            # The commit must be on dev's or main's own line: a merge commit or
+            # another commit made there, not one inside a merged PR's branch.
+            first_parent=$(git rev-list --first-parent origin/dev origin/main)
+            grep -qxF "$commit" <<<"$first_parent" \
+              || { echo "::error::$tag ($commit) is on neither dev's nor main's first-parent history"; exit 1; }
           fi
           # A PR's run builds the PR merged into its base; CI's checks are on the PR's head.
           gate_commit=${PR_HEAD:-$commit}
@@ -202,8 +208,10 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           COMMIT: ${{ needs.validate.outputs.gate_commit }}
           PUBLISH: ${{ needs.validate.outputs.publish }}
+          TAG: ${{ needs.validate.outputs.tag }}
         run: |
-          mode=(--wait 3600)
+          # A release needs the CI run that its tag's push started.
+          mode=(--tag "$TAG" --wait 3600)
           [ "$PUBLISH" = true ] || mode=(--warn-only)
           python3 scripts/release/ci_gate.py --commit "$COMMIT" "${mode[@]}"
 
@@ -610,9 +618,52 @@ jobs:
           python3 scripts/release/release_api.py stage --tag "$TAG" --commit "$COMMIT" \
             --notes notes/notes.md --assets release
 
+  # Before crates.io, which can't be undone: PyPI must accept this workflow's
+  # OIDC token for rusty-bacnet, which only a trusted publisher naming this
+  # repository, release.yml and the release environment makes it do. It runs
+  # as soon as Validate passes, so a mismatch shows before the builds finish.
+  # The exchange mints a PyPI upload token, valid for 15 minutes, which is
+  # masked at once, never printed and thrown away.
+  pypi-preflight:
+    name: PyPI trusted publishing
+    needs: validate
+    if: needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment:
+      name: release
+    permissions:
+      id-token: write # the OIDC token PyPI checks
+    steps:
+      - name: PyPI accepts this workflow's OIDC token
+        run: |
+          audience=$(curl -sSf --retry 3 https://pypi.org/_/oidc/audience | jq -r .audience)
+          [[ $audience =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::PyPI gave no OIDC audience"; exit 1; }
+          oidc=$(curl -sSf --retry 3 -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$audience" | jq -r '.value // empty')
+          [ -n "$oidc" ] || { echo "::error::GitHub gave this job no OIDC token; it needs id-token: write"; exit 1; }
+          echo "::add-mask::$oidc"
+          response=$(OIDC=$oidc jq -n '{token: env.OIDC}' | curl -sS --retry 3 -X POST \
+            -H 'Content-Type: application/json' --data-binary @- -w '\n%{http_code}' \
+            https://pypi.org/_/oidc/mint-token)
+          status=${response##*$'\n'}
+          body=${response%$'\n'*}
+          minted=$(jq -r '.token // empty' <<<"$body" 2>/dev/null || true)
+          if [ -n "$minted" ]; then echo "::add-mask::$minted"; fi
+          if [ "$status" = 200 ] && [ -n "$minted" ]; then
+            unset oidc response body minted
+            echo "PyPI accepts this workflow as a trusted publisher of rusty-bacnet"
+            exit 0
+          fi
+          unset oidc minted
+          echo "::error::PyPI refused this workflow's OIDC token (HTTP $status), so nothing is published. Point the"\
+            "rusty-bacnet trusted publisher at workflow release.yml with environment release (docs/ci.md)."
+          jq -r '.message // empty, (.errors // [] | .[] | "\(.code): \(.description)")' <<<"$body" 2>/dev/null || true
+          exit 1
+
   crates-io:
     name: Publish to crates.io
-    needs: [validate, github-draft]
+    needs: [validate, github-draft, pypi-preflight]
     if: needs.validate.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60

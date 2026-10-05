@@ -1,0 +1,16 @@
+# maturin for the release builds (build_linux.sh, build_native.sh), installed
+# with `pip install --require-hashes --only-binary :all: -r` this file, so pip
+# takes only a wheel whose sha256 is listed below. The version must equal
+# MATURIN_VERSION in .github/ci-pins.env (test_maturin_requirements.py checks).
+# The hashes, from https://pypi.org/pypi/maturin/<version>/json, are those of
+# the wheels the build hosts can pick, in this order:
+#   manylinux_2_12_x86_64 (the x86_64 manylinux2014 image),
+#   manylinux_2_17_aarch64 (the aarch64 manylinux2014 image),
+#   macosx_10_12_x86_64 and the universal2 wheel (macOS Intel takes either,
+#   Apple Silicon the universal2 one), win_amd64 (Windows).
+maturin==1.15.0 \
+    --hash=sha256:653020a63525bb224e5ab0adf02e17a2e08bc86dbea7fc1399c9a56d7529b99e \
+    --hash=sha256:0ebf9767892725083138e671c34482c660317a2f3d6a29fc0e0f34e9d8c99136 \
+    --hash=sha256:c40b4eae7bf5ef1f4b1af8d623fe4105016f93578fb15b764e741d08ec3b92dd \
+    --hash=sha256:cd35772633f489841132bc8e71d6fc7f842df30b9c05cd5cdf1ee1ddcb744cc7 \
+    --hash=sha256:552c2be4afd43fe8d5c9f3ec8d4c4756d973b8dcbe94c14084390301f50243e1

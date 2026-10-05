@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """Require CI to have passed on the release commit (#943, #1472).
 
-    ci_gate.py --commit SHA [--wait SECONDS] [--warn-only]
+    ci_gate.py --commit SHA [--tag v0.12.0] [--wait SECONDS] [--warn-only]
 
 Reads the GitHub Actions runs of the commit and their check runs through the
 API (/actions/runs?head_sha=, then each run's check suite). The release needs:
 
-- in the newest run of .github/workflows/ci.yml on the commit that ran MSRV
-  and audit-deny, the check runs `CI OK`, `MSRV (Linux native)` and `Cargo
-  Audit + Deny` all succeeded. CI runs those two heavy jobs on tags, pushes to
-  main, PRs to main, the weekly run and manual runs, and skips them on PRs to
-  dev and pushes to dev, whose `CI OK` passes without them. So a commit can
-  carry several `CI OK` check runs, such as a dev→main PR's head with dev's
-  lean push run and the PR's heavy run, and only a run that ran the heavy jobs
-  counts. A tag push always starts one on the tag's commit;
+- with --tag (a release), in the newest run of .github/workflows/ci.yml that
+  the tag's push started (event push, head_branch the tag, head_sha the
+  commit), the check runs `CI OK`, `MSRV (Linux native)` and `Cargo Audit +
+  Deny` all succeeded. CI runs those two heavy jobs on tags, so the tag's own
+  run checks the commit with that day's advisory databases;
+- without --tag (dry runs), the same in the newest ci.yml run on the commit
+  that ran MSRV and audit-deny. CI also runs them on pushes to main, PRs to
+  main, the weekly run and manual runs, and skips them on PRs to dev and
+  pushes to dev, whose `CI OK` passes without them. So a commit can carry
+  several `CI OK` check runs, such as a dev→main PR's head with dev's lean push
+  run and the PR's heavy run, and only a run that ran the heavy jobs counts;
 - in the newest run of .github/workflows/native-tests.yml on the commit,
   `Native OK` succeeded.
 
@@ -127,10 +130,28 @@ def heavy_ci_run(runs, repo, checks_of):
     return None
 
 
-def evaluate(runs, repo, checks_of):
+def tag_ci_run(runs, repo, checks_of, tag, commit):
+    """(run, its check runs) for the newest ci.yml run that the push of tag
+    started on commit; None if there is none yet."""
+    for run in ours(runs, repo, CI):
+        if run.get("event") == "push" and run.get("head_branch") == tag and run.get("head_sha") == commit:
+            return run, checks_of(run)
+    return None
+
+
+def evaluate(runs, repo, checks_of, tag=None, commit=None):
     """("pass" | "wait" | "fail", [one line per requirement]). checks_of(run)
-    gives a run's {name: check run}."""
+    gives a run's {name: check run}. With tag, CI's run must be the one that
+    tag's push started on commit."""
     results = []
+    if tag is not None:
+        tagged = tag_ci_run(runs, repo, checks_of, tag, commit)
+        if tagged is None:
+            results.append(("wait", f"CI: no ci.yml run of the push of {tag} on this commit yet"))
+        else:
+            result, text = verdict(*tagged, (CI_OK, *HEAVY))
+            results.append((result, f"CI: {text}"))
+        return combine(results + native_result(runs, repo, checks_of))
     heavy = heavy_ci_run(runs, repo, checks_of)
     if heavy is None:
         lean = len(ours(runs, repo, CI))
@@ -139,19 +160,26 @@ def evaluate(runs, repo, checks_of):
     else:
         result, text = verdict(*heavy, (CI_OK, *HEAVY))
         results.append((result, f"CI: {text}"))
+    return combine(results + native_result(runs, repo, checks_of))
+
+
+def native_result(runs, repo, checks_of):
+    """[(result, line)] for Native OK in the newest native-tests.yml run."""
     native = ours(runs, repo, NATIVE)
     if not native:
-        results.append(("wait", "Native: no native-tests.yml run on this commit; it runs on pushes to dev and"
-                                " main and on PRs to them, not on tags"))
-    else:
-        result, text = verdict(native[0], checks_of(native[0]), (NATIVE_OK,))
-        results.append((result, f"Native: {text}"))
+        return [("wait", "Native: no native-tests.yml run on this commit; it runs on pushes to dev and main and"
+                         " on PRs to them, not on tags")]
+    result, text = verdict(native[0], checks_of(native[0]), (NATIVE_OK,))
+    return [(result, f"Native: {text}")]
+
+
+def combine(results):
     outcomes = {result for result, _ in results}
     overall = "fail" if "fail" in outcomes else "wait" if "wait" in outcomes else "pass"
     return overall, [text for _, text in results]
 
 
-def read(gh, commit):
+def read(gh, commit, tag=None):
     runs = workflow_runs(gh, commit)
     cache = {}
 
@@ -160,12 +188,13 @@ def read(gh, commit):
             cache[run["id"]] = check_runs(gh, run)
         return cache[run["id"]]
 
-    return evaluate(runs, gh.repo, checks_of)
+    return evaluate(runs, gh.repo, checks_of, tag, commit)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--commit", required=True)
+    parser.add_argument("--tag", help="a release's tag: CI's run must be the one its push started")
     parser.add_argument("--wait", type=int, default=0, help="seconds to wait for runs still going")
     parser.add_argument("--warn-only", action="store_true", help="check once and only warn (dry runs)")
     args = parser.parse_args(argv)
@@ -177,7 +206,7 @@ def main(argv=None):
         shown = None
         while True:
             try:
-                result, lines = read(gh, args.commit)
+                result, lines = read(gh, args.commit, args.tag)
             except HttpFailure as err:
                 if not err.uncertain or args.warn_only or time.monotonic() >= deadline:
                     raise

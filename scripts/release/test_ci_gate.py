@@ -5,7 +5,9 @@ import contextlib
 import io
 import itertools
 import os
+import re
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import ci_gate as gate
@@ -13,7 +15,9 @@ import release_api
 
 gate.POLL = 0
 REPO = "o/r"
+COMMIT = "c0ffee"
 IDS = itertools.count(1)
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def check(name, conclusion="success", status="completed", started="2026-10-04T10:00:00Z", app="github-actions"):
@@ -21,10 +25,10 @@ def check(name, conclusion="success", status="completed", started="2026-10-04T10
             "started_at": started, "app": {"slug": app}}
 
 
-def run(path, started, checks, status="completed", event="push", repo=REPO, branch="dev"):
+def run(path, started, checks, status="completed", event="push", repo=REPO, branch="dev", sha=COMMIT):
     return {"id": next(IDS), "path": path, "run_started_at": started, "status": status, "event": event,
-            "head_branch": branch, "head_repository": {"full_name": repo}, "html_url": "https://x.invalid/run",
-            "check_suite_id": next(IDS), "checks": checks}
+            "head_branch": branch, "head_sha": sha, "head_repository": {"full_name": repo},
+            "html_url": "https://x.invalid/run", "check_suite_id": next(IDS), "checks": checks}
 
 
 def ci(started, heavy="success", ci_ok="success", **kwargs):
@@ -37,15 +41,20 @@ def native(started, result="success", **kwargs):
     return run(gate.NATIVE, started, [check(gate.NATIVE_OK, result)], **kwargs)
 
 
-def evaluate(*runs):
-    def checks_of(r):
-        found = {}
-        for c in r["checks"]:
-            if c["app"]["slug"] == gate.ACTIONS_APP:
-                found[c["name"]] = c
-        return found
+def checks_of(r):
+    found = {}
+    for c in r["checks"]:
+        if c["app"]["slug"] == gate.ACTIONS_APP:
+            found[c["name"]] = c
+    return found
 
+
+def evaluate(*runs):
     return gate.evaluate(list(runs), REPO, checks_of)
+
+
+def evaluate_tag(*runs, tag="v1.0.0"):
+    return gate.evaluate(list(runs), REPO, checks_of, tag, COMMIT)
 
 
 class EvaluateTests(unittest.TestCase):
@@ -126,6 +135,77 @@ class EvaluateTests(unittest.TestCase):
                          "fail")
 
 
+class TagTests(unittest.TestCase):
+    """A release (--tag) needs the run that the tag's push started."""
+
+    def test_the_tags_own_push_run_passes(self):
+        result, lines = evaluate_tag(ci("2026-10-04T10:00:00Z", heavy="skipped"),
+                                     ci("2026-10-04T09:00:00Z", branch="v1.0.0"), native("2026-10-04T08:00:00Z"))
+        self.assertEqual(result, "pass", lines)
+        self.assertIn("push on v1.0.0", lines[0])
+
+    def test_another_heavy_run_doesnt_stand_in_for_the_tags(self):
+        # A push to main, a PR to main or a manual run ran the heavy jobs too.
+        for other in (ci("2026-10-04T10:00:00Z", branch="main"),
+                      ci("2026-10-04T10:00:00Z", event="pull_request", branch="v1.0.0"),
+                      ci("2026-10-04T10:00:00Z", event="workflow_dispatch", branch="v1.0.0"),
+                      ci("2026-10-04T10:00:00Z", branch="v0.9.0"),
+                      ci("2026-10-04T10:00:00Z", branch="v1.0.0", sha="beef")):
+            with self.subTest(event=other["event"], branch=other["head_branch"], sha=other["head_sha"]):
+                result, lines = evaluate_tag(other, native("2026-10-04T08:00:00Z"))
+                self.assertEqual(result, "wait")
+                self.assertIn("no ci.yml run of the push of v1.0.0 on this commit yet", lines[0])
+
+    def test_the_tags_run_still_going_waits_and_its_failure_fails(self):
+        going = run(gate.CI, "2026-10-04T10:00:00Z", [check(gate.CI_OK, status="queued"),
+                                                      check(gate.MSRV, status="in_progress"), check(gate.AUDIT)],
+                    status="in_progress", branch="v1.0.0")
+        self.assertEqual(evaluate_tag(going, native("2026-10-04T08:00:00Z"))[0], "wait")
+        failed = ci("2026-10-04T10:00:00Z", heavy="failure", ci_ok="failure", branch="v1.0.0")
+        self.assertEqual(evaluate_tag(failed, ci("2026-10-04T09:00:00Z", branch="main"),
+                                      native("2026-10-04T08:00:00Z"))[0], "fail")
+
+    def test_a_tag_run_that_skipped_the_heavy_jobs_fails(self):
+        # If ci.yml ever stopped running them on tags, the gate says so at once.
+        lean = ci("2026-10-04T10:00:00Z", heavy="skipped", branch="v1.0.0")
+        result, lines = evaluate_tag(lean, native("2026-10-04T08:00:00Z"))
+        self.assertEqual(result, "fail")
+        self.assertIn("MSRV (Linux native): skipped", lines[0])
+
+    def test_native_ok_is_still_required(self):
+        result, lines = evaluate_tag(ci("2026-10-04T09:00:00Z", branch="v1.0.0"))
+        self.assertEqual(result, "wait")
+        self.assertIn("no native-tests.yml run", lines[1])
+
+
+def job_names(path):
+    """The job-level `name:` values of a workflow file."""
+    return set(re.findall(r"^    name: (.+?)\s*$", (ROOT / path).read_text(encoding="utf-8"), re.MULTILINE))
+
+
+class WorkflowTests(unittest.TestCase):
+    """The names the gate relies on exist in the workflows, so a rename fails
+    here, not after a tag's 60-minute wait."""
+
+    def test_ci_yml_has_the_jobs_the_gate_reads(self):
+        names = job_names(gate.CI)
+        for name in (gate.CI_OK, gate.MSRV, gate.AUDIT):
+            with self.subTest(name=name):
+                self.assertIn(name, names, f"{gate.CI} has no job named {name!r}; update ci_gate.py with it")
+
+    def test_native_tests_yml_has_native_ok(self):
+        self.assertIn(gate.NATIVE_OK, job_names(gate.NATIVE))
+
+    def test_ci_yml_runs_on_tag_pushes(self):
+        # A release needs the run that its tag's push starts.
+        text = (ROOT / gate.CI).read_text(encoding="utf-8")
+        self.assertRegex(text, r'(?m)^  push:\n(?:    .*\n)*?    tags: \["v\*"\]')
+
+    def test_the_job_name_reader_reads_names(self):
+        self.assertIn("Lint", job_names(gate.CI))
+        self.assertNotIn("Rustfmt", job_names(gate.CI))  # a step's name
+
+
 class ReadTests(unittest.TestCase):
     """read() against a fake API: paging, the check-suite endpoint, latest per name."""
 
@@ -167,7 +247,7 @@ class MainTests(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         answers = iter(results)
         with mock.patch.dict(os.environ, self.ENV if env is None else env, clear=True), \
-                mock.patch.object(gate, "read", lambda gh, commit: next(answers)), \
+                mock.patch.object(gate, "read", lambda gh, commit, tag=None: next(answers)), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = gate.main(argv)
         return code, out.getvalue(), err.getvalue()
@@ -195,6 +275,16 @@ class MainTests(unittest.TestCase):
                                      [("fail", ["CI: failure"])])
         self.assertEqual(code, 0)
         self.assertIn("::warning::a release of c0ffee would need these to pass", out)
+
+    def test_the_tag_reaches_read(self):
+        seen = []
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, self.ENV, clear=True), \
+                mock.patch.object(gate, "read", lambda gh, commit, tag=None: seen.append(tag) or ("pass", ["ok"])), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(gate.main(["--commit", "c0ffee", "--tag", "v1.0.0"]), 0)
+            self.assertEqual(gate.main(["--commit", "c0ffee", "--warn-only"]), 0)
+        self.assertEqual(seen, ["v1.0.0", None])
 
     def test_a_missing_token_fails(self):
         code, _, err = self.run_main(["--commit", "c0ffee"], [], env={"GITHUB_REPOSITORY": REPO})

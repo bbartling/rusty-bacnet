@@ -595,9 +595,10 @@ Pages publication remains the manual
 - **Pull request.** A PR to `dev` or `main` that changes what the release
   builds with runs a dry run, so a release change is tested before it merges:
   the workflow itself, `.github/ci-pins.env`, `scripts/release/**`,
-  `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` and
-  `crates/rusty-bacnet/pyproject.toml`. A newer push to the PR cancels the
-  older dry run. The check isn't required for merging.
+  `Cargo.toml`, `Cargo.lock`, `crates/*/Cargo.toml`, `rust-toolchain.toml`,
+  `crates/rusty-bacnet/pyproject.toml` and `scripts/changelog*.py`. Not
+  `changelog.d/`, which nearly every PR changes. A newer push to the PR
+  cancels the older dry run. The check isn't required for merging.
 
 A dry run's notes come from the workspace version's `CHANGELOG.md` section if
 it has one, otherwise from the section the waiting `changelog.d/` fragments
@@ -608,6 +609,12 @@ it too.
 
 To release:
 
+0. Once, before the first release from this workflow: on pypi.org, under
+   rusty-bacnet's Publishing settings, add a GitHub trusted publisher with
+   owner `jscott3201`, repository `rusty-bacnet`, workflow `release.yml` and
+   environment `release`, then remove the one that names `ci.yml`. The
+   [PyPI trusted publishing](#secrets-and-environment) job stops a release
+   before crates.io if this isn't done.
 1. Set the workspace version, assemble the version's `CHANGELOG.md` section
    from the fragments, add release highlights by hand under the new heading if
    the release has any, and merge:
@@ -625,7 +632,8 @@ To release:
    the same links. A tag fails if any fragment is still waiting.
 2. Optionally, dispatch a dry run on the release branch first: it runs
    everything the release does short of publishing.
-3. Tag the commit, on `main` or `dev`, once its CI has passed:
+3. Tag a commit on `main`'s or `dev`'s first-parent history (a merge commit,
+   not one inside a merged branch), once its CI has passed:
 
    ```bash
    git tag -a v0.12.0 -m "Rusty BACnet 0.12.0"
@@ -639,13 +647,14 @@ waits for them (see [CI gate](#ci-gate)).
 
 | Job | What it does |
 | --- | --- |
-| Validate | Runs the release script tests (`scripts/release/test_*.py`, `scripts/test_changelog.py`). Checks that every publishable crate has the workspace version and, for a tag, that the tag is `v<version>` and the commit is on `dev` or `main`. For a tag, checks that no `changelog.d/` fragment is left unassembled. Extracts the notes with `changelog_notes.py` and writes `THIRD-PARTY-NOTICES`. |
-| CI gate | `ci_gate.py` on the release commit (a PR's head on a PR's dry run). On a tag it waits for CI; a dry run checks once and only warns. See [CI gate](#ci-gate). |
+| Validate | Runs the release script tests (`scripts/release/test_*.py`, `scripts/test_changelog.py`). Checks that every publishable crate has the workspace version and, for a tag, that the tag is `v<version>` and the commit is on `dev`'s or `main`'s first-parent history (`git rev-list --first-parent`), so a commit inside a merged PR's branch doesn't qualify. For a tag, checks that no `changelog.d/` fragment is left unassembled. Extracts the notes with `changelog_notes.py` and writes `THIRD-PARTY-NOTICES`. |
+| CI gate | `ci_gate.py` on the release commit (a PR's head on a PR's dry run). On a tag it waits for the CI run the tag's push started; a dry run checks once and only warns. See [CI gate](#ci-gate). |
 | Crates and sdist | `cargo publish --workspace --dry-run --locked`, which packages every publishable crate and builds each against the others as published. Then `cargo package` for the `crates` artifact, and `maturin sdist`. |
 | Build (linux-x86_64, linux-aarch64, macos-x86_64, macos-arm64, windows-x86_64) | The wheels for CPython 3.11 to 3.14 (`PYTHONS`) and the CLI, on each platform's own runner. See [Builds](#builds). |
 | Check the artifacts | `check_artifacts.py` over every file, then the `release-assets` artifact: what the publish jobs upload. See below. |
 | Smoke test (Linux x86_64, Linux aarch64, macOS arm64, macOS x86_64, Windows x86_64) | Each platform's wheels and CLI, run on that platform. See [Smoke tests](#smoke-tests). |
 | Publish plan (dry run) | Dry runs only, read only: `release_api.py plan` and `publish_crates.sh --dry-run`. See [Publish plan](#publish-plan-dry-run). |
+| PyPI trusted publishing | Releases only, in the `release` environment, as soon as Validate passes: exchanges the job's OIDC token for a PyPI upload token, which proves PyPI's trusted publisher matches this workflow. The minted token is masked at once, never printed and discarded. See [Secrets and environment](#secrets-and-environment). |
 | GitHub draft | `release_api.py stage`: makes the tag's GitHub draft hold exactly the `release-assets` files and their `SHA256SUMS`. See [Draft, then publish](#draft-then-publish). |
 | Publish to crates.io | `publish_crates.sh`: one multi-package `cargo publish --no-verify` of the crates whose version isn't on crates.io yet. Cargo orders them and waits for the index. |
 | Publish to PyPI | `pypa/gh-action-pypi-publish` with trusted publishing: the wheels and the sdist. |
@@ -667,7 +676,9 @@ pinned toolchain's `llvm-tools`.
 CI gate, the artifact check and every smoke test passed. They run one at a
 time in the order above, so a failure stops the jobs after it. The GitHub
 draft comes first because it is the one reversible step: it shows that GitHub
-takes the release before crates.io and PyPI, which can't be undone. The draft
+takes the release before crates.io and PyPI, which can't be undone. crates.io
+also waits for the PyPI trusted publishing check, so a PyPI publisher that
+doesn't match stops the release before anything is published. The draft
 is published last, so the release page and `releases/latest` show the
 release only once its crates and wheels are out.
 
@@ -712,19 +723,22 @@ run of `ci.yml` and `native-tests.yml` the check runs of its check suite
 (`GET /repos/{o}/{r}/check-suites/{id}/check-runs?filter=latest`). The job
 token needs `actions: read` and `checks: read`.
 
-- **CI.** The newest `ci.yml` run on the commit that ran MSRV and audit-deny
-  must have succeeded: its `CI OK`, `MSRV (Linux native)` and `Cargo Audit +
-  Deny` check runs all `success`. CI runs those two heavy jobs on tags, pushes
-  to `main`, PRs to `main`, the weekly run and manual runs, and skips them on
-  PRs to `dev` and pushes to `dev`, whose `CI OK` passes without them. A
-  commit can therefore carry several `CI OK` check runs: a `dev`→`main` PR's
-  head has `dev`'s lean push run and the PR's heavy run, and a tagged `dev`
-  merge has `dev`'s lean run and the tag's heavy one. The gate counts only a
-  run that ran the heavy jobs, so a lean `CI OK` never stands in for MSRV,
-  audit and deny. A run that skipped both, or finished without either, is
-  lean. A tag push always starts a heavy run on the tag's commit, and audit
-  and deny read advisory databases that change, so the tag's own run is
-  normally the one that counts.
+- **CI.** On a release, the `ci.yml` run that the tag's push started (event
+  `push`, `head_branch` the tag, `head_sha` the commit; the newest if it was
+  re-run) must have succeeded: its `CI OK`, `MSRV (Linux native)` and `Cargo
+  Audit + Deny` check runs all `success`. CI runs those two heavy jobs on
+  tags, so that run checks the commit with that day's advisory databases, and
+  no other run, however heavy, stands in for it. If it skipped them, the gate
+  fails at once.
+
+  A dry run has no tag, so there the gate takes the newest `ci.yml` run on the
+  commit that ran MSRV and audit-deny. CI runs them on tags, pushes to `main`,
+  PRs to `main`, the weekly run and manual runs, and skips them on PRs to
+  `dev` and pushes to `dev`, whose `CI OK` passes without them. A commit can
+  therefore carry several `CI OK` check runs: a `dev`→`main` PR's head has
+  `dev`'s lean push run and the PR's heavy run. Only a run that ran the heavy
+  jobs counts, so a lean `CI OK` never stands in for MSRV, audit and deny. A
+  run that skipped both, or finished without either, is lean.
 - **Native.** The newest `native-tests.yml` run on the commit must have
   `Native OK` `success`. Native tests don't run on tags, so the tagged commit
   must have come through a push to `dev` or `main`, which runs them.
@@ -733,7 +747,10 @@ Only this repository's runs count, not a fork's pull request runs, and only
 check runs created by GitHub Actions. Within a run the latest check run of
 each name counts, so a re-run of failed jobs replaces the attempt it re-ran.
 Of several runs, the newest (by the start of its latest attempt) counts, so
-an older success can't hide a newer failure.
+an older success can't hide a newer failure. `test_ci_gate.py` reads both
+workflow files and fails if a job name the gate relies on, or `ci.yml`'s
+trigger on `v*` tags, is gone, so a rename shows in the PR that makes it, not
+after a tag's 60-minute wait.
 
 On a tag, the gate polls every 30 seconds for up to 60 minutes while the run
 that counts is still going or doesn't exist yet. It fails at once when a
@@ -917,7 +934,7 @@ mounted. In the image it:
   `libpcap.a` in `LIBPCAP_LIBDIR` the linker takes the archive. `LIBPCAP_VER`
   tells the crate's build script the version, which it would otherwise load a
   shared libpcap to ask;
-- builds the wheels with maturin at its pinned version:
+- builds the wheels with the pinned maturin (see below):
   `--compatibility manylinux2014` tags them `manylinux_2_17`, and
   `--auditwheel check` fails the build on a symbol or library outside that
   policy instead of copying a library into the wheel;
@@ -929,8 +946,16 @@ GCC's `memcmp` bug, which GCC 10.2 doesn't have.
 
 **macOS and Windows** ([`build_native.sh`](../scripts/release/build_native.sh)).
 The job installs the pinned toolchain and the four CPythons, and the script
-builds the wheels with maturin at its pinned version, in a venv, then the CLI
-with `--features sc-tls`.
+builds the wheels with the pinned maturin, in a venv, then the CLI with
+`--features sc-tls`.
+
+Both scripts install maturin with `pip install --require-hashes --only-binary
+:all: -r` [`maturin-requirements.txt`](../scripts/release/maturin-requirements.txt),
+which names its version and the sha256 of each wheel the five build hosts can
+pick (manylinux x86_64 and aarch64, macOS x86_64 and universal2, Windows
+x86_64), from `https://pypi.org/pypi/maturin/<version>/json`.
+`test_maturin_requirements.py` fails if that version differs from
+`MATURIN_VERSION` in `.github/ci-pins.env`; bump them together.
 
 - **Minimum macOS.** 10.12 on x86_64 and 11.0 on arm64, as in 0.11.0's wheel
   tags (`macosx_10_12_x86_64`, `macosx_11_0_arm64`) and Rust's defaults.
@@ -1021,6 +1046,8 @@ Every publish job is safe to run again:
   run's files; on a published release it only checks.
 - **crates.io**: `publish_crates.sh` publishes only the crate versions that
   aren't on crates.io yet.
+- **PyPI trusted publishing** only mints and discards a token, so it can run
+  any number of times.
 - **PyPI** uploads without `skip-existing`. PyPI takes a file it already has
   with the same bytes as a no-op, and refuses a file of the same name with
   other bytes, so a re-run finishes a partial upload, and a rebuilt wheel that
@@ -1053,7 +1080,7 @@ permissions it declares (the workflow's default is none):
 | CI gate | `actions: read`, `checks: read`, `contents: read` | |
 | GitHub draft, GitHub release | `contents: write` | |
 | Publish to crates.io | `contents: read` | the `release` environment's `CARGO_REGISTRY_TOKEN` |
-| Publish to PyPI | `id-token: write` only | the `release` environment, for trusted publishing |
+| PyPI trusted publishing, Publish to PyPI | `id-token: write` only | the `release` environment, for trusted publishing |
 
 - **The `release` environment.** Only tags matching `v*` may deploy to it (a
   custom deployment policy since 2026-10-04; before, only protected branches
@@ -1067,8 +1094,16 @@ permissions it declares (the workflow's default is none):
   `rusty-bacnet` when the project's trusted publisher names owner
   `jscott3201`, repository `rusty-bacnet`, workflow `release.yml` and
   environment `release`. No PyPI token is stored anywhere. 0.11.0 was
-  published from `ci.yml` (environment `release`), whose release jobs moved
-  out in #943, so that publisher no longer matches anything.
+  published from `ci.yml` (environment `release`), so PyPI's publisher still
+  names `ci.yml`, whose release jobs moved out in #943. Before the first
+  release, the owner adds the `release.yml` publisher on pypi.org and removes
+  the `ci.yml` one (step 0 of [To release](#trigger-and-dry-run)). The PyPI
+  trusted publishing job checks this before crates.io: it requests the job's
+  OIDC token for PyPI's audience (`https://pypi.org/_/oidc/audience`),
+  exchanges it at `https://pypi.org/_/oidc/mint-token`, masks the minted
+  token with `::add-mask::` at once, never prints it and discards it (it
+  expires after 15 minutes). If PyPI refuses, the job prints PyPI's reason and
+  fails, and nothing is published.
 - **Fork PRs** run the dry run with a read-only token and no secret, as GitHub
   gives every fork's `pull_request` run.
 - The actions are pinned to full commit SHAs, as the repository requires, and
