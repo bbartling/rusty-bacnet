@@ -104,81 +104,6 @@ fn default_broadcast(interface: Ipv4Addr) -> Ipv4Addr {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_broadcast_uses_global_broadcast_for_unspecified_interface() {
-        assert_eq!(
-            default_broadcast(Ipv4Addr::UNSPECIFIED),
-            Ipv4Addr::BROADCAST
-        );
-    }
-
-    #[test]
-    fn default_broadcast_uses_slash_24_for_bound_interface() {
-        assert_eq!(
-            default_broadcast(Ipv4Addr::new(192, 168, 204, 55)),
-            Ipv4Addr::new(192, 168, 204, 255)
-        );
-    }
-
-    #[test]
-    fn current_command_priority_accepts_only_unsigned_priorities() {
-        for priority in 1u8..=16 {
-            let mut bytes = BytesMut::new();
-            encode_property_value(&mut bytes, &PropertyValue::Unsigned(u64::from(priority)))
-                .unwrap();
-            assert_eq!(decode_current_command_priority(&bytes), Some(priority));
-        }
-        for value in [
-            0,
-            17,
-            255,
-            256,
-            257,
-            272,
-            65_537,
-            (1u64 << 32) + 1,
-            u64::MAX,
-        ] {
-            let mut bytes = BytesMut::new();
-            encode_property_value(&mut bytes, &PropertyValue::Unsigned(value)).unwrap();
-            assert_eq!(decode_current_command_priority(&bytes), None, "{value}");
-        }
-        for value in [
-            PropertyValue::Null,
-            PropertyValue::Signed(1),
-            PropertyValue::Enumerated(1),
-            PropertyValue::Real(1.0),
-        ] {
-            let mut bytes = BytesMut::new();
-            encode_property_value(&mut bytes, &value).unwrap();
-            assert_eq!(decode_current_command_priority(&bytes), None, "{value:?}");
-        }
-        assert_eq!(decode_current_command_priority(&[]), None);
-        assert_eq!(decode_current_command_priority(&[0x22, 0x01]), None);
-    }
-
-    #[test]
-    fn overwide_priority_cannot_explain_a_failed_write() {
-        let mut bytes = BytesMut::new();
-        encode_property_value(&mut bytes, &PropertyValue::Unsigned(257)).unwrap();
-        let snapshot = PointSnapshot {
-            present_value: PropertyValue::Real(2.0),
-            priority_slot: Some(PropertyValue::Real(5.0)),
-            current_priority: decode_current_command_priority(&bytes),
-        };
-        assert!(!verify_write_taken(
-            &snapshot,
-            &PropertyValue::Real(5.0),
-            8,
-            0.05,
-        ));
-    }
-}
-
 fn resolve_interface(args: &Args) -> Ipv4Addr {
     if let Some(ip) = args.interface {
         return ip;
@@ -675,4 +600,79 @@ async fn main() {
 
     let _ = client.stop().await;
     println!("\nDone — full write cycle verified.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_broadcast_uses_global_broadcast_for_unspecified_interface() {
+        assert_eq!(
+            default_broadcast(Ipv4Addr::UNSPECIFIED),
+            Ipv4Addr::BROADCAST
+        );
+    }
+
+    #[test]
+    fn default_broadcast_uses_slash_24_for_bound_interface() {
+        assert_eq!(
+            default_broadcast(Ipv4Addr::new(192, 168, 204, 55)),
+            Ipv4Addr::new(192, 168, 204, 255)
+        );
+    }
+
+    #[test]
+    fn current_command_priority_accepts_only_unsigned_priorities() {
+        for priority in 1u8..=16 {
+            let mut bytes = BytesMut::new();
+            encode_property_value(&mut bytes, &PropertyValue::Unsigned(u64::from(priority)))
+                .unwrap();
+            assert_eq!(decode_current_command_priority(&bytes), Some(priority));
+        }
+        for value in [
+            0,
+            17,
+            255,
+            256,
+            257,
+            272,
+            65_537,
+            (1u64 << 32) + 1,
+            u64::MAX,
+        ] {
+            let mut bytes = BytesMut::new();
+            encode_property_value(&mut bytes, &PropertyValue::Unsigned(value)).unwrap();
+            assert_eq!(decode_current_command_priority(&bytes), None, "{value}");
+        }
+        for value in [
+            PropertyValue::Null,
+            PropertyValue::Signed(1),
+            PropertyValue::Enumerated(1),
+            PropertyValue::Real(1.0),
+        ] {
+            let mut bytes = BytesMut::new();
+            encode_property_value(&mut bytes, &value).unwrap();
+            assert_eq!(decode_current_command_priority(&bytes), None, "{value:?}");
+        }
+        assert_eq!(decode_current_command_priority(&[]), None);
+        assert_eq!(decode_current_command_priority(&[0x22, 0x01]), None);
+    }
+
+    #[test]
+    fn overwide_priority_cannot_explain_a_failed_write() {
+        let mut bytes = BytesMut::new();
+        encode_property_value(&mut bytes, &PropertyValue::Unsigned(257)).unwrap();
+        let snapshot = PointSnapshot {
+            present_value: PropertyValue::Real(2.0),
+            priority_slot: Some(PropertyValue::Real(5.0)),
+            current_priority: decode_current_command_priority(&bytes),
+        };
+        assert!(!verify_write_taken(
+            &snapshot,
+            &PropertyValue::Real(5.0),
+            8,
+            0.05,
+        ));
+    }
 }

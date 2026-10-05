@@ -13,8 +13,7 @@ Built for the bench where rusty-bacnet servers reply with **broadcast I-Am** —
 Build + run manually:
 
 ```bash
-cargo build --release
-./target/release/whois-scan \
+cargo run --release -- \
   --interface 192.168.204.55 \
   --broadcast 192.168.204.255
 ```

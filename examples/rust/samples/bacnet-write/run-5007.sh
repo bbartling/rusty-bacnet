@@ -2,14 +2,11 @@
 # WriteProperty demo on device 5007 (C06-0-10VDC-O), verify, relinquish.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$ROOT/target/release/bacnet-write"
+# A workspace member: cargo run builds it into the workspace's target/ first
+# when needed.
+RUN=(cargo run --release --manifest-path "$ROOT/Cargo.toml" --)
 
-if [[ ! -x "$BIN" ]]; then
-  echo "Building $BIN ..."
-  (cd "$ROOT" && cargo build --release)
-fi
-
-exec "$BIN" \
+exec "${RUN[@]}" \
   --device "${BACNET_DEVICE_INSTANCE:-5007}" \
   --interface "${BACNET_BIND_ADDRESS:-192.168.204.55}" \
   --broadcast "${BACNET_BROADCAST:-192.168.204.255}" \

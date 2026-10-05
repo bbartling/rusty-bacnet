@@ -326,7 +326,9 @@ and transport you rely on there.
 ## Contributing
 
 Bug reports, test cases, documentation fixes and focused patches are welcome.
-See the [contributing guide](https://jscott3201.github.io/rusty-bacnet/project/contributing/).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the pull request flow, and the
+[documentation guide](https://jscott3201.github.io/rusty-bacnet/project/contributing/)
+for docs changes.
 
 ```bash
 git clone https://github.com/jscott3201/rusty-bacnet.git
