@@ -51,7 +51,7 @@ class WriteGroupTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_value_is_bytes_or_a_property_value(self):
         client = BACnetClient(interface="127.0.0.1", port=0)
-        for value in ("72.0", 72.0, None):
+        for value in ("72.0", 72.0, None, list(REAL_72), tuple(REAL_72)):
             with self.subTest(value=value):
                 with self.assertRaises(TypeError):
                     client.write_group("invalid-address", 1, 8, [(5, None, value)])
@@ -139,7 +139,7 @@ class WriteGroupTests(unittest.IsolatedAsyncioTestCase):
                     (300, 10, PropertyValue.null()),
                     (0, None, PropertyValue.boolean(True)),
                     (7, None, PropertyValue.enumerated(1)),
-                    (8, None, b"\x21\x03"),
+                    (8, None, bytearray(b"\x21\x03")),
                 ]
                 await client.write_group(address, 258, 16, change_list, True)
                 packet, _ = await asyncio.wait_for(loop.sock_recvfrom(peer, 2048), 2)
@@ -149,6 +149,17 @@ class WriteGroupTests(unittest.IsolatedAsyncioTestCase):
                         "0a 01 02 19 10 2e 0a 01 2c 19 0a 00 09 00 11 09 07 91 01 09 08 21 03 2f 39 01"
                     ),
                 )
+
+                # A lighting command goes as bytes or as the same octets in a
+                # PropertyValue (a fade to 50.0 percent over 8 seconds).
+                framed = bytes.fromhex("0e 09 01 1c 42 48 00 00 59 08 0f")
+                for value in (framed, PropertyValue.application_data(framed)):
+                    with self.subTest(value=value):
+                        await client.write_group(address, 1, 8, [(5, None, value)])
+                        packet, _ = await asyncio.wait_for(loop.sock_recvfrom(peer, 2048), 2)
+                        self.assertEqual(
+                            packet[8:], bytes.fromhex("09 01 19 08 2e 09 05") + framed + b"\x2f"
+                        )
 
 
 class WhoAmITests(unittest.IsolatedAsyncioTestCase):

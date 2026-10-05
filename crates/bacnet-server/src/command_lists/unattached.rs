@@ -139,6 +139,10 @@ impl RunHost for Unattached<'_> {
         Err(RemoteRequestError::NoNetwork)
     }
 
+    fn remote_slots(&self) -> Option<&super::RemoteSlots> {
+        None
+    }
+
     async fn committed(&self, _db: &ObjectDatabase, _source: ObjectIdentifier) {}
 
     async fn report(&self, _source: ObjectIdentifier) {}

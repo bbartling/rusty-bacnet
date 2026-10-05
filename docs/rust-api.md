@@ -3162,23 +3162,32 @@ ReadProperty there, sent as the distribution starts so it overlaps the
 member's delay, and converts the value to it as for a local member (#1342):
 a REAL 1.0 reaches a remote Binary Output as ACTIVE. A primitive datatype is
 kept on the Channel until that member, or the whole member list, is written
-again, so later distributions send no read. No read is sent for a NULL, a
-lighting command or a `Lighting_Command` member. A read that is refused, gets
-no answer after its retries, or returns NULL or a constructed value keeps
-nothing, and the value goes as written; the device then refuses a datatype it
-doesn't take. Each member is written when its own delay is up (#1343): a
-remote write that waits for its answer holds back no other member, though
+again, or a write made with it is refused as a configuration fault (an invalid
+datatype, an unknown property), so later distributions send no read until
+then. No read is sent for a NULL, a lighting command or a `Lighting_Command`
+member. A read that gets no answer after its retries, or whose Who-Is finds
+nothing, counts the device as silent, as a write would (every device executes
+ReadProperty): the member fails as COMMUNICATION_FAILURE with no write sent. A
+read that is refused, or returns NULL or a constructed value, keeps nothing,
+and the value goes as written; the device then refuses a datatype it doesn't
+take. Each member is written when its own delay is up (#1343): a remote
+request that waits for its answer holds back no other member, though
 Write_Status stays IN_PROGRESS (a Present_Value write, WriteGroup's included,
 is refused BUSY) until every member has finished. Members in this device go
-in delay order, list order among equal delays; one distribution keeps at most
-16 requests outstanding in other devices, and a member due while all 16 are
-out waits for one to end. A device that answers none of a write's attempts,
-or none of the Who-Is sent to find it, counts as offline for the rest of that
-distribution: its members due after that fail at once with nothing sent,
-while members in other devices and local ones are still written. A run that
-`stop()` cuts short during a remote request ends FAILED and frees its invoke
-ID. Without a server, `tick_schedules` has no network, so a remote member
-fails there.
+in delay order, list order among equal delays. The requests the server's runs
+make in other devices, a Command's included, wait in two queues: each device
+takes one at a time, as small and MS/TP devices often can only serve one, and
+the server keeps at most 32 outstanding, an eighth of its 256 invoke IDs,
+leaving the rest to confirmed notifications and Audit. A member due while its
+device answers another request is written once that one ends. A device that
+answers none of a request's attempts, or none of the Who-Is sent to find it,
+counts as silent for the rest of that distribution: its members whose turn
+comes after that fail at once with nothing sent, so a distribution waits out
+one request's retries per silent device, while members in other devices and
+local ones are still written. A run that `stop()` cuts short, or whose future
+is dropped, during a remote request ends FAILED and frees its invoke ID.
+Without a server, `tick_schedules` has no network, so a remote member fails
+there.
 
 Reliability reports how the last distribution ended (Clause 12.53.9):
 NO_FAULT_DETECTED after a SUCCESSFUL one, otherwise the kind of the first
@@ -3233,8 +3242,11 @@ not others. A denied write is skipped with nothing answered and counted in
 `mutation_decision_counters().write_group`. Each Channel written makes one
 WRITE Audit record (Table 19-5) of its Present_Value at the priority used,
 naming the requester (its bound Device, when the audit profile knows one) and
-no invoke ID; a denied one makes none (#1318). The endpoint responder ignores
-WriteGroup.
+no invoke ID; a denied one makes none (#1318). A Channel's Present_Value is
+commandable (Clause 12.53.5), so its records, a WriteProperty's as well as a
+WriteGroup's, carry the priority, and Audit_Priority_Filter applies to them
+(Clause 19.6.3): one at a priority the filter disables is dropped. The
+endpoint responder ignores WriteGroup.
 
 Channel runs are owned as Command runs are (#1178). A `write_local` dropped
 after the Channel took its value ends the distribution FAILED without

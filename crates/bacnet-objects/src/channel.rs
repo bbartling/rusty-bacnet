@@ -18,8 +18,8 @@
 //! A member may name another Device (Clause 12.53.11): the server writes it
 //! there as a confirmed WriteProperty, from its device bindings, coerced to
 //! the datatype a ReadProperty there returned. The object keeps that datatype
-//! for each member ([`BACnetObject::learn_member_datatype_internal`]) until
-//! the member is written again (#1342).
+//! for each member ([`BACnetObject::remember_member_datatype_internal`]) until
+//! the member is written again, or the server forgets it (#1342).
 //!
 //! Reliability reports how the last distribution ended (Clause 12.53.9). A
 //! SUCCESSFUL one sets NO_FAULT_DETECTED; a FAILED one sets the kind of its
@@ -456,14 +456,14 @@ impl BACnetObject for ChannelObject {
         Some(self.generation)
     }
 
-    fn learn_member_datatype_internal(
+    fn remember_member_datatype_internal(
         &mut self,
         slot: usize,
         reference: &BACnetDeviceObjectPropertyReference,
-        datatype: MemberDatatype,
+        datatype: Option<MemberDatatype>,
     ) {
         if self.members.get(slot) == Some(reference) {
-            self.learned[slot] = Some(datatype);
+            self.learned[slot] = datatype;
         }
     }
 

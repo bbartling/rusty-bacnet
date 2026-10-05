@@ -1,5 +1,5 @@
 //! The datatype the server learns for a member in another device stays with
-//! that member until it is replaced (#1342).
+//! that member until it is replaced or the server forgets it (#1342).
 use super::tests::{device, encoded, member};
 use super::*;
 use PropertyIdentifier as P;
@@ -32,7 +32,7 @@ fn learned(channel: &mut ChannelObject) -> Vec<Option<MemberDatatype>> {
 
 fn learn(channel: &mut ChannelObject, slot: usize, instance: u32) {
     let datatype = MemberDatatype::Enumerated;
-    channel.learn_member_datatype_internal(slot, &remote(instance), datatype);
+    channel.remember_member_datatype_internal(slot, &remote(instance), Some(datatype));
 }
 
 #[test]
@@ -48,6 +48,13 @@ fn a_learned_datatype_stays_until_its_member_is_replaced() {
     let some = Some(MemberDatatype::Enumerated);
     assert_eq!(learned(&mut channel), [some, None, some]);
     assert_eq!(learned(&mut channel), [some, None, some]);
+
+    // The server forgets one with `None`, again only for that reference.
+    channel.remember_member_datatype_internal(0, &remote(2), None);
+    assert_eq!(learned(&mut channel), [some, None, some]);
+    channel.remember_member_datatype_internal(0, &remote(1), None);
+    assert_eq!(learned(&mut channel), [None, None, some]);
+    learn(&mut channel, 0, 1);
 
     // An element write forgets that member alone, even for the same
     // reference.

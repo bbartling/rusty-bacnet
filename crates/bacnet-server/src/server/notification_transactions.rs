@@ -78,6 +78,9 @@ pub struct NotificationTransactions {
     pub(super) audit_association:
         std::sync::OnceLock<Arc<bacnet_objects::audit::TargetAuditAssociation>>,
     audit_failures: std::sync::OnceLock<Vec<ReporterFailureQueue>>,
+    /// Where the requests the server's runs make in other devices wait, so
+    /// they take a bounded share of the invoke IDs leased here.
+    run_slots: crate::command_lists::RemoteSlots,
 }
 
 type ReporterFailureQueue = (
@@ -193,7 +196,14 @@ impl NotificationTransactions {
             audit_permits: Arc::new(tokio::sync::Semaphore::new(64)),
             audit_association: std::sync::OnceLock::new(),
             audit_failures: std::sync::OnceLock::new(),
+            run_slots: crate::command_lists::RemoteSlots::default(),
         })
+    }
+
+    /// Where the requests the server's runs make in other devices wait
+    /// (`crate::command_lists::RemoteSlots`).
+    pub(super) fn run_slots(&self) -> &crate::command_lists::RemoteSlots {
+        &self.run_slots
     }
 
     #[doc(hidden)]

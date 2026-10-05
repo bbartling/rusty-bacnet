@@ -463,10 +463,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     &Apdu::ComplexAck(ack),
                 )
                 .await;
-                debug!(
-                    invoke_id,
-                    admitted, "Server ignoring ComplexAck for confirmed notification"
-                );
+                if admitted {
+                    debug!(invoke_id, "ComplexAck answered a read this server sent");
+                } else {
+                    debug!(invoke_id, "Server ignoring ComplexAck it has no read for");
+                }
             }
         }
     }

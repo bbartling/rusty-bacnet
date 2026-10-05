@@ -1247,12 +1247,14 @@ answers, so the call returns once the request is sent.
   - `channel` is a channel number (`int`, 0 to 65535) matching a Channel object's
     `Channel_Number`.
   - `override_priority` is 1 to 16, or `None` to use `write_priority`.
-  - `value` is a `PropertyValue` holding one primitive (`PropertyValue.real(72.0)`,
-    `PropertyValue.null()`), which the binding encodes, or `bytes` holding one
-    encoded BACnetChannelValue with no wrapper tag: a single application-tagged
-    primitive, or a context-0 lighting command, which has no `PropertyValue`
-    form. A `PropertyValue` that isn't one primitive, such as a list, raises
-    `ValueError` (#1359).
+  - `value` is a `PropertyValue`, which the binding encodes, or a `bytes` or
+    `bytearray` holding the encoded octets (#1359). Either way it must be one
+    BACnetChannelValue with no wrapper tag: a single application-tagged
+    primitive (`PropertyValue.real(72.0)`, `PropertyValue.null()`), or a
+    context-0 lighting command, given as `bytes` or as the same octets in
+    `PropertyValue.application_data(...)`. Anything else, such as a
+    `PropertyValue.list(...)`, raises `ValueError`, and a value of another
+    type, a list of ints included, raises `TypeError`.
 - `inhibit_delay`: optional Boolean. TRUE skips the execution delays of Channels whose
   `Allow_Group_Delay_Inhibit` is TRUE.
 
@@ -2157,8 +2159,10 @@ file-backed storage is a separate contract. Installed-extension loopback tests i
 `test_audit_api.py` prove queryable target WRITEs for both confirmation modes,
 strict atomic validation, replacement, selector/priority filtering and Reporter-write
 bypass, suppression, unresolved-recipient no growth and lifecycle freezing.
-Broader source/bounds evidence remains the existing Rust
-Reporter suites, not independent interoperability qualification.
+An inbound WriteGroup is audited as one WRITE per Channel it writes, from the
+requester's address and with no invoke ID (`WriteGroupAuditTests`). Broader
+source/bounds evidence remains the existing Rust Reporter suites, not
+independent interoperability qualification.
 
 Recipient changes through the active Device property also support local and
 network writes with atomic old/new notification admission. Rust's supported
@@ -2166,7 +2170,7 @@ network writes with atomic old/new notification admission. Rust's supported
 and physical Input sampling remain outside it. AV/BV policy rows are described
 below. No Python live configuration/callbacks, payload-origin verification, standalone
 source-side reporting, ordinary sample/event production,
-WriteGroup expansion, source batching, durability, full Reporter/Audit/BIBB/BTL/certification,
+source batching, durability, full Reporter/Audit/BIBB/BTL/certification,
 independent interop or #345 closure is claimed.
 
 #### Object-owned AV/BV Audit policy
@@ -2492,8 +2496,9 @@ it, from `add_device_binding` or an I-Am heard in the last ten minutes, or
 finds one with a Who-Is first, as for a Command's remote action (see
 [Building Control](#building-control)). The server reads that member's
 property there first to learn its datatype and converts the value to it as for
-a local member; a read that fails leaves the value as written (see the Channel
-paragraphs under [Lighting & Color](rust-api.md#lighting--color-5)).
+a local member. A read the device refuses leaves the value as written; one it
+doesn't answer fails the member with no write sent (see the Channel paragraphs
+under [Lighting & Color](rust-api.md#lighting--color-5)).
 `execution_delay` holds one delay in milliseconds per member (zeros when
 omitted), `control_groups` the groups whose WriteGroup the Channel takes, and
 `allow_group_delay_inhibit` whether a WriteGroup that asks for no delays skips

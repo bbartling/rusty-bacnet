@@ -14,6 +14,12 @@ and not others. A denied write is skipped silently, since nothing answers an
 unconfirmed request, makes no Audit record, and is counted in the `write_group` row of
 `mutation_decision_counters()`.
 
+**Check an existing authorizer for WriteGroup.** Before #1319 an installed authorizer
+never saw a WriteGroup, which was dropped whatever it returned. A callback that allows
+what it doesn't recognize, through `matches!`, `if let` or a `_ => true` arm, now
+allows WriteGroup Channel writes. `MutationTarget` isn't `#[non_exhaustive]`, but
+such callbacks still compile, so handle `MutationTarget::WriteGroup` explicitly.
+
 **SC mTLS channel/peer authentication is not service authorization.** Identities at
 this layer are claimed link/routed addresses, never certificate principals.
 Distinguishing SC certificate principals is out of scope: none reaches this layer.

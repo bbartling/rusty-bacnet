@@ -272,8 +272,8 @@ impl BACnetClient {
     /// `group_number` is 1..4294967295 (group 0 is reserved) and `write_priority` is 1..16.
     /// `change_list` is a non-empty list of `(channel, override_priority_or_none, value)`
     /// tuples: `channel` is a channel number 0..65535, `override_priority_or_none` is 1..16 or
-    /// `None`, and `value` is a `PropertyValue` holding a primitive, which the binding encodes,
-    /// or `bytes` holding one encoded BACnetChannelValue (a single application-tagged
+    /// `None`, and `value` is a `PropertyValue`, which the binding encodes, or a `bytes` or
+    /// `bytearray` holding one encoded BACnetChannelValue (a single application-tagged
     /// primitive, or a context-0 lighting command) with no extra wrapper tag (#1359). Raises
     /// `ValueError`, or `OverflowError` for integers that don't fit, for an argument outside
     /// those rules.
@@ -335,13 +335,14 @@ impl BACnetClient {
 }
 
 /// One `write_group` change-list value as Python gives it: a `PropertyValue`,
-/// encoded here, or the BACnetChannelValue already encoded, as a lighting
-/// command has to be. Either way the request's own check refuses anything
-/// that isn't one BACnetChannelValue.
+/// encoded here, or the BACnetChannelValue already encoded in a `bytes` or
+/// `bytearray`, as a lighting command usually is. Either way the request's
+/// own check refuses anything that isn't one BACnetChannelValue. A list of
+/// ints is neither, and raises TypeError.
 #[derive(FromPyObject)]
 enum ChannelValueArg {
     Value(PyPropertyValue),
-    Encoded(Vec<u8>),
+    Encoded(pyo3::pybacked::PyBackedBytes),
 }
 
 impl ChannelValueArg {
@@ -354,7 +355,7 @@ impl ChannelValueArg {
                     .map_err(|error| PyValueError::new_err(error.to_string()))?;
                 Ok(octets.to_vec())
             }
-            Self::Encoded(octets) => Ok(octets),
+            Self::Encoded(octets) => Ok(octets.to_vec()),
         }
     }
 }

@@ -564,15 +564,16 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     }
 
     /// Keep `datatype`, learned for a Channel's member in another device, for
-    /// the distributions after this one: the member at zero-based `slot` of
-    /// List_Of_Object_Property_References, if that slot still holds
-    /// `reference`. Writing the member, or the whole list, forgets it.
+    /// the distributions after this one, or forget the one kept with `None`:
+    /// the member at zero-based `slot` of List_Of_Object_Property_References,
+    /// if that slot still holds `reference`. Writing the member, or the whole
+    /// list, forgets it too.
     #[doc(hidden)]
-    fn learn_member_datatype_internal(
+    fn remember_member_datatype_internal(
         &mut self,
         _slot: usize,
         _reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
-        _datatype: crate::channel::MemberDatatype,
+        _datatype: Option<crate::channel::MemberDatatype>,
     ) {
     }
 

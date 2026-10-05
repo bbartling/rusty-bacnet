@@ -26,7 +26,8 @@
 //!
 //! [`execute`] is the sequence every runner shares. A Command's commands go
 //! in list order, each through the owner's write path (a command naming
-//! another device through [`RunHost::write_remote`]), each outcome recorded
+//! another device through [`RunHost::write_remote`], once
+//! [`RunHost::remote_slots`] has room for it), each outcome recorded
 //! under a generation check, the post delay after each attempt, a stop at a
 //! failure that quits, then the end of the run. A Channel's members each go
 //! once their own delay is up, through the same write paths, a member in
@@ -54,11 +55,13 @@ use crate::server::RemoteRequestError;
 
 mod chain;
 mod channel;
+mod remote_slots;
 mod taken;
 mod target;
 mod unattached;
 
 pub(crate) use chain::admit;
+pub(crate) use remote_slots::RemoteSlots;
 pub(crate) use taken::TakenRuns;
 pub(crate) use unattached::run_unattached;
 
@@ -94,6 +97,10 @@ pub(crate) trait RunHost: Sync {
         device: ObjectIdentifier,
         reference: &BACnetDeviceObjectPropertyReference,
     ) -> impl Future<Output = Result<PropertyValue, RemoteRequestError>> + Send;
+
+    /// The queues every request a run makes in another device waits in
+    /// (`remote_slots`), or `None` for a runner with no network.
+    fn remote_slots(&self) -> Option<&RemoteSlots>;
 
     /// The object's run state changed under `db`, the guard that changed it.
     fn committed(
@@ -402,6 +409,12 @@ async fn make<H: RunHost>(
         } else {
             command.device_identifier
         }
+    };
+    // A command in another device waits its turn with every other request
+    // runs make there (`remote_slots`).
+    let _slot = match (remote, host.remote_slots()) {
+        (Some(device), Some(slots)) => Some(slots.acquire(device).await),
+        _ => None,
     };
     let made = target::write(host, run, remote, command)
         .await

@@ -8,15 +8,18 @@
 //! device are written by the distribution itself, in order of delay and list
 //! order among equal delays, so their writes keep that order. A member in
 //! another device is its own future, so a write there that waits for its
-//! answer holds back no other member; at most [`REMOTE_IN_FLIGHT`] requests
-//! to other devices are outstanding at once in one distribution, and a member
-//! whose time comes while all of them are taken waits for one to end.
+//! answer holds back no member here or in another device. Requests in other
+//! devices wait their turn in the server's queues (`remote_slots`): one at a
+//! time per device and a bounded number across the server, so a member due
+//! while its device is answering another request is written once that one
+//! ends.
 //!
-//! A device that answers none of a write's attempts, or none of the Who-Is
+//! A device that answers none of a request's attempts, or none of the Who-Is
 //! sent to find it when it had no binding (#1322), is taken to be offline for
-//! the rest of the distribution: its members whose writes start after that
-//! fail at once as communication failures, with nothing sent. Members already
-//! outstanding there wait out their own retries, side by side.
+//! the rest of the distribution: its members whose requests come up after
+//! that, their turn in the queue included, fail at once as communication
+//! failures, with nothing sent. A distribution so waits out one request's
+//! retries per silent device.
 //!
 //! For a member in this device the runner looks up the datatype of the
 //! property's current value, coerces the channel value to it (Table 12-63)
@@ -28,12 +31,17 @@
 //! in that device, sent when the distribution starts so it overlaps the
 //! member's delay, and the value is coerced to the datatype of what it
 //! returns, as for a member here. A primitive datatype learned is kept on the
-//! Channel for later distributions until the member is replaced. No read is
-//! sent when the coercion can't depend on the answer: for a NULL, a lighting
-//! command, or a member that is a Lighting_Command. A read that is refused,
-//! gets no answer, or returns NULL or a constructed value leaves the value
-//! as written, and the device itself refuses a datatype its property doesn't
-//! take; nothing is kept, so the next distribution reads again.
+//! Channel for later distributions until the member is replaced, or until a
+//! write made with it is refused as a configuration fault (an invalid
+//! datatype, say), so a property whose datatype can change is read again. No
+//! read is sent when the coercion can't depend on the answer: for a NULL, a
+//! lighting command, or a member that is a Lighting_Command. A read that gets
+//! no answer finds the device silent, since every device executes
+//! ReadProperty: the member fails as a communication failure with no write
+//! sent. A read that is refused, or returns NULL, a constructed value or an
+//! answer that doesn't fit, leaves the value as written, and the device
+//! itself refuses a datatype its property doesn't take; nothing is kept, so
+//! the next distribution reads again.
 //!
 //! A coercion failure means that member isn't written, and counts as a
 //! configuration failure: the member's datatype doesn't fit the value. A
@@ -53,31 +61,26 @@ use bacnet_objects::channel::{
     coerce_channel_value, ChannelDistribution, ChannelMember, MemberDatatype,
 };
 use bacnet_objects::command::{CommandRun, WriteFailure};
+use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::constructed::BACnetActionCommand;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
-use tokio::sync::Semaphore;
 use tokio::time::Instant;
 use tracing::debug;
 
+use super::remote_slots::RemoteSlot;
 use super::target::{self, Failed};
 use super::{Owner, RunHost};
-
-/// The most requests to other devices, reads and writes together, one
-/// distribution keeps outstanding at once: a sixteenth of the device's 256
-/// invoke IDs, which its notifications and other runs share.
-pub(super) const REMOTE_IN_FLIGHT: usize = 16;
+use crate::server::RemoteRequestError;
 
 /// What a distribution's members share while they are written.
 struct Shared {
     start: Instant,
-    /// Devices that answered none of a write's attempts, or its Who-Is, in
+    /// Devices that answered none of a request's attempts, or its Who-Is, in
     /// this distribution. Never held across an await.
     silent: Mutex<Vec<ObjectIdentifier>>,
-    /// One permit per outstanding request to another device.
-    remote: Semaphore,
 }
 
 impl Shared {
@@ -109,7 +112,6 @@ pub(super) async fn distribute<H: RunHost>(
     let shared = Shared {
         start: Instant::now(),
         silent: Mutex::new(Vec::new()),
-        remote: Semaphore::new(REMOTE_IN_FLIGHT),
     };
     let (mut local, remote): (Vec<&ChannelMember>, Vec<(&ChannelMember, ObjectIdentifier)>) = {
         let db = host.database().read().await;
@@ -159,7 +161,7 @@ pub(super) async fn distribute<H: RunHost>(
 }
 
 /// Whether `run` is still its object's current run.
-fn current(db: &bacnet_objects::database::ObjectDatabase, run: &CommandRun) -> bool {
+fn current(db: &ObjectDatabase, run: &CommandRun) -> bool {
     db.get(&run.source)
         .and_then(|object| object.command_generation_internal())
         == Some(run.generation)
@@ -191,10 +193,20 @@ async fn write_remote<H: RunHost>(
     .await
 }
 
+/// Room for one request in `device`, from the host's queues; `None` from a
+/// host with no network, whose request fails unsent anyway.
+async fn slot<H: RunHost>(host: &H, device: ObjectIdentifier) -> Option<RemoteSlot<'_>> {
+    match host.remote_slots() {
+        Some(slots) => Some(slots.acquire(device).await),
+        None => None,
+    }
+}
+
 /// The datatype `member`'s property in `device` holds, read there when the
 /// coercion depends on it and kept on the Channel when it's a primitive one.
 /// Anything short of that is [`MemberDatatype::Unknown`], or Lighting_Command
-/// for that property, and the value goes as written.
+/// for that property, and the value goes as written; a read that gets no
+/// answer marks the device silent, so the member's write is never sent.
 async fn learn<H: RunHost>(
     host: &H,
     run: &CommandRun,
@@ -212,17 +224,34 @@ async fn learn<H: RunHost>(
         distribution.value,
         PropertyValue::Null | PropertyValue::ApplicationData(_)
     ) && unread == MemberDatatype::Unknown;
-    if !decides || shared.is_silent(device) {
+    if !decides {
         return unread;
     }
     let read = {
-        let Ok(_permit) = shared.remote.acquire().await else {
+        let _slot = slot(host, device).await;
+        // The run may have gone stale, or the device silent, while this read
+        // waited its turn: then nothing is read, and the member's write finds
+        // the run stale or the device silent.
+        let current = current(&*host.database().read().await, run);
+        if !current || shared.is_silent(device) {
             return unread;
-        };
+        }
         host.read_remote(device, reference).await
     };
     let datatype = match read {
         Ok(value) => MemberDatatype::of(property, Some(&value)),
+        Err(error @ (RemoteRequestError::Unanswered | RemoteRequestError::Undiscovered)) => {
+            debug!(
+                channel = %run.source,
+                %device,
+                target = %reference.object_identifier,
+                ?property,
+                %error,
+                "Channel member's device answered no datatype read; it counts as silent"
+            );
+            shared.found_silent(device);
+            return unread;
+        }
         Err(error) => {
             debug!(
                 channel = %run.source,
@@ -236,12 +265,23 @@ async fn learn<H: RunHost>(
         }
     };
     if datatype != MemberDatatype::Unknown {
-        let mut db = host.database().write().await;
-        if let Some(channel) = db.get_mut(&run.source) {
-            channel.learn_member_datatype_internal(member.slot, reference, datatype);
-        }
+        remember(host, run, member, Some(datatype)).await;
     }
     datatype
+}
+
+/// Keep `datatype` on the Channel for `member`, or forget what it had with
+/// `None`.
+async fn remember<H: RunHost>(
+    host: &H,
+    run: &CommandRun,
+    member: &ChannelMember,
+    datatype: Option<MemberDatatype>,
+) {
+    let mut db = host.database().write().await;
+    if let Some(channel) = db.get_mut(&run.source) {
+        channel.remember_member_datatype_internal(member.slot, &member.reference, datatype);
+    }
 }
 
 /// Write one member: `Ok` if that counts as a success, otherwise how it
@@ -275,6 +315,12 @@ async fn write_member<H: RunHost>(
             }
         }
     };
+    // A member in another device waits its turn there first, and the device
+    // may go silent meanwhile.
+    let _slot = match device {
+        Some(device) => slot(host, device).await,
+        None => None,
+    };
     if let Some(device) = device.filter(|device| shared.is_silent(*device)) {
         debug!(
             channel = %run.source,
@@ -307,16 +353,7 @@ async fn write_member<H: RunHost>(
         quit_on_failure: false,
         write_successful: false,
     };
-    let written = match device {
-        None => target::write(host, run, None, &command).await,
-        Some(_) => {
-            let Ok(_permit) = shared.remote.acquire().await else {
-                return Some(Err(WriteFailure::Process));
-            };
-            target::write(host, run, device, &command).await
-        }
-    };
-    Some(match written {
+    Some(match target::write(host, run, device, &command).await {
         Ok(()) => Ok(()),
         Err(Failed {
             answer: Some(answer),
@@ -329,6 +366,19 @@ async fn write_member<H: RunHost>(
         Err(failed) => {
             if let Some(device) = device.filter(|_| failed.unanswered) {
                 shared.found_silent(device);
+            }
+            // The device refused the coerced value as a configuration fault:
+            // the datatype kept for it may be wrong now, so the next
+            // distribution reads it again.
+            let refused = failed.answer.is_some() && failed.failure == WriteFailure::Configuration;
+            let kept = remote.is_some_and(|(_, datatype)| {
+                !matches!(
+                    datatype,
+                    MemberDatatype::Unknown | MemberDatatype::LightingCommand
+                )
+            });
+            if refused && kept {
+                remember(host, run, member, None).await;
             }
             Err(failed.failure)
         }

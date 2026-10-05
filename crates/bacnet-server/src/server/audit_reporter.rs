@@ -85,9 +85,10 @@ mod policy_precommit;
 /// An inbound WriteGroup reports WRITE (Table 19-5) once per Channel it writes,
 /// as a WriteProperty of that Channel's Present_Value at the priority used, with
 /// the requester as source and no invoke ID; a Channel write the mutation
-/// authorizer denied makes none (#1318). A Channel's Present_Value counts as
-/// commandable for the priority and its filter, since it passes its priority
-/// through to the members.
+/// authorizer denied makes none (#1318). A Channel's Present_Value is
+/// commandable (Clause 12.53.5), so its records, a WriteProperty's included,
+/// carry the priority and Audit_Priority_Filter applies to them (Clause
+/// 19.6.3): one at a disabled priority is dropped.
 ///
 /// READ covers completed, unsegmented RP/RPM responses, one record per
 /// returned property outcome in result order, including inline RPM errors.

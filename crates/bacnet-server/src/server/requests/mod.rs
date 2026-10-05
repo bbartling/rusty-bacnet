@@ -14,6 +14,7 @@ mod alarm_summary;
 mod atomic_read_file;
 mod atomic_write_file;
 mod audit_notification;
+pub(super) use audit_notification::fail_closed_authorize;
 #[cfg(test)]
 mod confirmed;
 pub(super) mod confirmed_response;

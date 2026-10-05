@@ -369,14 +369,14 @@ impl BACnetObject for Probe {
         );
         true
     }
-    fn learn_member_datatype_internal(
+    fn remember_member_datatype_internal(
         &mut self,
         slot: usize,
         reference: &bacnet_types::constructed::BACnetDeviceObjectPropertyReference,
-        datatype: bacnet_objects::channel::MemberDatatype,
+        datatype: Option<bacnet_objects::channel::MemberDatatype>,
     ) {
         self.called(
-            "learn_member_datatype_internal",
+            "remember_member_datatype_internal",
             (slot, reference.clone(), datatype),
         );
     }

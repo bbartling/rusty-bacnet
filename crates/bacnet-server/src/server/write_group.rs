@@ -119,9 +119,7 @@ impl Requester<'_> {
                 }),
             };
             // A callback that panics denies, as for the confirmed services.
-            let allowed =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| authorizer(&context)));
-            if allowed.unwrap_or(false) {
+            if super::requests::fail_closed_authorize(|| authorizer(&context)) {
                 MutationDecision::Allow
             } else {
                 MutationDecision::Deny

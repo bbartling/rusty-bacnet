@@ -19,7 +19,10 @@
 //! apply as for any other local write. A command or member naming another
 //! device goes out as a confirmed WriteProperty through [`RemoteWriter`]
 //! (#1180), which also makes the ReadProperty a Channel learns a remote
-//! member's datatype with (#1342). No database guard is held across a write's
+//! member's datatype with (#1342). Every run on the server shares one set of
+//! queues for those requests, kept in [`NotificationTransactions`] beside the
+//! invoke IDs they lease: one at a time per device, a bounded number in all
+//! (`crate::command_lists::RemoteSlots`). No database guard is held across a write's
 //! notifications, an outstanding remote request or a delay. The
 //! object's generation guards every report back, so a run whose object was
 //! replaced or reconfigured stops.
@@ -273,6 +276,11 @@ impl<T: TransportPort + 'static> RunHost for CommandRunner<T> {
             property_array_index: reference.property_array_index,
         };
         self.remote_writer().read(device, &request).await
+    }
+
+    /// The server's queues, shared by every run on it.
+    fn remote_slots(&self) -> Option<&crate::command_lists::RemoteSlots> {
+        Some(self.notification_transactions.run_slots())
     }
 
     /// Timestamped references capture the change under its guard (#856).
