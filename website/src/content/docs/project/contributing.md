@@ -13,7 +13,7 @@ Start a guide with the intended outcome, prerequisites, and whether it sends tra
 
 Check command help and implementation for CLI syntax; check published APIs, type stubs, and tests for language examples. Do not infer a server capability from an enum constant or a CLI feature from a Rust transport module.
 
-Keep examples tied to a named release or explicitly marked current development. Use relative repository links for maintainer-only material and correctly based website links for public routes. Test the GitHub Pages project subpath rather than only a local root URL.
+Keep examples tied to the release the site describes, and mark anything that needs an unreleased source build. Use relative repository links for maintainer-only material and correctly based website links for public routes. Test the GitHub Pages project subpath rather than only a local root URL.
 
 ## Make visuals useful
 
@@ -33,7 +33,7 @@ No private keys, real customer identifiers, or unredacted operational captures b
 
 Use [GitHub issues](https://github.com/jscott3201/rusty-bacnet/issues) to report problems and propose work. Preserve immutable release links and historical artifact provenance. Do not edit deployment workflows or publish the site as a side effect of a content change.
 
-The [engineering docs map](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/README.md) identifies canonical contracts. Add task guidance under `website/src/content/docs/development/` for current-source behavior; keep released install/lab examples tied to their validated revision. Navigation drives route checks, and Markdown exports must preserve version scope and usable links.
+The [engineering docs map](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/README.md) identifies canonical contracts. Add integration guidance under `website/src/content/docs/development/` and operating guidance under `guides/`; keep install/lab examples tied to their validated revision. The release version lives in `website/src/lib/site.mjs`, and `npm test` names every page that still carries another one. Navigation drives route checks, and Markdown exports must preserve version scope and usable links.
 
 ## Validate a content change
 

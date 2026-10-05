@@ -10,39 +10,49 @@ import { release } from '../../src/lib/site.mjs';
 // read it from there; this test lists every literal copy that doesn't follow it.
 const root = new URL('../../', import.meta.url);
 const repo = new URL('../', root);
+const docs = new URL('src/content/docs/', root);
 const read = path => readFile(new URL(path, root), 'utf8');
 const readRepo = path => readFile(new URL(path, repo), 'utf8');
 const series = release.split('.').slice(0, 2).join('.');
+// The release project/upgrading.md moves from. The upgrade guide and the lab's
+// recorded evidence may name it; nothing else may.
+const previous = '0.11.0';
+const history = new Set(['project/upgrading.md', 'start/local-lab.mdx']);
 // A 0.x.y version, alone or as v0.x.y, but not part of an address such as 0.0.0.0.
 const versions = text => [...new Set([...text.matchAll(/(?<![\w.])v?(0\.\d+\.\d+)(?![.\d])/g)].map(match => match[1]))];
+// A v0.x series such as "v0.12", not followed by a patch number.
+const serieses = text => [...new Set([...text.matchAll(/(?<![\w.])v(0\.\d+)(?![.\d])/g)].map(match => match[1]))];
 const install = 'src/content/docs/start/installation.mdx';
 
 test('every copy of the release version matches site.mjs', async () => {
   const stale = [];
   const expect = (where, ok) => { if (!ok) stale.push(where); };
-  // MDX takes the version from site.mjs, so it names none itself.
-  expect(`${install} names ${versions(await read(install))}; use {release}`, versions(await read(install)).length === 0);
-  expect('start/local-lab.mdx: rusty-bacnet=={release}', /rusty-bacnet==\{release\}/.test(await read('src/content/docs/start/local-lab.mdx')));
-  // Markdown start pages can't, so each names the release and nothing else.
-  const pages = (await readdir(new URL('src/content/docs/start/', root))).filter(name => name.endsWith('.md'));
-  assert.ok(pages.length > 0);
+  const pages = (await readdir(docs, { recursive: true })).filter(name => /\.mdx?$/.test(name)).map(name => name.replaceAll('\\', '/'));
+  assert.ok(pages.length > 20);
   for (const name of pages) {
-    const found = versions(await read(`src/content/docs/start/${name}`));
-    expect(`start/${name} names ${found.join(', ') || 'no version'}`, found.length === 1 && found[0] === release);
+    const text = await read(`src/content/docs/${name}`);
+    const allowed = history.has(name) ? [release, previous] : [release];
+    // MDX takes the release from site.mjs ({release}), so it names none itself.
+    const found = versions(text).filter(version => name.endsWith('.mdx') ? version !== previous || !history.has(name) : !allowed.includes(version));
+    expect(`${name} names ${found.join(', ')}${name.endsWith('.mdx') ? '; use {release}' : ''}`, found.length === 0);
+    const series_ = serieses(text).filter(found => found !== series && !(history.has(name) && previous.startsWith(`${found}.`)));
+    expect(`${name} names v${series_.join(', v')}`, series_.length === 0);
   }
+  expect('start/local-lab.mdx: rusty-bacnet=={release}', /rusty-bacnet==\{release\}/.test(await read('src/content/docs/start/local-lab.mdx')));
   const lab = await read('examples/python/loopback_lab.py');
   expect(`loopback_lab.py names ${versions(lab).join(', ')}`, versions(lab).join() === release
     && lab.match(/^EXPECTED_VERSION = "([^"]+)"$/m)?.[1] === release);
+  const labels = navigation.flatMap(group => [group.label, ...group.items.map(item => item.label)]).join('\n');
+  expect(`navigation.json names v${serieses(labels).join(', v')}`, serieses(labels).join() === series);
   expect(`navigation.json: "Start with v${series}"`, navigation.some(group => group.label === `Start with v${series}`));
-  expect(`index.mdx banner: 'v${series} release tutorials`,
-    (await read('src/content/docs/index.mdx')).includes(`content: 'v${series} release tutorials`));
+  expect(`index.mdx banner: 'Guides for the v${series} release`,
+    (await read('src/content/docs/index.mdx')).includes(`content: 'Guides for the v${series} release`));
   const support = await read('src/content/docs/project/support.md');
-  expect(`project/support.md: describe **v${release}**`,
-    support.includes(`(/rusty-bacnet/start/installation/) describe **v${release}**`));
-  expect(`project/support.md: what v${release} shipped, with its release notes`,
-    support.includes(`for what v${release} shipped, see its [release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v${release})`));
-  expect(`development/overview.md: [v${series} installation]`,
-    (await read('src/content/docs/development/overview.md')).includes(`[v${series} installation](/rusty-bacnet/start/installation/)`));
+  expect(`project/support.md: describe **v${release}**`, support.includes(`and the operating guides describe **v${release}**`));
+  expect(`project/support.md: describes v${release}, with its release notes`,
+    support.includes(`This summary describes v${release}; its [release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v${release})`));
+  const upgrading = await read('src/content/docs/project/upgrading.md');
+  expect(`project/upgrading.md: from v${previous} to v${release}`, upgrading.includes(`title: "Upgrade from v${previous} to v${release}"`));
   assert.deepEqual(stale, [], `release is ${release}; update these`);
 });
 

@@ -4,6 +4,7 @@ description: "Separate the Rust state machine, serial adapter behavior, and on-w
 ---
 
 import Diagram from '../../../components/Diagram.astro';
+import { release, repository } from '../../../lib/site.mjs';
 
 
 MS/TP is a token-passing serial transport. Fast protocol code is useful, but it does not by itself prove that a host, driver, and RS-485 adapter meet the required on-wire timing.
@@ -12,13 +13,13 @@ MS/TP is a token-passing serial transport. Fast protocol code is useful, but it 
 
 ## Choose the supported surface
 
-The release includes a standalone Python mini-device example using `transport="mstp"` and Rust serial transport code. The reviewed `bacnet` CLI does not expose MS/TP transport flags; do not substitute an invented `--mstp` or `--serial` option into CLI instructions.
+The Python package supports `transport="mstp"` on `BACnetClient` and `BACnetServer`, and `MstpEndpoint` for one device that both requests and responds; every release wheel includes it. Rust has the serial transport itself. The `bacnet` CLI does not expose MS/TP transport flags; do not substitute an invented `--mstp` or `--serial` option into CLI instructions.
 
 Treat Linux as the initial documentation/qualification lane. Serial path examples for macOS or Windows are not evidence that those platform/adapter combinations are qualified.
 
 ## Prepare the trunk
 
-Use a serial-enabled package and an adapter whose transmit-direction behavior is suitable for this deployment. The example asks for automatic transmit-direction control; adapter and driver behavior vary.
+Use the release package, or a source build with the `serial` feature, and an adapter whose transmit-direction behavior is suitable for this deployment. The example asks for automatic transmit-direction control; adapter and driver behavior vary.
 
 Choose a unique local master MAC in `0..=127`, a suitable device instance, and a baud rate matching the existing trunk. Coordinate `Max_Master` with the actual station address plan. Check wiring, polarity, common/reference arrangements, isolation, termination, and biasing against the equipment and adapter documentation; this page is not an electrical wiring specification.
 
@@ -26,7 +27,7 @@ Choose a unique local master MAC in `0..=127`, a suitable device instance, and a
 
 ## Start the repository's mini-device
 
-From a v0.11.0 source checkout, with its Python package installed:
+From a v{release} source checkout, which holds the example script, with the Python package installed:
 
 ```sh
 python examples/python/mstp_mini_device.py \
@@ -40,7 +41,7 @@ python examples/python/mstp_mini_device.py \
 
 Replace the serial path, MAC, baud, and device instance before connecting. The example's default baud is `38400`; it is not a universal setting for every trunk. The Python path accepts configured rates of 9600, 19200, 38400, 57600, 76800, and 115200; acceptance of a numeric setting does not establish a tested hardware matrix.
 
-The example passes `serial_port`, `mstp_baud`, `mstp_mac`, `mstp_max_master`, and `mstp_max_info_frames` to `BACnetServer`. Use that example as the concrete starting point, not the abbreviated Python constructor table that still lists only BIP, IPv6, and SC.
+The example passes `serial_port`, `mstp_baud`, `mstp_mac`, `mstp_max_master`, and `mstp_max_info_frames` to `BACnetServer`. The <a href={`${repository}/blob/v${release}/docs/python-api.md`}>Python API</a> documents the same options for `BACnetClient` and the `MstpEndpoint` alternative.
 
 ## Observe before increasing load
 
@@ -58,6 +59,6 @@ Repeated token loss, unstable latency, duplicate station addresses, or unexplain
 
 ## Sources and release scope
 
-These instructions target **v0.11.0**. Source review is not a claim of hardware qualification.
+These instructions target **v{release}**. Source review is not a claim of hardware qualification.
 
-[Mini-device source](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/examples/python/mstp_mini_device.py) · [Python example requirements](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/examples/python/README.md) · [On-wire qualification work](https://github.com/jscott3201/rusty-bacnet/issues/502).
+<a href={`${repository}/blob/v${release}/examples/python/mstp_mini_device.py`}>Mini-device source</a> · <a href={`${repository}/blob/v${release}/examples/python/README.md`}>Python example requirements</a> · [On-wire qualification work](https://github.com/jscott3201/rusty-bacnet/issues/502).

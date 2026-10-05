@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { release } from '../../src/lib/site.mjs';
 
 const root = new URL('../../', import.meta.url);
-test('development navigation resolves marked task guides with canonical source links', async () => {
-  const group = navigation.find(group => group.label === 'Current development');
+test('integration navigation resolves task guides with release-pinned source links', async () => {
+  const group = navigation.find(group => group.label === 'Build and integrate');
   assert.ok(group);
   const slugs = group.items.map(item => item.slug);
   assert.deepEqual(slugs, ['development/overview', 'development/shared-endpoints', 'development/network-number', 'development/transports', 'development/bacnet-sc']);
@@ -20,8 +20,8 @@ test('development navigation resolves marked task guides with canonical source l
     const page = frontmatter(source);
     assert.ok(page.title && page.description, slug);
     const body = await plainBody(page.body, path, []);
-    assert.match(body, /current development|unreleased source/i, slug);
-    assert.ok(body.includes('https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/'), slug);
+    assert.ok(body.includes(`https://github.com/jscott3201/rusty-bacnet/blob/v${release}/docs/`), slug);
+    assert.ok(!body.includes('https://github.com/jscott3201/rusty-bacnet/blob/dev/'), slug);
     assert.ok(body.includes('## Next steps'), slug);
     assert.ok(!body.includes('cargo install bacnet-cli --version'), slug);
   }

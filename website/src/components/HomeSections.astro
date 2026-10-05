@@ -3,9 +3,9 @@ import { release } from '../lib/site.mjs';
 ---
 <div class="rb-home">
   <aside class="rb-lab-banner" aria-label="Start without a controller"><div><strong>No controller? Start on your own machine.</strong><p>The local lab uses loopback addresses and an example server. No building-network discovery.</p></div><a href="/rusty-bacnet/start/local-lab/">Try the local lab <span aria-hidden="true">→</span></a></aside>
-  <section class="rb-bottom-grid" aria-label="Choose your documentation version">
-    <a href="/rusty-bacnet/start/installation/"><p class="rb-eyebrow">RELEASE · v{release}</p><h2>Start with a released tool.</h2><p>Install a release binary or package, run the preserved local lab, then read a known device.</p><span class="rb-card-link">Install v{release} <span aria-hidden="true">→</span></span></a>
-    <a href="/rusty-bacnet/development/overview/"><p class="rb-eyebrow">CURRENT DEVELOPMENT · SOURCE BUILD</p><h2>Build with the current APIs.</h2><p>Compose shared endpoints, configure SC, and understand Network Port registration, passive Number controls and transport evidence.</p><span class="rb-card-link">Open development guides <span aria-hidden="true">→</span></span></a>
+  <section class="rb-bottom-grid" aria-label="Choose where to start">
+    <a href="/rusty-bacnet/start/installation/"><p class="rb-eyebrow">RELEASE · v{release}</p><h2>Start with a released tool.</h2><p>Install a release binary or package, run the local lab, then read a known device.</p><span class="rb-card-link">Install v{release} <span aria-hidden="true">→</span></span></a>
+    <a href="/rusty-bacnet/development/overview/"><p class="rb-eyebrow">INTEGRATE · v{release}</p><h2>Build with the APIs.</h2><p>Compose shared endpoints, configure SC, and understand Network Port registration, passive Number controls and transport evidence.</p><span class="rb-card-link">Open integration guides <span aria-hidden="true">→</span></span></a>
   </section>
   <section aria-labelledby="journeys-title" class="rb-section">
     <div class="rb-section-heading"><div><p class="rb-eyebrow">RELEASE TUTORIALS · START WITH YOUR TASK</p><h2 id="journeys-title">Choose the tool that fits your task.</h2></div><a href="/rusty-bacnet/start/installation/">Installation options <span aria-hidden="true">↗</span></a></div>
@@ -23,5 +23,5 @@ import { release } from '../lib/site.mjs';
     <a href="/rusty-bacnet/help/troubleshooting/"><p class="rb-eyebrow">WHEN SOMETHING DOES NOT CONNECT</p><h2>Find the next useful check.</h2><p>Work from the symptom: no discovery replies, a timeout, an unknown property, or a certificate failure.</p><span class="rb-card-link">Troubleshooting <span aria-hidden="true">→</span></span></a>
     <a href="/rusty-bacnet/project/support/"><p class="rb-eyebrow">KNOW THE BOUNDARIES</p><h2>Evidence, not blanket claims.</h2><p>Understand the release, interface, transport, and conformance scope before planning a deployment.</p><span class="rb-card-link">Support and limitations <span aria-hidden="true">→</span></span></a>
   </section>
-  <p class="rb-footnote">Rusty BACnet is an MIT-licensed protocol stack. Neither release nor development guidance makes a BTL certification or full BACnet conformance claim. Work only on networks you are authorized to access.</p>
+  <p class="rb-footnote">Rusty BACnet is an MIT-licensed protocol stack. It makes no BTL certification or full BACnet conformance claim. Work only on networks you are authorized to access.</p>
 </div>

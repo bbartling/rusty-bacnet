@@ -1,12 +1,10 @@
 # Rusty BACnet documentation site
 
-An Astro/Starlight task guide with two explicit paths: release
-installation/lab/tutorials (`start/` targets the release named in
-`src/lib/site.mjs`; `guides/` are preserved **v0.11.0**) and
-**current development** source guides.
-The development section covers shared endpoints, Network Port/Number controls,
-transport evidence and current SC setup. [Engineering docs](../docs/README.md)
-remain the contract authority.
+An Astro/Starlight task guide for the release named in `src/lib/site.mjs`:
+installation, the local lab and first reads (`start/`), integration guides for
+shared endpoints, Network Port/Number controls, transport evidence and SC setup
+(`development/`), and operating guides (`guides/`). [Engineering
+docs](../docs/README.md) remain the contract authority.
 
 This content refresh is local-only. A successful build or browser check does not
 publish it or establish that a hosted site contains these changes. Historical
@@ -204,15 +202,18 @@ artifact or fetch a mutable branch in the deployment job.
 
 ## Content organization
 
-- `start/`: release tasks for the version in `src/lib/site.mjs`; `guides/`: preserved v0.11 release tasks.
+- `start/`, `development/` and `guides/`: release tasks for the version in
+  `src/lib/site.mjs`, linked to the canonical repository docs at that release's
+  tag. `development/overview` keeps the source-build path for unreleased changes.
 - `src/lib/site.mjs`: `release`, which MDX pages, the download list, the footer
   and the llms index read. To move to another release, change it and run
-  `npm test`: `tests/unit/release.test.mjs` names each Markdown page, the lab
-  script, the sidebar label and the home banner that still carry the old
-  version. It also checks the installation page's asset list against
+  `npm test`: `tests/unit/release.test.mjs` names every page, the lab script,
+  the sidebar label and the home banner that still carry another version
+  (`project/upgrading.md` and the lab's recorded evidence may name the previous
+  one). It also checks the installation page's asset list against
   `.github/workflows/release.yml`.
-- `development/`: marked current-source task guides, linked to canonical repository docs.
-- `reference/` and `project/`: cross-version navigation with explicit release/current links.
+- `reference/` and `project/`: reference entry points, support scope and the
+  upgrade guide from the previous release.
 - `src/data/navigation.json`: sidebar and test route inventory.
 - `scripts/prepare.mjs`: source-derived raw Markdown and version-aware llms index.
 

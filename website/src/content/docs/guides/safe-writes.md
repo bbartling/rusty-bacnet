@@ -45,12 +45,12 @@ Relinquishing removes that slot's command. It does **not** promise a return to t
 
 ## More consequential operations
 
-Alarm acknowledgments, time synchronization, communication control, object creation/deletion, and file writes are not read-only diagnostics. They need distinct guidance and operator intent. In particular, v0.11.0 alarm acknowledgment requires the original event timestamp and an explicit acknowledgment timestamp; do not manufacture those from an unrelated current clock reading.
+Alarm acknowledgments, time synchronization, communication control, object creation/deletion, and file writes are not read-only diagnostics. They need distinct guidance and operator intent. In particular, the CLI's alarm acknowledgment requires the original event timestamp (`--timestamp`) and an explicit acknowledgment time (`--ack-time`); do not manufacture those from an unrelated current clock reading.
 
 Record what was requested, the response, readback, and cleanup outcome in the approved operational record. Keep customer data out of public issues and site examples.
 
 ## Sources and release scope
 
-These instructions target **v0.11.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.12.0**. Source review is not a claim of hardware qualification.
 
-[Write and relinquish grammar](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/CLI.md) · [CLI arguments and acknowledgment inputs](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/bacnet-cli/src/args.rs) · [Python typed values](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/python-api.md).
+[Write and relinquish grammar](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/CLI.md) · [CLI arguments and acknowledgment inputs](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/crates/bacnet-cli/src/args.rs) · [Python typed values](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/python-api.md).

@@ -3,31 +3,30 @@ title: "Configure BACnet/SC"
 description: "Treat certificate trust, local identities, and build features as explicit prerequisites."
 ---
 
-:::caution[Release guide, not current dev]
-This page targets **v0.11.0**. Current `dev` has intentionally stricter SC configuration: the CLI requires explicit `--sc-ca` with no system-root fallback; Python requires explicit CA/operational credentials and device UUIDs. Do not mix those APIs with the release commands below. Follow the [current SC setup guide](/rusty-bacnet/development/bacnet-sc/) and the engineering references for [CLI trust migration](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/CLI.md#transport-variants), [Python credentials](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/python-api.md#required-operational-credentials), and [device UUID migration](https://github.com/jscott3201/rusty-bacnet/blob/dev/docs/python-api.md#sc-device-uuid-migration).
-:::
-
 BACnet/SC setup combines a WebSocket/TLS connection with BACnet-specific identities and hub behavior. A successful TCP or TLS connection alone does not establish a complete BACnet/SC deployment.
+
+This page covers the CLI and the trust roles. For Python and Rust credentials, durable device identity and failure stages, continue with [BACnet/SC setup](/rusty-bacnet/development/bacnet-sc/).
 
 ## Before connecting
 
-Obtain the hub URL, your node's certificate and private key, the trust arrangement for the hub's certificate chain, and an allocated VMAC and device UUID where the interface requires them. Ensure the certificate identity matches the hub name you are using and that the system clock is appropriate for certificate validation.
+Obtain the hub URL, the CA certificate that verifies the hub, your node's certificate and private key, and an allocated VMAC and device UUID. Ensure the hub's certificate identity matches the hub name you are using and that the system clock is appropriate for certificate validation.
 
 Keep private keys outside the repository and the generated site. Example names below are not deployable credentials.
 
 ## CLI feature and identity setup
 
-From the [v0.11.0 source checkout](/rusty-bacnet/start/installation/#prefer-a-source-build), build a CLI with the `sc-tls` feature:
+Every [release CLI executable](/rusty-bacnet/start/installation/#install-a-cli-executable) includes BACnet/SC. For a [source build](/rusty-bacnet/start/installation/#prefer-a-source-build), enable the `sc-tls` feature:
 
 ```sh
 cargo install --path crates/bacnet-cli --locked --features sc-tls
 ```
 
-The reviewed CLI requires a hub URL, client certificate, private key, local VMAC, and nonzero local device UUID:
+The CLI requires a hub URL, the hub's CA, a client certificate and private key, a local VMAC, and a nonzero local device UUID:
 
 ```sh
 bacnet --sc \
   --sc-url wss://hub.example.com/bacnet \
+  --sc-ca site-ca.pem \
   --sc-cert node-cert.pem \
   --sc-key node-key.pem \
   --sc-vmac 22:01:02:03:04:05 \
@@ -37,19 +36,17 @@ bacnet --sc \
 
 Replace every identity and path with an approved value for your network. The final VMAC is the **remote** target; `--sc-vmac` is the **local** node identity. Do not reuse the example VMAC or UUID throughout a deployment.
 
-### The CLI trust store is not the Python trust argument
+### Trust the hub's issuer, not the system roots
 
-The v0.11.0 CLI constructs its trust store from native root certificates. Its reviewed parser does not offer a `--sc-ca-cert` flag. A private hub CA therefore needs an appropriate trust path on the actual execution host, following site policy, or a different supported application configuration.
+`--sc-ca` names the CA PEM that verifies the hub's certificate. The CLI has no fallback to the operating system's root certificates, so a private hub CA needs no change to the host's trust store.
 
 Do not “fix” certificate failures by disabling certificate validation. A client certificate supplied through `--sc-cert` is not the same thing as trusting the issuer of the hub's certificate.
 
 ## Python trust configuration
 
-The Python client exposes `sc_ca_cert`, `sc_client_cert`, and `sc_client_key`. The hub exposes `ca_cert` for trusted node issuers. These are different roles: a node trusts the hub's issuer, and the hub validates connecting node identities using its configured trust.
+The Python client and server take `sc_ca_cert`, `sc_client_cert`, `sc_client_key` and a keyword-only `sc_device_uuid`; all four are required for `transport="sc"`. The hub (`ScHub`) takes `ca_cert` for trusted node issuers. These are different roles: a node trusts the hub's issuer, and the hub validates connecting node identities using its configured trust.
 
-The v0.11.0 repository distinguishes a hub configured with a trusted issuer CA from an example that omits `ca_cert`. The latter is server-auth-only example mode, not claimed BACnet/SC mutual-TLS conformance evidence. **Do not use server-auth-only example mode for deployment.** Configure trusted node issuers and operational credentials; current `dev` has removed this example mode.
-
-Use the versioned Python API and secure-connect example for release constructor details rather than translating CLI flags mechanically into Python names.
+A hub always requires `ca_cert` and verifies each node's certificate; there is no server-auth-only mode. Use the Python API and secure-connect example linked below for constructor details rather than translating CLI flags mechanically into Python names.
 
 ## Validate the whole path
 
@@ -59,6 +56,6 @@ These instructions explain configuration boundaries. They are not a certificate-
 
 ## Sources and release scope
 
-These instructions target **v0.11.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.12.0**. Source review is not a claim of hardware qualification.
 
-[CLI SC construction and native roots](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/bacnet-cli/src/transport.rs) · [CLI flags](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/bacnet-cli/src/args.rs) · [Python trust and hub guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/README.md) · [SC example](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/examples/python/sc_secure_connect.py).
+[CLI SC transport](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/CLI.md#transport-variants) · [CLI flags](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/crates/bacnet-cli/src/args.rs) · [Python credentials](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/python-api.md#required-operational-credentials) · [SC example](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/examples/python/sc_secure_connect.py).

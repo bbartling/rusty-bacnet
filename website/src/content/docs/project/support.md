@@ -3,17 +3,17 @@ title: "Support status and evidence"
 description: "What Rusty BACnet supports, and how to read release, development and platform evidence at the scope actually tested."
 ---
 
-Rusty BACnet is pre-1.0, with changing APIs and partial conformance coverage. Neither the release nor current development makes a BTL certification or full BACnet conformance claim.
+Rusty BACnet is pre-1.0, with changing APIs and partial conformance coverage. It makes no BTL certification or full BACnet conformance claim.
 
 ## Choose the version and owner first
 
-The [installation and local tutorials](/rusty-bacnet/start/installation/) describe **v0.12.0**; the operating guides still describe **v0.11.0**. The [development section](/rusty-bacnet/development/overview/) describes **unreleased source**, including shared endpoints, current SC requirements and local Network Number controls. A checkout may still report the latest release's version; use its commit to identify behavior.
+The [installation and local tutorials](/rusty-bacnet/start/installation/), the [integration guides](/rusty-bacnet/development/overview/) (shared endpoints, SC requirements and local Network Number controls) and the operating guides describe **v0.12.0**. A `dev` checkout may hold later changes while it still reports the release's version; use its commit to identify behavior.
 
-Standalone client, full server, shared endpoint and language binding are different surfaces. The shared endpoint's bounded responder does not acquire the full server's service set. Use the [current transport matrix](/rusty-bacnet/development/transports/) to choose a starting point, then follow its evidence links.
+Standalone client, full server, shared endpoint and language binding are different surfaces. The shared endpoint's bounded responder does not acquire the full server's service set. Use the [transport matrix](/rusty-bacnet/development/transports/) to choose a starting point, then follow its evidence links.
 
 ## What's supported
 
-This summary describes the current development source, which may be ahead of the latest release; for what v0.12.0 shipped, see its [release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.12.0). It lists what the code implements, not what has been certified or tried against other vendors' devices.
+This summary describes v0.12.0; its [release notes](https://github.com/jscott3201/rusty-bacnet/releases/tag/v0.12.0) list what changed. It lists what the code implements, not what has been certified or tried against other vendors' devices.
 
 **Objects.** `bacnet-objects` implements 64 of the 65 standard object types; Network Security is the one it leaves out. That covers the analog, binary and multi-state inputs, outputs and values; the integer, positive integer, large analog, character string, octet string, bit string, date, time, date-time and pattern values; Device, Network Port, File, Program, Loop, Accumulator, Pulse Converter, Averaging, Calendar, Schedule, Timer, Command, Channel, Group, Global Group, Structured View and Staging; Trend Log, Trend Log Multiple, Event Log, Audit Log and Audit Reporter; Notification Class, Notification Forwarder, and Event and Alert Enrollment; Load Control and the lighting and color objects; and the life safety, access control, elevator group, escalator and lift objects. A server keeps them in an `ObjectDatabase`, which also holds your own `BACnetObject` implementations.
 
@@ -47,8 +47,8 @@ This summary describes the current development source, which may be ahead of the
 
 A screenshot, test count or single-device demonstration does not establish all-device interoperability or fitness for an operating building. No green badge replaces the stated limits. External ignored fixtures, hardware tests and ordinary CI have different execution requirements.
 
-## Report a current problem
+## Report a problem
 
-Start with [troubleshooting](/rusty-bacnet/help/troubleshooting/) for release tasks or the relevant development guide. Open a [GitHub issue](https://github.com/jscott3201/rusty-bacnet/issues/new) with revision/artifact, transport, feature set, platform, minimal reproduction and sanitized evidence. Include the exact conflicting documentation link.
+Start with [troubleshooting](/rusty-bacnet/help/troubleshooting/) or the relevant integration guide. Open a [GitHub issue](https://github.com/jscott3201/rusty-bacnet/issues/new) with revision/artifact, transport, feature set, platform, minimal reproduction and sanitized evidence. Include the exact conflicting documentation link.
 
 Never attach private keys, customer identifiers or unredacted operational captures. Use the project's security-reporting guidance for sensitive findings.

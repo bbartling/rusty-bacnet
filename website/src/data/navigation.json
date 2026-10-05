@@ -29,10 +29,10 @@
     ]
   },
   {
-    "label": "Current development",
+    "label": "Build and integrate",
     "items": [
       {
-        "label": "Development overview",
+        "label": "Integration overview",
         "slug": "development/overview"
       },
       {
@@ -48,13 +48,13 @@
         "slug": "development/transports"
       },
       {
-        "label": "Current BACnet/SC",
+        "label": "BACnet/SC setup",
         "slug": "development/bacnet-sc"
       }
     ]
   },
   {
-    "label": "Operate v0.11",
+    "label": "Operate",
     "items": [
       {
         "label": "Connection settings",

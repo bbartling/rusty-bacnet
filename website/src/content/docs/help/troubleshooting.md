@@ -5,13 +5,13 @@ description: "Start with the layer that failed, not with a larger scan or a long
 
 Capture the exact program version, command or API call, transport, host platform, and failure symptom. Keep a sanitized record of the local address/port, target address, object/property, and whether a smaller operation works.
 
-:::caution[Check release versus dev before applying a fix]
-These guides describe **v0.11.0**, not current `dev`. In particular, current-dev SC requires explicit CLI `--sc-ca` and stricter Python CA/credentials/device UUID configuration. Follow the [SC release and migration boundary](/rusty-bacnet/guides/bacnet-sc/) rather than combining commands from different versions.
+:::caution[Check the version before applying a fix]
+These guides describe **v0.12.0**. Commands and APIs from earlier releases differ in places, notably BACnet/SC trust and identity. If you are moving an existing setup, read the [upgrade guide](/rusty-bacnet/project/upgrading/) rather than combining commands from different versions.
 :::
 
 ## The executable or module does not start
 
-Check installation before the network. The v0.11.0 Linux CLI release dynamically links libpcap; a missing `libpcap.so.0.8` can prevent even `--version` from starting. Install the platform's libpcap runtime through its package manager, or use the basic Cargo build without `pcap`. Later Linux release executables link libpcap in and need glibc 2.17 or newer; check that the file matches the machine's operating system and processor. A Python wheel/import problem is a different path: use the correct interpreter and run the [native import check](/rusty-bacnet/start/installation/#install-the-python-package).
+Check installation before the network. Check that the executable matches the machine's operating system and processor; the Linux release executables need glibc 2.17 or newer and link libpcap in. A source build with the `pcap` feature links the system's libpcap instead, so a missing libpcap shared library can prevent even `--version` from starting; install the platform's libpcap runtime, or build without `pcap`. A Python wheel/import problem is a different path: use the correct interpreter and run the [native import check](/rusty-bacnet/start/installation/#install-the-python-package).
 
 A local fixture can separate installation and protocol basics from network configuration. [Try the bounded loopback lab](/rusty-bacnet/start/local-lab/).
 
@@ -25,7 +25,7 @@ An empty discovery result does not prove that a building has no devices. A succe
 
 The shell can retain discovered devices in its session. A separate process does not inherit that session's cache. Use an explicit target address for a one-shot operation, or keep discovery and device-instance lookup within the same supported session.
 
-For v0.11.0, do not promise a one-shot read to `DNET:instance`; the reviewed dispatch rejects that target form. A routed network requires more than finding a router's IP address.
+Do not promise a one-shot read to `DNET:instance`; the one-shot commands reject that target form. A routed network requires more than finding a router's IP address.
 
 ## The socket is already in use
 
@@ -43,9 +43,7 @@ Reduce the request to one object/property. Investigate the peer's APDU limits, r
 
 ## BACnet/SC connection fails
 
-Check whether the binary includes SC support, then distinguish URL/connectivity, certificate trust, hostname/validity, client identity, hub acceptance, and BACnet target errors. The v0.11.0 CLI uses native trust roots; Python has an explicit CA argument. There is no reviewed `--sc-ca-cert` CLI flag. Current `dev` instead requires `--sc-ca`; see the migration links above.
-
-The exact message `no native root certificates found` points to an empty root store in the v0.11.0 CLI's SC construction path. Fix the trust deployment using approved procedures; do not disable verification.
+Check whether the binary includes SC support, then distinguish URL/connectivity, certificate trust, hostname/validity, client identity, hub acceptance, and BACnet target errors. The CLI trusts only the CA named by `--sc-ca`, and Python only `sc_ca_cert`; neither falls back to the system's root certificates. Follow the stage table in [BACnet/SC setup](/rusty-bacnet/development/bacnet-sc/#diagnose-the-stage-that-failed). Fix the trust deployment using approved procedures; do not disable verification.
 
 ## The serial port opens but MS/TP is unstable
 
@@ -65,6 +63,6 @@ Describe the task, version/build features, platform and transport, minimal repro
 
 ## Sources and release scope
 
-These instructions target **v0.11.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.12.0**. Source review is not a claim of hardware qualification.
 
-[CLI behavior](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/bacnet-cli/src/main.rs) · [SC error and trust implementation](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/bacnet-cli/src/transport.rs) · [Versioned API](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/python-api.md) · [MS/TP timing work](https://github.com/jscott3201/rusty-bacnet/issues/502).
+[CLI behavior](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/crates/bacnet-cli/src/main.rs) · [SC error and trust implementation](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/crates/bacnet-cli/src/transport.rs) · [Versioned API](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/python-api.md) · [MS/TP timing work](https://github.com/jscott3201/rusty-bacnet/issues/502).
