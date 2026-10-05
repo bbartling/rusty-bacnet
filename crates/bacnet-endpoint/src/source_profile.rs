@@ -4,7 +4,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Write the active source profile's Device Audit recipient as a trusted local operation.
     ///
     /// `Some(value)` validates and changes the actual Device value, atomically
-    /// admitting its old/new notifications. `None` is NULL relinquishment: it
+    /// admitting its two notifications: to the old and the new recipient, or
+    /// to the new one and by global broadcast when the old is an Address the
+    /// session's number does not name. `None` is NULL relinquishment: it
     /// succeeds unchanged after the same live-owner checks. Equal values are also
     /// no-ops. This is runtime mutation, not initial provisioning or route setup.
     ///

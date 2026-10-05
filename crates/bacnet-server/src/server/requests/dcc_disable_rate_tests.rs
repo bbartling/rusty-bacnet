@@ -80,12 +80,27 @@ impl Fixture {
                 self.config.clone(),
             )
         };
+        let mut audit = crate::server::audit_reporter::WriteAudit::new(
+            &services.config,
+            &services.network,
+            &services.notification_transactions,
+            &services.device_bindings,
+            crate::server::audit_reporter::RequestSource {
+                mac: &[peer],
+                network: source.as_ref(),
+                invoke_id: peer,
+                local_network: None,
+            },
+        )
+        .await;
         response(
             &services,
             &req,
             &[peer],
             source.as_ref(),
+            None,
             &self.tasks.spawner(),
+            &mut audit,
         )
         .await
     }

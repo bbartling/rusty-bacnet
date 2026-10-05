@@ -107,10 +107,25 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 }),
             )
             .publishing_to(egress.local_network_number().clone());
+            // A changed number may change whether the source recipient
+            // resolves; its Reporter's health follows at once (#1461).
+            let source = source_recipient.as_ref().map(Arc::downgrade);
+            let database = self.database.as_ref().map(Arc::downgrade);
             tokio::spawn(async move {
                 let _registration_lease = registration_lease;
                 while let Some(control) = controls.recv().await {
-                    if let Some(npdu) = owner.handle(control).await {
+                    let before = egress.local_network_number().get();
+                    let reply = owner.handle(control).await;
+                    let source = source.as_ref().and_then(std::sync::Weak::upgrade);
+                    let database = database.as_ref().and_then(std::sync::Weak::upgrade);
+                    if let (true, Some(source), Some(database)) = (
+                        egress.local_network_number().get() != before,
+                        source,
+                        database,
+                    ) {
+                        source.number_changed(&*database.read().await);
+                    }
+                    if let Some(npdu) = reply {
                         if let Err(error) = egress.send_network_number_is(npdu).await {
                             tracing::debug!(%error, "Network-Number-Is broadcast failed");
                         }

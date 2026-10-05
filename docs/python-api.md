@@ -2071,7 +2071,11 @@ child.add_device_binding(9, await parent.local_address())
   Provision the Device recipient independently with `configure_audit_recipient`,
   using a copied `AuditRecipientInput` Device or Address mapping. Device choices
   must be concrete, remote Device identifiers (instance 4194303 is reserved).
-  Address choices use the supported direct unicast B/IP subset. Missing provision
+  Address choices use the supported direct unicast B/IP subset, on network zero
+  or a network numbered 1 to 65534: an address naming the server's own network
+  number is local once the server knows that number (a registered port's, or one
+  learned from Network-Number-Is), and until then it starts unresolved with
+  CONFIGURATION_ERROR (see [Device recipient writes](device-audit-recipient.md)). Missing provision
   fails startup before registration transfer, including at Audit_Level NONE.
   See [Device recipient writes](device-audit-recipient.md) for the complete bounded contract.
 - `audit_level` is required and exactly `"none"`, `"audit_config"` or `"audit_all"`.
@@ -2133,7 +2137,9 @@ child.add_device_binding(9, await parent.local_address())
 By default `Monitored_Objects` remains absent (catch-all) and `Audit_Priority_Filter`
 selects all priorities; `Audit_Source_Reporter` remains false. The Rust producer covers inbound WP/WPM elements, AddListElement/RemoveListElement,
 AtomicWriteFile and CREATE/DELETE successes and authorized execution errors at
-their existing operation boundaries. Normal operations require their operation
+their existing operation boundaries, and each DeviceCommunicationControl change
+the server carries out as DEVICE_DISABLE_COMM or DEVICE_ENABLE_COMM (see
+[Audit records](dcc-policy.md#audit-records)). Normal operations require their operation
 bit; enabled external Reporter property writes retain the core filter bypass.
 Success omits Result; known execution errors include the response-mapped Error.
 Each selected Reporter has its own optional bounded, memory-only AUDITING_FAILURE
@@ -2156,7 +2162,9 @@ Broader source/bounds evidence remains the existing Rust
 Reporter suites, not independent interoperability qualification.
 
 Recipient changes through the active Device property also support local and
-network writes with atomic old/new notification admission. Rust's supported
+network writes; both of the change's notifications (to the old and new recipients,
+or to the new one and by global broadcast when the old has no route) are admitted
+atomically. Rust's supported
 `write_local` operation also shares the target observer; raw database authoring
 and physical Input sampling remain outside it. AV/BV policy rows are described
 below. No Python live configuration/callbacks, payload-origin verification, standalone

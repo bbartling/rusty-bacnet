@@ -269,22 +269,7 @@ impl SourceAudit {
         }
         let status = reporter.status_internal();
         let confirmed = reporter.confirmed_internal();
-        let route = db
-            .get(&self.device)
-            .and_then(|object| {
-                object
-                    .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
-                    .ok()
-            })
-            .and_then(|value| match value {
-                PropertyValue::ApplicationData(bytes) => {
-                    bacnet_encoding::constructed::decode_recipient(&bytes, 0)
-                        .ok()
-                        .map(|(value, _)| value)
-                }
-                _ => None,
-            })
-            .and_then(|value| runtime.routes.resolve(&value));
+        let route = runtime.recipient_route(&db);
         status.set_configured(route.is_some());
         let Some(route) = route else {
             drop(db);

@@ -1,5 +1,7 @@
 //! Complete target recipient mutation owner: preparation, commit and owned delivery.
-use super::audit_reporter::{deliver, encode_notification, DeliveryCompletion};
+use super::audit_reporter::{
+    deliver, deliver_global_broadcast, encode_notification, DeliveryCompletion,
+};
 use super::*;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::{
@@ -76,8 +78,13 @@ pub(super) fn validate(
     }
     let route = routes.resolve(&value);
     // A Device may be provisioned before its route is available. Address choices
-    // must belong to this runtime's explicit direct-unicast B/IP subset.
-    if matches!(value, BACnetRecipient::Address(_)) && route.is_none() {
+    // must belong to this runtime's explicit direct-unicast B/IP subset. One
+    // naming a network that the number in force does not name, or not yet,
+    // starts unresolved the same way, and resolves once it does (#1460).
+    if matches!(value, BACnetRecipient::Address(_))
+        && route.is_none()
+        && !routes.awaits_local_number(&value)
+    {
         return Err(denied());
     }
     for selected in &profile.reporters {
@@ -196,6 +203,16 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
         self.routes.resolve(&self.recipient.lock().unwrap())
     }
 
+    /// The network's number changed: whether the recipient resolves may have
+    /// changed with it, so each Reporter's CONFIGURATION_ERROR follows the
+    /// route in force now, not at the next audited operation (#1460).
+    pub(super) fn number_changed(&self) {
+        let configured = self.current_route().is_some();
+        for (_, status) in self.association.reporters() {
+            status.set_configured(configured);
+        }
+    }
+
     pub(super) fn uninstall(self: &Arc<Self>, db: &mut ObjectDatabase) {
         let sink: Arc<dyn AuditRecipientChangeSink> = self.clone();
         if let Some(mut authority) = db
@@ -229,7 +246,15 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
             if !self.owner.is_active() {
                 return Err(denied());
             }
-            let old_route = self.routes.resolve(current).ok_or_else(denied)?;
+            // An old Address the network's number no longer, or not yet,
+            // names has no route, but does not refuse the change (#1460,
+            // #1461): the record goes by global broadcast in its place.
+            // Any other old recipient must resolve.
+            let old_route = match self.routes.resolve(current) {
+                Some(route) => Some(route),
+                None if self.routes.awaits_local_number(current) => None,
+                None => return Err(denied()),
+            };
             let new_route = self.routes.resolve(&new).ok_or_else(denied)?;
             let mut old_value = BytesMut::new();
             let mut new_value = BytesMut::new();
@@ -276,29 +301,40 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
                     .prepare_context(next, reporter.auditing_failure_epoch().is_some())?;
                 contexts.push((Arc::clone(reporter), next, context));
             }
+            // Clause 12.11.66: the change's record reaches both recipients,
+            // or goes by global broadcast. With no route to the old one, the
+            // new recipient gets its copy and an unconfirmed global
+            // broadcast (`None`) stands in for the old one's.
+            let targets = match old_route {
+                Some(old_route) => [Some(old_route), Some(new_route)],
+                None => [Some(new_route), None],
+            };
             let task = status.commit_recipient_change(|confirmed, token| {
                 let mut attempts = Vec::with_capacity(2);
-                for route in [old_route, new_route] {
+                for target in targets {
                     let permit = self.transactions.try_admit_audit().map_err(|_| denied())?;
-                    let reservation = if confirmed {
-                        Some(
+                    let reservation = match &target {
+                        Some(route) if confirmed => Some(
                             self.transactions
                                 .reserve(
                                     route.canonical_peer.clone(),
                                     ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
                                 )
                                 .map_err(|_| denied())?,
-                        )
-                    } else {
-                        None
+                        ),
+                        _ => None,
                     };
                     let invoke = reservation
                         .as_ref()
                         .map_or(0, |(operation, _)| operation.invoke_id());
-                    let bytes =
-                        encode_notification(&notification, confirmed, self.max_apdu, invoke)
-                            .ok_or_else(denied)?;
-                    attempts.push((route, permit, reservation, bytes));
+                    let bytes = encode_notification(
+                        &notification,
+                        reservation.is_some(),
+                        self.max_apdu,
+                        invoke,
+                    )
+                    .ok_or_else(denied)?;
+                    attempts.push((target, permit, reservation, bytes));
                 }
                 // No fallible work remains. Worker registration happens under
                 // the same owner lock as this commit and shutdown sealing.
@@ -315,38 +351,32 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
                     }
                 }
                 let network = Arc::clone(&self.network);
-                let status = Arc::clone(&status);
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-                let mut attempts = attempts.into_iter();
-                let first = attempts.next().unwrap();
-                let second = attempts.next().unwrap();
-                let completion_a = DeliveryCompletion {
-                    status: Arc::clone(&status),
-                    epoch: token,
-                    finished: false,
-                };
-                let completion_b = DeliveryCompletion {
-                    status,
-                    epoch: token,
-                    finished: false,
-                };
-                Ok(async move {
-                    let run = |(route, _permit, reservation, bytes): (
-                        Arc<super::event_recipient_route::ConfirmedRecipientRoute>,
-                        tokio::sync::OwnedSemaphorePermit,
-                        Option<super::notification_transactions::NotificationReservation>,
-                        BytesMut,
-                    ),
-                               completion: DeliveryCompletion| {
+                // Each attempt owns its completion, so each outcome reaches
+                // the Reporter's health on its own.
+                let runs: Vec<_> = attempts
+                    .into_iter()
+                    .map(|(target, permit, reservation, bytes)| {
                         let network = Arc::clone(&network);
+                        let completion = DeliveryCompletion {
+                            status: Arc::clone(&status),
+                            epoch: token,
+                            finished: false,
+                        };
                         async move {
-                            let _permit = _permit;
-                            let delivered =
-                                deliver(&network, &route, &bytes, reservation, deadline).await;
+                            let _permit = permit;
+                            let delivered = match &target {
+                                Some(route) => {
+                                    deliver(&network, route, &bytes, reservation, deadline).await
+                                }
+                                None => deliver_global_broadcast(&network, &bytes, deadline).await,
+                            };
                             completion.finish(delivered);
                         }
-                    };
-                    tokio::join!(run(first, completion_a), run(second, completion_b));
+                    })
+                    .collect();
+                Ok(async move {
+                    futures_util::future::join_all(runs).await;
                 })
             })?;
             for (_, _, context) in contexts {

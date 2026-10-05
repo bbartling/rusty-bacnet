@@ -46,15 +46,24 @@ device's boot and recovery can live with that.
 4. `source_restriction`. A request that carries a routed source (SNET and
    SADR) matches only a routed entry with the same network and the full
    address, never the MAC of the router it came through. A request with no
-   routed source matches only a direct entry equal to its transport MAC.
+   routed source matches a direct entry equal to its transport MAC. Once the
+   server knows its own network's number, it also matches a routed entry
+   naming that number and its MAC: network numbers are unique, so that
+   entry names the same station (#1458), as the
+   [DCC restriction](dcc-policy.md#optional-exact-source-restriction) reads
+   it. While the number is unknown, a routed entry matches routed requests
+   only, and a direct entry never matches a routed one.
 5. The server must have a Device clock; a clockless server refuses.
 6. Rate and coalescing, under one lock: the global coalescing window, the
    global bucket, then, when a per-source rate or window is set, the source's
    window and bucket. A source that is not tracked yet is refused while the
    table holds `max_sources` entries, unless an entry has refilled and left its
    window, which makes room; an active entry is never dropped to reset its
-   budget. While sources are tracked, a request whose source address is not 1
-   to 18 octets, or whose routed network is not 1 to 65534, is refused.
+   budget. Once the server knows its own network's number, a station's
+   direct requests and those relayed with that number as SNET and its MAC as
+   SADR are one source with one budget (#1458). While sources are tracked, a
+   request whose source address is not 1 to 18 octets, or whose routed network
+   is not 1 to 65534, is refused.
 7. `max_step`. The requested time is compared with the clock in the request's
    own basis: a UTC request against the local time shifted by `UTC_Offset` and
    daylight saving. The bound is inclusive in both directions, and 0 allows

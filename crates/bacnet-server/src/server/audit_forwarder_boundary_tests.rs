@@ -137,10 +137,11 @@ async fn audit_forwarding_full_ring_evicts_atomically_without_delivery_rollback(
         let Some(Apdu::Error(error)) = f.confirmed(210, &[3], data.clone()).await else {
             panic!("storage unavailable must not be mistaken for normal ring eviction")
         };
-        // The injected backend returns Error::Transport; preserve the server's
-        // existing non-protocol error mapping rather than inventing a new one.
-        assert_eq!(error.error_class, ErrorClass::SERVICES);
-        assert_eq!(error.error_code, ErrorCode::OTHER);
+        // The injected backend returns Error::Transport; a failed commit is
+        // the server's own trouble, refused as DEVICE / OPERATIONAL_PROBLEM
+        // (#1366).
+        assert_eq!(error.error_class, ErrorClass::DEVICE);
+        assert_eq!(error.error_code, ErrorCode::OPERATIONAL_PROBLEM);
         settle().await;
         assert_eq!(snapshot(&f), before);
         assert_live(&f, &before).await;
@@ -181,7 +182,7 @@ async fn audit_forwarding_partial_batch_is_one_commit_and_one_complete_wire_requ
     };
     assert_eq!(
         (error.error_class, error.error_code),
-        (ErrorClass::SERVICES, ErrorCode::OTHER)
+        (ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM)
     );
     settle().await;
     assert_eq!(snapshot(&f), before);
