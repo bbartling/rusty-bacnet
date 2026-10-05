@@ -36,7 +36,7 @@ use crate::event::{
 use crate::property_metadata::{
     PropertyConformance::Optional,
     PropertyMetadata,
-    PropertyPresenceCondition::IntrinsicReporting,
+    PropertyPresenceCondition::{IntrinsicReportingOptional, IntrinsicReportingRequired},
     PropertyWriteCapability::{Always, ReadOnly},
 };
 
@@ -52,29 +52,40 @@ pub struct BufferReadyReport {
     pub current_notification: u32,
 }
 
-const fn row(
+/// A row footnote 3 of Table 12-31 (4 of Tables 12-29 and 12-35) requires
+/// of a log that reports intrinsically.
+const fn required(
     property: P,
     write: crate::property_metadata::PropertyWriteCapability,
 ) -> PropertyMetadata {
-    PropertyMetadata::new(property, Optional, Some(IntrinsicReporting), write)
+    PropertyMetadata::new(property, Optional, Some(IntrinsicReportingRequired), write)
+}
+
+/// A row footnote 5 of Table 12-31 (7 of 12-29, 6 of 12-35) only lets such
+/// a log have.
+const fn permitted(
+    property: P,
+    write: crate::property_metadata::PropertyWriteCapability,
+) -> PropertyMetadata {
+    PropertyMetadata::new(property, Optional, Some(IntrinsicReportingOptional), write)
 }
 
 /// The event rows a log that reports intrinsically adds, in the order the
 /// three log tables list them. Event_Message_Texts_Config and the
 /// Event_Algorithm_Inhibit pair are optional there and not served; the
-/// others are the ones footnote 3 of Table 12-31 (4 of Tables 12-29 and
-/// 12-35) asks of a log with intrinsic reporting, and Event_Message_Texts.
+/// others are the ones the tables require of a log with intrinsic
+/// reporting, and Event_Message_Texts, which they only permit.
 pub(crate) const BUFFER_READY_METADATA: [PropertyMetadata; 10] = [
-    row(P::NOTIFICATION_THRESHOLD, Always),
-    row(P::RECORDS_SINCE_NOTIFICATION, ReadOnly),
-    row(P::LAST_NOTIFY_RECORD, ReadOnly),
-    row(P::NOTIFICATION_CLASS, Always),
-    row(P::EVENT_ENABLE, Always),
-    row(P::ACKED_TRANSITIONS, ReadOnly),
-    row(P::NOTIFY_TYPE, Always),
-    row(P::EVENT_TIME_STAMPS, ReadOnly),
-    row(P::EVENT_MESSAGE_TEXTS, ReadOnly),
-    row(P::EVENT_DETECTION_ENABLE, Always),
+    required(P::NOTIFICATION_THRESHOLD, Always),
+    required(P::RECORDS_SINCE_NOTIFICATION, ReadOnly),
+    required(P::LAST_NOTIFY_RECORD, ReadOnly),
+    required(P::NOTIFICATION_CLASS, Always),
+    required(P::EVENT_ENABLE, Always),
+    required(P::ACKED_TRANSITIONS, ReadOnly),
+    required(P::NOTIFY_TYPE, Always),
+    required(P::EVENT_TIME_STAMPS, ReadOnly),
+    permitted(P::EVENT_MESSAGE_TEXTS, ReadOnly),
+    required(P::EVENT_DETECTION_ENABLE, Always),
 ];
 
 /// The records collected from Total_Record_Count `from` to `to`. The count

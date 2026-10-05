@@ -689,6 +689,24 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
                 );
             }
         }
+        // The three tables require every BUFFER_READY row of a log that
+        // reports intrinsically, as these do, but Event_Message_Texts,
+        // which they only permit (#1485).
+        let read_only = [
+            PropertyIdentifier::RECORDS_SINCE_NOTIFICATION,
+            PropertyIdentifier::LAST_NOTIFY_RECORD,
+            PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+        ];
+        for property in reporting.iter().chain(&read_only) {
+            assert_eq!(
+                optional(*property),
+                Some(false),
+                "{object_type:?} {property:?}"
+            );
+        }
+        let texts = PropertyIdentifier::EVENT_MESSAGE_TEXTS;
+        assert_eq!(optional(texts), Some(true), "{object_type:?}");
     }
 }
 

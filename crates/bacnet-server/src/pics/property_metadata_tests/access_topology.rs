@@ -5,6 +5,9 @@ use PropertyIdentifier as P;
 
 fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
     // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.
+    // Tables 12-30 and 12-37 require the event rows, Door_Alarm_State and the
+    // zone's occupancy-counting rows of an object that reports intrinsically,
+    // and only permit Event_Message_Texts and Time_Delay_Normal (#1485).
     match kind {
         ObjectType::ACCESS_DOOR => vec![
             (P::OBJECT_IDENTIFIER, false, false),
@@ -16,7 +19,7 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::DOOR_STATUS, true, true),
             (P::LOCK_STATUS, true, true),
             (P::SECURED_STATUS, true, false),
-            (P::DOOR_ALARM_STATE, true, true),
+            (P::DOOR_ALARM_STATE, false, true),
             (P::DOOR_MEMBERS, true, false),
             (P::STATUS_FLAGS, false, false),
             (P::OUT_OF_SERVICE, false, true),
@@ -34,16 +37,16 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             // configuration are writable, the event machinery keeps the
             // rest.
             (P::MASKED_ALARM_VALUES, true, true),
-            (P::TIME_DELAY, true, true),
-            (P::NOTIFICATION_CLASS, true, true),
-            (P::ALARM_VALUES, true, true),
+            (P::TIME_DELAY, false, true),
+            (P::NOTIFICATION_CLASS, false, true),
+            (P::ALARM_VALUES, false, true),
             (P::FAULT_VALUES, true, true),
-            (P::EVENT_ENABLE, true, true),
-            (P::ACKED_TRANSITIONS, true, false),
-            (P::NOTIFY_TYPE, true, true),
-            (P::EVENT_TIME_STAMPS, true, false),
+            (P::EVENT_ENABLE, false, true),
+            (P::ACKED_TRANSITIONS, false, false),
+            (P::NOTIFY_TYPE, false, true),
+            (P::EVENT_TIME_STAMPS, false, false),
             (P::EVENT_MESSAGE_TEXTS, true, false),
-            (P::EVENT_DETECTION_ENABLE, true, true),
+            (P::EVENT_DETECTION_ENABLE, false, true),
             (P::TIME_DELAY_NORMAL, true, true),
             (P::PROPERTY_LIST, false, false),
         ],
@@ -80,7 +83,7 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             // Table 12-37 has no Present_Value or Access_Doors row (#1064).
             (P::GLOBAL_IDENTIFIER, false, true),
             // Writable while Out_Of_Service is TRUE (Table 12-37 footnote 1).
-            (P::OCCUPANCY_COUNT, true, true),
+            (P::OCCUPANCY_COUNT, false, true),
             (P::ENTRY_POINTS, false, false),
             (P::EXIT_POINTS, false, false),
             (P::STATUS_FLAGS, false, false),
@@ -90,21 +93,21 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             // (footnote 5).
             (P::OCCUPANCY_STATE, false, false),
             (P::EVENT_STATE, false, false),
-            (P::OCCUPANCY_COUNT_ENABLE, true, false),
-            (P::ADJUST_VALUE, true, true),
+            (P::OCCUPANCY_COUNT_ENABLE, false, false),
+            (P::ADJUST_VALUE, false, true),
             (P::OCCUPANCY_UPPER_LIMIT, true, false),
             (P::OCCUPANCY_LOWER_LIMIT, true, false),
             // The event rows #1305 added: the configuration is writable,
             // the event machinery keeps the rest.
-            (P::TIME_DELAY, true, true),
-            (P::NOTIFICATION_CLASS, true, true),
-            (P::ALARM_VALUES, true, true),
-            (P::EVENT_ENABLE, true, true),
-            (P::ACKED_TRANSITIONS, true, false),
-            (P::NOTIFY_TYPE, true, true),
-            (P::EVENT_TIME_STAMPS, true, false),
+            (P::TIME_DELAY, false, true),
+            (P::NOTIFICATION_CLASS, false, true),
+            (P::ALARM_VALUES, false, true),
+            (P::EVENT_ENABLE, false, true),
+            (P::ACKED_TRANSITIONS, false, false),
+            (P::NOTIFY_TYPE, false, true),
+            (P::EVENT_TIME_STAMPS, false, false),
             (P::EVENT_MESSAGE_TEXTS, true, false),
-            (P::EVENT_DETECTION_ENABLE, true, true),
+            (P::EVENT_DETECTION_ENABLE, false, true),
             (P::TIME_DELAY_NORMAL, true, true),
             (P::PROPERTY_LIST, false, false),
         ],

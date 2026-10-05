@@ -7,14 +7,18 @@ use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
-    PropertyPresenceCondition::{Commandable, IntrinsicReporting, PairedText},
+    PropertyPresenceCondition::{
+        Commandable, IntrinsicReportingOptional, IntrinsicReportingRequired, PairedText,
+    },
     PropertyPresenceCondition::{CommandableValueSourceTracking, ValueSourceTracking},
     PropertyWriteCapability::WhenCommandOwner,
     PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
 // Base conformance is independent of implemented writability. Commandable and
-// intrinsic rows retain their optional base code. Preserve legacy list order.
+// intrinsic rows retain their optional base code; the intrinsic ones carry
+// Table 12-10's footnote 6 (required) or footnote 8 alone (only permitted) as
+// their condition (#1485). Preserve legacy list order.
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, Always),
@@ -26,40 +30,55 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(
         P::EVENT_DETECTION_ENABLE,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
-    PropertyMetadata::new(P::EVENT_ENABLE, Optional, Some(IntrinsicReporting), Always),
-    PropertyMetadata::new(P::TIME_DELAY, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::EVENT_ENABLE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
+    PropertyMetadata::new(
+        P::TIME_DELAY,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::TIME_DELAY_NORMAL,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingOptional),
         Always,
     ),
-    PropertyMetadata::new(P::NOTIFY_TYPE, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::NOTIFY_TYPE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::NOTIFICATION_CLASS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
     PropertyMetadata::new(
         P::ACKED_TRANSITIONS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         ReadOnly,
     ),
     PropertyMetadata::new(
         P::EVENT_TIME_STAMPS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         ReadOnly,
     ),
     PropertyMetadata::new(
         P::EVENT_MESSAGE_TEXTS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingOptional),
         ReadOnly,
     ),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
@@ -75,7 +94,12 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY_EVALUATION_INHIBIT, Optional, None, Always),
     PropertyMetadata::new(P::ACTIVE_TEXT, Optional, Some(PairedText), Always),
     PropertyMetadata::new(P::INACTIVE_TEXT, Optional, Some(PairedText), Always),
-    PropertyMetadata::new(P::ALARM_VALUE, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::ALARM_VALUE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::VALUE_SOURCE,
         Optional,
@@ -196,17 +220,6 @@ mod tests {
                 let required = object.required_properties();
                 for row in &original {
                     let p = row.property_identifier;
-                    let conformance = if output && p == P::PRESENT_VALUE {
-                        RequiredWrite
-                    } else if required.contains(&p)
-                        && ![P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]
-                            .contains(&p)
-                    {
-                        RequiredRead
-                    } else {
-                        Optional
-                    };
-                    assert_eq!(row.conformance, conformance, "{p:?}");
                     let condition = match p {
                         P::VALUE_SOURCE => Some(ValueSourceTracking),
                         P::VALUE_SOURCE_ARRAY | P::LAST_COMMAND_TIME => {
@@ -216,20 +229,45 @@ mod tests {
                             (!output).then_some(Commandable)
                         }
                         P::ACTIVE_TEXT | P::INACTIVE_TEXT => Some(PairedText),
+                        // Tables 12-8 and 12-10 require these of an object
+                        // that reports intrinsically, and only permit the
+                        // next two (#1485).
                         P::EVENT_DETECTION_ENABLE
                         | P::EVENT_ENABLE
                         | P::TIME_DELAY
-                        | P::TIME_DELAY_NORMAL
                         | P::NOTIFY_TYPE
                         | P::NOTIFICATION_CLASS
                         | P::ACKED_TRANSITIONS
                         | P::EVENT_TIME_STAMPS
-                        | P::EVENT_MESSAGE_TEXTS
                         | P::ALARM_VALUE
-                        | P::FEEDBACK_VALUE => Some(IntrinsicReporting),
+                        | P::FEEDBACK_VALUE => Some(IntrinsicReportingRequired),
+                        P::TIME_DELAY_NORMAL | P::EVENT_MESSAGE_TEXTS => {
+                            Some(IntrinsicReportingOptional)
+                        }
                         _ => None,
                     };
                     assert_eq!(row.presence_condition, condition, "{p:?}");
+                    let conformance = if output && p == P::PRESENT_VALUE {
+                        RequiredWrite
+                    } else if condition.is_none() && required.contains(&p) {
+                        RequiredRead
+                    } else {
+                        Optional
+                    };
+                    assert_eq!(row.conformance, conformance, "{p:?}");
+                    assert_eq!(
+                        required.contains(&p),
+                        conformance != Optional
+                            || matches!(
+                                condition,
+                                Some(
+                                    IntrinsicReportingRequired
+                                        | ValueSourceTracking
+                                        | CommandableValueSourceTracking
+                                )
+                            ),
+                        "{p:?}"
+                    );
                     assert!(object.read_property(p, None).is_ok(), "{p:?}");
                 }
                 let wire: Vec<_> = expected

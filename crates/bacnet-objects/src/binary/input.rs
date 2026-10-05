@@ -49,55 +49,55 @@ const BINARY_INPUT_PROPERTY_METADATA: &[PropertyMetadata] = &[
     PropertyMetadata::new(
         PropertyIdentifier::EVENT_DETECTION_ENABLE,
         PropertyConformance::Optional,
-        Some(PropertyPresenceCondition::IntrinsicReporting),
+        Some(PropertyPresenceCondition::IntrinsicReportingRequired),
         PropertyWriteCapability::Always,
     ),
     PropertyMetadata::new(
         PropertyIdentifier::EVENT_ENABLE,
         PropertyConformance::Optional,
-        Some(PropertyPresenceCondition::IntrinsicReporting),
+        Some(PropertyPresenceCondition::IntrinsicReportingRequired),
         PropertyWriteCapability::Always,
     ),
     PropertyMetadata::new(
         PropertyIdentifier::TIME_DELAY,
         PropertyConformance::Optional,
-        Some(PropertyPresenceCondition::IntrinsicReporting),
+        Some(PropertyPresenceCondition::IntrinsicReportingRequired),
         PropertyWriteCapability::Always,
     ),
     PropertyMetadata::new(
         PropertyIdentifier::TIME_DELAY_NORMAL,
         PropertyConformance::Optional,
-        Some(PropertyPresenceCondition::IntrinsicReporting),
+        Some(PropertyPresenceCondition::IntrinsicReportingOptional),
         PropertyWriteCapability::Always,
     ),
     PropertyMetadata::new(
         PropertyIdentifier::NOTIFY_TYPE,
         PropertyConformance::Optional,
-        Some(PropertyPresenceCondition::IntrinsicReporting),
+        Some(PropertyPresenceCondition::IntrinsicReportingRequired),
         PropertyWriteCapability::Always,
     ),
     PropertyMetadata::new(
         PropertyIdentifier::NOTIFICATION_CLASS,
         PropertyConformance::Optional,
-        Some(PropertyPresenceCondition::IntrinsicReporting),
+        Some(PropertyPresenceCondition::IntrinsicReportingRequired),
         PropertyWriteCapability::Always,
     ),
     PropertyMetadata::new(
         PropertyIdentifier::ACKED_TRANSITIONS,
         PropertyConformance::Optional,
-        Some(PropertyPresenceCondition::IntrinsicReporting),
+        Some(PropertyPresenceCondition::IntrinsicReportingRequired),
         PropertyWriteCapability::ReadOnly,
     ),
     PropertyMetadata::new(
         PropertyIdentifier::EVENT_TIME_STAMPS,
         PropertyConformance::Optional,
-        Some(PropertyPresenceCondition::IntrinsicReporting),
+        Some(PropertyPresenceCondition::IntrinsicReportingRequired),
         PropertyWriteCapability::ReadOnly,
     ),
     PropertyMetadata::new(
         PropertyIdentifier::EVENT_MESSAGE_TEXTS,
         PropertyConformance::Optional,
-        Some(PropertyPresenceCondition::IntrinsicReporting),
+        Some(PropertyPresenceCondition::IntrinsicReportingOptional),
         PropertyWriteCapability::ReadOnly,
     ),
     PropertyMetadata::new(
@@ -139,7 +139,7 @@ const BINARY_INPUT_PROPERTY_METADATA: &[PropertyMetadata] = &[
     PropertyMetadata::new(
         PropertyIdentifier::ALARM_VALUE,
         PropertyConformance::Optional,
-        Some(PropertyPresenceCondition::IntrinsicReporting),
+        Some(PropertyPresenceCondition::IntrinsicReportingRequired),
         PropertyWriteCapability::Always,
     ),
     PropertyMetadata::new(

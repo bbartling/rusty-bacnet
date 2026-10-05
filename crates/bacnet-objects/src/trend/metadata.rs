@@ -223,6 +223,9 @@ mod tests {
                         // Table 12-29 footnote 1 (#1481).
                         required.extend(WINDOW);
                     }
+                    // Intrinsic reporting requires every BUFFER_READY row but
+                    // Event_Message_Texts, which it only permits (#1485).
+                    required.extend(REPORTING.iter().filter(|&&p| p != P::EVENT_MESSAGE_TEXTS));
                     required.push(P::PROPERTY_LIST);
                     assert_eq!(object.property_list().as_ref(), all);
                     assert_eq!(object.required_properties().as_ref(), required);
@@ -236,10 +239,12 @@ mod tests {
                     for row in metadata.iter() {
                         let p = row.property_identifier;
                         let reporting = REPORTING.contains(&p);
-                        assert_eq!(
-                            row.presence_condition,
-                            reporting.then_some(PropertyPresenceCondition::IntrinsicReporting)
-                        );
+                        let condition = if p == P::EVENT_MESSAGE_TEXTS {
+                            PropertyPresenceCondition::IntrinsicReportingOptional
+                        } else {
+                            PropertyPresenceCondition::IntrinsicReportingRequired
+                        };
+                        assert_eq!(row.presence_condition, reporting.then_some(condition));
                         // A Trend Log's window has to be writable (Table
                         // 12-29 footnote 2); Log_Interval only while POLLED,
                         // which its capability carries, as on a Trend Log
@@ -248,6 +253,8 @@ mod tests {
                         let conformance =
                             if matches!(p, P::LOG_ENABLE | P::RECORD_COUNT) || trend_write {
                                 RequiredWrite
+                            } else if reporting {
+                                Optional
                             } else if required.contains(&p) {
                                 RequiredRead
                             } else {

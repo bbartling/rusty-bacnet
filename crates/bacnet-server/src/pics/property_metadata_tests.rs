@@ -154,9 +154,17 @@ fn pics_projects_migrated_property_metadata() {
             true,
             true,
         ),
+        // Table 12-6 requires Acked_Transitions of a Binary Input that
+        // reports intrinsically, and only permits Event_Message_Texts (#1485).
         (
             ObjectType::BINARY_INPUT,
             PropertyIdentifier::ACKED_TRANSITIONS,
+            false,
+            false,
+        ),
+        (
+            ObjectType::BINARY_INPUT,
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS,
             true,
             false,
         ),
@@ -346,6 +354,9 @@ fn pics_analog_property_metadata_is_exact_for_each_configuration() {
     use PropertyIdentifier as P;
 
     // Expected (identifier, optional, writable) rows, not generated from metadata.
+    // The event rows Tables 12-2, 12-3 and 12-4 require of an intrinsic
+    // reporter are not optional; Time_Delay_Normal and Event_Message_Texts,
+    // which they only permit, are (#1485).
     let base = [
         (P::OBJECT_IDENTIFIER, false, false),
         (P::OBJECT_NAME, false, true),
@@ -354,23 +365,23 @@ fn pics_analog_property_metadata_is_exact_for_each_configuration() {
         (P::PRESENT_VALUE, false, true),
         (P::STATUS_FLAGS, false, false),
         (P::EVENT_STATE, false, false),
-        (P::EVENT_DETECTION_ENABLE, true, true),
+        (P::EVENT_DETECTION_ENABLE, false, true),
         (P::OUT_OF_SERVICE, false, true),
         (P::UNITS, false, false),
         (P::COV_INCREMENT, true, true),
-        (P::HIGH_LIMIT, true, true),
-        (P::LOW_LIMIT, true, true),
-        (P::DEADBAND, true, true),
-        (P::LIMIT_ENABLE, true, true),
-        (P::EVENT_ENABLE, true, true),
-        (P::NOTIFY_TYPE, true, true),
-        (P::NOTIFICATION_CLASS, true, true),
-        (P::TIME_DELAY, true, true),
+        (P::HIGH_LIMIT, false, true),
+        (P::LOW_LIMIT, false, true),
+        (P::DEADBAND, false, true),
+        (P::LIMIT_ENABLE, false, true),
+        (P::EVENT_ENABLE, false, true),
+        (P::NOTIFY_TYPE, false, true),
+        (P::NOTIFICATION_CLASS, false, true),
+        (P::TIME_DELAY, false, true),
         (P::TIME_DELAY_NORMAL, true, true),
         (P::RELIABILITY, true, true),
         (P::RELIABILITY_EVALUATION_INHIBIT, true, true),
-        (P::ACKED_TRANSITIONS, true, false),
-        (P::EVENT_TIME_STAMPS, true, false),
+        (P::ACKED_TRANSITIONS, false, false),
+        (P::EVENT_TIME_STAMPS, false, false),
         (P::EVENT_MESSAGE_TEXTS, true, false),
         (P::PROPERTY_LIST, false, false),
     ];
@@ -468,6 +479,8 @@ fn pics_binary_commandable_property_metadata_is_exact() {
     use PropertyIdentifier as P;
 
     // Independent (identifier, optional, writable) fixture in legacy order.
+    // Tables 12-8 and 12-10 require the event rows of an intrinsic reporter
+    // but Time_Delay_Normal and Event_Message_Texts (#1485).
     let base = [
         (P::OBJECT_IDENTIFIER, false, false),
         (P::OBJECT_NAME, false, true),
@@ -476,14 +489,14 @@ fn pics_binary_commandable_property_metadata_is_exact() {
         (P::PRESENT_VALUE, false, true),
         (P::STATUS_FLAGS, false, false),
         (P::EVENT_STATE, false, false),
-        (P::EVENT_DETECTION_ENABLE, true, true),
-        (P::EVENT_ENABLE, true, true),
-        (P::TIME_DELAY, true, true),
+        (P::EVENT_DETECTION_ENABLE, false, true),
+        (P::EVENT_ENABLE, false, true),
+        (P::TIME_DELAY, false, true),
         (P::TIME_DELAY_NORMAL, true, true),
-        (P::NOTIFY_TYPE, true, true),
-        (P::NOTIFICATION_CLASS, true, true),
-        (P::ACKED_TRANSITIONS, true, false),
-        (P::EVENT_TIME_STAMPS, true, false),
+        (P::NOTIFY_TYPE, false, true),
+        (P::NOTIFICATION_CLASS, false, true),
+        (P::ACKED_TRANSITIONS, false, false),
+        (P::EVENT_TIME_STAMPS, false, false),
         (P::EVENT_MESSAGE_TEXTS, true, false),
         (P::OUT_OF_SERVICE, false, true),
         (P::RELIABILITY, true, true),
@@ -524,10 +537,10 @@ fn pics_binary_commandable_property_metadata_is_exact() {
                     ],
                 );
                 if optional {
-                    expected.push((P::ALARM_VALUE, true, true));
+                    expected.push((P::ALARM_VALUE, false, true));
                 } else {
                     expected.insert(20, (P::POLARITY, false, false));
-                    expected.insert(5, (P::FEEDBACK_VALUE, true, true));
+                    expected.insert(5, (P::FEEDBACK_VALUE, false, true));
                 }
                 expected.extend([
                     (P::VALUE_SOURCE, false, true),
@@ -581,14 +594,14 @@ fn pics_multistate_property_metadata_is_exact() {
         (P::PRESENT_VALUE, false, true),
         (P::STATUS_FLAGS, false, false),
         (P::EVENT_STATE, false, false),
-        (P::EVENT_DETECTION_ENABLE, true, true),
-        (P::EVENT_ENABLE, true, true),
-        (P::TIME_DELAY, true, true),
+        (P::EVENT_DETECTION_ENABLE, false, true),
+        (P::EVENT_ENABLE, false, true),
+        (P::TIME_DELAY, false, true),
         (P::TIME_DELAY_NORMAL, true, true),
-        (P::NOTIFY_TYPE, true, true),
-        (P::NOTIFICATION_CLASS, true, true),
-        (P::ACKED_TRANSITIONS, true, false),
-        (P::EVENT_TIME_STAMPS, true, false),
+        (P::NOTIFY_TYPE, false, true),
+        (P::NOTIFICATION_CLASS, false, true),
+        (P::ACKED_TRANSITIONS, false, false),
+        (P::EVENT_TIME_STAMPS, false, false),
         (P::EVENT_MESSAGE_TEXTS, true, false),
         (P::OUT_OF_SERVICE, false, true),
         (P::NUMBER_OF_STATES, false, false),
@@ -632,9 +645,9 @@ fn pics_multistate_property_metadata_is_exact() {
                     );
                 }
                 if kind == ObjectType::MULTI_STATE_OUTPUT {
-                    expected.insert(5, (P::FEEDBACK_VALUE, true, true));
+                    expected.insert(5, (P::FEEDBACK_VALUE, false, true));
                 } else {
-                    expected.push((P::ALARM_VALUES, true, true));
+                    expected.push((P::ALARM_VALUES, false, true));
                 }
                 if kind != ObjectType::MULTI_STATE_INPUT {
                     expected.extend([

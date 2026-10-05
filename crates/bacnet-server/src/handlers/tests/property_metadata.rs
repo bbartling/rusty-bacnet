@@ -265,28 +265,31 @@ fn rpm_metadata_selectors_are_exact_for_binary_input() {
             PropertyIdentifier::PRESENT_VALUE,
             PropertyIdentifier::STATUS_FLAGS,
             PropertyIdentifier::EVENT_STATE,
+            // Table 12-6 footnote 5 requires these of a Binary Input that
+            // reports intrinsically (#1485).
+            PropertyIdentifier::EVENT_DETECTION_ENABLE,
+            PropertyIdentifier::EVENT_ENABLE,
+            PropertyIdentifier::TIME_DELAY,
+            PropertyIdentifier::NOTIFY_TYPE,
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
             PropertyIdentifier::OUT_OF_SERVICE,
             PropertyIdentifier::POLARITY,
+            PropertyIdentifier::ALARM_VALUE,
         ]
     );
     assert_eq!(
         rpm_property_ids(&db, oid, PropertyIdentifier::OPTIONAL),
         vec![
             PropertyIdentifier::DESCRIPTION,
-            PropertyIdentifier::EVENT_DETECTION_ENABLE,
-            PropertyIdentifier::EVENT_ENABLE,
-            PropertyIdentifier::TIME_DELAY,
+            // Footnote 7 alone only permits these two.
             PropertyIdentifier::TIME_DELAY_NORMAL,
-            PropertyIdentifier::NOTIFY_TYPE,
-            PropertyIdentifier::NOTIFICATION_CLASS,
-            PropertyIdentifier::ACKED_TRANSITIONS,
-            PropertyIdentifier::EVENT_TIME_STAMPS,
             PropertyIdentifier::EVENT_MESSAGE_TEXTS,
             PropertyIdentifier::RELIABILITY,
             PropertyIdentifier::RELIABILITY_EVALUATION_INHIBIT,
             PropertyIdentifier::ACTIVE_TEXT,
             PropertyIdentifier::INACTIVE_TEXT,
-            PropertyIdentifier::ALARM_VALUE,
         ]
     );
 }
@@ -351,10 +354,10 @@ fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
         P::OUT_OF_SERVICE,
         P::UNITS,
     ];
-    let optional = vec![
-        P::DESCRIPTION,
+    // Tables 12-2, 12-3 and 12-4 require these of an analog object that
+    // reports intrinsically (#1485).
+    let intrinsic = [
         P::EVENT_DETECTION_ENABLE,
-        P::COV_INCREMENT,
         P::HIGH_LIMIT,
         P::LOW_LIMIT,
         P::DEADBAND,
@@ -363,11 +366,15 @@ fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
         P::NOTIFY_TYPE,
         P::NOTIFICATION_CLASS,
         P::TIME_DELAY,
+        P::ACKED_TRANSITIONS,
+        P::EVENT_TIME_STAMPS,
+    ];
+    let optional = vec![
+        P::DESCRIPTION,
+        P::COV_INCREMENT,
         P::TIME_DELAY_NORMAL,
         P::RELIABILITY,
         P::RELIABILITY_EVALUATION_INHIBIT,
-        P::ACKED_TRANSITIONS,
-        P::EVENT_TIME_STAMPS,
         P::EVENT_MESSAGE_TEXTS,
     ];
     for configuration in 0..8 {
@@ -395,7 +402,8 @@ fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
         for object in objects {
             let oid = object.object_identifier();
             let kind = oid.object_type();
-            let mut expected_required = required.clone();
+            let mut requires = required.clone();
+            requires.extend(intrinsic);
             let mut expected_optional = optional.clone();
             let commandable = [
                 P::PRIORITY_ARRAY,
@@ -403,16 +411,12 @@ fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
                 P::CURRENT_COMMAND_PRIORITY,
             ];
             if kind == ObjectType::ANALOG_OUTPUT {
-                expected_required.extend(commandable);
+                requires.extend(commandable);
             } else if kind == ObjectType::ANALOG_VALUE {
-                expected_optional.splice(2..2, commandable);
+                expected_optional.splice(1..1, commandable);
             }
             if kind != ObjectType::ANALOG_INPUT {
-                expected_required.extend([
-                    P::VALUE_SOURCE,
-                    P::VALUE_SOURCE_ARRAY,
-                    P::LAST_COMMAND_TIME,
-                ]);
+                requires.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
             }
             if configuration & 1 != 0 && kind != ObjectType::ANALOG_OUTPUT {
                 expected_optional.extend([P::FAULT_HIGH_LIMIT, P::FAULT_LOW_LIMIT]);
@@ -424,6 +428,12 @@ fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
                 expected_optional.push(P::MAX_PRES_VALUE);
             }
             let all = object.property_list().into_owned();
+            // RPM lists the required rows in metadata order.
+            let expected_required: Vec<_> = all
+                .iter()
+                .copied()
+                .filter(|p| requires.contains(p))
+                .collect();
             let metadata = object.property_metadata().into_owned();
             let mut db = ObjectDatabase::new();
             db.add(object).unwrap();
@@ -453,6 +463,18 @@ fn rpm_metadata_analog_required_optional_and_budgeted_bytes_agree() {
         }
     }
 }
+
+/// The event rows the binary and multi-state tables require of an object
+/// that reports intrinsically, besides its watched or fed-back value (#1485).
+const INTRINSIC_REQUIRED: [PropertyIdentifier; 7] = [
+    PropertyIdentifier::EVENT_DETECTION_ENABLE,
+    PropertyIdentifier::EVENT_ENABLE,
+    PropertyIdentifier::TIME_DELAY,
+    PropertyIdentifier::NOTIFY_TYPE,
+    PropertyIdentifier::NOTIFICATION_CLASS,
+    PropertyIdentifier::ACKED_TRANSITIONS,
+    PropertyIdentifier::EVENT_TIME_STAMPS,
+];
 
 #[test]
 fn rpm_metadata_binary_required_optional_and_budgeted_bytes_agree() {
@@ -495,7 +517,7 @@ fn rpm_metadata_binary_required_optional_and_budgeted_bytes_agree() {
             for mut object in objects {
                 let oid = object.object_identifier();
                 let mut all = base.to_vec();
-                let mut required = vec![
+                let mut requires = vec![
                     P::OBJECT_IDENTIFIER,
                     P::OBJECT_NAME,
                     P::OBJECT_TYPE,
@@ -504,20 +526,28 @@ fn rpm_metadata_binary_required_optional_and_budgeted_bytes_agree() {
                     P::EVENT_STATE,
                     P::OUT_OF_SERVICE,
                 ];
+                requires.extend(INTRINSIC_REQUIRED);
                 if oid.object_type() == ObjectType::BINARY_OUTPUT {
                     all.insert(20, P::POLARITY);
                     all.insert(5, P::FEEDBACK_VALUE);
-                    required.extend([
+                    requires.extend([
                         P::PRIORITY_ARRAY,
                         P::RELINQUISH_DEFAULT,
                         P::CURRENT_COMMAND_PRIORITY,
                         P::POLARITY,
+                        P::FEEDBACK_VALUE,
                     ]);
                 } else {
                     all.push(P::ALARM_VALUE);
+                    requires.push(P::ALARM_VALUE);
                 }
                 all.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
-                required.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
+                requires.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
+                let required: Vec<_> = all
+                    .iter()
+                    .copied()
+                    .filter(|p| requires.contains(p))
+                    .collect();
                 let optional: Vec<_> = all
                     .iter()
                     .copied()
@@ -604,7 +634,7 @@ fn rpm_metadata_multistate_required_optional_and_budgeted_bytes_agree() {
             let oid = object.object_identifier();
             let kind = oid.object_type();
             let mut all = base.to_vec();
-            let mut required = vec![
+            let mut requires = vec![
                 P::OBJECT_IDENTIFIER,
                 P::OBJECT_NAME,
                 P::OBJECT_TYPE,
@@ -614,6 +644,7 @@ fn rpm_metadata_multistate_required_optional_and_budgeted_bytes_agree() {
                 P::OUT_OF_SERVICE,
                 P::NUMBER_OF_STATES,
             ];
+            requires.extend(INTRINSIC_REQUIRED);
             let commands = [
                 P::PRIORITY_ARRAY,
                 P::RELINQUISH_DEFAULT,
@@ -624,9 +655,11 @@ fn rpm_metadata_multistate_required_optional_and_budgeted_bytes_agree() {
             }
             if kind == ObjectType::MULTI_STATE_OUTPUT {
                 all.insert(5, P::FEEDBACK_VALUE);
-                required.extend(commands);
+                requires.extend(commands);
+                requires.push(P::FEEDBACK_VALUE);
             } else {
                 all.push(P::ALARM_VALUES);
+                requires.push(P::ALARM_VALUES);
                 object
                     .write_property(
                         P::ALARM_VALUES,
@@ -638,8 +671,13 @@ fn rpm_metadata_multistate_required_optional_and_budgeted_bytes_agree() {
             }
             if kind != ObjectType::MULTI_STATE_INPUT {
                 all.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
-                required.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
+                requires.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
             }
+            let required: Vec<_> = all
+                .iter()
+                .copied()
+                .filter(|p| requires.contains(p))
+                .collect();
             let optional: Vec<_> = all
                 .iter()
                 .copied()

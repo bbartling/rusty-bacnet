@@ -56,8 +56,9 @@ fn access_objects(configured: bool) -> [Box<dyn BACnetObject>; 3] {
     objects
 }
 
-/// The zone's intrinsic-reporting rows (#1305), all optional, in metadata
-/// order.
+/// The zone's intrinsic-reporting rows (#1305), in metadata order. All but
+/// [`PERMITTED_EVENT_ROWS`] are required of a zone that reports
+/// intrinsically (#1485).
 const ZONE_EVENT_ROWS: [P; 10] = [
     P::TIME_DELAY,
     P::NOTIFICATION_CLASS,
@@ -71,9 +72,11 @@ const ZONE_EVENT_ROWS: [P; 10] = [
     P::TIME_DELAY_NORMAL,
 ];
 
-/// The door's rows #1149 added, all optional, in metadata order: the
-/// masked list, then the zone's event rows with Fault_Values after
-/// Alarm_Values.
+/// The event rows Tables 12-30 and 12-37 only permit (#1485).
+const PERMITTED_EVENT_ROWS: [P; 2] = [P::EVENT_MESSAGE_TEXTS, P::TIME_DELAY_NORMAL];
+
+/// The door's rows #1149 added, in metadata order: the masked list, then
+/// the zone's event rows with Fault_Values after Alarm_Values.
 fn door_alarm_rows() -> impl Iterator<Item = P> {
     [P::MASKED_ALARM_VALUES]
         .into_iter()
@@ -156,33 +159,33 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
         .chain(ZONE_EVENT_ROWS)
         .collect(),
     };
-    let optional = match kind {
+    // Door_Alarm_State, and the zone's Occupancy_Count,
+    // Occupancy_Count_Enable and Adjust_Value, carry the footnote that
+    // requires them of an intrinsic reporter, so none of them is here.
+    let optional_rows = match kind {
         ObjectType::ACCESS_DOOR => vec![
             P::DESCRIPTION,
             P::DOOR_STATUS,
             P::LOCK_STATUS,
             P::SECURED_STATUS,
-            P::DOOR_ALARM_STATE,
             P::DOOR_MEMBERS,
-        ]
-        .into_iter()
-        .chain(door_alarm_rows())
-        .collect(),
+            P::MASKED_ALARM_VALUES,
+            P::FAULT_VALUES,
+        ],
         // Tables 12-36 and 12-37 have no Present_Value, and Table 12-37 no
         // Access_Doors (#1064).
         ObjectType::ACCESS_POINT => vec![P::DESCRIPTION],
         _ => vec![
             P::DESCRIPTION,
-            P::OCCUPANCY_COUNT,
-            P::OCCUPANCY_COUNT_ENABLE,
-            P::ADJUST_VALUE,
             P::OCCUPANCY_UPPER_LIMIT,
             P::OCCUPANCY_LOWER_LIMIT,
-        ]
-        .into_iter()
-        .chain(ZONE_EVENT_ROWS)
-        .collect(),
+        ],
     };
+    let optional: Vec<_> = all
+        .iter()
+        .copied()
+        .filter(|p| optional_rows.contains(p) || PERMITTED_EVENT_ROWS.contains(p))
+        .collect();
     let required: Vec<_> = all
         .iter()
         .copied()

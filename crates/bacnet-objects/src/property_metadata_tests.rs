@@ -25,6 +25,7 @@ use crate::value_types::{
 };
 
 mod analog;
+mod intrinsic;
 
 /// Whether `property` reads the way its metadata row promises: with a value,
 /// or, for a log's Log_Buffer, with the PROPERTY / READ_ACCESS_DENIED that
@@ -249,7 +250,7 @@ fn property_metadata_contract_binary_input() {
     assert_eq!(event_enable.conformance, PropertyConformance::Optional);
     assert_eq!(
         event_enable.presence_condition,
-        Some(PropertyPresenceCondition::IntrinsicReporting)
+        Some(PropertyPresenceCondition::IntrinsicReportingRequired)
     );
     assert_eq!(
         event_enable.write_capability,
@@ -593,23 +594,42 @@ fn property_metadata_binary_commandable_exact_required_sets() {
         Box::new(BinaryValueObject::new(1, "BV-1").unwrap()),
         Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()),
     ];
+    // Tables 12-8 and 12-10 require these of an object that reports
+    // intrinsically (#1485), in metadata order.
+    let intrinsic = [
+        P::EVENT_DETECTION_ENABLE,
+        P::EVENT_ENABLE,
+        P::TIME_DELAY,
+        P::NOTIFY_TYPE,
+        P::NOTIFICATION_CLASS,
+        P::ACKED_TRANSITIONS,
+        P::EVENT_TIME_STAMPS,
+    ];
     for object in objects {
+        let output = object.object_identifier().object_type() == ObjectType::BINARY_OUTPUT;
         let mut required = vec![
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
             P::OBJECT_TYPE,
             P::PRESENT_VALUE,
-            P::STATUS_FLAGS,
-            P::EVENT_STATE,
-            P::OUT_OF_SERVICE,
         ];
-        if object.object_identifier().object_type() == ObjectType::BINARY_OUTPUT {
+        if output {
+            // Table 12-8 footnote 4: the COMMAND_FAILURE feedback.
+            required.push(P::FEEDBACK_VALUE);
+        }
+        required.extend([P::STATUS_FLAGS, P::EVENT_STATE]);
+        required.extend(intrinsic);
+        required.push(P::OUT_OF_SERVICE);
+        if output {
             required.extend([
                 P::PRIORITY_ARRAY,
                 P::RELINQUISH_DEFAULT,
                 P::CURRENT_COMMAND_PRIORITY,
                 P::POLARITY,
             ]);
+        } else {
+            // Table 12-10 footnote 6: the CHANGE_OF_STATE alarm value.
+            required.push(P::ALARM_VALUE);
         }
         required.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
         required.push(P::PROPERTY_LIST);
