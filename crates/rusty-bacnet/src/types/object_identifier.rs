@@ -1,5 +1,7 @@
 use super::*;
 
+use pyo3::types::PyType;
+
 // ---------------------------------------------------------------------------
 // ObjectIdentifier
 // ---------------------------------------------------------------------------
@@ -11,7 +13,14 @@ use super::*;
 /// Valid proprietary types and the wire wildcard instance are accepted.
 ///
 /// Usage: `ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)`
-#[pyclass(name = "ObjectIdentifier", frozen, from_py_object)]
+///
+/// `copy` and `pickle` rebuild one through that constructor (#1500).
+#[pyclass(
+    name = "ObjectIdentifier",
+    module = "rusty_bacnet",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone)]
 pub struct PyObjectIdentifier {
     inner: primitives::ObjectIdentifier,
@@ -54,6 +63,23 @@ impl PyObjectIdentifier {
 
     fn __hash__(&self) -> u64 {
         (self.inner.object_type().to_raw() as u64) << 22 | self.inner.instance_number() as u64
+    }
+
+    /// What `copy` and `pickle` call: the class and its constructor's
+    /// arguments. `__getnewargs__` would serve only pickle protocols 2 and
+    /// up; this serves 0 and 1 as well. Every identifier the class holds
+    /// (10-bit type, 22-bit instance) passes the constructor's checks.
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> (Bound<'py, PyType>, (PyObjectType, u32)) {
+        let oid = slf.get().inner;
+        (
+            slf.get_type(),
+            (
+                PyObjectType {
+                    inner: oid.object_type(),
+                },
+                oid.instance_number(),
+            ),
+        )
     }
 }
 

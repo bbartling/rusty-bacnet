@@ -238,7 +238,7 @@ impl BACnetObject for BinaryOutputObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
@@ -293,6 +293,13 @@ impl BACnetObject for BinaryOutputObject {
             }
             return Err(common::invalid_data_type_error());
         }
+        // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+        if let Some(result) =
+            self.event_history
+                .write(property, array_index, &value, self.event_detection_enable)
+        {
+            return result;
+        }
         if let Some(result) = write_generic_event_properties!(self, property, value) {
             return result;
         }
@@ -334,7 +341,7 @@ impl BACnetObject for BinaryOutputObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            _array_index,
+            array_index,
         ))
     }
 

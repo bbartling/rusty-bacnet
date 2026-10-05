@@ -325,3 +325,6 @@ async fn stop_warns_while_storage_holds_a_save_and_waits_for_it() {
     assert_eq!(storage.load_saved(), Some(snapshot(&[destination(1)])));
     drop(server);
 }
+
+#[path = "durable_drop_tests.rs"]
+mod drop_tests;

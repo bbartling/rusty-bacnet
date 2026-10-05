@@ -76,7 +76,7 @@ impl ScEndpointConfig {
 ///
 /// Lifecycle mirrors `BipEndpoint` (one running session, joined close, context
 /// manager). BIPv6/Ethernet have no endpoint owner.
-#[pyclass(name = "ScEndpoint")]
+#[pyclass(name = "ScEndpoint", module = "rusty_bacnet")]
 pub struct PyScEndpoint {
     lifecycle: Lifecycle<ScSession, PendingObject>,
     config: ScEndpointConfig,

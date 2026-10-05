@@ -39,16 +39,18 @@ fn each_createable_type_lists_what_only_creation_sets() {
             .creation_only_properties
             .clone()
     };
-    let states = vec![P::NUMBER_OF_STATES, P::STATE_TEXT];
+    // Since #1443 a whole State_Text write sets Number_Of_States too, so the
+    // multi-state types list nothing here: the count's row carries a note
+    // instead (below).
     for (object_type, expected) in [
         (ObjectType::ANALOG_INPUT, vec![P::UNITS]),
         (ObjectType::ANALOG_OUTPUT, vec![P::UNITS]),
         // Not createable, so nothing is set at creation.
         (ObjectType::ANALOG_VALUE, vec![]),
         (ObjectType::BINARY_VALUE, vec![]),
-        (ObjectType::MULTI_STATE_INPUT, states.clone()),
-        (ObjectType::MULTI_STATE_OUTPUT, states.clone()),
-        (ObjectType::MULTI_STATE_VALUE, states.clone()),
+        (ObjectType::MULTI_STATE_INPUT, vec![]),
+        (ObjectType::MULTI_STATE_OUTPUT, vec![]),
+        (ObjectType::MULTI_STATE_VALUE, vec![]),
     ] {
         assert_eq!(set(object_type), expected, "{object_type:?}");
     }
@@ -71,16 +73,35 @@ fn each_createable_type_lists_what_only_creation_sets() {
         "  Object Type: ANALOG_INPUT (createable=true, deleteable=true)\n  \
          Whole value set only by CreateObject: UNITS\n"
     ));
-    assert!(text.contains("Whole value set only by CreateObject: NUMBER_OF_STATES, STATE_TEXT\n"));
+    // The count's row is read-only and says how it changes, in both forms.
+    let note = "R (resized through STATE_TEXT: a whole write or its size at index 0)";
+    assert!(text.contains(&format!("    {:<40} {note}\n", "NUMBER_OF_STATES")));
     let markdown = pics.generate_markdown();
-    assert!(markdown.contains(
-        "### MULTI_STATE_VALUE\n\n- Createable: true\n- Deleteable: true\n\
-         - Whole value set only by CreateObject: NUMBER_OF_STATES, STATE_TEXT\n\n"
-    ));
+    assert!(markdown.contains(&format!("| NUMBER_OF_STATES | {note} |\n")));
+    assert_eq!(
+        text.matches(note).count(),
+        3,
+        "one row per multi-state type"
+    );
+    let msv = pics
+        .supported_object_types
+        .iter()
+        .find(|support| support.object_type == ObjectType::MULTI_STATE_VALUE)
+        .unwrap();
+    let count = msv
+        .supported_properties
+        .iter()
+        .find(|row| row.property_id == P::NUMBER_OF_STATES)
+        .unwrap();
+    assert!(!count.access.writable);
+    assert_eq!(count.written_through, Some(P::STATE_TEXT));
     // A type with nothing to list keeps its old shape.
+    assert!(
+        markdown.contains("### MULTI_STATE_VALUE\n\n- Createable: true\n- Deleteable: true\n\n|")
+    );
     assert!(markdown.contains("### BINARY_VALUE\n\n- Createable: true\n- Deleteable: true\n\n|"));
     assert_eq!(
         text.matches("Whole value set only by CreateObject").count(),
-        5
+        2
     );
 }

@@ -4,7 +4,8 @@
 //! A commanded level above 0.0 and below 1.0 enters its priority slot as 1.0,
 //! so the slot, Present_Value and Tracking_Value all read 1.0. 0.0 and 1.0 to
 //! 100.0 are stored as written, and a level outside 0.0 to 100.0 is refused
-//! with VALUE_OUT_OF_RANGE and changes nothing.
+//! with VALUE_OUT_OF_RANGE and changes nothing, but for the blink-warn values
+//! -1.0, -2.0 and -3.0 (`warn_tests`).
 
 use super::*;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -101,13 +102,15 @@ fn lighting_output_present_value_negative_zero_is_stored_as_off() {
 fn lighting_output_present_value_outside_the_range_is_refused_and_changes_nothing() {
     let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
     command(&mut lo, PropertyValue::Real(0.5), 8);
-    // The blink-warn values -1.0 to -3.0 stay refused until #1384.
+    // Only -1.0, -2.0 and -3.0 below 0.0 mean anything: the warn commands
+    // (#1384, `warn_tests`). Their neighbours are out of range.
     for level in [
         -JUST_ABOVE_OFF,
         -0.5,
-        -1.0,
-        -2.0,
-        -3.0,
+        1.0f32.next_up().copysign(-1.0),
+        -1.5,
+        3.0f32.next_up().copysign(-1.0),
+        -4.0,
         100.0f32.next_up(),
         f32::NAN,
         f32::INFINITY,

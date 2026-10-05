@@ -2,11 +2,11 @@
 
 `rusty_bacnet` provides Python bindings for the Rust BACnet protocol stack via PyO3. All I/O operations are async (`asyncio`-based).
 
-This reference describes current development-source APIs, including unreleased
-changes. The [published package](https://pypi.org/project/rusty-bacnet/0.11.0/)
-and the site’s release tutorials target **0.11.0**; see the [installation guidance](../README.md#install)
-for that release. To use the checkout APIs described here, follow
-[Build from source](../README.md#build-from-source).
+This reference follows the `dev` branch. At the `v0.12.0` tag it describes the
+[published 0.12.0 package](https://pypi.org/project/rusty-bacnet/0.12.0/), which
+the site's tutorials also target; see the [installation guidance](../README.md#install).
+Changes merged after the release wait in [`changelog.d/`](../changelog.d/); to
+use them, follow [Build from source](../README.md#build-from-source).
 
 **Requirements:** Python >= 3.11
 
@@ -34,11 +34,15 @@ that yields a notification or raises `StopAsyncIteration` when the channel close
 
 ## Installation
 
-Install the published 0.11.0 package with:
+Install the published 0.12.0 package with:
 
 ```bash
-pip install "rusty-bacnet==0.11.0"
+pip install "rusty-bacnet==0.12.0"
 ```
+
+Wheels cover CPython 3.11 to 3.14 on Linux (glibc 2.17 or newer; x86_64,
+aarch64), macOS (x86_64 on 10.12 or later, arm64 on 11.0 or later) and Windows
+(x64), each with BACnet/IPv6, BACnet/SC and MS/TP.
 
 The package includes a `.pyi` type stub file for IDE autocompletion and type checking. Most editors (VS Code, PyCharm) will pick it up automatically from the installed package.
 
@@ -177,6 +181,9 @@ oid.object_type   # ObjectType.ANALOG_INPUT
 oid.instance       # 1
 ```
 
+It copies and pickles like the other value classes; see
+[Copying and pickling](#copying-and-pickling).
+
 ---
 
 ## PropertyValue
@@ -196,11 +203,17 @@ PropertyValue.character_string("hello")
 PropertyValue.octet_string(b"\x01\x02")
 PropertyValue.enumerated(1)
 PropertyValue.object_identifier(oid)
-PropertyValue.date(2026, 3, 21, 6)    # year, month, day, day_of_week (1=Mon)
+PropertyValue.date(2026, 3, 21, 6)    # full year, month, day, day_of_week (1=Mon)
 PropertyValue.time(14, 30, 0, 0)      # hour, minute, second, hundredths
 PropertyValue.bit_string(0, b"\xff")  # unused_bits, data
 PropertyValue.list([PropertyValue.unsigned(1), PropertyValue.unsigned(2)])
 ```
+
+Lists nest at most 32 deep, the decoder's nesting limit: a deeper
+`PropertyValue.list`, by hand or from a pickle, raises `ValueError` (#1506).
+Two values are equal when they have the same tag and value, numbers compared
+as numbers (`PropertyValue.real(0.0) == PropertyValue.real(-0.0)`, and a NaN
+equals nothing), and equal values hash alike.
 
 ### Accessors
 
@@ -223,11 +236,35 @@ v.value   # 72.5 (native Python float)
 | `"enumerated"` | `int` |
 | `"object_identifier"` | `ObjectIdentifier` |
 | `"bit_string"` | `dict` with `"unused_bits"` and `"data"` |
-| `"date"` | `tuple(year, month, day, day_of_week)` |
+| `"date"` | `tuple(year, month, day, day_of_week)`, the full year as [Dates](#dates) gives it |
 | `"time"` | `tuple(hour, minute, second, hundredths)` |
 | `"list"` | `list` of native Python values |
 | `"application_data"` | `bytes`: the encoded value, octet for octet |
 | `"destination"`, `"port_permission"` and the other element tags of [typed constructed values](#typed-constructed-values) | the element in its typed form |
+
+### Dates
+
+Every date the binding reads or takes is a `(year, month, day, day_of_week)`
+tuple with the full year, 1900 to 2154, and 255 for an unspecified year, the
+same 255 as any other unspecified date or time field (#1501). The module
+exports it as `rusty_bacnet.UNSPECIFIED`. That holds for a `"date"` value, a
+`BACnetTimeStamp` date-time, the dates in schedules, calendars and date
+ranges, and the audit log's records. A year outside 1900 to 2154 that isn't
+255 (the year octet 126, say) raises `ValueError`. The time synchronization
+requests take only a specific date and time; see
+[Time Synchronization](#time-synchronization).
+
+```python
+from rusty_bacnet import UNSPECIFIED
+v = PropertyValue.date(2026, 3, 21, 6)
+v.value                                       # (2026, 3, 21, 6)
+PropertyValue.date(UNSPECIFIED, 12, 25, UNSPECIFIED).value  # (255, 12, 25, 255): every Christmas
+BACnetTimeStamp.date_time((2026, 3, 21, 6), (8, 0, 0, 0)).value[0]  # (2026, 3, 21, 6)
+```
+
+A `datetime.date(255, 12, 25)` is Christmas in the year 255 AD, not a
+wildcard: compare a date's year with `UNSPECIFIED` before building a
+`datetime.date` from it.
 
 ### Integer arguments
 
@@ -352,8 +389,8 @@ its octets.
 | Accumulator | Scale (one value) | `"scale"` | a `float` for a float scale, an `int` for a power-of-ten scale | `add_accumulator(scale=...)` |
 | Accumulator | Prescale (one value) | `"prescale"` | `(multiplier, modulo_divide)` | `add_accumulator(prescale=...)` |
 
-A date in these forms is a `(year, month, day, day_of_week)` tuple with the
-full year, as `BACnetTimeStamp` takes it, and 255 in any field left
+A date in these forms is a `(year, month, day, day_of_week)` tuple as
+[Dates](#dates) gives it: the full year, and 255 in any field left
 unspecified. An Access Rights rule whose specifiers disagree with the
 references it carries, which no typed write makes, has no `AccessRule` form,
 so its array reads as `application_data`.
@@ -361,6 +398,40 @@ so its array reads as `application_data`.
 A Group's Present_Value results, and an `ActionCommand`'s `property_value`,
 are themselves read results: each value is shaped as a read of the property it
 names would be.
+
+---
+
+## Copying and pickling
+
+`ObjectIdentifier`, `PropertyValue` and `BACnetTimeStamp`, like the
+[enums](#enums), support `copy.copy`, `copy.deepcopy` and `pickle` at every
+protocol, and the copy equals the original (#1500). Every class the module
+exports reports `rusty_bacnet` as its `__module__`.
+
+- An `ObjectIdentifier` rebuilds through its constructor.
+- A `PropertyValue` rebuilds through the constructor its `tag` names, with
+  the value as stored: `PropertyValue.date(2026, 3, 21, 6)` pickles as that
+  call. A list rebuilds from its items as `PropertyValue`s, so a `real` item
+  stays a `real` where `.value` would give a plain `float`. A typed
+  constructed read rebuilds from the octets it was read from, with its
+  element tag, so it still writes back exactly what was read.
+- A `BACnetTimeStamp` rebuilds from its encoded CHOICE, so a timestamp a peer
+  sent with a field outside the ranges `date_time` checks (a month of 0, say)
+  copies too.
+
+```python
+import pickle
+value = await client.read_property(address, schedule, PropertyIdentifier.EXCEPTION_SCHEDULE)
+assert pickle.loads(pickle.dumps(value)) == value
+```
+
+A pickle is for the same rusty-bacnet version that made it: it names the
+classes' private rebuild methods, which may change before 1.0. Don't keep
+pickles across upgrades.
+
+The other classes (`DiscoveredDevice`, `CovNotification`,
+`ScHubCertificateBinding`, and the client, server, endpoint and hub classes)
+raise `TypeError` when pickled; copy the values you need out of them.
 
 ---
 
@@ -530,7 +601,7 @@ value decoding. Served scalars and BACnetLIST properties retain
 rules. Absence-first is a local error-precedence policy. Custom objects with empty
 metadata keep their existing classifier and writer delegation. WPM retains its
 successful prefix and leaves the failing element and suffix unmodified. This
-describes the current source build, not the error policy of a remote server.
+describes this library, not the error policy of a remote server.
 
 
 All three single-property entrypoints (`write_property`, `write_property_to_device`,
@@ -861,9 +932,16 @@ await client.time_synchronization(
 )
 ```
 
+The request sets the peer's clock, so the date and time must be specific: a
+real day with the full year (1900 to 2154), month 1 to 12, day 1 to 31 and
+`day_of_week` that day's own weekday (1 = Monday), and every time field in
+range. A field that is `UNSPECIFIED` (255) or a pattern value (month 13 for
+odd months, day 32 for a month's end), or a weekday that doesn't match the
+date, raises `ValueError` before anything is sent.
+
 #### `utc_time_synchronization(address, date, time)`
 
-Same format as `time_synchronization`.
+Same arguments and checks as `time_synchronization`.
 
 ---
 
@@ -895,10 +973,14 @@ A rusty-bacnet server names an object created without an Object_Name after
 its type and instance (`ANALOG_INPUT-2`), adding the first free ` (n)` when
 another object holds that name. It also takes a few properties at creation
 that WriteProperty refuses afterwards: Units on an Analog Input or Output,
-and Number_Of_States (1 to 1024) and State_Text written whole on the
-multi-state types. A valid Number_Of_States applies before the other initial
-values, State_Text needs one string per state, and an Alarm_Values entry
-past the count is refused.
+and Number_Of_States (1 to 1024) on the multi-state types. A valid
+Number_Of_States applies before the other initial values, and an
+Alarm_Values entry past the count is refused. State_Text written whole, at
+creation or by a later write, sets Number_Of_States to its number of labels;
+with a Number_Of_States in the same request it has to match it, and a write
+that would leave a state the object holds past the new count is refused
+with VALUE_OUT_OF_RANGE. Writing a count to State_Text at `array_index=0`
+resizes it the same way, adding `State n` labels when it grows.
 
 #### `delete_object(address, object_id)`
 
@@ -1594,7 +1676,7 @@ await client.who_am_i(260, "Controller-X", "SN-0001")
 
 ## BACnetServer
 
-In the current development checkout, the full server constructs its owned
+The full server constructs its owned
 Device with the selected transport's stable local receive capacity: 1476 for
 B/IP, B/IPv6 and SC, or 480 for MS/TP. Device
 `Max_APDU_Length_Accepted` and I-Am therefore match the effective server
@@ -1603,7 +1685,7 @@ Python capacity argument and does not rewrite application-owned Rust Devices.
 The MS/TP constructor correction has a non-hardware binding test; it is not
 serial-hardware qualification. The [directional Rust contract](rust-api.md#local-receive-capacity-and-outgoing-limits)
 explains raw declarations and Confirmed-Request header flooring. These changes
-postdate published 0.11.0.
+are new in 0.12.0.
 
 Await `server.stop()` to join admitted work and release the transport. Cancelling
 its Future retains the server's shutdown owner; a later `stop()` joins it, and a
@@ -1905,6 +1987,15 @@ write Notification_Threshold (and Notification_Class) with
 `write_property_local` or from a peer, and the log's Notification Class
 recipients hear each time that many more records have been collected. Zero,
 the default, reports nothing.
+
+Every object that reports intrinsically also takes Event_Message_Texts_Config
+(three strings, the Message Text of the TO_OFFNORMAL, TO_FAULT and TO_NORMAL
+transitions in place of the server's own; an empty string leaves it) and
+Event_Algorithm_Inhibit, which suspends the event algorithm but not fault
+reporting (#1329). Write them with `write_property_local`; there are no
+`add_*` keyword arguments for them. Event_Algorithm_Inhibit_Ref makes the
+inhibit follow a local Boolean or BinaryPV property, read each time the
+server evaluates the object.
 
 An Audit Log's `storage_path` is application-owned and produces two sibling
 snapshot files with `.slot0` and `.slot1` suffixes. Reuse the same path when
@@ -2519,8 +2610,11 @@ server.add_binary_lighting_output(instance=1, name="On/Off Light")
 A Lighting Output's Present_Value and Relinquish_Default take a REAL level
 from 0.0 to 100.0. A level above 0.0 and below 1.0, written locally or over the
 network, is stored and read back as 1.0, the dimmest on level (#1385); one
-outside 0.0 to 100.0 raises `BacnetProtocolError` with VALUE_OUT_OF_RANGE.
-Tracking_Value reads the same level as Present_Value.
+outside 0.0 to 100.0 raises `BacnetProtocolError` with VALUE_OUT_OF_RANGE,
+except Present_Value's warn values -1.0 (WARN), -2.0 (WARN_RELINQUISH) and
+-3.0 (WARN_OFF), which act as those lighting commands do (#1384).
+Tracking_Value reads the same level as Present_Value whenever no fade or ramp
+is running.
 
 A Lighting Output's `Lighting_Command` is a BACnetLightingCommand (#1263). It
 reads as `application_data` holding the command's context-tagged fields, and
@@ -2537,9 +2631,11 @@ The object checks each command against its operation as the Rust API notes
 describe: NONE, a reserved operation, FADE_TO or RAMP_TO without a target
 level, or a field out of range raises `BacnetProtocolError` with
 VALUE_OUT_OF_RANGE. An `octet_string`, or any other datatype, raises
-INVALID_DATA_TYPE. The object stores the command without carrying it out
-(#1384). A
-[Channel](#channels) with a `Lighting_Command` member passes on a lighting
+INVALID_DATA_TYPE. The object carries the command out (#1384): the FADE_TO
+above puts 50.0 in Present_Value at once and moves Tracking_Value there over
+the fade time, with In_Progress reading FADE_ACTIVE (1) until it arrives. The
+[Rust API notes](rust-api.md#lighting--color-5) list what each operation does.
+A [Channel](#channels) with a `Lighting_Command` member passes on a lighting
 command written to its Present_Value: the fields above between `b"\x0e"` and
 `b"\x0f"`, the opening and closing context tag 0.
 
@@ -4013,12 +4109,13 @@ server = BACnetServer(
 
 ### BACnet/IPv6
 
-In current source, `ipv6_interface=None` and `"::"` select one unambiguous usable
+`ipv6_interface=None` and `"::"` select one unambiguous usable
 local link and address. A non-loopback multicast interface is preferred; a unique
 non-link-local address on it is preferred over a unique link-local address.
 Ambiguity fails async client entry or server startup; use a concrete local IPv6
-address to select its unique interface. This replaces published 0.11.0's wildcard
-fallback without changing constructor signatures. There is no silent `::1`
+address to select its unique interface. In 0.12.0 this replaced 0.11.0's
+selection, which asked the routing table for an address and fell back to `::1`,
+without changing constructor signatures. There is no silent `::1`
 fallback for failed physical selection. Explicit loopback remains node-local.
 
 The selected address and actual bound port are used for outgoing data and control
@@ -4121,7 +4218,7 @@ Generated-certificate installed-native tests cover both paths without changing
 Python signatures or exception mapping. This is local policy, not UUID-profile
 or lifetime-storage validation; post-handshake startup rollback is not expanded.
 
-**Current-dev zero-limit receive policy (Refs #519):** native `BACnetClient` async
+**Zero-limit receive policy (Refs #519):** native `BACnetClient` async
 entry and `BACnetServer.start()` also silently discard Connect-Accept advertising
 zero Max-BVLC or Max-NPDU. AB.2 forbids a response: no NAK, startup completion,
 peer-limit commit or original connect-deadline reset. A later valid Accept can
@@ -4205,29 +4302,29 @@ ms and require `sc_heartbeat_timeout_ms` to be greater than the interval.
 
 #### Accepted-direct identity and responses
 
-Current native source retains a verified direct leaf fingerprint
+Native code retains a verified direct leaf fingerprint
 and connection incarnation through queued server work, duplicate/replay admission,
 and partial request reassembly. Python does not expose a principal authorizer or
 the direct listener through this API; its mutation policy remains the existing
-static `permissive`/`deny_all` choice. The Rust identity APIs postdate published
-0.11.0. Hub admission's scope-only channel assertion and Hub-relayed application
+static `permissive`/`deny_all` choice. The Rust identity APIs are new in
+0.12.0. Hub admission's scope-only channel assertion and Hub-relayed application
 traffic never become downstream direct leaf identities. See the
 [Rust identity contract](rust-api.md#accepted-direct-tls-identity). Native
-`BACnetServer` now confines accepted-direct confirmed replies, LSO replay and
+`BACnetServer` confines accepted-direct confirmed replies, LSO replay and
 segmented-request controls to the original socket. Unconfirmed Who-Is/Who-Has
 discovery replies retain ordinary routing. Python still exposes neither
 direct-listener setup nor this response capability. This adds no Python direct-connection entry point
-or Python direct-connection support. Native source also confines the standalone
+or Python direct-connection support. Native code also confines the standalone
 client's inbound confirmed replies and the shared endpoint's narrow responder;
 that does not change outgoing client transaction/retry policy or expose a Python
 response capability. See the [server response scope](rust-api.md#accepted-direct-server-responses)
 and [native client/endpoint scope](rust-api.md#accepted-direct-client-and-endpoint-replies).
-Native `ScTransport::with_direct_tls` now admits bidirectional application traffic
+Native `ScTransport::with_direct_tls` admits bidirectional application traffic
 with matching verified identity and original reply authority; established accepted
 peers also serve ordinary unicast with discovery disabled. Arbitrary custom dialers
 remain send-only. Outgoing transactions retain standard address/Invoke-ID correlation
-and Hub/direct path switching, not a same-leaf continuity guarantee. These source
-APIs postdate 0.11.0 and add no Python direct-connection entry point. See the
+and Hub/direct path switching, not a same-leaf continuity guarantee. These APIs are new
+in 0.12.0 and add no Python direct-connection entry point. See the
 [native routing contract](rust-api.md#bidirectional-direct-traffic).
 
 ## Request admission limits

@@ -2,11 +2,12 @@
 
 Rusty BACnet is a workspace of library crates implementing the BACnet protocol stack (ASHRAE 135-2020). The [README crate table](../README.md#crates) lists which are on crates.io.
 
-This reference describes current development-source APIs, including unreleased
-changes. Published crates and the site’s release tutorials target **0.11.0**; use the
-[versioned Rust API](https://docs.rs/bacnet-client/0.11.0/bacnet_client/) and
-[installation guidance](../README.md#install) for that release. To use the
-checkout APIs described here, follow [Build from source](../README.md#build-from-source).
+This reference follows the `dev` branch. At the `v0.12.0` tag it describes the
+published 0.12.0 crates, which the site's tutorials also target; see
+[docs.rs](https://docs.rs/bacnet-client/0.12.0/bacnet_client/) and the
+[installation guidance](../README.md#install). Changes merged after the release
+wait in [`changelog.d/`](../changelog.d/); to use them, follow
+[Build from source](../README.md#build-from-source).
 
 ## Crate Dependency Order
 
@@ -568,7 +569,7 @@ Transport-layer implementations. All implement the `TransportPort` trait.
 
 ### Local receive capacity and outgoing limits
 
-In the current development checkout, every `TransportPort` implementation must
+Every `TransportPort` implementation must
 provide `local_receive_apdu_capacity() -> u16`, a stable receive declaration.
 Transparent wrappers and `AnyTransport` delegate it. The former transport method
 `max_apdu_length()` is now `egress_apdu_limit()` without an alias: it describes
@@ -601,8 +602,8 @@ Both registered B/IP port snapshots use local capacity independently of the
 Device/server ceiling. SC nodes advertise and enforce local NPDU 1478, including
 the two-byte plain NPDU header, on Hub, accepted-direct and outbound-direct
 intake. Complete BVLC bounds, remote/path limits, routed overhead and the Hub's
-forwarding capacity remain independent. These source APIs postdate published
-0.11.0; this bounded evidence is not a full Annex AB or hardware qualification.
+forwarding capacity remain independent. These APIs are new in
+0.12.0; this bounded evidence is not a full Annex AB or hardware qualification.
 
 ### Feature Flags
 
@@ -672,14 +673,14 @@ let transport = Bip6Transport::new(
 // 3-byte VMAC, 3 multicast scopes, collision detection
 ```
 
-Current source selects one concrete local address and OS interface for normal
+The transport selects one concrete local address and OS interface for normal
 B/IPv6 operation. `::` requires one usable non-loopback multicast interface (or
 loopback if none exists), then a unique non-link-local address on that interface,
 otherwise a unique link-local address. Multiple interfaces or addresses in the
 selected class fail startup; configure an existing concrete address to resolve
 ambiguity. A concrete address must have one usable local owner. This is local
-selection policy, not an Annex U requirement, and differs from published 0.11.0's
-wildcard address fallback.
+selection policy, not an Annex U requirement. It replaced, in 0.12.0, 0.11.0's
+selection, which asked the routing table for an address and fell back to `::1`.
 
 The selected address and actual UDP port form `local_mac()`. One wildcard socket
 receives selected unicast and BACnet multicast traffic; packet metadata fences
@@ -851,13 +852,13 @@ and segment-phase checks. Responses may switch Hub/direct paths. A replacement
 peer claiming the same address can complete or control an old pending outgoing
 transaction; this is not proof of same-leaf continuity. Optional historical-route
 filtering is separate from the selected original-socket policy for incoming replies.
-No outgoing transaction/retry policy changes here. This source behavior postdates
-published 0.11.0 and adds no Python direct-entry API, Hub-relayed end-to-end identity,
+No outgoing transaction/retry policy changes here. This behavior is new in
+0.12.0 and adds no Python direct-entry API, Hub-relayed end-to-end identity,
 full Annex AB or certification claim.
 
 ### Accepted direct TLS identity
 
-Current source carries `TransportProvenance::direct_sc_identity()` through
+The stack carries `TransportProvenance::direct_sc_identity()` through
 accepted-direct and built-in outbound TLS ingress, the network queue, and server dispatch. It returns a
 sealed, immutable `DirectScIdentity` with read-only `leaf_sha256()` and
 `incarnation()` accessors. The fingerprint hashes the exact verified TLS leaf
@@ -891,7 +892,7 @@ scope labels; claimed addresses remain claims. **Pre-1.0 API change:**
 report `is_hub_channel()` rather than `is_direct_peer()`; that scope-only value,
 Hub-relayed ingress, and unverified transports return no direct identity.
 
-These source APIs postdate published 0.11.0. This does not provide a Python
+These APIs are new in 0.12.0. This does not provide a Python
 principal callback, certificate-to-claim binding, Hub-relayed end-to-end identity,
 or a Python direct connection entry point. The narrower server response
 capability below is separate from authentication provenance.
@@ -952,7 +953,7 @@ Receive reassembly saves segment zero's response capability separately from
 its authorization snapshot; final completion uses that saved route.
 
 This is selected local confinement policy, not a Standard requirement to deliver
-on a historical socket. It postdates published 0.11.0 and qualifies only the
+on a historical socket. It is new in 0.12.0 and qualifies only the
 native server consumer described here. The [client and endpoint supplement](#accepted-direct-client-and-endpoint-replies)
 qualifies those additional inbound reply consumers. Outgoing client transaction
 correlation retains the [standard path-switching behavior](#bidirectional-direct-traffic). No full
@@ -960,11 +961,11 @@ Annex AB, external interoperability or certification claim follows.
 
 ### Accepted-direct client and endpoint replies
 
-Current source extends the selected original-socket response policy to standalone
+The selected original-socket response policy extends to standalone
 `BACnetClient` handling inbound confirmed COV/Event notifications and unsupported
 or segmented confirmed requests, and to `EndpointSession`'s existing narrow
-ReadProperty/authorized Device WriteProperty responder. This postdates published
-0.11.0. It does not change outgoing client transactions, their retries or their
+ReadProperty/authorized Device WriteProperty responder. This is new in
+0.12.0. It does not change outgoing client transactions, their retries or their
 terminal/segment-control admission. Ordinary direct routing now applies as
 described [above](#bidirectional-direct-traffic). BACnet permits response path switching; this is a
 local confinement policy for these incoming-request consumers, not a universal
@@ -1795,23 +1796,42 @@ whole only at creation, and the server gives such a value, sent without an
 array index, to `BACnetObject::initialize_property` instead of the write
 route (#1429). The built-in Analog Input and Analog Output take Units (an
 Enumerated up to 65535). The Multi-state Input, Output and Value take
-Number_Of_States (1 to `multistate::MAX_CREATED_NUMBER_OF_STATES`, 1024),
-which resizes State_Text, and State_Text written whole, which needs one
-CharacterString per state. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
+Number_Of_States (1 to `multistate::MAX_NUMBER_OF_STATES`, 1024),
+which resizes State_Text. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
 if a value the object holds would name a state past it. WriteProperty still
 answers `PROPERTY/WRITE_ACCESS_DENIED` for each. The PICS lists each
 createable type's set.
 
-On these objects the order of the initial values follows one rule: a
-Number_Of_States that passes its own checks (no array index, an Unsigned, 1
-to 1024) is applied before every other initial value, and everything else,
-including a Number_Of_States that fails those checks, is applied in request
-order. So Present_Value, Relinquish_Default, Alarm_Values and State_Text are
-judged against the requested count wherever it stands, and a bad value
-earlier in the list than a bad count is the one named. A refusal always
-names the value's own position: `[Relinquish_Default 2, Number_Of_States 1]`
-is refused at 1, the default being past the one state. With several good
-counts, the last one sets the states.
+State_Text written whole, by WriteProperty, WritePropertyMultiple or a
+CreateObject initial value, sets Number_Of_States to its number of labels
+(#1443), with the same checks: 1 to 1024 labels, and a shrink that would
+leave Present_Value, Relinquish_Default, a Priority_Array command or an
+Alarm_Values entry past the new count is `PROPERTY/VALUE_OUT_OF_RANGE` and
+changes nothing. A Multi-state Output's Feedback_Value doesn't block a
+shrink; past the count it shows as CONFIGURATION_ERROR. Since a whole
+write can resize State_Text, its size at index 0 takes a write as well
+(Clause 12.1.5.1): an Unsigned count with the same checks, which truncates
+State_Text on a shrink and, on a grow, appends the `State {n}` labels a new
+object starts with. A WriteProperty naming Number_Of_States is still
+refused. The metadata gives Number_Of_States
+`PropertyWriteCapability::Through(STATE_TEXT)`, which doesn't count as
+writable, and the PICS keeps its row read-only, marks it "resized through
+STATE_TEXT: a whole write or its size at index 0", and leaves it off the
+creation-only line.
+
+On these objects the order of the initial values follows one rule: the
+values that give the state count are applied before every other initial
+value, and everything else, including a count value that fails its own
+checks (an array index, its datatype, its range), is applied in request
+order. Those values are the request's Number_Of_States, or, when it has
+none, State_Text written whole; with a Number_Of_States, a whole State_Text
+has to label exactly that many states. So Present_Value,
+Relinquish_Default, Alarm_Values and State_Text are judged against the
+requested count wherever it stands, and a bad value earlier in the list than
+a bad count is the one named. A refusal always names the value's own
+position: `[Relinquish_Default 2, Number_Of_States 1]` is refused at 1, the
+default being past the one state. With several good counts, the last one
+sets the states.
 
 A Multi-state Input or Value refuses an Alarm_Values entry past its
 Number_Of_States with `PROPERTY/VALUE_OUT_OF_RANGE` naming the element, over
@@ -2302,8 +2322,10 @@ bundled server stages every network or `write_local` Recipient_List write
 (WriteProperty, WritePropertyMultiple, AddListElement and RemoveListElement)
 and waits for its save with the database guard dropped. A list that cannot be
 saved is refused with DEVICE / OPERATIONAL_PROBLEM, and the class keeps the
-old one. A WritePropertyMultiple under a `mutation_authorizer`, and
-application code writing through the database, save in place. A staged write
+old one. A WritePropertyMultiple that writes the list more than once stages
+one save of the last (#1423). Application code writing through the database
+saves in place, and a write it makes that the class refuses leaves a staged
+write alone (#1424). A staged write
 its request releases without making (an earlier WritePropertyMultiple attempt
 failed, say) is dropped, and the class saves the list it serves at once. A
 staged write whose request vanished without releasing it (`stop()` aborted
@@ -2693,7 +2715,41 @@ the Event Logs like any other notification; those logs take no notifications,
 so it can't count toward their own next report. A purge restarts Records_Since_Notification at the BUFFER_PURGED
 record but leaves the threshold counting from Last_Notify_Record;
 Event_Detection_Enable TRUE again restarts both from the current count.
-Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair aren't served.
+While Event_Algorithm_Inhibit is TRUE no report goes out; the records keep
+counting, so one falls due as soon as it clears.
+
+Every object here that reports intrinsically (the analog, binary and
+multi-state families, Access Door, Access Zone and the three logs) also
+serves Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair
+(#1329), all three writable:
+
+- Event_Message_Texts_Config holds one CharacterString per transition,
+  TO_OFFNORMAL, TO_FAULT and TO_NORMAL. A non-empty entry replaces the
+  server's own Message Text for that transition, in the notification and in
+  Event_Message_Texts; an empty one, the default, leaves it. The text goes
+  out as written: the stack defines no substitution codes.
+- Event_Algorithm_Inhibit TRUE stops the event algorithm but not fault
+  detection (Clause 13.2.2.1): no offnormal or normal transition of its own,
+  any time delay under way dropped, and an offnormal object back to NORMAL at
+  once. Once it is FALSE, a condition has to last its whole Time_Delay again.
+  A client writes it while Event_Detection_Enable is TRUE and there is no
+  reference.
+- Event_Algorithm_Inhibit_Ref names a Boolean or BinaryPV property of this
+  device (the datatype has no device member) for the inhibit to follow, and
+  the inhibit is then read-only. The server reads the property, through
+  `ObjectDatabase::follow_event_algorithm_inhibit`, each time it evaluates
+  the object: on a write to it and on the one-second tick, so a change
+  reaches the inhibit within a second. A Boolean TRUE inhibits, and so does
+  ACTIVE read from a property known to hold a BinaryPV: Present_Value,
+  Relinquish_Default, a Priority_Array element, Alarm_Value and
+  Feedback_Value of the binary types, and an Access Credential's
+  Credential_Status. Anything else doesn't, an Event_State of FAULT or a
+  Reliability that reads as Enumerated 1 included, nor does a missing
+  property. Unset, it reads as Binary Value 4194303's Present_Value, and
+  writing that clears it and puts the inhibit back to FALSE.
+- Event_Message_Texts_Config is always three entries: the tables fix its
+  size, so a write at index 0 is `PROPERTY/WRITE_ACCESS_DENIED` (Clause
+  12.1.5.1).
 
 Every Trend Log samples a BACnet property, so its Start_Time, Stop_Time,
 Log_Interval and Log_DeviceObjectProperty are classed required (Table 12-29
@@ -3103,8 +3159,10 @@ Lighting Output's Present_Value and Relinquish_Default take a level from 0.0
 (off) to 100.0 percent. A level above 0.0 and below 1.0 is stored as 1.0, the
 dimmest on level (Clause 12.54.4), so the priority slot, Present_Value,
 Tracking_Value and COV reports all carry 1.0 (#1385). A level below 0.0 or
-above 100.0, NaN included, is refused with VALUE_OUT_OF_RANGE. Tracking_Value
-follows Present_Value, since In_Progress stays IDLE.
+above 100.0, NaN included, is refused with VALUE_OUT_OF_RANGE, except
+Present_Value's warn values -1.0, -2.0 and -3.0 (Table 12-65), which act as
+WARN, WARN_RELINQUISH and WARN_OFF at the write's priority and never enter the
+priority array (#1384).
 
 Lighting Output's `Lighting_Command` holds a `BACnetLightingCommand`
 (`bacnet_types::constructed`): an operation plus an optional target level, ramp
@@ -3130,8 +3188,44 @@ A refused command is VALUE_OUT_OF_RANGE. Any other datatype, an OCTET STRING
 included, is INVALID_DATA_TYPE, and octets that aren't exactly one command are
 INVALID_DATA_ENCODING, even when a field is also too wide for its type. An
 Unsigned or ENUMERATED field may open with zero octets only up to four contents
-octets. The object stores the command without carrying it out: Present_Value,
-Tracking_Value, In_Progress and the priority array stay as they are (#1384).
+octets.
+
+The object carries out each command it takes (#1384), at the command's
+priority or `Lighting_Command_Default_Priority`, and `Lighting_Command` keeps
+reporting it as written. `Lighting_Command_Default_Priority` takes 1 to 16 but
+not 6, Minimum On/Off's priority (Clause 12.54.27). A level it puts in a slot is normalized as a
+commanded Present_Value is, so a FADE_TO 0.5 puts 1.0 in the slot.
+
+- FADE_TO and RAMP_TO put the target level in the slot. When that slot is then
+  the highest in use, Tracking_Value moves in a straight line from where it
+  stood to the level, over the fade time (or `Default_Fade_Time`) or at the
+  ramp rate (or `Default_Ramp_Rate`), and In_Progress reads FADE_ACTIVE or
+  RAMP_ACTIVE until it arrives.
+- The step operations put Tracking_Value plus or minus the step increment (or
+  `Default_Step_Increment`) in the slot, kept within 1.0 to 100.0. STEP_UP and
+  STEP_DOWN do nothing while off; STEP_ON turns off into 1.0, STEP_OFF turns
+  1.0 into off.
+- With `Blink_Warn_Enable` FALSE (the default) the warn operations act at once:
+  WARN changes nothing, WARN_RELINQUISH relinquishes the slot and WARN_OFF
+  writes 0.0 to it. With it TRUE they blink and, where the table's conditions
+  call for one, hold the level for `Egress_Time` seconds with `Egress_Active`
+  TRUE before relinquishing the slot or writing 0.0.
+- STOP ends a fade or ramp at its priority with Tracking_Value in the slot, or
+  cancels an egress timer there; elsewhere it is ignored.
+- A command other than STOP, or a Present_Value write, at the priority of the
+  command in progress or a higher one halts it (Clause 12.54.6.1): a fade or
+  ramp stops with its slot as it is, and an egress takes effect at once.
+- A proprietary operation is stored and does nothing else.
+
+Fades, ramps and egress timers run on the server's monotonic task, which a
+write that starts one wakes. Tracking_Value is worked out from the clock when
+read. While it moves, the task samples it for COV each time it has moved by
+`COV_Increment` (1.0 percent while that is 0.0), on a 100 ms grid shared by
+every object, and once more when it arrives; Table 13-1 reports Present_Value
+and Status_Flags, so a SubscribeCOV hears a fade once, when its level goes in,
+and a SubscribeCOVProperty of Tracking_Value hears it move. A Tracking_Value
+subscription whose own increment is finer than that sample step still hears
+only the sample points.
 
 Color and Color Temperature (Addendum 135-2020ca) hold their `Color_Command`
 as a `BACnetColorCommand` (`bacnet_types::constructed`): a `ColorOperation`
@@ -3368,9 +3462,11 @@ Saves follow the Notification Class's rules (see
 object's own writer thread, and the bundled server stages each WriteProperty,
 WritePropertyMultiple or `write_local` write of the arrays (whole, one
 element, or the size at index 0), of Enable or of Accompaniment, and waits
-for its save with the database guard dropped. A request stages only its
-first such write to an object; a WritePropertyMultiple's later writes to the
-same object save in place. A state that cannot be saved is refused with DEVICE /
+for its save with the database guard dropped. A WritePropertyMultiple's
+several such writes to one object stage one save of the state they leave
+together (#1423): each write takes its own step as the request makes it, and
+a request that stops part way puts storage back to what the object serves. A
+state that cannot be saved is refused with DEVICE /
 OPERATIONAL_PROBLEM, and nothing changes. A staged write that is never made
 puts storage back to the served state on release, after its lifetime, at
 `stop()`, or when the object drops. A saved value wins over the
@@ -3438,7 +3534,8 @@ CHANGE_OF_STATE algorithm (Clause 12.32). It serves the event rows the
 Multi-state Input does: Time_Delay, Notification_Class, Alarm_Values,
 Event_Enable, Acked_Transitions, Notify_Type, Event_Time_Stamps,
 Event_Message_Texts, Event_Detection_Enable and Time_Delay_Normal, the
-configuration writable over the network. Alarm_Values is a list of
+configuration writable over the network, and the message texts and inhibit
+rows every intrinsic reporter serves (#1329). Alarm_Values is a list of
 BACnetAccessZoneOccupancyState values other than NORMAL (named, or
 proprietary from 64 to 65535; anything else, NORMAL included, is
 VALUE_OUT_OF_RANGE naming the element), which
@@ -4223,15 +4320,19 @@ timestamp and the list's tags, 25 to 33 octets in all (#1197). Each change count
 its encoding and one item's framing, as if it started an item of its own. The
 context also keeps room, at most one notification's worth, for the most its
 untimestamped values have taken in one report since it was last admitted or lost
-a reference. Memory has a ceiling of its own (#1287): counting each change with a
-fixed 32 octets more for the memory it holds besides its values, one context
-never holds more than four notifications of the server's own maximum APDU,
-whatever its subscriber's size, so many tiny changes cannot outgrow it. The
-overhead takes no room in a notification, so with the shortest envelope a
-50-octet subscriber keeps four REAL Present_Value changes, one per notification,
-on a server whose own maximum APDU is 78 octets or more. Near the local maximum
-the ceiling binds first, and the subscription caps (`CovPolicy`) limit how many
-contexts there are, so the history as a whole stays bounded. Only on overflow
+a reference. Memory has a ceiling of its own (#1287), counted in the bytes each
+pending change really takes (#1357): the change itself and, for each value, its
+slots in the change's vectors and its encoded octets. One context's changes never
+take more than four bytes for each octet four notifications of the server's own
+maximum APDU have for items, whatever its subscriber's size, so many tiny changes
+cannot outgrow it: 23,216 bytes at a 1476-octet maximum, some 116 of the smallest
+changes. That memory takes no room in a notification, so with the shortest
+envelope a 50-octet subscriber keeps four REAL Present_Value changes, one per
+notification, on a server whose own maximum APDU is 77 octets or more. Near the
+local maximum the ceiling binds first for small changes, and the subscription
+caps (`CovPolicy`) limit how many contexts there are: under the default 1,024
+subscriptions the histories take about 24 MB at most, besides the changes that
+are never dropped (below). Only on overflow
 of either limit, the last resort, is a change dropped: the oldest of the same
 reference first, then the oldest in the context, never a reference's latest.
 Nor is a reference's change in delivery dropped: once a change sent one value
@@ -4935,6 +5036,14 @@ and a warning naming the objects still saving is logged after 5 s and every
 30 s after that. `stop()` doesn't wait while the application holds the
 database; the objects then settle once it lets go, and put storage back when
 they are dropped.
+Call `stop()` before dropping the server. A server dropped without it in async
+code aborts its tasks and hands its object database to a task that drops it on
+Tokio's blocking pool once those tasks have let go (#1409), so the drop doesn't
+block a runtime worker while the objects' last saves run; nothing waits for
+those saves, though. Storage may still change after the drop returns, as they
+and the put-back of a staged write land, so `stop().await` before building
+another server on the same storage. An application still holding
+`server.database()` drops the last handle itself, best off the runtime as well.
 The target-Audit drain retains the ingress needed for acknowledgments until its
 existing completion/deadline boundary. Cancelling a stop waiter retains cleanup:
 call `stop()` again to join it. Transport cleanup errors retain the owner for retry;
@@ -4960,7 +5069,7 @@ release guarantee. This is a local lifecycle contract, not a BACnet wire change.
 
 ### Confirmed transaction lifetimes
 
-Current source detects exact ordinary confirmed duplicates only while their
+The stack detects exact ordinary confirmed duplicates only while their
 server transaction is pending. Once an unsegmented SimpleACK, ComplexACK, Error,
 Reject or Abort is encoded and its local network send is issued, the same peer,
 Invoke ID and bytes may execute again. The boundary precedes the transport
@@ -4983,7 +5092,7 @@ the immutable leaf/incarnation partition described above. There is no generic
 completed cache or response replay. LifeSafetyOperation's separate completed
 replay policy and Audit service receipts are unchanged.
 
-This behavior postdates published 0.11.0. `NetworkLayer::send_apdu_on_issuance`
+This behavior is new in 0.12.0. `NetworkLayer::send_apdu_on_issuance`
 provides the narrow post-NPDU-encoding callback used by these response owners;
 constructing its lazy future does not invoke the callback. This does not resolve
 response socket affinity or segmented-response ACK/Abort confinement (#524).
@@ -5047,6 +5156,13 @@ Audit/LifeSafety's fail-closed absence. False or panic returns
 `SERVICES / SERVICE_REQUEST_DENIED` without the denied mutation. WPM authorizes
 each element in order and retains an authorized prefix on later denial or
 malformed input; other covered services authorize once after service decoding.
+A WPM element that an object saves before serving it (a forwarder or Notification
+Class list, an Access Rights rule array, Enable or Accompaniment, an Audit Log's
+Log_Enable or Buffer_Size) is decided before the server stages its save off the
+database lock (#1321): still once, and in wire order among those elements, so
+ahead of earlier elements no object saves first, and possibly for an element the
+request never reaches because an earlier one fails. Counters and audit records
+cover only the elements the handler reaches.
 Callbacks must be fast, nonblocking, and side-effect-free. Context addresses and
 process IDs are claimed, not authenticated identities. DCC/Reinit, Audit/LifeSafety,
 reads, discovery, trusted local writes and unconfirmed services other than WriteGroup
@@ -5432,9 +5548,10 @@ the save in place. The bundled server stages each network or
 it with the guard dropped (on the blocking pool, as for the Audit Log), and the
 write then takes the saved list. A write
 that cannot be saved fails with DEVICE / OPERATIONAL_PROBLEM and leaves the old
-list. WritePropertyMultiple stages too, except under a `mutation_authorizer`,
-which sees each attempt only as the handler reaches it; such an attempt saves
-in place. The operation task's lapse and minute saves coalesce, so a burst
+list. WritePropertyMultiple stages too, its writes to both lists as one save
+(#1423); under a `mutation_authorizer` the server decides each such attempt
+before staging it and stages only those allowed (#1321). The operation task's
+lapse and minute saves coalesce, so a burst
 costs one save of the latest lists; one that fails is logged and retried a
 minute later. `save_counters()` returns a `ForwarderSaveCounters` handle,
 shared with the object, whose `failed_saves()` counts every refused save; take
@@ -5679,7 +5796,7 @@ This receive-shape policy adds no UUID version/variant, generation or storage
 requirements; optional [Hub certificate bindings](#hub-certificate-bindings) are
 configured separately.
 
-**Current-dev zero-limit receive policy (Refs #519):** the shared Connect validator
+**Zero-limit receive policy (Refs #519):** the shared Connect validator
 rejects zero Max-BVLC or Max-NPDU in either received Connect message, after the
 existing envelope/length/identity checks and before MU diagnostics. This is
 **zero-only local policy**, not a universal minimum-capacity conformance claim.

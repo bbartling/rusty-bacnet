@@ -407,7 +407,7 @@ impl BACnetObject for TrendLogMultipleObject {
             return self.write_log_device_object_property(array_index, value);
         }
         let total = self.log_buffer.total_record_count();
-        if let Some(result) = self.reporting.write(property, &value, total) {
+        if let Some(result) = self.reporting.write(property, array_index, &value, total) {
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {

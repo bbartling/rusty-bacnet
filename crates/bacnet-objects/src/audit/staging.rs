@@ -570,6 +570,10 @@ impl DurableWrites for AuditLogObject {
         }
     }
 
+    fn has_staged_write(&self) -> bool {
+        self.staged.is_some()
+    }
+
     /// Settle what the operation task would, without waiting out a
     /// lifetime: drop staged changes, putting storage back, and take a
     /// batch whose commit has run. A batch whose commit still runs is left

@@ -30,6 +30,9 @@ pub(super) async fn run<T: TransportPort + 'static>(
             let mut out = Vec::new();
             let mut commit = BackgroundCommit::new();
             for oid in db.list_objects() {
+                // Event_Algorithm_Inhibit follows its reference once a
+                // second at least, under this same guard (#1329).
+                db.follow_event_algorithm_inhibit(&oid);
                 let Some(outcome) = db
                     .get_mut(&oid)
                     .and_then(|object| object.tick_intrinsic_reporting())

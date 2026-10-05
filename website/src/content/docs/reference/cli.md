@@ -16,7 +16,7 @@ Use `bacnet --help` and the subcommand's help from the exact installed binary as
 | Observe changes | `subscribe` | Creates remote subscription state |
 | Write a value | `write` | Requires explicit site authorization and cleanup |
 | Inspect BBMD tables | `bdt`, `fdt` | Table inspection is different from changing registration |
-| Packet analysis | `capture` | Optional feature and platform prerequisites |
+| Packet analysis | `capture` | In the Linux release executables; a source build needs the `pcap` feature |
 | Alarm/device/file operations | See the full reference | Not ordinary read-only onboarding |
 
 ## Names and aliases
@@ -35,10 +35,10 @@ Use `--json` explicitly in automation. Preserve protocol errors and nonzero proc
 
 ## Full documentation
 
-[Read the versioned CLI guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/CLI.md), but resolve discrepancies against the parser, dispatch, and actual installed command help. The website migration should fix known conflicts rather than reproduce them on a prettier page.
+[Read the versioned CLI guide](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/CLI.md), but resolve discrepancies against the parser, dispatch, and actual installed command help, and report any conflict you find.
 
 ## Sources and release scope
 
-These instructions target **v0.11.0**. Source review is not a claim of hardware qualification.
+These instructions target **v0.12.0**. Source review is not a claim of hardware qualification.
 
-[CLI documentation](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/CLI.md) · [Argument source](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/bacnet-cli/src/args.rs) · [Dispatch source](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/bacnet-cli/src/main.rs).
+[CLI documentation](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/CLI.md) · [Argument source](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/crates/bacnet-cli/src/args.rs) · [Dispatch source](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/crates/bacnet-cli/src/main.rs).

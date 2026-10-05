@@ -358,8 +358,8 @@ impl BACnetObject for DeviceReadView<'_> {
     fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
         self.object.next_monotonic_deadline_internal()
     }
-    fn binary_lighting_blink_count_internal(&self) -> u64 {
-        self.object.binary_lighting_blink_count_internal()
+    fn lighting_blink_count_internal(&self) -> u64 {
+        self.object.lighting_blink_count_internal()
     }
     fn is_createable(&self) -> bool {
         self.object.is_createable()
@@ -435,6 +435,9 @@ impl BACnetObject for DeviceReadView<'_> {
     }
     fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
         self.object.buffer_ready_report_internal()
+    }
+    fn event_algorithm_inhibit_reference_internal(&self) -> Option<BACnetObjectPropertyReference> {
+        self.object.event_algorithm_inhibit_reference_internal()
     }
 }
 

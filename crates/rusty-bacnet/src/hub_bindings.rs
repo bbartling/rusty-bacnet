@@ -7,7 +7,12 @@ use pyo3::{
 };
 
 /// Immutable installation group; routine representation is redacted.
-#[pyclass(name = "ScHubCertificateBinding", frozen, skip_from_py_object)]
+#[pyclass(
+    name = "ScHubCertificateBinding",
+    module = "rusty_bacnet",
+    frozen,
+    skip_from_py_object
+)]
 pub(crate) struct PyScHubCertificateBinding {
     inner: ScHubCertificateBinding,
 }

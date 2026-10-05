@@ -35,8 +35,16 @@ impl PropertyConformance {
 pub enum PropertyPresenceCondition {
     /// The row is present because the object is commandable.
     Commandable,
-    /// The row is present because the object implements intrinsic reporting.
-    IntrinsicReporting,
+    /// The object reports intrinsically, and its table's footnotes make this
+    /// row required of such an object: the event configuration, Event_Enable,
+    /// Acked_Transitions, Notify_Type, Event_Time_Stamps and
+    /// Event_Detection_Enable, for example.
+    IntrinsicReportingRequired,
+    /// The object reports intrinsically, and its table's footnotes only let
+    /// this row be present for such an object without requiring it:
+    /// Event_Message_Texts, Event_Message_Texts_Config, the
+    /// Event_Algorithm_Inhibit pair and Time_Delay_Normal.
+    IntrinsicReportingOptional,
     /// Audit Reporting is active, making its recipient required and writable.
     AuditReporting,
     /// An optional object-owned Audit setting is provisioned.
@@ -69,12 +77,27 @@ pub enum PropertyWriteCapability {
     WhenOutOfService,
     /// Correction is restricted to the original command owner at that priority.
     WhenCommandOwner,
+    /// The property has no write route of its own, but a write of the named
+    /// property changes it too: State_Text written whole, or its size at
+    /// index 0, sets a multi-state object's Number_Of_States (#1443). A
+    /// WriteProperty naming this property itself is refused, so it doesn't
+    /// count as writable.
+    Through(PropertyIdentifier),
 }
 
 impl PropertyWriteCapability {
-    /// Whether any network property-write route is implemented.
+    /// Whether a network property-write route naming this property is
+    /// implemented. [`Self::Through`] has none.
     pub const fn is_writable(self) -> bool {
-        !matches!(self, Self::ReadOnly)
+        !matches!(self, Self::ReadOnly | Self::Through(_))
+    }
+
+    /// The property whose writes change this one, for [`Self::Through`].
+    pub const fn written_through(self) -> Option<PropertyIdentifier> {
+        match self {
+            Self::Through(property) => Some(property),
+            _ => None,
+        }
     }
 }
 
@@ -98,14 +121,16 @@ pub struct PropertyMetadata {
 }
 
 impl PropertyMetadata {
-    /// Whether this effective row is required, including enabled Audit Reporting
-    /// and command-source mechanisms while retaining optional base table codes.
+    /// Whether this effective row is required, including the rows intrinsic
+    /// reporting, enabled Audit Reporting and command-source mechanisms
+    /// require while retaining optional base table codes.
     pub const fn is_required(self) -> bool {
         self.conformance.is_required()
             || matches!(
                 self.presence_condition,
                 Some(
-                    PropertyPresenceCondition::AuditReporting
+                    PropertyPresenceCondition::IntrinsicReportingRequired
+                        | PropertyPresenceCondition::AuditReporting
                         | PropertyPresenceCondition::ValueSourceTracking
                         | PropertyPresenceCondition::CommandableValueSourceTracking
                 )

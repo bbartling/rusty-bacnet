@@ -40,31 +40,40 @@
 //! finds the record yet; wait on the served state, such as the log's
 //! Record_Count, instead.
 //!
+//! A request that makes several writes to one object, as a
+//! WritePropertyMultiple can, stages them as one save of the state they
+//! leave together. Each write takes its own step of it as the request makes
+//! it, so the object serves the state the last write leaves only once every
+//! write has been made, and a request that stops part way keeps the steps it
+//! took while storage goes back to that served state (#1423). Under a
+//! mutation authorizer, the server asks it about such writes before staging
+//! them, and stages only the ones it allows (#1321).
+//!
 //! Some paths still wait for a save while the guard is held. They get the
 //! same outcome through the same writer; the object just queues the save and
 //! waits for it where it is:
 //!
-//! - a write nobody staged: application code writing through the database,
-//!   and a WritePropertyMultiple attempt when a mutation authorizer is
-//!   configured, since the authorizer sees each attempt only as the handler
-//!   reaches it under the guard;
-//! - a request's second write to an object that stages one write per request,
-//!   as a Notification Forwarder or Class or an Access Rights object does (an
-//!   Audit Log folds a request's Log_Enable and Buffer_Size writes into one
-//!   staged commit instead);
+//! - a write nobody staged, such as application code writing through the
+//!   database;
 //! - an in-place change to an Audit Log, such as `add_record`, which first
 //!   lets a staged commit land, waiting for it if it is still running.
 //!
+//! A write nobody staged takes the place of a staged write it doesn't match
+//! only when the object will make it: a write the object refuses leaves the
+//! staged write alone (#1424).
+//!
 //! Dropping an object waits for the saves it has queued. The server's
 //! DeleteObject therefore drops a removed object on a blocking thread after
-//! releasing the guard; application code that removes one, or drops the
-//! database, should do the same. An object dropped with a write still
-//! staged for a request that never came back first saves the state it
-//! serves, so storage never keeps a state no client was told about, and
-//! waits for that save too (#1363). The server's `stop()` settles such
-//! writes once it has joined its requests
-//! ([`DurableWrites::settle_forgotten_writes`]) and waits for their saves,
-//! so a database dropped after a stop has nothing more to save.
+//! releasing the guard, and a server dropped without `stop()` in async code
+//! drops its database there too (#1409); application code that removes an
+//! object, or drops the last handle on the database, should do the same.
+//! An object dropped with a write still staged for a request that never
+//! came back first saves the state it serves, so storage never keeps a
+//! state no client was told about, and waits for that save too (#1363).
+//! The server's `stop()` settles such writes once it has joined its
+//! requests ([`DurableWrites::settle_forgotten_writes`]) and waits for
+//! their saves, so a database dropped after a stop has nothing more to
+//! save. A server dropped without `stop()` returns before those saves land.
 //!
 //! The writer's thread is a plain `std` thread with no Tokio runtime, so a
 //! storage implementation that needs one brings its own handle. A storage
@@ -78,12 +87,14 @@
 //! instead of saving under the guard:
 //!
 //! 1. Own a `staged::StagedSaves` over a `SaveWriter` of a snapshot of the
-//!    state to keep. It stages a write's save, hands the write the saved
-//!    state or the save's error, and drops a staged write its request never
-//!    made, leaving the object to save its served state at once
+//!    state to keep. It stages one save of the state a request's writes
+//!    leave (`staged::steps` works out each write's step), hands each write
+//!    its step or the save's error, and drops a staged write its request
+//!    never made, leaving the object to save its served state at once
 //!    (`StagedSaves::correct`), or as the object drops. A write nobody
-//!    staged saves with `StagedSaves::save_now`, and a save nobody waits
-//!    for coalesces through `StagedSaves::submit_coalescing`.
+//!    staged saves with `StagedSaves::save_now`, once the object knows it
+//!    will make it, and a save nobody waits for coalesces through
+//!    `StagedSaves::submit_coalescing`.
 //! 2. Implement [`DurableWrites`] for the object, including
 //!    `settle_forgotten_writes` (`StagedSaves::drop_forgotten`), and return
 //!    it from `BACnetObject::durable_writes_internal`.
@@ -643,8 +654,9 @@ pub trait DurableWrites {
     /// makes them; a WritePropertyMultiple can make several. The default
     /// stages the first write the object takes through
     /// [`stage_write`](Self::stage_write), and the request's later writes to
-    /// the object save in place. An object that can fold several writes into
-    /// one save overrides it.
+    /// the object save in place. Every bundled object overrides it to fold
+    /// the writes into one save (#1423): each write then takes its own step
+    /// of that save as the request makes it.
     fn stage_writes(&mut self, writes: &[PendingWrite]) -> StageStep {
         for write in writes {
             match self.stage_write(write.property, write.array_index, &write.value) {
@@ -680,6 +692,12 @@ pub trait DurableWrites {
     /// the object serves is queued at once, so storage follows the object
     /// again.
     fn release_staged_write(&mut self, staged: &SaveWait);
+
+    /// Whether the object holds something staged for a request that the
+    /// request has still to take or release. The default stages nothing.
+    fn has_staged_write(&self) -> bool {
+        false
+    }
 
     /// No request is left to take or release what is staged, as once the
     /// server's `stop()` has joined its requests (#1363). Settle it: a

@@ -25,7 +25,7 @@ use crate::property_metadata::{
 // requires the window the way Table 12-29's does a Trend Log's (#1481). The
 // log reports BUFFER_READY (#1347), so the intrinsic reporting rows footnote
 // 4 asks for come last, each marked as present for that reason.
-const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 32] {
+const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 35] {
     let r = BUFFER_READY_METADATA;
     [
         PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
@@ -59,12 +59,15 @@ const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 32] {
         r[7],
         r[8],
         r[9],
+        r[10],
+        r[11],
+        r[12],
         PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
     ]
 }
 
-const POLLED: [PropertyMetadata; 32] = rows(Always);
-const TRIGGERED: [PropertyMetadata; 32] = rows(ReadOnly);
+const POLLED: [PropertyMetadata; 35] = rows(Always);
+const TRIGGERED: [PropertyMetadata; 35] = rows(ReadOnly);
 
 pub(super) fn for_object(object: &TrendLogMultipleObject) -> Cow<'_, [PropertyMetadata]> {
     Cow::Borrowed(if object.logging_type() == LoggingType::TRIGGERED {

@@ -240,7 +240,7 @@ async fn each_saved_write_property_saves_off_the_lock_and_survives_a_rebuild() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_write_property_multiple_with_several_rights_writes_survives_a_rebuild() {
+async fn a_write_property_multiple_with_several_rights_writes_saves_once_and_survives_a_rebuild() {
     let storage = Arc::new(RightsStorage::default());
     let (fixture, rights) = served_by(&storage).await;
     let positive = [zone_rule(1), zone_rule(2)];
@@ -272,15 +272,15 @@ async fn a_write_property_multiple_with_several_rights_writes_survives_a_rebuild
         .await
         .unwrap()
         .expect("the save started");
-    // The request stages its first write to the object and saves it with
-    // the guard dropped.
+    // The request stages its three writes to the object as one save, of the
+    // state they leave together, made with the guard dropped (#1423).
     let readable = tokio::time::timeout(WAIT, fixture.db.read()).await.is_ok();
     let writable = tokio::time::timeout(WAIT, fixture.db.write()).await.is_ok();
-    // Its later writes to the object save in place; let every save through.
     drop(go);
     assert_eq!(sending.await.unwrap(), SIMPLE_ACK_WPM);
     assert!(readable && writable, "the database was held while it saved");
-    assert_eq!(storage.saves.load(Ordering::SeqCst), 3);
+    // Each write took its step of that save; none saved again.
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 1);
     let expected = AccessRightsSnapshot {
         positive_access_rules: Some(positive.to_vec()),
         negative_access_rules: Some(vec![grown_rule()]),
@@ -420,11 +420,12 @@ async fn a_state_that_cannot_be_saved_is_refused_on_every_path_and_nothing_chang
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_write_property_multiple_stopped_before_its_rules_write_puts_storage_back() {
+async fn a_write_property_multiple_refused_at_its_first_rights_write_stages_nothing() {
     let storage = Arc::new(RightsStorage::default());
     let (fixture, rights) = served_by(&storage).await;
-    // The first attempt fails, since Enable takes a BOOLEAN, so the rules
-    // write after it, staged and already saved, never reaches the object.
+    // The first attempt fails, since Enable takes a BOOLEAN. The object
+    // stages a request's writes only up to one it will refuse (#1423), so
+    // the rules write after it is never saved.
     let request = write_property_multiple(
         rights,
         vec![
@@ -439,23 +440,30 @@ async fn a_write_property_multiple_stopped_before_its_rules_write_puts_storage_b
     )
     .await;
     assert_eq!(response[0], ERROR_PDU, "the first attempt was refused");
-    // Storage goes back at once to holding nothing written, the state the
-    // object serves.
-    let restored = tokio::time::timeout(WAIT, async {
-        while storage.saves.load(Ordering::SeqCst) < 2 {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await;
-    assert!(
-        restored.is_ok(),
-        "storage kept rules the object never served"
-    );
-    assert_eq!(storage.load_saved(), Some(AccessRightsSnapshot::default()));
+    saves_done(&fixture, rights).await;
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 0);
+    assert_eq!(storage.load_saved(), None);
     assert_eq!(
         reads(&fixture, rights).await,
         expected_reads(&AccessRightsSnapshot::default())
     );
+}
+
+/// Wait, without the guard, until every save `rights` has queued has run.
+/// The request released what it staged, so settling drops nothing: a write
+/// still staged here would be one the request never corrected.
+async fn saves_done(fixture: &Fixture, rights: ObjectIdentifier) {
+    let mut db = fixture.db.write().await;
+    let writes = db
+        .get_mut(&rights)
+        .and_then(|object| object.durable_writes_internal())
+        .expect("the object saves");
+    assert!(!writes.has_staged_write(), "a write is still staged");
+    let wait = writes.settle_forgotten_writes().expect("the object saves");
+    drop(db);
+    tokio::time::timeout(WAIT, wait)
+        .await
+        .expect("the saves ran");
 }
 
 #[tokio::test(start_paused = true)]
@@ -636,3 +644,6 @@ async fn an_accompaniment_write_saves_off_the_lock_and_survives_a_rebuild() {
     let (rebuilt, rights) = served_by(&storage).await;
     assert_eq!(rebuilt.read(rights, P::ACCOMPANIMENT).await, served);
 }
+
+#[path = "access_rights_fold_wire_tests.rs"]
+mod fold_wire_tests;

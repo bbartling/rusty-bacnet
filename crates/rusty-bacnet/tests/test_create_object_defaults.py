@@ -3,10 +3,11 @@ what it may set that WriteProperty can't (#1437, #1429).
 
 A new object's name is the type and instance, or the first free name with a
 " (n)" suffix after it when another object holds that. Units on an Analog
-Input or Output, and Number_Of_States and State_Text written whole on a
-multi-state object, take a CreateObject initial value but stay
-WRITE_ACCESS_DENIED to WriteProperty. Number_Of_States applies first, so the
-order of the initial values doesn't change the object."""
+Input or Output, and Number_Of_States on a multi-state object, take a
+CreateObject initial value but stay WRITE_ACCESS_DENIED to WriteProperty.
+Number_Of_States applies first, so the order of the initial values doesn't
+change the object. State_Text written whole sets the count, at creation and
+by WriteProperty (#1443)."""
 import asyncio
 import unittest
 
@@ -103,10 +104,42 @@ class CreateObjectDefaultsTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await self.read(created, STATE_TEXT), LABELS)
         await self.refused(
             self.client.write_property(
-                self.address, ObjectIdentifier(MSV, 1), STATE_TEXT, LABELS
+                self.address, ObjectIdentifier(MSV, 1), STATES, count
             ),
             ErrorCode.WRITE_ACCESS_DENIED,
         )
+
+    async def test_a_whole_state_text_sets_the_count(self):
+        # With no Number_Of_States in the request, the labels give it.
+        await self.create(MSV, [initial(STATE_TEXT, LABELS)])
+        created = ObjectIdentifier(MSV, 1)
+        self.assertEqual(await self.read(created, STATES), PropertyValue.unsigned(3))
+        # A later WriteProperty of the whole array resizes it too.
+        two = PropertyValue.list(
+            [PropertyValue.character_string(label) for label in ("Off", "On")]
+        )
+        await asyncio.wait_for(
+            self.client.write_property(self.address, created, STATE_TEXT, two), 3
+        )
+        self.assertEqual(await self.read(created, STATES), PropertyValue.unsigned(2))
+        self.assertEqual(await self.read(created, STATE_TEXT), two)
+        # A shrink that would leave Relinquish_Default past the count is refused.
+        await asyncio.wait_for(
+            self.client.write_property(
+                self.address,
+                created,
+                PropertyIdentifier.RELINQUISH_DEFAULT,
+                PropertyValue.unsigned(2),
+            ),
+            3,
+        )
+        await self.refused(
+            self.client.write_property(
+                self.address, created, STATE_TEXT, PropertyValue.character_string("Only")
+            ),
+            ErrorCode.VALUE_OUT_OF_RANGE,
+        )
+        self.assertEqual(await self.read(created, STATES), PropertyValue.unsigned(2))
 
     async def test_a_state_text_of_the_wrong_length_is_refused(self):
         await self.refused(

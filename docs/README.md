@@ -1,6 +1,6 @@
 # Engineering documentation
 
-These documents describe the **current development checkout**, including unreleased changes. The workspace version can still be 0.11.0; record the source revision when using these APIs. For the release, use the [v0.11.0 documentation tree](https://github.com/jscott3201/rusty-bacnet/tree/v0.11.0/docs). The Astro site's authored `development/` guides provide a shorter task-oriented path to these contracts; its `start/` tutorials retain their release scope.
+These documents follow the `dev` branch. The latest release is **0.12.0**, and the [v0.12.0 documentation tree](https://github.com/jscott3201/rusty-bacnet/tree/v0.12.0/docs) is the copy that matches it. A `dev` checkout may hold later changes while its version still reads 0.12.0, so record the source revision when using these APIs. The [website](https://jscott3201.github.io/rusty-bacnet/) gives a shorter task-oriented path for the release: its `start/` pages install and make a first read, and its `development/` guides lead to these contracts.
 
 ## Start with your question
 

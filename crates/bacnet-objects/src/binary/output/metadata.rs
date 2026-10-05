@@ -3,11 +3,14 @@ use std::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
+use crate::event::options::REPORTING_OPTION_METADATA;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
     PropertyPresenceCondition::{CommandableValueSourceTracking, ValueSourceTracking},
-    PropertyPresenceCondition::{IntrinsicReporting, PairedText},
+    PropertyPresenceCondition::{
+        IntrinsicReportingOptional, IntrinsicReportingRequired, PairedText,
+    },
     PropertyWriteCapability::WhenCommandOwner,
     PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
@@ -23,7 +26,7 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(
         P::FEEDBACK_VALUE,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
@@ -31,42 +34,61 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(
         P::EVENT_DETECTION_ENABLE,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
-    PropertyMetadata::new(P::EVENT_ENABLE, Optional, Some(IntrinsicReporting), Always),
-    PropertyMetadata::new(P::TIME_DELAY, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::EVENT_ENABLE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
+    PropertyMetadata::new(
+        P::TIME_DELAY,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::TIME_DELAY_NORMAL,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingOptional),
         Always,
     ),
-    PropertyMetadata::new(P::NOTIFY_TYPE, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::NOTIFY_TYPE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::NOTIFICATION_CLASS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
     PropertyMetadata::new(
         P::ACKED_TRANSITIONS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         ReadOnly,
     ),
     PropertyMetadata::new(
         P::EVENT_TIME_STAMPS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         ReadOnly,
     ),
     PropertyMetadata::new(
         P::EVENT_MESSAGE_TEXTS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingOptional),
         ReadOnly,
     ),
+    // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+    REPORTING_OPTION_METADATA[0],
+    REPORTING_OPTION_METADATA[1],
+    REPORTING_OPTION_METADATA[2],
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
     PropertyMetadata::new(P::PRIORITY_ARRAY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELINQUISH_DEFAULT, RequiredRead, None, Always),

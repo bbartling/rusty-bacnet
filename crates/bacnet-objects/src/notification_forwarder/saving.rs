@@ -6,7 +6,9 @@
 //! server stages such a write ([`DurableWrites`](crate::durable::DurableWrites)):
 //! the save runs on the forwarder's writer thread while the database guard is
 //! dropped, and the write then takes the saved lists without saving again. A
-//! write that was not staged queues its save and waits for it where it is.
+//! WritePropertyMultiple that writes both lists, or one more than once,
+//! stages one save of what its last write leaves (#1423). A write that was
+//! not staged queues its save and waits for it where it is.
 //!
 //! A staged write its request never makes, because the request failed first
 //! or is gone, is dropped. Its save may already have put lists in storage
@@ -43,7 +45,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::persistence::{ForwarderSnapshot, NotificationForwarderPersistence};
-use crate::durable::staged::StagedSaves;
+use crate::durable::staged::{StagedSaves, Step};
 use crate::durable::{SaveWait, SaveWriter, StageStep};
 use crate::subscribed_recipients::SubscribedRecipients;
 
@@ -81,6 +83,16 @@ impl ForwarderSaveCounters {
 pub(super) enum NextList {
     RecipientList(Vec<BACnetDestination>),
     SubscribedRecipients(SubscribedRecipients),
+}
+
+/// Put the list `next` leaves into `snapshot`.
+pub(super) fn apply(snapshot: &mut ForwarderSnapshot, next: &NextList) {
+    match next {
+        NextList::RecipientList(list) => snapshot.recipient_list = Some(list.clone()),
+        NextList::SubscribedRecipients(store) => {
+            snapshot.subscribed_recipients = store.subscriptions();
+        }
+    }
 }
 
 /// A forwarder's storage, its writer and staged write, and what storage
@@ -143,25 +155,20 @@ impl Storage {
         self.saves.busy_at(now)
     }
 
-    /// Queue a save of `snapshot` for a write of `value` to `property` that
-    /// leaves `next`, and keep `next` aside until the write arrives;
-    /// `served` holds the lists the forwarder serves meanwhile (see
-    /// [`StagedSaves::stage`]).
+    /// Stage one save of the lists `steps` leave, made from write count
+    /// `base` on; `served` holds the lists the forwarder serves meanwhile
+    /// (see [`StagedSaves::stage`]).
     pub(super) fn stage(
         &mut self,
-        property: PropertyIdentifier,
-        value: PropertyValue,
+        steps: Vec<Step<NextList>>,
         base: u64,
-        next: NextList,
-        snapshot: ForwarderSnapshot,
         served: ForwarderSnapshot,
     ) -> StageStep {
-        // Both lists are BACnetLISTs, written whole.
-        self.saves
-            .stage(property, None, value, base, next, snapshot, served)
+        self.saves.stage(steps, base, served, apply)
     }
 
-    /// Take the staged list for a write (see [`StagedSaves::claim`]).
+    /// Take the next staged list for a write (see [`StagedSaves::claim`]).
+    /// Both lists are BACnetLISTs, written whole.
     pub(super) fn claim(
         &mut self,
         property: PropertyIdentifier,
@@ -169,6 +176,17 @@ impl Storage {
         base: u64,
     ) -> Option<Result<NextList, Error>> {
         self.saves.claim(property, None, value, base)
+    }
+
+    /// Whether a list write is staged (see [`StagedSaves::is_staged`]).
+    pub(super) fn is_staged(&self) -> bool {
+        self.saves.is_staged()
+    }
+
+    /// Drop the staged write, for a write that supersedes it (see
+    /// [`StagedSaves::drop_staged`]).
+    pub(super) fn drop_staged(&mut self) {
+        self.saves.drop_staged();
     }
 
     /// Save `snapshot` and wait for the outcome, for a write nobody staged.

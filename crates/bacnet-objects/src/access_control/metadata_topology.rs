@@ -3,10 +3,11 @@ use std::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
+use crate::event::options::REPORTING_OPTION_METADATA;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
-    PropertyPresenceCondition::IntrinsicReporting,
+    PropertyPresenceCondition::{IntrinsicReportingOptional, IntrinsicReportingRequired},
     PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
@@ -20,9 +21,10 @@ use crate::property_metadata::{
 // exactly three rows, and Property_List is appended so the projection helper
 // omits it while required_properties keeps it. Only implemented rows are
 // described: table rows the objects do not serve (Door_Unlock_Delay_Time,
-// Maintenance_Required, the point's event rows, the door's and zone's
-// Event_Message_Texts_Config and Event_Algorithm_Inhibit pair,
-// audit/tag/profile rows) stay absent until dispatch exists. The required door rows #1073
+// Maintenance_Required, the point's event rows, audit/tag/profile rows)
+// stay absent until dispatch exists. The door and the zone serve
+// Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329)
+// after Event_Message_Texts. The required door rows #1073
 // added follow Relinquish_Default: Door_Pulse_Time, Door_Extended_Pulse_Time
 // and Door_Open_Too_Long_Time carry the table R code with routed Unsigned32
 // arms, so RequiredRead/Always, and Current_Command_Priority, derived from
@@ -35,7 +37,10 @@ use crate::property_metadata::{
 // Optional/Always. Out_Of_Service carries the table R code with the routed
 // Boolean arm, so RequiredRead/Always.
 // The door's event rows (#1149) are the zone's ten below, with the same
-// codes and capabilities (Table 12-30 footnotes 3 and 5). Fault_Values and
+// codes, conditions and capabilities (Table 12-30 footnotes 3 and 5).
+// Door_Alarm_State, the value the door's CHANGE_OF_STATE algorithm watches,
+// also carries footnote 3, so intrinsic reporting requires it too (#1485).
+// Fault_Values and
 // Masked_Alarm_Values carry the plain O code and routed list arms, so
 // Optional/Always with no presence reason. The door's Reliability, the
 // table R code, is writable only out of service, since the FAULT_STATE
@@ -70,7 +75,9 @@ use crate::property_metadata::{
 // Occupancy_Count carries the table O code and Reliability the table R code,
 // both with footnote 1, and dispatch takes their writes only while
 // Out_Of_Service is TRUE (#1247), so Optional/WhenOutOfService and
-// RequiredRead/WhenOutOfService. Entry_Points and Exit_Points carry the
+// RequiredRead/WhenOutOfService. Occupancy_Count, Occupancy_Count_Enable
+// and Adjust_Value also carry footnote 3, which requires them of a zone
+// that reports intrinsically, as this one does (#1485). Entry_Points and Exit_Points carry the
 // table R code with no arm, so RequiredRead/ReadOnly, and Status_Flags the
 // table R code with no network write route, so RequiredRead/ReadOnly.
 // The rows #1284 appended: Occupancy_State and Event_State carry the table R
@@ -79,8 +86,10 @@ use crate::property_metadata::{
 // Occupancy_Count_Enable and the two limits carry the O code with no write
 // arm (the application sets them), so Optional/ReadOnly.
 // The zone's event rows (#1305) follow the Multi-state Input's: the Table
-// 12-37 O code with footnote 3 or 7, so Optional with the IntrinsicReporting
-// presence reason. Time_Delay, Notification_Class, Alarm_Values,
+// 12-37 O code with footnote 3, which requires the row of a zone that
+// reports intrinsically (IntrinsicReportingRequired), or footnote 7 alone,
+// which only permits it (IntrinsicReportingOptional: Event_Message_Texts and
+// Time_Delay_Normal; #1485). Time_Delay, Notification_Class, Alarm_Values,
 // Event_Enable, Notify_Type, Event_Detection_Enable and Time_Delay_Normal
 // have routed write arms, so Always; Acked_Transitions, Event_Time_Stamps
 // and Event_Message_Texts are kept by the event machinery, so ReadOnly.
@@ -107,7 +116,12 @@ const ACCESS_DOOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::DOOR_STATUS, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::LOCK_STATUS, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::SECURED_STATUS, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::DOOR_ALARM_STATE, Optional, None, WhenOutOfService),
+    PropertyMetadata::new(
+        P::DOOR_ALARM_STATE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        WhenOutOfService,
+    ),
     PropertyMetadata::new(P::DOOR_MEMBERS, Optional, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
@@ -120,45 +134,69 @@ const ACCESS_DOOR_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::DOOR_OPEN_TOO_LONG_TIME, RequiredRead, None, Always),
     PropertyMetadata::new(P::CURRENT_COMMAND_PRIORITY, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::MASKED_ALARM_VALUES, Optional, None, Always),
-    PropertyMetadata::new(P::TIME_DELAY, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::TIME_DELAY,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::NOTIFICATION_CLASS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
-    PropertyMetadata::new(P::ALARM_VALUES, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::ALARM_VALUES,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(P::FAULT_VALUES, Optional, None, Always),
-    PropertyMetadata::new(P::EVENT_ENABLE, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::EVENT_ENABLE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::ACKED_TRANSITIONS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         ReadOnly,
     ),
-    PropertyMetadata::new(P::NOTIFY_TYPE, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::NOTIFY_TYPE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::EVENT_TIME_STAMPS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         ReadOnly,
     ),
     PropertyMetadata::new(
         P::EVENT_MESSAGE_TEXTS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingOptional),
         ReadOnly,
     ),
+    // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+    REPORTING_OPTION_METADATA[0],
+    REPORTING_OPTION_METADATA[1],
+    REPORTING_OPTION_METADATA[2],
     PropertyMetadata::new(
         P::EVENT_DETECTION_ENABLE,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
     PropertyMetadata::new(
         P::TIME_DELAY_NORMAL,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingOptional),
         Always,
     ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
@@ -197,7 +235,12 @@ const ACCESS_ZONE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::GLOBAL_IDENTIFIER, RequiredWrite, None, Always),
-    PropertyMetadata::new(P::OCCUPANCY_COUNT, Optional, None, WhenOutOfService),
+    PropertyMetadata::new(
+        P::OCCUPANCY_COUNT,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        WhenOutOfService,
+    ),
     PropertyMetadata::new(P::ENTRY_POINTS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::EXIT_POINTS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
@@ -205,48 +248,82 @@ const ACCESS_ZONE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, WhenOutOfService),
     PropertyMetadata::new(P::OCCUPANCY_STATE, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::OCCUPANCY_COUNT_ENABLE, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::ADJUST_VALUE, Optional, None, Always),
+    PropertyMetadata::new(
+        P::OCCUPANCY_COUNT_ENABLE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::ADJUST_VALUE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(P::OCCUPANCY_UPPER_LIMIT, Optional, None, ReadOnly),
     PropertyMetadata::new(P::OCCUPANCY_LOWER_LIMIT, Optional, None, ReadOnly),
-    PropertyMetadata::new(P::TIME_DELAY, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::TIME_DELAY,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::NOTIFICATION_CLASS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
-    PropertyMetadata::new(P::ALARM_VALUES, Optional, Some(IntrinsicReporting), Always),
-    PropertyMetadata::new(P::EVENT_ENABLE, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::ALARM_VALUES,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
+    PropertyMetadata::new(
+        P::EVENT_ENABLE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::ACKED_TRANSITIONS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         ReadOnly,
     ),
-    PropertyMetadata::new(P::NOTIFY_TYPE, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::NOTIFY_TYPE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::EVENT_TIME_STAMPS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         ReadOnly,
     ),
     PropertyMetadata::new(
         P::EVENT_MESSAGE_TEXTS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingOptional),
         ReadOnly,
     ),
+    // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+    REPORTING_OPTION_METADATA[0],
+    REPORTING_OPTION_METADATA[1],
+    REPORTING_OPTION_METADATA[2],
     PropertyMetadata::new(
         P::EVENT_DETECTION_ENABLE,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
     PropertyMetadata::new(
         P::TIME_DELAY_NORMAL,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingOptional),
         Always,
     ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
