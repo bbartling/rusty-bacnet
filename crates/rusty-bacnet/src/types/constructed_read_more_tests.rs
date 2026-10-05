@@ -683,3 +683,33 @@ fn a_single_value_that_is_not_one_element_falls_back() {
         None
     );
 }
+
+#[test]
+fn address_bindings_read_as_mappings() {
+    Python::initialize();
+    Python::attach(|py| {
+        let bindings = [
+            (oid(O::DEVICE, 99), 0u64, vec![0x0A, 0, 0, 9, 0xBA, 0xC0]),
+            (oid(O::DEVICE, 99), 77, vec![0x07]),
+        ];
+        let (octets, ends) = concat(&bindings, |buf, (device, network, mac)| {
+            bacnet_encoding::primitives::encode_app_object_id(buf, device);
+            bacnet_encoding::primitives::encode_app_unsigned(buf, *network);
+            bacnet_encoding::primitives::encode_app_octet_string(buf, mac);
+        });
+        let expected = eval(
+            py,
+            cr"[{'device_identifier': device, 'network_number': 0,
+                 'mac_address': b'\x0a\x00\x00\x09\xba\xc0'},
+                {'device_identifier': device,
+                 'network_number': 77, 'mac_address': b'\x07'}]",
+        );
+        assert_collection(
+            py,
+            &[(O::DEVICE, P::DEVICE_ADDRESS_BINDING)],
+            (&octets, &ends),
+            Element::AddressBinding,
+            &expected,
+        );
+    });
+}

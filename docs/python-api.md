@@ -380,6 +380,7 @@ its octets.
 | Global Group | Present_Value | `"property_access_result"` | the member's `DeviceObjectPropertyReference` keys, then `"value"` (shaped as a read of the member) and `"error"` (`(ErrorClass, ErrorCode)`), one of them `None` | none |
 | Device | Audit_Notification_Recipient (one value) | `"recipient"` | an `AuditRecipientInput` mapping | `configure_audit_recipient(...)` |
 | Device | Active_COV_Subscriptions | `"cov_subscription"` | `{"recipient", "process_identifier", "object_identifier", "property_identifier", "property_array_index", "issue_confirmed_notifications", "time_remaining", "cov_increment"}`; `recipient` an `AuditRecipientInput` mapping, `cov_increment` a `float` or `None` | none |
+| Device | Device_Address_Binding | `"address_binding"` | `{"device_identifier", "network_number", "mac_address"}`; `network_number` 0 for a device on this network, `mac_address` its own MAC, not a router's | none |
 | Schedule | Weekly_Schedule | `"daily_schedule"` | one day: `[(time, value), ...]`, `time` an `(hour, minute, second, hundredths)` tuple and `value` a `PropertyValue` | none |
 | Schedule | Exception_Schedule | `"special_event"` | `{"period", "time_values", "priority"}`; `period` a calendar entry mapping or a Calendar's `ObjectIdentifier`, `time_values` as for a day | none |
 | Schedule | Effective_Period (one value) | `"date_range"` | `(start_date, end_date)` | none |
@@ -3153,8 +3154,8 @@ rebuilt from its members, Device instance `4194303` names this server's
 Device, and the Device's Active_COV_Subscriptions lists the live
 subscriptions. Its Device_Address_Binding lists the server's device bindings
 (#1369): each `add_device_binding` and each device whose I-Am arrived in the
-last ten minutes, one encoded BACnetAddressBinding (Device identifier, network
-number, 0 on this network, and MAC) per item. The value takes the
+last ten minutes, one `"address_binding"` element each (see the typed
+constructed values below). The value takes the
 [read result](#read-results) shape. An
 unknown object or property raises `BacnetProtocolError` with the error a
 network read gets (`UNKNOWN_OBJECT`, for example). A Group whose member rows
