@@ -8,12 +8,13 @@
 //! 100 ms after the distribution starts. CH-10 (channel 26) writes the
 //! Present_Values of AO-1 to AO-20 in Device 9, all at once. CH-11 and CH-12
 //! (channels 27 and 28) each write AO-1 in twenty other devices, Devices 100
-//! to 119 and 120 to 139. Every device is bound to the harness peer and
-//! answers by hand. The clock is paused.
+//! to 119 and 120 to 139. CH-14 (channel 30) writes AO-1 in Device 9 and the
+//! local AO-2 together, 100 ms after the distribution starts. Every device is
+//! bound to the harness peer and answers by hand. The clock is paused.
 use super::channel_remote_write_tests::{
-    answer_reads, error, next_request, reliability, remote_output, start_with,
+    answer_reads, error, next_reads, next_request, read_ack, reliability, remote_output, start_with,
 };
-use super::channel_wire_tests::{ch, channel, settled, write_channel, write_status};
+use super::channel_wire_tests::{ch, channel, member, settled, write_channel, write_status};
 use super::command_action_wire_tests::{ao, read_db, slot8};
 use super::command_remote_write_tests::{ack, device, remote_write, sent_writes};
 use super::command_runs::CommandRunner;
@@ -35,6 +36,8 @@ async fn start() -> Harness {
             db.add(Box::new(channel(instance, 16 + instance as u16, members)))
                 .unwrap();
         }
+        let together = vec![(remote_output(9, 1), 100), (member(ao(2), PV), 100)];
+        db.add(Box::new(channel(14, 30, together))).unwrap();
     })
     .await;
     for instance in 100..140 {
@@ -90,6 +93,65 @@ async fn a_silent_member_in_another_device_holds_back_no_member_here() {
         PropertyValue::Enumerated(Reliability::PROCESS_ERROR.to_raw())
     );
     assert_eq!(h.server.notification_transactions.active_count(), 0);
+}
+
+/// AO-1 there and AO-2 here come due together while something else holds the
+/// database. Once it lets go, the database lock grants AO-1's waiting read
+/// whether or not AO-1's future is polled. A run that left that future
+/// unpolled while it wrote AO-2 kept the read guard for good, and AO-2's
+/// write, which needs the database to itself, waited on it with every later
+/// user of the database queued behind, a client's ReadProperty included.
+#[tokio::test(start_paused = true)]
+async fn members_due_together_while_the_database_is_held_both_go() {
+    let mut h = start().await;
+    let started = tokio::time::Instant::now();
+    write_channel(&mut h, 14, &PropertyValue::Real(80.0), Some(8))
+        .await
+        .unwrap();
+    answer_reads(&h, 1, &PropertyValue::Real(0.0)).await;
+    let writer = h.server.database().write().await;
+    tokio::time::sleep_until(started + Duration::from_millis(150)).await;
+    drop(writer);
+
+    let (invoke_id, written) = next_request(&h, ao(1)).await;
+    assert_eq!(written, [0x44, 0x42, 0xA0, 0x00, 0x00]);
+    h.respond(ack(invoke_id)).await;
+    assert_eq!(settled(&mut h, 14).await, WriteStatus::SUCCESSFUL);
+    assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
+}
+
+/// The same with a waiting writer: AO-2 here comes due while AO-1 there
+/// waits for the database to keep the datatype its read learned, and that
+/// write guard, granted to an unpolled future, held the database for good.
+#[tokio::test(start_paused = true)]
+async fn a_member_here_due_while_one_there_waits_for_the_database_goes_through() {
+    let mut h = start().await;
+    write_channel(&mut h, 5, &PropertyValue::Real(80.0), Some(8))
+        .await
+        .unwrap();
+    let [(invoke_id, request)]: [_; 1] = next_reads(&h, 1).await.try_into().unwrap();
+    // A reader, such as a client's ReadProperty, holds the database when the
+    // datatype read is answered, so keeping the datatype waits for it.
+    let reader = h.server.database().read().await;
+    h.respond(read_ack(invoke_id, &request, &PropertyValue::Real(0.0)))
+        .await;
+    // A waiting writer turns new readers away.
+    tokio::time::timeout(Duration::from_millis(50), async {
+        while h.server.database().try_read().is_ok() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the run waits for the database to keep AO-1's datatype");
+    // AO-2's 100 ms pass while the reader still holds it.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    drop(reader);
+
+    let (invoke_id, written) = next_request(&h, ao(1)).await;
+    assert_eq!(written, [0x44, 0x42, 0xA0, 0x00, 0x00]);
+    h.respond(ack(invoke_id)).await;
+    assert_eq!(settled(&mut h, 5).await, WriteStatus::SUCCESSFUL);
+    assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
 }
 
 #[tokio::test(start_paused = true)]
