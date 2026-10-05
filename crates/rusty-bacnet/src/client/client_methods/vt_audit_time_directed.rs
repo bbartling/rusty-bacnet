@@ -306,8 +306,9 @@ impl BACnetClient {
     /// Send a TimeSynchronization request (unconfirmed) to a remote device.
     ///
     /// `date` is `(year, month, day, day_of_week)` where year is the full year
-    /// (e.g. 2026), month 1-12, day 1-31, day_of_week 1=Monday..7=Sunday
-    /// (or 255 for unspecified).
+    /// (e.g. 2026), month 1-12, day 1-31, day_of_week 1=Monday..7=Sunday,
+    /// each 255 for unspecified. A year outside 1900..=2154 that isn't 255
+    /// raises ValueError (#1501).
     /// `time` is `(hour, minute, second, hundredths)`.
     #[pyo3(signature = (address, date, time))]
     fn time_synchronization<'py>(
@@ -318,12 +319,7 @@ impl BACnetClient {
         time: (u8, u8, u8, u8),
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let d = bacnet_types::primitives::Date {
-            year: date.0.saturating_sub(1900) as u8,
-            month: date.1,
-            day: date.2,
-            day_of_week: date.3,
-        };
+        let d = crate::types::date_from_value(date)?;
         let t = bacnet_types::primitives::Time {
             hour: time.0,
             minute: time.1,
@@ -359,12 +355,7 @@ impl BACnetClient {
         time: (u8, u8, u8, u8),
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let d = bacnet_types::primitives::Date {
-            year: date.0.saturating_sub(1900) as u8,
-            month: date.1,
-            day: date.2,
-            day_of_week: date.3,
-        };
+        let d = crate::types::date_from_value(date)?;
         let t = bacnet_types::primitives::Time {
             hour: time.0,
             minute: time.1,

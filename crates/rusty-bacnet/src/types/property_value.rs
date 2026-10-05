@@ -1,4 +1,6 @@
 use super::constructed_read::Element;
+use super::date::{date_from_value, date_value};
+use super::timestamp::time_value;
 use super::*;
 
 // ---------------------------------------------------------------------------
@@ -79,14 +81,8 @@ fn property_value_to_py(py: Python<'_>, value: &primitives::PropertyValue) -> Py
             dict.set_item("data", PyBytes::new(py, data))?;
             dict.into_any().unbind()
         }
-        primitives::PropertyValue::Date(d) => (d.year, d.month, d.day, d.day_of_week)
-            .into_pyobject(py)?
-            .into_any()
-            .unbind(),
-        primitives::PropertyValue::Time(t) => (t.hour, t.minute, t.second, t.hundredths)
-            .into_pyobject(py)?
-            .into_any()
-            .unbind(),
+        primitives::PropertyValue::Date(d) => date_value(d).into_pyobject(py)?.into_any().unbind(),
+        primitives::PropertyValue::Time(t) => time_value(t).into_pyobject(py)?.into_any().unbind(),
         primitives::PropertyValue::List(elements) => {
             let list = pyo3::types::PyList::empty(py);
             for elem in elements {
@@ -154,20 +150,18 @@ impl PyPropertyValue {
         Self::from_rust(primitives::PropertyValue::ObjectIdentifier(oid.to_rust()))
     }
 
-    /// Create a Date property value.
+    /// Create a Date property value, in the form `.value` reads it back.
     ///
-    /// `year` is the full year (e.g. 2026; 255 for unspecified encodes as 0xFF internally).
+    /// `year` is the full year, 1900..=2154, or 255 for unspecified; any
+    /// other year raises ValueError (#1501).
     /// `month` is 1-12 (or 255 for unspecified).
     /// `day` is 1-31 (or 255 for unspecified).
     /// `day_of_week` is 1=Monday..7=Sunday (or 255 for unspecified).
     #[staticmethod]
-    fn date(year: u16, month: u8, day: u8, day_of_week: u8) -> Self {
-        Self::from_rust(primitives::PropertyValue::Date(primitives::Date {
-            year: year.saturating_sub(1900) as u8,
-            month,
-            day,
-            day_of_week,
-        }))
+    fn date(year: u16, month: u8, day: u8, day_of_week: u8) -> PyResult<Self> {
+        Ok(Self::from_rust(primitives::PropertyValue::Date(
+            date_from_value((year, month, day, day_of_week))?,
+        )))
     }
 
     /// Create a Time property value.
@@ -333,7 +327,8 @@ fn repr(value: &primitives::PropertyValue) -> String {
         }
         primitives::PropertyValue::Enumerated(e) => format!("PropertyValue.enumerated({e})"),
         primitives::PropertyValue::Date(d) => {
-            format!("PropertyValue.date({}/{}/{})", d.year, d.month, d.day)
+            let (year, month, day, _) = date_value(d);
+            format!("PropertyValue.date({year}/{month}/{day})")
         }
         primitives::PropertyValue::Time(t) => {
             format!("PropertyValue.time({}:{}:{})", t.hour, t.minute, t.second)

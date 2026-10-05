@@ -151,13 +151,14 @@ class TimeSyncPolicyWireTests(unittest.IsolatedAsyncioTestCase):
         self.admitted = await self.settled(self.admitted + 1)
 
     async def clock(self) -> datetime.datetime:
-        """The server's Local_Date and Local_Time; its clock runs on UTC."""
+        """The server's Local_Date and Local_Time; its clock runs on UTC. A
+        date reads with its full year (#1501)."""
         device = ObjectIdentifier(ObjectType.DEVICE, DEVICE)
         date = (await self.client.read_property(self.address, device,
                                                 PropertyIdentifier.LOCAL_DATE)).value
         time = (await self.client.read_property(self.address, device,
                                                 PropertyIdentifier.LOCAL_TIME)).value
-        return datetime.datetime(date[0] + 1900, date[1], date[2], time[0], time[1], time[2],
+        return datetime.datetime(date[0], date[1], date[2], time[0], time[1], time[2],
                                  time[3] * 10_000, tzinfo=UTC)
 
     async def test_an_allowlist_takes_only_its_listed_sources(self) -> None:

@@ -1113,7 +1113,8 @@ class BACnetTimeStamp:
     ) -> int | tuple[int, int, int, int] | tuple[
         tuple[int, int, int, int], tuple[int, int, int, int]
     ]:
-        """Exact selected value, using a full year for the Date tuple."""
+        """Exact selected value, using a full year for the Date tuple (255
+        when unspecified), as ``PropertyValue.date`` reads."""
         ...
 
     def __repr__(self) -> str: ...
@@ -1468,7 +1469,11 @@ class PropertyValue:
     def object_identifier(oid: ObjectIdentifier) -> PropertyValue: ...
     @staticmethod
     def date(year: int, month: int, day: int, day_of_week: int) -> PropertyValue:
-        """Create a Date value. ``year`` is the full year (e.g. 2026); use 255 for unspecified fields."""
+        """Create a Date value, in the form ``.value`` reads it back.
+
+        ``year`` is the full year, 1900..2154, or 255 for unspecified; any
+        other year raises ValueError. Use 255 for any other unspecified
+        field."""
         ...
     @staticmethod
     def time(hour: int, minute: int, second: int, hundredths: int) -> PropertyValue:
@@ -1508,7 +1513,9 @@ class PropertyValue:
         """The Python-native value (int, float, str, bytes, bool, dict, tuple,
         ObjectIdentifier, list, or None); ``application_data`` is ``bytes``,
         and a typed constructed element the form its typed write takes, or
-        the form docs/python-api.md gives it."""
+        the form docs/python-api.md gives it. A date is ``(year, month, day,
+        day_of_week)`` with the full year, or 255 for an unspecified year,
+        as in every other date the binding reads."""
         ...
 
     def __repr__(self) -> str: ...
@@ -2042,7 +2049,9 @@ class BACnetClient:
         """Send a TimeSynchronization request (unconfirmed).
 
         ``date`` is ``(year, month, day, day_of_week)``; ``time`` is
-        ``(hour, minute, second, hundredths)``. Year is the full year (e.g. 2026).
+        ``(hour, minute, second, hundredths)``. Year is the full year
+        (1900..2154) or 255 for unspecified; any other year raises
+        ValueError before anything is sent.
         """
         ...
 
@@ -2052,7 +2061,8 @@ class BACnetClient:
         date: tuple[int, int, int, int],
         time: tuple[int, int, int, int],
     ) -> Awaitable[None]:
-        """Send a UTCTimeSynchronization request (unconfirmed)."""
+        """Send a UTCTimeSynchronization request (unconfirmed); arguments as
+        for ``time_synchronization``."""
         ...
 
     # --- Auto-routing (by device instance) ---

@@ -196,7 +196,7 @@ PropertyValue.character_string("hello")
 PropertyValue.octet_string(b"\x01\x02")
 PropertyValue.enumerated(1)
 PropertyValue.object_identifier(oid)
-PropertyValue.date(2026, 3, 21, 6)    # year, month, day, day_of_week (1=Mon)
+PropertyValue.date(2026, 3, 21, 6)    # full year, month, day, day_of_week (1=Mon)
 PropertyValue.time(14, 30, 0, 0)      # hour, minute, second, hundredths
 PropertyValue.bit_string(0, b"\xff")  # unused_bits, data
 PropertyValue.list([PropertyValue.unsigned(1), PropertyValue.unsigned(2)])
@@ -223,11 +223,28 @@ v.value   # 72.5 (native Python float)
 | `"enumerated"` | `int` |
 | `"object_identifier"` | `ObjectIdentifier` |
 | `"bit_string"` | `dict` with `"unused_bits"` and `"data"` |
-| `"date"` | `tuple(year, month, day, day_of_week)` |
+| `"date"` | `tuple(year, month, day, day_of_week)`, the full year as [Dates](#dates) gives it |
 | `"time"` | `tuple(hour, minute, second, hundredths)` |
 | `"list"` | `list` of native Python values |
 | `"application_data"` | `bytes`: the encoded value, octet for octet |
 | `"destination"`, `"port_permission"` and the other element tags of [typed constructed values](#typed-constructed-values) | the element in its typed form |
+
+### Dates
+
+Every date the binding reads or takes is a `(year, month, day, day_of_week)`
+tuple with the full year, 1900 to 2154, and 255 for an unspecified year, the
+same 255 as any other unspecified date or time field (#1501). That holds for
+a `"date"` value, a `BACnetTimeStamp` date-time, the dates in schedules,
+calendars and date ranges, the audit log's records, and the `date` argument
+of `time_synchronization`. A year outside 1900 to 2154 that isn't 255 (the
+year octet 126, say) raises `ValueError`.
+
+```python
+v = PropertyValue.date(2026, 3, 21, 6)
+v.value                                       # (2026, 3, 21, 6)
+PropertyValue.date(255, 12, 25, 255).value    # (255, 12, 25, 255): every Christmas
+BACnetTimeStamp.date_time((2026, 3, 21, 6), (8, 0, 0, 0)).value[0]  # (2026, 3, 21, 6)
+```
 
 ### Integer arguments
 
@@ -352,8 +369,8 @@ its octets.
 | Accumulator | Scale (one value) | `"scale"` | a `float` for a float scale, an `int` for a power-of-ten scale | `add_accumulator(scale=...)` |
 | Accumulator | Prescale (one value) | `"prescale"` | `(multiplier, modulo_divide)` | `add_accumulator(prescale=...)` |
 
-A date in these forms is a `(year, month, day, day_of_week)` tuple with the
-full year, as `BACnetTimeStamp` takes it, and 255 in any field left
+A date in these forms is a `(year, month, day, day_of_week)` tuple as
+[Dates](#dates) gives it: the full year, and 255 in any field left
 unspecified. An Access Rights rule whose specifiers disagree with the
 references it carries, which no typed write makes, has no `AccessRule` form,
 so its array reads as `application_data`.
@@ -860,6 +877,9 @@ await client.time_synchronization(
     time=(14, 30, 0, 0),        # (hour, minute, second, hundredths)
 )
 ```
+
+The year is the full year, or 255 for unspecified, as [Dates](#dates) gives
+it; any other year raises `ValueError` before anything is sent.
 
 #### `utc_time_synchronization(address, date, time)`
 

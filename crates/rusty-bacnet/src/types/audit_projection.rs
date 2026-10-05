@@ -4,10 +4,11 @@ use bacnet_services::audit::{
     AuditLogQueryAck, AuditPropertyReference, BACnetAuditLogDatum, BACnetAuditNotification,
 };
 use bacnet_types::constructed::BACnetRecipient;
-use bacnet_types::primitives::Date;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyDict, PyList};
 
+use super::date::date_value;
+use super::timestamp::time_value;
 use super::{
     PyAuditOperation, PyBACnetTimeStamp, PyErrorClass, PyErrorCode, PyObjectIdentifier,
     PyPropertyIdentifier,
@@ -127,10 +128,6 @@ fn notification_to_py<'py>(
     Ok(result)
 }
 
-fn actual_year(date: &Date) -> u16 {
-    date.actual_year().unwrap_or(u16::from(Date::UNSPECIFIED))
-}
-
 fn datum_to_py<'py>(py: Python<'py>, datum: &BACnetAuditLogDatum) -> PyResult<Bound<'py, PyDict>> {
     let result = PyDict::new(py);
     match datum {
@@ -164,13 +161,7 @@ pub(crate) fn audit_log_query_ack_to_py(
         record_result.set_item("sequence_number", item.sequence_number)?;
         let record = PyDict::new(py);
         let (date, time) = &item.record.timestamp;
-        record.set_item(
-            "timestamp",
-            (
-                (actual_year(date), date.month, date.day, date.day_of_week),
-                (time.hour, time.minute, time.second, time.hundredths),
-            ),
-        )?;
+        record.set_item("timestamp", (date_value(date), time_value(time)))?;
         record.set_item("datum", datum_to_py(py, &item.record.datum)?)?;
         record_result.set_item("record", record)?;
         records.append(record_result)?;
