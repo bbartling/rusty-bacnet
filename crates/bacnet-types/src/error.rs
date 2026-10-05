@@ -143,17 +143,25 @@ pub enum Error {
 }
 
 /// Which fault a decoder found in the data it refused, so a responder can
-/// name it (#1446). [`Error::reject_reason`] gives the Clause 18.9 Reject
-/// reason each kind draws when the data was a confirmed request.
+/// name it (#1446). [`DecodingKind::reject_reason`] gives the Clause 18.9
+/// Reject reason each kind draws when the data was a confirmed request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DecodingKind {
-    /// A fault the other kinds don't name: contents that don't fit their
-    /// type or range, a wrong length, a reserved choice, too many items, or
-    /// nesting too deep.
-    Malformed,
+    /// Contents whose encoding isn't valid for their datatype: a wrong
+    /// length, an Unsigned of no octets or with padding a canonical field
+    /// refuses, an unknown character set, a BIT STRING's unused-bit count
+    /// past 7, and the like. The kind [`Error::decoding`] makes.
+    InvalidEncoding,
+    /// A value too large for its field's width, or outside the range the
+    /// production or service gives it.
+    OutOfRange,
+    /// More than the decoder takes: a count of items past its limit, or a tag
+    /// length past its sanity bound.
+    Overflow,
     /// A tag that doesn't fit where it stands: another number, class or form
-    /// than the member there needs, a closing tag that matches no opening
-    /// one, or a tag header that is itself malformed.
+    /// than the member there needs, a closing tag that closes no open frame,
+    /// a tag header that is itself malformed, or an opening tag nested
+    /// deeper than the decoder walks.
     InvalidTag,
     /// The data ends, or the enclosing frame closes, where a required member
     /// or a frame's closing tag is due: a member is missing.
@@ -161,18 +169,34 @@ pub enum DecodingKind {
     /// Octets are left after the last member of a value that must fill its
     /// input: arguments beyond those the production has.
     Trailing,
+    /// A well-formed encoding the decoder doesn't handle: a CharacterString
+    /// in a character set it can't convert (IBM/Microsoft DBCS, JIS X 0208
+    /// or UCS-4).
+    Unsupported,
 }
 
 impl DecodingKind {
     /// The Clause 18.9 Reject reason that names this fault in a confirmed
-    /// request: OTHER, INVALID_TAG, MISSING_REQUIRED_PARAMETER or
-    /// TOO_MANY_ARGUMENTS.
+    /// request:
+    ///
+    /// | Kind | Reject reason |
+    /// |---|---|
+    /// | [`InvalidEncoding`](Self::InvalidEncoding) | INVALID_DATA_ENCODING |
+    /// | [`OutOfRange`](Self::OutOfRange) | PARAMETER_OUT_OF_RANGE |
+    /// | [`Overflow`](Self::Overflow) | BUFFER_OVERFLOW |
+    /// | [`InvalidTag`](Self::InvalidTag) | INVALID_TAG |
+    /// | [`Missing`](Self::Missing) | MISSING_REQUIRED_PARAMETER |
+    /// | [`Trailing`](Self::Trailing) | TOO_MANY_ARGUMENTS |
+    /// | [`Unsupported`](Self::Unsupported) | OTHER |
     pub fn reject_reason(self) -> RejectReason {
         match self {
-            Self::Malformed => RejectReason::OTHER,
+            Self::InvalidEncoding => RejectReason::INVALID_DATA_ENCODING,
+            Self::OutOfRange => RejectReason::PARAMETER_OUT_OF_RANGE,
+            Self::Overflow => RejectReason::BUFFER_OVERFLOW,
             Self::InvalidTag => RejectReason::INVALID_TAG,
             Self::Missing => RejectReason::MISSING_REQUIRED_PARAMETER,
             Self::Trailing => RejectReason::TOO_MANY_ARGUMENTS,
+            Self::Unsupported => RejectReason::OTHER,
         }
     }
 }
@@ -281,10 +305,10 @@ impl Error {
         }
     }
 
-    /// Create a [`DecodingKind::Malformed`] decoding error at the given byte
-    /// offset.
+    /// Create a [`DecodingKind::InvalidEncoding`] decoding error at the given
+    /// byte offset: contents whose encoding isn't valid for their datatype.
     pub fn decoding(offset: usize, message: impl Into<String>) -> Self {
-        Self::decoding_kind(DecodingKind::Malformed, offset, message)
+        Self::decoding_kind(DecodingKind::InvalidEncoding, offset, message)
     }
 
     /// Create a decoding error of `kind` at the given byte offset.
@@ -314,13 +338,26 @@ impl Error {
         Self::decoding_kind(DecodingKind::Trailing, offset, message)
     }
 
+    /// Create a [`DecodingKind::OutOfRange`] decoding error: a value at
+    /// `offset` too large for its field, or outside its range.
+    pub fn out_of_range(offset: usize, message: impl Into<String>) -> Self {
+        Self::decoding_kind(DecodingKind::OutOfRange, offset, message)
+    }
+
+    /// Create a [`DecodingKind::Overflow`] decoding error: more items, or a
+    /// longer tag, than the decoder takes.
+    pub fn overflow(offset: usize, message: impl Into<String>) -> Self {
+        Self::decoding_kind(DecodingKind::Overflow, offset, message)
+    }
+
     /// The Reject reason a responder answers a confirmed request with when
-    /// this error refused it as a syntax fault (Clauses 18.9 and 20.1.8):
-    /// the reason itself for [`Error::Reject`], the kind's reason for
-    /// [`Error::Decoding`] (see [`DecodingKind::reject_reason`]), and
-    /// MISSING_REQUIRED_PARAMETER for [`Error::BufferTooShort`], a member cut
-    /// short because the data ran out before it was complete. `None` for any
-    /// other error, which isn't a syntax fault.
+    /// this error refused it while decoding its parameters (Clauses 18.9 and
+    /// 20.1.8): the reason itself for [`Error::Reject`], the kind's reason
+    /// for [`Error::Decoding`] (the table on [`DecodingKind::reject_reason`]),
+    /// and MISSING_REQUIRED_PARAMETER for [`Error::BufferTooShort`], a member
+    /// cut short because the data ran out before it was complete. `None` for
+    /// any other error, which no decoder of the request's parameters
+    /// reports.
     pub fn reject_reason(&self) -> Option<RejectReason> {
         match self {
             Self::Reject { reason } => Some(RejectReason::from_raw(*reason)),
@@ -450,7 +487,19 @@ mod tests {
     #[test]
     fn syntax_faults_name_their_reject_reasons() {
         for (error, reason) in [
-            (Error::decoding(1, "bad"), RejectReason::OTHER),
+            (
+                Error::decoding(1, "bad"),
+                RejectReason::INVALID_DATA_ENCODING,
+            ),
+            (
+                Error::out_of_range(1, "wide"),
+                RejectReason::PARAMETER_OUT_OF_RANGE,
+            ),
+            (Error::overflow(1, "many"), RejectReason::BUFFER_OVERFLOW),
+            (
+                Error::decoding_kind(DecodingKind::Unsupported, 1, "DBCS"),
+                RejectReason::OTHER,
+            ),
             (Error::invalid_tag(1, "tag"), RejectReason::INVALID_TAG),
             (
                 Error::missing(1, "gone"),

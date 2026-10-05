@@ -3,7 +3,8 @@
 use bacnet_encoding::constructed::encode_bacnet_property_value;
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
-use bacnet_types::error::Error;
+use bacnet_types::enums::RejectReason;
+use bacnet_types::error::{DecodingKind, Error};
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
@@ -25,6 +26,24 @@ pub use error::WritePropertyMultipleError;
 // ---------------------------------------------------------------------------
 // WritePropertyMultipleRequest
 // ---------------------------------------------------------------------------
+
+/// The [`DecodingKind`] that draws the Reject reason the cursor gave
+/// `failure` (see [`DecodingKind::reject_reason`]).
+fn failure_kind(failure: WritePropertyMultipleFailureKind) -> DecodingKind {
+    use RejectReason as R;
+    match failure {
+        WritePropertyMultipleFailureKind::PriorityOutOfRange => DecodingKind::OutOfRange,
+        WritePropertyMultipleFailureKind::Syntax(reason) => match reason {
+            R::INVALID_TAG => DecodingKind::InvalidTag,
+            R::MISSING_REQUIRED_PARAMETER => DecodingKind::Missing,
+            R::TOO_MANY_ARGUMENTS => DecodingKind::Trailing,
+            R::PARAMETER_OUT_OF_RANGE => DecodingKind::OutOfRange,
+            R::BUFFER_OVERFLOW => DecodingKind::Overflow,
+            R::OTHER => DecodingKind::Unsupported,
+            _ => DecodingKind::InvalidEncoding,
+        },
+    }
+}
 
 /// A single object + list of property values to write.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,13 +114,18 @@ impl WritePropertyMultipleRequest {
     }
 
     /// Decode the request from service-request octets; fails on malformed or truncated input.
+    ///
+    /// The error's [`DecodingKind`] is the one whose Reject reason the
+    /// cursor chose, so [`Error::into_request_reject`] gives a responder the
+    /// cursor's reason.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
         let mut cursor = WritePropertyMultipleCursor::new(data);
         let mut specs = Vec::new();
         let mut current = None;
 
         while let Some(event) = cursor.next_event().map_err(|error| {
-            Error::decoding(
+            Error::decoding_kind(
+                failure_kind(error.kind),
                 error.offset,
                 format!("WPM {:?}: {}", error.stage, error.message),
             )

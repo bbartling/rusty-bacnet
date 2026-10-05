@@ -105,10 +105,11 @@ fn get_enrollment_summary_request() {
             &cat(&[all, &[0x4E, 0x0A, 0x01, 0x4F]]),
             Malformed,
         ),
+        // Out of range (#1446), see reject_reason_tests.
         (
             "priority filter minimum above maximum",
             &cat(&[all, &[0x4E, 0x09, 0x05, 0x19, 0x01, 0x4F]]),
-            Kind::Reject(RejectReason::INVALID_DATA_ENCODING),
+            Malformed,
         ),
         (
             "notification class filter cut short",

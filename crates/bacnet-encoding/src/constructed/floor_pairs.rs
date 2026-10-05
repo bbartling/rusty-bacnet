@@ -69,7 +69,7 @@ pub(super) fn decode_floor_pairs(
             return Ok((pairs, expect_closing(data, offset, 0, names.frame)?));
         }
         if pairs.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 offset,
                 format!("{} exceeds the decoded item limit", names.value),
             ));

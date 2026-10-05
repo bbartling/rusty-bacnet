@@ -149,6 +149,7 @@ pub(super) fn decode(data: &[u8]) -> Result<AuditLogQueryRequest, Error> {
     let (wrapper_tag, wrapper_start) = tags::decode_tag(data, offset)?;
     if !wrapper_tag.is_opening_tag(1) {
         return Err(misplaced_tag(
+            data,
             &wrapper_tag,
             Some(1),
             offset,
@@ -194,6 +195,7 @@ fn decode_query_parameters(data: &[u8]) -> Result<BACnetAuditLogQueryParameters,
         (decode_by_source(content)?, end)
     } else {
         return Err(misplaced_tag(
+            data,
             &choice,
             None,
             0,
@@ -367,6 +369,7 @@ fn decode_address(
     let (opening, content_start) = tags::decode_tag(data, offset)?;
     if !opening.is_opening_tag(expected_tag) {
         return Err(misplaced_tag(
+            data,
             &opening,
             Some(expected_tag),
             offset,
@@ -383,7 +386,7 @@ fn decode_address(
     )?;
     let network_number = decode_canonical_unsigned(network_bytes, offset, field)?;
     let network_number = u16::try_from(network_number)
-        .map_err(|_| Error::decoding(offset, format!("{field} network-number exceeds u16")))?;
+        .map_err(|_| Error::out_of_range(offset, format!("{field} network-number exceeds u16")))?;
 
     let mac_offset = inner_offset;
     let (mac_address, inner_offset) = decode_app_primitive(

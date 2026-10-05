@@ -74,10 +74,11 @@ pub fn decode_property_access_result(
     } else if tag.is_opening_tag(5) {
         let (class, next) = decode_app_enumerated::<u32>(data, content, WHAT)?;
         let (code, next) = decode_app_enumerated::<u32>(data, next, WHAT)?;
-        let class = u16::try_from(class)
-            .map_err(|_| Error::decoding(content, format!("{WHAT}: error class exceeds u16")))?;
+        let class = u16::try_from(class).map_err(|_| {
+            Error::out_of_range(content, format!("{WHAT}: error class exceeds u16"))
+        })?;
         let code = u16::try_from(code)
-            .map_err(|_| Error::decoding(content, format!("{WHAT}: error code exceeds u16")))?;
+            .map_err(|_| Error::out_of_range(content, format!("{WHAT}: error code exceeds u16")))?;
         let end = expect_closing(data, next, 5, WHAT)?;
         let error = AccessResult::Error {
             class: ErrorClass::from_raw(class),

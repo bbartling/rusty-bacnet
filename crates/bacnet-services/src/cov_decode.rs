@@ -50,12 +50,13 @@ fn failure(error: Error, reject_reason: RejectReason) -> COVNotificationDecodeEr
     COVNotificationDecodeError::new(error, reject_reason)
 }
 
-/// A syntax fault with the reason the server's rule gives it (#1446): the
-/// data ending where a member or closing tag is due, or a member cut short,
-/// is MISSING_REQUIRED_PARAMETER; a tag that doesn't fit, INVALID_TAG;
-/// octets past the end, TOO_MANY_ARGUMENTS.
+/// A decoder's refusal with the reason the server gives the same fault in
+/// any confirmed request (#1446; the table on
+/// [`DecodingKind::reject_reason`](bacnet_types::error::DecodingKind::reject_reason)).
 fn syntax(error: Error) -> COVNotificationDecodeError {
-    let reject_reason = error.reject_reason().unwrap_or(RejectReason::OTHER);
+    let reject_reason = error
+        .reject_reason()
+        .unwrap_or(RejectReason::INVALID_DATA_ENCODING);
     failure(error, reject_reason)
 }
 
@@ -84,14 +85,9 @@ fn decode_required_u32(
     field: &str,
 ) -> COVDecodeResult<(u32, usize)> {
     let (content, end) = decode_required_context(data, offset, expected_tag, field)?;
-    let value = decode_canonical_unsigned(content, offset, field)
-        .map_err(|error| failure(error, RejectReason::INVALID_DATA_ENCODING))?;
-    let value = u32::try_from(value).map_err(|_| {
-        failure(
-            Error::decoding(offset, format!("{field} exceeds u32")),
-            RejectReason::PARAMETER_OUT_OF_RANGE,
-        )
-    })?;
+    let value = decode_canonical_unsigned(content, offset, field).map_err(syntax)?;
+    let value = u32::try_from(value)
+        .map_err(|_| syntax(Error::out_of_range(offset, format!("{field} exceeds u32"))))?;
     Ok((value, end))
 }
 
@@ -106,14 +102,12 @@ impl COVNotificationRequest {
         offset = end;
 
         let (content, end) = decode_required_context(data, offset, 1, "COVNotification device-id")?;
-        let initiating_device_identifier = ObjectIdentifier::decode(content)
-            .map_err(|error| failure(error, RejectReason::INVALID_DATA_ENCODING))?;
+        let initiating_device_identifier = ObjectIdentifier::decode(content).map_err(syntax)?;
         offset = end;
 
         let (content, end) =
             decode_required_context(data, offset, 2, "COVNotification monitored-id")?;
-        let monitored_object_identifier = ObjectIdentifier::decode(content)
-            .map_err(|error| failure(error, RejectReason::INVALID_DATA_ENCODING))?;
+        let monitored_object_identifier = ObjectIdentifier::decode(content).map_err(syntax)?;
         offset = end;
 
         let (time_remaining, end) =
@@ -129,6 +123,7 @@ impl COVNotificationRequest {
         let (tag, tag_end) = tags::decode_tag(data, offset).map_err(syntax)?;
         if !tag.is_opening_tag(4) {
             return Err(syntax(misplaced_tag(
+                data,
                 &tag,
                 Some(4),
                 offset,
@@ -151,10 +146,10 @@ impl COVNotificationRequest {
                 break;
             }
             if values.len() >= MAX_DECODED_ITEMS {
-                return Err(failure(
-                    Error::decoding(offset, "COVNotification values exceeds max"),
-                    RejectReason::BUFFER_OVERFLOW,
-                ));
+                return Err(syntax(Error::overflow(
+                    offset,
+                    "COVNotification values exceeds max",
+                )));
             }
             let (pv, new_offset) = decode_bacnet_property_value_in_list_detailed(data, offset, 4)
                 .map_err(|failed| {
@@ -170,13 +165,10 @@ impl COVNotificationRequest {
             offset = new_offset;
         }
         if values.is_empty() {
-            return Err(failure(
-                Error::decoding(
-                    offset,
-                    "COVNotification list-of-values must contain at least one value",
-                ),
-                RejectReason::PARAMETER_OUT_OF_RANGE,
-            ));
+            return Err(syntax(Error::out_of_range(
+                offset,
+                "COVNotification list-of-values must contain at least one value",
+            )));
         }
         expect_end(data, offset, offset, "COVNotification").map_err(syntax)?;
 

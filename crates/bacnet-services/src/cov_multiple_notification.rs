@@ -192,6 +192,7 @@ impl COVNotificationMultipleRequest {
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         if !tag.is_opening_tag(4) {
             return Err(misplaced_tag(
+                data,
                 &tag,
                 Some(4),
                 offset,
@@ -237,6 +238,7 @@ impl COVNotificationMultipleRequest {
             let (tag, tag_end) = tags::decode_tag(data, offset)?;
             if !tag.is_opening_tag(1) {
                 return Err(misplaced_tag(
+                    data,
                     &tag,
                     Some(1),
                     offset,
@@ -302,6 +304,7 @@ impl COVNotificationMultipleRequest {
                 let (tag, tag_end) = tags::decode_tag(data, offset)?;
                 if !tag.is_opening_tag(2) {
                     return Err(misplaced_tag(
+                        data,
                         &tag,
                         Some(2),
                         offset,

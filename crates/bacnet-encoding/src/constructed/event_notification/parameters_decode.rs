@@ -31,14 +31,17 @@ pub(super) fn decode_bounded(
         .ok_or_else(|| Error::decoding(offset, "NotificationParameters offset exceeds input"))?;
     // Peek the inner opening tag to determine the variant
     if offset >= data.len() {
-        return Err(Error::decoding(
+        return Err(Error::missing(
             offset,
             "NotificationParameters: empty payload",
         ));
     }
     let (inner_tag, inner_start) = tags::decode_tag(data, offset)?;
     if !inner_tag.is_opening {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            data,
+            &inner_tag,
+            None,
             offset,
             "NotificationParameters: expected opening tag for variant",
         ));
@@ -47,7 +50,7 @@ pub(super) fn decode_bounded(
     if variant_tag == 6 {
         let (_, next) = tags::extract_context_value(data, inner_start, 6)?;
         if next != data.len() {
-            return Err(Error::decoding(
+            return Err(Error::trailing(
                 next,
                 "ComplexEventType has trailing encoded fields",
             ));
@@ -71,7 +74,10 @@ pub(super) fn decode_bounded(
             // [0] new-state: BACnetPropertyStates — wrapped in opening/closing [0]
             let (t, p) = tags::decode_tag(data, pos)?;
             if !t.is_opening || t.number != 0 {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    data,
+                    &t,
+                    Some(0),
                     pos,
                     "ChangeOfState: expected opening tag [0] for new-state",
                 ));
@@ -81,7 +87,11 @@ pub(super) fn decode_bounded(
             // Skip closing tag [0]
             let (ct, cp) = tags::decode_tag(data, pos)?;
             if !ct.is_closing || ct.number != 0 {
-                return Err(Error::decoding(pos, "ChangeOfState: expected closing [0]"));
+                return Err(Error::decoding_kind(
+                    unclosed_kind(&ct),
+                    pos,
+                    "ChangeOfState: expected closing [0]",
+                ));
             }
             pos = cp;
             // [1] status-flags
@@ -101,7 +111,10 @@ pub(super) fn decode_bounded(
             // [0] new-value CHOICE — wrapped in opening/closing [0]
             let (t, p) = tags::decode_tag(data, pos)?;
             if !t.is_opening || t.number != 0 {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    data,
+                    &t,
+                    Some(0),
                     pos,
                     "ChangeOfValue: expected opening [0] for new-value",
                 ));
@@ -133,7 +146,10 @@ pub(super) fn decode_bounded(
                     ChangeOfValueChoice::ChangedValue(value)
                 }
                 _ => {
-                    return Err(Error::decoding(
+                    return Err(misplaced_tag(
+                        data,
+                        &choice_tag,
+                        None,
                         pos,
                         "ChangeOfValue: expected context choice [0] or [1]",
                     ));
@@ -142,7 +158,11 @@ pub(super) fn decode_bounded(
             // Closing tag [0]
             let (ct, cp) = tags::decode_tag(data, pos)?;
             if !ct.is_closing || ct.number != 0 {
-                return Err(Error::decoding(pos, "ChangeOfValue: expected closing [0]"));
+                return Err(Error::decoding_kind(
+                    unclosed_kind(&ct),
+                    pos,
+                    "ChangeOfValue: expected closing [0]",
+                ));
             }
             pos = cp;
             // [1] status-flags
@@ -198,7 +218,10 @@ pub(super) fn decode_bounded(
             // [0] buffer-property: BACnetDeviceObjectPropertyReference
             let (t, p) = tags::decode_tag(data, pos)?;
             if !t.is_opening || t.number != 0 {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    data,
+                    &t,
+                    Some(0),
                     pos,
                     "BufferReady: expected opening [0] for buffer-property",
                 ));
@@ -208,7 +231,11 @@ pub(super) fn decode_bounded(
             // Closing tag [0]
             let (ct, cp) = tags::decode_tag(data, pos)?;
             if !ct.is_closing || ct.number != 0 {
-                return Err(Error::decoding(pos, "BufferReady: expected closing [0]"));
+                return Err(Error::decoding_kind(
+                    unclosed_kind(&ct),
+                    pos,
+                    "BufferReady: expected closing [0]",
+                ));
             }
             pos = cp;
             // [1] previous-notification
@@ -283,7 +310,13 @@ pub(super) fn decode_bounded(
             // [0] command-value — opening/closing, raw
             let (t, p) = tags::decode_tag(data, pos)?;
             if !t.is_opening || t.number != 0 {
-                return Err(Error::decoding(pos, "CommandFailure: expected opening [0]"));
+                return Err(misplaced_tag(
+                    data,
+                    &t,
+                    Some(0),
+                    pos,
+                    "CommandFailure: expected opening [0]",
+                ));
             }
             let (command_value, after) = extract_raw_context(data, p, 0)?;
             pos = after;
@@ -293,7 +326,13 @@ pub(super) fn decode_bounded(
             // [2] feedback-value — opening/closing, raw
             let (t, p) = tags::decode_tag(data, pos)?;
             if !t.is_opening || t.number != 2 {
-                return Err(Error::decoding(pos, "CommandFailure: expected opening [2]"));
+                return Err(misplaced_tag(
+                    data,
+                    &t,
+                    Some(2),
+                    pos,
+                    "CommandFailure: expected opening [2]",
+                ));
             }
             let (feedback_value, after) = extract_raw_context(data, p, 2)?;
             finish_variant(
@@ -389,7 +428,13 @@ pub(super) fn decode_bounded(
             // [2] parameters — opening/closing, raw
             let (t, p) = tags::decode_tag(data, pos)?;
             if !t.is_opening_tag(2) {
-                return Err(Error::decoding(pos, "Extended: expected opening [2]"));
+                return Err(misplaced_tag(
+                    data,
+                    &t,
+                    Some(2),
+                    pos,
+                    "Extended: expected opening [2]",
+                ));
             }
             let (parameters, after) = extract_raw_context(data, p, 2)?;
             finish_variant(
@@ -583,7 +628,10 @@ pub(super) fn decode_bounded(
             // [2] property-values — opening/closing, raw
             let (t, p) = tags::decode_tag(data, pos)?;
             if !t.is_opening_tag(2) {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    data,
+                    &t,
+                    Some(2),
                     pos,
                     "ChangeOfReliability: expected opening [2]",
                 ));

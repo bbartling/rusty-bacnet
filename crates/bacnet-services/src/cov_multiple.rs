@@ -203,6 +203,7 @@ impl SubscribeCOVPropertyMultipleRequest {
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         if !tag.is_opening_tag(4) {
             return Err(misplaced_tag(
+                data,
                 &tag,
                 Some(4),
                 offset,
@@ -241,6 +242,7 @@ impl SubscribeCOVPropertyMultipleRequest {
             let (tag, tag_end) = tags::decode_tag(data, offset)?;
             if !tag.is_opening_tag(1) {
                 return Err(misplaced_tag(
+                    data,
                     &tag,
                     Some(1),
                     offset,
@@ -278,6 +280,7 @@ impl SubscribeCOVPropertyMultipleRequest {
                 // [0] monitoredProperty — opening tag 0
                 if !tag.is_opening_tag(0) {
                     return Err(misplaced_tag(
+                        data,
                         &tag,
                         Some(0),
                         offset,

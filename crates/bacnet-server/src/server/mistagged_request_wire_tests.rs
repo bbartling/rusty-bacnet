@@ -9,7 +9,7 @@
 //! and for one too many.
 use super::*;
 use crate::server::cov_wire_test_support::Harness;
-use crate::server::truncated_request_wire_tests::{answer_to, reject_for};
+use crate::server::truncated_request_wire_tests::{answer_to, reject_case, reject_for};
 use bacnet_objects::file::FileObject;
 use bacnet_types::enums::FileAccessMethod;
 
@@ -141,8 +141,8 @@ async fn mistagged_file_requests_are_rejected() {
             request(FILE_2, &[0x1E, 0x31, 0x00, 0x21, 0x02, 0x21, 0x42, 0x1F]),
         ),
     ];
-    for (service, _, body) in &cases {
-        reject_for(&mut h, *service, body, RejectReason::INVALID_TAG).await;
+    for (service, what, body) in &cases {
+        reject_case(&mut h, *service, what, body, RejectReason::INVALID_TAG).await;
     }
     assert_eq!(contents(&h).await, before);
     h.server.stop().await.unwrap();

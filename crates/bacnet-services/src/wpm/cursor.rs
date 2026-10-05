@@ -227,7 +227,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
             return Err(self.syntax_error(
                 start,
                 WritePropertyMultipleDecodeStage::ObjectIdentifier,
-                misplaced_kind(&tag, Some(0)).reject_reason(),
+                misplaced_kind(self.data, start, &tag, Some(0)).reject_reason(),
                 None,
                 "WPM object identifier must use primitive context tag 0",
             ));
@@ -290,7 +290,7 @@ impl<'a> WritePropertyMultipleCursor<'a> {
             return Err(self.syntax_error(
                 start,
                 WritePropertyMultipleDecodeStage::PropertyList,
-                misplaced_kind(&tag, Some(1)).reject_reason(),
+                misplaced_kind(self.data, start, &tag, Some(1)).reject_reason(),
                 None,
                 "WPM expected opening tag 1 for the property list",
             ));
@@ -339,10 +339,11 @@ impl<'a> WritePropertyMultipleCursor<'a> {
     }
 
     fn limit_error(&self, message: &str) -> WritePropertyMultipleCursorError {
+        // An item limit is a buffer capacity, as for every decoder (#1446).
         self.syntax_error(
             self.offset,
             WritePropertyMultipleDecodeStage::ItemLimit,
-            RejectReason::TOO_MANY_ARGUMENTS,
+            RejectReason::BUFFER_OVERFLOW,
             None,
             message,
         )
@@ -632,7 +633,7 @@ mod tests {
         let error = first_error(&data);
         assert_eq!(
             error.kind,
-            WritePropertyMultipleFailureKind::Syntax(RejectReason::TOO_MANY_ARGUMENTS)
+            WritePropertyMultipleFailureKind::Syntax(RejectReason::BUFFER_OVERFLOW)
         );
         assert_eq!(error.stage, WritePropertyMultipleDecodeStage::ItemLimit);
     }

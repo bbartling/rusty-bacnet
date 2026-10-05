@@ -6956,6 +6956,7 @@
     "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::unknown_object_is_semantic_result_with_actual_reference_before_any_commit",
     "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::semantic_index_value_name_and_write_arm_failures_keep_exact_reference",
     "crates/bacnet-server/src/handlers/tests/wpm_prefix_commit.rs::malformed_before_first_write_rejects_without_mutation",
+    "crates/bacnet-services/src/wpm/priority_tests.rs::whole_request_decode_keeps_the_cursor_reason",
     "crates/bacnet-services/src/wpm/priority_tests.rs::wpm_priority_range_failure_keeps_kind_stage_offset_and_indexed_reference",
     "crates/bacnet-services/src/wpm/priority_tests.rs::wpm_priority_malformed_unsigned_is_syntax_not_numeric_range",
     "crates/bacnet-server/src/server/requests/mutation_wpm_priority_tests.rs::wpm_priority_range_wire_error_is_semantic_before_and_after_prefix",
@@ -6967,7 +6968,7 @@
    "notes": [
     "Refs #741: syntactically valid Unsigned priorities outside 1..16 retain a typed PriorityOutOfRange cursor failure and return formal SERVICES / PARAMETER_OUT_OF_RANGE both before writes and after a committed prefix.",
     "Commandable AnalogOutput wire tests cover 0, 17 and 257, exact failed coordinates, untouched suffixes and policy reachability; malformed priority encodings retain initial Reject and post-prefix INVALID_TAG.",
-    "The public cursor error kind replaces its former reject-only field; whole-request decode still returns Error::Decoding. Bounded service-procedure correction (Refs #242), not full BACnet, object, PICS, or BIBB conformance.",
+    "The public cursor error kind replaces its former reject-only field; whole-request decode returns Error::Decoding whose kind draws the cursor's reason. Bounded service-procedure correction (Refs #242), not full BACnet or BIBB conformance.",
     "The post-success undecodable-coordinate policy uses DEVICE instance 4194303, PropertyIdentifier ALL, and no array index; only the instance is normative. Inbound empty requests and empty property lists retain the existing SimpleACK/no-op behavior; outbound typed requests reject them before encoding (#793).",
     "Existing ErrorPdu, TsmResponse, client, and Python shapes are unchanged: low-level ErrorPdu.error_data retains the complete formal body while high-level clients continue exposing class/code. Legacy generic WPM Error PDUs remain decodable.",
     "The unused public object write rollback API was removed before 1.0 (Refs #743). Observable File, NetworkPort, multistate and AccessDoor tests prove committed prefix state survives a later failure, including command priority and fallback ownership.",
@@ -7012,7 +7013,7 @@
     "crates/bacnet-server/src/server/mistagged_request_wire_tests.rs::mistagged_delete_object_is_rejected",
     "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::{inline_members_cut_short_are_rejected,create_object_and_list_requests_cut_short_are_rejected,members_cut_short_inside_a_frame_are_rejected}",
     "crates/bacnet-encoding/src/primitives/length_first_tests.rs::{fixed_size_application_values_check_their_length_first,timestamp_members_check_their_length_then_their_contents}",
-    "crates/bacnet-services/src/reject_reason_tests.rs::{read_property_faults_name_their_reasons,frames_and_choices_name_their_reasons,atomic_write_file_record_counts_name_their_reasons}",
+    "crates/bacnet-services/src/reject_reason_tests.rs::{read_property_faults_name_their_reasons,frames_and_choices_name_their_reasons,atomic_write_file_record_counts_name_their_reasons,ranges_lists_and_character_sets_name_their_reasons}",
     "crates/bacnet-types/src/error.rs::tests::syntax_faults_name_their_reject_reasons",
     "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::formal_members_cut_short_inside_their_frames_are_a_short_buffer",
     "crates/bacnet-encoding/src/constructed/tests/event_notification/cut_short.rs::members_cut_short_are_a_short_buffer",
@@ -7034,11 +7035,11 @@
     "The server rejects a ReadPropertyMultiple, SubscribeCOVProperty, SubscribeCOVPropertyMultiple or ConfirmedAuditNotification cut short as MISSING_REQUIRED_PARAMETER: its octets ran out before a member was complete.",
     "bacnet-services reads its service parameter members with the same public helpers (constructed::tagged), so one cut short outside a constructed frame is Error::BufferTooShort; AtomicReadFile-ACK's application BOOLEAN has no contents to cut.",
     "A ReadProperty, WriteProperty, ReadRange, SubscribeCOV, SubscribeCOVProperty, AcknowledgeAlarm, GetEventInformation, LifeSafetyOperation or AuditLogQuery cut short is rejected as MISSING_REQUIRED_PARAMETER.",
-    "DeleteObject and I-Have requests refuse an object identifier or object name under any tag but its application tag; the server answers such a DeleteObject with SERVICES / OTHER and deletes nothing.",
+    "DeleteObject and I-Have requests refuse an object identifier or object name under any tag but its application tag; the server rejects such a DeleteObject as INVALID_TAG and deletes nothing.",
     "A fixed-size application-tagged member (an object identifier, REAL, Double, Date or Time) has its length checked before its contents, as the context ones do, in the service readers and in decode_application_value alike.",
     "A DeviceCommunicationControl, ReinitializeDevice, ConfirmedTextMessage, GetEnrollmentSummary, DeleteObject, AtomicReadFile, AtomicWriteFile, CreateObject or list-service request cut short is rejected the same way.",
-    "A confirmed request the decoder refuses is rejected naming the fault: TOO_MANY_ARGUMENTS for octets after the last member, INVALID_TAG for a misfit tag, MISSING_REQUIRED_PARAMETER, else OTHER. Unconfirmed ones are dropped.",
-    "A GetAlarmSummary carrying any service-request octet draws SERVICES / OTHER. A Who-Is with only one limit, or with octets its limits leave unread, a limit under another tag included, is dropped."
+    "A confirmed request the decoder refuses is rejected with the reason Error::reject_reason names: TOO_MANY_ARGUMENTS, INVALID_TAG, MISSING_REQUIRED_PARAMETER, INVALID_DATA_ENCODING, PARAMETER_OUT_OF_RANGE, BUFFER_OVERFLOW or OTHER.",
+    "A GetAlarmSummary carrying any service-request octet is rejected as TOO_MANY_ARGUMENTS. A Who-Is with only one limit, or with octets its limits leave unread, a limit under another tag included, is dropped."
    ]
   },
   {

@@ -96,6 +96,7 @@ impl ForwardedEventNotification {
             let (opening, inner) = tags::decode_tag(data, offset)?;
             if !opening.is_opening_tag(12) {
                 return Err(misplaced_tag(
+                    data,
                     &opening,
                     Some(12),
                     offset,
@@ -104,7 +105,8 @@ impl ForwardedEventNotification {
             }
             let (values, end) = tags::extract_context_value(data, inner, 12)?;
             if values.is_empty() {
-                return Err(Error::decoding(
+                // The frame holds none of the CHOICE's alternatives.
+                return Err(Error::missing(
                     offset,
                     "EventNotification eventValues are empty",
                 ));

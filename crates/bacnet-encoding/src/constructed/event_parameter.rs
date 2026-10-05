@@ -321,7 +321,7 @@ pub fn decode_event_parameter(
             let mut list_of_values = Vec::new();
             while !next_is_closing(data, pos, 2)? {
                 if list_of_values.len() >= MAX_FRAMED_ITEMS {
-                    return Err(Error::decoding(
+                    return Err(Error::overflow(
                         pos,
                         "change-of-bitstring: list-of-bitstring-values exceeds limit",
                     ));
@@ -348,7 +348,7 @@ pub fn decode_event_parameter(
             let mut list_of_values = Vec::new();
             while !next_is_closing(data, pos, 1)? {
                 if list_of_values.len() >= MAX_FRAMED_ITEMS {
-                    return Err(Error::decoding(
+                    return Err(Error::overflow(
                         pos,
                         "change-of-state: list-of-values exceeds limit",
                     ));

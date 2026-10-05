@@ -63,11 +63,25 @@ pub(super) async fn reject_for(
     body: &[u8],
     reason: RejectReason,
 ) {
+    reject_case(h, service, "", body, reason).await;
+}
+
+/// [`reject_for`] for the case `what`, which a failure names.
+pub(super) async fn reject_case(
+    h: &mut Harness,
+    service: ConfirmedServiceChoice,
+    what: &str,
+    body: &[u8],
+    reason: RejectReason,
+) {
     match answer_to(h, service, body).await {
         Apdu::Reject(reject) => {
-            assert_eq!(reject.reject_reason, reason, "{service:?} {body:02X?}");
+            assert_eq!(
+                reject.reject_reason, reason,
+                "{service:?} {what} {body:02X?}"
+            );
         }
-        other => panic!("{service:?} {body:02X?} drew {other:?}"),
+        other => panic!("{service:?} {what} {body:02X?} drew {other:?}"),
     }
 }
 
@@ -130,8 +144,14 @@ async fn confirmed_audit_notification_cut_short_or_misshapen_is_rejected() {
     let device = [0x2E, 0x0C, 0x02, 0x00, 0x00, 0x01, 0x2F];
     let three_octets = [&[0x0E][..], &device, &[0x3B, 0x00, 0x80, 0x00, 0x0F]].concat();
     let cut = [&[0x0E][..], &device, &[0x3C, 0x00, 0x80]].concat();
-    // A wrong length is a syntax fault the Reject reasons don't name.
-    reject_for(&mut h, service, &three_octets, RejectReason::OTHER).await;
+    // A wrong length is an encoding not valid for the datatype.
+    reject_for(
+        &mut h,
+        service,
+        &three_octets,
+        RejectReason::INVALID_DATA_ENCODING,
+    )
+    .await;
     cut_short(&mut h, service, &cut).await;
     h.server.stop().await.unwrap();
 }
@@ -149,7 +169,19 @@ fn request_syntax_faults_draw_the_reject_naming_them_for_every_service() {
     for raw in 0..=u8::MAX {
         let service = ConfirmedServiceChoice::from_raw(raw);
         for (error, reason) in [
-            (Error::decoding(3, "malformed"), RejectReason::OTHER),
+            (
+                Error::decoding(3, "malformed"),
+                RejectReason::INVALID_DATA_ENCODING,
+            ),
+            (
+                Error::out_of_range(3, "wide"),
+                RejectReason::PARAMETER_OUT_OF_RANGE,
+            ),
+            (Error::overflow(3, "many"), RejectReason::BUFFER_OVERFLOW),
+            (
+                Error::decoding_kind(DecodingKind::Unsupported, 3, "DBCS"),
+                RejectReason::OTHER,
+            ),
             (Error::invalid_tag(3, "tag"), RejectReason::INVALID_TAG),
             (
                 Error::missing(3, "missing"),
@@ -177,7 +209,6 @@ fn request_syntax_faults_draw_the_reject_naming_them_for_every_service() {
     let refusal = Error::OutOfRange("too large".into()).into_request_reject();
     let service = ConfirmedServiceChoice::READ_PROPERTY;
     assert!(matches!(reply(service, &refusal), Apdu::Error(_)));
-    assert_eq!(DecodingKind::Malformed.reject_reason(), RejectReason::OTHER);
 }
 
 /// A `[0]` Unsigned announcing two contents octets and holding one.

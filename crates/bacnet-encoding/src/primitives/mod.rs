@@ -3,7 +3,7 @@
 //! Provides both raw value codecs (no tag header) and application/context-tagged
 //! convenience functions for all BACnet primitive types.
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodingKind, Error};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, PropertyValue, Time};
 use bytes::{BufMut, BytesMut};
 
@@ -83,7 +83,7 @@ pub fn decode_unsigned(data: &[u8]) -> Result<u64, Error> {
 pub fn decode_unsigned_u8(data: &[u8]) -> Result<u8, Error> {
     let value = decode_unsigned(data)?;
     u8::try_from(value)
-        .map_err(|_| Error::decoding(0, format!("unsigned value {value} exceeds u8")))
+        .map_err(|_| Error::out_of_range(0, format!("unsigned value {value} exceeds u8")))
 }
 
 /// Decode an unsigned integer that fits in a `u16` from 1-8 big-endian bytes.
@@ -91,7 +91,7 @@ pub fn decode_unsigned_u8(data: &[u8]) -> Result<u8, Error> {
 pub fn decode_unsigned_u16(data: &[u8]) -> Result<u16, Error> {
     let value = decode_unsigned(data)?;
     u16::try_from(value)
-        .map_err(|_| Error::decoding(0, format!("unsigned value {value} exceeds u16")))
+        .map_err(|_| Error::out_of_range(0, format!("unsigned value {value} exceeds u16")))
 }
 
 /// Decode an unsigned integer that fits in a `u32` from 1-8 big-endian bytes.
@@ -99,7 +99,7 @@ pub fn decode_unsigned_u16(data: &[u8]) -> Result<u16, Error> {
 pub fn decode_unsigned_u32(data: &[u8]) -> Result<u32, Error> {
     let value = decode_unsigned(data)?;
     u32::try_from(value)
-        .map_err(|_| Error::decoding(0, format!("unsigned value {value} exceeds u32")))
+        .map_err(|_| Error::out_of_range(0, format!("unsigned value {value} exceeds u32")))
 }
 
 // --- Signed Integer ---
@@ -254,10 +254,14 @@ pub fn decode_character_string(data: &[u8]) -> Result<String, Error> {
             Ok(s)
         }
         charset::ISO_8859_1 => Ok(payload.iter().map(|&b| b as char).collect()),
-        charset::IBM_MICROSOFT_DBCS | charset::JIS_X_0208 | charset::UCS4 => Err(Error::decoding(
-            0,
-            format!("unsupported charset: {charset_id}"),
-        )),
+        // Character sets the standard defines but this decoder doesn't convert.
+        charset::IBM_MICROSOFT_DBCS | charset::JIS_X_0208 | charset::UCS4 => {
+            Err(Error::decoding_kind(
+                DecodingKind::Unsupported,
+                0,
+                format!("unsupported charset: {charset_id}"),
+            ))
+        }
         other => Err(Error::decoding(0, format!("unknown charset: {other}"))),
     }
 }
@@ -587,7 +591,7 @@ pub fn decode_application_value(
         }
         app_tag::ENUMERATED => {
             let value = u32::try_from(decode_unsigned(content)?)
-                .map_err(|_| Error::decoding(content_start, "ENUMERATED exceeds u32"))?;
+                .map_err(|_| Error::out_of_range(content_start, "ENUMERATED exceeds u32"))?;
             PropertyValue::Enumerated(value)
         }
         app_tag::DATE => PropertyValue::Date(Date::decode(content)?),
@@ -596,7 +600,7 @@ pub fn decode_application_value(
             PropertyValue::ObjectIdentifier(ObjectIdentifier::decode(content)?)
         }
         other => {
-            return Err(Error::decoding(
+            return Err(Error::invalid_tag(
                 offset,
                 format!("unknown application tag number {other}"),
             ));
@@ -616,7 +620,10 @@ pub fn decode_application_value(
 pub fn validate_application_value(data: &[u8], offset: usize) -> Result<usize, Error> {
     let (tag, content_start) = tags::decode_tag(data, offset)?;
     if tag.class != TagClass::Application || tag.is_opening || tag.is_closing {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            data,
+            &tag,
+            None,
             offset,
             "expected an application-tagged value",
         ));
@@ -784,7 +791,7 @@ pub fn decode_timestamp_choice(
         let (octets, end) = tagged::decode_ctx_primitive(data, offset, 1, WHAT)?;
         let n = decode_unsigned(octets)?;
         if n > MAX_TIMESTAMP_SEQUENCE_NUMBER {
-            return Err(Error::decoding(
+            return Err(Error::out_of_range(
                 inner_pos,
                 format!("BACnetTimeStamp sequence-number {n} exceeds 65535"),
             ));
@@ -806,6 +813,7 @@ pub fn decode_timestamp_choice(
         return Ok((date_time, end));
     }
     Err(misplaced_tag(
+        data,
         &inner_tag,
         None,
         offset,
@@ -841,6 +849,7 @@ pub fn decode_timestamp(
     let (tag, pos) = tags::decode_tag(data, offset)?;
     if !tag.is_opening_tag(tag_number) {
         return Err(misplaced_tag(
+            data,
             &tag,
             Some(tag_number),
             offset,

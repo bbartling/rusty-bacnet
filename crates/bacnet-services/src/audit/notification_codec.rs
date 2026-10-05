@@ -30,6 +30,7 @@ pub(super) fn decode(data: &[u8]) -> Result<AuditNotificationRequest, Error> {
     let (outer, body_start) = tags::decode_tag(data, 0)?;
     if !outer.is_opening_tag(NOTIFICATIONS_TAG) {
         return Err(misplaced_tag(
+            data,
             &outer,
             Some(NOTIFICATIONS_TAG),
             0,
@@ -39,7 +40,9 @@ pub(super) fn decode(data: &[u8]) -> Result<AuditNotificationRequest, Error> {
     let (body, end) = tags::extract_context_value(data, body_start, NOTIFICATIONS_TAG)?;
     expect_end(data, end, end, "AuditNotification")?;
     if body.is_empty() {
-        return Err(Error::decoding(
+        // An empty list is outside the list's size range, as an empty COV
+        // list of values is (#1446).
+        return Err(Error::out_of_range(
             body_start,
             "AuditNotification notifications must not be empty",
         ));
@@ -49,7 +52,7 @@ pub(super) fn decode(data: &[u8]) -> Result<AuditNotificationRequest, Error> {
     let mut offset = 0;
     while offset < body.len() {
         if notifications.len() >= MAX_DECODED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 body_start + offset,
                 "AuditNotification notifications count exceeds limit",
             ));

@@ -292,7 +292,7 @@ pub fn decode_tag(data: &[u8], offset: usize) -> Result<(Tag, usize), Error> {
     };
 
     if length > MAX_TAG_LENGTH {
-        return Err(Error::decoding(
+        return Err(Error::overflow(
             offset,
             format!("tag length ({length}) exceeds sanity limit ({MAX_TAG_LENGTH})"),
         ));

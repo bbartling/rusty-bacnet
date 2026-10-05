@@ -122,7 +122,7 @@ impl VTCloseRequest {
         let mut ids = Vec::new();
         while offset < data.len() {
             if ids.len() >= MAX_DECODED_ITEMS {
-                return Err(Error::decoding(offset, "VTClose too many session IDs"));
+                return Err(Error::overflow(offset, "VTClose too many session IDs"));
             }
             let (id, next) = decode_app_unsigned::<u8>(data, offset, "VTClose session-identifier")?;
             ids.push(id);

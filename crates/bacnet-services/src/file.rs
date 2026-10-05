@@ -225,7 +225,7 @@ impl AtomicWriteFileRequest {
                 decode_app_unsigned::<u32>(content, inner, "AtomicWriteFile record record-count")?;
             inner = new_inner;
             if record_count as usize > MAX_DECODED_ITEMS {
-                return Err(Error::decoding(0, "record count exceeds maximum"));
+                return Err(Error::overflow(0, "record count exceeds maximum"));
             }
             let mut file_record_data = Vec::new();
             for i in 0..record_count {
@@ -378,7 +378,7 @@ impl AtomicReadFileAck {
             )?;
             inner = new_inner;
             if returned_record_count as usize > MAX_DECODED_ITEMS {
-                return Err(Error::decoding(0, "record count exceeds maximum"));
+                return Err(Error::overflow(0, "record count exceeds maximum"));
             }
             let mut file_record_data = Vec::new();
             for i in 0..returned_record_count {

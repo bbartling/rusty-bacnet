@@ -3,7 +3,7 @@
 
 use bacnet_types::constructed::BACnetPropertyValue;
 use bacnet_types::enums::{PropertyIdentifier, RejectReason};
-use bacnet_types::error::{DecodingKind, Error};
+use bacnet_types::error::Error;
 
 use super::{extract_property_value, matches_property_boundary, PropertyValueBoundary};
 use crate::constructed::tagged::misplaced_kind;
@@ -73,36 +73,19 @@ impl PropertyValueDecodeError {
     }
 }
 
-// The reasons follow the rule the server applies to every request (#1446):
-// the data ending where a member is due, or a member cut short, is
-// MISSING_REQUIRED_PARAMETER; a tag that doesn't fit, INVALID_TAG; octets
-// past the end, TOO_MANY_ARGUMENTS. Contents that don't fit their datatype
-// keep the more specific INVALID_DATA_ENCODING this decoder can name.
-
-/// The reason for an error reading a tag header: the data ended
-/// (MISSING_REQUIRED_PARAMETER) or the header is malformed (INVALID_TAG).
-fn tag_failure_reason(error: &Error) -> RejectReason {
-    error.reject_reason().unwrap_or(RejectReason::INVALID_TAG)
+/// The Reject reason a decoder's refusal draws, the one the server gives
+/// every confirmed request (#1446; the table on
+/// [`DecodingKind::reject_reason`](bacnet_types::error::DecodingKind::reject_reason)).
+fn reason_of(error: &Error) -> RejectReason {
+    error
+        .reject_reason()
+        .unwrap_or(RejectReason::INVALID_DATA_ENCODING)
 }
 
 fn error_offset(error: &Error, fallback: usize) -> usize {
     match error {
         Error::Decoding { offset, .. } => *offset,
         _ => fallback,
-    }
-}
-
-/// The reason for an error extracting the value: the kind's own reason,
-/// except that a malformed value is INVALID_DATA_ENCODING.
-fn value_failure_reason(error: &Error) -> RejectReason {
-    match error {
-        Error::Decoding {
-            kind: DecodingKind::Malformed,
-            ..
-        } => RejectReason::INVALID_DATA_ENCODING,
-        _ => error
-            .reject_reason()
-            .unwrap_or(RejectReason::INVALID_DATA_ENCODING),
     }
 }
 
@@ -169,7 +152,7 @@ fn decode_with_boundaries_detailed(
 ) -> Result<(BACnetPropertyValue, usize), PropertyValueDecodeError> {
     let start = offset;
     let (tag, content_start) = tags::decode_tag(data, offset).map_err(|error| {
-        let reason = tag_failure_reason(&error);
+        let reason = reason_of(&error);
         PropertyValueDecodeError::syntax(
             error,
             offset,
@@ -183,13 +166,13 @@ fn decode_with_boundaries_detailed(
     if !tag.is_context(0) {
         return Err(PropertyValueDecodeError::syntax(
             Error::decoding_kind(
-                misplaced_kind(&tag, Some(0)),
+                misplaced_kind(data, offset, &tag, Some(0)),
                 offset,
                 "BACnetPropertyValue property-id expected context tag 0",
             ),
             offset,
             PropertyValueDecodeStage::PropertyIdentifier,
-            misplaced_kind(&tag, Some(0)).reject_reason(),
+            misplaced_kind(data, offset, &tag, Some(0)).reject_reason(),
             None,
             None,
             false,
@@ -236,7 +219,7 @@ fn decode_with_boundaries_detailed(
         })?;
     let prop_id = u32::try_from(prop_id).map_err(|_| {
         PropertyValueDecodeError::syntax(
-            Error::decoding(start, "BACnetPropertyValue property-id exceeds u32"),
+            Error::out_of_range(start, "BACnetPropertyValue property-id exceeds u32"),
             start,
             PropertyValueDecodeStage::PropertyIdentifier,
             RejectReason::PARAMETER_OUT_OF_RANGE,
@@ -251,7 +234,7 @@ fn decode_with_boundaries_detailed(
     let mut array_index = None;
     if offset < data.len() {
         let (tag, content_start) = tags::decode_tag(data, offset).map_err(|error| {
-            let reason = tag_failure_reason(&error);
+            let reason = reason_of(&error);
             PropertyValueDecodeError::syntax(
                 error,
                 offset,
@@ -304,7 +287,7 @@ fn decode_with_boundaries_detailed(
                 })?;
             let value = u32::try_from(value).map_err(|_| {
                 PropertyValueDecodeError::syntax(
-                    Error::decoding(offset, "BACnetPropertyValue array-index exceeds u32"),
+                    Error::out_of_range(offset, "BACnetPropertyValue array-index exceeds u32"),
                     offset,
                     PropertyValueDecodeStage::ArrayIndex,
                     RejectReason::PARAMETER_OUT_OF_RANGE,
@@ -319,7 +302,7 @@ fn decode_with_boundaries_detailed(
     }
 
     let (tag, tag_end) = tags::decode_tag(data, offset).map_err(|error| {
-        let reason = tag_failure_reason(&error);
+        let reason = reason_of(&error);
         PropertyValueDecodeError::syntax(
             error,
             offset,
@@ -333,13 +316,13 @@ fn decode_with_boundaries_detailed(
     if !tag.is_opening_tag(2) {
         return Err(PropertyValueDecodeError::syntax(
             Error::decoding_kind(
-                misplaced_kind(&tag, Some(2)),
+                misplaced_kind(data, offset, &tag, Some(2)),
                 offset,
                 "BACnetPropertyValue expected opening tag 2",
             ),
             offset,
             PropertyValueDecodeStage::Value,
-            misplaced_kind(&tag, Some(2)).reject_reason(),
+            misplaced_kind(data, offset, &tag, Some(2)).reject_reason(),
             Some(property_identifier),
             array_index,
             true,
@@ -348,7 +331,7 @@ fn decode_with_boundaries_detailed(
     let (value_bytes, offset) =
         extract_property_value(data, tag_end, 2, property_identifier, boundaries).map_err(
             |error| {
-                let reject_reason = value_failure_reason(&error);
+                let reject_reason = reason_of(&error);
                 let offset = error_offset(&error, tag_end);
                 PropertyValueDecodeError::syntax(
                     error,
@@ -366,7 +349,7 @@ fn decode_with_boundaries_detailed(
     let mut priority = None;
     if offset < data.len() {
         let (tag, new_pos) = tags::decode_tag(data, offset).map_err(|error| {
-            let reason = tag_failure_reason(&error);
+            let reason = reason_of(&error);
             PropertyValueDecodeError::syntax(
                 error,
                 offset,
@@ -413,7 +396,7 @@ fn decode_with_boundaries_detailed(
             })?;
             if !(1..=16).contains(&prio) {
                 return Err(PropertyValueDecodeError {
-                    error: Error::decoding(
+                    error: Error::out_of_range(
                         new_pos,
                         format!("BACnetPropertyValue priority {prio} out of range 1-16"),
                     ),
@@ -483,7 +466,7 @@ fn boundary_error(
             Err(error) => error,
         }
     };
-    let reject_reason = tag_failure_reason(&error);
+    let reject_reason = reason_of(&error);
     PropertyValueDecodeError::syntax(
         error,
         offset,

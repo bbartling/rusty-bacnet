@@ -57,7 +57,7 @@ impl GetAlarmSummaryAck {
 
         while offset < data.len() {
             if entries.len() >= MAX_DECODED_ITEMS {
-                return Err(Error::decoding(offset, "AlarmSummaryAck too many entries"));
+                return Err(Error::overflow(offset, "AlarmSummaryAck too many entries"));
             }
 
             // objectIdentifier, alarmState, acknowledgedTransitions (all

@@ -83,7 +83,7 @@ pub(super) fn extract_raw_context(
         let (tag, content_start) = tags::decode_tag(data, pos)?;
         if tag.is_opening {
             if depth == stack.len() {
-                return Err(Error::decoding(
+                return Err(Error::invalid_tag(
                     pos,
                     format!(
                         "context tag nesting depth exceeds maximum ({})",
@@ -96,7 +96,7 @@ pub(super) fn extract_raw_context(
             pos = content_start;
         } else if tag.is_closing {
             if tag.number != stack[depth - 1] {
-                return Err(Error::decoding(
+                return Err(Error::invalid_tag(
                     pos,
                     format!(
                         "closing tag {} does not match opening tag {}",
@@ -122,7 +122,7 @@ pub(super) fn extract_raw_context(
         }
     }
 
-    Err(Error::decoding(
+    Err(Error::missing(
         start,
         format!("extract_raw_context: missing closing tag [{tag_number}]"),
     ))

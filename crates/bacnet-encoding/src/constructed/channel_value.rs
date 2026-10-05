@@ -48,7 +48,7 @@ pub fn channel_value_end(data: &[u8], offset: usize) -> Result<usize, Error> {
         return Err(Error::decoding(offset, format!("lighting command {field}")));
     }
     if let Some(priority) = command.priority.filter(|p| !(1..=16).contains(p)) {
-        return Err(Error::decoding(
+        return Err(Error::out_of_range(
             offset,
             format!("lighting command priority {priority} out of range 1-16"),
         ));

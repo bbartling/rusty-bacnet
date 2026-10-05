@@ -89,6 +89,7 @@ impl CreateObjectRequest {
             // stands there.
             let (found, _) = tags::decode_tag(data, offset)?;
             return Err(misplaced_tag(
+                data,
                 &found,
                 None,
                 offset,
@@ -111,7 +112,7 @@ impl CreateObjectRequest {
                     break;
                 }
                 if values.len() >= MAX_DECODED_ITEMS {
-                    return Err(Error::decoding(offset, "CreateObject values exceeds max"));
+                    return Err(Error::overflow(offset, "CreateObject values exceeds max"));
                 }
                 let (pv, new_offset) = decode_bacnet_property_value_in_list(data, offset, 1)?;
                 values.push(pv);

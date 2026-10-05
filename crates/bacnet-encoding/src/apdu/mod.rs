@@ -723,7 +723,7 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
     }
     let error_class_raw = primitives::decode_unsigned(&data[tag_end..class_end])?;
     let error_class_raw = u16::try_from(error_class_raw).map_err(|_| {
-        Error::decoding(
+        Error::out_of_range(
             tag_end,
             format!("ErrorPDU error class {error_class_raw} exceeds u16"),
         )
@@ -745,7 +745,7 @@ fn decode_error(data: Bytes) -> Result<ErrorPdu, Error> {
     }
     let error_code_raw = primitives::decode_unsigned(&data[tag_end..code_end])?;
     let error_code_raw = u16::try_from(error_code_raw).map_err(|_| {
-        Error::decoding(
+        Error::out_of_range(
             tag_end,
             format!("ErrorPDU error code {error_code_raw} exceeds u16"),
         )

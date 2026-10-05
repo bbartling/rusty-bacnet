@@ -98,16 +98,25 @@ Error PDU, and each body has its own type for encoding and decoding:
 `private_transfer::PrivateTransferError` and `virtual_terminal::VTCloseError`.
 
 `Error::Decoding { offset, kind, message }` carries the `DecodingKind` of the
-fault a decoder found: `Malformed`, `InvalidTag` (a tag that doesn't fit),
-`Missing` (the data or the frame ends where a member is due) or `Trailing`
-(octets after the last member). Contents cut short are
-`Error::BufferTooShort`. `Error::reject_reason()` names the Reject reason each
-draws when it refuses a confirmed request: OTHER, INVALID_TAG,
-MISSING_REQUIRED_PARAMETER, TOO_MANY_ARGUMENTS, and MISSING_REQUIRED_PARAMETER
-for a short buffer. `Error::into_request_reject()` turns a request's decode
-error into that `Error::Reject`; the bundled server answers every confirmed
-request it can't decode that way, and keeps the Error PDU for a decoding
-error met once a service runs (#1446).
+fault a decoder found, and `Error::reject_reason()` names the Reject reason
+it draws when it refuses a confirmed request (#1446):
+
+| Fault | Reported as | Reject reason |
+|---|---|---|
+| Encoding not valid for its datatype (wrong length, empty Unsigned, unknown character set) | `Decoding`, `InvalidEncoding` | INVALID_DATA_ENCODING |
+| Value too large for its field, or outside its range | `Decoding`, `OutOfRange` | PARAMETER_OUT_OF_RANGE |
+| More items than the decoder takes, or a tag length past its bound | `Decoding`, `Overflow` | BUFFER_OVERFLOW |
+| A tag that doesn't fit, a closing tag closing nothing, nesting too deep | `Decoding`, `InvalidTag` | INVALID_TAG |
+| The data or the frame ends where a member is due | `Decoding`, `Missing` | MISSING_REQUIRED_PARAMETER |
+| A member's contents cut short | `BufferTooShort` | MISSING_REQUIRED_PARAMETER |
+| Octets after the last member | `Decoding`, `Trailing` | TOO_MANY_ARGUMENTS |
+| A character set the decoder doesn't convert | `Decoding`, `Unsupported` | OTHER |
+
+`Error::into_request_reject()` turns a request's decode error into that
+`Error::Reject`. The bundled server answers every confirmed request it can't
+decode that way. A decoder that names a fault the table doesn't, such as
+GetEnrollmentSummary's undefined enumerations, returns its `Error::Reject`
+itself. A decoding error met once a service runs keeps its Error PDU.
 
 `Error::UnsupportedTransport { required, actual }` reports an operation the
 endpoint's data link cannot carry, such as a BBMD request through an

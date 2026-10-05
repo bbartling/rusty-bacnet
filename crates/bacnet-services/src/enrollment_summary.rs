@@ -215,9 +215,10 @@ impl GetEnrollmentSummaryRequest {
                 decode_ctx_unsigned::<u8>(content, end, 1, "EnrollmentSummary maxPriority")?;
             expect_end(content, end, offset, what)?;
             if min_priority > max_priority {
-                return Err(Error::Reject {
-                    reason: bacnet_types::enums::RejectReason::INVALID_DATA_ENCODING.to_raw(),
-                });
+                return Err(Error::out_of_range(
+                    offset,
+                    "EnrollmentSummary priorityFilter minimum exceeds maximum",
+                ));
             }
             priority_filter = Some(PriorityFilter {
                 min_priority,
@@ -252,9 +253,10 @@ fn decode_closed_enumeration(data: &[u8], maximum: u32) -> Result<u32, Error> {
     let value = match data {
         [value] => u32::from(*value),
         [] | [0, ..] => {
-            return Err(Error::Reject {
-                reason: bacnet_types::enums::RejectReason::INVALID_DATA_ENCODING.to_raw(),
-            })
+            return Err(Error::decoding(
+                0,
+                "EnrollmentSummary eventStateFilter is not a canonical ENUMERATED",
+            ))
         }
         _ => {
             return Err(Error::Reject {
@@ -317,7 +319,7 @@ impl GetEnrollmentSummaryAck {
 
         while offset < data.len() {
             if entries.len() >= MAX_DECODED_ITEMS {
-                return Err(Error::decoding(
+                return Err(Error::overflow(
                     offset,
                     "EnrollmentSummaryAck too many entries",
                 ));

@@ -85,3 +85,31 @@ fn wpm_priority_malformed_unsigned_is_syntax_not_numeric_range() {
         );
     }
 }
+
+#[test]
+fn whole_request_decode_keeps_the_cursor_reason() {
+    // A cut-short priority, a priority of no octets, and one of 17: the
+    // decode error draws the Reject reason the cursor chose (#1446).
+    for (priority, reason) in [
+        (&[0x3a, 1][..], RejectReason::MISSING_REQUIRED_PARAMETER),
+        (&[0x38], RejectReason::INVALID_DATA_ENCODING),
+        (&[0x39, 17], RejectReason::PARAMETER_OUT_OF_RANGE),
+    ] {
+        let (bytes, _) = request(priority);
+        let error = WritePropertyMultipleRequest::decode(&bytes).unwrap_err();
+        assert_eq!(error.reject_reason(), Some(reason), "{priority:02X?}");
+    }
+    // Every reason a cursor gives maps back to itself.
+    for reason in [
+        RejectReason::INVALID_TAG,
+        RejectReason::MISSING_REQUIRED_PARAMETER,
+        RejectReason::TOO_MANY_ARGUMENTS,
+        RejectReason::PARAMETER_OUT_OF_RANGE,
+        RejectReason::BUFFER_OVERFLOW,
+        RejectReason::INVALID_DATA_ENCODING,
+        RejectReason::OTHER,
+    ] {
+        let kind = super::failure_kind(WritePropertyMultipleFailureKind::Syntax(reason));
+        assert_eq!(kind.reject_reason(), reason);
+    }
+}

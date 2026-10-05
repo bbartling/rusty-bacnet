@@ -10,6 +10,7 @@ fn decode_date_time(
     let (opening, mut pos) = tags::decode_tag(data, offset)?;
     if !opening.is_opening_tag(context_tag) {
         return Err(misplaced_tag(
+            data,
             &opening,
             Some(context_tag),
             offset,
@@ -19,7 +20,13 @@ fn decode_date_time(
 
     let (date_tag, content_start) = tags::decode_tag(data, pos)?;
     if date_tag.class != tags::TagClass::Application || date_tag.number != tags::app_tag::DATE {
-        return Err(Error::decoding(pos, format!("{field} expected Date")));
+        return Err(misplaced_tag(
+            data,
+            &date_tag,
+            None,
+            pos,
+            format!("{field} expected Date"),
+        ));
     }
     if date_tag.length != 4 {
         return Err(Error::decoding(
@@ -38,7 +45,13 @@ fn decode_date_time(
 
     let (time_tag, content_start) = tags::decode_tag(data, pos)?;
     if time_tag.class != tags::TagClass::Application || time_tag.number != tags::app_tag::TIME {
-        return Err(Error::decoding(pos, format!("{field} expected Time")));
+        return Err(misplaced_tag(
+            data,
+            &time_tag,
+            None,
+            pos,
+            format!("{field} expected Time"),
+        ));
     }
     if time_tag.length != 4 {
         return Err(Error::decoding(
@@ -116,7 +129,7 @@ pub(super) fn decode_change_of_timer(
             None
         };
     if pos != variant_body_end {
-        return Err(Error::decoding(
+        return Err(Error::trailing(
             pos,
             "ChangeOfTimer unexpected fields before closing tag 22",
         ));
@@ -140,7 +153,10 @@ pub(super) fn decode_change_of_discrete_value(
     // [0] new-value — opening/closing, raw
     let (t, p) = tags::decode_tag(data, pos)?;
     if !t.is_opening || t.number != 0 {
-        return Err(Error::decoding(
+        return Err(misplaced_tag(
+            data,
+            &t,
+            Some(0),
             pos,
             "ChangeOfDiscreteValue: expected opening [0]",
         ));
@@ -151,7 +167,7 @@ pub(super) fn decode_change_of_discrete_value(
     let (status_flags, pos) =
         decode_context_status_flags(data, pos, 1, "ChangeOfDiscreteValue status-flags")?;
     if pos != variant_body_end {
-        return Err(Error::decoding(
+        return Err(Error::trailing(
             pos,
             "ChangeOfDiscreteValue unexpected fields before closing tag 21",
         ));

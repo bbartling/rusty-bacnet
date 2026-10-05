@@ -52,7 +52,7 @@ impl VTCloseError {
             let mut position = 0;
             while position < frame.len() {
                 if sessions.len() >= MAX_DECODED_ITEMS {
-                    return Err(Error::decoding(position, "VTClose-Error too many sessions"));
+                    return Err(Error::overflow(position, "VTClose-Error too many sessions"));
                 }
                 let (session, next) =
                     decode_app_unsigned::<u8>(frame, position, "VTClose-Error session-identifier")?;

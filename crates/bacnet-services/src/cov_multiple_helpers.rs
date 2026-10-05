@@ -36,7 +36,7 @@ pub(super) fn decode_required_bool(
     })?;
     if !tag.is_context(context_tag) {
         return Err(reject(
-            misplaced_kind(&tag, Some(context_tag)).reject_reason(),
+            misplaced_kind(data, offset, &tag, Some(context_tag)).reject_reason(),
             "required Boolean is missing or under another tag",
         ));
     }

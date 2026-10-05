@@ -84,7 +84,7 @@ pub fn decode_read_access_specification(
             ));
         }
         if list_of_property_references.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::decoding(
+            return Err(Error::overflow(
                 offset,
                 format!("{WHAT} property references exceed the item limit"),
             ));

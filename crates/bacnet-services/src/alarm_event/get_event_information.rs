@@ -93,6 +93,7 @@ impl GetEventInformationAck {
         let (tag, mut offset) = tags::decode_tag(data, 0)?;
         if !tag.is_opening_tag(0) {
             return Err(misplaced_tag(
+                data,
                 &tag,
                 Some(0),
                 0,
@@ -108,7 +109,7 @@ impl GetEventInformationAck {
                 break;
             }
             if list_of_event_summaries.len() >= MAX_DECODED_ITEMS {
-                return Err(Error::decoding(
+                return Err(Error::overflow(
                     offset,
                     format!("GetEventInformation ACK exceeds {MAX_DECODED_ITEMS} event summaries"),
                 ));
@@ -134,6 +135,7 @@ impl GetEventInformationAck {
             let (tag, next) = tags::decode_tag(data, offset)?;
             if !tag.is_opening_tag(3) {
                 return Err(misplaced_tag(
+                    data,
                     &tag,
                     Some(3),
                     offset,
@@ -177,6 +179,7 @@ impl GetEventInformationAck {
             let (tag, next) = tags::decode_tag(data, offset)?;
             if !tag.is_opening_tag(6) {
                 return Err(misplaced_tag(
+                    data,
                     &tag,
                     Some(6),
                     offset,

@@ -17,7 +17,7 @@ fn decode_count(data: &[u8], offset: usize, field: &str) -> Result<(i32, usize),
     let (content, end) = decode_app_primitive(data, offset, tags::app_tag::SIGNED, field)?;
     let value = primitives::decode_signed(content)?;
     let value = i16::try_from(value)
-        .map_err(|_| Error::decoding(offset, format!("{field} exceeds INTEGER16")))?;
+        .map_err(|_| Error::out_of_range(offset, format!("{field} exceeds INTEGER16")))?;
     if value == 0 {
         return Err(Error::decoding(offset, format!("{field} may not be zero")));
     }
@@ -276,7 +276,10 @@ impl ReadRangeRequest {
                 });
                 offset = new_offset;
             } else {
-                return Err(Error::decoding(
+                return Err(misplaced_tag(
+                    data,
+                    &tag,
+                    None,
                     offset,
                     "ReadRange request has invalid range choice",
                 ));
@@ -395,6 +398,7 @@ impl ReadRangeAck {
         let (tag, tag_end) = tags::decode_tag(data, offset)?;
         if !tag.is_opening_tag(5) {
             return Err(misplaced_tag(
+                data,
                 &tag,
                 Some(5),
                 offset,
@@ -417,6 +421,7 @@ impl ReadRangeAck {
             let (tag, _) = tags::decode_tag(data, offset)?;
             if !tag.is_context(6) {
                 return Err(misplaced_tag(
+                    data,
                     &tag,
                     Some(6),
                     offset,

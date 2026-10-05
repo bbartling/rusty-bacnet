@@ -228,6 +228,7 @@ impl SubscribeCOVPropertyRequest {
         let (tag, pos) = tags::decode_tag(data, offset)?;
         if !tag.is_opening_tag(4) {
             return Err(misplaced_tag(
+                data,
                 &tag,
                 Some(4),
                 offset,

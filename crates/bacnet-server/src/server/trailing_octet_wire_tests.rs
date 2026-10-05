@@ -14,7 +14,7 @@ use crate::server::cov_wire_test_support::{av1, Harness};
 use crate::server::mistagged_request_wire_tests::{
     contents, harness, request, FILE_1, FILE_2, READ, WRITE,
 };
-use crate::server::truncated_request_wire_tests::{answer_to, reject_for};
+use crate::server::truncated_request_wire_tests::{answer_to, reject_case, reject_for};
 use bacnet_services::device_mgmt::{DeviceCommunicationControlRequest, ReinitializeDeviceRequest};
 use bacnet_types::enums::{EnableDisable, ReinitializedState};
 
@@ -95,8 +95,15 @@ async fn file_requests_with_trailing_octets_are_rejected() {
             ),
         ),
     ];
-    for (service, _, body) in &cases {
-        reject_for(&mut h, *service, body, RejectReason::TOO_MANY_ARGUMENTS).await;
+    for (service, what, body) in &cases {
+        reject_case(
+            &mut h,
+            *service,
+            what,
+            body,
+            RejectReason::TOO_MANY_ARGUMENTS,
+        )
+        .await;
     }
     assert_eq!(contents(&h).await, before);
     h.server.stop().await.unwrap();
@@ -110,9 +117,10 @@ async fn delete_object_with_trailing_octets_is_rejected() {
         ("an octet", &[0x00][..]),
         ("a second identifier", &AV_1[..]),
     ] {
-        reject_for(
+        reject_case(
             &mut h,
             delete,
+            what,
             &[&AV_1[..], tail].concat(),
             RejectReason::TOO_MANY_ARGUMENTS,
         )
@@ -179,7 +187,14 @@ async fn dcc_with_trailing_octets_is_rejected_and_changes_nothing() {
         ),
     ];
     for (what, body) in &cases {
-        reject_for(&mut h, service, body, RejectReason::TOO_MANY_ARGUMENTS).await;
+        reject_case(
+            &mut h,
+            service,
+            what,
+            body,
+            RejectReason::TOO_MANY_ARGUMENTS,
+        )
+        .await;
         assert_eq!(dcc_state(&h).await, (enabled, false), "{what}");
     }
     let answer = answer_to(&mut h, service, &dcc(restrict, Some(5), &[])).await;
@@ -249,7 +264,14 @@ async fn reinitialize_device_with_trailing_octets_is_rejected() {
         ("a [2] after the state", reinitialize(None, &[0x29, 0x01])),
     ];
     for (what, body) in &cases {
-        reject_for(&mut h, service, body, RejectReason::TOO_MANY_ARGUMENTS).await;
+        reject_case(
+            &mut h,
+            service,
+            what,
+            body,
+            RejectReason::TOO_MANY_ARGUMENTS,
+        )
+        .await;
         assert_eq!(dcc_state(&h).await, (DccState::Enable, false), "{what}");
     }
     h.server.stop().await.unwrap();

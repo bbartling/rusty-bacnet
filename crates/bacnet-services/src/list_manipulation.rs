@@ -116,7 +116,7 @@ fn validate_elements_framing(data: &[u8]) -> Result<(), Error> {
         let (tag, next) = tags::decode_tag(data, offset)?;
         if tag.is_opening {
             if depth == open_tags.len() {
-                return Err(Error::decoding(
+                return Err(Error::invalid_tag(
                     offset,
                     "context nesting exceeds shared limit",
                 ));
@@ -126,7 +126,7 @@ fn validate_elements_framing(data: &[u8]) -> Result<(), Error> {
             offset = next;
         } else if tag.is_closing {
             if depth == 1 || open_tags[depth - 1] != tag.number {
-                return Err(Error::decoding(
+                return Err(Error::invalid_tag(
                     offset,
                     "unmatched or mismatched closing tag",
                 ));
@@ -136,14 +136,15 @@ fn validate_elements_framing(data: &[u8]) -> Result<(), Error> {
         } else if tag.class == tags::TagClass::Application && tag.number == tags::app_tag::BOOLEAN {
             offset = next;
         } else {
-            offset = next
-                .checked_add(tag.length as usize)
-                .filter(|&end| end <= data.len())
-                .ok_or_else(|| Error::decoding(next, "tag contents exceed element bytes"))?;
+            let end = next.saturating_add(tag.length as usize);
+            if end > data.len() {
+                return Err(Error::buffer_too_short(end, data.len()));
+            }
+            offset = end;
         }
     }
     if depth != 1 {
-        return Err(Error::decoding(offset, "unclosed context tag"));
+        return Err(Error::missing(offset, "unclosed context tag"));
     }
     Ok(())
 }

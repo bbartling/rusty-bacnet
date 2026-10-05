@@ -6,7 +6,7 @@ use bacnet_encoding::tags::{encode_tag, TagClass};
 use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::port::TransportProvenance;
-use bacnet_types::enums::{EventState, EventType, NotifyType, ObjectType};
+use bacnet_types::enums::{EventState, EventType, NotifyType, ObjectType, RejectReason};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, StatusFlags};
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
@@ -163,8 +163,8 @@ impl Harness {
         assert_reply(data, source, expected);
     }
 
-    /// Require a Reject naming a syntax fault (#1446), and return its reason.
-    async fn reject(&mut self, source: Option<NpduAddress>) -> u8 {
+    /// Require a Reject, and return its reason.
+    async fn reject(&mut self, source: Option<NpduAddress>) -> RejectReason {
         let (data, mac) = timeout(Duration::from_secs(2), self.output.recv())
             .await
             .unwrap()
@@ -175,11 +175,7 @@ impl Harness {
         let [0x60, INVOKE, reason] = npdu.payload[..] else {
             panic!("expected a Reject, got {:02X?}", npdu.payload);
         };
-        assert!(
-            [0, 4, 5, 7].contains(&reason),
-            "reason {reason} names no syntax fault"
-        );
-        reason
+        RejectReason::from_raw(reason)
     }
 
     // An ordered request/response fence proves prior dispatch completed without
@@ -326,35 +322,53 @@ async fn bad_message_text_is_dropped_only_by_client_for_both_services() {
     h.client.stop().await.unwrap();
 }
 
-fn malformed_cases() -> Vec<Bytes> {
+/// Each malformed request with the Reject reason it draws (#1446).
+fn malformed_cases() -> Vec<(Bytes, RejectReason)> {
+    use RejectReason as R;
     let bad_text = payload(Some(&[0, 0xff]));
-    let mut cases = vec![Bytes::new(), payload(Some(&[]))];
-    for text_tlv in [
-        &[0x7e, 0x7f][..], // Constructed text is not a character string.
-        &[0x72, 0, 0xff],  // Wrong tag class.
-        &[0x7d, 0xff, 0xff, 0xff, 0xff, 0xff], // Impossible declared length.
-        &[0x7d],           // Truncated extended header.
-        &[0x7a, 0, 0xff, 0x7a, 0, 0xff], // Duplicate text fields.
-        &[0x7a, 0, 0xff, 0x79, 0], // Bad text followed by valid empty text.
-        &[0x79, 0, 0x7a, 0, 0xff], // Valid text followed by bad text.
+    // Nothing at all, and a text with no character set octet.
+    let mut cases = vec![
+        (Bytes::new(), R::MISSING_REQUIRED_PARAMETER),
+        (payload(Some(&[])), R::INVALID_DATA_ENCODING),
+    ];
+    for (text_tlv, reason) in [
+        // Constructed text is not a character string.
+        (&[0x7e, 0x7f][..], R::INVALID_TAG),
+        // Wrong tag class: an application CharacterString whose UTF-8 the
+        // request's value check refuses first.
+        (&[0x72, 0, 0xff], R::INVALID_DATA_ENCODING),
+        // Impossible declared length.
+        (&[0x7d, 0xff, 0xff, 0xff, 0xff, 0xff], R::BUFFER_OVERFLOW),
+        // Truncated extended header: the next octet reads as its length.
+        (&[0x7d], R::MISSING_REQUIRED_PARAMETER),
+        // Duplicate text fields, and bad text followed by valid empty text:
+        // the first text's characters are refused before the second is seen.
+        (&[0x7a, 0, 0xff, 0x7a, 0, 0xff], R::INVALID_DATA_ENCODING),
+        (&[0x7a, 0, 0xff, 0x79, 0], R::INVALID_DATA_ENCODING),
+        // Valid text followed by bad text, where the notify type is due.
+        (&[0x79, 0, 0x7a, 0, 0xff], R::INVALID_TAG),
     ] {
-        cases.push([PREFIX, text_tlv, SUFFIX].concat().into());
+        cases.push(([PREFIX, text_tlv, SUFFIX].concat().into(), reason));
     }
+    // [1] where the [0] process identifier is due.
     let mut wrong_prefix = bad_text.to_vec();
     wrong_prefix[0] = 0x19;
-    cases.push(wrong_prefix.into());
+    cases.push((wrong_prefix.into(), R::MISSING_REQUIRED_PARAMETER));
+    // The timestamp frame closed by [4].
     let mut wrong_timestamp = bad_text.to_vec();
     wrong_timestamp[15] = 0x4f;
-    cases.push(wrong_timestamp.into());
+    cases.push((wrong_timestamp.into(), R::INVALID_TAG));
     let mut oversized_priority = bad_text.to_vec();
     oversized_priority.splice(18..20, [0x5a, 1, 0]);
-    cases.push(oversized_priority.into());
+    cases.push((oversized_priority.into(), R::PARAMETER_OUT_OF_RANGE));
+    // A second [10] where the [11] to-state is due.
     let mut wrong_tail = bad_text.to_vec();
     wrong_tail[PREFIX.len() + 3 + 6] = 0xa9;
-    cases.push(wrong_tail.into());
+    cases.push((wrong_tail.into(), R::INVALID_TAG));
+    // The event values closed by [13].
     let mut wrong_values = bad_text.to_vec();
     *wrong_values.last_mut().unwrap() = 0xdf;
-    cases.push(wrong_values.into());
+    cases.push((wrong_values.into(), R::INVALID_TAG));
     cases
 }
 
@@ -363,12 +377,13 @@ async fn other_malformed_fields_are_rejected_or_silently_dropped_without_deliver
     let mut h = Harness::new(64).await;
     let mut rx = h.client.event_notifications();
     for confirmed in [true, false] {
-        for data in malformed_cases() {
+        for (data, reason) in malformed_cases() {
             assert!(decode_event_notification(&data).is_err());
+            let what = format!("{data:02X?}");
             h.send(inbound(request(data, confirmed, false), remote()))
                 .await;
             if confirmed {
-                h.reject(remote()).await;
+                assert_eq!(h.reject(remote()).await, reason, "{what}");
             }
             h.fence().await;
             assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
@@ -390,7 +405,12 @@ async fn truncations_do_not_escape_validation_after_text_tolerance() {
         }
         h.send(inbound(request(data.slice(..len), true, false), None))
             .await;
-        h.reject(None).await;
+        // Every request cut short is missing a parameter (#1446).
+        assert_eq!(
+            h.reject(None).await,
+            RejectReason::MISSING_REQUIRED_PARAMETER,
+            "cut at {len}"
+        );
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
     }
     h.client.stop().await.unwrap();
@@ -456,9 +476,9 @@ async fn immediate_reply_and_closed_channel_fallback_preserve_event_responses() 
         for closed in [false, true] {
             for (data, segmented, expected, publish) in [
                 (payload(Some(&[0, 0xff])), false, [0x20, INVOKE, 2], true),
-                // Message text with no character set: a malformed value,
-                // rejected as OTHER (#1446).
-                (payload(Some(&[])), false, [0x60, INVOKE, 0], false),
+                // Message text with no character set octet: an encoding not
+                // valid for its datatype (#1446).
+                (payload(Some(&[])), false, [0x60, INVOKE, 10], false),
                 (payload(None), true, [0x71, INVOKE, 4], false),
             ] {
                 let (tx, reply) = oneshot::channel();

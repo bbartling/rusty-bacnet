@@ -75,7 +75,7 @@ impl WhoIsRequest {
         match (low_limit, high_limit) {
             (None, None) => Ok(Self::all()),
             (Some(low), Some(high)) if low > high => {
-                Err(Error::decoding(0, "WhoIs low_limit exceeds high_limit"))
+                Err(Error::out_of_range(0, "WhoIs low_limit exceeds high_limit"))
             }
             (Some(low), Some(high)) => Ok(Self::range(low, high)),
             (Some(_), None) => Err(Error::missing(
