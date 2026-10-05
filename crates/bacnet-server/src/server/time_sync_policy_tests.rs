@@ -143,13 +143,13 @@ fn time_sync_source_entries_hold_to_the_bacnet_address_bound() {
         (&[7; 18][..], None),
         (&[1][..], Some((65534, &[7; 18][..]))),
     ] {
-        assert!(TimeSyncSource::from_received(&received(mac, route)).is_ok());
+        assert!(TimeSyncSource::from_received(&received(mac, route), None).is_ok());
     }
     for (mac, route) in [
         (&[7; 19][..], None),
         (&[1][..], Some((65534, &[7; 19][..]))),
     ] {
-        assert!(TimeSyncSource::from_received(&received(mac, route)).is_err());
+        assert!(TimeSyncSource::from_received(&received(mac, route), None).is_err());
     }
 }
 
@@ -209,25 +209,25 @@ fn time_sync_rates_bound_bursts_and_restore_cadence_without_denial_debits() {
     let b = received(&[2], None);
     let now = Instant::now();
     for _ in 0..2 {
-        limiter.apply_at(&a, now, || Ok(())).unwrap();
+        limiter.apply_at(&a, None, now, || Ok(())).unwrap();
     }
     assert!(limiter
-        .apply_at(&a, now, || panic!("source limited"))
+        .apply_at(&a, None, now, || panic!("source limited"))
         .is_err());
-    limiter.apply_at(&b, now, || Ok(())).unwrap();
+    limiter.apply_at(&b, None, now, || Ok(())).unwrap();
     assert!(limiter
-        .apply_at(&b, now, || panic!("global limited"))
+        .apply_at(&b, None, now, || panic!("global limited"))
         .is_err());
     assert!(limiter
-        .apply_at(&a, now + Duration::from_millis(999), || panic!(
+        .apply_at(&a, None, now + Duration::from_millis(999), || panic!(
             "early refill"
         ))
         .is_err());
     for seconds in 1..=5 {
         let now = now + Duration::from_secs(seconds);
-        limiter.apply_at(&a, now, || Ok(())).unwrap();
+        limiter.apply_at(&a, None, now, || Ok(())).unwrap();
         assert!(limiter
-            .apply_at(&b, now, || panic!("global limited"))
+            .apply_at(&b, None, now, || panic!("global limited"))
             .is_err());
     }
 }
@@ -244,24 +244,27 @@ fn coalescing_and_source_capacity_preserve_active_routed_identity() {
     let same_via_other_router = received(&[2], Some((7, &[8])));
     let b = received(&[1], Some((8, &[8])));
     let now = Instant::now();
-    limiter.apply_at(&a, now, || Ok(())).unwrap();
+    limiter.apply_at(&a, None, now, || Ok(())).unwrap();
     assert!(limiter
         .apply_at(
             &same_via_other_router,
+            None,
             now + Duration::from_secs(1),
             || panic!("coalesced")
         )
         .is_err());
     assert!(limiter
-        .apply_at(&b, now + Duration::from_secs(1), || panic!("table full"))
+        .apply_at(&b, None, now + Duration::from_secs(1), || panic!(
+            "table full"
+        ))
         .is_err());
     // Denials did not extend the original coalescing window.
     limiter
-        .apply_at(&b, now + Duration::from_secs(2), || Ok(()))
+        .apply_at(&b, None, now + Duration::from_secs(2), || Ok(()))
         .unwrap();
     assert_eq!(limiter.state.lock().unwrap().sources.len(), 1);
     assert!(limiter
-        .apply_at(&a, now + Duration::from_secs(2), || panic!(
+        .apply_at(&a, None, now + Duration::from_secs(2), || panic!(
             "cannot evict active"
         ))
         .is_err());
@@ -278,11 +281,13 @@ fn failed_step_does_not_spend_rate_or_coalescing_budget() {
     let a = received(&[1], None);
     let now = Instant::now();
     assert!(limiter
-        .apply_at(&a, now, || Err(denied("step cap exceeded")))
+        .apply_at(&a, None, now, || Err(denied("step cap exceeded")))
         .is_err());
     assert!(limiter.state.lock().unwrap().sources.is_empty());
-    limiter.apply_at(&a, now, || Ok(())).unwrap();
-    assert!(limiter.apply_at(&a, now, || panic!("limited")).is_err());
+    limiter.apply_at(&a, None, now, || Ok(())).unwrap();
+    assert!(limiter
+        .apply_at(&a, None, now, || panic!("limited"))
+        .is_err());
 }
 
 #[test]
@@ -305,16 +310,18 @@ fn limits_are_independent_and_monotonic_time_does_not_refill_backwards() {
         let now = Instant::now();
         let a = received(&[1], None);
         let b = received(&[2], None);
-        limiter.apply_at(&a, now, || Ok(())).unwrap();
+        limiter.apply_at(&a, None, now, || Ok(())).unwrap();
         assert!(limiter
-            .apply_at(&a, now - Duration::from_secs(1), || panic!("backwards"))
+            .apply_at(&a, None, now - Duration::from_secs(1), || panic!(
+                "backwards"
+            ))
             .is_err());
         assert_eq!(
-            limiter.apply_at(&b, now, || Ok(())).is_ok(),
+            limiter.apply_at(&b, None, now, || Ok(())).is_ok(),
             policy.global_rate.is_none()
         );
         limiter
-            .apply_at(&a, now + Duration::from_secs(1), || Ok(()))
+            .apply_at(&a, None, now + Duration::from_secs(1), || Ok(()))
             .unwrap();
     }
 }
@@ -330,7 +337,7 @@ fn concurrent_time_sync_admission_is_bounded_and_check_apply_is_serialized() {
     std::thread::scope(|scope| {
         for _ in 0..32 {
             scope.spawn(|| {
-                let _ = limiter.apply_at(&received(&[1], None), now, || {
+                let _ = limiter.apply_at(&received(&[1], None), None, now, || {
                     let before = applied.load(Ordering::SeqCst);
                     std::thread::yield_now();
                     applied.store(before + 1, Ordering::SeqCst);
@@ -459,18 +466,46 @@ fn global_coalescing_bounds_direct_routed_and_sc_vmac_without_extending_cadence(
     ];
     let now = Instant::now();
     assert!(limiter
-        .apply_at(&contexts[0], now, || Err(denied("step cap exceeded")))
+        .apply_at(&contexts[0], None, now, || Err(denied("step cap exceeded")))
         .is_err());
     for (index, context) in contexts.iter().enumerate() {
         let at = now + Duration::from_secs(index as u64 * 2);
-        limiter.apply_at(context, at, || Ok(())).unwrap();
+        limiter.apply_at(context, None, at, || Ok(())).unwrap();
         for other in &contexts {
             assert!(limiter
-                .apply_at(other, at + Duration::from_millis(1999), || panic!(
+                .apply_at(other, None, at + Duration::from_millis(1999), || panic!(
                     "globally coalesced"
                 ))
                 .is_err());
         }
     }
     assert!(limiter.state.lock().unwrap().sources.is_empty());
+}
+
+/// One node gets one per-source budget whichever form its requests take:
+/// relayed with this network's own number as SNET, a request comes from the
+/// station its SADR names, the same source as one from that MAC with no
+/// SNET (#1458). With the number unknown, or on another network, the
+/// relayed form is a source of its own.
+#[test]
+fn a_station_shares_one_budget_direct_and_relayed_through_this_network() {
+    const THIS_NETWORK: u16 = 7;
+    let station: &[u8] = &[10, 0, 0, 3, 0xBA, 0xC0];
+    let router: &[u8] = &[10, 0, 0, 9, 0xBA, 0xC0];
+    let direct = received(station, None);
+    for (relayed_on, number, shared) in [
+        (THIS_NETWORK, Some(THIS_NETWORK), true),
+        (THIS_NETWORK, None, false),
+        (THIS_NETWORK + 1, Some(THIS_NETWORK), false),
+    ] {
+        let limiter = TimeSyncLimiter::new(TimeSyncPolicy {
+            per_source_rate: Some(rate(1)),
+            ..Default::default()
+        });
+        let now = Instant::now();
+        limiter.apply_at(&direct, number, now, || Ok(())).unwrap();
+        let relayed = received(router, Some((relayed_on, station)));
+        let second = limiter.apply_at(&relayed, number, now, || Ok(()));
+        assert_eq!(second.is_err(), shared, "{relayed_on} {number:?}");
+    }
 }

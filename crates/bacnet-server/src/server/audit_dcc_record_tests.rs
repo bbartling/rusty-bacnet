@@ -150,8 +150,6 @@ async fn an_enables_own_timer_reports_nothing_more() {
     let mut f = server(dcc_reporter()).await;
     f.server.config.dcc_policy = DccPolicy::LegacyPermissive;
     let enable = carried_out(dcc(&f, EnableDisable::ENABLE, Some(1), None).await);
-    // The timer starts counting once its task first runs.
-    settle().await;
     tokio::time::advance(Duration::from_secs(61)).await;
     settle().await;
     let timer = f.server.dcc_timer.lock().await;
@@ -248,8 +246,6 @@ async fn dcc_records_follow_the_reporters_operations_delay_and_confirmation() {
     let mut f = server(reporter()).await;
     f.server.config.dcc_policy = DccPolicy::LegacyPermissive;
     carried_out(dcc(&f, EnableDisable::DISABLE_INITIATION, Some(1), None).await);
-    // The timer starts counting once its task first runs.
-    settle().await;
     expire_dcc(&f).await;
     assert!(audit_frames(&f).is_empty());
     f.server.stop().await.unwrap();

@@ -13,16 +13,17 @@ pub(super) fn address_length_fits(length: usize) -> bool {
 
 /// Whether a routed DCC or time-sync allowlist entry for `network` and
 /// `address` names the node that sent a request from link MAC `mac` with no
-/// SNET (#1458). Once `local_network`, this network's own number, is known,
-/// an entry routed through it names a station on this link, the rule a
-/// Device binding follows (#1404): the entry is taken as the local route
-/// [`RecipientRoute::localize`] makes of it, and that route's MAC is the
-/// station's. While the number is unknown, or for any other network, the
-/// entry names only the routed source it spells out.
+/// SNET (#1458): true only when `local_network`, this network's own number,
+/// is known and is `network`, and `mac` is `address`. The entry is taken as
+/// the local route [`RecipientRoute::localize`] makes of it, as a send to
+/// that address would be (#1358). While the number is unknown, or for any
+/// other network, the entry names only the routed source it spells out.
 ///
-/// Only this direction widens. A direct entry still matches no routed
-/// source: any node on the link can claim this network's number and a MAC
-/// as SNET and SADR, while a direct entry names the link source itself.
+/// Only this direction widens. A Device binding also takes a request relayed
+/// with this network's number as its direct station (#1404); an allowlist
+/// does not. A direct entry still matches no routed source: any node on the
+/// link can claim this network's number and a MAC as SNET and SADR, while a
+/// direct entry names the link source itself.
 ///
 /// [`RecipientRoute::localize`]: super::event_recipient_route::RecipientRoute::localize
 pub(super) fn routed_entry_names_direct_source(

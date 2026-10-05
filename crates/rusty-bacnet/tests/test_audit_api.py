@@ -706,6 +706,66 @@ class AuditContractArtifactTests(unittest.TestCase):
                 await server.stop()
         asyncio.run(bounded_reporter_test(exercise()))
 
+    def test_device_recipient_address_on_the_server_network_number_receives_records(self) -> None:
+        # An address naming the server's own network number is local once the
+        # server knows that number; a registered port publishes it at startup.
+        async def exercise() -> None:
+            with tempfile.TemporaryDirectory() as directory:
+                parent = BACnetServer(device_instance=9, interface="127.0.0.1", port=0,
+                                      broadcast_address="127.0.0.1")
+                parent.add_audit_log(7, "Receiver", str(Path(directory) / "parent"), buffer_size=10)
+                parent.configure_audit_notification_sink(7, policy="allow_all")
+                await parent.start()
+                try:
+                    parent_address = await parent.local_address()
+                    ip, port = parent_address.split(":")
+                    logger = socket.inet_aton(ip) + int(port).to_bytes(2, "big")
+                    # The default broadcast address: an Address at the
+                    # broadcast IP is refused, and the logger is on loopback.
+                    child = BACnetServer(device_instance=8, interface="127.0.0.1", port=0,
+                                         registered_network_port=2)
+                    child.add_bip_network_port(2, "Port", ip_address="127.0.0.1", udp_port=0,
+                                               network_number=7)
+                    child.add_audit_reporter(0, "Selected")
+                    child.add_analog_value(1, "Writable")
+                    with self.assertRaises(ValueError):
+                        child.configure_audit_recipient(cast(Any, {
+                            "kind": "address", "network_number": 65535, "mac_address": logger}))
+                    child.configure_audit_recipient(
+                        {"kind": "address", "network_number": 7, "mac_address": logger})
+                    child.configure_audit_reporters([{"instance": 0, "audit_level": "audit_all",
+                                                      "auditable_operations": 2,
+                                                      "issue_confirmed_notifications": False}])
+                    await child.start()
+                    try:
+                        reporter = ObjectIdentifier(ObjectType.AUDIT_REPORTER, 0)
+                        self.assertEqual(
+                            (await child.read_property(reporter, PropertyIdentifier.RELIABILITY)).value, 0)
+                        query = cast("AuditLogQueryRequestInput", {
+                            "audit_log": ObjectIdentifier(ObjectType.AUDIT_LOG, 7),
+                            "query_parameters": {"kind": "by_target", "target_device_identifier":
+                                ObjectIdentifier(ObjectType.DEVICE, 8), "successful_actions_only": 0},
+                            "requested_count": 10,
+                        })
+                        async with BACnetClient(interface="127.0.0.1", port=0,
+                                               broadcast_address="127.0.0.1", apdu_timeout_ms=2_000) as client:
+                            await client.write_property(await child.local_address(),
+                                                        ObjectIdentifier(ObjectType.ANALOG_VALUE, 1),
+                                                        PropertyIdentifier.PRESENT_VALUE,
+                                                        PropertyValue.real(42.5))
+                            async with asyncio.timeout(5):
+                                while True:
+                                    records = (await client.audit_log_query_typed(parent_address, query))["records"]
+                                    if records:
+                                        break
+                                    await asyncio.sleep(0.01)
+                            self.assertEqual(len(records), 1)
+                    finally:
+                        await child.stop()
+                finally:
+                    await parent.stop()
+        asyncio.run(bounded_reporter_test(exercise()))
+
     def test_reporter_strict_validation_is_atomic_and_set_is_replaceable(self) -> None:
         async def exercise() -> None:
             server = BACnetServer(device_instance=8, interface="127.0.0.1", port=0)

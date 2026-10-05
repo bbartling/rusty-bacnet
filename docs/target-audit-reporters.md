@@ -65,11 +65,15 @@ remain INVALID_DATA_TYPE. The optional Maximum_Send_Delay/Send_Now pair is also 
 other network configuration remains unsupported.
 
 All target Reporters share the typed [Device recipient](device-audit-recipient.md).
-An actual recipient change still prepares exactly one old/new pair. Its owner is
+An actual recipient change prepares exactly one dedicated pair of attempts for its
+record: a copy to the old and to the new recipient when both resolve, otherwise
+(an old Address the network number does not name) a copy to the new recipient and
+an unconfirmed global broadcast (Clause 12.11.66). Its owner is
 the lowest enabled nominal Device match, else the lowest enabled configured
 Reporter, else the lowest configured Reporter. This local ownership choice preserves
 the dedicated pair even when all levels are NONE. The change fences every target
-Reporter's old recipient context. Both routes must be usable before commit.
+Reporter's old recipient context. The new route, and any old route other than such
+an Address, must be usable before commit.
 
 The active owner protects every configured Reporter and its Device through sealed,
 canceled and dropped lifetimes until DB-capable task frames quiesce. Normal target

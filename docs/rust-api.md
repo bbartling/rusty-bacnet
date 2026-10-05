@@ -6074,7 +6074,9 @@ families and broader Audit completion remain open.
 
 The standalone target profile uses `DeviceObject::provision_audit_recipient` for
 initial state and `AuditReportersConfig { reporters }` for selection. Active local
-and authorized network recipient writes share atomic old/new delivery admission.
+and authorized network recipient writes share atomic admission of the change's two
+notifications: to the old and the new recipient, or to the new one and by global
+broadcast when the old one is an Address the network number does not name.
 See the [Device recipient contract](device-audit-recipient.md) for supported routes,
 metadata, failure semantics and shutdown ownership. The endpoint source profile
 uses the same typed Device value and a source-owned paired delivery path; it has

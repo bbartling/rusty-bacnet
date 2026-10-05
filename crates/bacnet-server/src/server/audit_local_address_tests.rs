@@ -4,9 +4,14 @@
 //! number is unknown it names a routed station, which target Audit does not
 //! route, so it waits unresolved, reporting CONFIGURATION_ERROR as a Device
 //! with no route does, and resolves from the first record after the number
-//! is learned. When the number moves away, it no longer resolves, and a
-//! recipient change goes ahead with no copy for it.
+//! is learned, its Reporter's health following each change of number at
+//! once. When the number moves away, it no longer resolves, and a recipient
+//! change goes ahead: the new recipient gets its copy, and a global
+//! broadcast stands in for the old one's (Clause 12.11.66).
 use super::*;
+use bacnet_objects::device::{DeviceConfig, DeviceObject};
+use bacnet_objects::network_port::{BipPortConfig, NetworkPortObject};
+use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 
 /// The link's B/IP broadcast endpoint.
 const BROADCAST: std::net::SocketAddrV4 =
@@ -41,12 +46,34 @@ async fn address_logger(recipient: BACnetRecipient, confirmed: bool) -> Result<F
     .await
 }
 
-/// A B/IP-shaped capture link, with a broadcast endpoint.
+/// A B/IP-shaped capture link, with a broadcast endpoint, that records the
+/// broadcasts it is handed.
 fn bip_capture() -> AuditCapture {
     let mut capture = AuditCapture::default();
     capture.six_byte_mac = true;
     capture.bip_broadcast = Some(BROADCAST);
+    capture.record_broadcasts = true;
     capture
+}
+
+/// The Audit records sent by global broadcast: unconfirmed, DNET 0xFFFF.
+fn broadcast_records(fixture: &Fixture) -> Vec<BACnetAuditNotification> {
+    let mut records = Vec::new();
+    for bytes in fixture.transport.broadcasts.lock().unwrap().iter() {
+        let npdu = decode_npdu(bytes.clone()).unwrap();
+        let Ok(Apdu::UnconfirmedRequest(request)) = decode_apdu(npdu.payload) else {
+            continue;
+        };
+        if request.service_choice != UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION {
+            continue;
+        }
+        assert_eq!(npdu.destination.map(|to| to.network), Some(0xFFFF));
+        let mut decoded =
+            bacnet_services::audit::AuditNotificationRequest::decode(&request.service_request)
+                .unwrap();
+        records.append(&mut decoded.notifications);
+    }
+    records
 }
 
 /// Where each record went: its link MAC, and whether the NPDU had a DNET.
@@ -137,7 +164,8 @@ async fn an_address_recipient_on_this_network_waits_for_the_number_then_goes_wit
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_change_away_from_an_address_the_number_left_goes_to_the_new_recipient_only() {
+async fn a_change_away_from_an_address_the_number_left_goes_to_the_new_recipient_and_by_broadcast()
+{
     let mut fixture = address_logger(address(THIS_NETWORK, &STATION), false)
         .await
         .unwrap();
@@ -149,8 +177,9 @@ async fn a_change_away_from_an_address_the_number_left_goes_to_the_new_recipient
     );
     publish(&fixture, THIS_NETWORK);
     publish(&fixture, REMOTE_NETWORK);
-    // The old address no longer resolves; the change still goes ahead, and
-    // only the new recipient gets its record.
+    // The old address no longer resolves; the change still goes ahead. The
+    // new recipient gets its record, and the same record goes by global
+    // broadcast in place of the old recipient's copy.
     let next = address(0, &NEW_STATION);
     change_recipient(&fixture, &next).await.unwrap();
     settle().await;
@@ -158,6 +187,7 @@ async fn a_change_away_from_an_address_the_number_left_goes_to_the_new_recipient
     let records = notifications(&fixture.transport.sent);
     assert_eq!(records.len(), 1);
     let record = &records[0].notifications[0];
+    assert_eq!(broadcast_records(&fixture), std::slice::from_ref(record));
     assert_eq!(record.operation, AuditOperation::WRITE);
     let mut old = BytesMut::new();
     bacnet_encoding::constructed::encode_recipient(&mut old, &address(THIS_NETWORK, &STATION))
@@ -200,4 +230,139 @@ async fn a_change_away_from_a_device_with_no_route_is_still_refused() {
     settle().await;
     assert!(sends(&fixture).is_empty());
     fixture.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_change_between_recipients_that_both_resolve_sends_no_broadcast() {
+    let mut fixture = address_logger(address(THIS_NETWORK, &STATION), false)
+        .await
+        .unwrap();
+    publish(&fixture, THIS_NETWORK);
+    change_recipient(&fixture, &address(0, &NEW_STATION))
+        .await
+        .unwrap();
+    settle().await;
+    assert_eq!(
+        sends(&fixture),
+        [(STATION.to_vec(), false), (NEW_STATION.to_vec(), false)]
+    );
+    assert!(broadcast_records(&fixture).is_empty());
+    fixture.server.stop().await.unwrap();
+}
+
+/// Health follows the network's number as the server's Number worker takes
+/// each announcement, before any audited operation.
+#[tokio::test(start_paused = true)]
+async fn the_reporters_health_follows_each_change_of_number() {
+    let (inbound, incoming) = mpsc::channel(8);
+    let mut capture = bip_capture();
+    capture.number_controls = true;
+    *capture.incoming.lock().unwrap() = Some(incoming);
+    let mut fixture = try_servers_config(
+        vec![reporter()],
+        &[10],
+        Some(address(THIS_NETWORK, &STATION)),
+        vec![],
+        true,
+        1476,
+        capture,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        health(&fixture.server).await,
+        Reliability::CONFIGURATION_ERROR
+    );
+    for (number, expected) in [
+        (THIS_NETWORK, Reliability::NO_FAULT_DETECTED),
+        (REMOTE_NETWORK, Reliability::CONFIGURATION_ERROR),
+    ] {
+        let [high, low] = number.to_be_bytes();
+        inbound
+            .send(ReceivedNpdu {
+                direct_response: None,
+                npdu: Bytes::copy_from_slice(&[1, 0x80, 0x13, high, low, 1]),
+                source_mac: MacAddr::from_slice(&NEW_STATION),
+                link_layer_group: true,
+                data_attributes: Vec::new(),
+                provenance: TransportProvenance::unverified(),
+                reply_tx: None,
+            })
+            .await
+            .unwrap();
+        let mut reached = false;
+        for _ in 0..50 {
+            settle().await;
+            if health(&fixture.server).await == expected {
+                reached = true;
+                break;
+            }
+        }
+        assert!(reached, "{number}: health follows the number");
+        let published = fixture.server.test_network().local_network_number().get();
+        assert_eq!(published, Some(number));
+    }
+    assert!(sends(&fixture).is_empty(), "no operation took place");
+    fixture.server.stop().await.unwrap();
+}
+
+/// A registered Network Port publishes its number before target Audit
+/// validates the recipient. An address on another network starts unresolved
+/// too: the number may still come to name it.
+#[tokio::test(start_paused = true)]
+async fn an_address_off_a_number_known_at_startup_also_starts_unresolved() {
+    let port_ip = [127, 0, 0, 1];
+    let mut capture = bip_capture();
+    capture.normal_bip = Some(std::net::SocketAddrV4::new(port_ip.into(), 0xBAC0));
+    let mut device = DeviceObject::new(DeviceConfig {
+        instance: 10,
+        ..Default::default()
+    })
+    .unwrap();
+    device
+        .provision_audit_recipient(address(REMOTE_NETWORK, &STATION))
+        .unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(device)).unwrap();
+    db.add(Box::new(reporter())).unwrap();
+    db.add(Box::new(
+        bacnet_objects::binary::BinaryValueObject::new(1, "value").unwrap(),
+    ))
+    .unwrap();
+    let port_config = BipPortConfig {
+        network_number: THIS_NETWORK,
+        ip_address: port_ip,
+        ..BipPortConfig::default()
+    };
+    db.add(Box::new(
+        NetworkPortObject::new_bip(1, "Port", port_config).unwrap(),
+    ))
+    .unwrap();
+    let mut server = BACnetServer::start_with_clock_mode_and_bindings(
+        ServerConfig {
+            audit_reporters: Some(AuditReportersConfig {
+                reporters: vec![oid(ObjectType::AUDIT_REPORTER, 1)],
+            }),
+            registered_network_port: Some(oid(ObjectType::NETWORK_PORT, 1)),
+            ..Default::default()
+        },
+        db,
+        capture.port(),
+        None,
+        vec![],
+    )
+    .await
+    .expect("starts unresolved");
+    assert_eq!(
+        server.test_network().local_network_number().get(),
+        Some(THIS_NETWORK)
+    );
+    assert_eq!(health(&server).await, Reliability::CONFIGURATION_ERROR);
+    assert!(matches!(
+        write_value(&server, None).await,
+        Apdu::SimpleAck(_)
+    ));
+    settle().await;
+    assert!(capture.sent.lock().unwrap().is_empty());
+    server.stop().await.unwrap();
 }

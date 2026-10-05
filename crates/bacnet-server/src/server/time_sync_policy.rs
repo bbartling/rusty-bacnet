@@ -53,11 +53,30 @@ impl TimeSyncSource {
         Ok(())
     }
 
-    fn from_received(received: &ReceivedApdu) -> Result<Self, Error> {
+    /// The rate and coalescing key of a received request: one node, one
+    /// budget. A request relayed with this network's own number as SNET
+    /// comes from the station its SADR names, the direct source a request
+    /// from that MAC with no SNET has, as [`CanonicalPeer::from_source`]
+    /// reads it (#1458). A routed source with no SADR stays routed, and so
+    /// fails validation.
+    ///
+    /// [`CanonicalPeer::from_source`]: bacnet_endpoint_core::coordinator::CanonicalPeer::from_source
+    fn from_received(received: &ReceivedApdu, local_network: Option<u16>) -> Result<Self, Error> {
+        use bacnet_endpoint_core::coordinator::CanonicalPeer;
         let source = match &received.source_network {
+            Some(source) if !source.mac_address.is_empty() => {
+                match CanonicalPeer::from_source(&received.source_mac, Some(source), local_network)
+                {
+                    CanonicalPeer::Direct(mac) => Self::Direct(mac.to_vec()),
+                    CanonicalPeer::Routed { network, address } => Self::Routed {
+                        network,
+                        address: address.to_vec(),
+                    },
+                }
+            }
             Some(source) => Self::Routed {
                 network: source.network,
-                address: source.mac_address.to_vec(),
+                address: Vec::new(),
             },
             None => Self::Direct(received.source_mac.to_vec()),
         };
@@ -348,9 +367,13 @@ impl TimeSyncLimiter {
         }
     }
 
+    /// Admit and apply one request. `local_network`, this network's own
+    /// number once known, keys a station's direct and relayed forms alike
+    /// ([`TimeSyncSource::from_received`]).
     pub(super) fn apply_at(
         &self,
         received: &ReceivedApdu,
+        local_network: Option<u16>,
         now: Instant,
         apply: impl FnOnce() -> Result<(), Error>,
     ) -> Result<(), Error> {
@@ -359,7 +382,7 @@ impl TimeSyncLimiter {
         let policy = &self.policy;
         let track_source = policy.per_source_rate.is_some() || !policy.coalesce_window.is_zero();
         let key = track_source
-            .then(|| TimeSyncSource::from_received(received))
+            .then(|| TimeSyncSource::from_received(received, local_network))
             .transpose()?;
         let mut state = self
             .state

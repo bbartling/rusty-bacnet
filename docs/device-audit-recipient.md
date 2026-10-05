@@ -50,10 +50,14 @@ names its network, and the first record after that finds the route (#1460,
 #1461). A session or server without a registered Network Port learns its number
 only after it starts, so this is how such a recipient starts there. When a
 learned number is later replaced, the recipient no longer resolves, and ordinary
-records stop again. A recipient change is not held up by such an old Address: the
-change goes ahead, and only the new recipient gets its record, since nothing
-reaches the old one. Any other old recipient without a route still refuses the
-change, and the new recipient must always resolve. Broadcast, multicast, unspecified, routed Address, IPv6, SC and
+records stop again, and the Reporter's health follows each change of number as
+the Number worker takes it, before any audited operation. A recipient change is
+not held up by such an old Address: the change goes ahead, the new recipient gets
+its record, and the same record goes out unconfirmed by global broadcast in place
+of the old recipient's copy, since Clause 12.11.66 asks for the change to reach
+both recipients or go by global broadcast. Any other old recipient without a
+route still refuses the change, and the new recipient must always resolve.
+Broadcast, multicast, unspecified, routed Address, IPv6, SC and
 MS/TP Address choices are outside this runtime subset. The generic BACnetRecipient
 codec continues to represent the wider protocol grammar.
 
@@ -65,7 +69,10 @@ NULL relinquishment. The call uses the actual Device mutation owner and rechecks
 sealed state after taking the database lock. It does not call the inbound network
 authorizer. `Both` additionally accepts authorized network WP. An actual change prepares and reserves two
 bounded notification attempts before committing the property, its Reporter
-generation, and an owned delivery worker. Both attempts carry the same WRITE
+generation, and an owned delivery worker: one to the old and one to the new
+recipient when both resolve, or, when the old recipient is an Address the network
+number does not name, one to the new recipient and an unconfirmed global broadcast
+in place of the old one's copy (Clause 12.11.66). Both attempts carry the same WRITE
 record: local target Device/Object, recipient property, new Target_Value and old
 Current_Value. Remote writes retain requester identity and invoke ID; local
 writes identify the local Device and omit invoke ID. Two different recipient

@@ -44,10 +44,11 @@ mod policy_precommit;
 /// network's number once it is known (#1460); one naming a network the number
 /// in force does not name starts unresolved the same way. The active Device recipient is
 /// required/writable; actual local or authorized WP/WPM changes atomically reserve
-/// old/new attempts before commit, independently of ordinary reporting filters.
-/// Both routes must be usable; an unavailable old route requires reconfiguration
-/// and restart, except an old Address the number does not name, which gets no
-/// attempt. Active Device/Reporter membership is protected until quiescence.
+/// two attempts before commit, independently of ordinary reporting filters: to
+/// the old and the new recipient. The new route must be usable. An unavailable
+/// old route requires reconfiguration and restart, except an old Address the
+/// number does not name: an unconfirmed global broadcast takes its attempt
+/// (Clause 12.11.66). Active Device/Reporter membership is protected until quiescence.
 /// At most 64 deliveries are active per server. Optional object-owned
 /// Maximum_Send_Delay/Send_Now retains ordinary records in a bounded target queue:
 /// 256 records/256 KiB globally and 64 records/64 KiB per Reporter. Mandatory
@@ -701,7 +702,9 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
 
 #[path = "audit_delivery.rs"]
 mod delivery;
-pub(super) use delivery::{deliver, deliver_observed, encode_notification, DeliveryCompletion};
+pub(super) use delivery::{
+    deliver, deliver_global_broadcast, deliver_observed, encode_notification, DeliveryCompletion,
+};
 
 /// Table 19-4 permits omission above 32 encoded octets. Bound encoding work,
 /// including nested lists, before handing a value to the ordinary encoder.

@@ -59,8 +59,11 @@ device's boot and recovery can live with that.
    window and bucket. A source that is not tracked yet is refused while the
    table holds `max_sources` entries, unless an entry has refilled and left its
    window, which makes room; an active entry is never dropped to reset its
-   budget. While sources are tracked, a request whose source address is not 1
-   to 18 octets, or whose routed network is not 1 to 65534, is refused.
+   budget. Once the server knows its own network's number, a station's
+   direct requests and those relayed with that number as SNET and its MAC as
+   SADR are one source with one budget (#1458). While sources are tracked, a
+   request whose source address is not 1 to 18 octets, or whose routed network
+   is not 1 to 65534, is refused.
 7. `max_step`. The requested time is compared with the clock in the request's
    own basis: a UTC request against the local time shifted by `UTC_Offset` and
    daylight saving. The bound is inclusive in both directions, and 0 allows

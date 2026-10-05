@@ -65,10 +65,11 @@ or SC dialing (Python constructor, Rust build/start), never silently ignoring it
 Direct entries only match requests without a routed source. Routed entries match
 the exact network and full source address, not the immediate router's MAC.
 Once the server knows its own network's number, a routed entry naming that number
-also matches the station's direct requests from that address, with no routed
-source (#1458). Network numbers are unique, so both forms name the same node: the
-rule a Device binding follows (#1404). While the number is unknown, such an entry
-matches only the routed form it spells out. The widening goes one way: a direct
+also matches a request with no routed source from the link MAC equal to the
+entry's address (#1458): network numbers are unique, so the entry names a station
+on this link. While the number is unknown, such an entry matches only the routed
+form it spells out. This widening goes one way only, unlike a Device binding,
+which also takes such a relayed request as its direct station (#1404): a direct
 entry still matches no routed source, because any node on the link can claim this
 network's number and the station's MAC as SNET and SADR.
 Malformed routed identities fail closed rather than falling back to direct matching.

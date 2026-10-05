@@ -41,11 +41,27 @@ async fn source_reporting_to(
     learned: bool,
     recipient: BACnetRecipient,
 ) -> Endpoint {
+    let mut endpoint = unstarted_source(role, recipient, None);
+    endpoint.start(learned).await;
+    endpoint
+}
+
+/// The source session [`source_reporting_to`] starts. With `port_number`,
+/// it registers a B/IP Network Port configured with that network number,
+/// which is the session's number from startup.
+fn unstarted_source(
+    role: SessionRole,
+    recipient: BACnetRecipient,
+    port_number: Option<u16>,
+) -> Endpoint {
     let device = oid(ObjectType::DEVICE, 123);
-    let mut db = crate::DeviceIdentity::new(123, 42)
-        .unwrap()
-        .build_database()
-        .unwrap();
+    let mut identity = crate::DeviceIdentity::new(123, 42).unwrap();
+    if let Some(number) = port_number {
+        identity = identity
+            .with_bip_port(2, number.into(), *host(SELF).ip(), PORT)
+            .unwrap();
+    }
+    let mut db = identity.build_database().unwrap();
     db.get_mut(&device)
         .unwrap()
         .device_authority_internal()
@@ -72,11 +88,15 @@ async fn source_reporting_to(
     if role == SessionRole::Both {
         session = session.with_device_writes(Arc::new(|_| true));
     }
+    if port_number.is_some() {
+        session = session
+            .with_identity(identity)
+            .with_registered_network_port(oid(ObjectType::NETWORK_PORT, 2));
+    }
     session
         .source_audit_bindings
         .push((oid(ObjectType::DEVICE, 999), host(SINK)));
     endpoint.session = session;
-    endpoint.start(learned).await;
     endpoint
 }
 

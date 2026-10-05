@@ -191,7 +191,7 @@ pub trait BACnetObject: Send + Sync {
 
 The stack runs on a Tokio multi-threaded runtime.
 
-**Lock ordering** (server): always lock `db` (ObjectDatabase) before `cov_table` (COV subscriptions). Violating this order risks deadlock.
+**Lock ordering** (server): always lock `db` (ObjectDatabase) before `cov_table` (COV subscriptions). With target Audit configured, a DeviceCommunicationControl change and its timer's expiry take the DCC timer slot first and `db` second, to report the change under the slot (#1387); nothing takes the slot while holding `db`. Violating either order risks deadlock.
 
 **Resource exhaustion caps**:
 - COV subscriptions: 1,024 max

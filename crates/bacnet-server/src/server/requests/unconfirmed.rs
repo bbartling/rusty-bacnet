@@ -407,7 +407,7 @@ pub(super) fn apply_time_sync_request(
     }
     let clock = clock.ok_or_else(|| Error::Encoding("Device clock is disabled".into()))?;
     let mut delta_hundredths = None;
-    let result = limiter.apply_at(received, Instant::now(), || {
+    let result = limiter.apply_at(received, local_network, Instant::now(), || {
         delta_hundredths = clock
             .read_clock()
             .and_then(|frame| time_sync_policy::step_hundredths(supplied, is_utc, frame));

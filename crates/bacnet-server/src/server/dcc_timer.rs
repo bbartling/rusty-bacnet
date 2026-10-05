@@ -130,8 +130,10 @@ pub(super) async fn replace<T: TransportPort + 'static>(
         // Only a disable running out re-enables communication; an ENABLE's
         // own timer changes nothing when it fires, so it reports nothing.
         let expiry_audit = DccAudit::of(services).filter(|_| proposed != DccState::Enable);
+        // The duration runs from the commit, not from the task's first poll.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(minutes as u64 * 60);
         **slot = Some(tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(minutes as u64 * 60)).await;
+            tokio::time::sleep_until(deadline).await;
             if let Some(owner) = owner.upgrade() {
                 // An old task waiting here can be aborted and joined while a
                 // replacement holds the slot; it never joins or removes itself.

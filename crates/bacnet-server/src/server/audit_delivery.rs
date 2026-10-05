@@ -47,6 +47,24 @@ pub(in crate::server) async fn deliver<T: TransportPort + 'static>(
     deliver_observed(network, route, bytes, reserved, deadline, None).await
 }
 
+/// Send one encoded UnconfirmedAuditNotification by global broadcast
+/// (DNET 0xFFFF) and report whether the link took it. A recipient change
+/// whose old recipient has no route goes out this way too, so it reaches
+/// every listening logger (Clause 12.11.66). Like every audit send, no DCC
+/// state holds it back ([`deliver_observed`]).
+pub(in crate::server) async fn deliver_global_broadcast<T: TransportPort + 'static>(
+    network: &NetworkLayer<T>,
+    bytes: &[u8],
+    deadline: tokio::time::Instant,
+) -> bool {
+    tokio::time::timeout_at(
+        deadline,
+        network.broadcast_global_apdu(bytes, false, NetworkPriority::NORMAL),
+    )
+    .await
+    .is_ok_and(|sent| sent.is_ok())
+}
+
 /// Send one audit notification and report whether it was delivered.
 ///
 /// No DeviceCommunicationControl state holds it back. Clause 16.1 leaves

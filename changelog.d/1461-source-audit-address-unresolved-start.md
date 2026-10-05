@@ -1,6 +1,6 @@
 ---
 section: Fixed
 ---
-- **Wire:** An endpoint source Audit recipient Address naming the session's network starts
-  unresolved until the number is learned, and a recipient change after the number moves goes
-  ahead with a record for the new recipient only (#1461).
+- **Wire:** An endpoint source Audit recipient Address whose network the session's number does not
+  name, unknown or different, starts unresolved; a change away from it goes to the new recipient
+  and by unconfirmed global broadcast (#1461).
