@@ -80,8 +80,25 @@ fn a_run_samples_when_due_and_finishes_at_the_end() {
     assert_eq!(run.advance(ms(299), 25.0), Progress::Pending);
     assert_eq!(run.advance(ms(300), 25.0), Progress::Sampled);
     assert_eq!(run.deadline(), ms(600));
-    // A late advance schedules from when it ran.
+    // An advance a grid cell or more late schedules from when it ran.
     assert_eq!(run.advance(ms(750), 25.0), Progress::Sampled);
     assert_eq!(run.deadline(), ms(1_000));
     assert_eq!(run.advance(ms(1_000), 25.0), Progress::Finished);
+}
+
+#[test]
+fn a_run_woken_slightly_late_keeps_its_cadence() {
+    // 10 percent a second with a 1 percent step: a sample every 100 ms.
+    let fade = Transition::fade(0.0f32, 100.0, ms(0), ms(10_000)).unwrap();
+    let mut run = Run::start(fade, 1.0);
+    assert_eq!(run.deadline(), ms(100));
+    // Each wake comes 1 ms after its sample, as a real timer's might; the
+    // next sample stays a grid cell after the planned one.
+    for planned in (100..=900).step_by(100) {
+        assert_eq!(run.advance(ms(planned + 1), 1.0), Progress::Sampled);
+        assert_eq!(run.deadline(), ms(planned + 100), "woken at {planned} + 1");
+    }
+    // 99 ms late still counts as on time.
+    assert_eq!(run.advance(ms(1_099), 1.0), Progress::Sampled);
+    assert_eq!(run.deadline(), ms(1_100));
 }

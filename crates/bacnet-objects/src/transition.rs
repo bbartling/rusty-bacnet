@@ -211,13 +211,24 @@ impl<V: TransitionLevel> Run<V> {
         self.next_sample
     }
 
-    /// Advance to `now`, scheduling the next sample from `now` when one fell
-    /// due.
+    /// Advance to `now`, scheduling the next sample when one fell due.
+    ///
+    /// A wake a little late (less than one grid cell, as a real timer
+    /// usually is) schedules from the sample it was meant for, so the
+    /// cadence holds instead of slipping a cell each time. A wake later than
+    /// that schedules from `now`. A planned sample short of the end is a
+    /// grid point, so the next one from it is a cell or more on, past `now`.
     pub(crate) fn advance(&mut self, now: Duration, step: f64) -> Progress {
         if self.transition.is_finished(now) {
             Progress::Finished
         } else if now >= self.next_sample {
-            self.next_sample = self.transition.next_sample(now, step);
+            let planned = self.next_sample;
+            let from = if now - planned < SAMPLE_GRID {
+                planned
+            } else {
+                now
+            };
+            self.next_sample = self.transition.next_sample(from, step);
             Progress::Sampled
         } else {
             Progress::Pending

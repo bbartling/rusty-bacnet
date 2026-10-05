@@ -3100,7 +3100,8 @@ octets.
 
 The object carries out each command it takes (#1384), at the command's
 priority or `Lighting_Command_Default_Priority`, and `Lighting_Command` keeps
-reporting it as written. A level it puts in a slot is normalized as a
+reporting it as written. `Lighting_Command_Default_Priority` takes 1 to 16 but
+not 6, Minimum On/Off's priority (Clause 12.54.27). A level it puts in a slot is normalized as a
 commanded Present_Value is, so a FADE_TO 0.5 puts 1.0 in the slot.
 
 - FADE_TO and RAMP_TO put the target level in the slot. When that slot is then
@@ -3130,7 +3131,9 @@ read. While it moves, the task samples it for COV each time it has moved by
 `COV_Increment` (1.0 percent while that is 0.0), on a 100 ms grid shared by
 every object, and once more when it arrives; Table 13-1 reports Present_Value
 and Status_Flags, so a SubscribeCOV hears a fade once, when its level goes in,
-and a SubscribeCOVProperty of Tracking_Value hears it move.
+and a SubscribeCOVProperty of Tracking_Value hears it move. A Tracking_Value
+subscription whose own increment is finer than that sample step still hears
+only the sample points.
 
 Color and Color Temperature (Addendum 135-2020ca) hold their `Color_Command`
 as a `BACnetColorCommand` (`bacnet_types::constructed`): a `ColorOperation`

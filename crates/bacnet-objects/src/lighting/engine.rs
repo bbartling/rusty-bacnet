@@ -289,6 +289,14 @@ impl LightingOutputObject {
                 let increment = command
                     .step_increment
                     .unwrap_or(self.default_step_increment);
+                // During a WARN_OFF or WARN_RELINQUISH egress at this
+                // priority, Tracking_Value is the level being held, so the
+                // step works from it: the halt below gives the slot its
+                // final value and the step result then replaces it. A step
+                // during the warning thus keeps the lights on at the stepped
+                // level, which is the override Clause 12.54.6.2 gives
+                // occupants the egress time for, rather than stepping from
+                // the off or relinquished level the egress was heading to.
                 if let Some(level) = step_level(operation, tracking, increment) {
                     self.halt_for(priority);
                     self.set_slot(priority, Some(engine_level(level)));

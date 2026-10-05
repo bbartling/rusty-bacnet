@@ -268,6 +268,9 @@ impl BACnetObject for LightingOutputObject {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Real(self.present_value))
             }
+            // Each read takes its own instant, so one ReadPropertyMultiple
+            // that straddles a fade's end may pair a Tracking_Value just short
+            // of the level with In_Progress IDLE.
             p if p == PropertyIdentifier::TRACKING_VALUE => {
                 Ok(PropertyValue::Real(self.tracking_value_at(self.now())))
             }
@@ -344,10 +347,12 @@ impl BACnetObject for LightingOutputObject {
             return Ok(());
         }
 
-        // LIGHTING_COMMAND_DEFAULT_PRIORITY
+        // LIGHTING_COMMAND_DEFAULT_PRIORITY: 1 to 16, but not 6. Clause
+        // 12.54.27 keeps 6 out: Table 19-1 gives that slot to Minimum On/Off,
+        // and a command written without a priority acts at this one.
         if property == PropertyIdentifier::LIGHTING_COMMAND_DEFAULT_PRIORITY {
             if let PropertyValue::Unsigned(v) = value {
-                if !(1..=16).contains(&v) {
+                if !(1..=16).contains(&v) || v == 6 {
                     return Err(common::value_out_of_range_error());
                 }
                 self.lighting_command_default_priority = v as u32;

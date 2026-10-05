@@ -238,3 +238,38 @@ fn lighting_output_takes_a_lighting_command_a_channel_passes_on() {
     lo.write_property(LC, None, value, Some(10)).unwrap();
     assert_eq!(lo.read_property(LC, None).unwrap(), octets(&FADE));
 }
+
+#[test]
+fn lighting_command_default_priority_refuses_six_and_commands_act_at_it() {
+    const LCDP: PropertyIdentifier = PropertyIdentifier::LIGHTING_COMMAND_DEFAULT_PRIORITY;
+    let mut lo = LightingOutputObject::new(1, "LO-1").unwrap();
+    for taken in [5, 7] {
+        lo.write_property(LCDP, None, PropertyValue::Unsigned(taken), None)
+            .unwrap();
+        assert_eq!(
+            lo.read_property(LCDP, None).unwrap(),
+            PropertyValue::Unsigned(taken)
+        );
+    }
+    // 6 is Minimum On/Off's slot (Clause 12.54.27, Table 19-1).
+    assert_error(
+        lo.write_property(LCDP, None, PropertyValue::Unsigned(6), None),
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+    assert_eq!(
+        lo.read_property(LCDP, None).unwrap(),
+        PropertyValue::Unsigned(7)
+    );
+    // A command without a priority acts at the stored default.
+    lo.set_lighting_command(BACnetLightingCommand {
+        step_increment: Some(5.0),
+        ..command(Op::STEP_ON)
+    })
+    .unwrap();
+    let slot = |priority: u32| {
+        lo.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(priority))
+            .unwrap()
+    };
+    assert_eq!(slot(7), PropertyValue::Real(1.0));
+    assert_eq!(slot(6), PropertyValue::Null);
+}

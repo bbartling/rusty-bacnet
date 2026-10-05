@@ -228,6 +228,21 @@ fn a_halted_egress_gives_its_slot_its_final_value_at_once() {
 }
 
 #[test]
+fn a_step_during_an_egress_steps_from_the_held_level() {
+    for operation in [Op::WARN_OFF, Op::WARN_RELINQUISH] {
+        let mut f = Fixture::lit_at_8();
+        f.blink_warn(10);
+        f.warn(Path::LightingCommand, operation, 8);
+        f.command(BACnetLightingCommand {
+            step_increment: Some(10.0),
+            ..op(Op::STEP_UP, Some(8))
+        });
+        assert_eq!((f.slot(8), f.pv()), (Some(90.0), 90.0), "{operation:?}");
+        assert_eq!((f.egress_active(), f.deadline()), (false, None));
+    }
+}
+
+#[test]
 fn stop_cancels_an_egress_at_its_priority_and_leaves_the_slot() {
     for path in PATHS {
         let mut f = Fixture::lit_at_8();

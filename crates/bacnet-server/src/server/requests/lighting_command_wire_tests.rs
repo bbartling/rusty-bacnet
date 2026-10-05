@@ -1,6 +1,7 @@
 //! A Lighting Output carrying out a Lighting_Command written over the wire
-//! (#1384), and taking the Present_Value warn values: the replies exactly as
-//! the server encodes them, then what the object serves.
+//! (#1384), taking the Present_Value warn values, and refusing a
+//! Lighting_Command_Default_Priority of 6: the replies exactly as the server
+//! encodes them, then what the object serves.
 //!
 //! LIGHTING_OUTPUT 1 is `0D 80 00 01`; Present_Value is property 85,
 //! Tracking_Value 164, In_Progress 378 and Lighting_Command 380.
@@ -152,5 +153,23 @@ async fn present_value_warn_values_are_taken_and_their_neighbours_refused() {
         )
         .await,
         [0x50, 5, 15, 0x91, 0x02, 0x91, 0x25]
+    );
+}
+
+#[tokio::test]
+async fn lighting_command_default_priority_refuses_six_over_the_wire() {
+    let (fixture, _) = fixture().await;
+    let lcdp = PropertyIdentifier::LIGHTING_COMMAND_DEFAULT_PRIORITY;
+    // Unsigned 7 is taken; 6, Minimum On/Off's slot, is PROPERTY /
+    // VALUE_OUT_OF_RANGE (Clause 12.54.27).
+    assert_eq!(write(&fixture, lcdp, &[0x21, 0x07], None).await, SIMPLE_ACK);
+    assert_eq!(
+        write(&fixture, lcdp, &[0x21, 0x06], None).await,
+        [0x50, 5, 15, 0x91, 0x02, 0x91, 0x25]
+    );
+    // Property 381 is context tag 1 `1A 01 7D`; it still reads 7.
+    assert_eq!(
+        read(&fixture, lcdp).await,
+        read_ack(&[0x1A, 0x01, 0x7D], &[0x21, 0x07])
     );
 }
