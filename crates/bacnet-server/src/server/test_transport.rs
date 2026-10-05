@@ -275,6 +275,7 @@ struct Hooks {
     on_stop: Option<StopHook>,
     on_drop: Option<Callback>,
     is_broadcast_mac: Option<MacPredicate>,
+    is_group_destination: Option<MacPredicate>,
     bip_broadcast_endpoint: Option<EndpointHook>,
 }
 
@@ -282,6 +283,8 @@ struct Hooks {
 pub(crate) struct TestTransport {
     local_mac: MacAddr,
     broadcast_macs: Vec<MacAddr>,
+    /// Group destinations beside the broadcast MACs (#1493).
+    group_macs: Vec<MacAddr>,
     start: StartMode,
     unicast: SendMode,
     broadcast: SendMode,
@@ -320,6 +323,7 @@ impl TestTransport {
             transport: Self {
                 local_mac: MacAddr::from_slice(&[1]),
                 broadcast_macs: Vec::new(),
+                group_macs: Vec::new(),
                 start: StartMode::Closed,
                 unicast: SendMode::Record,
                 broadcast: SendMode::Record,
@@ -453,6 +457,33 @@ impl TransportPort for TestTransport {
             None => self.broadcast_macs.iter().any(|b| b.as_slice() == mac),
         }
     }
+
+    /// `is_broadcast_mac`, one of the [`TestTransportBuilder::group_mac`]s,
+    /// or what the [`TestTransportBuilder::on_is_group_destination`] hook
+    /// adds.
+    fn is_group_destination(&self, mac: &[u8]) -> bool {
+        self.is_broadcast_mac(mac)
+            || self.group_macs.iter().any(|g| g.as_slice() == mac)
+            || self
+                .hooks
+                .is_group_destination
+                .as_ref()
+                .is_some_and(|hook| hook(mac))
+    }
+
+    /// The broadcast and group MAC lists, copied, so the rule never calls a
+    /// hook.
+    fn group_destinations(&self) -> bacnet_transport::port::GroupDestinations {
+        let macs: Vec<MacAddr> = self
+            .broadcast_macs
+            .iter()
+            .chain(&self.group_macs)
+            .cloned()
+            .collect();
+        bacnet_transport::port::GroupDestinations::new(move |mac| {
+            macs.iter().any(|g| g.as_slice() == mac)
+        })
+    }
 }
 
 /// Configures a [`TestTransport`]. Defaults: local MAC `[1]`, receive capacity
@@ -471,6 +502,25 @@ impl TestTransportBuilder {
     /// Add a MAC that `is_broadcast_mac` recognises (unless a hook overrides).
     pub(crate) fn broadcast_mac(mut self, mac: &[u8]) -> Self {
         self.transport.broadcast_macs.push(MacAddr::from_slice(mac));
+        self
+    }
+
+    /// Add a MAC that reaches a group of nodes without being the link's
+    /// broadcast, such as a B/IP multicast address: `is_group_destination`
+    /// and `group_destinations` recognise it, `is_broadcast_mac` doesn't.
+    pub(crate) fn group_mac(mut self, mac: &[u8]) -> Self {
+        self.transport.group_macs.push(MacAddr::from_slice(mac));
+        self
+    }
+
+    /// Recognise more group destinations with a hook, beside the broadcast
+    /// and group MACs: `is_group_destination` asks it, `group_destinations`
+    /// doesn't.
+    pub(crate) fn on_is_group_destination(
+        mut self,
+        hook: impl Fn(&[u8]) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.transport.hooks.is_group_destination = Some(Arc::new(hook));
         self
     }
 

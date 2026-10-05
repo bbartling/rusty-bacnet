@@ -43,6 +43,18 @@ pub const MIN_ETHERNET_PAYLOAD: usize = 46;
 /// BACnet broadcast MAC (all 0xFF).
 pub const ETHERNET_BROADCAST: [u8; 6] = [0xFF; 6];
 
+/// Whether `mac` is an IEEE 802 group address: six octets whose first has
+/// its low (individual/group) bit set. The all-ones broadcast is one, and so
+/// is every multicast MAC. A frame sent to one reaches every station that
+/// listens for it, so it is a local broadcast, which carries no confirmed
+/// request (Clause 6.3, #1493), and no station sends from one.
+pub fn is_group_mac(mac: &[u8]) -> bool {
+    mac.len() == 6 && mac[0] & 0x01 != 0
+}
+
+/// Whether an admitted frame arrived as a group delivery. Ingress admits only
+/// this station's own MAC and the all-ones broadcast, so of those only the
+/// broadcast is one.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn is_ethernet_group(destination: &[u8; 6]) -> bool {
     *destination == ETHERNET_BROADCAST
@@ -850,8 +862,12 @@ mod transport {
             mac == ETHERNET_BROADCAST
         }
 
+        fn is_group_destination(&self, mac: &[u8]) -> bool {
+            is_group_mac(mac)
+        }
+
         fn group_destinations(&self) -> crate::port::GroupDestinations {
-            crate::port::GroupDestinations::new(|mac| mac == ETHERNET_BROADCAST)
+            crate::port::GroupDestinations::new(is_group_mac)
         }
 
         fn egress_apdu_limit(&self) -> u16 {

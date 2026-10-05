@@ -163,6 +163,26 @@ pub(super) fn ack(invoke_id: u8) -> Apdu {
     })
 }
 
+/// #1493: a binding at a group address, the device's own or its router's,
+/// names no device. The request path refuses it, so no WriteProperty goes
+/// out and the remote write fails as for an unbound device, while the local
+/// write still runs.
+#[tokio::test(start_paused = true)]
+async fn command_write_to_a_device_bound_at_a_group_address_is_never_sent() {
+    for binding in [
+        DeviceBinding::local(device(9), GROUP),
+        DeviceBinding::routed(device(9), 700, [0x33], GROUP),
+    ] {
+        let mut h = start(binding.unwrap()).await;
+        write_pv(&mut h, 1, 1).await.unwrap();
+        idle(&h, 1).await;
+        assert!(sent_writes(&h).is_empty());
+        assert_eq!(db_flags(&h, 1).await, [false, true]);
+        assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
+        assert_eq!(state(&mut h, 1).await, (false, false));
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn command_writes_another_device_and_its_ack_marks_the_command_successful() {
     let mut h = start_local().await;

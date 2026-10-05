@@ -28,6 +28,9 @@ use tokio::sync::mpsc;
 pub(super) const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
 pub(super) const SF: PropertyIdentifier = PropertyIdentifier::STATUS_FLAGS;
 pub(super) const PEER: [u8; 6] = [10, 0, 0, 5, 0xBA, 0xC0];
+/// A multicast address, which the harness link reports as a group
+/// destination that isn't its broadcast (#1493).
+pub(super) const GROUP: [u8; 6] = [224, 0, 0, 1, 0xBA, 0xC0];
 
 pub(super) fn at(second: u8) -> ClockFrame {
     assert!(second < 60, "an invalid Device clock captures nothing");
@@ -226,6 +229,7 @@ impl Harness {
         };
         let transport = TestTransport::builder()
             .local_mac(&[10, 0, 0, 2, 0xBA, 0xC0])
+            .group_mac(&GROUP)
             .inbound(rx)
             .on_send(move |frame| link.clone().send(frame))
             .build();

@@ -52,6 +52,18 @@ pub(super) enum RecipientRoute {
     InvalidDevice,
 }
 
+/// Why [`RecipientRoute::into_confirmed`] gives no route for a confirmed
+/// request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ConfirmedRouteRefusal {
+    /// The route names no single device: a broadcast, or a Device recipient
+    /// with no usable binding.
+    NotOneDevice,
+    /// Its local next hop, the destination's own MAC or the binding's router,
+    /// reaches a group of nodes (#1493).
+    GroupNextHop,
+}
+
 #[derive(PartialEq, Eq)]
 pub(super) struct ConfirmedRecipientRoute {
     pub(super) canonical_peer: bacnet_endpoint_core::coordinator::CanonicalPeer,
@@ -85,15 +97,17 @@ impl RecipientRoute {
     /// destination is on this network, so the NPDU goes with no DNET, as a
     /// local broadcast or a unicast to the MAC (Clause 6.5.1). A non-routing
     /// node drops an NPDU whose DNET names a network (Clause 6.5.2.1), so a
-    /// routed form might never arrive. A link broadcast MAC is a local
-    /// broadcast for an address. For a Device binding it names no single
-    /// device, so the binding is unusable ([`Self::InvalidDevice`], skipped
-    /// as unroutable), as a local binding at that MAC is. With the number
-    /// unknown every route stays as it is.
+    /// routed form might never arrive. An address at the link's broadcast MAC
+    /// (`is_link_broadcast`) is a local broadcast. A Device binding at any
+    /// group address (`is_group`, which takes in the link broadcast) names no
+    /// single device, so the binding is unusable ([`Self::InvalidDevice`],
+    /// skipped as unroutable), as a local binding at such a MAC is (#1493).
+    /// With the number unknown every route stays as it is.
     pub(super) fn localize(
         self,
         local_network: Option<u16>,
         is_link_broadcast: impl Fn(&[u8]) -> bool,
+        is_group: impl Fn(&[u8]) -> bool,
     ) -> Self {
         let here = |network: u16| Some(network) == local_network;
         match self {
@@ -111,7 +125,7 @@ impl RecipientRoute {
                 freshness,
                 ..
             } if here(network) => {
-                if is_link_broadcast(&mac) {
+                if is_group(&mac) {
                     Self::InvalidDevice
                 } else {
                     Self::BoundLocalUnicast { mac, freshness }
@@ -147,7 +161,20 @@ impl RecipientRoute {
         }
     }
 
-    pub(super) fn into_confirmed(self) -> Option<ConfirmedRecipientRoute> {
+    /// The route a confirmed request to this recipient takes: every server
+    /// path that sends one (event notifications, a Channel's or Command's
+    /// requests to another device, audit notifications and Audit Log
+    /// forwarding) gets its route here. A confirmed request goes to one
+    /// device, so a route that names none is refused, and so is one whose
+    /// local next hop, the destination's MAC or the binding's router, reaches
+    /// a group of nodes (`is_group`, [`TransportPort::is_group_destination`]):
+    /// with no DNET that send is a local broadcast, which carries only
+    /// unconfirmed requests (Clause 6.3), and a binding to a router there
+    /// names no single router (#1493).
+    pub(super) fn into_confirmed(
+        self,
+        is_group: impl Fn(&[u8]) -> bool,
+    ) -> Result<ConfirmedRecipientRoute, ConfirmedRouteRefusal> {
         let (canonical_peer, local_target, remote, freshness) = match self {
             Self::LocalUnicast(mac) => (canonical_direct_peer(&mac), Some(mac), None, None),
             Self::BoundLocalUnicast { mac, freshness } => (
@@ -173,9 +200,15 @@ impl RecipientRoute {
                 Some((network, mac, Some(router))),
                 Some(freshness),
             ),
-            _ => return None,
+            _ => return Err(ConfirmedRouteRefusal::NotOneDevice),
         };
-        Some(ConfirmedRecipientRoute {
+        let next_hop = local_target
+            .as_ref()
+            .or_else(|| remote.as_ref().and_then(|(_, _, router)| router.as_ref()));
+        if next_hop.is_some_and(|mac| is_group(mac)) {
+            return Err(ConfirmedRouteRefusal::GroupNextHop);
+        }
+        Ok(ConfirmedRecipientRoute {
             canonical_peer,
             local_target,
             remote,

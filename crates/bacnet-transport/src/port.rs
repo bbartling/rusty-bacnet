@@ -459,9 +459,11 @@ pub trait TransportPort: Send + Sync {
     /// Whether a send to `mac` with no DNET reaches a group of nodes rather
     /// than one: this link's broadcast MAC, or any other broadcast or
     /// multicast address the medium carries, such as a B/IP limited
-    /// broadcast or an IPv6 multicast group. Such a send is a local broadcast,
-    /// which may carry only an Unconfirmed-Request (Clause 6.3), so a sender
-    /// that takes a caller-chosen MAC refuses anything else to it (#1479).
+    /// broadcast, an IPv6 multicast group or an Ethernet multicast MAC
+    /// (#1493). Such a send is a local broadcast, which may carry only an
+    /// Unconfirmed-Request (Clause 6.3), so a sender that takes a
+    /// caller-chosen MAC refuses anything else to it (#1479), and the server
+    /// sends no confirmed request to one and binds no device to one (#1493).
     ///
     /// [`Self::is_broadcast_mac`] keeps its narrower meaning, this link's own
     /// broadcast, which routing and recipient checks rely on. The default is

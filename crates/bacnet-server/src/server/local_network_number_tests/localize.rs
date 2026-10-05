@@ -46,7 +46,10 @@ fn localize_leaves_every_route_alone_while_the_number_is_unknown() {
         || bound_routed(THIS_NETWORK, &PEER_C),
         || bound_routed(THIS_NETWORK, LITERAL_BROADCAST_MAC),
     ] {
-        assert_eq!(route().localize(None, is_link_broadcast), route());
+        assert_eq!(
+            route().localize(None, is_link_broadcast, is_link_broadcast),
+            route()
+        );
     }
 }
 
@@ -72,7 +75,10 @@ fn localize_takes_only_routes_naming_this_network_as_local() {
         || remote_unicast(REMOTE_NETWORK, &REMOTE_MAC),
         || bound_routed(REMOTE_NETWORK, &PEER_C),
     ] {
-        assert_eq!(route().localize(local, is_link_broadcast), route());
+        assert_eq!(
+            route().localize(local, is_link_broadcast, is_link_broadcast),
+            route()
+        );
     }
     // Routes naming this network become local ones.
     for (route, expected) in [
@@ -101,7 +107,10 @@ fn localize_takes_only_routes_naming_this_network_as_local() {
             RecipientRoute::InvalidDevice,
         ),
     ] {
-        assert_eq!(route.localize(local, is_link_broadcast), expected);
+        assert_eq!(
+            route.localize(local, is_link_broadcast, is_link_broadcast),
+            expected
+        );
     }
 }
 

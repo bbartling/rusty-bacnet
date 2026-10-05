@@ -355,12 +355,13 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
 
     /// Send an APDU to a specific local destination by MAC address.
     ///
-    /// With no DNET, the link's broadcast MAC
-    /// ([`TransportPort::is_broadcast_mac`]) makes this a local broadcast,
-    /// which may carry only an Unconfirmed-Request APDU (Clause 6.3). This
-    /// layer doesn't ask the transport on every unicast, so that is the
-    /// caller's to keep: `BACnetClient` and the endpoint's egress, which take
-    /// caller-chosen MACs, refuse anything else to it (#1479).
+    /// With no DNET, the link's broadcast MAC or any other group address
+    /// ([`TransportPort::is_group_destination`]) makes this a local
+    /// broadcast, which may carry only an Unconfirmed-Request APDU (Clause
+    /// 6.3). This layer doesn't ask the transport on every unicast, so that
+    /// is the caller's to keep: `BACnetClient`, the endpoint's egress and its
+    /// requester, which take caller-chosen MACs, refuse anything else to it
+    /// (#1479), and the server sends no confirmed request to one (#1493).
     pub async fn send_apdu(
         &self,
         apdu: &[u8],

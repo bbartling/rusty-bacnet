@@ -153,6 +153,57 @@ fn ethernet_transport_new() {
     assert_eq!(t.local_mac(), &[0; 6]); // not started yet
 }
 
+/// Group MACs: the all-ones broadcast and multicast MACs (IPv4 and IPv6
+/// mapped, a bridge group, a locally administered group).
+const GROUP_MACS: [[u8; 6]; 5] = [
+    ETHERNET_BROADCAST,
+    [0x01, 0x00, 0x5E, 0x00, 0x00, 0x01],
+    [0x33, 0x33, 0x00, 0x00, 0x00, 0x01],
+    [0x01, 0x80, 0xC2, 0x00, 0x00, 0x00],
+    [0x03, 0x00, 0x00, 0x00, 0x00, 0x01],
+];
+
+/// Individual MACs, a locally administered one and all-but-the-group-bit
+/// included.
+const INDIVIDUAL_MACS: [[u8; 6]; 3] = [
+    [0x00, 0x11, 0x22, 0x33, 0x44, 0x55],
+    [0x02, 0x00, 0x00, 0x00, 0x00, 0x01],
+    [0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+];
+
+/// #1493: the group bit, the low bit of the first octet, marks every group
+/// MAC, so a multicast MAC is a group destination as the broadcast is.
+#[test]
+fn the_group_bit_marks_every_group_mac() {
+    for mac in GROUP_MACS {
+        assert!(is_group_mac(&mac), "{mac:02x?}");
+    }
+    for mac in INDIVIDUAL_MACS {
+        assert!(!is_group_mac(&mac), "{mac:02x?}");
+    }
+    for length in [0, 1, 5, 7] {
+        assert!(!is_group_mac(&vec![0xFF; length]), "{length} octets");
+    }
+}
+
+/// The transport's live and owned rules are the group bit, while
+/// `is_broadcast_mac` keeps to the all-ones broadcast.
+#[cfg(target_os = "linux")]
+#[test]
+fn ethernet_group_destinations_are_every_group_mac() {
+    let transport = EthernetTransport::new("unused");
+    let owned = transport.group_destinations();
+    for mac in GROUP_MACS {
+        assert!(transport.is_group_destination(&mac), "{mac:02x?}");
+        assert!(owned.contains(&mac), "{mac:02x?}");
+        assert_eq!(transport.is_broadcast_mac(&mac), mac == ETHERNET_BROADCAST);
+    }
+    for mac in INDIVIDUAL_MACS {
+        assert!(!transport.is_group_destination(&mac), "{mac:02x?}");
+        assert!(!owned.contains(&mac), "{mac:02x?}");
+    }
+}
+
 #[test]
 fn ethernet_destination_policy_precedes_all_llc_controls() {
     let local = [2, 0, 0, 0, 0, 1];

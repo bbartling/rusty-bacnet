@@ -173,6 +173,7 @@ async fn original_unicast_npdu_uses_udp_sender_source_mac_and_ignores_self() {
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: false,
+        forwarded_origins: super::groups::ForwardedOrigins::detached(),
     };
     let sender = ([192, 0, 2, 30], 0xBAC0);
     let msg = BvllMessage {
@@ -258,6 +259,7 @@ async fn original_broadcast_npdu_bbmd_forwards_to_bdt_and_fdt_without_local_echo
         management_limiter: Arc::new(std::sync::Mutex::new(ManagementRateLimiter::new())),
         fanout: None,
         force_dbtn_forward_failure: false,
+        forwarded_origins: super::groups::ForwardedOrigins::detached(),
     };
     let msg = BvllMessage {
         function: BvlcFunction::ORIGINAL_BROADCAST_NPDU,
@@ -378,6 +380,7 @@ async fn original_broadcast_npdu_bbmd_fanout_deduplicates_and_throttles() {
             Arc::clone(&counters),
         )),
         force_dbtn_forward_failure: false,
+        forwarded_origins: super::groups::ForwardedOrigins::detached(),
     };
     let msg = BvllMessage {
         function: BvlcFunction::ORIGINAL_BROADCAST_NPDU,

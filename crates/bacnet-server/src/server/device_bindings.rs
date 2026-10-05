@@ -23,7 +23,9 @@ enum DeviceBindingTarget {
 /// One explicitly configured unicast route to a Device object.
 ///
 /// Constructed values are transport-neutral. A builder performs the remaining
-/// concrete data-link broadcast check before the transport is started.
+/// concrete data-link check before the transport is started: neither the
+/// peer nor the router may be a broadcast or other group address of the link
+/// ([`TransportPort::is_group_destination`], #1493).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceBinding {
     device: ObjectIdentifier,
@@ -169,7 +171,7 @@ impl DeviceBindingTable {
         immediate: &[u8],
         routed: Option<&NpduAddress>,
         local_network: Option<u16>,
-        is_broadcast: impl Fn(&[u8]) -> bool,
+        is_group: impl Fn(&[u8]) -> bool,
     ) -> bacnet_objects::command_source::CommandOrigin {
         bacnet_objects::command_source::CommandOrigin::Remote {
             actual_address: bacnet_types::constructed::BACnetAddress {
@@ -179,7 +181,7 @@ impl DeviceBindingTable {
                     |source| source.mac_address.clone(),
                 ),
             },
-            binding: self.source_binding(immediate, routed, local_network, is_broadcast),
+            binding: self.source_binding(immediate, routed, local_network, is_group),
         }
     }
 
@@ -190,9 +192,9 @@ impl DeviceBindingTable {
         immediate: &[u8],
         routed: Option<&NpduAddress>,
         local_network: Option<u16>,
-        is_broadcast: impl Fn(&[u8]) -> bool,
+        is_group: impl Fn(&[u8]) -> bool,
     ) -> Option<ObjectIdentifier> {
-        match self.source_binding(immediate, routed, local_network, is_broadcast) {
+        match self.source_binding(immediate, routed, local_network, is_group) {
             bacnet_objects::command_source::CommandDeviceBinding::Unique(device) => Some(device),
             _ => None,
         }
@@ -213,15 +215,18 @@ impl DeviceBindingTable {
         immediate: &[u8],
         routed: Option<&NpduAddress>,
         local_network: Option<u16>,
-        is_broadcast: impl Fn(&[u8]) -> bool,
+        is_group: impl Fn(&[u8]) -> bool,
     ) -> bacnet_objects::command_source::CommandDeviceBinding {
         use bacnet_objects::command_source::CommandDeviceBinding;
         let now = Instant::now();
         let mut matched = None;
         for device in self.entries.keys() {
-            let resolution = self.resolve_at(device, now, &is_broadcast);
-            let route = RecipientRoute::from_device_resolution(resolution)
-                .localize(local_network, &is_broadcast);
+            let resolution = self.resolve_at(device, now, &is_group);
+            let route = RecipientRoute::from_device_resolution(resolution).localize(
+                local_network,
+                &is_group,
+                &is_group,
+            );
             let matches = match (route, routed) {
                 (RecipientRoute::BoundLocalUnicast { mac, .. }, None) => {
                     mac.as_slice() == immediate
@@ -250,11 +255,11 @@ impl DeviceBindingTable {
 
     pub(super) fn from_configured(
         bindings: Vec<DeviceBinding>,
-        is_broadcast: impl Fn(&[u8]) -> bool,
+        is_group: impl Fn(&[u8]) -> bool,
     ) -> Result<Self, Error> {
         let mut table = Self::new();
         for binding in bindings {
-            table.insert_configured(binding, &is_broadcast)?;
+            table.insert_configured(binding, &is_group)?;
         }
         Ok(table)
     }
@@ -277,12 +282,12 @@ impl DeviceBindingTable {
     pub(super) fn insert_configured(
         &mut self,
         binding: DeviceBinding,
-        is_broadcast: impl Fn(&[u8]) -> bool,
+        is_group: impl Fn(&[u8]) -> bool,
     ) -> Result<(), Error> {
         validate_device_identifier(binding.device)?;
-        if !target_is_usable(&binding.target, &is_broadcast) {
+        if !target_is_usable(&binding.target, &is_group) {
             return Err(binding_error(
-                "local peer or next-hop router is a broadcast address",
+                "local peer or next-hop router is a broadcast or group address",
             ));
         }
         if self.entries.contains_key(&binding.device) {
@@ -302,7 +307,7 @@ impl DeviceBindingTable {
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
         now: Instant,
-        is_broadcast: impl Fn(&[u8]) -> bool,
+        is_group: impl Fn(&[u8]) -> bool,
     ) -> ObservationOutcome {
         if validate_device_identifier(device).is_err() {
             return ObservationOutcome::RejectedInvalid;
@@ -322,7 +327,7 @@ impl DeviceBindingTable {
             }
             Some(_) => return ObservationOutcome::RejectedInvalid,
         };
-        if !target_is_usable(&target, &is_broadcast) {
+        if !target_is_usable(&target, &is_group) {
             return ObservationOutcome::RejectedInvalid;
         }
 
@@ -408,7 +413,7 @@ impl DeviceBindingTable {
         &self,
         device: &ObjectIdentifier,
         now: Instant,
-        is_broadcast: impl Fn(&[u8]) -> bool,
+        is_group: impl Fn(&[u8]) -> bool,
     ) -> DeviceResolution {
         if device.object_type() != ObjectType::DEVICE {
             return DeviceResolution::Invalid;
@@ -431,7 +436,7 @@ impl DeviceBindingTable {
             }
             None => return DeviceResolution::Unknown,
         };
-        if !target_is_usable(target, is_broadcast) {
+        if !target_is_usable(target, is_group) {
             return DeviceResolution::Invalid;
         }
         match target {
@@ -453,9 +458,14 @@ impl DeviceBindingTable {
     }
 }
 
-fn target_is_usable(target: &DeviceBindingTarget, is_broadcast: impl Fn(&[u8]) -> bool) -> bool {
+/// Whether a binding names one device this link can reach. A binding never
+/// takes a group address, the link's broadcast or any other such as a
+/// multicast address (`is_group`, [`TransportPort::is_group_destination`]),
+/// for its peer or its next-hop router (#1493): one names no single device,
+/// and a confirmed request sent there would be a local broadcast.
+fn target_is_usable(target: &DeviceBindingTarget, is_group: impl Fn(&[u8]) -> bool) -> bool {
     match target {
-        DeviceBindingTarget::Local { peer_mac } => !peer_mac.is_empty() && !is_broadcast(peer_mac),
+        DeviceBindingTarget::Local { peer_mac } => !peer_mac.is_empty() && !is_group(peer_mac),
         DeviceBindingTarget::Routed {
             network,
             final_mac,
@@ -464,7 +474,7 @@ fn target_is_usable(target: &DeviceBindingTarget, is_broadcast: impl Fn(&[u8]) -
             (1..=0xFFFE).contains(network)
                 && !final_mac.is_empty()
                 && !router_mac.is_empty()
-                && !is_broadcast(router_mac)
+                && !is_group(router_mac)
         }
     }
 }
@@ -496,7 +506,11 @@ pub(super) async fn snapshot_command_origin(
                 transactions
                     .audit_routes
                     .get()
-                    .is_some_and(|routes| routes.is_broadcast(mac))
+                    .is_some_and(|routes| routes.is_group(mac))
             }),
     )
 }
+
+#[cfg(test)]
+#[path = "group_binding_tests.rs"]
+mod group_binding_tests;
