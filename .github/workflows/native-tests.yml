@@ -177,12 +177,6 @@ jobs:
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
-      # The conformance ledger test runs python3.
-      - &setup-python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        id: python
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
 
       # nextest runs each test in its own process (.config/nextest.toml); it
       # does not run doctests, so cargo test --doc covers those. Every later
@@ -233,7 +227,10 @@ jobs:
       - *nextest
       # Every PyO3 build below links this interpreter (#919): PYO3_PYTHON is
       # set to it, not to the venv that the maturin step makes.
-      - *setup-python
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
       - name: Point PyO3 at that interpreter
         env:
           PYTHON_PATH: ${{ steps.python.outputs.python-path }}
