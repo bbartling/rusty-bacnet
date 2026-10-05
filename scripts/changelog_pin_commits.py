@@ -51,12 +51,13 @@ def merge_title(subject, body):
 
 def merge_issues(root):
     """{issue number: [full SHA of each first-parent merge naming it]} on HEAD's history."""
-    log = cl.git_out(root, "log", "--first-parent", "--merges", "--format=%H%x00%s%x00%b%x1e")
+    # NUL ends each field and, with -z, each commit: a commit message can't hold one.
+    log = cl.git_out(root, "log", "-z", "--first-parent", "--merges", "--format=%H%x00%s%x00%b")
+    fields = log.split("\0")
+    if len(fields) % 3 == 1 and fields[-1] == "":
+        fields.pop()  # after the NUL that ends the last commit
     merges = {}
-    for record in log.split("\x1e"):
-        if not record.strip():
-            continue
-        sha, subject, body = record.lstrip("\n").split("\0", 2)
+    for sha, subject, body in zip(fields[0::3], fields[1::3], fields[2::3]):
         for number in {int(n) for n in ISSUE_REF.findall(merge_title(subject, body))}:
             merges.setdefault(number, []).append(sha)
     return merges

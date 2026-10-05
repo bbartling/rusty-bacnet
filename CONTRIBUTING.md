@@ -17,13 +17,19 @@ Issues, pull requests and CI all live on
 `rust-toolchain.toml` pins the Rust release, which rustup selects in the
 checkout; published crates keep an MSRV of 1.93. Tests run with
 [cargo-nextest](https://nexte.st) 0.9.145 or later, which skips doctests, so
-run `cargo test --doc` as well. Pick the feature list for your OS (Linux and
-macOS shown; on Windows, drop `bacnet-cli/pcap` from the macOS list, since it
-needs the Npcap SDK):
+run `cargo test --doc` as well. The block below picks the features CI uses on
+your OS. On Linux, install a C toolchain, `pkg-config` and `libpcap-dev` first
+(Debian and Ubuntu names), because the list includes the CLI's packet capture;
+the Python bindings also need `python3-venv` for maturin's venv and
+`libpython3-dev` for the PyO3 crate's tests. Windows leaves out
+`bacnet-cli/pcap`, which needs the Npcap SDK.
 
 ```bash
-FEATURES=$(sed -n 's/^  LINUX_FEATURES: //p' .github/workflows/ci.yml)  # Linux: every optional feature
-FEATURES=$(sed -n 's/^features=//p' scripts/ci/local-macos.sh)            # macOS: all but serial and ethernet
+case "$(uname -s)" in
+  Linux)  FEATURES=$(sed -n 's/^  LINUX_FEATURES: //p' .github/workflows/ci.yml) ;;  # every optional feature
+  Darwin) FEATURES=$(sed -n 's/^features=//p' scripts/ci/local-macos.sh) ;;          # all but serial and ethernet
+  *)      FEATURES=$(sed -n 's/^features=//p' scripts/ci/local-macos.sh | sed 's#,bacnet-cli/pcap##') ;;  # Windows (Git Bash)
+esac
 
 cargo fmt --all --check
 cargo clippy --workspace --exclude rusty-bacnet --all-targets --locked --features "$FEATURES" -- -D warnings

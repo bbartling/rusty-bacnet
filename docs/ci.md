@@ -114,9 +114,11 @@ about them.
 ### Samples
 
 The sample programs in `examples/rust/samples` are workspace members with
-`publish = false` (#1450), which join through a glob in the root `Cargo.toml`.
-They share the workspace's `Cargo.lock`, so a version bump or a new
-dependency of a `bacnet-*` crate needs no separate lock refresh, and every
+`publish = false` (#1450). The root `Cargo.toml` lists each one in `members`,
+so a new sample needs adding there: with a glob, a leftover directory without
+a `Cargo.toml`, such as a renamed sample's ignored `target/`, would break every
+cargo command. The samples share the workspace's `Cargo.lock`, so a version
+bump or a new dependency of a `bacnet-*` crate needs no lock refresh, and every
 `--workspace` run covers them: clippy, rustdoc and the tests, in CI and in the
 [native tests](#native-tests-macos-and-windows). They stay out of
 `default-members`, so a plain `cargo build` or `cargo test` at the root skips
@@ -578,13 +580,11 @@ dispatch on GitHub.
 
 To release:
 
-1. Set the workspace version and refresh the
-   [standalone samples'](#standalone-samples) locks, which record it. Assemble
+1. Set the workspace version. Assemble
    the version's `CHANGELOG.md` section from the fragments, add release
    highlights by hand under the new heading if the release has any, and merge:
 
    ```bash
-   for m in examples/rust/samples/*/Cargo.toml; do cargo update --workspace --manifest-path "$m"; done
    python3 scripts/changelog.py preview        # what the section will hold
    python3 scripts/changelog.py assemble --version 0.12.0 [--date 2026-10-02]
    ```

@@ -16,7 +16,13 @@ members = [
     "crates/bacnet-cli",
     "benchmarks",
     # The sample programs (publish = false), which share this Cargo.lock (#1450).
-    "examples/rust/samples/*",
+    # Listed one by one: with a glob, a leftover directory there without a
+    # Cargo.toml would break every cargo command in the workspace.
+    "examples/rust/samples/bacnet-write",
+    "examples/rust/samples/mini-device-revisited",
+    "examples/rust/samples/point-discover",
+    "examples/rust/samples/rpm-read",
+    "examples/rust/samples/whois-scan",
 ]
 # rusty-bacnet's tests link libpython, so they need a Python with its shared library.
 # bacnet-cli has heavy deps (rustyline, clap) — excluded from default builds.

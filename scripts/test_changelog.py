@@ -614,18 +614,19 @@ class BackfillTests(unittest.TestCase):
             code = pin_commits.main(["--root", str(root or repo.root), *args])
         return code, out.getvalue(), err.getvalue()
 
-    def merge_pr(self, repo, issue, name, pr, github=False, title=None):
+    def merge_pr(self, repo, issue, name, pr, github=False, title=None, description=None):
         """Merge a branch adding a fragment, with a pull request title naming issue; return the merge.
 
         The title is quoted in the subject, or with github=True follows GitHub's
-        default subject as the first line of the body.
+        default subject as the first line of the body, before the description.
         """
         repo.git("checkout", "-q", "-b", f"b{pr}")
         repo.commit_fragment(name, fragment("Fixed", f"- Fix {issue}."), f"work {pr}")
         repo.git("checkout", "-q", "dev")
         title = f"fix: thing (#{issue}, #99)" if title is None else title
+        description = f"Describes #{pr + 1000}." if description is None else description
         if github:
-            message = f"Merge pull request #{pr} from someone/b{pr}\n\n{title}\n\nDescribes #{pr + 1000}."
+            message = f"Merge pull request #{pr} from someone/b{pr}\n\n{title}\n\n{description}"
         else:
             message = f"Merge pull request '{title}' (#{pr}) from b{pr} into dev"
         repo.git("merge", "-q", "--no-ff", "-m", message, f"b{pr}")
@@ -692,6 +693,24 @@ class BackfillTests(unittest.TestCase):
             self.assertIn(f"commit: {github}\n", (repo.dir / "8-github.md").read_text(encoding="utf-8"))
             for name in ("15-pr-number.md", "1015-description.md"):
                 self.assertNotIn("commit:", (repo.dir / name).read_text(encoding="utf-8"))
+
+    def test_odd_bytes_in_a_merge_body_are_just_text(self):
+        with GitRepo() as repo:
+            for i in range(cl.BULK_ADDS):
+                (repo.dir / f"{100 + i}-moved.md").write_text(fragment("Changed", f"- Moved {i}."), encoding="utf-8")
+            for name in ("8-github.md", "9-titled.md"):
+                (repo.dir / name).write_text(fragment("Fixed", f"- {name}."), encoding="utf-8")
+            self.commit_all(repo, "bulk, so no fragment links")
+            # git log lists newest first, so the older merge's record follows the odd body.
+            titled = self.merge_pr(repo, 9, "994-x.md", 14)
+            odd = "Control bytes \x1e\x1f\x01 and a\x1erecord separator."
+            github = self.merge_pr(repo, 8, "995-y.md", 15, github=True, description=odd)
+            self.assertIn("\x1e", repo.git("log", "-1", "--format=%b"))
+            code, out, _ = self.backfill(repo)
+            self.assertEqual(code, 0)
+            self.assertIn("pinned 2 fragment(s)", out)
+            self.assertIn(f"commit: {github}\n", (repo.dir / "8-github.md").read_text(encoding="utf-8"))
+            self.assertIn(f"commit: {titled}\n", (repo.dir / "9-titled.md").read_text(encoding="utf-8"))
 
     def test_merge_title(self):
         title = pin_commits.merge_title
