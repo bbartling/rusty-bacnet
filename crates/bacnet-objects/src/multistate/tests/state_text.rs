@@ -97,15 +97,21 @@ fn msi_state_text_write_bad_index_rejected() {
             None,
         )
         .is_err());
-    // no index
+    // Without an index the value is the whole array (#1443): a label of
+    // another datatype is refused, and nothing changes.
     assert!(msi
         .write_property(
             PropertyIdentifier::STATE_TEXT,
             None,
-            PropertyValue::CharacterString("X".into()),
+            PropertyValue::Unsigned(1),
             None,
         )
         .is_err());
+    assert_eq!(
+        msi.read_property(PropertyIdentifier::STATE_TEXT, Some(0))
+            .unwrap(),
+        PropertyValue::Unsigned(3)
+    );
 }
 
 #[test]
@@ -247,11 +253,12 @@ fn msv_state_text_write_at_index() {
 #[test]
 fn msv_state_text_write_bad_index_rejected() {
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
+    // Without an index the value is the whole array (#1443).
     assert!(msv
         .write_property(
             PropertyIdentifier::STATE_TEXT,
             None,
-            PropertyValue::CharacterString("X".into()),
+            PropertyValue::Unsigned(1),
             None,
         )
         .is_err());

@@ -43,10 +43,24 @@ pub const MIN_ETHERNET_PAYLOAD: usize = 46;
 /// BACnet broadcast MAC (all 0xFF).
 pub const ETHERNET_BROADCAST: [u8; 6] = [0xFF; 6];
 
+/// Whether `mac` is an IEEE 802 group address: six octets whose first has
+/// its low (individual/group) bit set. The all-ones broadcast is one, and so
+/// is every multicast MAC. A frame sent to one reaches every station that
+/// listens for it, so it is a local broadcast, which carries no confirmed
+/// request (Clause 6.3, #1493), and no station sends from one.
+pub fn is_group_mac(mac: &[u8]) -> bool {
+    mac.len() == 6 && mac[0] & 0x01 != 0
+}
+
+/// Whether an admitted frame arrived as a group delivery. Ingress admits only
+/// this station's own MAC and the all-ones broadcast, so of those only the
+/// broadcast is one.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn is_ethernet_group(destination: &[u8; 6]) -> bool {
     *destination == ETHERNET_BROADCAST
 }
+
+mod ingress;
 
 // Local single-link policy: only our unicast or BACnet all-FF broadcast.
 // Keep this before all LLC handling; kernel/BPF delivery is not admission.
@@ -244,12 +258,14 @@ pub fn decode_ethernet_frame(data: &[u8]) -> Result<EthernetFrame, Error> {
 mod transport {
     use super::*;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
     use tokio::io::unix::AsyncFd;
     use tokio::sync::mpsc;
     use tokio::task::JoinHandle;
     use tracing::{debug, warn};
 
+    use super::ingress::{classify_frame, FrameIngress};
     use crate::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 
     /// Max NPDU size for Ethernet: 1518 (max frame) - 14 (eth header) - 3 (LLC) - 4 (FCS by NIC) = 1497.
@@ -264,6 +280,8 @@ mod transport {
         raw_fd: Option<Arc<OwnedFd>>,
         if_index: i32,
         recv_task: Option<JoinHandle<()>>,
+        /// See [`Self::group_source_drops`].
+        group_source_drops: Arc<AtomicU64>,
     }
 
     impl EthernetTransport {
@@ -276,7 +294,19 @@ mod transport {
                 raw_fd: None,
                 if_index: 0,
                 recv_task: None,
+                group_source_drops: Arc::default(),
             }
+        }
+
+        /// Frames dropped since this transport was created because their
+        /// source MAC is a group address, one with the group bit set (#1492).
+        /// No station sends from one, and an answer to such a frame, an XID
+        /// or TEST response or a reply to a confirmed request in it, would go
+        /// to every station in the group, so the frame is dropped before any
+        /// LLC command is answered or the frame is decoded. The total
+        /// survives a restart.
+        pub fn group_source_drops(&self) -> u64 {
+            self.group_source_drops.load(Ordering::Relaxed)
         }
 
         /// Query the kernel for the interface index via `SIOCGIFINDEX`.
@@ -638,6 +668,7 @@ mod transport {
 
             let send_fd = Arc::clone(&owned_fd);
             let if_index = self.if_index;
+            let group_source_drops = Arc::clone(&self.group_source_drops);
             let recv_task = tokio::spawn(async move {
                 let mut recv_buf = vec![0u8; 2048];
                 loop {
@@ -670,53 +701,50 @@ mod transport {
                     }) {
                         Ok(Ok(len)) => {
                             let data = &recv_buf[..len];
-                            if !accepts_ethernet_destination(data, &local_mac) {
-                                continue;
-                            }
-
-                            // Handle XID/TEST commands before UI decode (Clause 7.1)
-                            if let Some(control) = check_llc_control(data) {
-                                if data.len() >= 12 && data[6..12] != local_mac {
-                                    let mut src_mac = [0u8; 6];
-                                    src_mac.copy_from_slice(&data[6..12]);
-                                    match control {
-                                        LLC_CONTROL_XID_CMD => {
-                                            debug!(src = ?src_mac, "XID command, sending response");
-                                            let resp = build_xid_response(&local_mac, &src_mac);
-                                            let _ = EthernetTransport::raw_sendto(
-                                                send_fd.as_raw_fd(),
-                                                if_index,
-                                                &src_mac,
-                                                &resp,
-                                            );
-                                            continue;
-                                        }
-                                        LLC_CONTROL_TEST_CMD => {
-                                            // Echo back the test data (bytes after LLC header)
-                                            let test_data =
-                                                if data.len() > 17 { &data[17..] } else { &[] };
-                                            debug!(src = ?src_mac, len = test_data.len(), "TEST command, sending response");
-                                            let resp = build_test_response(
-                                                &local_mac, &src_mac, test_data,
-                                            );
-                                            let _ = EthernetTransport::raw_sendto(
-                                                send_fd.as_raw_fd(),
-                                                if_index,
-                                                &src_mac,
-                                                &resp,
-                                            );
-                                            continue;
-                                        }
-                                        _ => {} // UI and others fall through to decode
-                                    }
+                            // Destination admission, then the group-source
+                            // drop (#1492), then the XID and TEST commands
+                            // (Clause 7.1), all before a UI frame is decoded.
+                            match classify_frame(data, &local_mac) {
+                                FrameIngress::Ignore => continue,
+                                FrameIngress::GroupSource { source } => {
+                                    group_source_drops.fetch_add(1, Ordering::Relaxed);
+                                    debug!(
+                                        src = ?source,
+                                        "Dropping frame whose source MAC is a group address"
+                                    );
+                                    continue;
                                 }
+                                FrameIngress::Xid { source } => {
+                                    debug!(src = ?source, "XID command, sending response");
+                                    let resp = build_xid_response(&local_mac, &source);
+                                    let _ = EthernetTransport::raw_sendto(
+                                        send_fd.as_raw_fd(),
+                                        if_index,
+                                        &source,
+                                        &resp,
+                                    );
+                                    continue;
+                                }
+                                FrameIngress::Test { source, data } => {
+                                    debug!(
+                                        src = ?source,
+                                        len = data.len(),
+                                        "TEST command, sending response"
+                                    );
+                                    let resp = build_test_response(&local_mac, &source, data);
+                                    let _ = EthernetTransport::raw_sendto(
+                                        send_fd.as_raw_fd(),
+                                        if_index,
+                                        &source,
+                                        &resp,
+                                    );
+                                    continue;
+                                }
+                                FrameIngress::Decode => {}
                             }
 
                             match decode_ethernet_frame(data) {
                                 Ok(frame) => {
-                                    if frame.source == local_mac {
-                                        continue;
-                                    }
                                     debug!(
                                         src = ?frame.source,
                                         dst = ?frame.destination,
@@ -850,8 +878,12 @@ mod transport {
             mac == ETHERNET_BROADCAST
         }
 
+        fn is_group_destination(&self, mac: &[u8]) -> bool {
+            is_group_mac(mac)
+        }
+
         fn group_destinations(&self) -> crate::port::GroupDestinations {
-            crate::port::GroupDestinations::new(|mac| mac == ETHERNET_BROADCAST)
+            crate::port::GroupDestinations::new(is_group_mac)
         }
 
         fn egress_apdu_limit(&self) -> u16 {

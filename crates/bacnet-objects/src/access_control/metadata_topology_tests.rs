@@ -17,7 +17,7 @@ fn assert_error(error: Error, expected: ErrorCode) {
 
 /// The intrinsic-reporting rows of the zone (#1305) and the door (#1149),
 /// in metadata order.
-const EVENT_ROWS: [P; 10] = [
+const EVENT_ROWS: [P; 13] = [
     P::TIME_DELAY,
     P::NOTIFICATION_CLASS,
     P::ALARM_VALUES,
@@ -26,11 +26,45 @@ const EVENT_ROWS: [P; 10] = [
     P::NOTIFY_TYPE,
     P::EVENT_TIME_STAMPS,
     P::EVENT_MESSAGE_TEXTS,
+    P::EVENT_MESSAGE_TEXTS_CONFIG,
+    P::EVENT_ALGORITHM_INHIBIT_REF,
+    P::EVENT_ALGORITHM_INHIBIT,
     P::EVENT_DETECTION_ENABLE,
     P::TIME_DELAY_NORMAL,
 ];
 
-fn assert_exact_sets(object: &dyn BACnetObject, all: &[P], required: &[P]) {
+/// The event rows Tables 12-30 and 12-37 only permit, by footnote 5 or 7
+/// alone, rather than require of an object that reports intrinsically.
+const PERMITTED_EVENT_ROWS: [P; 5] = [
+    P::EVENT_MESSAGE_TEXTS,
+    P::EVENT_MESSAGE_TEXTS_CONFIG,
+    P::EVENT_ALGORITHM_INHIBIT_REF,
+    P::EVENT_ALGORITHM_INHIBIT,
+    P::TIME_DELAY_NORMAL,
+];
+
+/// The rows the table requires of an object that reports intrinsically:
+/// the event rows but the permitted ones, and `extra`.
+fn intrinsic_required(extra: &[P]) -> Vec<P> {
+    EVENT_ROWS
+        .iter()
+        .copied()
+        .filter(|p| !PERMITTED_EVENT_ROWS.contains(p))
+        .chain(extra.iter().copied())
+        .collect()
+}
+
+/// `all` kept to the rows `base` or `intrinsic` names, in metadata order,
+/// then Property_List: the required set RPM and the PICS list.
+fn required_set(all: &[P], base: &[P], intrinsic: &[P]) -> Vec<P> {
+    all.iter()
+        .copied()
+        .filter(|p| base.contains(p) || intrinsic.contains(p))
+        .chain([P::PROPERTY_LIST])
+        .collect()
+}
+
+fn assert_exact_sets(object: &dyn BACnetObject, all: &[P], required: &[P], intrinsic: &[P]) {
     let metadata = object.property_metadata();
     assert!(matches!(metadata, Cow::Borrowed(_)));
     assert_eq!(metadata.len(), all.len() + 1);
@@ -47,15 +81,21 @@ fn assert_exact_sets(object: &dyn BACnetObject, all: &[P], required: &[P]) {
     assert!(!object.is_createable());
     assert!(object.is_deleteable());
     for row in metadata.iter() {
+        let condition = if PERMITTED_EVENT_ROWS.contains(&row.property_identifier) {
+            Some(PropertyPresenceCondition::IntrinsicReportingOptional)
+        } else if intrinsic.contains(&row.property_identifier) {
+            Some(PropertyPresenceCondition::IntrinsicReportingRequired)
+        } else {
+            None
+        };
         assert_eq!(
-            row.presence_condition,
-            EVENT_ROWS
-                .contains(&row.property_identifier)
-                .then_some(PropertyPresenceCondition::IntrinsicReporting),
+            row.presence_condition, condition,
             "{:?}",
             row.property_identifier
         );
-        let expected = if (row.property_identifier == P::PRESENT_VALUE
+        let expected = if condition.is_some() {
+            Optional
+        } else if (row.property_identifier == P::PRESENT_VALUE
             && object.object_identifier().object_type() == ObjectType::ACCESS_DOOR)
             || row.property_identifier == P::GLOBAL_IDENTIFIER
         {
@@ -136,7 +176,7 @@ fn property_metadata_access_door_exact_sets_readable_rows_and_indexed_list() {
     .chain([P::FAULT_VALUES])
     .chain(EVENT_ROWS[3..].iter().copied())
     .collect::<Vec<_>>();
-    let required = [
+    let base_required = [
         P::OBJECT_IDENTIFIER,
         P::OBJECT_NAME,
         P::OBJECT_TYPE,
@@ -151,9 +191,11 @@ fn property_metadata_access_door_exact_sets_readable_rows_and_indexed_list() {
         P::DOOR_EXTENDED_PULSE_TIME,
         P::DOOR_OPEN_TOO_LONG_TIME,
         P::CURRENT_COMMAND_PRIORITY,
-        P::PROPERTY_LIST,
     ];
-    assert_exact_sets(&object, &all, &required);
+    // Table 12-30 footnote 3 also requires Door_Alarm_State (#1485).
+    let intrinsic = intrinsic_required(&[P::DOOR_ALARM_STATE]);
+    let required = required_set(&all, &base_required, &intrinsic);
+    assert_exact_sets(&object, &all, &required, &intrinsic);
     assert_indexed_property_list(&object, &all);
     assert!(object.supports_cov());
     assert_eq!(
@@ -260,7 +302,7 @@ fn property_metadata_access_point_exact_sets_readable_rows_and_indexed_list() {
         P::PRIORITY_FOR_WRITING,
         P::PROPERTY_LIST,
     ];
-    assert_exact_sets(&object, &all, &required);
+    assert_exact_sets(&object, &all, &required, &[]);
     assert_indexed_property_list(&object, &all);
     // Table 13-1 has an Access Point row (#1061).
     assert!(object.supports_cov());
@@ -335,7 +377,7 @@ fn property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list() {
     .into_iter()
     .chain(EVENT_ROWS)
     .collect::<Vec<_>>();
-    let required = [
+    let base_required = [
         P::OBJECT_IDENTIFIER,
         P::OBJECT_NAME,
         P::OBJECT_TYPE,
@@ -347,9 +389,16 @@ fn property_metadata_access_zone_exact_sets_readable_rows_and_indexed_list() {
         P::RELIABILITY,
         P::OCCUPANCY_STATE,
         P::EVENT_STATE,
-        P::PROPERTY_LIST,
     ];
-    assert_exact_sets(&object, &all, &required);
+    // Table 12-37 footnote 3 also requires the occupancy-counting rows
+    // of a zone that reports intrinsically (#1485).
+    let intrinsic = intrinsic_required(&[
+        P::OCCUPANCY_COUNT,
+        P::OCCUPANCY_COUNT_ENABLE,
+        P::ADJUST_VALUE,
+    ]);
+    let required = required_set(&all, &base_required, &intrinsic);
+    assert_exact_sets(&object, &all, &required, &intrinsic);
     assert_indexed_property_list(&object, &all);
     assert!(!object.supports_cov());
     // Table 12-37 has neither of these rows (#1064).
@@ -412,6 +461,10 @@ fn property_metadata_access_trio_write_capabilities_match_dispatch() {
                 P::NOTIFY_TYPE,
                 P::EVENT_DETECTION_ENABLE,
                 P::TIME_DELAY_NORMAL,
+                // The message texts and the inhibit pair (#1329).
+                P::EVENT_MESSAGE_TEXTS_CONFIG,
+                P::EVENT_ALGORITHM_INHIBIT_REF,
+                P::EVENT_ALGORITHM_INHIBIT,
             ],
             // Table 12-30 footnote 1 (#1131), and Reliability, which the
             // FAULT_STATE check can move (Clause 12.26.9, #1149).
@@ -449,6 +502,10 @@ fn property_metadata_access_trio_write_capabilities_match_dispatch() {
                 P::NOTIFY_TYPE,
                 P::EVENT_DETECTION_ENABLE,
                 P::TIME_DELAY_NORMAL,
+                // The message texts and the inhibit pair (#1329).
+                P::EVENT_MESSAGE_TEXTS_CONFIG,
+                P::EVENT_ALGORITHM_INHIBIT_REF,
+                P::EVENT_ALGORITHM_INHIBIT,
             ],
             // Table 12-37 footnote 1 (#1247).
             &[P::OCCUPANCY_COUNT, P::RELIABILITY],

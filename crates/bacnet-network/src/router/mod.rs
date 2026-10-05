@@ -314,6 +314,9 @@ pub struct BACnetRouter {
     address_length_drops: Arc<AtomicU64>,
     /// NPDUs dropped for a DADR beside DNET 0xFFFF (#1379).
     global_broadcast_dadr_drops: Arc<AtomicU64>,
+    /// Broadcast NPDUs dropped for an APDU other than an
+    /// Unconfirmed-Request (#1491).
+    broadcast_pdu_type_drops: Arc<AtomicU64>,
     /// Last sequence given to a control for the router's own consumer.
     network_control_ingress_sequence: Arc<AtomicU64>,
 }
@@ -391,6 +394,20 @@ impl BACnetRouter {
     /// [`Self::address_length_drops`].
     pub fn global_broadcast_dadr_drops(&self) -> u64 {
         self.global_broadcast_dadr_drops.load(Ordering::Relaxed)
+    }
+
+    /// NPDUs dropped on any port since start because they were addressed to
+    /// a broadcast, global (DNET 0xFFFF) or remote (a DNET with DLEN 0), and
+    /// carried an APDU other than an Unconfirmed-Request (#1491). Saturates
+    /// at `u64::MAX`.
+    ///
+    /// Only an Unconfirmed-Request may go to a broadcast network address
+    /// (Clause 6.3). Anything else belongs to one peer's transaction, so the
+    /// router neither passes it on to any network nor delivers it locally,
+    /// and answers it with no reject. The PDU type comes from the first APDU
+    /// octet, with no decode; network messages are not affected.
+    pub fn broadcast_pdu_type_drops(&self) -> u64 {
+        self.broadcast_pdu_type_drops.load(Ordering::Relaxed)
     }
 
     async fn start_dispatch<T: TransportPort + 'static>(
@@ -517,6 +534,7 @@ impl BACnetRouter {
         let mut dispatch_tasks = Vec::new();
         let address_length_drops = Arc::new(AtomicU64::new(0));
         let global_broadcast_dadr_drops = Arc::new(AtomicU64::new(0));
+        let broadcast_pdu_type_drops = Arc::new(AtomicU64::new(0));
         let network_control_ingress_sequence = Arc::new(AtomicU64::new(0));
         let local_control = Arc::new(LocalControl::new(
             OwnAddresses::new(
@@ -541,6 +559,7 @@ impl BACnetRouter {
                 local_control: Arc::clone(&local_control),
                 address_length_drops: Arc::clone(&address_length_drops),
                 global_broadcast_dadr_drops: Arc::clone(&global_broadcast_dadr_drops),
+                broadcast_pdu_type_drops: Arc::clone(&broadcast_pdu_type_drops),
                 local_tx: local_tx.clone(),
                 send_txs: Arc::clone(&send_txs),
                 port_idx,
@@ -590,6 +609,7 @@ impl BACnetRouter {
                 aging_task: Some(aging_task),
                 address_length_drops,
                 global_broadcast_dadr_drops,
+                broadcast_pdu_type_drops,
                 network_control_ingress_sequence,
             },
             local_rx,

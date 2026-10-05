@@ -3,18 +3,23 @@ use std::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
+use crate::event::options::REPORTING_OPTION_METADATA;
 use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
-    PropertyPresenceCondition::{Commandable, IntrinsicReporting},
+    PropertyPresenceCondition::{
+        Commandable, IntrinsicReportingOptional, IntrinsicReportingRequired,
+    },
     PropertyPresenceCondition::{CommandableValueSourceTracking, ValueSourceTracking},
     PropertyWriteCapability::WhenCommandOwner,
     PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
 };
 
 // Base conformance is independent of implemented writability. Commandable and
-// intrinsic rows retain their optional base code. Preserve legacy list order.
+// intrinsic rows retain their optional base code; the intrinsic ones carry
+// Table 12-4's footnote 3 (required) or footnote 6 alone (only permitted) as
+// their condition (#1485). Preserve legacy list order.
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, Always),
@@ -26,7 +31,7 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(
         P::EVENT_DETECTION_ENABLE,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
@@ -40,23 +45,58 @@ const BASE: &[PropertyMetadata] = &[
         ReadOnly,
     ),
     PropertyMetadata::new(P::COV_INCREMENT, Optional, None, Always),
-    PropertyMetadata::new(P::HIGH_LIMIT, Optional, Some(IntrinsicReporting), Always),
-    PropertyMetadata::new(P::LOW_LIMIT, Optional, Some(IntrinsicReporting), Always),
-    PropertyMetadata::new(P::DEADBAND, Optional, Some(IntrinsicReporting), Always),
-    PropertyMetadata::new(P::LIMIT_ENABLE, Optional, Some(IntrinsicReporting), Always),
-    PropertyMetadata::new(P::EVENT_ENABLE, Optional, Some(IntrinsicReporting), Always),
-    PropertyMetadata::new(P::NOTIFY_TYPE, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::HIGH_LIMIT,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
+    PropertyMetadata::new(
+        P::LOW_LIMIT,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
+    PropertyMetadata::new(
+        P::DEADBAND,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
+    PropertyMetadata::new(
+        P::LIMIT_ENABLE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
+    PropertyMetadata::new(
+        P::EVENT_ENABLE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
+    PropertyMetadata::new(
+        P::NOTIFY_TYPE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::NOTIFICATION_CLASS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
-    PropertyMetadata::new(P::TIME_DELAY, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::TIME_DELAY,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::TIME_DELAY_NORMAL,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingOptional),
         Always,
     ),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, WhenOutOfService),
@@ -64,21 +104,25 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(
         P::ACKED_TRANSITIONS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         ReadOnly,
     ),
     PropertyMetadata::new(
         P::EVENT_TIME_STAMPS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         ReadOnly,
     ),
     PropertyMetadata::new(
         P::EVENT_MESSAGE_TEXTS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingOptional),
         ReadOnly,
     ),
+    // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+    REPORTING_OPTION_METADATA[0],
+    REPORTING_OPTION_METADATA[1],
+    REPORTING_OPTION_METADATA[2],
     PropertyMetadata::new(
         P::VALUE_SOURCE,
         Optional,

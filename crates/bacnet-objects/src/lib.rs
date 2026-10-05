@@ -44,6 +44,7 @@ pub mod staging;
 pub mod subscribed_recipients;
 pub mod timer;
 pub mod traits;
+pub(crate) mod transition;
 pub mod trend;
 pub mod value_types;
 

@@ -1,10 +1,11 @@
 //! CreateObject initializes a few properties WriteProperty can't change
 //! afterwards (#1429): Units on Analog Input and Output, and Number_Of_States
-//! and State_Text written whole on the multi-state objects. Each goes through
-//! the object's `initialize_property`, keeps its checks, and stays
-//! WRITE_ACCESS_DENIED to a later WriteProperty. Number_Of_States applies
-//! before the other initial values, so the result doesn't depend on where it
-//! stands in the list.
+//! on the multi-state objects. Each goes through the object's
+//! `initialize_property`, keeps its checks, and stays WRITE_ACCESS_DENIED to
+//! a later WriteProperty. Number_Of_States applies before the other initial
+//! values, so the result doesn't depend on where it stands in the list.
+//! State_Text written whole goes the write route and sets the count when
+//! the request gives none (#1443); with a count, it has to match it.
 
 use super::create_object_initial_values::{create, initial, read, text};
 use super::*;
@@ -166,9 +167,10 @@ fn number_of_states_and_state_text_give_the_same_object_in_either_order() {
                 read(&db, oid, P::STATE_TEXT, Some(0)),
                 PropertyValue::Unsigned(3)
             );
-            // Both stay read-only to WriteProperty; an element doesn't.
+            // The count stays read-only to WriteProperty; State_Text, whole
+            // or by element, doesn't (#1443).
             assert!(denied(wp(&mut db, oid, P::NUMBER_OF_STATES, None, &count)));
-            assert!(denied(wp(&mut db, oid, P::STATE_TEXT, None, &names)));
+            wp(&mut db, oid, P::STATE_TEXT, None, &names).unwrap();
             wp(&mut db, oid, P::STATE_TEXT, Some(3), &text("Max")).unwrap();
             assert_eq!(read(&db, oid, P::STATE_TEXT, Some(3)), text("Max"));
         }
@@ -253,12 +255,6 @@ fn a_state_text_of_the_wrong_length_is_refused_at_its_position() {
                 ],
                 1,
             ),
-            // With no count in the request, State_Text has to match the two
-            // states a new object starts with.
-            (
-                vec![initial(P::STATE_TEXT, None, &labels(&["a", "b", "c"]))],
-                1,
-            ),
         ] {
             assert_eq!(
                 refused(&mut db, object_type, values),
@@ -287,7 +283,7 @@ fn a_state_text_of_the_wrong_length_is_refused_at_its_position() {
 #[test]
 fn a_number_of_states_out_of_range_is_refused_at_its_position() {
     let mut db = make_db_with_device_and_ai();
-    let past_the_cap = u64::from(bacnet_objects::multistate::MAX_CREATED_NUMBER_OF_STATES) + 1;
+    let past_the_cap = u64::from(bacnet_objects::multistate::MAX_NUMBER_OF_STATES) + 1;
     for object_type in MULTI_STATE {
         for count in [0, past_the_cap, u64::MAX] {
             let values = vec![
@@ -321,4 +317,61 @@ fn a_number_of_states_out_of_range_is_refused_at_its_position() {
         refused(&mut db, ObjectType::ANALOG_INPUT, values),
         (ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE, 1)
     );
+}
+
+#[test]
+fn a_whole_state_text_without_a_count_gives_the_count() {
+    let mut db = make_db_with_device_and_ai();
+    let three = labels(&["Off", "Low", "High"]);
+    for object_type in MULTI_STATE {
+        // The labels set three states before the rest apply, wherever they
+        // stand, so State_Text[3] is in range ahead of them and then
+        // relabels the third state (#1443).
+        let oid = create(
+            &mut db,
+            object_type,
+            vec![
+                initial(P::STATE_TEXT, Some(3), &text("Max")),
+                initial(P::STATE_TEXT, None, &three),
+            ],
+        )
+        .unwrap_or_else(|error| panic!("{object_type:?}: {error:?}"));
+        assert_eq!(
+            read(&db, oid, P::NUMBER_OF_STATES, None),
+            PropertyValue::Unsigned(3)
+        );
+        assert_eq!(
+            read(&db, oid, P::STATE_TEXT, None),
+            labels(&["Off", "Low", "Max"])
+        );
+        // With several, the last sets the count.
+        let oid = create(
+            &mut db,
+            object_type,
+            vec![
+                initial(P::STATE_TEXT, None, &three),
+                initial(P::STATE_TEXT, None, &text("Only")),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            read(&db, oid, P::NUMBER_OF_STATES, None),
+            PropertyValue::Unsigned(1)
+        );
+    }
+    // A value past the count the labels give is the one refused.
+    for object_type in [
+        ObjectType::MULTI_STATE_OUTPUT,
+        ObjectType::MULTI_STATE_VALUE,
+    ] {
+        let values = vec![
+            initial(P::RELINQUISH_DEFAULT, None, &PropertyValue::Unsigned(2)),
+            initial(P::STATE_TEXT, None, &text("Only")),
+        ];
+        assert_eq!(
+            refused(&mut db, object_type, values),
+            (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE, 1),
+            "{object_type:?}"
+        );
+    }
 }

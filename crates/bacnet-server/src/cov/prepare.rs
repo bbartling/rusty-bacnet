@@ -159,7 +159,10 @@ fn known_whole_array(object: ObjectType, property: PropertyIdentifier) -> bool {
             object,
             O::MULTI_STATE_INPUT | O::MULTI_STATE_OUTPUT | O::MULTI_STATE_VALUE
         ),
-        P::EVENT_TIME_STAMPS | P::EVENT_MESSAGE_TEXTS => analog_binary_multi,
+        // Event_Message_Texts_Config: #1329.
+        P::EVENT_TIME_STAMPS | P::EVENT_MESSAGE_TEXTS | P::EVENT_MESSAGE_TEXTS_CONFIG => {
+            analog_binary_multi
+        }
         _ => false,
     }
 }

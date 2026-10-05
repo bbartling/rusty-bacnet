@@ -8,6 +8,12 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Literal, NotRequired, Optional, TypedDict, Union
 
+UNSPECIFIED: Literal[255]
+"""What an unspecified date or time field holds, the year included: dates
+are ``(year, month, day, day_of_week)`` with the full year, and times
+``(hour, minute, second, hundredths)``. ``datetime.date(255, ...)`` is the
+year 255 AD, not a wildcard."""
+
 
 # ---------------------------------------------------------------------------
 # Enum types
@@ -1059,6 +1065,9 @@ class ObjectIdentifier:
     For u32-representable values, types above 1023 or instances above 4,194,303
     raise ValueError. Integers outside u32 raise OverflowError.
     Valid proprietary types and the wire wildcard instance are accepted.
+
+    ``copy.copy``, ``copy.deepcopy`` and ``pickle`` (every protocol) rebuild
+    an equal identifier through this constructor.
     """
 
     def __init__(self, object_type: ObjectType, instance: int) -> None: ...
@@ -1081,6 +1090,10 @@ class BACnetTimeStamp:
     Date accepts full years 1900..2154 or 255 for unspecified, months 1..14,
     days 1..34, and days-of-week 1..7; each non-year date field also accepts
     255 for unspecified. Supplied values are never normalized.
+
+    ``copy.copy``, ``copy.deepcopy`` and ``pickle`` (every protocol) rebuild
+    an equal timestamp from its encoded CHOICE, so one read from a peer with
+    a field outside those ranges copies too.
     """
 
     @staticmethod
@@ -1113,7 +1126,8 @@ class BACnetTimeStamp:
     ) -> int | tuple[int, int, int, int] | tuple[
         tuple[int, int, int, int], tuple[int, int, int, int]
     ]:
-        """Exact selected value, using a full year for the Date tuple."""
+        """Exact selected value, using a full year for the Date tuple (255
+        when unspecified), as ``PropertyValue.date`` reads."""
         ...
 
     def __repr__(self) -> str: ...
@@ -1444,6 +1458,11 @@ class PropertyValue:
 
     Two values are equal when they carry the same octets and, for a typed
     read, the same element production.
+
+    ``copy.copy``, ``copy.deepcopy`` and ``pickle`` (every protocol) rebuild
+    an equal value through the constructor its ``tag`` names, a list from
+    its items as PropertyValues, and a typed constructed element from the
+    octets it was read from.
     """
 
     @staticmethod
@@ -1468,7 +1487,11 @@ class PropertyValue:
     def object_identifier(oid: ObjectIdentifier) -> PropertyValue: ...
     @staticmethod
     def date(year: int, month: int, day: int, day_of_week: int) -> PropertyValue:
-        """Create a Date value. ``year`` is the full year (e.g. 2026); use 255 for unspecified fields."""
+        """Create a Date value, in the form ``.value`` reads it back.
+
+        ``year`` is the full year, 1900..2154, or 255 for unspecified; any
+        other year raises ValueError. Use 255 for any other unspecified
+        field."""
         ...
     @staticmethod
     def time(hour: int, minute: int, second: int, hundredths: int) -> PropertyValue:
@@ -1508,7 +1531,9 @@ class PropertyValue:
         """The Python-native value (int, float, str, bytes, bool, dict, tuple,
         ObjectIdentifier, list, or None); ``application_data`` is ``bytes``,
         and a typed constructed element the form its typed write takes, or
-        the form docs/python-api.md gives it."""
+        the form docs/python-api.md gives it. A date is ``(year, month, day,
+        day_of_week)`` with the full year, or 255 for an unspecified year,
+        as in every other date the binding reads."""
         ...
 
     def __repr__(self) -> str: ...
@@ -2042,7 +2067,12 @@ class BACnetClient:
         """Send a TimeSynchronization request (unconfirmed).
 
         ``date`` is ``(year, month, day, day_of_week)``; ``time`` is
-        ``(hour, minute, second, hundredths)``. Year is the full year (e.g. 2026).
+        ``(hour, minute, second, hundredths)``. The request sets a clock, so
+        both must be specific: a real day with the full year (1900..2154),
+        month 1..12, day 1..31 and ``day_of_week`` that day's own weekday
+        (1 = Monday), and every time field in range. A field that is
+        ``UNSPECIFIED`` (255) or a pattern value (an odd month, the last
+        day) raises ValueError before anything is sent.
         """
         ...
 
@@ -2052,7 +2082,8 @@ class BACnetClient:
         date: tuple[int, int, int, int],
         time: tuple[int, int, int, int],
     ) -> Awaitable[None]:
-        """Send a UTCTimeSynchronization request (unconfirmed)."""
+        """Send a UTCTimeSynchronization request (unconfirmed); arguments as
+        for ``time_synchronization``."""
         ...
 
     # --- Auto-routing (by device instance) ---
@@ -2965,7 +2996,10 @@ class BACnetServer:
         Invalid instance/address or duplicate Device raises ValueError. No overwrite,
         routing or discovery. Syntax validation precedes the frozen-state check; after
         start() consumes configuration, parseable calls raise RuntimeError before the
-        transport/shape checks, including after stop. Broadcast validation stays in start().
+        transport/shape checks, including after stop. start() refuses a binding at a
+        broadcast or other group address of the link (a multicast address,
+        255.255.255.255, or the broadcast IP at another port), raising BacnetError
+        naming the device and the address; bind each device at its unicast address.
         """
         ...
     def configure_audit_log_parent(
@@ -3089,13 +3123,18 @@ class BACnetServer:
         the context-tagged BACnetLightingCommand, operation NONE
         (``b"\\x09\\x00"``) until written. An ``octet_string`` or any other
         datatype is refused with INVALID_DATA_TYPE, and a command its operation
-        can't take with VALUE_OUT_OF_RANGE. The object stores a command
-        without carrying it out.
+        can't take with VALUE_OUT_OF_RANGE. The object carries each command
+        out: a fade or ramp puts its level in Present_Value at once and moves
+        Tracking_Value there over time, with In_Progress showing FADE_ACTIVE
+        or RAMP_ACTIVE; a step changes the level at once; and with
+        Blink_Warn_Enable TRUE the warn commands hold the level for
+        Egress_Time seconds before relinquishing or turning it off.
 
         A Present_Value or Relinquish_Default level above 0.0 and below 1.0
         is stored as 1.0, and one outside 0.0 to 100.0 is refused with
-        VALUE_OUT_OF_RANGE. Tracking_Value reads the same level as
-        Present_Value.
+        VALUE_OUT_OF_RANGE, but for Present_Value's warn values -1.0 (WARN),
+        -2.0 (WARN_RELINQUISH) and -3.0 (WARN_OFF). Tracking_Value reads the
+        same level as Present_Value whenever no fade or ramp is running.
         """
         ...
     def add_binary_lighting_output(self, instance: int, name: str) -> None: ...
@@ -3735,7 +3774,8 @@ class BACnetServer:
         not counted. The next three count matched destinations skipped while
         their route was resolved: a Device recipient with no current binding,
         a recipient that can't be routed as configured, and a confirmed
-        recipient at a broadcast address. The confirmed fields count
+        recipient at a group address (a broadcast or a multicast one). The
+        confirmed fields count
         notifications to one recipient that found no free invoke ID, were
         answered with an Error, Reject or Abort, or drew no acknowledgment
         after the last retry. unconfirmed_send_failed counts unconfirmed

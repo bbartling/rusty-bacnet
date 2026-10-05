@@ -30,7 +30,7 @@ fn analog_objects(configuration: u8) -> [Box<dyn BACnetObject>; 3] {
 fn property_metadata_analog_exact_required_and_instance_projections() {
     use PropertyIdentifier as P;
 
-    let required = [
+    let base_required = [
         P::OBJECT_IDENTIFIER,
         P::OBJECT_NAME,
         P::OBJECT_TYPE,
@@ -39,7 +39,29 @@ fn property_metadata_analog_exact_required_and_instance_projections() {
         P::EVENT_STATE,
         P::OUT_OF_SERVICE,
         P::UNITS,
-        P::PROPERTY_LIST,
+    ];
+    // Tables 12-2, 12-3 and 12-4 require these of an object that reports
+    // intrinsically; Time_Delay_Normal and Event_Message_Texts they only
+    // permit (#1485).
+    let intrinsic_required = [
+        P::EVENT_DETECTION_ENABLE,
+        P::HIGH_LIMIT,
+        P::LOW_LIMIT,
+        P::DEADBAND,
+        P::LIMIT_ENABLE,
+        P::EVENT_ENABLE,
+        P::NOTIFY_TYPE,
+        P::NOTIFICATION_CLASS,
+        P::TIME_DELAY,
+        P::ACKED_TRANSITIONS,
+        P::EVENT_TIME_STAMPS,
+    ];
+    let intrinsic_permitted = [
+        P::TIME_DELAY_NORMAL,
+        P::EVENT_MESSAGE_TEXTS,
+        P::EVENT_MESSAGE_TEXTS_CONFIG,
+        P::EVENT_ALGORITHM_INHIBIT_REF,
+        P::EVENT_ALGORITHM_INHIBIT,
     ];
     let base = [
         P::OBJECT_IDENTIFIER,
@@ -67,11 +89,15 @@ fn property_metadata_analog_exact_required_and_instance_projections() {
         P::ACKED_TRANSITIONS,
         P::EVENT_TIME_STAMPS,
         P::EVENT_MESSAGE_TEXTS,
+        P::EVENT_MESSAGE_TEXTS_CONFIG,
+        P::EVENT_ALGORITHM_INHIBIT_REF,
+        P::EVENT_ALGORITHM_INHIBIT,
     ];
     for configuration in 0..8 {
         for object in analog_objects(configuration) {
             let kind = object.object_identifier().object_type();
-            let mut required = required.to_vec();
+            let mut requires = base_required.to_vec();
+            requires.extend(intrinsic_required);
             let mut expected = base.to_vec();
             let commandable = [
                 P::PRIORITY_ARRAY,
@@ -82,15 +108,11 @@ fn property_metadata_analog_exact_required_and_instance_projections() {
                 expected.splice(10..10, commandable);
             }
             if kind == ObjectType::ANALOG_OUTPUT {
-                required.splice(8..8, commandable);
+                requires.extend(commandable);
             }
             if kind != ObjectType::ANALOG_INPUT {
                 expected.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
-                let end = required.len() - 1;
-                required.splice(
-                    end..end,
-                    [P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME],
-                );
+                requires.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
             }
             if configuration & 1 != 0 && kind != ObjectType::ANALOG_OUTPUT {
                 expected.extend([P::FAULT_HIGH_LIMIT, P::FAULT_LOW_LIMIT]);
@@ -101,26 +123,46 @@ fn property_metadata_analog_exact_required_and_instance_projections() {
             if configuration & 4 != 0 {
                 expected.push(P::MAX_PRES_VALUE);
             }
+            // Metadata order is the list's.
+            let mut required: Vec<_> = expected
+                .iter()
+                .copied()
+                .filter(|p| requires.contains(p))
+                .collect();
+            required.push(P::PROPERTY_LIST);
             assert_unique_and_canonical(object.as_ref());
             assert_eq!(object.required_properties().as_ref(), required);
             assert_eq!(object.property_list().as_ref(), expected);
             let metadata = object.property_metadata();
             assert_eq!(metadata.len(), expected.len() + 1);
             for row in metadata.iter() {
+                let p = row.property_identifier;
+                if intrinsic_required.contains(&p) {
+                    assert_eq!(
+                        row.presence_condition,
+                        Some(PropertyPresenceCondition::IntrinsicReportingRequired),
+                        "{kind:?} {p:?}"
+                    );
+                } else if intrinsic_permitted.contains(&p) {
+                    assert_eq!(
+                        row.presence_condition,
+                        Some(PropertyPresenceCondition::IntrinsicReportingOptional),
+                        "{kind:?} {p:?}"
+                    );
+                }
                 assert_eq!(
                     row.conformance,
-                    if kind == ObjectType::ANALOG_OUTPUT
-                        && row.property_identifier == P::PRESENT_VALUE
-                    {
+                    if kind == ObjectType::ANALOG_OUTPUT && p == P::PRESENT_VALUE {
                         PropertyConformance::RequiredWrite
-                    } else if required.contains(&row.property_identifier)
-                        && ![P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]
-                            .contains(&row.property_identifier)
+                    } else if base_required.contains(&p)
+                        || p == P::PROPERTY_LIST
+                        || (kind == ObjectType::ANALOG_OUTPUT && commandable.contains(&p))
                     {
                         PropertyConformance::RequiredRead
                     } else {
                         PropertyConformance::Optional
-                    }
+                    },
+                    "{kind:?} {p:?}"
                 );
                 if commandable.contains(&row.property_identifier) {
                     assert_eq!(
@@ -201,6 +243,9 @@ fn property_metadata_analog_write_capabilities_match_dispatch() {
                     | P::NOTIFICATION_CLASS
                     | P::TIME_DELAY
                     | P::TIME_DELAY_NORMAL
+                    | P::EVENT_MESSAGE_TEXTS_CONFIG
+                    | P::EVENT_ALGORITHM_INHIBIT_REF
+                    | P::EVENT_ALGORITHM_INHIBIT
                     | P::RELIABILITY_EVALUATION_INHIBIT => PropertyWriteCapability::Always,
                     _ => PropertyWriteCapability::ReadOnly,
                 };

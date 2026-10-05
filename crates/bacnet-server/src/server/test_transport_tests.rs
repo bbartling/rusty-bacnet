@@ -80,6 +80,38 @@ async fn identity_defaults_and_hooks() {
     assert_eq!(queries.load(Ordering::SeqCst), 3);
 }
 
+/// Group MACs widen `is_group_destination` and the owned rule, not
+/// `is_broadcast_mac`; the owned rule never calls the broadcast hook.
+#[test]
+fn group_macs_are_group_destinations_only() {
+    let transport = TestTransport::builder()
+        .broadcast_mac(&[0xFF])
+        .group_mac(&[0xE0])
+        .build();
+    let owned = transport.group_destinations();
+    for (mac, broadcast, group) in [
+        ([0xFF], true, true),
+        ([0xE0], false, true),
+        ([1], false, false),
+    ] {
+        assert_eq!(transport.is_broadcast_mac(&mac), broadcast, "{mac:?}");
+        assert_eq!(transport.is_group_destination(&mac), group, "{mac:?}");
+        assert_eq!(owned.contains(&mac), group, "{mac:?}");
+    }
+
+    let queries = Arc::new(AtomicUsize::new(0));
+    let hook = Arc::clone(&queries);
+    let transport = TestTransport::builder()
+        .on_is_broadcast_mac(move |_| {
+            hook.fetch_add(1, Ordering::SeqCst);
+            false
+        })
+        .group_mac(&[0xE0])
+        .build();
+    assert!(transport.group_destinations().contains(&[0xE0]));
+    assert_eq!(queries.load(Ordering::SeqCst), 0);
+}
+
 #[tokio::test]
 async fn start_modes() {
     let started = Arc::new(AtomicBool::new(false));

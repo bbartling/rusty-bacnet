@@ -442,12 +442,16 @@ impl BACnetServer {
     ///
     /// Its Lighting_Command reads and writes as `application_data` holding
     /// the context-tagged BACnetLightingCommand, operation NONE until written
-    /// (#1263). The object stores a command without carrying it out.
+    /// (#1263). The object carries each command out (#1384): fades and ramps
+    /// move Tracking_Value to the new level over time, steps change the level
+    /// at once, and the warn commands blink and hold the level for
+    /// Egress_Time when Blink_Warn_Enable is TRUE.
     ///
     /// A Present_Value or Relinquish_Default level above 0.0 and below 1.0 is
     /// stored as 1.0, and one outside 0.0 to 100.0 is refused with
-    /// VALUE_OUT_OF_RANGE (#1385). Tracking_Value reads the same level as
-    /// Present_Value.
+    /// VALUE_OUT_OF_RANGE (#1385), but for Present_Value's warn values -1.0,
+    /// -2.0 and -3.0. Tracking_Value reads the same level as Present_Value
+    /// whenever no fade or ramp is running.
     #[pyo3(signature = (instance, name))]
     fn add_lighting_output(&self, instance: u32, name: &str) -> PyResult<()> {
         let obj = LightingOutputObject::new(instance, name).map_err(to_py_err)?;

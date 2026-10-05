@@ -4,7 +4,7 @@
 
 use super::event_forwarding::ForwardingBudget;
 use super::event_recipient_route::{
-    network_priority_for_event, ConfirmedRecipientRoute, RecipientRoute,
+    network_priority_for_event, ConfirmedRecipientRoute, ConfirmedRouteRefusal, RecipientRoute,
 };
 use super::event_suppression::EventSuppression;
 use super::notification_transactions::NotificationReserveError;
@@ -70,7 +70,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // One reading for every destination of this notification, taken
         // without the database lock (#1298).
         let local_network = network.local_network_number().get();
+        // The link's own broadcast routes an Address recipient; any group
+        // address takes no binding and no confirmed request (#1493).
         let is_link_broadcast = |mac: &[u8]| network.transport().is_broadcast_mac(mac);
+        let is_group = |mac: &[u8]| network.transport().is_group_destination(mac);
 
         for (recipient, process_id, confirmed) in recipients {
             let route = match recipient {
@@ -80,14 +83,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 BACnetRecipient::Device(identifier) => {
                     let resolution = {
                         let table = device_bindings.read().await;
-                        table.resolve_at(identifier, Instant::now(), is_link_broadcast)
+                        table.resolve_at(identifier, Instant::now(), is_group)
                     };
                     RecipientRoute::from_device_resolution(resolution)
                 }
             }
             // A recipient on this network by number is sent to as a local
             // one (#1299).
-            .localize(local_network, is_link_broadcast);
+            .localize(local_network, is_link_broadcast, is_group);
 
             // A route that can't carry this notification is skipped and
             // counted (#1160); the remaining destinations are still served.
@@ -95,6 +98,34 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 suppressions.record(skip);
                 continue;
             }
+            // A confirmed one goes to one device, never to a group address
+            // such as a multicast one, where an unconfirmed one may still go.
+            // It is counted with the confirmed broadcast recipients (#1493).
+            let confirmed_route = if *confirmed {
+                match route.clone().into_confirmed(is_group) {
+                    Ok(confirmed_route) => Some(confirmed_route),
+                    Err(ConfirmedRouteRefusal::GroupNextHop) => {
+                        suppressions.record(EventSuppression::ConfirmedBroadcastRecipient);
+                        warn!(
+                            notification_class,
+                            "Recipient requests confirmed notifications at a group address; \
+                             a confirmed request goes to one device, skipping"
+                        );
+                        continue;
+                    }
+                    // `skip` let only unicast routes through, so this means
+                    // the route classification changed: fail closed.
+                    Err(ConfirmedRouteRefusal::NotOneDevice) => {
+                        warn!(
+                            notification_class,
+                            "Confirmed notification route is unusable"
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
             // A forwarded notification keeps off the routes Clause 12.51's
             // loop rules close to it. That is configured behaviour, not a
             // failed delivery, so nothing is counted.
@@ -145,22 +176,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 continue;
             }
 
-            if *confirmed {
-                // Convert only the unicast route shapes admitted above and
-                // fail closed if the route classification changes.
-                let Some(ConfirmedRecipientRoute {
-                    canonical_peer,
-                    local_target,
-                    remote,
-                    freshness,
-                }) = route.into_confirmed()
-                else {
-                    warn!(
-                        notification_class,
-                        "Confirmed notification route is unusable"
-                    );
-                    continue;
-                };
+            if let Some(ConfirmedRecipientRoute {
+                canonical_peer,
+                local_target,
+                remote,
+                freshness,
+            }) = confirmed_route
+            {
                 let (operation, result_rx) = match notification_transactions.reserve(
                     canonical_peer,
                     ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,

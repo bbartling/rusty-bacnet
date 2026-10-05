@@ -19,7 +19,7 @@ use crate::property_metadata::{
 // come together and are writable (footnotes 1 and 2); no footnote requires
 // them. The log reports BUFFER_READY (#1347), so it has the rows footnote 3
 // asks for, each marked as present for intrinsic reporting.
-const BASE: [PropertyMetadata; 26] = {
+const BASE: [PropertyMetadata; 29] = {
     let r = BUFFER_READY_METADATA;
     [
         PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
@@ -47,6 +47,9 @@ const BASE: [PropertyMetadata; 26] = {
         r[7],
         r[8],
         r[9],
+        r[10],
+        r[11],
+        r[12],
         PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
     ]
 };
