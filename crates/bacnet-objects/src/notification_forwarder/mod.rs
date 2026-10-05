@@ -84,6 +84,15 @@ pub use selection::{forwarding_targets, ForwardingInput, ForwardingTargets};
 
 /// BACnet Notification Forwarder object (type 51). See the
 /// [module documentation](self).
+///
+/// # Unwind safety
+///
+/// The forwarder is neither `UnwindSafe` nor `RefUnwindSafe`, by decision
+/// (#1452). Its Subscribed_Recipients keep the monotonic clock the server
+/// binds, a closure the caller supplies and runs on its own thread. Nothing
+/// catches a panic from it, so wrapping it in `AssertUnwindSafe`, as the
+/// save writer's parts are, would claim more than the type can promise.
+/// Caller clocks get no unwind-safety bound either.
 pub struct NotificationForwarderObject {
     oid: ObjectIdentifier,
     name: String,

@@ -2438,17 +2438,24 @@ the buffer alone and may name another device (the poller logs a failure for
 it), but refuse a Device member that isn't a Device identifier, and
 `add_property_reference` a 65th reference.
 
-A Trend Log Multiple also serves Start_Time, Stop_Time, Align_Intervals,
-Interval_Offset and Trigger, and its Logging_Type is writable (#1235); each
-has a local setter returning `Result` where a write can be refused:
+Trend Log and Trend Log Multiple both serve Start_Time, Stop_Time,
+Align_Intervals, Interval_Offset and Trigger, and their Logging_Type is
+writable (#1235, #1353, #1354); Event Log serves Start_Time and Stop_Time
+(#1353). Each row has a local setter on the object, returning `Result` where
+a write can be refused:
 
-- **Logging_Type** is POLLED or TRIGGERED. COV, which this object type never
-  uses (Clause 12.30.12), and any other value are PROPERTY /
-  VALUE_OUT_OF_RANGE, through `set_logging_type(LoggingType)` as over the
-  wire. POLLED with a zero Log_Interval sets
+- **Logging_Type** is POLLED or TRIGGERED. COV and any other value are
+  PROPERTY / VALUE_OUT_OF_RANGE, through `set_logging_type(LoggingType)` as
+  over the wire: a Trend Log Multiple never logs by COV (Clause 12.30.12),
+  and a Trend Log could (Clause 12.25.26) but this stack has no COV
+  acquisition, so it refuses COV rather than serve a mode it doesn't carry
+  out. POLLED with a zero Log_Interval sets
   `trend::DEFAULT_LOG_INTERVAL` (6000 hundredths, one minute); TRIGGERED sets
   Log_Interval to 0 and makes it read-only, so a write or
-  `set_log_interval` then is WRITE_ACCESS_DENIED.
+  `set_log_interval` then is WRITE_ACCESS_DENIED. On a POLLED Trend Log, a
+  nonzero Log_Interval written to 0 is the older way to ask for COV logging
+  (Clause 12.25.9), and is refused the same way; a Trend Log Multiple just
+  stops polling at 0.
 - **Trigger** written TRUE (or `trigger()`) asks a TRIGGERED log for one
   acquisition; it reads TRUE until the poller's record is accepted, and
   `add_record` clears it. TRUE on a POLLED log is PROPERTY /
@@ -2465,8 +2472,9 @@ has a local setter returning `Result` where a write can be refused:
   records it at once, and the poller's next pass records a change that time
   brings. Enable changes while the window is shut leave logging off, so they
   add no record. The local setters are configuration: the first
-  look afterwards notes the window without a record. The window logic lives
-  in the shared log lifecycle, so the other log objects can take it up.
+  look afterwards notes the window without a record. The poller looks at
+  every log's window on each pass, an Event Log's included, so an opening or
+  closing is recorded even when no record arrives.
 - **Align_Intervals / Interval_Offset** (`set_align_intervals`,
   `set_interval_offset`) make a POLLED log acquire when the Device clock's
   time of day is Interval_Offset (modulo Log_Interval) past a multiple of
@@ -2521,8 +2529,8 @@ with `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`). The rules:
   property of an Event Log. Logging such a report anywhere would add a record
   that changes what it watches, so reports could prompt each other without end,
   directly or crosswise between two logs.
-- Each log applies its own Enable, Buffer_Size and Stop_When_Full handling.
-  Event Log has no Start_Time or Stop_Time, so Enable alone switches logging.
+- Each log applies its own Enable, Start_Time / Stop_Time window,
+  Buffer_Size and Stop_When_Full handling.
 - Without a valid Device clock nothing is logged, since a record needs a
   timestamp.
 
@@ -2578,17 +2586,17 @@ Trend Log Multiple records. The void hook and `try_add_trend_record_internal`
 adapter have been replaced. Custom implementations return their insertion result
 directly; the default returns `OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED`.
 The server poller (`ObjectDatabase::poll_trend_logs`) samples both object types
-and retries failed insertions without advancing its last-log time. For a Trend
-Log Multiple it also makes one acquisition for each Trigger of a TRIGGERED log
-(a log with no members records an empty set of values, so Trigger never stays
-TRUE), waits for each clock-aligned boundary of an aligned POLLED log, and on
-every pass calls the hidden `refresh_log_window_internal` hook so each log
-records its window opening or closing. Wrappers forward that hook, as
-`SourceReporter` does. `TrendLogObject::set_logging_type` takes a
-`LoggingType` too; a Trend Log keeps its read-only Logging_Type and has no
-window, alignment or Trigger yet (#1353, #1354). Only POLLED and TRIGGERED
-logs are polled: a Trend Log set to a proprietary Logging_Type, which used to
-be polled as POLLED, no longer is. Bounded evidence is recorded in
+and retries failed insertions without advancing its last-log time. It also
+makes one acquisition for each Trigger of a TRIGGERED log (a Trend Log
+Multiple with no members records an empty set of values, and a Trend Log
+with no reference a PROPERTY / NO_PROPERTY_SPECIFIED failure, so Trigger
+never stays TRUE), waits for each clock-aligned boundary of an aligned POLLED
+log, and on every pass calls the hidden `refresh_log_window_internal` hook on
+each Trend Log, Trend Log Multiple and Event Log, so each records its window
+opening or closing. Wrappers forward that hook, as `SourceReporter` does.
+`TrendLogObject::set_logging_type` returns `Result`, as Trend Log
+Multiple's does. Only POLLED and TRIGGERED logs are polled. Bounded evidence
+is recorded in
 `BACNET-12-LOG-STATUS-LIFECYCLE`; complete log-family conformance is not
 claimed.
 

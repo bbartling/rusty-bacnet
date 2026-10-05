@@ -28,7 +28,7 @@ fn log_objects(capacity: u32, configured: bool) -> [Box<dyn BACnetObject>; 3] {
             .set_log_device_object_property(Some(reference.clone()))
             .unwrap();
         multiple.add_property_reference(reference).unwrap();
-        trend.set_logging_type(LoggingType::TRIGGERED);
+        trend.set_logging_type(LoggingType::TRIGGERED).unwrap();
         multiple.set_logging_type(LoggingType::TRIGGERED).unwrap();
         for (log_datum, status_flags, log_data, event_datum) in [
             (
@@ -97,8 +97,8 @@ fn log_objects(capacity: u32, configured: bool) -> [Box<dyn BACnetObject>; 3] {
 // Independent (identifier, optional, writable) fixtures in legacy order.
 // Kept with the log-family consumer tests so existing near-cap PICS and RPM
 // test files need no unrelated splits.
-/// `triggered`: the trend logs' Logging_Type is TRIGGERED, which makes a
-/// Trend Log Multiple's Log_Interval read-only (Table 12-35 footnote 2).
+/// `triggered`: the trend logs' Logging_Type is TRIGGERED, which makes their
+/// Log_Interval read-only (Table 12-29 footnote 3, Table 12-35 footnote 2).
 fn expected_rows(kind: ObjectType, triggered: bool) -> Vec<(P, bool, bool)> {
     let multiple = kind == ObjectType::TREND_LOG_MULTIPLE;
     let mut rows = vec![
@@ -107,7 +107,7 @@ fn expected_rows(kind: ObjectType, triggered: bool) -> Vec<(P, bool, bool)> {
         (P::DESCRIPTION, true, true),
         (P::OBJECT_TYPE, false, false),
         (P::LOG_ENABLE, false, true),
-        (P::LOG_INTERVAL, !multiple, !(multiple && triggered)),
+        (P::LOG_INTERVAL, !multiple, !triggered),
         (P::STOP_WHEN_FULL, false, true),
         (P::BUFFER_SIZE, false, false),
         (P::LOG_BUFFER, false, false),
@@ -118,13 +118,14 @@ fn expected_rows(kind: ObjectType, triggered: bool) -> Vec<(P, bool, bool)> {
         (P::RELIABILITY, true, false),
     ];
     if kind == ObjectType::EVENT_LOG {
-        // Table 12-31 has no Log_Interval (#1064).
+        // Table 12-31 has no Log_Interval (#1064); its window is writable
+        // (#1353).
         rows.retain(|row| row.0 != P::LOG_INTERVAL);
-    }
-    if kind != ObjectType::EVENT_LOG {
+        rows.extend([P::START_TIME, P::STOP_TIME].map(|p| (p, true, true)));
+    } else {
         rows.extend([
-            // A Trend Log Multiple takes POLLED or TRIGGERED (#1235).
-            (P::LOGGING_TYPE, false, multiple),
+            // Both trend objects take POLLED or TRIGGERED (#1235, #1354).
+            (P::LOGGING_TYPE, false, true),
             // Writable on both trend objects (#1234).
             (
                 P::LOG_DEVICE_OBJECT_PROPERTY,
@@ -132,9 +133,8 @@ fn expected_rows(kind: ObjectType, triggered: bool) -> Vec<(P, bool, bool)> {
                 true,
             ),
         ]);
-    }
-    if multiple {
-        // The window, clock alignment and Trigger, all writable (#1235).
+        // The window, clock alignment and Trigger, all writable (#1235,
+        // #1353, #1354).
         rows.extend(
             [
                 P::START_TIME,

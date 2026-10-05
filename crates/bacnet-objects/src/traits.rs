@@ -1321,9 +1321,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// clock, recording the LOG_DISABLED change when it opened or closed
     /// since the last look while Enable is TRUE.
     ///
-    /// The trend poller calls this for every trend log on each pass, so a
-    /// window that moves while no record is acquired is still logged within
-    /// one pass. Returns whether a record was added. The default, for objects
+    /// The trend poller calls this for every Trend Log, Trend Log Multiple
+    /// and Event Log on each pass, so a window that moves while no record
+    /// arrives is still logged within one pass. Returns whether a record was added. The default, for objects
     /// without a window, does nothing and returns `false`.
     #[doc(hidden)]
     fn refresh_log_window_internal(&mut self) -> bool {

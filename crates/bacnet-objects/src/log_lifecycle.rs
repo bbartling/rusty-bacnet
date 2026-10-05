@@ -27,19 +27,18 @@ pub(crate) const STOP_WHEN_FULL_METADATA: PropertyMetadata =
 pub(crate) const RECORD_COUNT_METADATA: PropertyMetadata =
     PropertyMetadata::new(P::RECORD_COUNT, RequiredWrite, None, Always);
 
-/// The shared lifecycle of one log object.
+/// The shared lifecycle of one log object: Trend Log, Event Log or Trend Log
+/// Multiple.
 ///
-/// A log with a Start_Time / Stop_Time window (see
-/// [`with_window`](Self::with_window)) collects only while Enable is TRUE and
-/// the window admits the current local time; each LOG_DISABLED it records
-/// reflects both. A log without one behaves as if its window were always
-/// open.
+/// A log collects only while Enable is TRUE and its Start_Time / Stop_Time
+/// window admits the current local time; each LOG_DISABLED it records
+/// reflects both. A window with both ends unspecified is always open.
 pub(crate) struct LogLifecycle<'a, R: ResidentLogRecord> {
     buffer: &'a mut LogRecordBuffer<R>,
     enabled: &'a mut bool,
     stop_when_full: &'a mut bool,
     clock: Option<&'a Arc<dyn ClockReader>>,
-    window: Option<&'a mut LogWindow>,
+    window: &'a mut LogWindow,
 }
 
 impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
@@ -48,20 +47,15 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         enabled: &'a mut bool,
         stop_when_full: &'a mut bool,
         clock: Option<&'a Arc<dyn ClockReader>>,
+        window: &'a mut LogWindow,
     ) -> Self {
         Self {
             buffer,
             enabled,
             stop_when_full,
             clock,
-            window: None,
+            window,
         }
-    }
-
-    /// Gate collection on `window` as well as Enable.
-    pub(crate) fn with_window(mut self, window: &'a mut LogWindow) -> Self {
-        self.window = Some(window);
-        self
     }
 
     /// Look at the window again. When it opened or closed since the last look
@@ -74,24 +68,33 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
     /// changes and the next look with a clock records what it finds. The
     /// first look after a local change only notes where the window stands.
     pub(crate) fn refresh_window(&mut self) -> bool {
-        let now = valid_timestamp(self.clock).ok();
+        let now = self.look_time();
         self.refresh_window_at(now)
+    }
+
+    /// The local time a look at the window needs, or `None` when the clock
+    /// can't give one. A window open at both ends that wasn't shut at the
+    /// last look can't change and needs no time, so the clock isn't read
+    /// then: most logs leave both ends open, and the poller looks at each
+    /// one on every pass.
+    fn look_time(&self) -> Option<(Date, Time)> {
+        if self.window.is_unbounded() && self.window.last() != Some(false) {
+            return None;
+        }
+        valid_timestamp(self.clock).ok()
     }
 
     /// [`refresh_window`](Self::refresh_window) at the local moment `now`,
     /// which also stamps any record it adds.
     fn refresh_window_at(&mut self, now: Option<(Date, Time)>) -> bool {
-        let Some(window) = self.window.as_deref_mut() else {
-            return false;
-        };
         let open = match now {
-            _ if window.is_unbounded() => true,
-            Some(now) => window.admits(now),
+            _ if self.window.is_unbounded() => true,
+            Some(now) => self.window.admits(now),
             None => return false,
         };
-        let changed = window.last().is_some_and(|last| last != open);
+        let changed = self.window.last().is_some_and(|last| last != open);
         if !changed || !*self.enabled {
-            window.note(open);
+            self.window.note(open);
             return false;
         }
         // The record needs a timestamp; without one, keep the last look so
@@ -99,7 +102,7 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
         let Some(now) = now else {
             return false;
         };
-        window.note(open);
+        self.window.note(open);
         let status = if !open {
             LogStatus::LOG_DISABLED
         } else if *self.stop_when_full && self.buffer.next_record_would_fill_positive_capacity() {
@@ -114,7 +117,7 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
 
     /// Whether the window admitted logging at the last look.
     fn window_open(&self) -> bool {
-        self.window.as_deref().is_none_or(LogWindow::is_open)
+        self.window.is_open()
     }
 
     /// Admit an ordinary record. A record that would not encode is refused
@@ -129,13 +132,10 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
     /// is judged at the clock's time instead.
     pub(crate) fn try_add_ordinary(&mut self, record: R) -> Result<OrdinaryAdmission, Error> {
         record.encode(&mut BytesMut::new())?;
-        // A log without a window (Trend Log, Event Log) skips this step.
-        if self.window.is_some() {
-            let at = Some(record.timestamp())
-                .filter(|&timestamp| LogWindow::is_moment(timestamp))
-                .or_else(|| valid_timestamp(self.clock).ok());
-            self.refresh_window_at(at);
-        }
+        let at = Some(record.timestamp())
+            .filter(|&timestamp| LogWindow::is_moment(timestamp))
+            .or_else(|| self.look_time());
+        self.refresh_window_at(at);
         let collecting = *self.enabled && self.window_open();
         let admission = self
             .buffer

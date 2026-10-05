@@ -11,7 +11,7 @@ use bacnet_types::enums::{
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 
-use super::acquisition::Acquisition;
+use super::acquisition::{Acquisition, Rules};
 use super::multiple_metadata;
 use super::references::{self, MAX_LOG_DEVICE_OBJECT_PROPERTIES};
 use crate::clock::ClockReader;
@@ -62,7 +62,7 @@ impl TrendLogMultipleObject {
             buffer_size,
             log_buffer: LogRecordBuffer::new(buffer_size),
             log_device_object_property: Vec::new(),
-            acquisition: Acquisition::default(),
+            acquisition: Acquisition::new(Rules::TrendLogMultiple),
             window: LogWindow::default(),
             reliability: Reliability::NO_FAULT_DETECTED,
             clock: None,
@@ -199,25 +199,16 @@ impl TrendLogMultipleObject {
     /// the weekday may stay unspecified, and unspecified seconds or
     /// hundredths count as zero.
     pub fn set_start_time(&mut self, date: Date, time: Time) -> Result<(), Error> {
-        self.set_window_end(PropertyIdentifier::START_TIME, date, time)
+        self.window
+            .configure(PropertyIdentifier::START_TIME, (date, time))
     }
 
     /// Set Stop_Time, the local date and time from which records are no
     /// longer kept, under the same rules as
     /// [`set_start_time`](Self::set_start_time).
     pub fn set_stop_time(&mut self, date: Date, time: Time) -> Result<(), Error> {
-        self.set_window_end(PropertyIdentifier::STOP_TIME, date, time)
-    }
-
-    fn set_window_end(
-        &mut self,
-        property: PropertyIdentifier,
-        date: Date,
-        time: Time,
-    ) -> Result<(), Error> {
-        self.window.set(property, (date, time))?;
-        self.window.forget();
-        Ok(())
+        self.window
+            .configure(PropertyIdentifier::STOP_TIME, (date, time))
     }
 
     /// Set Align_Intervals: whether a POLLED log acquires at clock-aligned
@@ -249,8 +240,8 @@ impl TrendLogMultipleObject {
             &mut self.log_enable,
             &mut self.stop_when_full,
             self.clock.as_ref(),
+            &mut self.window,
         )
-        .with_window(&mut self.window)
     }
 }
 

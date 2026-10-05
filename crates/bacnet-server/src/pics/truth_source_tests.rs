@@ -583,6 +583,9 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
                 PropertyIdentifier::DESCRIPTION,
+                // The window (#1353).
+                PropertyIdentifier::START_TIME,
+                PropertyIdentifier::STOP_TIME,
             ][..],
         ),
         (
@@ -594,6 +597,14 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
                 PropertyIdentifier::RECORD_COUNT,
                 PropertyIdentifier::DESCRIPTION,
                 PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY,
+                // Logging_Type, the window, alignment and Trigger (#1353,
+                // #1354).
+                PropertyIdentifier::LOGGING_TYPE,
+                PropertyIdentifier::START_TIME,
+                PropertyIdentifier::STOP_TIME,
+                PropertyIdentifier::ALIGN_INTERVALS,
+                PropertyIdentifier::INTERVAL_OFFSET,
+                PropertyIdentifier::TRIGGER,
             ][..],
         ),
         (

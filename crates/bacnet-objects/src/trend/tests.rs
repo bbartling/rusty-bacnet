@@ -307,11 +307,11 @@ fn trendlog_read_logging_type() {
 #[test]
 fn trendlog_set_logging_type() {
     let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
-    tl.set_logging_type(LoggingType::COV);
+    tl.set_logging_type(LoggingType::TRIGGERED).unwrap();
     let val = tl
         .read_property(PropertyIdentifier::LOGGING_TYPE, None)
         .unwrap();
-    assert_eq!(val, PropertyValue::Enumerated(1));
+    assert_eq!(val, PropertyValue::Enumerated(2));
 }
 
 #[test]
