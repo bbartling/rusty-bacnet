@@ -1243,12 +1243,16 @@ answers, so the call returns once the request is sent.
   address and a network together raise `ValueError`.
 - `group_number`: 1 to 4294967295; group 0 is reserved.
 - `write_priority`: 1 to 16, used for entries that do not override it.
-- `change_list`: a non-empty list of `(channel, override_priority, value_bytes)` tuples.
+- `change_list`: a non-empty list of `(channel, override_priority, value)` tuples.
   - `channel` is a channel number (`int`, 0 to 65535) matching a Channel object's
     `Channel_Number`.
   - `override_priority` is 1 to 16, or `None` to use `write_priority`.
-  - `value_bytes` is one encoded BACnetChannelValue with no wrapper tag: a single
-    application-tagged primitive, or a context-0 lighting command.
+  - `value` is a `PropertyValue` holding one primitive (`PropertyValue.real(72.0)`,
+    `PropertyValue.null()`), which the binding encodes, or `bytes` holding one
+    encoded BACnetChannelValue with no wrapper tag: a single application-tagged
+    primitive, or a context-0 lighting command, which has no `PropertyValue`
+    form. A `PropertyValue` that isn't one primitive, such as a list, raises
+    `ValueError` (#1359).
 - `inhibit_delay`: optional Boolean. TRUE skips the execution delays of Channels whose
   `Allow_Group_Delay_Inhibit` is TRUE.
 
@@ -1265,15 +1269,16 @@ await client.write_group(
     group_number=1,
     write_priority=8,
     change_list=[
-        # Channel 5 gets REAL 72.0 (application tag 4); channel 6 gets NULL and
-        # writes at priority 10 (NULL relinquishes, as with WriteProperty).
-        (5, None, bytes([0x44, 0x42, 0x90, 0x00, 0x00])),
-        (6, 10, bytes([0x00])),
+        # Channel 5 gets REAL 72.0; channel 6 gets NULL and writes at
+        # priority 10 (NULL relinquishes, as with WriteProperty).
+        (5, None, PropertyValue.real(72.0)),
+        (6, 10, PropertyValue.null()),
     ],
     inhibit_delay=False,
 )
 
-# The same change list for every device on network 5.
+# The same REAL for every device on network 5, already encoded
+# (application tag 4).
 await client.write_group(
     None, 1, 8, [(5, None, bytes([0x44, 0x42, 0x90, 0x00, 0x00]))], network=5
 )

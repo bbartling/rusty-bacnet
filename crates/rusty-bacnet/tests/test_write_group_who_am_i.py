@@ -4,7 +4,7 @@ import asyncio
 import socket
 import unittest
 
-from rusty_bacnet import BACnetClient
+from rusty_bacnet import BACnetClient, ObjectIdentifier, ObjectType, PropertyValue
 
 REAL_72 = bytes([0x44, 0x42, 0x90, 0x00, 0x00])
 
@@ -20,6 +20,11 @@ def invalid_write_groups():
     yield 1, 8, [(5, None, b"\x00\x00")]  # two values
     yield 1, 8, [(5, None, b"\x2e" + REAL_72 + b"\x2f")]  # wrapped in context tag 2
     yield 1, 8, [(5, None, b"\x44\x42\x90")]  # truncated REAL
+    # A PropertyValue that isn't one primitive (#1359).
+    two = PropertyValue.list([PropertyValue.null(), PropertyValue.null()])
+    yield 1, 8, [(5, None, two)]  # two values
+    yield 1, 8, [(5, None, PropertyValue.list([]))]  # no value
+    yield 1, 8, [(5, None, PropertyValue.application_data(b"\x2e\x21\x01\x2f"))]  # constructed
 
 
 class WriteGroupTests(unittest.IsolatedAsyncioTestCase):
@@ -39,12 +44,17 @@ class WriteGroupTests(unittest.IsolatedAsyncioTestCase):
             client.write_group("invalid-address", 1 << 32, 8, [(5, None, REAL_72)])
 
     async def test_object_identifier_channel_is_rejected(self):
-        from rusty_bacnet import ObjectIdentifier, ObjectType
-
         client = BACnetClient(interface="127.0.0.1", port=0)
         oid = ObjectIdentifier(ObjectType.CHANNEL, 5)
         with self.assertRaises(TypeError):
             client.write_group("invalid-address", 1, 8, [(oid, None, REAL_72)])
+
+    async def test_a_value_is_bytes_or_a_property_value(self):
+        client = BACnetClient(interface="127.0.0.1", port=0)
+        for value in ("72.0", 72.0, None):
+            with self.subTest(value=value):
+                with self.assertRaises(TypeError):
+                    client.write_group("invalid-address", 1, 8, [(5, None, value)])
 
     async def test_destination_arguments(self):
         client = BACnetClient(interface="127.0.0.1", port=0)
@@ -107,6 +117,37 @@ class WriteGroupTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     packet[8:],
                     bytes.fromhex("0a 01 02 19 10 2e 0a 01 2c 19 0a 00 09 00 11 2f 39 01"),
+                )
+
+    async def test_property_values_are_encoded_as_their_bytes_would_be(self):
+        # Each PropertyValue goes out as the bytes test_exact_wire_bytes
+        # sends for it (#1359), and bytes and values mix in one list.
+        loop = asyncio.get_running_loop()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
+            peer.bind(("127.0.0.1", 0))
+            peer.setblocking(False)
+            address = f"127.0.0.1:{peer.getsockname()[1]}"
+            async with BACnetClient(interface="127.0.0.1", port=0) as client:
+                await client.write_group(address, 1, 8, [(5, None, PropertyValue.real(72.0))])
+                packet, _ = await asyncio.wait_for(loop.sock_recvfrom(peer, 2048), 2)
+                self.assertEqual(
+                    packet[8:],
+                    bytes.fromhex("09 01 19 08 2e 09 05 44 42 90 00 00 2f"),
+                )
+
+                change_list = [
+                    (300, 10, PropertyValue.null()),
+                    (0, None, PropertyValue.boolean(True)),
+                    (7, None, PropertyValue.enumerated(1)),
+                    (8, None, b"\x21\x03"),
+                ]
+                await client.write_group(address, 258, 16, change_list, True)
+                packet, _ = await asyncio.wait_for(loop.sock_recvfrom(peer, 2048), 2)
+                self.assertEqual(
+                    packet[8:],
+                    bytes.fromhex(
+                        "0a 01 02 19 10 2e 0a 01 2c 19 0a 00 09 00 11 09 07 91 01 09 08 21 03 2f 39 01"
+                    ),
                 )
 
 

@@ -4530,7 +4530,7 @@
     "crates/bacnet-objects/src/device/tests.rs::read_protocol_services_supported",
     "crates/rusty-bacnet/tests/test_channel.py::ChannelMembersTests::test_write_group_reaches_the_channel_through_its_control_groups",
     "crates/bacnet-server/src/pics/tests.rs::{executed_services_match_dispatch_table,services_match_implementation}",
-    "crates/rusty-bacnet/tests/test_write_group_who_am_i.py::WriteGroupTests::{test_exact_wire_bytes,test_broadcasts_are_sent}",
+    "crates/rusty-bacnet/tests/test_write_group_who_am_i.py::WriteGroupTests::{test_exact_wire_bytes,test_broadcasts_are_sent,test_property_values_are_encoded_as_their_bytes_would_be}",
     "crates/rusty-bacnet/src/client/client_methods/enrollment_alarm_covmulti_who_writegroup.rs::write_group_address_and_network_pick_the_destination"
    ],
    "negative_tests": [
@@ -4540,7 +4540,7 @@
     "crates/bacnet-endpoint/src/device_execution_tests.rs::endpoint_execution_profile_refusals_precede_ingress_and_allow_repair",
     "crates/bacnet-client/src/client/write_group_tests.rs::write_group_refuses_a_bad_request_or_network_before_sending",
     "crates/bacnet-services/src/write_group_tests.rs::{decode_rejects_group_zero_as_decoding_error,decode_rejects_trailing_data,decode_rejects_every_truncation}",
-    "crates/rusty-bacnet/tests/test_write_group_who_am_i.py::WriteGroupTests::{test_destination_arguments,test_invalid_arguments_raise_before_address_and_start}"
+    "crates/rusty-bacnet/tests/test_write_group_who_am_i.py::WriteGroupTests::{test_destination_arguments,test_invalid_arguments_raise_before_address_and_start,test_a_value_is_bytes_or_a_property_value}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -4550,7 +4550,8 @@
     "docs/python-api.md#channels",
     "docs/mutation-policy.md#local-mutation-authorization",
     "CHANGELOG.md Unreleased Changed entry for #1319 (the mutation authorizer decides WriteGroup Channel writes), from changelog.d/1319-write-group-mutation-authorizer.md",
-    "CHANGELOG.md Unreleased Added entry for #1318 (Audit records for WriteGroup Channel writes), from changelog.d/1318-write-group-audit.md"
+    "CHANGELOG.md Unreleased Added entry for #1318 (Audit records for WriteGroup Channel writes), from changelog.d/1318-write-group-audit.md",
+    "CHANGELOG.md Unreleased Added entry for #1359 (Python write_group takes PropertyValue values), from changelog.d/1359-python-write-group-property-values.md"
    ],
    "notes": [
     "Group membership is each Channel's own `Control_Groups`: a Channel outside the group keeps its value even when another Channel in the device is in it. Group and number are checked again under each write's guard.",

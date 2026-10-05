@@ -2373,7 +2373,7 @@ class BACnetClient:
         address: Optional[str],
         group_number: int,
         write_priority: int,
-        change_list: list[tuple[int, Optional[int], bytes]],
+        change_list: list[tuple[int, Optional[int], Union[PropertyValue, bytes]]],
         inhibit_delay: Optional[bool] = None,
         *,
         network: Optional[int] = None,
@@ -2387,12 +2387,15 @@ class BACnetClient:
 
         ``group_number`` is 1-4294967295 (group 0 is reserved) and
         ``write_priority`` is 1-16. ``change_list`` is a non-empty list of
-        ``(channel, override_priority_or_none, value_bytes)`` tuples, where
+        ``(channel, override_priority_or_none, value)`` tuples, where
         ``channel`` is a channel number 0-65535, the override priority is 1-16 or
-        ``None``, and ``value_bytes`` is one encoded BACnetChannelValue: a single
-        application-tagged primitive or a context-0 lighting command, with no
-        wrapper tag. Raises ``ValueError``, or ``OverflowError`` for integers that
-        don't fit, for an argument outside those rules.
+        ``None``, and ``value`` is a ``PropertyValue`` holding a primitive
+        (``PropertyValue.real(72.0)``), which is encoded for you, or ``bytes``
+        holding one encoded BACnetChannelValue: a single application-tagged
+        primitive or a context-0 lighting command, with no wrapper tag. Raises
+        ``ValueError``, or ``OverflowError`` for integers that don't fit, for an
+        argument outside those rules, a ``PropertyValue`` that isn't one
+        primitive (a list, say) included.
         """
         ...
 
