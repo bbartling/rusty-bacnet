@@ -138,10 +138,33 @@ impl TransportPort for CaptureTransport {
     fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
         mac == BROADCAST_MAC
     }
+
+    /// Its broadcast MAC, and every group form a B/IP link with broadcast
+    /// address 192.168.1.255 recognises (#1479).
+    fn is_group_destination(&self, mac: &[u8]) -> bool {
+        mac == BROADCAST_MAC
+            || bacnet_transport::bip::BipTransport::new(
+                std::net::Ipv4Addr::LOCALHOST,
+                0xBAC0,
+                std::net::Ipv4Addr::new(192, 168, 1, 255),
+            )
+            .is_group_destination(mac)
+    }
 }
 
 /// The capture link's broadcast MAC, as on MS/TP.
 const BROADCAST_MAC: [u8; 1] = [0xff];
+
+/// The B/IP group forms the capture link recognises: the limited broadcast
+/// and the configured broadcast IP at this port and another, and IPv4
+/// multicast.
+const BIP_GROUPS: [[u8; 6]; 5] = [
+    [255, 255, 255, 255, 0xBA, 0xC0],
+    [255, 255, 255, 255, 0xBA, 0xC1],
+    [192, 168, 1, 255, 0xBA, 0xC1],
+    [224, 0, 0, 1, 0xBA, 0xC0],
+    [239, 255, 255, 250, 0x07, 0x6C],
+];
 
 fn encoded_unconfirmed_request() -> Vec<u8> {
     let mut encoded = BytesMut::new();
@@ -359,11 +382,17 @@ async fn effective_group_destinations_reject_confirmed_and_malformed_apdus_witho
             destination_network: 400,
         },
         EndpointApduDestination::GlobalBroadcast,
-        // With no DNET, the link's broadcast MAC is a local broadcast (#1479).
-        EndpointApduDestination::Direct {
-            destination_mac: MacAddr::from_slice(&BROADCAST_MAC),
-        },
-    ] {
+    ]
+    .into_iter()
+    // With no DNET, the link's broadcast MAC, or any other group address, is
+    // a local broadcast (#1479).
+    .chain(
+        std::iter::once(&BROADCAST_MAC[..])
+            .chain(BIP_GROUPS.iter().map(|mac| &mac[..]))
+            .map(|mac| EndpointApduDestination::Direct {
+                destination_mac: MacAddr::from_slice(mac),
+            }),
+    ) {
         for apdu in [encoded_confirmed_request(), vec![0xff]] {
             assert!(matches!(
                 egress

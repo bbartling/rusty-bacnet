@@ -18,11 +18,15 @@ use bytes::BytesMut;
 /// instance lies from [`low`](Self::low) to [`high`](Self::high), both
 /// included (Clauses 16.10.1.1.1-2 and 16.9.1.1.1-2).
 ///
-/// The clauses send both limits or neither, and keep the low one at or below
-/// the high one. A request holds an `Option<DeviceInstanceRange>`, so it
-/// can't carry one limit alone, and [`Self::new`] refuses a low limit above
-/// the high one, a range no device lies in. The decoders refuse both forms
-/// on the wire as well (#1447, #1483).
+/// The clauses send both limits or neither, keep the low one at or below
+/// the high one, and give each the instance range 0 to
+/// [`ObjectIdentifier::MAX_INSTANCE`]. A request holds an
+/// `Option<DeviceInstanceRange>`, so it can't carry one limit alone, and
+/// [`Self::new`] refuses a low limit above the high one, a range no device
+/// lies in, and a limit past the highest instance. The decoders refuse the
+/// first two forms on the wire as well (#1447, #1483), but take a limit past
+/// the highest instance, since some devices send one to mean every device;
+/// [`Self::contains`] reads such a range as written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DeviceInstanceRange {
     low: u32,
@@ -31,8 +35,22 @@ pub struct DeviceInstanceRange {
 
 impl DeviceInstanceRange {
     /// The instances from `low` to `high`, both included. Fails with
-    /// [`Error::OutOfRange`] when `low` is above `high`.
+    /// [`Error::OutOfRange`] when `low` is above `high`, or `high` is above
+    /// [`ObjectIdentifier::MAX_INSTANCE`].
     pub fn new(low: u32, high: u32) -> Result<Self, Error> {
+        let range = Self::decoded(low, high)?;
+        if high > ObjectIdentifier::MAX_INSTANCE {
+            return Err(Error::OutOfRange(format!(
+                "device instance range high limit {high} is above the highest instance, {}",
+                ObjectIdentifier::MAX_INSTANCE
+            )));
+        }
+        Ok(range)
+    }
+
+    /// The range as a decoder reads it: `low` no greater than `high`, with
+    /// either past the highest instance taken as written.
+    fn decoded(low: u32, high: u32) -> Result<Self, Error> {
         if low > high {
             return Err(Error::OutOfRange(format!(
                 "device instance range low limit {low} is above its high limit {high}, \
@@ -42,8 +60,15 @@ impl DeviceInstanceRange {
         Ok(Self { low, high })
     }
 
-    /// The one instance `instance`, as when a Who-Is looks for one device.
-    pub const fn single(instance: u32) -> Self {
+    /// The one instance `instance`, as when a Who-Is looks for one device;
+    /// fails as [`Self::new`] does for an instance past the highest.
+    pub fn single(instance: u32) -> Result<Self, Error> {
+        Self::new(instance, instance)
+    }
+
+    /// The one instance of `device`, which always lies in the instance range.
+    pub fn device(device: ObjectIdentifier) -> Self {
+        let instance = device.instance_number();
         Self {
             low: instance,
             high: instance,
@@ -53,18 +78,18 @@ impl DeviceInstanceRange {
     /// The range two separately held limits give: none for neither, a range
     /// for both, as the Python bindings take them. One limit alone fails with
     /// [`Error::OutOfRange`] naming it, rather than becoming a request for
-    /// every device, and so does a low limit above the high one.
+    /// every device, and so does any range [`Self::new`] refuses.
     pub fn from_limits(low: Option<u32>, high: Option<u32>) -> Result<Option<Self>, Error> {
         match (low, high) {
             (None, None) => Ok(None),
             (Some(low), Some(high)) => Self::new(low, high).map(Some),
             (Some(low), None) => Err(Error::OutOfRange(format!(
                 "a device instance range needs both limits or neither: \
-                 low_limit {low} was given without high_limit"
+                 low limit {low} was given without a high limit"
             ))),
             (None, Some(high)) => Err(Error::OutOfRange(format!(
                 "a device instance range needs both limits or neither: \
-                 high_limit {high} was given without low_limit"
+                 high limit {high} was given without a low limit"
             ))),
         }
     }
@@ -110,14 +135,14 @@ impl WireLimits {
             data,
             0,
             0,
-            &format!("{service} low-limit"),
+            &format!("{service} low limit"),
             decode_ctx_unsigned::<u32>,
         )?;
         let (high, end) = decode_optional_ctx(
             data,
             after_low,
             1,
-            &format!("{service} high-limit"),
+            &format!("{service} high limit"),
             decode_ctx_unsigned::<u32>,
         )?;
         Ok(Self {
@@ -136,17 +161,19 @@ impl WireLimits {
         match (self.low, self.high) {
             (None, None) => Ok(None),
             (Some(low), Some(high)) => {
-                DeviceInstanceRange::new(low, high).map(Some).map_err(|_| {
-                    Error::out_of_range(0, format!("{service} low-limit exceeds high-limit"))
-                })
+                DeviceInstanceRange::decoded(low, high)
+                    .map(Some)
+                    .map_err(|_| {
+                        Error::out_of_range(0, format!("{service} low limit exceeds high limit"))
+                    })
             }
             (Some(_), None) => Err(Error::missing(
                 self.after_low,
-                format!("{service} low-limit needs the high-limit [1] with it"),
+                format!("{service} low limit needs the high limit [1] with it"),
             )),
             (None, Some(_)) => Err(Error::missing(
                 0,
-                format!("{service} high-limit needs the low-limit [0] before it"),
+                format!("{service} high limit needs the low limit [0] before it"),
             )),
         }
     }
@@ -337,15 +364,15 @@ mod tests {
         let err = WhoIsRequest::decode(&data).unwrap_err();
         assert!(
             err.to_string()
-                .contains("WhoIs low-limit exceeds high-limit"),
-            "expected low_limit > high_limit error, got: {err:?}"
+                .contains("WhoIs low limit exceeds high limit"),
+            "expected a low limit above the high limit to fail, got: {err:?}"
         );
     }
 
     #[test]
     fn who_is_equal_limits_is_valid() {
         let req = WhoIsRequest {
-            range: Some(DeviceInstanceRange::single(1500)),
+            range: Some(DeviceInstanceRange::single(1500).unwrap()),
         };
         let mut buf = BytesMut::new();
         req.encode(&mut buf);
@@ -368,10 +395,10 @@ mod tests {
             (
                 4_294_967_297,
                 4_294_967_297,
-                "low-limit: [0]",
+                "low limit: [0]",
                 4_294_967_297_u64,
             ),
-            (1, 4_294_967_297, "high-limit: [1]", 4_294_967_297),
+            (1, 4_294_967_297, "high limit: [1]", 4_294_967_297),
         ] {
             let encoded = encode_range(low, high);
             let error = WhoIsRequest::decode(&encoded).unwrap_err();
@@ -389,7 +416,9 @@ mod tests {
             leading_zero.extend_from_slice(&[0, 0xff, 0xff, 0xff, 0xff]);
         }
         let decoded = WhoIsRequest::decode(&leading_zero).unwrap();
-        assert_eq!(decoded.range, Some(DeviceInstanceRange::single(u32::MAX)));
+        // Past the highest instance, but taken as written.
+        let range = decoded.range.unwrap();
+        assert_eq!((range.low(), range.high()), (u32::MAX, u32::MAX));
     }
 
     #[test]

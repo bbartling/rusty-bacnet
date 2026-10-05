@@ -641,6 +641,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
     fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
         mac == [BROADCAST_MAC]
     }
+
+    fn group_destinations(&self) -> crate::port::GroupDestinations {
+        crate::port::GroupDestinations::new(|mac| mac == [BROADCAST_MAC])
+    }
 }
 
 impl<S: SerialPort> Drop for MstpTransport<S> {

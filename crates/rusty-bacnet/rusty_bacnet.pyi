@@ -1869,9 +1869,9 @@ class BACnetClient:
         """Broadcast a Who-Is request. Responses are collected asynchronously;
         use ``discovered_devices()`` to retrieve them.
 
-        Give ``low_limit`` and ``high_limit`` together or not at all: one alone,
-        or ``low_limit`` above ``high_limit``, raises ``ValueError`` before
-        anything is sent.
+        Give ``low_limit`` and ``high_limit`` together or not at all, each from
+        0 to 4194303: one alone, ``low_limit`` above ``high_limit``, or a limit
+        past 4194303 raises ``ValueError`` before anything is sent.
         """
         ...
 
@@ -1883,9 +1883,9 @@ class BACnetClient:
     ) -> Awaitable[list[DiscoveredDevice]]:
         """Convenience: send WhoIs, wait ``timeout_ms``, return discovered devices.
 
-        Give ``low_limit`` and ``high_limit`` together or not at all: one alone,
-        or ``low_limit`` above ``high_limit``, raises ``ValueError`` before
-        anything is sent.
+        Give ``low_limit`` and ``high_limit`` together or not at all, each from
+        0 to 4194303: one alone, ``low_limit`` above ``high_limit``, or a limit
+        past 4194303 raises ``ValueError`` before anything is sent.
         """
         ...
 
@@ -1897,9 +1897,9 @@ class BACnetClient:
     ) -> Awaitable[None]:
         """Broadcast Who-Has by object identifier.
 
-        Give ``low_limit`` and ``high_limit`` together or not at all: one alone,
-        or ``low_limit`` above ``high_limit``, raises ``ValueError`` before
-        anything is sent.
+        Give ``low_limit`` and ``high_limit`` together or not at all, each from
+        0 to 4194303: one alone, ``low_limit`` above ``high_limit``, or a limit
+        past 4194303 raises ``ValueError`` before anything is sent.
         """
         ...
 
@@ -1911,9 +1911,9 @@ class BACnetClient:
     ) -> Awaitable[None]:
         """Broadcast Who-Has by object name.
 
-        Give ``low_limit`` and ``high_limit`` together or not at all: one alone,
-        or ``low_limit`` above ``high_limit``, raises ``ValueError`` before
-        anything is sent.
+        Give ``low_limit`` and ``high_limit`` together or not at all, each from
+        0 to 4194303: one alone, ``low_limit`` above ``high_limit``, or a limit
+        past 4194303 raises ``ValueError`` before anything is sent.
         """
         ...
 
@@ -1951,9 +1951,9 @@ class BACnetClient:
     ) -> Awaitable[None]:
         """Send a Who-Is to a specific device address (unicast).
 
-        Give ``low_limit`` and ``high_limit`` together or not at all: one alone,
-        or ``low_limit`` above ``high_limit``, raises ``ValueError`` before
-        anything is sent.
+        Give ``low_limit`` and ``high_limit`` together or not at all, each from
+        0 to 4194303: one alone, ``low_limit`` above ``high_limit``, or a limit
+        past 4194303 raises ``ValueError`` before anything is sent.
         """
         ...
 

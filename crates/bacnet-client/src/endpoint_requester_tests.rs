@@ -420,3 +420,59 @@ async fn routed_destination_to_no_single_device_fails_before_registration() {
 
     endpoint.stop().await.unwrap();
 }
+
+/// A direct destination that reaches a group of nodes, as named or once a
+/// routed one naming the endpoint's own network is localized to it, is a
+/// local broadcast (#1479). The requester refuses it before it registers a
+/// transaction, so no lease or invoke ID is held afterwards, rather than
+/// leaving the refusal to the egress.
+#[tokio::test(start_paused = true)]
+async fn a_group_destination_fails_before_registration() {
+    use bacnet_types::network_number::NetworkNumber;
+
+    let (mut endpoint_transport, _peer_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    endpoint_transport.set_broadcast_mac(vec![0xFF]);
+    let mut endpoint = EndpointIngress::new(endpoint_transport, 2);
+    let ingress = endpoint.start().await.unwrap();
+    ingress
+        .egress
+        .local_network_number()
+        .publish(NetworkNumber::configured(7).unwrap());
+    let coordinator = Arc::new(OutboundTransactionCoordinator::new());
+    let requester =
+        EndpointRequester::new(ingress.egress.clone(), Arc::clone(&coordinator), config()).unwrap();
+    let broadcast = || MacAddr::from_slice(&[0xFF]);
+    for destination in [
+        EndpointApduDestination::Direct {
+            destination_mac: broadcast(),
+        },
+        EndpointApduDestination::Routed {
+            destination_network: 7,
+            destination_mac: broadcast(),
+            router_mac: MacAddr::from_slice(&[0x02]),
+        },
+        EndpointApduDestination::RoutedViaLocalBroadcast {
+            destination_network: 7,
+            destination_mac: broadcast(),
+        },
+    ] {
+        let refused = requester
+            .prepare_read_property(
+                destination.clone(),
+                Vec::new(),
+                object_identifier(),
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+            )
+            .err();
+        assert!(
+            matches!(&refused, Some(Error::Encoding(message))
+                if message.contains("broadcast or group address")),
+            "{destination:?}: {refused:?}"
+        );
+        assert_eq!(coordinator.active_count().unwrap(), 0);
+        assert_eq!(requester.inner.tsm.lock().unwrap().pending_count(), 0);
+    }
+
+    endpoint.stop().await.unwrap();
+}

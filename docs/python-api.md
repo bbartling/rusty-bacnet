@@ -673,10 +673,17 @@ await client.who_is()                    # all devices
 await client.who_is(1000, 2000)          # instance range
 ```
 
-The limits go together (Clauses 16.9 and 16.10). Every discovery call that
-takes `low_limit` and `high_limit` raises `ValueError` when only one is given,
-or when `low_limit` is above `high_limit`, before anything is sent (#1483);
-a single limit used to go out as a request for every device.
+The limits go together, each from 0 to 4194303 (Clauses 16.9 and 16.10).
+Every discovery call that takes `low_limit` and `high_limit` raises
+`ValueError` when only one is given, when `low_limit` is above `high_limit`,
+or when a limit is past 4194303, before anything is sent (#1483); a single
+limit used to go out as a request for every device.
+
+A confirmed request goes to one device. A confirmed call such as
+`read_property` or `write_property` to a broadcast or group address, such as
+`"255.255.255.255:47808"`, the configured broadcast address at any port, or
+an IPv4 multicast address, raises `BacnetError` before anything is sent
+(#1479).
 
 #### `who_has_by_id(object_id, low_limit=None, high_limit=None)`
 

@@ -58,9 +58,10 @@ fn validate_write_priority(priority: Option<u8>) -> PyResult<()> {
 }
 
 /// The Who-Is or Who-Has range the `low_limit` and `high_limit` keywords
-/// give: both or neither (Clauses 16.9 and 16.10). One alone, or a low limit
-/// above the high one, raises `ValueError` before anything is sent, where one
-/// limit used to go out as a request for every device (#1483).
+/// give: both or neither, each from 0 to 4194303 (Clauses 16.9 and 16.10).
+/// One alone, a low limit above the high one, or a limit past 4194303 raises
+/// `ValueError` before anything is sent, where one limit used to go out as a
+/// request for every device (#1483).
 fn device_range(
     low_limit: Option<u32>,
     high_limit: Option<u32>,

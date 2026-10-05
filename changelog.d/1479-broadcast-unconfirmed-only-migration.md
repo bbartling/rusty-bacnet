@@ -5,6 +5,6 @@ section: Migration notes
   with `NetworkLayer::broadcast_to_network`, not
   `send_apdu_routed_via_local_broadcast` with an empty `dest_mac`. Send a
   confirmed request, an acknowledgement, an Error, a Reject or an Abort to
-  one device: the broadcast sends, a routed send with no DADR, and a
-  `BACnetClient` confirmed request to the link's broadcast MAC now refuse it
-  with `Error::Encoding`.
+  one device: the broadcast sends and a routed send with no DADR refuse it,
+  and so do confirmed requests from `BACnetClient`, the endpoint and Python
+  to any group address, all before anything is sent.

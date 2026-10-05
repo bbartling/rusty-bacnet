@@ -125,13 +125,13 @@ async fn lowest_device_owns_wildcard_reads_and_both_live_cov_lists_in_both_order
         wire.server.broadcast_i_am().await.unwrap();
         let mut who_is = BytesMut::new();
         WhoIsRequest {
-            range: Some(DeviceInstanceRange::single(813)),
+            range: Some(DeviceInstanceRange::single(813).unwrap()),
         }
         .encode(&mut who_is);
         unconfirmed(&wire, UnconfirmedServiceChoice::WHO_IS, who_is).await;
         let mut who_has = BytesMut::new();
         WhoHasRequest {
-            range: Some(DeviceInstanceRange::single(813)),
+            range: Some(DeviceInstanceRange::single(813).unwrap()),
             object: WhoHasObject::Identifier(av(1)),
         }
         .encode(&mut who_has)

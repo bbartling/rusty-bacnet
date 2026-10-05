@@ -291,9 +291,14 @@ async fn discover_device(
         return;
     }
 
-    let whois = WhoIsRequest {
-        range: Some(DeviceInstanceRange::single(args.device)),
+    let range = match DeviceInstanceRange::single(args.device) {
+        Ok(range) => range,
+        Err(e) => {
+            eprintln!("ERROR: --device: {e}");
+            process::exit(1);
+        }
     };
+    let whois = WhoIsRequest { range: Some(range) };
     let mut whois_buf = BytesMut::new();
     whois.encode(&mut whois_buf);
 
@@ -305,10 +310,7 @@ async fn discover_device(
         eprintln!("ERROR: local Who-Is failed: {e}");
         process::exit(1);
     }
-    if let Err(e) = client
-        .who_is(Some(DeviceInstanceRange::single(args.device)))
-        .await
-    {
+    if let Err(e) = client.who_is(Some(range)).await {
         eprintln!("ERROR: global Who-Is failed: {e}");
         process::exit(1);
     }

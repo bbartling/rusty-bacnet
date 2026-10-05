@@ -35,7 +35,7 @@ pub struct WhoHasRequest {
 impl WhoHasRequest {
     /// Encode the request parameters into `buf`; fails if the object name cannot be encoded.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
-        // [0] low-limit and [1] high-limit, both or neither
+        // [0] low limit and [1] high limit, both or neither
         if let Some(range) = self.range {
             range.encode(buf);
         }
@@ -56,7 +56,7 @@ impl WhoHasRequest {
     /// low limit above the high one (#1483). The request is unconfirmed, so a receiver drops
     /// it unanswered rather than reading one limit as a request for every device.
     pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        // [0] low-limit and [1] high-limit, both or neither
+        // [0] low limit and [1] high limit, both or neither
         let limits = WireLimits::decode(data, "WhoHas")?;
         let offset = limits.end;
 
@@ -171,11 +171,11 @@ mod tests {
             (
                 4_294_967_296,
                 4_294_967_296,
-                "low-limit: [0]",
+                "low limit: [0]",
                 4_294_967_296_u64,
             ),
-            (1, 4_294_967_297, "high-limit: [1]", 4_294_967_297),
-            (u64::MAX, u64::MAX, "low-limit: [0]", u64::MAX),
+            (1, 4_294_967_297, "high limit: [1]", 4_294_967_297),
+            (u64::MAX, u64::MAX, "low limit: [0]", u64::MAX),
         ] {
             let encoded = encode_request(low, high);
             let error = WhoHasRequest::decode(&encoded).unwrap_err();
@@ -194,7 +194,9 @@ mod tests {
         }
         primitives::encode_ctx_object_id(&mut leading_zero, 2, &object_identifier);
         let decoded = WhoHasRequest::decode(&leading_zero).unwrap();
-        assert_eq!(decoded.range, Some(DeviceInstanceRange::single(u32::MAX)));
+        // Past the highest instance, but taken as written.
+        let range = decoded.range.unwrap();
+        assert_eq!((range.low(), range.high()), (u32::MAX, u32::MAX));
     }
 
     #[test]

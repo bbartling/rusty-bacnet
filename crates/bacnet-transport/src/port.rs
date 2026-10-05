@@ -9,7 +9,44 @@ pub use crate::direct_response::{DirectResponse, DirectResponseScope};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
+
+/// An owned copy of a link's group-destination rule
+/// ([`TransportPort::is_group_destination`]), for a sender that checks a
+/// destination away from the task that owns the transport, before it takes
+/// any state for the send (#1479). Clones share one rule.
+#[derive(Clone, Default)]
+pub struct GroupDestinations(Option<Arc<GroupRule>>);
+
+/// The predicate inside a [`GroupDestinations`].
+type GroupRule = dyn Fn(&[u8]) -> bool + Send + Sync;
+
+impl GroupDestinations {
+    /// The rule `is_group` gives.
+    pub fn new(is_group: impl Fn(&[u8]) -> bool + Send + Sync + 'static) -> Self {
+        Self(Some(Arc::new(is_group)))
+    }
+
+    /// No rule: nothing matches. A sender holding this leaves the check to the
+    /// send path, which asks the transport itself.
+    pub fn unknown() -> Self {
+        Self(None)
+    }
+
+    /// Whether `mac` is a group destination under this rule.
+    pub fn contains(&self, mac: &[u8]) -> bool {
+        self.0.as_ref().is_some_and(|is_group| is_group(mac))
+    }
+}
+
+impl std::fmt::Debug for GroupDestinations {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("GroupDestinations")
+            .field(&if self.0.is_some() { "rule" } else { "unknown" })
+            .finish()
+    }
+}
 
 /// Data-link attributes that accompany an NPDU.
 ///
@@ -417,5 +454,27 @@ pub trait TransportPort: Send + Sync {
     /// treated as a unicast.
     fn is_broadcast_mac(&self, _mac: &[u8]) -> bool {
         false
+    }
+
+    /// Whether a send to `mac` with no DNET reaches a group of nodes rather
+    /// than one: this link's broadcast MAC, or any other broadcast or
+    /// multicast address the medium carries, such as a B/IP limited
+    /// broadcast or an IPv6 multicast group. Such a send is a local broadcast,
+    /// which may carry only an Unconfirmed-Request (Clause 6.3), so a sender
+    /// that takes a caller-chosen MAC refuses anything else to it (#1479).
+    ///
+    /// [`Self::is_broadcast_mac`] keeps its narrower meaning, this link's own
+    /// broadcast, which routing and recipient checks rely on. The default is
+    /// that answer.
+    fn is_group_destination(&self, mac: &[u8]) -> bool {
+        self.is_broadcast_mac(mac)
+    }
+
+    /// [`Self::is_group_destination`] as an owned rule that a sender can keep
+    /// once the transport has moved into the task that runs it. The built-in
+    /// transports give their rule; the default is
+    /// [`GroupDestinations::unknown`], which leaves the check to the send path.
+    fn group_destinations(&self) -> GroupDestinations {
+        GroupDestinations::unknown()
     }
 }

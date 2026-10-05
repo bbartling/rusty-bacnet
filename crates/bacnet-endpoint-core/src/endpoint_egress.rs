@@ -3,6 +3,7 @@ use super::*;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_network::network_number::LocalNetworkNumber;
 use bacnet_network::response_route::ResponseRoute;
+use bacnet_transport::port::GroupDestinations;
 
 pub(super) enum NetworkServicePayload {
     Apdu(Vec<u8>),
@@ -88,6 +89,8 @@ pub struct EndpointEgress {
     pub(super) commands: mpsc::Sender<NetworkServiceCommand>,
     pub(super) open: Arc<AtomicBool>,
     pub(super) local_network: LocalNetworkNumber,
+    /// The link's group-destination rule, taken from the transport at start.
+    pub(super) group_destinations: GroupDestinations,
 }
 
 impl EndpointApduDestination {
@@ -132,6 +135,17 @@ impl EndpointEgress {
     #[doc(hidden)]
     pub fn local_network_number(&self) -> &LocalNetworkNumber {
         &self.local_network
+    }
+
+    /// Whether a `Direct` send to `mac` would reach a group of nodes, by the
+    /// rule the transport gave at start
+    /// ([`TransportPort::group_destinations`](bacnet_transport::port::TransportPort::group_destinations)).
+    /// The egress refuses anything but an Unconfirmed-Request there when it
+    /// sends; a sender that takes state for a send, such as a transaction,
+    /// asks here first (#1479).
+    #[doc(hidden)]
+    pub fn is_group_destination(&self, mac: &[u8]) -> bool {
+        self.group_destinations.contains(mac)
     }
 
     /// Whether this ingress still admits transport work.

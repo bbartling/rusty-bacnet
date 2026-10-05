@@ -224,6 +224,11 @@ impl TransportPort for LoopbackTransport {
     fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
         self.broadcast_mac.as_deref() == Some(mac)
     }
+
+    fn group_destinations(&self) -> crate::port::GroupDestinations {
+        let broadcast = self.broadcast_mac.clone();
+        crate::port::GroupDestinations::new(move |mac| broadcast.as_deref() == Some(mac))
+    }
 }
 
 #[cfg(test)]

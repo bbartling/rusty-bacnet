@@ -315,10 +315,9 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
         scope: WhoIsScope,
         probe: u64,
     ) -> Result<(), RemoteWriteError> {
-        let instance = device.instance_number();
         let mut service = BytesMut::new();
         WhoIsRequest {
-            range: Some(DeviceInstanceRange::single(instance)),
+            range: Some(DeviceInstanceRange::device(device)),
         }
         .encode(&mut service);
         let mut apdu = BytesMut::new();

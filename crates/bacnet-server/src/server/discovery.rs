@@ -123,6 +123,10 @@ pub struct DiscoveryCounters {
     pub responses_throttled_global: u64,
     /// Total directed unicast discovery responses sent.
     pub directed_responses_sent: u64,
+    /// Who-Is and Who-Has requests dropped because they didn't decode, such
+    /// as one with a single limit or octets after its last member. They are
+    /// dropped before any other work and count in neither received total.
+    pub malformed_dropped: u64,
 }
 
 #[derive(Debug, Default)]
@@ -136,6 +140,7 @@ pub(crate) struct AtomicDiscoveryCounters {
     pub(crate) responses_throttled_source: AtomicU64,
     pub(crate) responses_throttled_global: AtomicU64,
     pub(crate) directed_responses_sent: AtomicU64,
+    pub(crate) malformed_dropped: AtomicU64,
 }
 
 impl AtomicDiscoveryCounters {
@@ -150,6 +155,7 @@ impl AtomicDiscoveryCounters {
             responses_throttled_source: self.responses_throttled_source.load(Ordering::Relaxed),
             responses_throttled_global: self.responses_throttled_global.load(Ordering::Relaxed),
             directed_responses_sent: self.directed_responses_sent.load(Ordering::Relaxed),
+            malformed_dropped: self.malformed_dropped.load(Ordering::Relaxed),
         }
     }
 
@@ -475,7 +481,10 @@ impl DiscoveryLimiter {
         let _ = received.provenance;
         let who_is = match WhoIsRequest::decode(req_bytes) {
             Ok(w) => w,
-            Err(_) => return PreCheckDecision::DecodeError,
+            Err(_) => {
+                self.counters.inc(&self.counters.malformed_dropped);
+                return PreCheckDecision::DecodeError;
+            }
         };
 
         self.counters.inc(&self.counters.who_is_received);
@@ -570,7 +579,10 @@ impl DiscoveryLimiter {
         let _ = received.provenance;
         let who_has = match WhoHasRequest::decode(req_bytes) {
             Ok(w) => w,
-            Err(_) => return PreCheckDecision::DecodeError,
+            Err(_) => {
+                self.counters.inc(&self.counters.malformed_dropped);
+                return PreCheckDecision::DecodeError;
+            }
         };
 
         self.counters.inc(&self.counters.who_has_received);

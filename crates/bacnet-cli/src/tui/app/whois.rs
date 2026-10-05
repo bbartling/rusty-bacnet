@@ -278,23 +278,21 @@ fn parse_network(target: &str) -> Result<u16, String> {
 }
 
 /// Blank is unbounded; `N` is one instance; `LOW-HIGH` uses the shared parser,
-/// which refuses one limit alone and a low limit above the high one (#1483).
+/// which refuses one limit alone, a low limit above the high one and a limit
+/// past the highest instance (#1483).
 fn parse_range(text: &str) -> Result<Option<DeviceInstanceRange>, String> {
     if text.is_empty() {
         return Ok(None);
     }
-    let range = if text.contains('-') {
-        crate::core::range::parse_discover_range(Some(text)).map_err(|e| e.to_string())?
-    } else {
-        let n = text
-            .parse::<u32>()
-            .map_err(|_| format!("invalid instance range '{text}': use N or LOW-HIGH"))?;
-        Some(DeviceInstanceRange::single(n))
-    };
-    if range.is_some_and(|range| range.high() > MAX_INSTANCE) {
-        return Err(format!("instances run from 0 to {MAX_INSTANCE}"));
+    if text.contains('-') {
+        return crate::core::range::parse_discover_range(Some(text)).map_err(|e| e.to_string());
     }
-    Ok(range)
+    let n = text
+        .parse::<u32>()
+        .map_err(|_| format!("invalid instance range '{text}': use N or LOW-HIGH"))?;
+    DeviceInstanceRange::single(n)
+        .map(Some)
+        .map_err(|_| format!("instances run from 0 to {MAX_INSTANCE}"))
 }
 
 fn parse_listen(text: &str) -> Result<Duration, String> {
@@ -420,7 +418,7 @@ mod tests {
                 label: "10.0.0.7".into()
             }
         );
-        assert_eq!(spec.range, Some(DeviceInstanceRange::single(42)));
+        assert_eq!(spec.range, Some(DeviceInstanceRange::single(42).unwrap()));
 
         form.target = "1234".into();
         form.key(FormKey::Submit, AddressStyle::Bip, 0);
@@ -453,7 +451,16 @@ mod tests {
             parse_range("0-4194303"),
             Ok(Some(DeviceInstanceRange::new(0, MAX_INSTANCE).unwrap()))
         );
-        assert!(parse_range("0-4194304").is_err());
+        assert!(parse_range("0-4194304")
+            .unwrap_err()
+            .contains("above the highest instance"));
+        assert_eq!(
+            parse_range("4194303"),
+            Ok(Some(DeviceInstanceRange::single(MAX_INSTANCE).unwrap()))
+        );
+        assert!(parse_range("4194304")
+            .unwrap_err()
+            .contains("instances run from 0 to 4194303"));
         assert!(parse_range("9-1")
             .unwrap_err()
             .contains("low (9) > high (1)"));

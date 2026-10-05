@@ -371,6 +371,7 @@ async fn who_is_and_who_has_with_trailing_octets_are_dropped() {
         (counters.who_is_received, counters.who_has_received),
         (1, 1)
     );
+    assert_eq!(counters.malformed_dropped, 4);
     h.server.stop().await.unwrap();
 }
 
@@ -393,7 +394,11 @@ async fn a_who_is_with_one_limit_is_dropped() {
         unconfirmed(&h, who_is, &[0x09, 0x00, 0x1A, 0x03, 0xE8]).await,
         [UnconfirmedServiceChoice::I_AM]
     );
-    assert_eq!(h.server.discovery_counters().who_is_received, 1);
+    let counters = h.server.discovery_counters();
+    assert_eq!(
+        (counters.who_is_received, counters.malformed_dropped),
+        (1, 2)
+    );
     h.server.stop().await.unwrap();
 }
 
@@ -419,7 +424,37 @@ async fn a_who_has_with_one_limit_is_dropped() {
         unconfirmed(&h, who_has, &with(&[0x09, 0x00, 0x1A, 0x03, 0xE8])).await,
         [UnconfirmedServiceChoice::I_HAVE]
     );
-    assert_eq!(h.server.discovery_counters().who_has_received, 1);
+    let counters = h.server.discovery_counters();
+    assert_eq!(
+        (counters.who_has_received, counters.malformed_dropped),
+        (1, 3)
+    );
+    h.server.stop().await.unwrap();
+}
+
+/// Some devices send a high limit past the highest instance, 4194303, to
+/// mean every device. The decoders take it as written (#1483), so the
+/// server answers such a Who-Is and Who-Has.
+#[tokio::test(start_paused = true)]
+async fn a_high_limit_past_the_highest_instance_is_answered() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    // Low limit 0, high limit 4294967295.
+    let limits = [0x09, 0x00, 0x1C, 0xFF, 0xFF, 0xFF, 0xFF];
+    assert_eq!(
+        unconfirmed(&h, UnconfirmedServiceChoice::WHO_IS, &limits).await,
+        [UnconfirmedServiceChoice::I_AM]
+    );
+    // AV-1 by name.
+    let by_name = [0x3D, 0x05, 0x00, b'A', b'V', b'-', b'1'];
+    assert_eq!(
+        unconfirmed(
+            &h,
+            UnconfirmedServiceChoice::WHO_HAS,
+            &[&limits[..], &by_name[..]].concat()
+        )
+        .await,
+        [UnconfirmedServiceChoice::I_HAVE]
+    );
     h.server.stop().await.unwrap();
 }
 

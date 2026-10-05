@@ -38,7 +38,12 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// [`NetworkLayer::broadcast_global_apdu`] instead (#1380). A
     /// `destination` with no DADR is a remote broadcast, which carries only
     /// an Unconfirmed-Request APDU (Clause 6.3), so any other APDU to it is
-    /// an encoding failure too (#1479).
+    /// an encoding failure too (#1479). With no `destination`, a `next_hop`
+    /// that is the link's broadcast or another group address is a local
+    /// broadcast as well, but this layer doesn't ask the transport on every
+    /// unicast, so that one isn't checked, as with
+    /// [`NetworkLayer::send_apdu`]: a response goes back to the MAC its
+    /// request came from.
     ///
     /// Used by server transaction owners whose lifetime ends at local issuance,
     /// independently of the transport future's eventual Result.
@@ -84,16 +89,11 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             expecting_reply,
             priority,
         } = issued;
-        if let Some(destination) = destination {
-            check_destination(
-                destination.network,
-                "pass no destination (no DNET) for a local peer",
-            )?;
-            if destination.mac_address.is_empty() {
-                check_broadcast_apdu(apdu, "a destination with no DADR (a remote broadcast)")?;
-            }
+        crate::response_route::check_response_destination(destination)?;
+        if destination.is_some_and(|destination| destination.mac_address.is_empty()) {
+            check_broadcast_apdu(apdu, "a destination with no DADR (a remote broadcast)")?;
         }
-        let buf = crate::response_route::encode_response_npdu(
+        let buf = crate::response_route::encode_checked_response_npdu(
             apdu,
             destination,
             expecting_reply,

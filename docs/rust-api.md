@@ -403,12 +403,16 @@ use bacnet_services::who_has::{WhoHasRequest, WhoHasObject, IHaveRequest};
 `WhoIsRequest` and `WhoHasRequest` carry their device-instance limits as one
 `range: Option<DeviceInstanceRange>`, `None` asking every device (Clauses 16.9
 and 16.10, #1483). A range holds both limits, so a request with one alone can't
-be built, and `DeviceInstanceRange::new` refuses a low limit above the high one
-with `Error::OutOfRange`. `DeviceInstanceRange::single(n)` asks one device, and
+be built, and `DeviceInstanceRange::new` refuses a low limit above the high one,
+or a limit past `ObjectIdentifier::MAX_INSTANCE` (4194303), with
+`Error::OutOfRange`. `DeviceInstanceRange::single(n)` asks one instance,
+`DeviceInstanceRange::device(oid)` one device's instance, and
 `DeviceInstanceRange::from_limits(low, high)` turns two optional limits into a
 range, refusing one without the other. Both decoders refuse a request with one
 limit, or with its low limit above its high one, and the server drops it
-unanswered.
+unanswered, counting it in `DiscoveryCounters::malformed_dropped`. A decoder
+takes a limit past 4194303 as written, since some devices send one to mean
+every device.
 
 ### Device Management
 
@@ -1653,10 +1657,14 @@ every `_with_data_attributes` form too (#1479).
 empty DADR for every PDU type: a remote network's broadcast goes through
 `broadcast_to_network`. A send naming one device takes any PDU type, even when
 its link DA is the broadcast MAC. `send_apdu` to the MAC the transport reports
-as its broadcast (`TransportPort::is_broadcast_mac`) is a local broadcast too,
-but the layer doesn't ask the transport on every unicast: `BACnetClient`'s
-confirmed requests and the endpoint's egress, which take caller-chosen MACs,
-refuse anything but an Unconfirmed-Request there themselves.
+as its broadcast, or any other group address the medium carries
+(`TransportPort::is_group_destination`: on B/IP the limited broadcast, the
+configured broadcast IP or a multicast address at any port, on B/IPv6 any
+multicast group), is a local broadcast too, but the layer doesn't ask the
+transport on every unicast: `BACnetClient`'s confirmed requests, the
+endpoint's egress and its requester, which take caller-chosen MACs, refuse
+anything but an Unconfirmed-Request there themselves. `is_broadcast_mac` keeps
+its narrower meaning, this link's own broadcast.
 
 ---
 

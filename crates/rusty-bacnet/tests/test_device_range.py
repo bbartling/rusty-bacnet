@@ -1,15 +1,16 @@
 """Who-Is and Who-Has device ranges take both limits or neither (#1483).
 
 One limit alone used to go out as a request for every device. Each discovery
-call now raises ValueError for it, and for a low limit above the high one,
-before the client is even started, and sends nothing; both limits still go
-out on the wire.
+call now raises ValueError for it, for a low limit above the high one, and
+for a limit past the highest instance, 4194303, before the client is even
+started, and sends nothing; both limits still go out on the wire. A
+confirmed call to a broadcast or group address raises too (#1479).
 """
 import asyncio
 import socket
 import unittest
 
-from rusty_bacnet import BACnetClient, ObjectIdentifier, ObjectType
+from rusty_bacnet import BACnetClient, BacnetError, ObjectIdentifier, ObjectType, PropertyIdentifier
 
 OID = ObjectIdentifier(ObjectType.ANALOG_VALUE, 1)
 
@@ -26,9 +27,10 @@ def calls(client, address="127.0.0.1:47808"):
 
 
 REFUSED = [
-    ({"low_limit": 10}, "low_limit 10 was given without high_limit"),
-    ({"high_limit": 20}, "high_limit 20 was given without low_limit"),
+    ({"low_limit": 10}, "low limit 10 was given without a high limit"),
+    ({"high_limit": 20}, "high limit 20 was given without a low limit"),
     ({"low_limit": 20, "high_limit": 10}, "low limit 20 is above its high limit 10"),
+    ({"low_limit": 0, "high_limit": 4194304}, "high limit 4194304 is above the highest instance, 4194303"),
 ]
 
 
@@ -64,6 +66,23 @@ class DeviceRangeTests(unittest.IsolatedAsyncioTestCase):
                 await client.who_is_directed(address)
                 frame, _ = await asyncio.wait_for(loop.sock_recvfrom(peer, 2048), 3)
                 self.assertTrue(frame.endswith(bytes([0x10, 0x08])), frame.hex())
+
+                # The highest instance is a limit like any other.
+                await client.who_is_directed(address, low_limit=4194303, high_limit=4194303)
+                frame, _ = await asyncio.wait_for(loop.sock_recvfrom(peer, 2048), 3)
+                self.assertTrue(
+                    frame.endswith(bytes([0x0B, 0x3F, 0xFF, 0xFF, 0x1B, 0x3F, 0xFF, 0xFF])),
+                    frame.hex(),
+                )
+
+    async def test_a_confirmed_call_to_a_group_address_raises(self):
+        async with BACnetClient(interface="127.0.0.1", port=0) as client:
+            for address in ("255.255.255.255:47808", "255.255.255.255:47809", "224.0.0.1:47808"):
+                with self.subTest(address=address):
+                    with self.assertRaisesRegex(BacnetError, "not to a broadcast or group address"):
+                        await asyncio.wait_for(
+                            client.read_property(address, OID, PropertyIdentifier.PRESENT_VALUE), 3
+                        )
 
 
 if __name__ == "__main__":

@@ -21,7 +21,8 @@ const EFFECTIVE_GROUP_APDU_ERROR: &str =
 #[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EndpointApduDestination {
-    /// Direct unicast on the local data link. The link's broadcast MAC here
+    /// Direct unicast on the local data link. A MAC that reaches a group of
+    /// nodes here, such as the link's broadcast MAC or a multicast address,
     /// is a local broadcast, so it carries only an Unconfirmed-Request APDU
     /// (Clause 6.3, #1479).
     Direct {
@@ -248,6 +249,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             commands: egress_tx,
             open: Arc::clone(&egress_open),
             local_network: network.local_network_number().clone(),
+            group_destinations: network.transport().group_destinations(),
         };
         let network = self
             .network
@@ -594,7 +596,7 @@ async fn send_network_service_apdu<T: TransportPort + 'static>(
     data_attributes: &[DataAttribute],
 ) -> Result<(), Error> {
     validate_effective_group_apdu(apdu, destination, |mac| {
-        network.transport().is_broadcast_mac(mac)
+        network.transport().is_group_destination(mac)
     })?;
     match destination {
         EndpointApduDestination::Direct { destination_mac } => {
@@ -679,9 +681,10 @@ async fn send_network_service_apdu<T: TransportPort + 'static>(
 }
 
 /// Refuse anything but a valid Unconfirmed-Request APDU to a group: the
-/// three broadcast destinations, and a direct one to the link's broadcast
-/// MAC, which with no DNET is a local broadcast (Clause 6.3, #1479). The
-/// network layer refuses the routed forms with no DADR itself.
+/// three broadcast destinations, and a direct one to a MAC that reaches a
+/// group of nodes ([`TransportPort::is_group_destination`]), which with no
+/// DNET is a local broadcast (Clause 6.3, #1479). The network layer refuses
+/// the routed forms with no DADR itself.
 fn validate_effective_group_apdu(
     apdu: &[u8],
     destination: &EndpointApduDestination,

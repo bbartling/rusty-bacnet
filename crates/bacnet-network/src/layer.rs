@@ -589,6 +589,13 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
+        check_destination(target.network, "use send_apdu for a local device")?;
+        if target.mac.is_empty() {
+            check_broadcast_apdu(
+                apdu,
+                "a routed send with an empty dest_mac (a remote broadcast)",
+            )?;
+        }
         let buf = Self::encode_routed_npdu_buf(
             apdu,
             target.network,
@@ -730,9 +737,8 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     }
 
     /// Encode an APDU into an NPDU whose destination is `dest_network` /
-    /// `dest_mac`, ready for whichever link send the caller chooses. An empty
-    /// `dest_mac` is that network's broadcast, so the APDU must be an
-    /// Unconfirmed-Request.
+    /// `dest_mac`, ready for whichever link send the caller chooses. Each
+    /// caller checks the DNET, and what an empty `dest_mac` may carry, first.
     fn encode_routed_npdu_buf(
         apdu: &[u8],
         dest_network: u16,
@@ -740,13 +746,6 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         expecting_reply: bool,
         priority: NetworkPriority,
     ) -> Result<BytesMut, Error> {
-        check_destination(dest_network, "use send_apdu for a local device")?;
-        if dest_mac.is_empty() {
-            check_broadcast_apdu(
-                apdu,
-                "a routed send with an empty dest_mac (a remote broadcast)",
-            )?;
-        }
         let npdu = Npdu {
             is_network_message: false,
             expecting_reply,

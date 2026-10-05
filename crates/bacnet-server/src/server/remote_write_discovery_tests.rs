@@ -36,7 +36,7 @@ pub(super) type WhoIs = (Option<NpduAddress>, WhoIsRequest);
 /// The Who-Is for Device `instance` alone.
 pub(super) fn targeted(instance: u32) -> WhoIsRequest {
     WhoIsRequest {
-        range: Some(DeviceInstanceRange::single(instance)),
+        range: Some(DeviceInstanceRange::single(instance).unwrap()),
     }
 }
 

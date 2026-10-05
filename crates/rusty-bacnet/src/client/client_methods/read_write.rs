@@ -99,8 +99,9 @@ impl BACnetClient {
 
     /// Send a WhoIs broadcast to discover devices.
     ///
-    /// Give both limits or neither; one alone, or `low_limit` above
-    /// `high_limit`, raises `ValueError` before anything is sent.
+    /// Give both limits or neither, each from 0 to 4194303; one alone,
+    /// `low_limit` above `high_limit`, or a limit past 4194303 raises
+    /// `ValueError` before anything is sent.
     #[pyo3(signature = (low_limit=None, high_limit=None))]
     fn who_is<'py>(
         &self,

@@ -155,7 +155,7 @@ async fn commands_from_keys_reach_the_worker() {
     };
     assert_eq!(
         spec.range,
-        Some(bacnet_services::who_is::DeviceInstanceRange::single(7))
+        Some(bacnet_services::who_is::DeviceInstanceRange::single(7).unwrap())
     );
 }
 

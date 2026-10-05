@@ -16,7 +16,7 @@ fn a_range_holds_both_limits_in_order() {
     for (instance, inside) in [(9, false), (10, true), (15, true), (20, true), (21, false)] {
         assert_eq!(range.contains(instance), inside, "{instance}");
     }
-    let one = DeviceInstanceRange::single(7);
+    let one = DeviceInstanceRange::single(7).unwrap();
     assert_eq!(one, DeviceInstanceRange::new(7, 7).unwrap());
     assert!(one.contains(7) && !one.contains(6) && !one.contains(8));
 }
@@ -40,8 +40,8 @@ fn separate_limits_make_a_range_only_in_pairs() {
         Some(DeviceInstanceRange::new(1, 5).unwrap())
     );
     for (low, high, named) in [
-        (Some(1), None, "low_limit 1 was given without high_limit"),
-        (None, Some(5), "high_limit 5 was given without low_limit"),
+        (Some(1), None, "low limit 1 was given without a high limit"),
+        (None, Some(5), "high limit 5 was given without a low limit"),
     ] {
         let error = DeviceInstanceRange::from_limits(low, high).unwrap_err();
         assert!(
@@ -87,12 +87,12 @@ fn a_who_has_with_one_limit_or_an_empty_range_is_refused() {
     for (limits, fault) in [
         (
             &[0x09, 0x01][..],
-            "WhoHas low-limit needs the high-limit [1]",
+            "WhoHas low limit needs the high limit [1]",
         ),
-        (&[0x19, 0x0A], "WhoHas high-limit needs the low-limit [0]"),
+        (&[0x19, 0x0A], "WhoHas high limit needs the low limit [0]"),
         (
             &[0x09, 0x0A, 0x19, 0x01],
-            "WhoHas low-limit exceeds high-limit",
+            "WhoHas low limit exceeds high limit",
         ),
     ] {
         let error = WhoHasRequest::decode(&[limits, av_1].concat()).unwrap_err();
@@ -101,4 +101,43 @@ fn a_who_has_with_one_limit_or_an_empty_range_is_refused() {
             "{limits:02X?}: {error:?}"
         );
     }
+}
+
+/// Sending keeps each limit to the instance range, 0 to 4194303
+/// (Clauses 16.9.1.1.1-2 and 16.10.1.1.1-2), while a decoder takes a larger
+/// limit as written, since some devices send one to mean every device.
+#[test]
+fn a_limit_past_the_highest_instance_is_refused_when_sending_only() {
+    let top = ObjectIdentifier::MAX_INSTANCE;
+    assert_eq!(top, 4_194_303);
+    let range = DeviceInstanceRange::new(0, top).unwrap();
+    assert!(range.contains(top));
+    assert_eq!(DeviceInstanceRange::single(top).unwrap().high(), top);
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, top).unwrap();
+    assert_eq!(
+        DeviceInstanceRange::device(device),
+        DeviceInstanceRange::single(top).unwrap()
+    );
+    for (refused, high) in [
+        (DeviceInstanceRange::new(0, top + 1), top + 1),
+        (DeviceInstanceRange::new(top + 1, u32::MAX), u32::MAX),
+        (DeviceInstanceRange::single(top + 1), top + 1),
+        (
+            DeviceInstanceRange::from_limits(Some(1), Some(top + 1)).map(Option::unwrap),
+            top + 1,
+        ),
+    ] {
+        let expected = format!("high limit {high} is above the highest instance, 4194303");
+        assert!(
+            matches!(&refused, Err(Error::OutOfRange(message)) if message.contains(&expected)),
+            "{refused:?}"
+        );
+    }
+
+    // [0] low limit 0 and [1] high limit 4294967295 decode as written and
+    // take in every instance.
+    let data = [0x09, 0x00, 0x1C, 0xFF, 0xFF, 0xFF, 0xFF];
+    let range = WhoIsRequest::decode(&data).unwrap().range.unwrap();
+    assert_eq!((range.low(), range.high()), (0, u32::MAX));
+    assert!(range.contains(top));
 }
