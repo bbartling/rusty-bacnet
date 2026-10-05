@@ -551,6 +551,11 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             write,
             LocalWrite::Property { property, .. } if property == PropertyIdentifier::OBJECT_NAME
         );
+        // A Pulse Converter's Input_Reference is judged as it commits (#1341).
+        let input_reference = matches!(
+            write,
+            LocalWrite::Property { property, .. } if property == PropertyIdentifier::INPUT_REFERENCE
+        );
         let life_safety = crate::life_safety_cov::is_life_safety_object(*oid);
         // A write the object saves first saves here, without the guard.
         let durable = match write {
@@ -753,6 +758,9 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             }
             if renaming {
                 db.update_name_index(oid);
+            }
+            if input_reference {
+                db.check_input_reference(oid);
             }
             let staging_plans =
                 BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(oid));

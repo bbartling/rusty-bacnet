@@ -10,6 +10,8 @@ const P: PropertyIdentifier = PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY;
 
 /// [0] analog-input 1, [1] present-value.
 const AI1_PV: [u8; 7] = [0x0C, 0x00, 0x00, 0x00, 0x01, 0x19, 0x55];
+/// The unset form (#1417): [0] analog-input 4194303, [1] present-value.
+const UNSET: [u8; 7] = [0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55];
 
 struct FixedClock;
 
@@ -69,10 +71,10 @@ fn trend_log_write_purges_on_change_and_needs_a_clock_to() {
         ErrorClass::DEVICE,
         ErrorCode::OPERATIONAL_PROBLEM,
     );
-    assert_eq!(tl.read_property(P, None).unwrap(), PropertyValue::Null);
+    let unset = PropertyValue::ApplicationData(UNSET.to_vec());
+    assert_eq!(tl.read_property(P, None).unwrap(), unset);
     // Writing the value already held is no change, so needs no clock.
-    tl.write_property(P, None, PropertyValue::Null, None)
-        .unwrap();
+    tl.write_property(P, None, unset.clone(), None).unwrap();
 
     tl.bind_clock_internal(Some(Arc::new(FixedClock)));
     tl.write_property(P, None, framed.clone(), None).unwrap();
@@ -87,6 +89,79 @@ fn trend_log_write_purges_on_change_and_needs_a_clock_to() {
     )
     .unwrap();
     assert_eq!(record_count(&tl), 1);
+    // The unset form clears the reference, a change that purges again.
+    tl.write_property(P, None, unset.clone(), None).unwrap();
+    assert_eq!(tl.read_property(P, None).unwrap(), unset);
+    assert_eq!(record_count(&tl), 1);
+}
+
+#[test]
+fn trend_log_unset_forms_clear_and_null_is_another_datatype() {
+    let mut tl = TrendLogObject::new(1, "TL-1", 4).unwrap();
+    tl.bind_clock_internal(Some(Arc::new(FixedClock)));
+    let unset = tl.read_property(P, None).unwrap();
+    assert_eq!(unset, PropertyValue::ApplicationData(UNSET.to_vec()));
+    // Object or Device instance 4194303 is unset whatever else the reference
+    // holds, even a Device member the log otherwise refuses (#1417).
+    for octets in [
+        [
+            &[0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55][..],
+            &[0x3C, 0x02, 0x00, 0x00, 0x0A],
+        ]
+        .concat(),
+        [&AI1_PV[..], &[0x3C, 0x02, 0x3F, 0xFF, 0xFF]].concat(),
+    ] {
+        tl.write_property(
+            P,
+            None,
+            PropertyValue::ApplicationData(AI1_PV.to_vec()),
+            None,
+        )
+        .unwrap();
+        tl.write_property(P, None, PropertyValue::ApplicationData(octets), None)
+            .unwrap();
+        assert_eq!(tl.read_property(P, None).unwrap(), unset);
+    }
+    // A Device member that isn't a Device is still refused, unset or not.
+    assert_error(
+        tl.write_property(
+            P,
+            None,
+            PropertyValue::ApplicationData([&UNSET[..], &[0x3C, 0x00, 0x00, 0x00, 0x0A]].concat()),
+            None,
+        ),
+        ErrorClass::PROPERTY,
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+    // NULL is no reference: refused as another datatype, nothing purged.
+    tl.write_property(
+        P,
+        None,
+        PropertyValue::ApplicationData(AI1_PV.to_vec()),
+        None,
+    )
+    .unwrap();
+    let records = record_count(&tl);
+    assert_error(
+        tl.write_property(P, None, PropertyValue::Null, None),
+        ErrorClass::PROPERTY,
+        ErrorCode::INVALID_DATA_TYPE,
+    );
+    assert_eq!(record_count(&tl), records);
+    assert_eq!(
+        tl.read_property(P, None).unwrap(),
+        PropertyValue::ApplicationData(AI1_PV.to_vec())
+    );
+    // The setter takes the unset form as no reference too.
+    tl.set_log_device_object_property(Some(BACnetDeviceObjectPropertyReference::new_local(
+        oid(
+            ObjectType::BINARY_VALUE,
+            ObjectIdentifier::WILDCARD_INSTANCE,
+        ),
+        PropertyIdentifier::STATUS_FLAGS.to_raw(),
+    )))
+    .unwrap();
+    assert_eq!(tl.read_property(P, None).unwrap(), unset);
 }
 
 #[test]

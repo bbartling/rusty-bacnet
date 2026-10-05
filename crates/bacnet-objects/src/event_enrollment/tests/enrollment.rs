@@ -117,11 +117,20 @@ fn read_acked_transitions() {
 
 #[test]
 fn read_object_property_reference_none() {
-    let ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
-    let val = ee
-        .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
-        .unwrap();
-    assert_eq!(val, PropertyValue::Null);
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
+    let read = |ee: &EventEnrollmentObject| {
+        ee.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
+            .unwrap()
+    };
+    // The unset form (#1417): [0] analog-input 4194303, [1] present-value.
+    let unset = PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55]);
+    assert_eq!(read(&ee), unset);
+    // A reference whose Device is at the reserved instance leaves it unset.
+    let wildcard = ObjectIdentifier::new(ObjectType::DEVICE, 4_194_303).unwrap();
+    let ai5 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 5).unwrap();
+    let reference = BACnetDeviceObjectPropertyReference::new_remote(ai5, 85, wildcard);
+    ee.set_object_property_reference(Some(reference)).unwrap();
+    assert_eq!(read(&ee), unset);
 }
 
 #[test]

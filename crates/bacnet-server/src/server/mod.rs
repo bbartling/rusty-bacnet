@@ -802,6 +802,8 @@ mod notification_transactions_tests;
 #[cfg(test)]
 mod pulse_converter_cov_tests;
 #[cfg(test)]
+mod pulse_converter_reference_tests;
+#[cfg(test)]
 mod rb07_provenance_tests;
 #[cfg(test)]
 mod reference_write_wire_tests;
@@ -811,6 +813,8 @@ mod remote_write_answer_tests;
 mod remote_write_discovery_tests;
 #[cfg(test)]
 mod run_cycle_tests;
+#[cfg(test)]
+mod schedule_create_retry_tests;
 #[cfg(test)]
 mod schedule_reference_list_tests;
 #[cfg(test)]

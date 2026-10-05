@@ -5,6 +5,9 @@ use bacnet_services::device_mgmt::DeviceCommunicationControlRequest;
 use bacnet_types::enums::EnableDisable;
 use tokio::time::{advance, Duration};
 
+#[path = "dcc_local_network_tests.rs"]
+mod local_network;
+
 #[tokio::test(start_paused = true)]
 async fn dcc_source_exact_full_bytes_and_fail_closed_wire() {
     use crate::server::{DccSource, DccSourceRestriction};
@@ -81,14 +84,14 @@ async fn dcc_source_exact_full_bytes_and_fail_closed_wire() {
         let address = vec![1; length];
         let restriction =
             DccSourceRestriction::new(vec![DccSource::Direct(address.clone())]).unwrap();
-        assert!(restriction.allows(&address, None));
+        assert!(restriction.allows(&address, None, None));
         let mut other = address.clone();
         other[length - 1] = 2;
-        assert!(!restriction.allows(&other, None));
-        assert!(!restriction.allows(&address[..length - 1], None));
+        assert!(!restriction.allows(&other, None, None));
+        assert!(!restriction.allows(&address[..length - 1], None, None));
         let mut longer = address.clone();
         longer.push(1);
-        assert!(!restriction.allows(&longer, None));
+        assert!(!restriction.allows(&longer, None, None));
         for (network, mac) in [
             (0, address.clone()),
             (65535, address.clone()),
@@ -100,7 +103,8 @@ async fn dcc_source_exact_full_bytes_and_fail_closed_wire() {
                 Some(&NpduAddress {
                     network,
                     mac_address: MacAddr::from_slice(&mac)
-                })
+                }),
+                None,
             ));
         }
     }

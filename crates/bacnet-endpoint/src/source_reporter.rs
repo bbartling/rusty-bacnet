@@ -365,6 +365,10 @@ impl BACnetObject for SourceReporter {
         self.wrapped.complete_schedule_write(write, outcomes)
     }
 
+    fn retry_refusals_naming(&self, target: ObjectIdentifier) -> Option<ScheduleWrite> {
+        self.wrapped.retry_refusals_naming(target)
+    }
+
     fn calendar_state_internal(&self, day: SpecificDate) -> Option<bool> {
         self.wrapped.calendar_state_internal(day)
     }
@@ -480,6 +484,21 @@ impl BACnetObject for SourceReporter {
         now: Duration,
     ) -> Option<BACnetObjectPropertyReference> {
         self.wrapped.take_due_averaging_sample_internal(now)
+    }
+
+    fn input_reference_internal(&self) -> Option<Option<&BACnetObjectPropertyReference>> {
+        self.wrapped.input_reference_internal()
+    }
+
+    fn set_input_usable_internal(&mut self, usable: bool) -> bool {
+        self.wrapped.set_input_usable_internal(usable)
+    }
+
+    fn take_input_reading_internal(
+        &mut self,
+        reading: Option<bacnet_objects::accumulator::InputReading>,
+    ) -> bool {
+        self.wrapped.take_input_reading_internal(reading)
     }
 
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {

@@ -8,6 +8,11 @@ use PropertyIdentifier as P;
 
 fn accumulator_objects(configured: bool) -> [Box<dyn BACnetObject>; 2] {
     let mut acc = AccumulatorObject::new(7, "ACC-7", 95).unwrap();
+    // Prescale is served only once set, so set it to have the row to select.
+    acc.set_prescale(bacnet_types::constructed::BACnetPrescale {
+        multiplier: 1,
+        modulo_divide: 100,
+    });
     let mut pc = PulseConverterObject::new(7, "PC-7", 62).unwrap();
     if configured {
         acc.write_property(P::MAX_PRES_VALUE, None, PropertyValue::Unsigned(1000), None)

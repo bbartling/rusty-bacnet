@@ -3,7 +3,7 @@
 //! Split out to keep every file under the 700-LOC cap.
 
 use super::super::*;
-use bacnet_types::enums::{FaultType, LifeSafetyState};
+use bacnet_types::enums::{ErrorClass, ErrorCode, FaultType, LifeSafetyState};
 
 /// Decode the read arm's framed wire form back to a structured value.
 fn decode_framed(val: PropertyValue) -> FaultParameters {
@@ -400,20 +400,61 @@ fn fault_parameters_framed_malformed_rejected() {
 }
 
 #[test]
-fn fault_parameters_write_clear_to_null() {
+fn fault_parameters_application_null_is_another_datatype() {
+    // The CHOICE's `none` is context-tagged, so an application NULL is no
+    // BACnetFaultParameter (#1417): INVALID_DATA_TYPE, which the server
+    // turns into the Clause 15.9.2 no-op. The parameters stay.
     let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
-    ee.set_fault_parameters(Some(FaultParameters::FaultNone));
-    ee.write_property(
-        PropertyIdentifier::FAULT_PARAMETERS,
-        None,
-        PropertyValue::Null,
-        None,
-    )
-    .unwrap();
+    let out_of_range = FaultParameters::FaultOutOfRange {
+        min_normal: 1.0,
+        max_normal: 2.0,
+    };
+    ee.set_fault_parameters(Some(out_of_range.clone()));
+    let err = ee
+        .write_property(
+            PropertyIdentifier::FAULT_PARAMETERS,
+            None,
+            PropertyValue::Null,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Protocol { class, code }
+            if class == ErrorClass::PROPERTY.to_raw() as u32
+                && code == ErrorCode::INVALID_DATA_TYPE.to_raw() as u32),
+        "{err:?}"
+    );
     let val = ee
         .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
         .unwrap();
-    assert_eq!(decode_framed(val), FaultParameters::FaultNone);
+    assert_eq!(decode_framed(val), out_of_range);
+}
+
+#[test]
+fn fault_parameters_context_tagged_none_clears() {
+    // [0] NULL, the `none` choice an enrollment without parameters reads as,
+    // clears the parameters when written.
+    let mut ee = EventEnrollmentObject::new(1, "EE-FP", EventType::CHANGE_OF_BITSTRING).unwrap();
+    let unset = ee
+        .read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
+        .unwrap();
+    assert_eq!(unset, PropertyValue::ApplicationData(vec![0x08]));
+    ee.set_fault_parameters(Some(FaultParameters::FaultOutOfRange {
+        min_normal: 1.0,
+        max_normal: 2.0,
+    }));
+    ee.write_property(
+        PropertyIdentifier::FAULT_PARAMETERS,
+        None,
+        unset.clone(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        ee.read_property(PropertyIdentifier::FAULT_PARAMETERS, None)
+            .unwrap(),
+        unset
+    );
     assert_eq!(read_fault_type(&ee), FaultType::NONE.to_raw());
 }
 

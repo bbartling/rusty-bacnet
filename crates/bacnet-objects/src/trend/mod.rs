@@ -114,9 +114,10 @@ impl TrendLogObject {
     /// configuration: the log buffer is left as it is.
     ///
     /// A reference may name another device; the poller then logs a failure
-    /// for each sample instead of reading it. A Device member that isn't a
-    /// Device identifier fails with PROPERTY / VALUE_OUT_OF_RANGE and changes
-    /// nothing.
+    /// for each sample instead of reading it. `None`, or a reference whose
+    /// object or Device is at the reserved instance 4194303, leaves the log
+    /// without one (#1417). A Device member that isn't a Device identifier
+    /// fails with PROPERTY / VALUE_OUT_OF_RANGE and changes nothing.
     pub fn set_log_device_object_property(
         &mut self,
         reference: Option<BACnetDeviceObjectPropertyReference>,
@@ -124,25 +125,21 @@ impl TrendLogObject {
         if let Some(reference) = &reference {
             crate::device_reference::check_device_member(reference.device_identifier)?;
         }
-        self.log_device_object_property = reference;
+        self.log_device_object_property = reference.and_then(crate::device_reference::set_or_unset);
         Ok(())
     }
 
-    /// A client's write of Log_DeviceObjectProperty: one reference, or Null
-    /// for none (#1234). See [`references::check_written`] for the refusals.
-    /// A new value purges the buffer, leaving a BUFFER_PURGED status record
-    /// (Clause 12.25.8); without a valid clock the purge fails with DEVICE /
+    /// A client's write of Log_DeviceObjectProperty (#1234): one reference,
+    /// the unset form clearing it (#1417). See [`references::check_written`]
+    /// for the refusals; Null is no reference, so INVALID_DATA_TYPE. A new
+    /// value purges the buffer, leaving a BUFFER_PURGED status record (Clause
+    /// 12.25.8); without a valid clock the purge fails with DEVICE /
     /// OPERATIONAL_PROBLEM and nothing changes. Writing the value already held
     /// changes nothing.
     fn write_log_device_object_property(&mut self, value: PropertyValue) -> Result<(), Error> {
-        let reference = match value {
-            PropertyValue::Null => None,
-            value => {
-                let reference = crate::device_reference::decode_reference(&value)?;
-                references::check_written(&reference, false)?;
-                Some(reference)
-            }
-        };
+        let reference = crate::device_reference::decode_reference(&value)?;
+        references::check_written(&reference)?;
+        let reference = crate::device_reference::set_or_unset(reference);
         if reference != self.log_device_object_property {
             self.lifecycle().purge()?;
             self.log_device_object_property = reference;
@@ -311,11 +308,12 @@ impl BACnetObject for TrendLogObject {
             }
             // ReadRange pages it through `log_buffer_internal`.
             p if p == PropertyIdentifier::LOG_BUFFER => Err(log_buffer_read_denied()),
-            // The Clause 21 encoding; Null while no reference is set.
+            // The Clause 21 encoding; while no reference is set, the empty
+            // element a Trend Log Multiple grows by (#1417).
             p if p == PropertyIdentifier::LOG_DEVICE_OBJECT_PROPERTY => {
-                Ok(self.log_device_object_property.as_ref().map_or(
-                    PropertyValue::Null,
-                    crate::device_reference::reference_value,
+                Ok(crate::device_reference::optional_reference_value(
+                    self.log_device_object_property.as_ref(),
+                    ObjectType::ANALOG_INPUT,
                 ))
             }
             p if p == PropertyIdentifier::PROPERTY_LIST => {

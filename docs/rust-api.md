@@ -1947,7 +1947,10 @@ framing, through the shared `bacnet-encoding` codecs.
   BACnetEventParameter and BACnetFaultParameter CHOICE framing. Modeled
   alternatives round-trip. An alternative the stack does not model is kept as
   opaque bytes, and omitted, deprecated and reserved choices, or trailing bytes
-  after a framed element, are rejected.
+  after a framed element, are rejected. Fault_Parameters without a fault
+  algorithm reads as the context-tagged `none` choice (`08`), and writing that
+  clears it. The CHOICE has no application NULL, so a NULL written to it
+  succeeds and changes nothing (#1417).
 - **BACnetTimeStamp** (Clause 21) has one codec for every producer and consumer.
   The time form is a primitive tag holding raw Time octets, the sequence number
   must fit 0..=65535 on both encode and decode, and the date-and-time form is an
@@ -2307,10 +2310,13 @@ An Event Enrollment's Object_Property_Reference, set with
 identifier that isn't a Device with VALUE_OUT_OF_RANGE), reads as the
 context-tagged
 `BACnetDeviceObjectPropertyReference` in one `PropertyValue::ApplicationData`,
-its array index and Device members present only when set (Null while unset;
-#1182), and it stays read-only over the network. The server's evaluation and
-CHANGE_OF_RELIABILITY notifications decode that encoding, so a notification's
-property values carry the reference in it.
+its array index and Device members present only when set (#1182), and it
+stays read-only over the network. Without a reference it reads as the unset
+form, Analog Input 4194303's Present_Value (#1417), and a reference whose
+object or Device is at instance 4194303 given to the setter leaves it unset.
+The server's evaluation and CHANGE_OF_RELIABILITY notifications decode that
+encoding, so a notification's property values carry the reference in it; the
+evaluation treats the unset form as no reference.
 
 `ScheduleObject::add_object_property_reference` retains a complete local
 `BACnetObjectPropertyReference`, including its optional target array index;
@@ -2364,9 +2370,14 @@ that target later takes a value or leaves the list; a NULL, or an
 out-of-service value of another datatype, counts for nothing. While a refusal
 stands, each pass with nothing else to send offers the current value again to
 the refused references alone (#1436): the 60-second tick, or the pass any
-committed write to the Schedule runs. So a target object created later, or an
-array grown to take the index, gets the value and clears the fault within one
-tick. A retry that fails otherwise (an out-of-range value, a denied write) ends
+committed write to the Schedule runs. So an array grown to take the index gets
+the value and clears the fault within one tick. A target object created later
+doesn't wait (#1440): `ObjectDatabase::add` asks each Schedule through the
+public `BACnetObject::retry_refusals_naming(target)` hook whether it holds a
+refusal naming the new object, and queues those that do; the server then
+writes that retry to the references naming the object alone and fans COV out,
+under the CreateObject's own guard or, after the application's own `add`, from
+its Schedule task. A retry that fails otherwise (an out-of-range value, a denied write) ends
 the refusal as well, as that failure on a first write would never have raised
 it, and warns once; one still refused logs at debug. Retries skip a NULL value
 and a Schedule out of service or outside its period.
@@ -2465,11 +2476,14 @@ status, or a time change. `TrendLogMultipleObject::add_record` takes one and
 
 Log_DeviceObjectProperty reads as the context-tagged
 `BACnetDeviceObjectPropertyReference` (#1234): one
-`PropertyValue::ApplicationData` on a Trend Log (Null while unset), and on a
-Trend Log Multiple a BACnetARRAY with one such value per element, which an
-array index reads singly (index 0 is the count). Both are writable over
-WriteProperty, WritePropertyMultiple and `write_local`, in that encoding: a
-Trend Log takes one reference, or Null to unset it; a Trend Log Multiple takes
+`PropertyValue::ApplicationData` on a Trend Log, and on a Trend Log Multiple a
+BACnetARRAY with one such value per element, which an array index reads singly
+(index 0 is the count). A Trend Log without a reference reads as the unset
+form, Analog Input 4194303's Present_Value, the empty element a Trend Log
+Multiple grows by (#1417). Both are writable over WriteProperty,
+WritePropertyMultiple and `write_local`, in that encoding: a Trend Log takes
+one reference, any whose object or Device is at instance 4194303 unsetting it,
+and a NULL succeeds and changes nothing; a Trend Log Multiple takes
 the whole array, at any length up to `trend::MAX_LOG_DEVICE_OBJECT_PROPERTIES`
 (64, RESOURCES / NO_SPACE_TO_WRITE_PROPERTY past it), or one element by index.
 An Unsigned written to index 0 resizes it: a smaller size drops the trailing
@@ -2767,15 +2781,19 @@ writes it to the Manipulated_Variable_Reference target.
 
 Controlled_Variable_Reference and Manipulated_Variable_Reference read as the
 context-tagged `BACnetObjectPropertyReference` in one
-`PropertyValue::ApplicationData`, Null while unset. Setpoint_Reference reads
-as the `BACnetSetpointReference`: the same members inside opening and closing
-tag 0, or an empty `ApplicationData` while unset, since the sequence's only
-member is optional (#1312). All three take writes in those encodings over
+`PropertyValue::ApplicationData`. While unset they read as the unset form, the
+reserved instance 4194303's Present_Value of an Analog Input and an Analog
+Output respectively (#1417). Setpoint_Reference reads as the
+`BACnetSetpointReference`: the same members inside opening and closing tag 0,
+or an empty `ApplicationData` while unset, since the sequence's only member is
+optional (#1312). All three take writes in those encodings over
 WriteProperty, WritePropertyMultiple and `write_local`, so a value read writes
-back unchanged; Null clears a variable reference and the empty value clears
-Setpoint_Reference. Another datatype is INVALID_DATA_TYPE: the flat
-`[ObjectIdentifier, Enumerated, Unsigned?]` list these used to read as, Null
-on Setpoint_Reference, or the setpoint frame on a variable reference.
+back unchanged; any reference to instance 4194303 clears a variable reference
+(so do the setters given one), and the empty value clears Setpoint_Reference.
+Another datatype is INVALID_DATA_TYPE: the flat
+`[ObjectIdentifier, Enumerated, Unsigned?]` list these used to read as, Null,
+or the setpoint frame on a variable reference. The server turns that refusal
+of a NULL into the success that changes nothing (#1396, #1417).
 Malformed octets, such as a Device member `[3]` the production lacks or an
 empty frame `0E 0F`, are INVALID_DATA_ENCODING. These refusals are the device
 references' single-reference codes (#1395): anything after the one reference
@@ -2954,8 +2972,10 @@ Device member.
 
 Object_Property_Reference reads as the context-tagged
 `BACnetDeviceObjectPropertyReference`, a `PropertyValue::ApplicationData` with
-no Device member (Null while unset), and a write takes that encoding back
-(#1182). The flat application-tagged list reads used to serve is now
+no Device member, and a write takes that encoding back (#1182). While unset it
+reads as Analog Input 4194303's Present_Value, and writing a reference whose
+object or Device is at instance 4194303 unsets it; a NULL succeeds and changes
+nothing (#1417). The flat application-tagged list reads used to serve is now
 INVALID_DATA_TYPE, as are octets that don't open with the object
 identifier's context tag 0 (#1312); anything after the one reference is
 INVALID_DATA_ENCODING, and a Device member that isn't a Device identifier
@@ -3495,11 +3515,41 @@ as the device's.
 | `AccumulatorObject` | `::new(instance, name, units)` |
 | `PulseConverterObject` | `::new(instance, name, units)` |
 
+An Accumulator serves the optional Prescale only once `set_prescale` gives
+it one: BACnetPrescale has no NULL, so until then the property is absent from
+Property_List and the PICS, and a read is UNKNOWN_PROPERTY (#1417).
+
 A Pulse Converter's Input_Reference, set with `set_input_reference`, reads and
 takes writes like the Loop's variable references: the context-tagged
-`BACnetObjectPropertyReference` in a `PropertyValue::ApplicationData`, Null
-while unset, with the flat list refused as INVALID_DATA_TYPE (#1312). The
-object doesn't follow it; the application feeds Count with `add_pulses`.
+`BACnetObjectPropertyReference` in a `PropertyValue::ApplicationData`, with
+the flat list refused as INVALID_DATA_TYPE (#1312). While unset it reads as
+Accumulator 4194303's Present_Value, and writing a reference to instance
+4194303 unsets it (#1417).
+
+The database judges the reference (`ObjectDatabase::check_input_reference`,
+#1341): Reliability reads CONFIGURATION_ERROR, with Status_Flags FAULT, while
+it names a missing object or a property that doesn't read as an Unsigned or
+INTEGER, and NO_FAULT_DETECTED once it names one that does or is unset
+(Clause 12.23.9). An index on a property that isn't an array, index 0 (an
+array's size) and the converter's own properties are faults too. A
+Priority_Array slot is judged by the datatype the object is commanded in,
+its Relinquish_Default's, so a slot that is NULL for now is no fault but has
+nothing to count. The verdict is taken as a write of the reference commits
+(WriteProperty, WritePropertyMultiple or `write_local`; the object isn't one
+CreateObject builds), when the converter is added, whenever
+`ObjectDatabase::add` or `remove` adds, replaces or removes the object it
+names, and on every counting pass; the server fans COV out for a converter
+that changes. While Out_Of_Service is TRUE, Reliability takes a client's
+value (Clause 12.23.10), and the return to service applies the latest
+verdict. A running server also counts from the property at least once a
+second (`ObjectDatabase::count_pulse_inputs`, on every wake of its monotonic
+operation task): each increase over the last reading goes into Count as
+`add_pulses` would, and the first reading after the reference is set or
+changed only sets the baseline, so re-pointing it at a larger value counts
+nothing. A reading below the last one counts the wrap when the source is an
+Accumulator's Present_Value, modulo its Max_Pres_Value + 1 (Clause 12.61.4);
+from any other source it only sets the baseline again. The application can
+still feed Count with `add_pulses`.
 
 #### System (3)
 
@@ -5201,6 +5251,12 @@ the notification:
   `Send_Now`, and an object's mandatory audit policy, are accepted under
   DISABLE_INITIATION and report like any other.
 
+With target Audit configured, each DCC change the server carries out is itself
+audited (Table 19-5, #1387): DEVICE_DISABLE_COMM for an accepted
+DISABLE_INITIATION, sent under the state it reports, and DEVICE_ENABLE_COMM for
+an accepted ENABLE or a timed disable that runs out. A refused request writes no
+record. See [Audit records](dcc-policy.md#audit-records).
+
 A write a Command or Channel makes in another device follows the same rule
 (see [Building Control](#building-control-7)).
 
@@ -5917,7 +5973,10 @@ resolve through immutable `BipEndpointBuilder::source_audit_device_binding` entr
 a direct Address choice needs no binding. Once the session knows its network's
 number, an Address choice naming that number is direct too, and its records go
 to that MAC with no DNET (#1403). An audited read routed to that number is
-audited as the direct read it then is. The local database must have a
+audited as the direct read it then is. A provisioned Address naming a network
+the session's number does not name, or not yet, starts unresolved with
+CONFIGURATION_ERROR and resolves once the number names it (#1461); see
+[Device Audit recipient](device-audit-recipient.md). The local database must have a
 concrete built-in local Device (the lowest when it holds several; see
 [Databases with several Devices](#databases-with-several-devices)) and the
 selected Audit Reporter. Configure the Reporter's READ bit
@@ -6098,7 +6157,9 @@ families and broader Audit completion remain open.
 
 The standalone target profile uses `DeviceObject::provision_audit_recipient` for
 initial state and `AuditReportersConfig { reporters }` for selection. Active local
-and authorized network recipient writes share atomic old/new delivery admission.
+and authorized network recipient writes share atomic admission of the change's two
+notifications: to the old and the new recipient, or to the new one and by global
+broadcast when the old one is an Address the network number does not name.
 See the [Device recipient contract](device-audit-recipient.md) for supported routes,
 metadata, failure semantics and shutdown ownership. The endpoint source profile
 uses the same typed Device value and a source-owned paired delivery path; it has

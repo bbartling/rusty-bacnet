@@ -146,7 +146,20 @@ async fn a_confirmed_notification_whose_commit_fails_is_refused_and_stores_nothi
     )
     .await
     .unwrap();
-    assert!(matches!(response, Apdu::Error(_)));
+    // The storage error is the server's own trouble, not the sender's
+    // (#1366): DEVICE / OPERATIONAL_PROBLEM, as a failed Log_Enable commit.
+    let Apdu::Error(error) = response else {
+        panic!("expected an Error, got {response:?}");
+    };
+    assert_eq!(error.invoke_id, 9);
+    assert_eq!(
+        error.service_choice,
+        ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION
+    );
+    assert_eq!(
+        (error.error_class, error.error_code),
+        (ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM)
+    );
     assert_eq!(count(&db, sink).await, (0, 0));
     // The retransmission is stored once storage is back.
     storage.fail.store(false, Ordering::SeqCst);

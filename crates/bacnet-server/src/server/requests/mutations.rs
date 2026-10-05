@@ -388,9 +388,14 @@ impl Request<'_> {
         }
     }
 
+    /// CreateObject. Once the object is in, the work its arrival queued on
+    /// the database (`crate::membership`) is taken under the same guard and
+    /// its COV fanout joins the request's.
     pub(super) async fn create_object<T: TransportPort + 'static>(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
+        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        effects: &mut MutationEffects,
         mut ack_buf: BytesMut,
         audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
@@ -399,7 +404,8 @@ impl Request<'_> {
         }) {
             return self.error::<T>(&error);
         }
-        let result = {
+        let database = db;
+        let (result, membership) = {
             let mut db = db.write().await;
             let mut target = None;
             let result = handlers::handle_create_object_observed(
@@ -437,18 +443,28 @@ impl Request<'_> {
                 );
                 audit.lifecycle_completed(&mut db, &result);
             }
-            result
+            let membership = crate::membership::settle(database, &mut db, cov_table).await;
+            (result, membership)
         };
+        membership.merge_into(
+            &mut effects.coarse_cov_oids,
+            &mut effects.life_safety_cov_changes,
+            &mut effects.command_runs,
+        );
         match result {
             Ok(()) => self.complex_ack(ack_buf),
             Err(e) => self.error::<T>(&e),
         }
     }
 
+    /// DeleteObject. The work the removal queued on the database
+    /// (`crate::membership`) is taken under the same guard and its COV
+    /// fanout joins the request's.
     pub(super) async fn delete_object<T: TransportPort + 'static>(
         &self,
         db: &Arc<RwLock<ObjectDatabase>>,
         cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        effects: &mut MutationEffects,
         audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
         if let Err(error) = self.authorize(|| {
@@ -459,7 +475,8 @@ impl Request<'_> {
         let deleted_oid = DeleteObjectRequest::decode(&self.req.service_request)
             .ok()
             .map(|r| r.object_identifier);
-        let (result, removed) = {
+        let database = db;
+        let (result, removed, membership) = {
             let mut db = db.write().await;
             let removed_status = deleted_oid.and_then(|oid| {
                 db.get(&oid)
@@ -486,8 +503,14 @@ impl Request<'_> {
                 }
             }
             audit.lifecycle_completed(&mut db, &result);
-            (result, removed)
+            let membership = crate::membership::settle(database, &mut db, cov_table).await;
+            (result, removed, membership)
         };
+        membership.merge_into(
+            &mut effects.coarse_cov_oids,
+            &mut effects.life_safety_cov_changes,
+            &mut effects.command_runs,
+        );
         // Dropping an object that saves its state waits for its queued saves,
         // so drop it with the guard released and off the async workers.
         if let Some(removed) = removed {

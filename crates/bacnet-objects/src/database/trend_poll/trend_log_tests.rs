@@ -79,11 +79,13 @@ fn each_trigger_acquires_one_trend_log_record() {
 #[test]
 fn a_trigger_on_a_trend_log_without_a_reference_logs_a_failure() {
     let (mut db, oid, _, _) = fixture(u32::MAX);
+    // The unset form clears the reference (#1417): [0] analog-input 4194303,
+    // [1] present-value.
     write(
         &mut db,
         oid,
         P::LOG_DEVICE_OBJECT_PROPERTY,
-        PropertyValue::Null,
+        PropertyValue::ApplicationData(vec![0x0C, 0x00, 0x3F, 0xFF, 0xFF, 0x19, 0x55]),
     );
     write(&mut db, oid, P::LOGGING_TYPE, PropertyValue::Enumerated(2));
     write(&mut db, oid, P::TRIGGER, PropertyValue::Boolean(true));

@@ -257,7 +257,9 @@
     "crates/bacnet-server/src/local_references.rs::tests::only_members_naming_the_local_device_lose_their_device",
     "crates/bacnet-server/src/server/local_encoded_writes_tests.rs::a_local_read_writes_back_through_the_network_decoding",
     "crates/rusty-bacnet/tests/test_local_round_trips.py::LocalRoundTripTests::test_a_local_read_writes_back_locally_and_over_the_network",
-    "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others_as_they_are"
+    "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others_as_they_are",
+    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_writes_clear_with_the_unset_values_they_read_as",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_reference_reads_and_writes_in_the_clause_21_form"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/schedule/write_tests.rs::weekly_schedule_refused_writes_leave_it_unchanged",
@@ -392,6 +394,8 @@
    "code_anchors": [
     "crates/bacnet-objects/src/schedule/reliability.rs",
     "crates/bacnet-objects/src/schedule/mod.rs::ScheduleObject",
+    "crates/bacnet-objects/src/database/membership.rs",
+    "crates/bacnet-server/src/membership.rs",
     "crates/bacnet-server/src/fault_detection.rs",
     "crates/bacnet-objects/src/schedule/evaluation.rs::ScheduleTargetOutcome",
     "crates/bacnet-objects/src/traits.rs",
@@ -411,7 +415,10 @@
     "crates/bacnet-server/src/schedule_reference_reliability_tests.rs::{a_reference_its_target_can_never_write_faults_the_schedule,the_fault_clears_once_the_reference_is_fixed,a_missing_object_created_later_takes_the_value_at_the_next_pass}",
     "crates/bacnet-objects/src/schedule/retry_tests.rs::{a_pass_with_nothing_else_to_send_retries_only_the_refused_reference,a_datatype_refusal_is_retried_too,a_retry_that_fails_otherwise_ends_the_refusal,a_retry_leaves_the_held_slots_alone,a_new_value_goes_to_the_whole_list_not_as_a_retry}",
     "crates/bacnet-server/src/schedule_reference_retry_tests.rs::{a_state_text_index_that_becomes_valid_clears_the_fault,a_retry_runs_no_command_or_channel_member_again,a_retry_that_fails_otherwise_ends_the_fault_and_warns_once}",
-    "crates/bacnet-server/src/server/schedule_reference_write_tests.rs::a_target_created_later_takes_the_value_within_one_tick"
+    "crates/bacnet-server/src/server/schedule_reference_write_tests.rs::a_target_created_later_takes_the_value_as_it_is_created",
+    "crates/bacnet-objects/src/schedule/retry_tests.rs::{a_created_object_gets_a_retry_of_the_references_naming_it_alone,a_created_object_gets_no_retry_where_a_pass_would_send_none}",
+    "crates/bacnet-objects/src/database/membership_tests.rs::adding_a_refused_object_queues_its_retry_and_wakes_the_server",
+    "crates/bacnet-server/src/server/schedule_create_retry_tests.rs::{the_retry_writes_the_created_object_and_owes_cov_for_it,create_object_retries_the_refusal_before_its_answer,an_applications_own_add_is_retried_by_the_server_task}"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/schedule/retry_tests.rs::nothing_is_retried_without_a_value_the_schedule_sends",
@@ -436,6 +443,7 @@
     "The cost is that the fault shows at the first write rather than at configuration time; 12.24.13 already lets a remote member's fault wait for a write. Local choices: only a refusal of a value whose datatype the schedule itself holds counts, so a NULL, or an out-of-service value of another datatype, raises nothing; any other failure leaves a member's standing as it was; the flag combines with the contents check under the one ownership rule, so a Reliability set by the application or a client simulation is never cleared by it.",
     "A reference the target can't write whatever the value (a missing object or property, or an array index the property can't take) faults the Schedule as a datatype refusal does, and clears the same way. A denied write doesn't: it can be the target's state.",
     "While a refusal of either kind stands, each pass with nothing else to send offers Present_Value again to the refused members only, so the fault clears within a tick of its cause going away. NULL isn't retried; refusals log at debug.",
+    "When the object a refused member names is created, by CreateObject or ObjectDatabase::add, the server offers the value to the members naming it at once and fans COV out for what that writes; the database finds those Schedules by asking each whether it holds such a refusal. An array that grows still waits for the pass.",
     "A retry that fails otherwise (out of range, denied) ends that member's refusal and warns once, as the same failure on a first write raises nothing. After a write that isn't a retry, the next retry settles the member."
    ]
   },
@@ -569,7 +577,9 @@
     "crates/bacnet-server/src/cov/policy.rs::CovPolicy::validate",
     "crates/bacnet-server/src/cov/policy.rs::CovPolicy::is_peer_reserved",
     "crates/bacnet-server/src/cov/identity.rs::CovRecipient::from_endpoint",
-    "crates/rusty-bacnet/src/server/server_methods/time_sync_policy.rs::time_sync_policy"
+    "crates/rusty-bacnet/src/server/server_methods/time_sync_policy.rs::time_sync_policy",
+    "crates/bacnet-server/src/server/dcc_policy.rs::routed_entry_names_direct_source",
+    "crates/bacnet-server/src/server/time_sync_policy.rs::TimeSyncSource::from_received"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/time_sync_policy_tests.rs::time_sync_defaults_and_all_builders_validate_before_start_or_dial",
@@ -584,7 +594,10 @@
     "crates/bacnet-server/src/cov/tests.rs::is_peer_reserved_checks_canonical_peer_identity",
     "crates/rusty-bacnet/src/server/server_methods/time_sync_policy_tests.rs::every_time_sync_policy_key_reaches_its_field",
     "crates/rusty-bacnet/tests/test_time_sync_policy.py::TimeSyncPolicyWireTests::test_an_allowlist_takes_only_its_listed_sources",
-    "crates/rusty-bacnet/tests/test_time_sync_policy.py::TimeSyncPolicyWireTests::test_without_a_policy_every_valid_request_sets_the_clock"
+    "crates/rusty-bacnet/tests/test_time_sync_policy.py::TimeSyncPolicyWireTests::test_without_a_policy_every_valid_request_sets_the_clock",
+    "crates/bacnet-server/src/server/requests/dcc_local_network_tests.rs::a_routed_entry_on_this_network_admits_the_stations_direct_request",
+    "crates/bacnet-server/src/server/requests/unconfirmed_time_sync_tests.rs::time_sync_routed_entry_on_this_network_names_the_stations_direct_request",
+    "crates/bacnet-server/src/server/time_sync_policy_tests.rs::a_station_shares_one_budget_direct_and_relayed_through_this_network"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/time_sync_policy_tests.rs::exact_sources_and_configured_empty_do_not_fall_back_to_router",
@@ -601,7 +614,8 @@
     "crates/bacnet-server/src/cov/policy_tests.rs::invalid_cov_policy_fails_start_before_transport",
     "crates/rusty-bacnet/src/server/server_methods/time_sync_policy_tests.rs::invalid_time_sync_policy_raises_the_constructor_exception_types",
     "crates/rusty-bacnet/tests/test_time_sync_policy.py::TimeSyncPolicyConstructorTests::test_the_rust_limits_are_checked_at_construction",
-    "crates/rusty-bacnet/tests/test_time_sync_policy.py::TimeSyncPolicyWireTests::test_a_step_past_the_cap_is_refused"
+    "crates/rusty-bacnet/tests/test_time_sync_policy.py::TimeSyncPolicyWireTests::test_a_step_past_the_cap_is_refused",
+    "crates/bacnet-server/src/server/requests/dcc_local_network_tests.rs::{a_routed_entry_names_no_direct_request_off_this_network,a_direct_entry_still_names_no_routed_request}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -614,8 +628,8 @@
     "Inbound TimeSynchronization and UTCTimeSynchronization are decoded, then checked against `TimeSyncPolicy`. The default sets the clock on every valid request; a refused one leaves the clock and the `on_time_sync` observer untouched.",
     "`max_step` compares the requested time with the clock in the request's own basis, UTC through `UTC_Offset` and daylight saving, inclusive at the bound in both directions. With a cap set, an unreadable clock refuses the request.",
     "Per-source and global token buckets and coalescing windows count both services together; a request the step cap refuses spends no budget. The source table holds `max_sources` entries (default 256) and never evicts an active one.",
-    "Entries in `TimeSyncSourceRestriction`, `DccSourceRestriction` and the `CovPolicy` reserved lists hold 1 to `BACnetAddress::MAX_MAC_LEN` (18) octets and routed networks 1 to 65534; others fail with `Error::Encoding` before startup.",
-    "A routed source matches only a routed entry, by network and full address, never by the router's MAC; a direct entry matches only unrouted traffic. An empty time-sync or DCC list denies all; the DCC list needs `DccPolicy::RequirePassword`."
+    "Restriction and reserved-list entries hold 1 to `BACnetAddress::MAX_MAC_LEN` (18) octets and routed networks 1 to 65534, or fail with `Error::Encoding` before startup; a DCC list needs `DccPolicy::RequirePassword`.",
+    "A routed source matches only a routed entry, by network and full address, never by the router's MAC. A direct source matches a direct entry, or a routed entry on the server's known network number. An empty list denies all."
    ],
    "gaps": []
   },
@@ -623,7 +637,7 @@
    "id": "BACNET-16-DCC-NOTIFICATION-INITIATION",
    "standard_anchor": "Clause 16.1",
    "priority": "P1",
-   "summary": "While DCC restricts initiation the server sends no COV or event notification and ends a confirmed one at its next attempt, freeing its invoke ID; audit notifications are exempt.",
+   "summary": "While DCC restricts initiation the server sends no COV or event notification and ends a confirmed one at its next attempt; audit notifications are exempt, and each DCC change is audited.",
    "status": "supported-with-clause-evidence",
    "code_anchors": [
     "crates/bacnet-server/src/server/notification_transactions.rs::run_notification_under_dcc",
@@ -635,7 +649,9 @@
     "crates/bacnet-server/src/server/discovery.rs::broadcast_i_am_from",
     "crates/bacnet-server/src/handlers/device_mgmt.rs::validate_dcc",
     "crates/bacnet-server/src/server/comm_state.rs::CommState",
-    "crates/bacnet-server/src/server/dcc_timer.rs::replace"
+    "crates/bacnet-server/src/server/dcc_timer.rs::replace",
+    "crates/bacnet-server/src/server/audit_reporter_dcc.rs::device_communication",
+    "crates/bacnet-server/src/server/dcc_timer.rs::DccAudit"
    ],
    "positive_tests": [
     "crates/bacnet-server/src/server/notification_dcc_tests.rs::an_answer_claimed_as_the_retry_timer_fires_still_ends_the_notification",
@@ -652,7 +668,8 @@
     "crates/bacnet-server/src/server/dcc_outcome_admission_tests.rs::{disable_initiation_still_admits_requests_and_answers_overload_with_abort,disable_initiation_still_admits_life_safety_operations_and_answers_overload_with_abort}",
     "crates/bacnet-server/src/server/device_bindings_tests.rs::passive_local_and_routed_i_am_share_the_authority_and_disable_initiation_keeps_observing",
     "crates/rusty-bacnet/tests/test_dcc_policy.py::DccNativeTests::test_comm_state_returns_enable_disable",
-    "crates/rusty-bacnet/tests/test_dcc_policy.py::DccConstructorTests::test_comm_state_stub_returns_enable_disable"
+    "crates/rusty-bacnet/tests/test_dcc_policy.py::DccConstructorTests::test_comm_state_stub_returns_enable_disable",
+    "crates/bacnet-server/src/server/audit_dcc_record_tests.rs::{disable_initiation_and_enable_are_audited_with_their_requester,a_timed_disable_running_out_is_audited_as_this_devices_enable,a_dropped_dcc_record_is_summarized}"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/discovery_dcc_tests.rs::{disable_initiation_holds_back_i_have_and_still_answers_who_is,broadcast_i_am_fails_under_disable_initiation_and_sends_once_enabled,an_i_am_broadcaster_handle_is_refused_under_disable_initiation}",
@@ -661,18 +678,20 @@
     "crates/bacnet-server/src/server/event_confirmed_routing_tests/dcc_retry.rs::dcc_ends_an_outstanding_confirmed_event_notification_at_its_next_retry",
     "crates/bacnet-server/src/server/cov_notifications/confirmed/tests.rs::a_report_dcc_withdraws_before_its_first_attempt_is_not_counted",
     "crates/bacnet-integration-tests/tests/server/dcc.rs::{dcc_disable_rejected_without_changing_comm_state,dcc_disable_initiation_allows_rp_blocks_cov}",
-    "crates/bacnet-server/src/server/audit_dcc_tests.rs::disable_initiation_still_holds_back_cov_and_events_beside_audit"
+    "crates/bacnet-server/src/server/audit_dcc_tests.rs::disable_initiation_still_holds_back_cov_and_events_beside_audit",
+    "crates/bacnet-server/src/server/audit_dcc_record_tests.rs::{refused_dcc_requests_write_no_record,an_enables_own_timer_reports_nothing_more}"
    ],
    "benchmarks": [],
    "public_claims": [
     "docs/rust-api.md#discovery-under-devicecommunicationcontrol",
-    "docs/rust-api.md#confirmed-notifications-under-devicecommunicationcontrol"
+    "docs/rust-api.md#confirmed-notifications-under-devicecommunicationcontrol",
+    "docs/dcc-policy.md#audit-records"
    ],
    "notes": [
     "Each attempt of a confirmed COV or event notification, retries included, reads the DCC state first. One that DISABLE_INITIATION blocks ends the notification there, its invoke ID freed, unless an answer has already taken the lease.",
     "A COV report ended this way takes no hold-off and keeps its baselines. Its timestamped history goes back to the queue for the backstop to send once initiation is enabled; untimestamped values go out at the next fanout.",
     "An event notification ended this way moves no `EventNotificationCounters` field and is not sent again once initiation is enabled. `Acked_Transitions` keeps what the transition committed.",
-    "Audit notifications, AUDITING_FAILURE summaries and Audit Log forwards go out under DISABLE_INITIATION, and one already outstanding waits for its answer; DCC never counts against a Reporter's health or as a dropped record.",
+    "Audit notifications, summaries and forwards go out under DISABLE_INITIATION, one outstanding waits for its answer, and DCC never counts against a Reporter's health; DEVICE_DISABLE_COMM goes out under the state it reports.",
     "DISABLE is refused, so DISABLE_INITIATION restricts initiation: Who-Is still gets its I-Am, but Who-Has gets no I-Have and `broadcast_i_am` fails. Command and Channel writes to other devices follow the same per-attempt rule."
    ],
    "gaps": []
@@ -3627,7 +3646,7 @@
   },
   {
    "id": "BACNET-12-REQUIRED-ROWS-UNITS-PULSE-LIGHTING",
-   "standard_anchor": "Clauses 12.39, 12.43 and 12.44 with Tables 12-46, 12-50 and 12-51 (Units); Clause 12.23 and Table 12-27, including 12.23.5 Present_Value, 12.23.13 Adjust_Value and 12.23.14-12.23.17; Clause 13.1 and Table 13-1 (Pulse Converter row, COV_Period); Clauses 12.54 and 12.55 with Tables 12-64 and 12-69, including 12.54.17, 12.54.18, 12.54.39 and 12.55.32; Clause 21 BACnetEngineeringUnits, BACnetDateTime and BACnetOptionalUnsigned; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
+   "standard_anchor": "Clauses 12.39, 12.43 and 12.44 with Tables 12-46, 12-50 and 12-51 (Units); Clause 12.23 and Table 12-27, including 12.23.5 Present_Value, 12.23.9 Reliability, 12.23.10 Out_Of_Service, 12.23.13 Adjust_Value and 12.23.14-12.23.17; Clause 13.1 and Table 13-1 (Pulse Converter row, COV_Period); Clauses 12.54 and 12.55 with Tables 12-64 and 12-69, including 12.54.17, 12.54.18, 12.54.39 and 12.55.32; Clause 21 BACnetEngineeringUnits, BACnetDateTime and BACnetOptionalUnsigned; Clause 15.5 ReadProperty, Clause 15.7 ReadPropertyMultiple and Clause 15.9.1.3 WriteProperty errors",
    "priority": "P1",
    "requirement_summary": "Integer Value, Positive Integer Value and Large Analog Value serve the required Units (BACnetEngineeringUnits, NO_UNITS until the application sets it, read-only over the network). The Pulse Converter serves the required Count and Count_Before_Change (Unsigned), Update_Time and Count_Change_Time (BACnetDateTime), all read-only, and COV_Period (Unsigned 0, read-only), which its COV support makes required. In service its Present_Value is Count times Scale_Factor; a write of Adjust_Value stores the value, keeps the old Count in Count_Before_Change, takes the truncated quotient of the value over Scale_Factor off Count and stamps Count_Change_Time, or fails with PROPERTY / VALUE_OUT_OF_RANGE and changes nothing when Count would leave its range. Its SubscribeCOV notifications carry Update_Time after Present_Value and Status_Flags. Lighting Output serves Default_Ramp_Rate and Default_Step_Increment (REAL, writable within 0.1 to 100.0, VALUE_OUT_OF_RANGE outside it), and both lighting objects serve Current_Command_Priority: the Priority_Array slot Present_Value comes from, or NULL on Relinquish_Default, read-only. Each row is in Property_List, the property metadata, RPM ALL and REQUIRED (COV_Period in OPTIONAL) and the PICS.",
    "status": "supported-with-clause-evidence",
@@ -3636,6 +3655,9 @@
     "crates/bacnet-objects/src/value_types/metadata.rs",
     "crates/bacnet-objects/src/accumulator/pulse_converter.rs",
     "crates/bacnet-objects/src/accumulator/pulse_converter/metadata.rs",
+    "crates/bacnet-objects/src/database/input_references.rs",
+    "crates/bacnet-objects/src/database/membership.rs",
+    "crates/bacnet-server/src/membership.rs",
     "crates/bacnet-objects/src/clock.rs",
     "crates/bacnet-objects/src/traits/defaults.rs",
     "crates/bacnet-objects/src/lighting/mod.rs",
@@ -3672,10 +3694,31 @@
     "crates/bacnet-server/src/handlers/tests/read_rpm/lighting.rs::rpm_lighting_output_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/handlers/tests/read_rpm/lighting.rs::rpm_binary_lighting_output_indexed_reads_and_bytes_are_unchanged",
     "crates/bacnet-server/src/handlers/tests/property_metadata/lighting.rs::rpm_lighting_metadata_selectors_preserve_bytes_and_budgets",
-    "crates/bacnet-server/src/pics/property_metadata_tests/lighting.rs::pics_lighting_property_metadata_is_exact"
+    "crates/bacnet-server/src/pics/property_metadata_tests/lighting.rs::pics_lighting_property_metadata_is_exact",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::a_missing_object_faults_the_converter_until_it_is_added",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::only_unsigned_and_integer_properties_are_inputs",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::an_unset_reference_is_no_fault_and_clears_one",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::the_verdict_waits_out_of_service_and_applies_on_the_return",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::each_increase_of_an_accumulator_is_counted_across_its_wrap",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::a_decrease_of_any_other_source_only_sets_the_baseline_again",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::a_priority_array_slot_is_judged_by_the_commanded_datatype",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::the_counting_pass_judges_a_reference_changed_past_the_server",
+    "crates/bacnet-objects/src/database/input_references_tests.rs::reliability_takes_a_clients_value_out_of_service_until_the_return",
+    "crates/bacnet-objects/src/accumulator/pulse_converter/metadata_tests.rs::property_metadata_pulse_converter_reliability_oos_gate_pins",
+    "crates/bacnet-server/src/handlers/tests/pulse_converter_input_reference.rs::reliability_takes_a_simulated_value_only_out_of_service",
+    "crates/bacnet-server/src/handlers/tests/pulse_converter_input_reference.rs::an_accumulator_serves_prescale_only_once_set",
+    "crates/bacnet-objects/src/accumulator/mod.rs::accumulator_without_prescale_does_not_serve_it",
+    "crates/bacnet-server/src/handlers/tests/pulse_converter_input_reference.rs::a_written_reference_is_judged_as_the_write_commits",
+    "crates/bacnet-server/src/handlers/tests/pulse_converter_input_reference.rs::deleting_and_recreating_the_named_object_moves_the_fault",
+    "crates/bacnet-server/src/server/pulse_converter_reference_tests.rs::an_applications_add_and_remove_report_the_fault_without_a_write",
+    "crates/bacnet-server/src/server/pulse_converter_reference_tests.rs::create_object_and_delete_object_report_the_fault_they_move",
+    "crates/bacnet-server/src/server/pulse_converter_reference_tests.rs::a_local_write_of_input_reference_is_judged_at_once",
+    "crates/bacnet-server/src/server/pulse_converter_reference_tests.rs::a_running_server_counts_the_input_into_count_and_reports_it",
+    "crates/rusty-bacnet/tests/test_loop_references.py::PulseConverterInputTests::test_reliability_follows_what_input_reference_names"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/value_types/tests/units.rs::non_numeric_value_types_have_no_units",
+    "crates/bacnet-server/src/handlers/tests/pulse_converter_input_reference.rs::a_null_leaves_the_reference_and_its_verdict_as_they_are",
     "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_adjust_value_out_of_range_changes_nothing",
     "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_refuses_a_count_or_scale_past_the_largest_real",
     "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_count_rows_are_read_only_over_the_network",
@@ -3699,7 +3742,11 @@
     "Timestamps come from the database's Device clock through `clock::stamp_datetime`, shared with the File object's Modification_Date, and are all-unspecified with no clock or before the first change. COV_Period is required by footnote 2 since the object supports COV; it is a constant 0, which Clause 13.1 defines as no periodic notifications, because the server sends none.",
     "Table 13-1 reports Update_Time with the Pulse Converter's Present_Value and Status_Flags, so `cov_reported_properties_default` now lists it (reported, not a trigger). Lighting: Default_Ramp_Rate starts at 100.0 and Default_Step_Increment at 1.0, both inside the 0.1 to 100.0 range Clauses 12.54.17 and 12.54.18 set; they are writable, with matching setters.",
     "Current_Command_Priority reuses `common::current_command_priority`, which the analog, binary and multi-state outputs and values already share; on Binary Lighting Output it stays at the commanding slot through a WARN_RELINQUISH egress, since the slot holds until the egress ends.",
-    "Not covered: Lighting Output's Default_Fade_Time still reads a constant 0, below the 100 ms floor of Clause 12.54.16; Current_Command_Priority and COV_Increment on the commandable value types; periodic COV notifications; feeding Count from Input_Reference.",
+    "Not covered: Lighting Output's Default_Fade_Time still reads a constant 0, below the 100 ms floor of Clause 12.54.16; Current_Command_Priority and COV_Increment on the commandable value types; periodic COV notifications.",
+    "Pulse Converter Input_Reference: the database judges it as a write of it commits and as the object it names is added, replaced or removed. A missing object, a property that doesn't read as Unsigned or INTEGER, an index on a non-array or the converter's own property is CONFIGURATION_ERROR; an unset reference is not. Out of service the judged value waits for the return.",
+    "A running server reads the property Input_Reference names at least once a second, judging the reference again, and adds each increase to Count; a drop of an Accumulator's Present_Value counts its wrap at Max_Pres_Value, while the first reading, one after a change of reference and a drop of any other source only set the baseline. Clause 12.23.14 leaves the means local.",
+    "Pulse Converter Reliability takes a client's value while Out_Of_Service is TRUE, since it can now leave NO_FAULT_DETECTED (12.23.10); the return to service restores the judged value. Index 0 is a fault; a Priority_Array slot is judged by the Relinquish_Default datatype.",
+    "The Accumulator's optional Prescale is served only once the application sets one: BACnetPrescale has no NULL, so without one the row is absent from Property_List, the metadata and the PICS, and a read is UNKNOWN_PROPERTY.",
     "Lighting Output Default_Fade_Time, Current_Command_Priority on the commandable value types and COV_Increment on the numeric value types are covered by BACNET-12-REQUIRED-ROWS-VALUE-PRIORITY-COV-FADE.",
     "Analog Input and Output take Units from a CreateObject initial value, with the same 65535 bound; WriteProperty still refuses it. Analog Value isn't createable."
    ]
@@ -5015,7 +5062,7 @@
   },
   {
    "id": "BACNET-12-REFERENCE-PROPERTY-WRITABILITY",
-   "standard_anchor": "Clauses 12.5.13, 12.17.12, 12.17.13, 12.17.16, 12.23.6, 20.2.16; Table 12-5, 12-20, 12-27; Clause 21",
+   "standard_anchor": "Clauses 12.1, 12.5.13, 12.17.12, 12.17.13, 12.17.16, 12.23.6, 15.9.2, 20.2.16; Table 12-5, 12-20, 12-27; Clause 21",
    "priority": "P1",
    "requirement_summary": "The Loop Controlled_Variable_Reference and Manipulated_Variable_Reference and the Pulse Converter Input_Reference are typed BACnetObjectPropertyReference - a SEQUENCE of primitive context-tagged members [0]/[1] plus an optional property-array-index [2] - and the Loop Setpoint_Reference is BACnetSetpointReference, that reference as an optional member inside context tag [0]. Each reads as PropertyValue::ApplicationData holding that encoding, built by the shared codecs in bacnet-encoding/src/constructed/object_property_reference.rs, and takes writes in it over WriteProperty, WritePropertyMultiple and write_local; the server hands the written octets to the object whole. The codec requires full consumption and rejects a device-qualifying member [3], since unlike BACnetDeviceObjectPropertyReference these references are local-device only. The Averaging arm (Table 12-5, BACnetDeviceObjectPropertyReference) shares the write decode: a Device member there is PROPERTY / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and the server localizes one naming its own Device first (BACNET-12-AVERAGING-LOCAL-REFERENCE).",
    "status": "supported-with-clause-evidence",
@@ -5033,16 +5080,16 @@
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_golden_vector",
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_golden_vector_indexed",
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::setpoint_reference_empty_value_is_the_absent_alternative",
-    "crates/bacnet-objects/src/reference/tests.rs::object_property_reference_reads_as_its_members_or_null",
+    "crates/bacnet-objects/src/reference/tests.rs::object_property_reference_reads_as_its_members_or_the_unset_form",
     "crates/bacnet-objects/src/reference/tests.rs::setpoint_reference_reads_framed_or_empty",
     "crates/bacnet-objects/src/reference/tests.rs::read_values_write_back_unchanged",
-    "crates/bacnet-objects/src/reference/tests.rs::null_clears_except_on_setpoint_reference",
+    "crates/bacnet-objects/src/reference/tests.rs::a_bare_reference_to_the_reserved_instance_clears",
     "crates/bacnet-objects/src/reference/tests.rs::empty_value_clears_only_setpoint_reference",
     "crates/bacnet-objects/src/reference/tests.rs::framed_form_decodes_from_one_or_split_application_data",
-    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_unset_references_read_null_or_the_empty_setpoint_reference",
+    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_unset_references_read_the_reserved_instance_or_the_empty_setpoint_reference",
     "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_set_references_read_as_their_clause_21_encodings",
     "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_reference_writes_take_the_encodings_they_read_as",
-    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_reference_writes_clear_with_null_or_the_empty_setpoint_reference",
+    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_reference_writes_clear_with_the_unset_values_they_read_as",
     "crates/bacnet-objects/src/accumulator/pulse_converter/tests.rs::pulse_converter_write_framed_indexed_input_reference_lands",
     "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_accepts_the_framed_local_form",
     "crates/bacnet-server/src/handlers/tests/reference_writes.rs::loop_references_read_and_write_in_their_clause_21_encodings",
@@ -5053,7 +5100,10 @@
     "crates/bacnet-server/src/handlers/tests/loop_reference_follow.rs::loop_follows_the_references_a_client_writes",
     "crates/bacnet-server/src/pics/truth_source_tests.rs::is_writable_property_matches_write_property_on_pulse_converter_and_averaging",
     "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_references_read_and_write_in_their_encodings",
-    "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_null_or_the_empty_setpoint_reference_clears"
+    "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_unset_references_read_the_reserved_instance_or_the_empty_setpoint",
+    "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_the_unset_forms_clear_and_null_changes_nothing",
+    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::event_enrollment_fault_parameters_take_the_context_tagged_none_and_ignore_a_null",
+    "crates/bacnet-types/src/constructed/tests.rs::a_reference_to_the_reserved_instance_is_unset"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/constructed/object_property_reference/tests.rs::bare_decode_rejects_device_qualified_reference",
@@ -5077,7 +5127,11 @@
     "crates/bacnet-server/src/server/reference_write_wire_tests.rs::single_references_answer_the_same_octets_the_same_way",
     "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_rejects_bad_shapes_and_preserves_state",
     "crates/bacnet-objects/src/averaging/tests.rs::averaging_reference_write_refuses_the_flat_list_forms",
-    "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_flat_list_is_refused_and_changes_nothing"
+    "crates/rusty-bacnet/tests/test_loop_references.py::LoopReferenceTests::test_flat_list_is_refused_and_changes_nothing",
+    "crates/bacnet-objects/src/reference/tests.rs::null_is_another_datatype_on_every_reference",
+    "crates/bacnet-objects/src/loop_obj/reference_tests.rs::loop_null_reference_writes_are_refused_as_another_datatype",
+    "crates/bacnet-objects/src/averaging/tests.rs::averaging_null_reference_write_is_another_datatype",
+    "crates/bacnet-objects/src/event_enrollment/tests/fault_parameters.rs::fault_parameters_application_null_is_another_datatype"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -5086,7 +5140,8 @@
    ],
    "notes": [
     "The Loop, Pulse Converter and Averaging arms share one write decode (common::decode_single_element): another datatype, the flat list included, is PROPERTY / INVALID_DATA_TYPE; octets that open right but don't fully decode, PROPERTY / INVALID_DATA_ENCODING.",
-    "An unset BACnetObjectPropertyReference reads Null and a Null write clears it. An unset Setpoint_Reference reads as the empty value, which clears it when written; a Null there succeeds and changes nothing.",
+    "An unset BACnetObjectPropertyReference reads as a reference to the reserved instance 4194303 that Clause 12.1 allows for an unused identifier: Present_Value of an Analog Input (Controlled_Variable_Reference), an Analog Output (Manipulated_Variable_Reference) or an Accumulator (Input_Reference). Writing any reference to that instance, or giving one to the setters, clears it. An unset Setpoint_Reference reads as the empty value, which clears it when written. A NULL is no value of any of the four datatypes, so the object refuses it as INVALID_DATA_TYPE and the server answers the write as the Clause 15.9.2 no-op; the object stores no reference internally while unset.",
+    "Event Enrollment Fault_Parameters reads as the context-tagged none choice while it has no fault algorithm, and writing that clears it; an application NULL is no member of the CHOICE, so it is the same no-op.",
     "A Setpoint_Reference frame with nothing inside (0E 0F) is INVALID_DATA_ENCODING: a reference that is absent has no octets at all (Clause 20.2.16).",
     "Averaging Object_Property_Reference reads as the context-tagged BACnetDeviceObjectPropertyReference with no Device member; under that frame the flat list is INVALID_DATA_TYPE and a Device member naming no Device VALUE_OUT_OF_RANGE.",
     "The stack doesn't follow these references; an application decodes the value it reads with the shared codecs and follows that.",
@@ -5095,7 +5150,7 @@
   },
   {
    "id": "BACNET-12-DEVICE-REFERENCE-PROPERTIES",
-   "standard_anchor": "Clauses 12.5.13, 12.12.8, 12.15.29, 12.16.26, 12.16.27, 12.25.8 and 12.30.11; Clause 21",
+   "standard_anchor": "Clauses 12.1, 12.5.13, 12.12.8, 12.15.29, 12.16.26, 12.16.27, 12.25.8, 12.30.11, 15.9.2; Clause 21",
    "priority": "P1",
    "summary": "Every device reference property reads, and takes writes where writable, in its context-tagged Clause 21 encoding through one shared module, with one set of write errors.",
    "status": "supported-with-clause-evidence",
@@ -5116,6 +5171,10 @@
     "crates/bacnet-objects/src/device_reference_tests.rs::decode_accepts_raw_bytes_and_the_read_shape",
     "crates/bacnet-objects/src/event_enrollment/tests/enrollment.rs::read_object_property_reference_serves_every_member",
     "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_write_purges_on_change_and_needs_a_clock_to",
+    "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_unset_forms_clear_and_null_is_another_datatype",
+    "crates/bacnet-objects/src/averaging/tests.rs::averaging_write_of_the_unset_form_clears_reference",
+    "crates/bacnet-objects/src/event_enrollment/tests/enrollment.rs::read_object_property_reference_none",
+    "crates/bacnet-server/src/event_enrollment/tests/integration.rs::malformed_reference_shapes_do_not_become_local",
     "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_multiple_serves_one_encoding_per_element",
     "crates/bacnet-objects/src/trend/reference_tests.rs::trend_log_multiple_indexed_write_checks_only_the_element_written",
     "crates/bacnet-objects/src/life_safety/membership_tests.rs::point_member_of_keeps_a_remote_zone_and_lists_each_zone_once",
@@ -5147,7 +5206,7 @@
     "docs/rust-api.md#schedule--notification-6 Event Enrollment Object_Property_Reference"
    ],
    "notes": [
-    "An unset Averaging, Event Enrollment or Trend Log reference reads Null, since the production has no empty form.",
+    "Unset, a reference reads as Analog Input 4194303's Present_Value (Clause 12.1). One whose object or Device is at that instance unsets it when written or set; a NULL is the Clause 15.9.2 no-op. Evaluation and pollers take the form as none.",
     "Writable references reach the object as the written octets: another datatype, or a list element that can't open a reference, is INVALID_DATA_TYPE; a malformed reference, or anything after a single one, INVALID_DATA_ENCODING.",
     "Averaging and both trend objects keep their references inside this device: the server drops a Device member naming its own Device, and any other is OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.",
     "A Trend Log Multiple holds at most 64 references; an index 0 write resizes it, padding with empty elements, ones naming instance 4194303. A client's change to either trend reference purges the log.",
@@ -5746,7 +5805,7 @@
    "id": "BACNET-19-SOURCE-READ-PROPERTY",
    "standard_anchor": "Clause 19.6 / Tables 19-3, 19-4, 19-5; Clause 18.7; Clause 12.63; Clause 15.8 (printed745-748/PDF747-750); Clause19.6.5/Table19-5 (printed823/PDF825); Clauses20.2.12-13 (printed846-847/PDF848-849); Clause 15.5.1.2 (printed739/PDF741), 15.5.2 (printed740/PDF742); Table19-4 (printed822/PDF824); Clause15.7 (printed742–744/PDF744–746); Clause19.6 High Volume (printed825/PDF827)",
    "priority": "P1",
-   "requirement_summary": "Bounded endpoint source ReadProperty, ReadRange and explicit ReadPropertyMultiple reporting with one typed Device-owned recipient and atomic old/new recipient-change notifications; wider Audit Reporting remains partial.",
+   "requirement_summary": "Bounded endpoint source ReadProperty, ReadRange and explicit ReadPropertyMultiple reporting with one typed Device-owned recipient and atomically admitted recipient-change notifications (old and new recipient, or new recipient and a global broadcast); wider Audit Reporting remains partial.",
    "status": "in-progress",
    "code_anchors": [
     "crates/bacnet-client/src/read_property.rs::decode_ack",
@@ -5880,7 +5939,7 @@
     "Both requires an explicit Device write authorizer; endpoint WPM stays unsupported. Device choices use immutable direct B/IP bindings, Address choices use network0 six-byte unicast IPv4/nonzero-port without a binding.",
     "Actual post-start broadcast facts are captured before shared locks; resolution is pure. An unresolved Device may start CONFIGURATION_ERROR, suppressing ordinary records without changing READ results or consuming audit sequence/resources.",
     "Local and authorized WP changes use target WRITE semantics: one commit timestamp, actual remote source/invoke or local Device/no invoke, local Device/Object/property, new Target_Value and old Current_Value.",
-    "Mandatory old/new attempts bypass NONE/ordinary WRITE filters by the selected property-specific interpretation. NULL/equal are authorized no-ops. Two logical permits, confirmed leases, size checks and owned worker registration precede value/generation/sequence commit; independent bounded egress attempts follow.",
+    "Mandatory change attempts bypass NONE/ordinary WRITE filters by the selected property-specific interpretation. NULL/equal are authorized no-ops. Two logical permits (old and new recipient, or new recipient and an unconfirmed global broadcast when the old is an Address the session number does not name, per Clause 12.11.66), confirmed leases, size checks and owned worker registration precede value/generation/sequence commit; independent bounded egress attempts follow.",
     "Full/closed queue, send or ACK failure never rolls back or retries and cannot cancel the sibling; either failure wins within one generation. Recipient changes retire/wake summaries and fence stale completions.",
     "Device/Reporter/additional-Device membership is protected through quiescence. The public EndpointSession::write_audit_recipient uses the actual Device owner in ClientOnly/Both, treats None as NULL relinquishment and rechecks sealed state after DB acquisition.",
     "Post-ingress profile initialization failure runs joined cleanup and leaves a terminal session; canceled cleanup remains Stopping for stop/Drop completion. Preflight rejection remains retryable. Session and ingress canceled stop retain join ownership for retry.",
@@ -6002,7 +6061,21 @@
     "crates/bacnet-objects/src/audit/policy_authority.rs",
     "crates/bacnet-server/src/server/audit_policy_precommit.rs",
     "crates/bacnet-server/src/server/audit_recipient_routes.rs::AuditRoutes::resolve",
-    "crates/bacnet-server/src/server/audit_recipient.rs::current_route"
+    "crates/bacnet-server/src/server/audit_recipient.rs::current_route",
+    "crates/bacnet-server/src/server/audit_recipient_routes.rs::AuditRoutes::awaits_local_number",
+    "crates/bacnet-server/src/server/audit_recipient.rs::validate",
+    "crates/bacnet-endpoint/src/source_recipient.rs::SourceRoutes::awaits_local_number",
+    "crates/bacnet-endpoint/src/source_recipient.rs::SourceRoutes::validate_initial",
+    "crates/bacnet-server/src/server/audit_reporter_dcc.rs::device_communication",
+    "crates/bacnet-server/src/server/dcc_timer.rs::replace",
+    "crates/bacnet-server/src/server/dcc_timer.rs::DccAudit",
+    "crates/bacnet-server/src/handlers/audit_notification.rs::finish_audit_notification",
+    "crates/bacnet-server/src/server/audit_delivery.rs::deliver_global_broadcast",
+    "crates/bacnet-server/src/server/audit_recipient.rs::TargetAudit::number_changed",
+    "crates/bacnet-server/src/server/network_port.rs::spawn_number_worker",
+    "crates/bacnet-endpoint/src/source_audit_delivery.rs::admit_global_broadcast",
+    "crates/bacnet-endpoint/src/source_recipient.rs::SourceRecipient::number_changed",
+    "crates/rusty-bacnet/src/server/audit_configuration.rs::validate_audit_recipient_input"
    ],
    "target_create_delete_immediate": "RB-21d, Refs #345 (remains open). Standard 135-2020 Clause 19.6 and Tables 19-3/19-4/19-5, PDF pp. 819-828 (printed 817-826), inspected through the local licensed source navigation; paraphrase only. Uses the elected configured target Reporter to successful and authorized execution-failed CreateObject/DeleteObject operations. Lifecycle operations are locally classified as AUDIT_CONFIG, require their respective CREATE/DELETE bit, ignore priority filtering, and apply existing Monitored_Objects selection to the final/candidate created OID or captured deleted OID. CREATE/DELETE use nominal selector membership and their lifecycle operation bit. Each operation admits at most one immediate record, with source identity/invoke semantics, local target Device, completion timestamp, and no property, priority, target/current value, or separate initial-value WRITE records. Success omits Result; failure uses the unchanged response-mapped BACnet Error. By-type failures before allocation or without a wire-representable OID omit target_object instead of inventing an identity; only catch-all or the known requested type can select such a failure. Existing public handlers, factory support, response behavior, rollback/name-index removal, and COV cleanup remain unchanged. All configured Reporter identities remain protected until runtime quiescence. Other completed deletions retain the captured per-operation Reporter identity and health authority. Authorization denials, decode failures, requests dropped under DCC DISABLE (not DISABLE_INITIATION), overload and unknown Timeout/Reject/Abort outcomes remain silent. Reuses existing no-await admission, 64-active/three-second-total delivery bounds, health and stale-generation ownership. No source-side, per-object overrides, multi-Reporter arbitration, batching/Send_Now, AUDITING_FAILURE, retry/queue/segmentation/durable outbox, forwarding, Python parity, Audit BIBB, or BTL claim.",
    "target_list_immediate": "RB-21e, Refs #345 (remains open). Standard 135-2020 Clause 19.6, Tables 19-3/19-4/19-5 (PDF pp. 821-825, printed 819-823), and existing Clause 15.1/15.2 handlers; licensed source inspected locally, paraphrase only. The selected single target Reporter emits at most one immediate WRITE notification for an authorized AddListElement/RemoveListElement success or valid execution failure. Full service, element and required framed-destination decoding precedes observation. Existing responses, error precedence, atomicity, duplicate additions, framing, capacities and event semantics are preserved. The record carries target object/property/requested array index and no priority. Owner-selected Target_Value policy retains the raw requested delta without another application tag; Current_Value uses the existing bounded pre-image policy. Values are included when structurally valid and at most 32 encoded octets, including present empty values, otherwise omitted without truncation. A successful no-match removal still reports once. Success omits Result; authorized unknown-object, property, target-shape, write-access and capacity failures carry the unchanged response-mapped Error and truthful known fields. NONE, missing WRITE, and unmatched Monitored_Objects suppress ordinary targets; AUDIT_CONFIG and AUDIT_ALL admit implemented non-Present_Value lists, priority filtering is irrelevant, and enabled Reporter targets bypass selection and WRITE but not NONE. Duplicated selectors never duplicate records. Denials, service/element/framed decode failures, DCC DISABLE ingress drops, admission drops and unknown Timeout/Reject/Abort outcomes remain silent. Reuses no-await admission, 64-active/three-second-total delivery, APDU fit, confirmed/unconfirmed transaction ownership, instance-owned health and no-recursion behavior. No queue, retries, segmentation, durability or complete WRITE claim: AtomicWriteFile is covered separately by RB-21f; inbound WriteGroup remains unsupported by design. Multi-Reporter association is qualified by target_multiple_reporters; no full Reporter, BIBB or BTL qualification, source operation expansion or batching is claimed here.",
@@ -6174,7 +6247,11 @@
     "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_to_a_parent_routed_through_this_network_goes_without_a_dnet",
     "crates/bacnet-server/src/server/audit_dcc_tests.rs::{audit_notifications_start_under_disable_initiation_and_keep_the_reporter_healthy,audit_owing_writes_commit_and_notify_under_disable_initiation,send_now_under_disable_initiation_flushes_the_queue_once,a_resource_drop_under_disable_initiation_is_summarized}",
     "crates/bacnet-server/src/server/audit_forwarder_edge_tests.rs::audit_forwarding_goes_out_under_disable_initiation",
-    "crates/bacnet-objects/src/audit/staging_tests.rs::{a_log_dropped_with_a_staged_change_puts_storage_back_to_the_served_log,a_log_dropped_after_its_staged_change_was_made_keeps_it,a_log_dropped_part_way_through_staged_changes_keeps_the_steps_taken,a_log_dropped_while_its_staged_commit_runs_puts_storage_back_after_it,a_log_dropped_with_a_committed_batch_keeps_it_as_settling_would,settling_forgotten_writes_puts_storage_back_and_takes_a_batch_once_committed}"
+    "crates/bacnet-objects/src/audit/staging_tests.rs::{a_log_dropped_with_a_staged_change_puts_storage_back_to_the_served_log,a_log_dropped_after_its_staged_change_was_made_keeps_it,a_log_dropped_part_way_through_staged_changes_keeps_the_steps_taken,a_log_dropped_while_its_staged_commit_runs_puts_storage_back_after_it,a_log_dropped_with_a_committed_batch_keeps_it_as_settling_would,settling_forgotten_writes_puts_storage_back_and_takes_a_batch_once_committed}",
+    "crates/bacnet-server/src/server/audit_local_address_tests.rs::{an_address_recipient_on_this_network_waits_for_the_number_then_goes_without_a_dnet,a_change_away_from_an_address_the_number_left_goes_to_the_new_recipient_and_by_broadcast,a_change_between_recipients_that_both_resolve_sends_no_broadcast,the_reporters_health_follows_each_change_of_number,an_address_off_a_number_known_at_startup_also_starts_unresolved}",
+    "crates/bacnet-endpoint/src/local_network_recipient_tests.rs::{an_address_on_the_network_starts_unresolved_and_resolves_once_learned,a_replaced_number_unresolves_the_address_and_a_change_still_goes_ahead,an_address_off_a_number_known_at_startup_also_starts_unresolved}",
+    "crates/bacnet-server/src/server/audit_dcc_record_tests.rs::{disable_initiation_and_enable_are_audited_with_their_requester,a_timed_disable_running_out_is_audited_as_this_devices_enable,dcc_records_follow_the_reporters_operations_delay_and_confirmation,a_dropped_dcc_record_is_summarized}",
+    "crates/rusty-bacnet/tests/test_audit_api.py::AuditContractArtifactTests::test_device_recipient_address_on_the_server_network_number_receives_records"
    ],
    "negative_tests": [
     "crates/bacnet-server/src/server/audit_forwarder_tests.rs::audit_forwarding_invalid_parent_is_visible_at_startup_without_send",
@@ -6268,7 +6345,9 @@
     "crates/bacnet-server/src/server/truncated_request_wire_tests.rs::confirmed_audit_notification_cut_short_or_misshapen_is_rejected",
     "crates/bacnet-server/src/server/audit_dcc_tests.rs::disable_initiation_still_holds_back_cov_and_events_beside_audit",
     "crates/bacnet-objects/src/audit/staging_tests.rs::a_log_dropped_with_a_staged_change_whose_commit_failed_leaves_storage_alone",
-    "crates/bacnet-server/src/server/audit_local_source_tests.rs::a_direct_write_named_by_two_bindings_stays_ambiguous"
+    "crates/bacnet-server/src/server/audit_local_source_tests.rs::a_direct_write_named_by_two_bindings_stays_ambiguous",
+    "crates/bacnet-server/src/server/audit_local_address_tests.rs::a_change_away_from_a_device_with_no_route_is_still_refused",
+    "crates/bacnet-server/src/server/audit_dcc_record_tests.rs::{refused_dcc_requests_write_no_record,an_enables_own_timer_reports_nothing_more}"
    ],
    "benchmarks": [],
    "public_claims": [
@@ -6279,13 +6358,18 @@
     "docs/python-api.md#target-audit-reporters",
     "docs/audit-log-forwarding.md#configuration-health-and-resource-bounds",
     "CHANGELOG.md Unreleased Fixed entry for #1358 (the local network number on outbound paths), from changelog.d/1358-local-number-outbound.md",
-    "CHANGELOG.md Unreleased Fixed entry for #1404 (requests from a binding routed through the local network number), from changelog.d/1404-local-routed-binding-source.md"
+    "CHANGELOG.md Unreleased Fixed entry for #1404 (requests from a binding routed through the local network number), from changelog.d/1404-local-routed-binding-source.md",
+    "docs/dcc-policy.md#audit-records",
+    "CHANGELOG.md Unreleased Added entry for #1387 (DeviceCommunicationControl audit records), from changelog.d/1387-dcc-audit-records.md",
+    "CHANGELOG.md Unreleased Fixed entry for #1460 (target Audit Address recipient on the local network number), from changelog.d/1460-target-audit-address-local-number.md",
+    "CHANGELOG.md Unreleased Fixed entry for #1461 (endpoint source Audit Address recipient starts unresolved), from changelog.d/1461-source-audit-address-unresolved-start.md",
+    "CHANGELOG.md Unreleased Fixed entry for #1366 (failed confirmed Audit notification commit), from changelog.d/1366-audit-commit-failure-error.md"
    ],
    "target_write_immediate": "RB-21a/b/c narrow slices only, Refs #345 (remains open). Clause 12.63 / Table 12-82 and Clause 19.6 / Tables 19-3, 19-4, 19-5; Standard 135-2020 PDF pp. 621-624 and 819-828 inspected, including table footnotes; 2024-04-29 errata checked, with commandable-priority footnotes visually verified on errata p. 4. Failed target-operation reporting is implementation-defined; Monitored_Objects and batching are optional. One elected configured Reporter emits separate successful WP/WPM elements after authorization and commit. RB-21b reports execution errors at the existing observed object-write boundary, after decode/semantic prechecks and authorization: WP emits at most one failed record with the actual response-mapped BACnet Error in Result; WPM emits each committed-prefix success, one failed-element record, then halts without attempting or reporting later elements. Authorization/policy denials remain silent by owner decision; decode/pre-execution failures and unknown/timeout/Reject/Abort outcomes are not recast as execution failures. Disabled NONE emits no ordinary records; AUDIT_CONFIG locally designates non-Present_Value properties as configuration, and proprietary levels use AUDIT_ALL behavior. The same filters apply to success and failure records. Commandable Present_Value uses the object's Priority_Array capability and omitted priority 16; other properties are not priority-filtered. External Reporter writes emit once when enabled even with WRITE disabled, while internal status changes cannot recurse. Records include pre-write current value when available, target value, object/property/index, incoming invoke ID, source address or unambiguous known Device identity, local target Device and execution-completion timestamp; successes still omit Result and all target records omit source timestamp. Values over 32 encoded octets are omitted. The target Device owns Audit_Notification_Recipient; configured local/routed Device bindings remain immutable route authority and passive discovery is ineligible. The separate mandatory recipient-change path is described in target_device_recipient. Delivery is best-effort: 64 active slots, no waiting queue, one total three-second send/ACK deadline, no retries, no outbound segmentation, and complete APDU size bounded by the server limit. Encoding/size/admission/send/ACK failures do not change protocol responses or roll back writes and expose COMMUNICATION_FAILURE; an unresolved configured Device destination exposes CONFIGURATION_ERROR; missing local Device or provision rejects startup. Saturation and deadline tests cover both delivery modes without queued replay or recursive records; real UDP tests deliver successes and failures to an Audit Log and query them separately. There is no durable delivery guarantee. Source operations beyond the bounded endpoint READ slice in BACNET-19-SOURCE-READ-PROPERTY, non-WP/WPM production (including ordinary direct local/schedule writes), per-object audit overrides, Maximum_Send_Delay/Send_Now/batching, AUDITING_FAILURE drop records, parent forwarding/outbox/receipt changes (RB-22), and Python parity (RB-23) are explicitly deferred. Corrected RB-20 query contracts are untouched; no full Reporter, BIBB, BTL, or #345 completion claim. Public scope: CHANGELOG.md RB-21a/b/c and AuditReportersConfig Rust API docs. Audit family status is not promoted. #809 narrows the historical best-effort response statement for eligible actual built-in AV/BV Audit setting changes only: object_owned_av_bv_policy.mandatory_precommit_admission records the local atomic reject-before-change contract.",
    "target_write_monitored_objects": "RB-21c, Refs #345. Clause 12.63 / Table 12-82 (PDF pp. 621-623, printed 619-621), Clause 19.6.2 (PDF p. 821, printed 819), Clause 21 BACnetObjectSelector (PDF p. 921, printed 919), and Clause 12.1.5.1 (PDF p. 164, printed 162) inspected. The 2024-04-29 errata do not change selector semantics; item 4 Property_List exclusions are preserved. Local Rust set_monitored_objects(None) omits the optional property and selects nominal catch-all membership. Some(empty) or all-NULL selects no ordinary targets; exact ObjectIdentifier and ObjectType alternatives select matching targets, ignoring NULL and admitting at most one record per attempted element despite duplicates. Selection precedes pending-record creation for both successful and failed WP/WPM elements and never changes execution, response, committed-prefix ordering, reliability, or delivery bounds. Enabled Reporter-target writes bypass selection and existing WRITE/priority filters. Network WP/WPM cannot mutate the property; denied Reporter execution produces one failure record under the existing rule, without recursive delivery records. Effective optional/read-only metadata, Property_List, RP/RPM (including array count/index errors), and runtime PICS reflect local property presence without a metadata-schema change. Existing application primitive codecs encode the untagged NULL/ObjectIdentifier/Enumerated CHOICE and concatenated array; independent byte vectors and real UDP selected success/failure receipt are tested. Multiple target association and overlap health are qualified separately by target_multiple_reporters; no broader support claim.",
    "notes": [
     "Target Device recipient (#728): startup requires a concrete built-in local Device with a typed provision and the selected Reporter. Active membership protects both objects and rejects additional Devices; sealed shutdown retains protection until owned task quiescence.",
-    "Device-owned recipient changes through direct/local/WP/WPM routes atomically admit both old/new notifications, with generation fencing and shared sequence ownership. Unresolved configured Device provisions may start CONFIGURATION_ERROR; invalid or unsupported Address configurations reject before activation.",
+    "Device-owned recipient changes through direct/local/WP/WPM routes atomically admit both of the change's notifications (old and new recipient, or new recipient and an unconfirmed global broadcast), with generation fencing and shared sequence ownership. Unresolved configured Device provisions, and Address provisions on a network the number in force does not name, may start CONFIGURATION_ERROR; other invalid or unsupported Address configurations reject before activation.",
     "See target_device_recipient and docs/device-audit-recipient.md. Partial evidence; Refs #345. The request/ACK models follow the corrected 2020 baseline (Errata Summary 2024-04-29 items 7-8, visually verified from rendered p. 3): Unsigned64 start-at-sequence-number and the three-state BACnetSuccessFilter, including failures-only (see crates/bacnet-services/src/audit.rs, crates/bacnet-services/src/audit/query_codec.rs, crates/bacnet-types/src/constructed/audit.rs).",
     "The RB-02 codec migration and the RB-20 runtime/Python migration are done, so this row stays below supported status pending broader Audit review. AuditLogQuery behavior and query-visible record shape are unchanged: it executes both alternatives over the explicitly persisted, already-loaded retained snapshot, traverses insertion order newest-first without numeric sorting, applies the literal corrected-Unsigned64 start predicate (RB-02), scans completely for No_More_Items, and returns at most the 10,000-record persistence/ACK cap through the generic ComplexACK sizing and segmentation path.",
     "ConfirmedAuditNotification decodes before policy/storage, requires one explicit Audit Log sink and a fail-closed fast authorizer, keeps immediate/routed transport provenance separate from peer-reported payload identity, and applies each accepted list in wire order.",
@@ -6307,17 +6391,22 @@
     "The built-in Audit Log commits on its own writer thread. The server stages each inbound batch and awaits the commit without the database guard; the batch reaches memory, and a confirmed one its SimpleACK, once records and receipt are durable.",
     "One commit is staged per Audit Log at a time; a second batch waits for the first without the guard. A network or write_local Log_Enable change stages the same way; add_record and other in-place changes commit under the caller's guard.",
     "Storage holds a staged batch a moment before the log serves it: the commit returns on the writer thread, then the request applies the batch under the guard. A query made after the SimpleACK sees the batch.",
-    "A Buffer_Size write and `purge_audit_log` stage the same way. A Log_Enable or Buffer_Size write, or a purge, whose commit fails is refused with DEVICE / OPERATIONAL_PROBLEM.",
+    "A Buffer_Size write and `purge_audit_log` stage the same way. A Log_Enable or Buffer_Size write, a purge, or a confirmed notification batch whose commit fails is refused with DEVICE / OPERATIONAL_PROBLEM; the writer logs the storage error.",
     "A configured Device binding routed through the known local network number is a local route for target notifications and Audit Log forwarding: no DNET, answered from the final MAC. Target routes are resolved for each notification, so a number learned after startup applies from the next one; a queued or sent notification keeps its route.",
     "A request from the final MAC of a binding routed through the known local network number, direct or relayed with that number as SNET, names the Device as source. With the number unknown, or two bindings at that MAC, it names the address.",
     "Audit notifications, AUDITING_FAILURE summaries and Audit Log forwards go out under DISABLE_INITIATION (Clause 16.1). DCC never holds one back, marks a Reporter COMMUNICATION_FAILURE or refuses a write that owes one; COV and events stay held.",
     "The endpoint has no DeviceCommunicationControl service, so nothing gates its source audit notifications on DCC.",
-    "`stop()` drops Log_Enable, Buffer_Size or purge changes still staged and waits for the commit of the served state; a log dropped with some still staged commits it as it goes. A staged batch is left, since the log takes a committed batch."
+    "`stop()` drops Log_Enable, Buffer_Size or purge changes still staged and waits for the commit of the served state; a log dropped with some still staged commits it as it goes. A staged batch is left, since the log takes a committed batch.",
+    "An Address recipient naming the known local network number is local for target and endpoint source records: sent to its MAC with no DNET and answered from there, as network zero would be. It resolves against the number in force at each record.",
+    "An Address recipient whose network the number in force does not name, including any while the number is unknown, starts unresolved with CONFIGURATION_ERROR and resolves once the number names it. A change away from such an old Address is not refused: the new recipient gets the record and an unconfirmed global broadcast takes the old copy's place, per Clause 12.11.66 (both recipients, or a global broadcast). The new recipient must resolve, and any other old recipient without a route still refuses the change. A Reporter's health follows each change of number when the Number worker takes it.",
+    "Each DeviceCommunicationControl change the server carries out is audited per Table 19-5: DEVICE_DISABLE_COMM for DISABLE_INITIATION and DEVICE_ENABLE_COMM for ENABLE, from the requester with its invoke ID, and DEVICE_ENABLE_COMM from the local Device with no invoke ID when a timed disable runs out.",
+    "DCC records name the local Device as target with no object, property, value or Result. They use the Reporter monitoring the local Device, its operation bits and Maximum_Send_Delay, and AUDITING_FAILURE summaries. A refused DCC request writes none, and an ENABLE's own timer writes none.",
+    "Clause 12.11.66 lets a recipient change reach both recipients or go by global broadcast. Both runtimes send a copy to each when both resolve, and to the new recipient plus an unconfirmed global broadcast when the old recipient is an Address the network number does not name."
    ],
    "target_device_recipient": {
     "scope": "Target portion of #728; the completed bounded source endpoint migration is recorded separately in BACNET-19-SOURCE-READ-PROPERTY. Broader Audit conformance remains open. Corrected Device recipient requirement: Clause 12.11 with 135-2020 Errata Summary 2024-04-29 item 25 (PDF page 7), preserving base O and footnotes 19-20; NULL operation semantics in 15.9/15.10/19.2; record shape Table 19-4 and BACnetRecipient in Clause 21.",
     "contract": "One typed built-in Device value; provision alone stays unexposed. Active runtime exposes required/writable RP/RPM/Property_List metadata while retaining optional base conformance and AuditReporting condition. Local/direct/WP/WPM actual changes prepare both immutable routes, resources and encoding before value/generation/shared-sequence commit and owned worker registration. NULL/equal requests are unchanged successes after normal checks. Dedicated old/new WRITE attempts bypass ordinary WRITE/NONE filters as the selected property-specific interpretation; different values resolving to the same route still consume two attempts. Actual remote source/invoke or local/local context is retained. No duplicate ordinary observer. Independent three-second attempts use new-generation tokens; any failure survives sibling success and cannot roll back committed state. Target historical summary counts retain captured routes across ABA within the bounds in BACNET-12-AUDIT-REPORTER-DELAY; stale completions cannot affect current health.",
-    "routes": "Configured local/routed Device routes remain transport-neutral. Observed-only bindings are ineligible. Unresolved Device provision starts CONFIGURATION_ERROR, but both old/new routes must resolve for a live change; correcting an unavailable old route requires restart. Address support requires explicit IPv4 B/IP, network zero, six-byte unicast IP/nonzero-port, excluding unspecified/broadcast/multicast. Unsupported valid route choices return a semantic error distinct from malformed encoding.",
+    "routes": "Configured local/routed Device routes remain transport-neutral. Observed-only bindings are ineligible. Unresolved Device provision starts CONFIGURATION_ERROR, but both old/new routes must resolve for a live change; correcting an unavailable old route requires restart, except an old Address the local network number does not name, whose attempt becomes an unconfirmed global broadcast (Clause 12.11.66). Address support requires explicit IPv4 B/IP, network zero or the known local network number (an Address naming another network starts unresolved), six-byte unicast IP/nonzero-port, excluding unspecified/broadcast/multicast. Unsupported valid route choices return a semantic error distinct from malformed encoding.",
     "lifecycle": "Active and sealed ownership protects selected Device/Reporter removal, replacement and adapter callbacks, plus additional Device insertion. Narrow DeviceAuthority replaces raw mutable concrete access. Normal stop seals before close, joins producers/dispatch and drains workers, then uninstalls under DB guard. Canceled stop remains sealed/retryable. Drop aborts owned work and weak membership releases only after retained task frames quiesce.",
     "limits": "Existing mutation policy remains default Permissive without authorizer; Audit installation is not authentication. No durable outbox, retry, broader Address support or full Audit status promotion."
    },
@@ -6325,7 +6414,7 @@
     "scope": "Refs #782; target profile only. Standard135-2020 §12.63 and §19.6, including §19.6.2–3 printed819–820/PDF821–822 and Table19-5 printed823/PDF825. Existing row status and global review pins remain unchanged.",
     "association": "One through 64 concrete distinct target Reporters, canonicalized by instance. The cap is local policy. Enabled nominal selector membership determines lowest-instance election before operation/value filters and faults every actual overlap with CONFIGURATION_ERROR. Absent selectors are catch-all; empty/all-NULL select none. Subject add/remove and configuration changes refresh overlap. AV/BV policy inherits the elected Reporter. Source mode stays exactly one.",
     "mutation": "One object-owned configuration authority backs fallible local setters, atomic six-field aggregate configuration (including optional maximum send delay) and Description. Compare BACnet representations and emit each changed property in numeric PID order; equal local configuration is silent. Prepare all records/permits/confirmed leases/encoding/worker ownership before committing any field. Own enable uses post-state, disable/other enabled changes use pre-state. Lowest enabled nominal owner else configured self fallback is local policy, not nominal overlap. A target remaining NONE has no own fallback but can be observed by another eligible Reporter. The selected existing network WRITE attempt policy preserves no-op and execution-failure records for an enabled Reporter independently of WRITE/selector filters; failures include Result. This is local attempt accounting, not a normative failure/no-op mandate. Description sink/observer dedup retains original source/invoke exactly once. No new network configuration execution is added. Reporter Description uses common NULL relinquishment semantics: unchanged success, never stored NULL; any array index rejects before value handling with PROPERTY/PROPERTY_IS_NOT_AN_ARRAY. Standard §15.9.1.1/.1.3 printed752–753/PDF754–755. Direct and WP/WPM regressions distinguish no actual change from the selected network attempt record.",
-    "ownership": "Per-Reporter object-owned health, configuration generation and one bounded loss coalescer; one global64 operation budget, not64 per Reporter. Alternating contexts do not erase others. Recipient changes retain one atomic old/new pair, owned by lowest enabled nominal Device match, else lowest enabled configured, else lowest configured; this is local election policy. Fence every Reporter old-recipient context. All configured identities and Device stay protected through sealed/canceled/Drop lifetime until owned frames quiesce.",
+    "ownership": "Per-Reporter object-owned health, configuration generation and one bounded loss coalescer; one global64 operation budget, not64 per Reporter. Alternating contexts do not erase others. Recipient changes retain one atomically admitted pair of attempts (old and new recipient, or new recipient and a global broadcast), owned by lowest enabled nominal Device match, else lowest enabled configured, else lowest configured; this is local election policy. Fence every Reporter old-recipient context. All configured identities and Device stay protected through sealed/canceled/Drop lifetime until owned frames quiesce.",
     "evidence": [
      "crates/bacnet-server/src/server/audit_reporter_live_tests.rs::target_reporter_nominal_overlap_elects_lowest_before_write_filters_and_updates_live",
      "crates/bacnet-server/src/server/audit_reporter_live_tests.rs::target_reporter_aggregate_late_admission_failure_is_atomic_and_releases_prefix",
@@ -9653,7 +9742,9 @@
     "crates/rusty-bacnet/tests/test_noncommandable_null_writes.py::NoncommandableNullTests::test_a_commandable_present_value_still_relinquishes",
     "crates/rusty-bacnet/tests/test_noncommandable_null_writes.py::NoncommandableNullTests::test_a_null_is_stored_where_the_datatype_has_one",
     "crates/bacnet-server/src/handlers/tests/create_object_initial_values.rs::{a_null_initial_value_leaves_a_noncommandable_property_as_it_is,a_null_initial_value_still_relinquishes_a_commandable_present_value}",
-    "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others_as_they_are"
+    "crates/bacnet-server/src/schedule_relinquish_tests.rs::a_schedule_null_relinquishes_a_commandable_target_and_leaves_the_others_as_they_are",
+    "crates/bacnet-server/src/handlers/tests/reference_writes.rs::reference_writes_clear_with_the_unset_values_they_read_as",
+    "crates/bacnet-server/src/handlers/tests/log_reference_writes.rs::trend_log_reference_reads_and_writes_in_the_clause_21_form"
    ],
    "negative_tests": [
     "crates/bacnet-objects/src/property_metadata_audit/unknown_writes.rs::unknown_writes_optional_staging_names_use_current_presence",

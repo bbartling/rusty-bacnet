@@ -2,7 +2,7 @@
 use super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
 use super::*;
 use bacnet_network::network_number::LocalNetworkNumber;
-use bacnet_types::constructed::BACnetRecipient;
+use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
 
 #[derive(Default)]
 pub(super) struct AuditRoutes {
@@ -101,32 +101,69 @@ impl AuditRoutes {
     /// Pure lookup/byte validation: no transport, caller code, locks or clocks.
     /// A Device binding routed through this network's own number, read here
     /// with one atomic load, is the local route it is (#1358): it goes to the
-    /// binding's final MAC with no DNET, and is answered from there.
+    /// binding's final MAC with no DNET, and is answered from there. An
+    /// Address recipient naming that number is local the same way (#1460),
+    /// as a Notification Class recipient's is: it resolves as network zero
+    /// would. While the number is unknown, such an Address names a routed
+    /// station, and target Audit routes no Address off this link, so it has
+    /// no route ([`Self::awaits_local_number`]).
     pub(super) fn resolve(
         &self,
         recipient: &BACnetRecipient,
     ) -> Option<Arc<ConfirmedRecipientRoute>> {
+        let is_broadcast = |mac: &[u8]| self.is_broadcast(mac);
         match recipient {
             BACnetRecipient::Device(device) => {
                 let route = self
                     .devices
                     .get(device)?
                     .clone()
-                    .localize(self.local_network.get(), |mac| self.is_broadcast(mac))
+                    .localize(self.local_network.get(), is_broadcast)
                     .into_confirmed()?;
                 let next_hop = local_next_hop(&route)?;
                 (!self.is_broadcast(next_hop)).then(|| Arc::new(route))
             }
             BACnetRecipient::Address(address) => {
                 self.bip_broadcast?;
-                if !valid_bip_audit_address(address) || self.is_broadcast(&address.mac_address) {
+                let RecipientRoute::LocalUnicast(mac) =
+                    RecipientRoute::resolve_address(address, is_broadcast)
+                        .localize(self.local_network.get(), is_broadcast)
+                else {
+                    return None;
+                };
+                if !valid_bip_audit_address(&BACnetAddress {
+                    network_number: 0,
+                    mac_address: mac.clone(),
+                }) {
                     return None;
                 }
-                RecipientRoute::LocalUnicast(address.mac_address.clone())
+                RecipientRoute::LocalUnicast(mac)
                     .into_confirmed()
                     .map(Arc::new)
             }
         }
+    }
+
+    /// Whether `recipient` is an Address on a network numbered 1 to 65534
+    /// that is not this network's number in force, with a MAC this runtime
+    /// could send to: no route now, but one whenever that number is this
+    /// network's (#1460, #1461). One provisioned so starts unresolved, as a
+    /// Device whose binding has no route does; a server without a
+    /// registered port learns its number only after it starts. One the
+    /// number moved away from no longer holds up a recipient change: it gets
+    /// no copy of the change record, since nothing reaches it.
+    pub(super) fn awaits_local_number(&self, recipient: &BACnetRecipient) -> bool {
+        let BACnetRecipient::Address(address) = recipient else {
+            return false;
+        };
+        self.bip_broadcast.is_some()
+            && (1..=0xFFFE).contains(&address.network_number)
+            && Some(address.network_number) != self.local_network.get()
+            && !self.is_broadcast(&address.mac_address)
+            && valid_bip_audit_address(&BACnetAddress {
+                network_number: 0,
+                mac_address: address.mac_address.clone(),
+            })
     }
 }
 

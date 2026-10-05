@@ -3,6 +3,7 @@
 
 use super::fixtures::{address, clock, day, monotonic, noon, oid, schedule_write};
 use super::probe::{CUSTOM, CUSTOM_LIST};
+use bacnet_objects::accumulator::InputReading;
 use bacnet_objects::command::WriteFailure;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
@@ -191,11 +192,20 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("calendar_state_internal", |o| {
         format!("{:?}", o.calendar_state_internal(day()))
     }),
+    ("retry_refusals_naming", |o| {
+        format!(
+            "{:?}",
+            o.retry_refusals_naming(oid(ObjectType::ANALOG_VALUE, 9))
+        )
+    }),
     ("enrollment_eval_state_internal", |o| {
         format!("{:?}", o.enrollment_eval_state_internal())
     }),
     ("enrollment_eval_source_internal", |o| {
         format!("{:?}", o.enrollment_eval_source_internal())
+    }),
+    ("input_reference_internal", |o| {
+        format!("{:?}", o.input_reference_internal())
     }),
     ("reliability_evaluation_inhibited_internal", |o| {
         o.reliability_evaluation_inhibited_internal().to_string()
@@ -440,6 +450,16 @@ pub const COMMANDS: &[(&str, Command)] = &[
             "{:?}",
             o.take_due_averaging_sample_internal(Duration::from_secs(42))
         )
+    }),
+    ("set_input_usable_internal", |o| {
+        format!("{:?}", o.set_input_usable_internal(false))
+    }),
+    ("take_input_reading_internal", |o| {
+        let reading = InputReading {
+            value: -41,
+            wraps_after: Some(99),
+        };
+        format!("{:?}", o.take_input_reading_internal(Some(reading)))
     }),
     ("set_audit_log_parent_internal", |o| {
         let parent = BACnetDeviceObjectReference {

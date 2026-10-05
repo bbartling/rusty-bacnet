@@ -11,12 +11,15 @@
 //! `PropertyValue::ApplicationData` holding its context-tagged encoding, built
 //! by the shared codecs in `bacnet_encoding::constructed`, and take writes in
 //! that encoding (#1312). A bare reference has no empty encoding, so an unset
-//! one reads Null and a Null write clears it, as Averaging does. A
-//! `BACnetSetpointReference` does have one: its only member is optional and
-//! an absent member encodes as nothing (Clause 20.2.16). An unset
-//! Setpoint_Reference therefore reads as an empty `ApplicationData`, writing
-//! a value with no octets clears it, and Null is a value of another datatype
-//! there.
+//! one reads as the standard unset form, the property's usual object type at
+//! the reserved instance 4194303 (Clause 12.1, #1417), and writing a
+//! reference to that instance clears it, as on Averaging. A
+//! `BACnetSetpointReference` does have an empty encoding: its only member is
+//! optional and an absent member encodes as nothing (Clause 20.2.16). An
+//! unset Setpoint_Reference therefore reads as an empty `ApplicationData`,
+//! and writing a value with no octets clears it. Null is a value of another
+//! datatype on all four, which the bundled server turns into the success
+//! that changes nothing (Clause 15.9.2, #1396).
 //!
 //! Any other written value holds one reference and is decoded by
 //! `common::decode_single_element`, the decoder behind the device references'
@@ -37,11 +40,12 @@ use bacnet_encoding::constructed::{
 };
 use bacnet_encoding::tags::Tag;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 use bytes::BytesMut;
 
-use crate::common;
+use crate::{common, device_reference};
 
 /// The datatype a reference property is declared with, which fixes how its
 /// encoding opens and what stands for "no reference".
@@ -50,7 +54,8 @@ pub(crate) enum ReferenceFrame {
     /// `BACnetObjectPropertyReference`: the members alone, opening with the
     /// object identifier's primitive context tag 0 (Loop
     /// Controlled_Variable_Reference and Manipulated_Variable_Reference,
-    /// Pulse Converter Input_Reference). Null stands for no reference.
+    /// Pulse Converter Input_Reference). A reference to the reserved
+    /// instance stands for no reference.
     Bare,
     /// `BACnetSetpointReference`: the members inside opening and closing
     /// context tag 0, or no octets at all for no reference (Loop
@@ -58,16 +63,37 @@ pub(crate) enum ReferenceFrame {
     Setpoint,
 }
 
+/// The unset form of a `BACnetObjectPropertyReference` property (#1417):
+/// the Present_Value of `object_type` at the reserved instance 4194303, as
+/// [`device_reference::unset_reference`] builds it for the device-qualified
+/// references.
+pub(crate) fn unset_reference(object_type: ObjectType) -> BACnetObjectPropertyReference {
+    BACnetObjectPropertyReference::new(
+        device_reference::unset_identifier(object_type),
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )
+}
+
+/// `reference`, or `None` when it is the unset form, which these properties
+/// store as no reference at all.
+pub(crate) fn set_or_unset(
+    reference: BACnetObjectPropertyReference,
+) -> Option<BACnetObjectPropertyReference> {
+    (!reference.is_unset()).then_some(reference)
+}
+
 /// A `BACnetObjectPropertyReference` property as a read serves it: the
-/// reference's context-tagged members, or Null when there is none.
+/// reference's context-tagged members, or [`unset_reference`] naming
+/// `unset_type` when there is none.
 pub(crate) fn object_property_reference_value(
     reference: Option<&BACnetObjectPropertyReference>,
+    unset_type: ObjectType,
 ) -> PropertyValue {
-    let Some(reference) = reference else {
-        return PropertyValue::Null;
-    };
     let mut encoded = BytesMut::new();
-    encode_object_property_reference(&mut encoded, reference);
+    match reference {
+        Some(reference) => encode_object_property_reference(&mut encoded, reference),
+        None => encode_object_property_reference(&mut encoded, &unset_reference(unset_type)),
+    }
     PropertyValue::ApplicationData(encoded.to_vec())
 }
 
@@ -91,15 +117,10 @@ pub(crate) fn decode_reference_write(
     frame: ReferenceFrame,
 ) -> Result<Option<BACnetObjectPropertyReference>, Error> {
     match frame {
-        ReferenceFrame::Bare => match value {
-            PropertyValue::Null => Ok(None),
-            value => common::decode_single_element(
-                value,
-                opens_bare,
-                decode_object_property_reference_at,
-            )
-            .map(Some),
-        },
+        ReferenceFrame::Bare => {
+            common::decode_single_element(value, opens_bare, decode_object_property_reference_at)
+                .map(set_or_unset)
+        }
         ReferenceFrame::Setpoint => {
             if common::chunks(value)?.iter().all(|chunk| chunk.is_empty()) {
                 return Ok(None);

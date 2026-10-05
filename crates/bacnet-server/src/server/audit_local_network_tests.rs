@@ -157,3 +157,6 @@ async fn audit_notifications_to_a_binding_routed_to_another_network_keep_its_dne
     );
     fixture.server.stop().await.unwrap();
 }
+
+#[path = "audit_local_address_tests.rs"]
+mod address;

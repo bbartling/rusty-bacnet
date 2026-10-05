@@ -11,10 +11,12 @@ use bacnet_objects::{
     log_buffer::{LogBufferRecords, LogRecordIdentity},
     log_reporting::BufferReadyReport,
     property_metadata::{PropertyConformance, PropertyMetadata, PropertyWriteCapability},
+    schedule::ScheduleWrite,
     traits::{BACnetObject, CovReportedProperty},
 };
 use bacnet_types::{
     calendar::SpecificDate,
+    constructed::BACnetObjectPropertyReference,
     enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P, ServiceSupported},
     error::Error,
     primitives::{ObjectIdentifier, PropertyValue},
@@ -380,11 +382,17 @@ impl BACnetObject for DeviceReadView<'_> {
     fn calendar_state_internal(&self, day: SpecificDate) -> Option<bool> {
         self.object.calendar_state_internal(day)
     }
+    fn retry_refusals_naming(&self, target: ObjectIdentifier) -> Option<ScheduleWrite> {
+        self.object.retry_refusals_naming(target)
+    }
     fn enrollment_eval_state_internal(&self) -> Option<EventEnrollmentEvalState> {
         self.object.enrollment_eval_state_internal()
     }
     fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
         self.object.enrollment_eval_source_internal()
+    }
+    fn input_reference_internal(&self) -> Option<Option<&BACnetObjectPropertyReference>> {
+        self.object.input_reference_internal()
     }
     fn reliability_evaluation_inhibited_internal(&self) -> bool {
         self.object.reliability_evaluation_inhibited_internal()

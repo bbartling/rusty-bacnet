@@ -56,6 +56,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
 
         let (clock, monotonic_origin) = period::install_database_clocks(&mut db, clock_config);
+        let membership = crate::membership::install_waker(&mut db);
 
         let (network, mut apdu_rx, audit_routes, network_controls) =
             boxed(|| super::network_port::start(&mut db, &config, transport, audit_routes)).await?;
@@ -111,6 +112,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 &db,
                 config.registered_network_port,
                 controls,
+                target_audit.as_ref().map(Arc::downgrade),
             )
         });
         let network_dispatch = Arc::clone(&network);
@@ -703,15 +705,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }));
 
         let schedule_fanout = cov_fanout.clone();
+        // The 60-second Schedule pass, and the work an application's own
+        // `add` or `remove` queued on the database (`crate::membership`).
         let schedule_tick_task = Some(spawn_owned(audit_owner.clone(), move || async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
-                interval.tick().await;
-                let committed = crate::schedule::tick_schedules_committed(
-                    &schedule_fanout.db,
-                    &schedule_fanout.cov_table,
-                )
-                .await;
+                let (db, cov_table) = (&schedule_fanout.db, &schedule_fanout.cov_table);
+                let committed = tokio::select! {
+                    _ = interval.tick() => {
+                        crate::schedule::tick_schedules_committed(db, cov_table).await
+                    }
+                    () = membership.notified() => {
+                        crate::membership::settle_committed(db, cov_table).await
+                    }
+                };
                 schedule_fanout.fire(&committed).await;
                 schedule_runner.start(committed.command_runs);
             }
