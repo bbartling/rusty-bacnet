@@ -2,11 +2,12 @@
 
 Rusty BACnet is a workspace of library crates implementing the BACnet protocol stack (ASHRAE 135-2020). The [README crate table](../README.md#crates) lists which are on crates.io.
 
-This reference describes current development-source APIs, including unreleased
-changes. Published crates and the site’s release tutorials target **0.11.0**; use the
-[versioned Rust API](https://docs.rs/bacnet-client/0.11.0/bacnet_client/) and
-[installation guidance](../README.md#install) for that release. To use the
-checkout APIs described here, follow [Build from source](../README.md#build-from-source).
+This reference follows the `dev` branch. At the `v0.12.0` tag it describes the
+published 0.12.0 crates, which the site's tutorials also target; see
+[docs.rs](https://docs.rs/bacnet-client/0.12.0/bacnet_client/) and the
+[installation guidance](../README.md#install). Changes merged after the release
+wait in [`changelog.d/`](../changelog.d/); to use them, follow
+[Build from source](../README.md#build-from-source).
 
 ## Crate Dependency Order
 
@@ -568,7 +569,7 @@ Transport-layer implementations. All implement the `TransportPort` trait.
 
 ### Local receive capacity and outgoing limits
 
-In the current development checkout, every `TransportPort` implementation must
+Every `TransportPort` implementation must
 provide `local_receive_apdu_capacity() -> u16`, a stable receive declaration.
 Transparent wrappers and `AnyTransport` delegate it. The former transport method
 `max_apdu_length()` is now `egress_apdu_limit()` without an alias: it describes
@@ -601,8 +602,8 @@ Both registered B/IP port snapshots use local capacity independently of the
 Device/server ceiling. SC nodes advertise and enforce local NPDU 1478, including
 the two-byte plain NPDU header, on Hub, accepted-direct and outbound-direct
 intake. Complete BVLC bounds, remote/path limits, routed overhead and the Hub's
-forwarding capacity remain independent. These source APIs postdate published
-0.11.0; this bounded evidence is not a full Annex AB or hardware qualification.
+forwarding capacity remain independent. These APIs are new in
+0.12.0; this bounded evidence is not a full Annex AB or hardware qualification.
 
 ### Feature Flags
 
@@ -672,14 +673,14 @@ let transport = Bip6Transport::new(
 // 3-byte VMAC, 3 multicast scopes, collision detection
 ```
 
-Current source selects one concrete local address and OS interface for normal
+The transport selects one concrete local address and OS interface for normal
 B/IPv6 operation. `::` requires one usable non-loopback multicast interface (or
 loopback if none exists), then a unique non-link-local address on that interface,
 otherwise a unique link-local address. Multiple interfaces or addresses in the
 selected class fail startup; configure an existing concrete address to resolve
 ambiguity. A concrete address must have one usable local owner. This is local
-selection policy, not an Annex U requirement, and differs from published 0.11.0's
-wildcard address fallback.
+selection policy, not an Annex U requirement. It replaced, in 0.12.0, 0.11.0's
+selection, which asked the routing table for an address and fell back to `::1`.
 
 The selected address and actual UDP port form `local_mac()`. One wildcard socket
 receives selected unicast and BACnet multicast traffic; packet metadata fences
@@ -851,13 +852,13 @@ and segment-phase checks. Responses may switch Hub/direct paths. A replacement
 peer claiming the same address can complete or control an old pending outgoing
 transaction; this is not proof of same-leaf continuity. Optional historical-route
 filtering is separate from the selected original-socket policy for incoming replies.
-No outgoing transaction/retry policy changes here. This source behavior postdates
-published 0.11.0 and adds no Python direct-entry API, Hub-relayed end-to-end identity,
+No outgoing transaction/retry policy changes here. This behavior is new in
+0.12.0 and adds no Python direct-entry API, Hub-relayed end-to-end identity,
 full Annex AB or certification claim.
 
 ### Accepted direct TLS identity
 
-Current source carries `TransportProvenance::direct_sc_identity()` through
+The stack carries `TransportProvenance::direct_sc_identity()` through
 accepted-direct and built-in outbound TLS ingress, the network queue, and server dispatch. It returns a
 sealed, immutable `DirectScIdentity` with read-only `leaf_sha256()` and
 `incarnation()` accessors. The fingerprint hashes the exact verified TLS leaf
@@ -891,7 +892,7 @@ scope labels; claimed addresses remain claims. **Pre-1.0 API change:**
 report `is_hub_channel()` rather than `is_direct_peer()`; that scope-only value,
 Hub-relayed ingress, and unverified transports return no direct identity.
 
-These source APIs postdate published 0.11.0. This does not provide a Python
+These APIs are new in 0.12.0. This does not provide a Python
 principal callback, certificate-to-claim binding, Hub-relayed end-to-end identity,
 or a Python direct connection entry point. The narrower server response
 capability below is separate from authentication provenance.
@@ -952,7 +953,7 @@ Receive reassembly saves segment zero's response capability separately from
 its authorization snapshot; final completion uses that saved route.
 
 This is selected local confinement policy, not a Standard requirement to deliver
-on a historical socket. It postdates published 0.11.0 and qualifies only the
+on a historical socket. It is new in 0.12.0 and qualifies only the
 native server consumer described here. The [client and endpoint supplement](#accepted-direct-client-and-endpoint-replies)
 qualifies those additional inbound reply consumers. Outgoing client transaction
 correlation retains the [standard path-switching behavior](#bidirectional-direct-traffic). No full
@@ -960,11 +961,11 @@ Annex AB, external interoperability or certification claim follows.
 
 ### Accepted-direct client and endpoint replies
 
-Current source extends the selected original-socket response policy to standalone
+The selected original-socket response policy extends to standalone
 `BACnetClient` handling inbound confirmed COV/Event notifications and unsupported
 or segmented confirmed requests, and to `EndpointSession`'s existing narrow
-ReadProperty/authorized Device WriteProperty responder. This postdates published
-0.11.0. It does not change outgoing client transactions, their retries or their
+ReadProperty/authorized Device WriteProperty responder. This is new in
+0.12.0. It does not change outgoing client transactions, their retries or their
 terminal/segment-control admission. Ordinary direct routing now applies as
 described [above](#bidirectional-direct-traffic). BACnet permits response path switching; this is a
 local confinement policy for these incoming-request consumers, not a universal
@@ -5060,7 +5061,7 @@ release guarantee. This is a local lifecycle contract, not a BACnet wire change.
 
 ### Confirmed transaction lifetimes
 
-Current source detects exact ordinary confirmed duplicates only while their
+The stack detects exact ordinary confirmed duplicates only while their
 server transaction is pending. Once an unsegmented SimpleACK, ComplexACK, Error,
 Reject or Abort is encoded and its local network send is issued, the same peer,
 Invoke ID and bytes may execute again. The boundary precedes the transport
@@ -5083,7 +5084,7 @@ the immutable leaf/incarnation partition described above. There is no generic
 completed cache or response replay. LifeSafetyOperation's separate completed
 replay policy and Audit service receipts are unchanged.
 
-This behavior postdates published 0.11.0. `NetworkLayer::send_apdu_on_issuance`
+This behavior is new in 0.12.0. `NetworkLayer::send_apdu_on_issuance`
 provides the narrow post-NPDU-encoding callback used by these response owners;
 constructing its lazy future does not invoke the callback. This does not resolve
 response socket affinity or segmented-response ACK/Abort confinement (#524).
@@ -5764,7 +5765,7 @@ This receive-shape policy adds no UUID version/variant, generation or storage
 requirements; optional [Hub certificate bindings](#hub-certificate-bindings) are
 configured separately.
 
-**Current-dev zero-limit receive policy (Refs #519):** the shared Connect validator
+**Zero-limit receive policy (Refs #519):** the shared Connect validator
 rejects zero Max-BVLC or Max-NPDU in either received Connect message, after the
 existing envelope/length/identity checks and before MU diagnostics. This is
 **zero-only local policy**, not a universal minimum-capacity conformance claim.

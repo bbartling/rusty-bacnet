@@ -16,11 +16,11 @@ It isn't BTL certified; [Conformance](#conformance) explains what is covered.
 [Contributing](#contributing)
 
 > [!NOTE]
-> **Release and branch.** The latest release is **0.11.0**. The published
+> **Release and branch.** The latest release is **0.12.0**. The published
 > packages, the hosted guides and docs.rs all describe that release. This README
 > and the reference docs in [`docs/`](docs/) follow the `dev` branch, which may
-> include unreleased changes. Those are listed under *Unreleased* in the
-> [changelog](CHANGELOG.md).
+> hold changes merged since. Those wait in [`changelog.d/`](changelog.d/) until
+> the next release adds them to the [changelog](CHANGELOG.md).
 >
 > **Pre-1.0.** Public APIs can change in any minor release while obsolete APIs
 > are removed. They freeze at 1.0.0.
@@ -38,15 +38,15 @@ It isn't BTL certified; [Conformance](#conformance) explains what is covered.
   [Transports](#transports).
 - **Routing.** A network layer with router tables, routed requests and BBMD and
   foreign-device support for BACnet/IP.
-- **Python bindings.** `BACnetClient`, `BACnetServer` and `ScHub` with asyncio
-  support, typed enums and values, and async COV notification streams. Python and
+- **Python bindings.** `BACnetClient`, `BACnetServer`, `ScHub` and the shared
+  endpoints with asyncio support, typed enums and values, and async COV notification streams. Python and
   Rust expose different configuration surfaces, so check the Python API before
   assuming a Rust option exists there.
 - **CLI.** The `bacnet` tool does discovery, reads and writes, COV
   subscriptions, alarms, file transfer and BBMD management over BACnet/IP,
   BACnet/IPv6 and BACnet/SC, with an interactive shell and optional packet
   capture.
-- **Shared endpoints** (unreleased, on `dev`). One device can send requests and
+- **Shared endpoints.** One device can send requests and
   answer a limited set of them (ReadProperty by default) through a single
   BACnet/IP, BACnet/SC or MS/TP transport, from Rust or Python. Use the
   standalone server when you need its full service set.
@@ -69,12 +69,12 @@ python -m pip install rusty-bacnet
 ```
 
 This needs Python 3.11 or newer. The import name is `rusty_bacnet`. Wheels are
-published for CPython 3.11–3.13 on Linux (glibc; x86_64, aarch64), macOS
-(x86_64 on 10.12 or later, arm64 on 11.0 or later) and Windows (x64), and from
-0.12.0 for CPython 3.14 as well, on the same platforms. On any other Python
-version, platform or musl-based Linux, pip builds from source, which needs
-Rust 1.93 or newer and a C compiler. Add `--only-binary=:all:` to fail fast
-instead.
+published for CPython 3.11–3.14 on Linux (glibc 2.17 or newer; x86_64,
+aarch64), macOS (x86_64 on 10.12 or later, arm64 on 11.0 or later) and Windows
+(x64). Every wheel includes BACnet/IPv6, BACnet/SC and MS/TP. On any other
+Python version, platform or musl-based Linux, pip builds from source, which
+needs Rust 1.93 or newer and a C compiler. Add `--only-binary=:all:` to fail
+fast instead.
 
 ### Rust
 
@@ -83,9 +83,9 @@ server crate:
 
 ```toml
 [dependencies]
-bacnet-client = "0.11"
-bacnet-types = "0.11"
-bacnet-encoding = "0.11"
+bacnet-client = "0.12"
+bacnet-types = "0.12"
+bacnet-encoding = "0.12"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -95,32 +95,33 @@ The minimum supported Rust version is **1.93**.
 
 Download the `bacnet-<os>-<arch>` file for your platform from the
 [latest release](https://github.com/jscott3201/rusty-bacnet/releases/latest),
-rename it to `bacnet` (`bacnet.exe` on Windows), make it executable and put it
-on your `PATH`.
-- 0.11.0 has builds for Linux (amd64, arm64), macOS (amd64, arm64) and Windows
+check it against the release's `SHA256SUMS`, rename it to `bacnet`
+(`bacnet.exe` on Windows), make it executable and put it on your `PATH`. The
+[installation guide](https://jscott3201.github.io/rusty-bacnet/start/installation/)
+has the checksum command for each OS.
+- There are builds for Linux (amd64, arm64), macOS (amd64, arm64) and Windows
   (amd64), all with BACnet/SC. The Linux builds also include packet capture.
-  They need glibc 2.39 or newer (for example Ubuntu 24.04) and libpcap
-  (`libpcap0.8` on Debian and Ubuntu).
-- From 0.12.0, the same five builds are published. The Linux builds need only
-  glibc 2.17 or newer (RHEL/CentOS 7, Debian 8, Ubuntu 14.04 and later) and no
-  libpcap package, because they link it statically. The macOS builds need
-  macOS 10.12 (amd64) or 11.0 (arm64) or later. The Windows build links the C
-  runtime statically, so it no longer needs the Visual C++ Redistributable.
+- The Linux builds need glibc 2.17 or newer (RHEL/CentOS 7, Debian 8, Ubuntu
+  14.04 and later) and no libpcap package, because they link it statically.
+- The macOS builds need macOS 10.12 (amd64) or 11.0 (arm64) or later. They
+  aren't notarized, so macOS may block one downloaded through a browser.
+- The Windows build links the C runtime statically, so it needs no Visual C++
+  Redistributable.
 
-From 0.12.0, `bacnet-cli` is also published on crates.io, so once that release
-is out, `cargo install bacnet-cli --locked --features sc-tls` builds it on any
-platform with Rust 1.93 or later. Until then, build it from a checkout. Add
-`,pcap` to the features for capture, which needs the libpcap headers:
+`bacnet-cli` is also on crates.io, so Cargo can build it on any platform with
+Rust 1.93 or later. Add `,pcap` to the features for capture, which needs the
+libpcap headers:
 
 ```bash
+cargo install bacnet-cli --locked --features sc-tls
+# or, from a checkout:
 cargo install --path crates/bacnet-cli --locked --features sc-tls
 ```
 
 ### Build from source
 
-To try unreleased features from `dev`, such as shared endpoints, build from a
-checkout. A `dev` build still reports version 0.11.0, so record the commit you
-built.
+To try changes merged after the release, build from a `dev` checkout. Its
+version may still read 0.12.0, so record the commit you built.
 
 - **Python:** in a virtual environment, run `python -m pip install "maturin>=1,<2"`,
   then `maturin develop --release --manifest-path crates/rusty-bacnet/Cargo.toml --locked`.
@@ -257,15 +258,16 @@ includes BACnet/IPv6, BACnet/SC and MS/TP, but not Ethernet.
 | Transport | Feature | Notes |
 |---|---|---|
 | BACnet/IP (UDP/IPv4) | none | Includes BBMD and foreign-device registration. NAT traversal and B/IP multicast are not implemented. |
-| BACnet/IPv6 | `ipv6` | Binds one concrete interface and address. With `::`, startup fails if the host has more than one candidate, so pass a concrete address. |
+| BACnet/IPv6 | `ipv6` | Selects one concrete interface and address and keeps traffic on that link. With `::`, startup fails if the host has more than one candidate, so pass a concrete address. |
 | BACnet/SC | `sc-tls` | Nodes, direct connections and a hub over TLS 1.3. Requires a site CA, a certificate and key for each device, and a provisioned device UUID. |
 | MS/TP | `serial` (`serial-gpio` for GPIO direction control) | Standard frames only (no extended or COBS frames). RS-485 kernel options and GPIO are Linux-only. Evidence comes from a simulator and loopback; on-wire timing isn't qualified on any adapter or OS. |
 | Ethernet (802.3 LLC) | `ethernet` | Linux only (`AF_PACKET`). Needs `CAP_NET_RAW` or root. |
 
-The BACnet/IPv6 and BACnet/SC notes describe `dev`. In 0.11.0, BACnet/IPv6 can
-fall back to a wildcard address, and the CLI loads SC trust from the system
-roots. The [BACnet/SC guide](https://jscott3201.github.io/rusty-bacnet/guides/bacnet-sc/)
-covers the release.
+The [BACnet/SC guide](https://jscott3201.github.io/rusty-bacnet/guides/bacnet-sc/)
+covers CLI trust and identity. Before 0.12.0, BACnet/IPv6 could fall back to `::1`
+when it found no address, and the CLI loaded SC trust from the system roots; the
+[upgrade guide](https://jscott3201.github.io/rusty-bacnet/project/upgrading/)
+lists what to change.
 
 How to configure each one:
 - [Transport configuration](docs/rust-api.md#transport-configuration-examples) (Rust)
@@ -285,10 +287,10 @@ How to configure each one:
 | [`bacnet-objects`](https://crates.io/crates/bacnet-objects) | `BACnetObject` trait, object database and object types |
 | [`bacnet-server`](https://crates.io/crates/bacnet-server) | Async server: dispatch, COV, events, scheduling, PICS |
 | [`bacnet-endpoint-core`](https://crates.io/crates/bacnet-endpoint-core) | Shared ownership and transaction coordination for endpoints |
-| [`bacnet-endpoint`](crates/bacnet-endpoint) | One transport owner for both client and server roles (on `dev`, not yet on crates.io) |
-| [`bacnet-cli`](crates/bacnet-cli) | The `bacnet` command-line tool (release binaries; not on crates.io) |
+| [`bacnet-endpoint`](https://crates.io/crates/bacnet-endpoint) | One transport owner for both client and server roles |
+| [`bacnet-cli`](https://crates.io/crates/bacnet-cli) | The `bacnet` command-line tool (also as release binaries) |
 
-The others are on crates.io at 0.11.0. The Python package is built from
+All eleven are on crates.io at 0.12.0. The Python package is built from
 [`crates/rusty-bacnet`](crates/rusty-bacnet) with
 [maturin](https://www.maturin.rs/). The [architecture guide](docs/architecture.md)
 shows how the layers fit together.
@@ -296,17 +298,18 @@ shows how the layers fit together.
 ## Find it in the docs
 
 The [hosted guides](https://jscott3201.github.io/rusty-bacnet/) cover the
-0.11.0 release. The [`docs/`](docs/) references track `dev`.
+0.12.0 release. The [`docs/`](docs/) references track `dev`; the release's copies
+are at the `v0.12.0` tag.
 
 | Topic | Where to look |
 |---|---|
 | Installing and first steps | [Installation](https://jscott3201.github.io/rusty-bacnet/start/installation/), [choose your path](https://jscott3201.github.io/rusty-bacnet/start/choose-your-path/), [local lab](https://jscott3201.github.io/rusty-bacnet/start/local-lab/) |
 | Rust API | [docs.rs](https://docs.rs/bacnet-client) (release), [`docs/rust-api.md`](docs/rust-api.md) (dev) |
-| Python API | [v0.11.0](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/python-api.md) (release), [`docs/python-api.md`](docs/python-api.md) (dev) |
-| CLI | [v0.11.0](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/CLI.md) (release), [`docs/CLI.md`](docs/CLI.md) (dev) |
+| Python API | [v0.12.0](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/python-api.md) (release), [`docs/python-api.md`](docs/python-api.md) (dev) |
+| CLI | [v0.12.0](https://github.com/jscott3201/rusty-bacnet/blob/v0.12.0/docs/CLI.md) (release), [`docs/CLI.md`](docs/CLI.md) (dev) |
 | Discovery and COV | [Discovery](https://jscott3201.github.io/rusty-bacnet/guides/discovery/), [observing changes](https://jscott3201.github.io/rusty-bacnet/guides/observe-changes/) |
 | BACnet/SC: credentials, device identity, hub policy | [Rust node](docs/rust-api.md#bacnetsc-client-transport), [Rust hub](docs/rust-api.md#bacnetsc-hub), [Python](docs/python-api.md#bacnetsc-secure-connect), [hub certificate bindings](docs/python-api.md#hub-certificate-bindings) |
-| Shared endpoints (dev) | [Rust](docs/rust-api.md#bacnet-endpoint), [Python](docs/python-api.md#endpoint-one-transport-both-roles) |
+| Shared endpoints | [Rust](docs/rust-api.md#bacnet-endpoint), [Python](docs/python-api.md#endpoint-one-transport-both-roles) |
 | Writes and authorization | [Safe writes](https://jscott3201.github.io/rusty-bacnet/guides/safe-writes/), [mutation policy](docs/mutation-policy.md), [Device Communication Control](docs/dcc-policy.md) |
 | Audit reporting | [Rust](docs/rust-api.md#audit-services), [Python](docs/python-api.md#audit-services), [target reporters](docs/target-audit-reporters.md) |
 | Policy and resource limits | [Engineering docs index](docs/README.md#policy-and-resource-contracts) |
@@ -318,8 +321,8 @@ The [hosted guides](https://jscott3201.github.io/rusty-bacnet/) cover the
 Rusty BACnet is **not BTL certified** and does not claim full BACnet
 conformance. The website's
 [What's supported](https://jscott3201.github.io/rusty-bacnet/project/support/#whats-supported)
-section lists the object types, services, transports and Python bindings the
-current source implements. A running server can also generate a PICS for its
+section lists the object types, services, transports and Python bindings that
+0.12.0 implements. A running server can also generate a PICS for its
 own objects and services with `bacnet_server::pics`.
 
 ## Contributing

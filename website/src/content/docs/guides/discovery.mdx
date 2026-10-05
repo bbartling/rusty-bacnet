@@ -4,6 +4,7 @@ description: "Understand directed discovery, broadcasts, BBMDs, and session-loca
 ---
 
 import Diagram from '../../../components/Diagram.astro';
+import { release, repository } from '../../../lib/site.mjs';
 
 
 Discovery is a network operation, not a passive scan of a file. Start with the smallest authorized scope that answers your question.
@@ -36,7 +37,7 @@ bacnet discover --bbmd 192.168.1.1 --ttl 300 --wait 3
 
 Use a BBMD designated by the site owner. Registration changes BBMD foreign-device state. It is not a generic VPN or NAT workaround, and it is not part of BACnet/SC or IPv6 setup.
 
-`discover --dnet 2` requests discovery for a remote BACnet network. It does **not** establish that every other command supports `2:1234` as a routed target. In the reviewed v0.11.0 one-shot path, that target form is explicitly rejected. A direct router IP is not automatically equivalent to the downstream device's BACnet address.
+`discover --dnet 2` requests discovery for a remote BACnet network. It does **not** establish that every other command supports `2:1234` as a routed target. The one-shot commands reject that target form. A direct router IP is not automatically equivalent to the downstream device's BACnet address.
 
 ## Keep discovery and device-instance lookup in one session
 
@@ -64,7 +65,7 @@ For a one-shot command, use the parser-backed option:
 bacnet find --name "Zone Temp" --wait 3
 ```
 
-The older CLI guide includes positional `find` examples, but the reviewed one-shot parser declares `--name`. Shell grammar is a separate surface and must not be assumed identical to the one-shot command line.
+The one-shot command takes the name only through `--name`. Shell grammar is a separate surface and must not be assumed identical to the one-shot command line.
 
 ## When discovery is empty
 
@@ -72,6 +73,6 @@ Test a known direct property read, confirm the local/remote UDP ports, and check
 
 ## Sources and release scope
 
-These instructions target **v0.11.0**. Source review is not a claim of hardware qualification.
+These instructions target **v{release}**. Source review is not a claim of hardware qualification.
 
-[Discovery documentation](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/docs/CLI.md) · [Actual CLI parser](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/bacnet-cli/src/args.rs) · [Target resolution and dispatch](https://github.com/jscott3201/rusty-bacnet/blob/v0.11.0/crates/bacnet-cli/src/main.rs).
+<a href={`${repository}/blob/v${release}/docs/CLI.md`}>Discovery documentation</a> · <a href={`${repository}/blob/v${release}/crates/bacnet-cli/src/args.rs`}>Actual CLI parser</a> · <a href={`${repository}/blob/v${release}/crates/bacnet-cli/src/main.rs`}>Target resolution and dispatch</a>.
