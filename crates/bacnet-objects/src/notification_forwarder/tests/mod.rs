@@ -10,6 +10,7 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::primitives::Time;
 use bacnet_types::MacAddr;
 
+mod fold_tests;
 mod persistence_tests;
 mod properties;
 mod recipient_list_restart_tests;

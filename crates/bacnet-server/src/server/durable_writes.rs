@@ -14,10 +14,9 @@
 //! same way.
 //!
 //! A request stages once per object, handing it all of the request's writes
-//! to it in order. An Audit Log folds a WritePropertyMultiple's Log_Enable
-//! and Buffer_Size writes into one save; a forwarder, a Notification Class or
-//! an Access Rights object stages the first write it takes, and the
-//! request's later writes to it save in place.
+//! to it in order, and the object folds them into one save (#1423): a
+//! WritePropertyMultiple that provisions an Access Rights object saves its
+//! rule arrays and Enable together, off the guard.
 //!
 //! Other requests read and write the database while the save runs. One that
 //! stages a write to the same object waits for the first to land; requests

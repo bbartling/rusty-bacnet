@@ -2271,8 +2271,11 @@ bundled server stages every network or `write_local` Recipient_List write
 (WriteProperty, WritePropertyMultiple, AddListElement and RemoveListElement)
 and waits for its save with the database guard dropped. A list that cannot be
 saved is refused with DEVICE / OPERATIONAL_PROBLEM, and the class keeps the
-old one. A WritePropertyMultiple under a `mutation_authorizer`, and
-application code writing through the database, save in place. A staged write
+old one. A WritePropertyMultiple that writes the list more than once stages
+one save of the last (#1423). A WritePropertyMultiple under a
+`mutation_authorizer`, and application code writing through the database,
+save in place; a write such code makes that the class refuses leaves a
+staged write alone (#1424). A staged write
 its request releases without making (an earlier WritePropertyMultiple attempt
 failed, say) is dropped, and the class saves the list it serves at once. A
 staged write whose request vanished without releasing it (`stop()` aborted
@@ -3332,9 +3335,11 @@ Saves follow the Notification Class's rules (see
 object's own writer thread, and the bundled server stages each WriteProperty,
 WritePropertyMultiple or `write_local` write of the arrays (whole, one
 element, or the size at index 0), of Enable or of Accompaniment, and waits
-for its save with the database guard dropped. A request stages only its
-first such write to an object; a WritePropertyMultiple's later writes to the
-same object save in place. A state that cannot be saved is refused with DEVICE /
+for its save with the database guard dropped. A WritePropertyMultiple's
+several such writes to one object stage one save of the state they leave
+together (#1423): each write takes its own step as the request makes it, and
+a request that stops part way puts storage back to what the object serves. A
+state that cannot be saved is refused with DEVICE /
 OPERATIONAL_PROBLEM, and nothing changes. A staged write that is never made
 puts storage back to the served state on release, after its lifetime, at
 `stop()`, or when the object drops. A saved value wins over the
@@ -5389,9 +5394,10 @@ the save in place. The bundled server stages each network or
 it with the guard dropped (on the blocking pool, as for the Audit Log), and the
 write then takes the saved list. A write
 that cannot be saved fails with DEVICE / OPERATIONAL_PROBLEM and leaves the old
-list. WritePropertyMultiple stages too, except under a `mutation_authorizer`,
-which sees each attempt only as the handler reaches it; such an attempt saves
-in place. The operation task's lapse and minute saves coalesce, so a burst
+list. WritePropertyMultiple stages too, its writes to both lists as one save
+(#1423), except under a `mutation_authorizer`, which sees each attempt only as
+the handler reaches it; such an attempt saves in place. The operation task's
+lapse and minute saves coalesce, so a burst
 costs one save of the latest lists; one that fails is logged and retried a
 minute later. `save_counters()` returns a `ForwarderSaveCounters` handle,
 shared with the object, whose `failed_saves()` counts every refused save; take

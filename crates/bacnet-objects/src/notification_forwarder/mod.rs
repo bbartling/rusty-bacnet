@@ -64,7 +64,8 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 
 use crate::common::{self, read_common_properties};
-use crate::durable::{DurableWrites, SaveWait, StageStep};
+use crate::durable::staged::{self, Step};
+use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use crate::notification_class::recipient_list;
 use crate::subscribed_recipients::SubscribedRecipients;
 use crate::traits::{BACnetObject, MonotonicClock};
@@ -172,7 +173,7 @@ impl NotificationForwarderObject {
         forwarder.storage = Some(saving::Storage::new(
             forwarder.oid,
             persistence,
-            forwarder.snapshot(None),
+            forwarder.snapshot(),
             forwarder.save_counters.clone(),
         ));
         Ok(forwarder)
@@ -275,33 +276,38 @@ impl NotificationForwarderObject {
         }
     }
 
-    /// What storage would hold with `next` in place of the list it replaces.
-    fn snapshot(&self, next: Option<&saving::NextList>) -> ForwarderSnapshot {
+    /// What storage holds for the lists the forwarder serves.
+    fn snapshot(&self) -> ForwarderSnapshot {
         ForwarderSnapshot {
-            recipient_list: match next {
-                Some(saving::NextList::RecipientList(list)) => Some(list.clone()),
-                _ => self
-                    .recipient_list_written
-                    .then(|| self.recipient_list.clone()),
-            },
-            subscribed_recipients: match next {
-                Some(saving::NextList::SubscribedRecipients(store)) => store.subscriptions(),
-                _ => self.subscribed_recipients.subscriptions(),
-            },
+            recipient_list: self
+                .recipient_list_written
+                .then(|| self.recipient_list.clone()),
+            subscribed_recipients: self.subscribed_recipients.subscriptions(),
         }
     }
 
-    /// The list a write of `value` to `property` would leave, or the write's
-    /// refusal.
+    /// The list a write of `value` to `property` would leave on top of the
+    /// `earlier` steps of its request, or the write's refusal.
     fn next_list(
         &self,
+        earlier: &[Step<saving::NextList>],
         property: PropertyIdentifier,
         value: PropertyValue,
     ) -> Result<saving::NextList, Error> {
         if property == PropertyIdentifier::RECIPIENT_LIST {
             return recipient_list::decode_write(value).map(saving::NextList::RecipientList);
         }
-        let mut next = self.subscribed_recipients.clone();
+        // A written entry keeps the deadline of a live one it renews, so the
+        // store builds on the one an earlier step left.
+        let current = earlier
+            .iter()
+            .rev()
+            .find_map(|step| match &step.next {
+                saving::NextList::SubscribedRecipients(store) => Some(store),
+                saving::NextList::RecipientList(_) => None,
+            })
+            .unwrap_or(&self.subscribed_recipients);
+        let mut next = current.clone();
         next.write(value)?;
         Ok(saving::NextList::SubscribedRecipients(next))
     }
@@ -333,21 +339,41 @@ impl NotificationForwarderObject {
                 bacnet_types::enums::ErrorCode::OPERATIONAL_PROBLEM,
             )
         };
-        let base = self.list_writes;
-        if let Some(claimed) = self
-            .with_storage(|storage, _| storage.claim(property, &value, base))
-            .flatten()
-        {
-            self.install(claimed.map_err(refused)?);
-            return Ok(());
+        if let Some(taken) = self.take_staged(property, &value) {
+            return taken.map_err(refused);
         }
-        let next = self.next_list(property, value)?;
-        let snapshot = self.storage.is_some().then(|| self.snapshot(Some(&next)));
-        if let (Some(storage), Some(snapshot)) = (self.storage.as_mut(), snapshot) {
+        // A list the forwarder refuses leaves a write staged for another
+        // request alone (#1424).
+        let next = self.next_list(&[], property, value)?;
+        if self.storage.is_some() {
+            let mut snapshot = self.snapshot();
+            saving::apply(&mut snapshot, &next);
+            // This write will be made, so it supersedes a staged one: storage
+            // goes back to the served lists ahead of its save.
+            self.with_storage(|storage, _| storage.drop_staged());
+            let storage = self.storage.as_mut().expect("checked above");
             storage.save_now(snapshot).map_err(refused)?;
         }
         self.install(next);
         Ok(())
+    }
+
+    /// Take the staged step for a write of `value` to `property`, if it is
+    /// the next one: the forwarder then serves its list, or the save's error
+    /// comes back. `None` when nothing staged is this write.
+    fn take_staged(
+        &mut self,
+        property: PropertyIdentifier,
+        value: &PropertyValue,
+    ) -> Option<Result<(), Error>> {
+        let mut storage = self.storage.take()?;
+        let taken = storage
+            .claim(property, value, self.list_writes)
+            .map(|claimed| claimed.map(|next| self.install(next)));
+        // Steps the request has still to take keep the lists served now.
+        storage.correct(|| self.snapshot());
+        self.storage = Some(storage);
+        taken
     }
 
     /// After time passes, keep storage current (see the module docs).
@@ -365,12 +391,20 @@ impl NotificationForwarderObject {
         f: impl FnOnce(&mut saving::Storage, &dyn Fn() -> ForwarderSnapshot) -> R,
     ) -> Option<R> {
         let mut storage = self.storage.take()?;
-        let served = || self.snapshot(None);
+        let served = || self.snapshot();
         let result = f(&mut storage, &served);
         storage.correct(served);
         self.storage = Some(storage);
         Some(result)
     }
+}
+
+/// Whether `property` is one of the two lists a forwarder saves.
+fn listed(property: PropertyIdentifier) -> bool {
+    matches!(
+        property,
+        PropertyIdentifier::RECIPIENT_LIST | PropertyIdentifier::SUBSCRIBED_RECIPIENTS
+    )
 }
 
 impl DurableWrites for NotificationForwarderObject {
@@ -380,30 +414,36 @@ impl DurableWrites for NotificationForwarderObject {
         array_index: Option<u32>,
         value: &PropertyValue,
     ) -> StageStep {
-        let listed = matches!(
+        self.stage_writes(&[PendingWrite {
             property,
-            PropertyIdentifier::RECIPIENT_LIST | PropertyIdentifier::SUBSCRIBED_RECIPIENTS
-        );
-        if !listed || array_index.is_some() || self.storage.is_none() {
+            array_index,
+            value: value.clone(),
+        }])
+    }
+
+    /// Fold the request's writes to both lists into one staged save
+    /// (#1423).
+    fn stage_writes(&mut self, writes: &[PendingWrite]) -> StageStep {
+        if self.storage.is_none() || !writes.iter().any(|write| listed(write.property)) {
             return StageStep::Skip;
         }
         if let Some(wait) = self.with_storage(|storage, _| storage.busy()).flatten() {
             return StageStep::Busy(wait);
         }
-        let Ok(next) = self.next_list(property, value.clone()) else {
-            return StageStep::Skip;
-        };
-        let snapshot = self.snapshot(Some(&next));
-        let served = self.snapshot(None);
+        let steps = staged::steps(writes, |earlier, write| {
+            if !listed(write.property) {
+                return Ok(None);
+            }
+            if write.array_index.is_some() {
+                return Err(common::property_is_not_an_array_error());
+            }
+            self.next_list(earlier, write.property, write.value.clone())
+                .map(Some)
+        });
+        let served = self.snapshot();
         let base = self.list_writes;
-        self.storage.as_mut().expect("checked above").stage(
-            property,
-            value.clone(),
-            base,
-            next,
-            snapshot,
-            served,
-        )
+        let storage = self.storage.as_mut().expect("checked above");
+        storage.stage(steps, base, served)
     }
 
     fn release_staged_write(&mut self, staged: &SaveWait) {
@@ -485,11 +525,7 @@ impl BACnetObject for NotificationForwarderObject {
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        let listed = matches!(
-            property,
-            PropertyIdentifier::RECIPIENT_LIST | PropertyIdentifier::SUBSCRIBED_RECIPIENTS
-        );
-        if listed && array_index.is_some() {
+        if listed(property) && array_index.is_some() {
             return Err(common::property_is_not_an_array_error());
         }
         match property {

@@ -9,9 +9,10 @@
 //! ([`crate::durable`]), shared with it through `StagedSaves`: the bundled
 //! server stages the write, the save runs on the object's writer thread while
 //! the database guard is dropped, and the write then takes the saved state
-//! without saving again. A write that was not staged queues its save and
-//! waits for it where it is. That includes a WritePropertyMultiple's second
-//! and later writes to the object: the request stages only its first.
+//! without saving again. A WritePropertyMultiple's several writes to the
+//! object stage one save of the state they leave together, and each takes
+//! its own step of it in turn (#1423). A write that was not staged queues its
+//! save and waits for it where it is.
 //!
 //! A staged write its request releases without making is dropped, and the
 //! object at once queues a save of what it serves, so storage goes back to
@@ -41,8 +42,8 @@ use bacnet_types::primitives::PropertyValue;
 use super::persistence::{AccessRightsPersistence, AccessRightsSnapshot};
 use super::{check_accompaniment, checked_rules, AccessRightsObject};
 use crate::common;
-use crate::durable::staged::StagedSaves;
-use crate::durable::{DurableWrites, SaveWait, SaveWriter, StageStep};
+use crate::durable::staged::{self, StagedSaves, Step};
+use crate::durable::{DurableWrites, PendingWrite, SaveWait, SaveWriter, StageStep};
 
 /// The state a saved write leaves: the property it sets, as the object
 /// holds it.
@@ -165,46 +166,47 @@ impl AccessRightsObject {
         kept
     }
 
-    /// What storage would hold with `next` applied, or what the object
-    /// serves when `next` is `None`.
-    fn snapshot(&self, next: Option<&NextState>) -> AccessRightsSnapshot {
+    /// What storage holds for the state the object serves.
+    fn snapshot(&self) -> AccessRightsSnapshot {
         let served = |written: bool, rules: &Vec<BACnetAccessRule>| written.then(|| rules.clone());
         AccessRightsSnapshot {
-            positive_access_rules: match next {
-                Some(NextState::PositiveAccessRules(rules)) => Some(rules.clone()),
-                _ => served(self.written.positive, &self.positive_access_rules),
-            },
-            negative_access_rules: match next {
-                Some(NextState::NegativeAccessRules(rules)) => Some(rules.clone()),
-                _ => served(self.written.negative, &self.negative_access_rules),
-            },
-            enable: match next {
-                Some(NextState::Enable(enable)) => Some(*enable),
-                _ => self.written.enable.then_some(self.enable),
-            },
-            accompaniment: match next {
-                Some(NextState::Accompaniment(reference)) => Some(reference.clone()),
-                _ => self
-                    .written
-                    .accompaniment
-                    .then(|| self.accompaniment.clone())
-                    .flatten(),
-            },
+            positive_access_rules: served(self.written.positive, &self.positive_access_rules),
+            negative_access_rules: served(self.written.negative, &self.negative_access_rules),
+            enable: self.written.enable.then_some(self.enable),
+            accompaniment: self
+                .written
+                .accompaniment
+                .then(|| self.accompaniment.clone())
+                .flatten(),
         }
     }
 
     /// The state a write of `value` to `property` (at `array_index`) would
-    /// leave, or the write's refusal. The checks are the ones every write
-    /// makes, with or without persistence.
+    /// leave on top of the `earlier` steps of its request, or the write's
+    /// refusal. The checks are the ones every write makes, with or without
+    /// persistence.
     fn next_state(
         &self,
+        earlier: &[Step<NextState>],
         property: PropertyIdentifier,
         array_index: Option<u32>,
         value: PropertyValue,
     ) -> Result<NextState, Error> {
+        // An element or index-0 write edits the array an earlier step left.
+        let latest = |positive: bool| {
+            earlier.iter().rev().find_map(|step| match &step.next {
+                NextState::PositiveAccessRules(rules) if positive => Some(rules),
+                NextState::NegativeAccessRules(rules) if !positive => Some(rules),
+                _ => None,
+            })
+        };
         let current = match property {
-            PropertyIdentifier::POSITIVE_ACCESS_RULES => &self.positive_access_rules,
-            PropertyIdentifier::NEGATIVE_ACCESS_RULES => &self.negative_access_rules,
+            PropertyIdentifier::POSITIVE_ACCESS_RULES => {
+                latest(true).unwrap_or(&self.positive_access_rules)
+            }
+            PropertyIdentifier::NEGATIVE_ACCESS_RULES => {
+                latest(false).unwrap_or(&self.negative_access_rules)
+            }
             // Only the application adds the optional row.
             PropertyIdentifier::ACCOMPANIMENT if self.accompaniment.is_none() => {
                 return Err(common::unknown_property_error())
@@ -274,21 +276,43 @@ impl AccessRightsObject {
     ) -> Result<(), Error> {
         let refused =
             |_| common::protocol_error(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM);
-        let base = self.writes;
-        if let Some(claimed) = self
-            .with_storage(|storage| storage.claim(property, array_index, &value, base))
-            .flatten()
-        {
-            self.install(claimed.map_err(refused)?);
-            return Ok(());
+        if let Some(taken) = self.take_staged(property, array_index, &value) {
+            return taken.map_err(refused);
         }
-        let next = self.next_state(property, array_index, value)?;
-        let snapshot = self.storage.is_some().then(|| self.snapshot(Some(&next)));
-        if let (Some(storage), Some(snapshot)) = (self.storage.as_mut(), snapshot) {
+        // A write the object refuses, such as one past the end of an array,
+        // leaves a write staged for another request alone (#1424).
+        let next = self.next_state(&[], property, array_index, value)?;
+        if self.storage.is_some() {
+            let mut snapshot = self.snapshot();
+            apply(&mut snapshot, &next);
+            // This write will be made, so it supersedes a staged one: storage
+            // goes back to the served state ahead of its save.
+            self.with_storage(Storage::drop_staged);
+            let storage = self.storage.as_mut().expect("checked above");
             storage.save_now(snapshot).map_err(refused)?;
         }
         self.install(next);
         Ok(())
+    }
+
+    /// Take the staged step for a write of `value` to `property` (at
+    /// `array_index`), if it is the next one: the object then serves its
+    /// state, or the save's error comes back. `None` when nothing staged is
+    /// this write.
+    fn take_staged(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: &PropertyValue,
+    ) -> Option<Result<(), Error>> {
+        let mut storage = self.storage.take()?;
+        let taken = storage
+            .claim(property, array_index, value, self.writes)
+            .map(|claimed| claimed.map(|next| self.install(next)));
+        // Steps the request has still to take keep the state served now.
+        storage.correct(|| self.snapshot());
+        self.storage = Some(storage);
+        taken
     }
 
     /// From the server's operation task at monotonic `now`: drop a staged
@@ -304,9 +328,23 @@ impl AccessRightsObject {
     fn with_storage<R>(&mut self, f: impl FnOnce(&mut Storage) -> R) -> Option<R> {
         let mut storage = self.storage.take()?;
         let result = f(&mut storage);
-        storage.correct(|| self.snapshot(None));
+        storage.correct(|| self.snapshot());
         self.storage = Some(storage);
         Some(result)
+    }
+}
+
+/// Put the state `next` leaves into `snapshot`.
+fn apply(snapshot: &mut AccessRightsSnapshot, next: &NextState) {
+    match next {
+        NextState::PositiveAccessRules(rules) => {
+            snapshot.positive_access_rules = Some(rules.clone());
+        }
+        NextState::NegativeAccessRules(rules) => {
+            snapshot.negative_access_rules = Some(rules.clone());
+        }
+        NextState::Enable(enable) => snapshot.enable = Some(*enable),
+        NextState::Accompaniment(reference) => snapshot.accompaniment = Some(reference.clone()),
     }
 }
 
@@ -317,27 +355,39 @@ impl DurableWrites for AccessRightsObject {
         array_index: Option<u32>,
         value: &PropertyValue,
     ) -> StageStep {
-        if !saved_property(property) || self.storage.is_none() {
-            return StageStep::Skip;
-        }
-        if let Some(wait) = self.with_storage(|storage| storage.busy()).flatten() {
-            return StageStep::Busy(wait);
-        }
-        let Ok(next) = self.next_state(property, array_index, value.clone()) else {
-            return StageStep::Skip;
-        };
-        let snapshot = self.snapshot(Some(&next));
-        let served = self.snapshot(None);
-        let base = self.writes;
-        self.storage.as_mut().expect("checked above").stage(
+        self.stage_writes(&[PendingWrite {
             property,
             array_index,
-            value.clone(),
-            base,
-            next,
-            snapshot,
-            served,
-        )
+            value: value.clone(),
+        }])
+    }
+
+    /// Fold the request's writes of the saved properties into one staged
+    /// save (#1423), so a head end that provisions both rule arrays and
+    /// Enable in one WritePropertyMultiple saves once, off the guard.
+    fn stage_writes(&mut self, writes: &[PendingWrite]) -> StageStep {
+        if self.storage.is_none() || !writes.iter().any(|write| saved_property(write.property)) {
+            return StageStep::Skip;
+        }
+        if let Some(wait) = self.with_storage(Storage::busy).flatten() {
+            return StageStep::Busy(wait);
+        }
+        let steps = staged::steps(writes, |earlier, write| {
+            if !saved_property(write.property) {
+                return Ok(None);
+            }
+            let PendingWrite {
+                property,
+                array_index,
+                value,
+            } = write;
+            self.next_state(earlier, *property, *array_index, value.clone())
+                .map(Some)
+        });
+        let served = self.snapshot();
+        let base = self.writes;
+        let storage = self.storage.as_mut().expect("checked above");
+        storage.stage(steps, base, served, apply)
     }
 
     fn release_staged_write(&mut self, staged: &SaveWait) {
@@ -346,7 +396,7 @@ impl DurableWrites for AccessRightsObject {
 
     fn settle_forgotten_writes(&mut self) -> Option<SaveWait> {
         let mut storage = self.storage.take()?;
-        let wait = storage.drop_forgotten(|| self.snapshot(None));
+        let wait = storage.drop_forgotten(|| self.snapshot());
         self.storage = Some(storage);
         Some(wait)
     }
