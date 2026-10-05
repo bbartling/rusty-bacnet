@@ -60,8 +60,10 @@ FRAGMENT_DIR = "changelog.d"
 README = "README.md"
 
 # The headings a fragment may name, in the order a release section lists them:
-# Keep a Changelog's six, then the migration notes this changelog adds.
-SECTIONS = ("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security", "Migration notes")
+# the migration notes this changelog adds and Security first, then the rest of
+# Keep a Changelog's six. GitHub caps a release body, so notes that run long
+# are cut from the end, and what an upgrade needs must come before that.
+SECTIONS = ("Migration notes", "Security", "Added", "Changed", "Deprecated", "Removed", "Fixed")
 
 # The longest entry, in characters, and the longest Migration notes entry,
 # which also says what to change (#1188). Detail belongs in the issue.

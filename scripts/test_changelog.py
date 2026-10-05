@@ -131,7 +131,7 @@ class ParseFragmentTests(unittest.TestCase):
                 self.assert_rejected(name, fragment("Fixed", "- Entry."), "name it")
 
     def test_unknown_section(self):
-        self.assert_rejected("1-x.md", fragment("Fixes", "- Entry."), "'Fixes' is not one of: Added")
+        self.assert_rejected("1-x.md", fragment("Fixes", "- Entry."), "'Fixes' is not one of: Migration notes")
         self.assert_rejected("1-x.md", fragment("fixed", "- Entry."), "is not one of")
 
     def test_front_matter_shape(self):
@@ -225,7 +225,15 @@ ORDERING = {
     "304-change.md": fragment("Changed", "- Changed 304."),
 }
 
-ORDERED = """### Added
+ORDERED = """### Migration notes
+
+- Migrate.
+
+### Security
+
+- Security 301.
+
+### Added
 
 - Feature 300.
   continued.
@@ -251,14 +259,6 @@ ORDERED = """### Added
 - Fix 1000.
 
 - Fix without issue.
-
-### Security
-
-- Security 301.
-
-### Migration notes
-
-- Migrate.
 """
 
 
