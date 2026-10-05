@@ -371,6 +371,7 @@ async fn who_is_and_who_has_with_trailing_octets_are_dropped() {
         (counters.who_is_received, counters.who_has_received),
         (1, 1)
     );
+    assert_eq!(counters.malformed_dropped, 4);
     h.server.stop().await.unwrap();
 }
 
@@ -393,7 +394,67 @@ async fn a_who_is_with_one_limit_is_dropped() {
         unconfirmed(&h, who_is, &[0x09, 0x00, 0x1A, 0x03, 0xE8]).await,
         [UnconfirmedServiceChoice::I_AM]
     );
-    assert_eq!(h.server.discovery_counters().who_is_received, 1);
+    let counters = h.server.discovery_counters();
+    assert_eq!(
+        (counters.who_is_received, counters.malformed_dropped),
+        (1, 2)
+    );
+    h.server.stop().await.unwrap();
+}
+
+/// A Who-Has carrying one limit without the other is malformed too (#1483),
+/// and so is one whose low limit is above its high one, so the server drops
+/// each and sends no I-Have, where one limit used to read as no range.
+#[tokio::test(start_paused = true)]
+async fn a_who_has_with_one_limit_is_dropped() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    let who_has = UnconfirmedServiceChoice::WHO_HAS;
+    // AV-1 by name, behind limits 0 and 1000, which take in the harness
+    // device (856); either limit alone would too if read as unbounded.
+    let by_name = [0x3D, 0x05, 0x00, b'A', b'V', b'-', b'1'];
+    let with = |limits: &[u8]| [limits, &by_name[..]].concat();
+    for (what, limits) in [
+        ("only the low limit", &[0x09, 0x00][..]),
+        ("only the high limit", &[0x1A, 0x03, 0xE8]),
+        ("low limit above high", &[0x0A, 0x03, 0xE8, 0x19, 0x00]),
+    ] {
+        assert_eq!(unconfirmed(&h, who_has, &with(limits)).await, [], "{what}");
+    }
+    assert_eq!(
+        unconfirmed(&h, who_has, &with(&[0x09, 0x00, 0x1A, 0x03, 0xE8])).await,
+        [UnconfirmedServiceChoice::I_HAVE]
+    );
+    let counters = h.server.discovery_counters();
+    assert_eq!(
+        (counters.who_has_received, counters.malformed_dropped),
+        (1, 3)
+    );
+    h.server.stop().await.unwrap();
+}
+
+/// Some devices send a high limit past the highest instance, 4194303, to
+/// mean every device. The decoders take it as written (#1483), so the
+/// server answers such a Who-Is and Who-Has.
+#[tokio::test(start_paused = true)]
+async fn a_high_limit_past_the_highest_instance_is_answered() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    // Low limit 0, high limit 4294967295.
+    let limits = [0x09, 0x00, 0x1C, 0xFF, 0xFF, 0xFF, 0xFF];
+    assert_eq!(
+        unconfirmed(&h, UnconfirmedServiceChoice::WHO_IS, &limits).await,
+        [UnconfirmedServiceChoice::I_AM]
+    );
+    // AV-1 by name.
+    let by_name = [0x3D, 0x05, 0x00, b'A', b'V', b'-', b'1'];
+    assert_eq!(
+        unconfirmed(
+            &h,
+            UnconfirmedServiceChoice::WHO_HAS,
+            &[&limits[..], &by_name[..]].concat()
+        )
+        .await,
+        [UnconfirmedServiceChoice::I_HAVE]
+    );
     h.server.stop().await.unwrap();
 }
 

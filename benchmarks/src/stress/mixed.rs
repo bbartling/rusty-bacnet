@@ -126,7 +126,7 @@ pub async fn run(_transport: &str, clients: u64, duration_secs: u64) -> Vec<Degr
                     }
                 } else if roll < 95 {
                     // 5% WhoIs
-                    client.who_is(None, None).await
+                    client.who_is(None).await
                 } else {
                     // 5% ReadProperty on Device object
                     let oid = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();

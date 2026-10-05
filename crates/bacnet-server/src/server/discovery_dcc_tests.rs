@@ -74,8 +74,7 @@ async fn unconfirmed(h: &Harness, service_choice: UnconfirmedServiceChoice, body
 async fn who_has_av1(h: &Harness) {
     let mut body = BytesMut::new();
     WhoHasRequest {
-        low_limit: None,
-        high_limit: None,
+        range: None,
         object: WhoHasObject::Name("AV-1".into()),
     }
     .encode(&mut body)
@@ -86,11 +85,7 @@ async fn who_has_av1(h: &Harness) {
 /// A Who-Is for every device.
 async fn who_is(h: &Harness) {
     let mut body = BytesMut::new();
-    WhoIsRequest {
-        low_limit: None,
-        high_limit: None,
-    }
-    .encode(&mut body);
+    WhoIsRequest { range: None }.encode(&mut body);
     unconfirmed(h, UnconfirmedServiceChoice::WHO_IS, body).await;
 }
 

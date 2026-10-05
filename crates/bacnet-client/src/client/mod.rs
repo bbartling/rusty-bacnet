@@ -874,6 +874,8 @@ mod audit_tests;
 #[cfg(test)]
 mod batch_tests;
 #[cfg(test)]
+mod broadcast_mac_tests;
+#[cfg(test)]
 mod builder_options_tests;
 #[cfg(test)]
 mod confirmed_request_dispatch_tests;

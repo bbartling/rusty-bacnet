@@ -75,6 +75,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Returns the service response data (empty for SimpleAck). Automatically
     /// uses segmented transfer when the payload exceeds the remote device's
     /// max APDU length.
+    ///
+    /// A confirmed request goes to one device, so a `destination_mac` that
+    /// reaches a group of nodes ([`TransportPort::is_group_destination`]:
+    /// the link's broadcast MAC, or on B/IP the limited broadcast, the
+    /// configured broadcast IP or a multicast address at any port), which
+    /// would make it a local broadcast (Clause 6.3), fails with
+    /// [`Error::Encoding`] before any transaction state is taken (#1479). So
+    /// does a routed target that names this client's own network with such a
+    /// MAC, since it goes local.
     pub async fn confirmed_request(
         &self,
         destination_mac: &[u8],
@@ -153,6 +162,18 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             check_routed_unicast(dest_network, dest_mac.len())?;
         }
         let target = named.localized(self.network.local_network_number().get());
+        // With no DNET, a group destination is a local broadcast, which
+        // carries no confirmed request (Clause 6.3, #1479).
+        if let ConfirmedTarget::Local { mac } = target {
+            if self.network.transport().is_group_destination(mac) {
+                return Err(Error::Encoding(
+                    "a confirmed request goes to one device, not to a broadcast or group \
+                     address (a local broadcast carries only an UNCONFIRMED_REQUEST APDU, \
+                     Clause 6.3)"
+                        .into(),
+                ));
+            }
+        }
         let routed_forwarded_npci_len = match target {
             ConfirmedTarget::Local { .. } => None,
             ConfirmedTarget::Routed { dest_mac, .. } => {

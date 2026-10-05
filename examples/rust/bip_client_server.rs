@@ -131,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // --- WhoIs discovery ---
-    client.who_is(None, None).await?;
+    client.who_is(None).await?;
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     let devices = client.discovered_devices().await;
     println!("\nDiscovered {} device(s):", devices.len());

@@ -11,10 +11,8 @@ pub fn handle_who_has(
     let request = WhoHasRequest::decode(service_data)?;
 
     let instance = device_oid.instance_number();
-    if let (Some(low), Some(high)) = (request.low_limit, request.high_limit) {
-        if instance < low || instance > high {
-            return Ok(None);
-        }
+    if request.range.is_some_and(|range| !range.contains(instance)) {
+        return Ok(None);
     }
 
     match &request.object {

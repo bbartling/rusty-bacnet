@@ -1034,7 +1034,8 @@
    ],
    "positive_tests": [
     "crates/bacnet-encoding/src/npdu/address_bound_tests.rs::{npdu_address_bound_matches_the_recipient_bound,boundary_address_lengths_decode_and_round_trip_for_either_field,source_refusal_reports_the_npdu_dnet,destination_refusal_carries_the_source_behind_it}",
-    "crates/bacnet-network/src/address_bound_tests.rs::non_router_drops_and_counts_an_over_long_address_in_either_field"
+    "crates/bacnet-network/src/address_bound_tests.rs::non_router_drops_and_counts_an_over_long_address_in_either_field",
+    "crates/bacnet-network/src/broadcast_pdu_tests.rs::{broadcast_forms_send_an_unconfirmed_request,sends_naming_one_device_take_any_pdu_type}"
    ],
    "negative_tests": [
     "crates/bacnet-encoding/src/npdu/address_bound_tests.rs::{over_long_address_length_is_refused_for_either_field,over_long_length_is_refused_before_the_address_is_read,source_refusal_reports_the_npdu_dnet,destination_refusal_carries_the_source_behind_it,address_too_long_reads_as_out_of_range,encoder_refuses_an_address_past_the_bound_for_either_field}",
@@ -1042,7 +1043,13 @@
     "crates/bacnet-network/src/link_source_bound_tests.rs::non_router_drops_and_counts_a_frame_from_an_over_long_source_mac",
     "crates/bacnet-network/src/layer_delivery_tests.rs::sends_naming_network_zero_are_refused_before_any_frame",
     "crates/bacnet-network/src/layer_delivery_tests.rs::sends_naming_the_global_network_are_refused_before_any_frame",
-    "crates/bacnet-network/src/global_broadcast_dadr_tests.rs::non_router_drops_and_counts_a_global_broadcast_that_names_a_device"
+    "crates/bacnet-network/src/global_broadcast_dadr_tests.rs::non_router_drops_and_counts_a_global_broadcast_that_names_a_device",
+    "crates/bacnet-network/src/broadcast_pdu_tests.rs::{broadcast_forms_refuse_every_pdu_but_an_unconfirmed_request,routed_local_broadcast_forms_refuse_an_empty_dadr}",
+    "crates/bacnet-endpoint-core/src/endpoint_network_service_tests.rs::{routed_destinations_without_a_dadr_refuse_all_but_an_unconfirmed_request,effective_group_destinations_reject_confirmed_and_malformed_apdus_without_emission}",
+    "crates/bacnet-client/src/client/broadcast_mac_tests.rs::{a_confirmed_request_to_the_broadcast_mac_is_refused_before_any_state,a_confirmed_request_to_any_bip_group_address_is_refused,a_confirmed_request_to_any_bip6_multicast_group_is_refused,a_routed_request_to_this_networks_broadcast_mac_is_refused}",
+    "crates/bacnet-client/src/endpoint_requester_tests.rs::a_group_destination_fails_before_registration",
+    "crates/bacnet-transport/src/bip/tests.rs::group_destinations_cover_every_broadcast_and_multicast_address",
+    "crates/bacnet-transport/src/bip6/group_delivery_tests.rs::every_multicast_group_is_a_group_destination"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -1059,7 +1066,9 @@
     "#1198: NetworkLayer drops a frame whose link-layer source MAC is longer than NpduAddress::MAX_MAC_LEN before decoding it and counts it in address_length_drops(). No built-in transport reports one (B/IP, BACnet/SC and Ethernet use 6 octets, MS/TP 1, B/IPv6 18), so only a custom TransportPort can, and every address learned off the network fits a BACnetAddress.",
     "NetworkLayer refuses destination network 0 in broadcast_to_network, send_apdu_routed, send_apdu_routed_via_local_broadcast and send_apdu_on_issuance with a named Error::Encoding before encoding or sending (Clause 6.2.2.1).",
     "The routed sends and send_apdu_on_issuance refuse DNET 0xFFFF the same way, with or without a DADR (#1340, #1380): a global broadcast goes out only through broadcast_global_apdu, with DLEN 0 and the broadcast MAC so every router on the network can pass it on (Clauses 6.1, 6.3.2). A unicast to one router would reach only that router.",
-    "#1379: an inbound NPDU whose DNET is 0xFFFF and that carries a DADR names every device and one device at once (Clauses 6.2.2, 6.3.2). NetworkLayer drops it right after decoding, before APDU or control admission, and counts it in global_broadcast_dadr_drops(), apart from address_length_drops(). A wire test feeds hand-built frames with 1, 6 and 18-octet DADRs, as an APDU and as a network message, fenced by the next frames on each receiver. The router side is under BACNET-6-ROUTER-MESSAGES."
+    "#1379: an inbound NPDU whose DNET is 0xFFFF and that carries a DADR names every device and one device at once (Clauses 6.2.2, 6.3.2). NetworkLayer drops it right after decoding, before APDU or control admission, and counts it in global_broadcast_dadr_drops(), apart from address_length_drops(). A wire test feeds hand-built frames with 1, 6 and 18-octet DADRs, as an APDU and as a network message, fenced by the next frames on each receiver. The router side is under BACNET-6-ROUTER-MESSAGES.",
+    "#1479: Clause 6.3 keeps local, remote and global broadcast network addresses for Unconfirmed-Request PDUs. NetworkLayer refuses any other PDU type, named in the Error::Encoding, before encoding or sending, in broadcast_apdu, broadcast_global_apdu and broadcast_to_network and in a routed or on-issuance send with no DADR. The _via_local_broadcast forms refuse an empty DADR for every PDU type and point to broadcast_to_network. Sends naming one device keep every PDU type, including the routed form whose link DA is the broadcast MAC. Wire tests cover each form with a Confirmed-Request, SimpleACK, ComplexACK, SegmentACK, Error, Reject, Abort, a reserved type and an empty APDU, and show an Unconfirmed-Request still sent.",
+    "#1479: a send with no DNET to a MAC that reaches a group of nodes is a local broadcast too. TransportPort::is_group_destination names those MACs: the link's broadcast MAC, and on B/IP the limited broadcast, the configured broadcast IP (unless it is a loopback or the interface address) or an IPv4 multicast address at any port, on B/IPv6 any multicast group; group_destinations gives the same rule as an owned value. is_broadcast_mac keeps its narrower meaning. NetworkLayer::send_apdu doesn't ask the transport on every unicast (the audit route tests hold its post-startup sends free of route callbacks), so BACnetClient refuses a confirmed request to a group destination, including a routed target localized to one, before any transaction state; the endpoint requester refuses one before it registers a transaction, by the rule the egress took at start; and the endpoint egress refuses anything but a valid Unconfirmed-Request to one, as it does for its broadcast destinations."
    ]
   },
   {
@@ -7152,7 +7161,10 @@
     "crates/bacnet-types/src/error.rs::tests::syntax_faults_name_their_reject_reasons",
     "crates/bacnet-encoding/src/apdu/structured_error_tests.rs::formal_members_cut_short_inside_their_frames_are_a_short_buffer",
     "crates/bacnet-encoding/src/constructed/tests/event_notification/cut_short.rs::members_cut_short_are_a_short_buffer",
-    "crates/bacnet-server/src/server/trailing_octet_wire_tests.rs::{delete_object_with_trailing_octets_is_rejected,dcc_with_trailing_octets_is_rejected_and_changes_nothing,reinitialize_device_with_trailing_octets_is_rejected,get_alarm_summary_with_any_octet_is_rejected,confirmed_private_transfer_stays_unrecognized,who_is_and_who_has_with_trailing_octets_are_dropped,a_who_is_with_one_limit_is_dropped,an_i_am_with_trailing_octets_binds_nothing}"
+    "crates/bacnet-server/src/server/trailing_octet_wire_tests.rs::{delete_object_with_trailing_octets_is_rejected,dcc_with_trailing_octets_is_rejected_and_changes_nothing,reinitialize_device_with_trailing_octets_is_rejected,get_alarm_summary_with_any_octet_is_rejected,confirmed_private_transfer_stays_unrecognized,who_is_and_who_has_with_trailing_octets_are_dropped,a_who_is_with_one_limit_is_dropped,a_who_has_with_one_limit_is_dropped,a_high_limit_past_the_highest_instance_is_answered,an_i_am_with_trailing_octets_binds_nothing}",
+    "crates/bacnet-services/src/device_range_tests.rs::{a_low_limit_above_the_high_one_is_refused,separate_limits_make_a_range_only_in_pairs,a_who_has_with_one_limit_or_an_empty_range_is_refused,a_limit_past_the_highest_instance_is_refused_when_sending_only}",
+    "crates/rusty-bacnet/tests/test_device_range.py",
+    "crates/bacnet-cli/src/core/range.rs::tests::{rejects_a_range_with_one_limit,limits_stop_at_the_highest_instance}"
    ],
    "benchmarks": [
     "benchmarks/benches/encoding.rs"
@@ -7174,7 +7186,8 @@
     "A fixed-size application-tagged member (an object identifier, REAL, Double, Date or Time) has its length checked before its contents, as the context ones do, in the service readers and in decode_application_value alike.",
     "A DeviceCommunicationControl, ReinitializeDevice, ConfirmedTextMessage, GetEnrollmentSummary, DeleteObject, AtomicReadFile, AtomicWriteFile, CreateObject or list-service request cut short is rejected the same way.",
     "Refused confirmed requests draw the Reject Error::reject_reason names (TOO_MANY_ARGUMENTS, INVALID_TAG, MISSING_REQUIRED_PARAMETER, INVALID_DATA_ENCODING, PARAMETER_OUT_OF_RANGE, BUFFER_OVERFLOW, OTHER); unconfirmed ones are dropped.",
-    "A GetAlarmSummary carrying any service-request octet is rejected as TOO_MANY_ARGUMENTS. A Who-Is with only one limit, or with octets its limits leave unread, a limit under another tag included, is dropped."
+    "A GetAlarmSummary carrying any service-request octet is rejected as TOO_MANY_ARGUMENTS. A Who-Is with only one limit, or with octets its limits leave unread, a limit under another tag included, is dropped.",
+    "#1483: WhoIsRequest and WhoHasRequest hold their limits as one Option<DeviceInstanceRange>, which holds both limits with the low one no greater than the high one (Clauses 16.9.1.1.1-2, 16.10.1.1.1-2), so neither request can be built with one limit, and the client, Python and CLI send no such request: Python and the CLI refuse one limit, or a low limit above the high one, by name. WhoHasRequest::decode refuses both forms as WhoIsRequest::decode does, and the server drops such a Who-Has without an I-Have, before spawning a task, counting it in DiscoveryCounters::malformed_dropped. The clauses give each limit the range 0 to 4194303: DeviceInstanceRange::new, and so the client, Python and the CLI, refuse a larger one, while both decoders take it as written and the server answers, since some devices send a high limit past the top to mean every device."
    ]
   },
   {

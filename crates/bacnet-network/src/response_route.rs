@@ -76,12 +76,28 @@ pub(crate) fn encode_response_npdu(
     expecting_reply: bool,
     priority: NetworkPriority,
 ) -> Result<BytesMut, Error> {
-    if let Some(destination) = destination {
-        crate::layer::check_destination(
+    check_response_destination(destination)?;
+    encode_checked_response_npdu(apdu, destination, expecting_reply, priority)
+}
+
+/// Refuse a response `destination` on network 0 or 0xFFFF.
+pub(crate) fn check_response_destination(destination: Option<&NpduAddress>) -> Result<(), Error> {
+    match destination {
+        Some(destination) => crate::layer::check_destination(
             destination.network,
             "pass no destination (no DNET) for a local peer",
-        )?;
+        ),
+        None => Ok(()),
     }
+}
+
+/// [`encode_response_npdu`] once [`check_response_destination`] has passed.
+pub(crate) fn encode_checked_response_npdu(
+    apdu: &[u8],
+    destination: Option<&NpduAddress>,
+    expecting_reply: bool,
+    priority: NetworkPriority,
+) -> Result<BytesMut, Error> {
     let npdu = Npdu {
         destination: destination.cloned(),
         expecting_reply,

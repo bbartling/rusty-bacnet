@@ -14,6 +14,7 @@ use super::socket::Bip6Socket;
 use super::vmac_table::VmacTable;
 use super::*;
 use crate::port::ReceivedNpdu;
+use crate::port::TransportPort;
 use crate::udp_metadata::ReceivedDatagram;
 
 /// A ReadProperty confirmed request in an NPDU that expects a reply.
@@ -167,4 +168,33 @@ async fn original_unicast_for_another_vmac_is_dropped() {
         rx.try_recv().is_ok(),
         "the same frame for this VMAC is handed up"
     );
+}
+
+/// #1479: every IPv6 multicast group is a group destination at any port,
+/// the BACnet groups and others such as ff02::1, while `is_broadcast_mac`
+/// keeps to the BACnet groups. The owned rule agrees with the live one.
+#[test]
+fn every_multicast_group_is_a_group_destination() {
+    let transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0xBAC0, None);
+    let owned = transport.group_destinations();
+    let mac = |ip: Ipv6Addr, port: u16| [&ip.octets()[..], &port.to_be_bytes()].concat();
+    for (ip, group) in [
+        (BACNET_IPV6_MULTICAST_LINK_LOCAL, true),
+        ("ff02::1".parse().unwrap(), true),
+        ("ff05::1:3".parse().unwrap(), true),
+        ("fe80::1".parse().unwrap(), false),
+        ("2001:db8::7".parse().unwrap(), false),
+        (Ipv6Addr::LOCALHOST, false),
+    ] {
+        for port in [0xBAC0, 0x1234] {
+            assert_eq!(
+                transport.is_group_destination(&mac(ip, port)),
+                group,
+                "{ip}"
+            );
+            assert_eq!(owned.contains(&mac(ip, port)), group, "{ip}");
+        }
+    }
+    assert!(!transport.is_broadcast_mac(&mac("ff02::1".parse().unwrap(), 0xBAC0)));
+    assert!(!transport.is_group_destination(&[0xFF; 16]));
 }
