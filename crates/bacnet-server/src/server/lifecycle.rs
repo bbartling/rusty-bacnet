@@ -7,7 +7,7 @@ use crate::committed_cov::BackgroundCommit;
 mod period;
 use super::heap_futures::boxed;
 use super::{audit_recipient::spawn_owned, audit_recipient_routes::AuditRoutes};
-pub(super) use period::event_enrollment_period;
+pub(super) use period::{event_enrollment_period, MonotonicClocks};
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Start a server: every public start and build path ends here. The
@@ -55,7 +55,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             warn!("vendor_id is 0 (ASHRAE reserved); set a valid vendor ID for production use");
         }
 
-        let (clock, monotonic_origin) = period::install_database_clocks(&mut db, clock_config);
+        let (clock, monotonic) = period::install_database_clocks(&mut db, clock_config);
         let membership = crate::membership::install_waker(&mut db);
 
         let (network, mut apdu_rx, audit_routes, network_controls) =
@@ -761,8 +761,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let binary_lighting_operation_task = Some(
             super::binary_lighting_lifecycle::spawn_binary_lighting_operation_task(
-                cov_fanout,
-                monotonic_origin,
+                cov_fanout, monotonic,
             ),
         );
 

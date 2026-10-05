@@ -3067,8 +3067,10 @@ Lighting Output's Present_Value and Relinquish_Default take a level from 0.0
 (off) to 100.0 percent. A level above 0.0 and below 1.0 is stored as 1.0, the
 dimmest on level (Clause 12.54.4), so the priority slot, Present_Value,
 Tracking_Value and COV reports all carry 1.0 (#1385). A level below 0.0 or
-above 100.0, NaN included, is refused with VALUE_OUT_OF_RANGE. Tracking_Value
-follows Present_Value, since In_Progress stays IDLE.
+above 100.0, NaN included, is refused with VALUE_OUT_OF_RANGE, except
+Present_Value's warn values -1.0, -2.0 and -3.0 (Table 12-65), which act as
+WARN, WARN_RELINQUISH and WARN_OFF at the write's priority and never enter the
+priority array (#1384).
 
 Lighting Output's `Lighting_Command` holds a `BACnetLightingCommand`
 (`bacnet_types::constructed`): an operation plus an optional target level, ramp
@@ -3094,8 +3096,41 @@ A refused command is VALUE_OUT_OF_RANGE. Any other datatype, an OCTET STRING
 included, is INVALID_DATA_TYPE, and octets that aren't exactly one command are
 INVALID_DATA_ENCODING, even when a field is also too wide for its type. An
 Unsigned or ENUMERATED field may open with zero octets only up to four contents
-octets. The object stores the command without carrying it out: Present_Value,
-Tracking_Value, In_Progress and the priority array stay as they are (#1384).
+octets.
+
+The object carries out each command it takes (#1384), at the command's
+priority or `Lighting_Command_Default_Priority`, and `Lighting_Command` keeps
+reporting it as written. A level it puts in a slot is normalized as a
+commanded Present_Value is, so a FADE_TO 0.5 puts 1.0 in the slot.
+
+- FADE_TO and RAMP_TO put the target level in the slot. When that slot is then
+  the highest in use, Tracking_Value moves in a straight line from where it
+  stood to the level, over the fade time (or `Default_Fade_Time`) or at the
+  ramp rate (or `Default_Ramp_Rate`), and In_Progress reads FADE_ACTIVE or
+  RAMP_ACTIVE until it arrives.
+- The step operations put Tracking_Value plus or minus the step increment (or
+  `Default_Step_Increment`) in the slot, kept within 1.0 to 100.0. STEP_UP and
+  STEP_DOWN do nothing while off; STEP_ON turns off into 1.0, STEP_OFF turns
+  1.0 into off.
+- With `Blink_Warn_Enable` FALSE (the default) the warn operations act at once:
+  WARN changes nothing, WARN_RELINQUISH relinquishes the slot and WARN_OFF
+  writes 0.0 to it. With it TRUE they blink and, where the table's conditions
+  call for one, hold the level for `Egress_Time` seconds with `Egress_Active`
+  TRUE before relinquishing the slot or writing 0.0.
+- STOP ends a fade or ramp at its priority with Tracking_Value in the slot, or
+  cancels an egress timer there; elsewhere it is ignored.
+- A command other than STOP, or a Present_Value write, at the priority of the
+  command in progress or a higher one halts it (Clause 12.54.6.1): a fade or
+  ramp stops with its slot as it is, and an egress takes effect at once.
+- A proprietary operation is stored and does nothing else.
+
+Fades, ramps and egress timers run on the server's monotonic task, which a
+write that starts one wakes. Tracking_Value is worked out from the clock when
+read. While it moves, the task samples it for COV each time it has moved by
+`COV_Increment` (1.0 percent while that is 0.0), on a 100 ms grid shared by
+every object, and once more when it arrives; Table 13-1 reports Present_Value
+and Status_Flags, so a SubscribeCOV hears a fade once, when its level goes in,
+and a SubscribeCOVProperty of Tracking_Value hears it move.
 
 Color and Color Temperature (Addendum 135-2020ca) hold their `Color_Command`
 as a `BACnetColorCommand` (`bacnet_types::constructed`): a `ColorOperation`

@@ -36,8 +36,8 @@ use bacnet_objects::property_metadata::{
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
-    BACnetObject, CovReportedProperty, LifeSafetyOperationEffect, LifeSafetyOperationOutcome,
-    MonotonicClock, ReliabilityEvaluation,
+    BACnetObject, CovReportedProperty, DeadlineWaker, LifeSafetyOperationEffect,
+    LifeSafetyOperationOutcome, MonotonicClock, ReliabilityEvaluation,
 };
 use bacnet_objects::trend::TrendLogObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
@@ -265,6 +265,10 @@ impl BACnetObject for Probe {
         let clock = clock.as_deref().map(address);
         self.called("bind_monotonic_clock_internal", (clock,));
     }
+    fn bind_deadline_waker_internal(&mut self, waker: Option<Arc<DeadlineWaker>>) {
+        let waker = waker.as_deref().map(address);
+        self.called("bind_deadline_waker_internal", (waker,));
+    }
     fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
         self.called("advance_monotonic_time_internal", (now,));
         true
@@ -279,8 +283,8 @@ impl BACnetObject for Probe {
             AuditReporterObject::new(18, "Probe snapshot").unwrap(),
         ))
     }
-    fn binary_lighting_blink_count_internal(&self) -> u64 {
-        self.called("binary_lighting_blink_count_internal", ());
+    fn lighting_blink_count_internal(&self) -> u64 {
+        self.called("lighting_blink_count_internal", ());
         123
     }
     fn is_writable_property(&self, property: P) -> bool {

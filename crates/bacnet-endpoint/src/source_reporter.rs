@@ -25,7 +25,7 @@ use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::schedule::{ScheduleTargetOutcome, ScheduleWrite};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_objects::traits::{
-    BACnetObject, CovReportedProperty, LifeSafetyOperationOutcome, MonotonicClock,
+    BACnetObject, CovReportedProperty, DeadlineWaker, LifeSafetyOperationOutcome, MonotonicClock,
     ReliabilityEvaluation,
 };
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter, EventTransitionBits};
@@ -200,6 +200,10 @@ impl BACnetObject for SourceReporter {
         self.wrapped.bind_monotonic_clock_internal(clock)
     }
 
+    fn bind_deadline_waker_internal(&mut self, waker: Option<Arc<DeadlineWaker>>) {
+        self.wrapped.bind_deadline_waker_internal(waker)
+    }
+
     fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
         self.wrapped.advance_monotonic_time_internal(now)
     }
@@ -212,8 +216,8 @@ impl BACnetObject for SourceReporter {
         self.wrapped.cov_snapshot_internal()
     }
 
-    fn binary_lighting_blink_count_internal(&self) -> u64 {
-        self.wrapped.binary_lighting_blink_count_internal()
+    fn lighting_blink_count_internal(&self) -> u64 {
+        self.wrapped.lighting_blink_count_internal()
     }
 
     fn is_writable_property(&self, property: PropertyIdentifier) -> bool {

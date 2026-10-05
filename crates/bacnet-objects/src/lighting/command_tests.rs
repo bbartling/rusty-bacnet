@@ -55,16 +55,23 @@ fn lighting_output_lighting_command_starts_at_none_and_serves_what_was_written()
         lo.read_property(LC, None).unwrap(),
         octets(&[0x09, 0x0A, 0x59, 0x03])
     );
-    // The object stores commands without carrying them out.
+    // The FADE_TO was carried out at priority 8 (#1384). With no clock bound
+    // its fade waits on logical time, so it is still running, and the STOP
+    // at priority 3 had nothing there to stop.
     assert_eq!(
         lo.read_property(PropertyIdentifier::PRESENT_VALUE, None)
             .unwrap(),
-        PropertyValue::Real(0.0)
+        PropertyValue::Real(50.0)
+    );
+    assert_eq!(
+        lo.read_property(PropertyIdentifier::PRIORITY_ARRAY, Some(8))
+            .unwrap(),
+        PropertyValue::Real(50.0)
     );
     assert_eq!(
         lo.read_property(PropertyIdentifier::IN_PROGRESS, None)
             .unwrap(),
-        PropertyValue::Enumerated(0)
+        PropertyValue::Enumerated(1)
     );
 }
 

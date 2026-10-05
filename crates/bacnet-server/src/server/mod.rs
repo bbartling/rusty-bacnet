@@ -782,6 +782,8 @@ mod life_safety_operation_tests;
 #[cfg(test)]
 mod lighting_command_member_tests;
 #[cfg(test)]
+mod lighting_engine_task_tests;
+#[cfg(test)]
 mod lighting_present_value_tests;
 #[cfg(test)]
 mod list_element_event_tests;

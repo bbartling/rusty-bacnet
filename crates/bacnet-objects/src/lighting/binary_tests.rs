@@ -70,7 +70,7 @@ fn startup_and_all_reads_contain_only_steady_values() {
         read(&object, PropertyIdentifier::EGRESS_ACTIVE),
         PropertyValue::Boolean(false)
     );
-    assert_eq!(object.binary_lighting_blink_count_internal(), 0);
+    assert_eq!(object.lighting_blink_count_internal(), 0);
 
     set_blink(&mut object, true);
     for operation in 2..=5 {
@@ -112,7 +112,7 @@ fn warn_requests_blink_only_for_existing_highest_on_slot() {
 
     write(&mut object, PropertyValue::Enumerated(ON), 8);
     write(&mut object, PropertyValue::Enumerated(2), 8);
-    assert_eq!(object.binary_lighting_blink_count_internal(), 1);
+    assert_eq!(object.lighting_blink_count_internal(), 1);
     assert_eq!(slot(&object, 8), PropertyValue::Enumerated(ON));
     assert_eq!(
         read(&object, PropertyIdentifier::EGRESS_ACTIVE),
@@ -124,14 +124,14 @@ fn warn_requests_blink_only_for_existing_highest_on_slot() {
     }
     set_blink(&mut object, false);
     write(&mut object, PropertyValue::Enumerated(2), 8);
-    assert_eq!(object.binary_lighting_blink_count_internal(), 1);
+    assert_eq!(object.lighting_blink_count_internal(), 1);
     assert_eq!(slot(&object, 8), PropertyValue::Enumerated(ON));
 }
 
 #[test]
 fn warn_off_arms_snapshotted_delay_and_expires_exactly_once() {
     let mut object = armed_warn_off(5);
-    assert_eq!(object.binary_lighting_blink_count_internal(), 1);
+    assert_eq!(object.lighting_blink_count_internal(), 1);
     assert_eq!(slot(&object, 8), PropertyValue::Enumerated(ON));
     assert_eq!(
         read(&object, PropertyIdentifier::PRESENT_VALUE),
@@ -179,14 +179,14 @@ fn warn_off_immediate_paths_and_zero_duration_do_not_leave_active_egress() {
             read(&object, PropertyIdentifier::EGRESS_ACTIVE),
             PropertyValue::Boolean(false)
         );
-        assert_eq!(object.binary_lighting_blink_count_internal(), 0);
+        assert_eq!(object.lighting_blink_count_internal(), 0);
     }
 
     let mut zero = BinaryLightingOutputObject::new(1, "zero").unwrap();
     set_blink(&mut zero, true);
     write(&mut zero, PropertyValue::Enumerated(ON), 8);
     write(&mut zero, PropertyValue::Enumerated(3), 8);
-    assert_eq!(zero.binary_lighting_blink_count_internal(), 1);
+    assert_eq!(zero.lighting_blink_count_internal(), 1);
     assert_eq!(slot(&zero, 8), PropertyValue::Enumerated(OFF));
     assert_eq!(
         read(&zero, PropertyIdentifier::EGRESS_ACTIVE),
@@ -201,7 +201,7 @@ fn warn_relinquish_arms_only_when_the_next_effective_value_is_not_on() {
     set_egress(&mut eligible, 3);
     write(&mut eligible, PropertyValue::Enumerated(ON), 8);
     write(&mut eligible, PropertyValue::Enumerated(4), 8);
-    assert_eq!(eligible.binary_lighting_blink_count_internal(), 1);
+    assert_eq!(eligible.lighting_blink_count_internal(), 1);
     assert_eq!(slot(&eligible, 8), PropertyValue::Enumerated(ON));
     assert!(!eligible.advance_time_internal(Duration::from_millis(2_999)));
     assert!(eligible.advance_time_internal(Duration::from_millis(1)));
@@ -217,7 +217,7 @@ fn warn_relinquish_arms_only_when_the_next_effective_value_is_not_on() {
     write(&mut next_on, PropertyValue::Enumerated(ON), 10);
     write(&mut next_on, PropertyValue::Enumerated(ON), 8);
     write(&mut next_on, PropertyValue::Enumerated(4), 8);
-    assert_eq!(next_on.binary_lighting_blink_count_internal(), 0);
+    assert_eq!(next_on.lighting_blink_count_internal(), 0);
     assert_eq!(slot(&next_on, 8), PropertyValue::Null);
     assert_eq!(
         read(&next_on, PropertyIdentifier::PRESENT_VALUE),
@@ -251,7 +251,7 @@ fn warn_relinquish_not_highest_and_zero_duration_take_immediate_paths() {
     write(&mut not_highest, PropertyValue::Enumerated(ON), 4);
     write(&mut not_highest, PropertyValue::Enumerated(4), 8);
     assert_eq!(slot(&not_highest, 8), PropertyValue::Null);
-    assert_eq!(not_highest.binary_lighting_blink_count_internal(), 0);
+    assert_eq!(not_highest.lighting_blink_count_internal(), 0);
     assert_eq!(
         read(&not_highest, PropertyIdentifier::EGRESS_ACTIVE),
         PropertyValue::Boolean(false)
@@ -261,7 +261,7 @@ fn warn_relinquish_not_highest_and_zero_duration_take_immediate_paths() {
     set_blink(&mut zero, true);
     write(&mut zero, PropertyValue::Enumerated(ON), 8);
     write(&mut zero, PropertyValue::Enumerated(4), 8);
-    assert_eq!(zero.binary_lighting_blink_count_internal(), 1);
+    assert_eq!(zero.lighting_blink_count_internal(), 1);
     assert_eq!(slot(&zero, 8), PropertyValue::Null);
     assert_eq!(
         read(&zero, PropertyIdentifier::EGRESS_ACTIVE),
@@ -357,7 +357,7 @@ fn lower_and_repeated_special_commands_cannot_create_a_second_timer() {
     write(&mut lower, PropertyValue::Enumerated(3), 10);
     assert_eq!(slot(&lower, 10), PropertyValue::Enumerated(OFF));
     assert_eq!(lower.active_operation.unwrap().priority, 8);
-    assert_eq!(lower.binary_lighting_blink_count_internal(), 1);
+    assert_eq!(lower.lighting_blink_count_internal(), 1);
 
     let mut repeated = armed_warn_off(5);
     write(&mut repeated, PropertyValue::Enumerated(3), 8);
@@ -366,7 +366,7 @@ fn lower_and_repeated_special_commands_cannot_create_a_second_timer() {
         read(&repeated, PropertyIdentifier::EGRESS_ACTIVE),
         PropertyValue::Boolean(false)
     );
-    assert_eq!(repeated.binary_lighting_blink_count_internal(), 1);
+    assert_eq!(repeated.lighting_blink_count_internal(), 1);
 
     let mut repeated_relinquish = BinaryLightingOutputObject::new(2, "repeat-wr").unwrap();
     set_blink(&mut repeated_relinquish, true);
@@ -379,16 +379,13 @@ fn lower_and_repeated_special_commands_cannot_create_a_second_timer() {
         read(&repeated_relinquish, PropertyIdentifier::EGRESS_ACTIVE),
         PropertyValue::Boolean(false)
     );
-    assert_eq!(
-        repeated_relinquish.binary_lighting_blink_count_internal(),
-        1
-    );
+    assert_eq!(repeated_relinquish.lighting_blink_count_internal(), 1);
 }
 
 #[test]
 fn invalid_commands_are_side_effect_free_before_halt() {
     let mut object = armed_warn_off(5);
-    let before_count = object.binary_lighting_blink_count_internal();
+    let before_count = object.lighting_blink_count_internal();
     for (value, priority, expected) in [
         (
             PropertyValue::Enumerated(6),
@@ -415,7 +412,7 @@ fn invalid_commands_are_side_effect_free_before_halt() {
             read(&object, PropertyIdentifier::EGRESS_ACTIVE),
             PropertyValue::Boolean(true)
         );
-        assert_eq!(object.binary_lighting_blink_count_internal(), before_count);
+        assert_eq!(object.lighting_blink_count_internal(), before_count);
     }
     assert_property_error(
         object
@@ -553,7 +550,7 @@ fn rejected_command_preserves_operation_remaining_time_and_blink_observation() {
         )
         .is_err());
     assert_eq!(slot(&object, 4), PropertyValue::Null);
-    assert_eq!(object.binary_lighting_blink_count_internal(), 1);
+    assert_eq!(object.lighting_blink_count_internal(), 1);
     assert_eq!(slot(&object, 8), PropertyValue::Enumerated(ON));
     assert_eq!(
         read(&object, PropertyIdentifier::EGRESS_ACTIVE),

@@ -6,9 +6,11 @@ use bacnet_types::enums::{LightingOperation, ObjectType, PropertyIdentifier, Rel
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use std::borrow::Cow;
+use std::sync::Arc;
+use std::time::Duration;
 
-use crate::common::{self, read_common_properties, read_priority_array, write_priority_array};
-use crate::traits::BACnetObject;
+use crate::common::{self, read_common_properties, read_priority_array};
+use crate::traits::{BACnetObject, DeadlineWaker, MonotonicClock};
 
 // ---------------------------------------------------------------------------
 // LightingOutput (type 54)
@@ -20,27 +22,36 @@ use crate::traits::BACnetObject;
 /// floating-point present-value (0.0 to 100.0 percent). A commanded level
 /// above 0.0 and below 1.0 is stored as 1.0, and so is such a
 /// Relinquish_Default (see [`set_relinquish_default`](Self::set_relinquish_default)).
-/// Tracking_Value follows Present_Value, since In_Progress stays IDLE.
 ///
 /// Lighting_Command takes a [`BACnetLightingCommand`] checked against its
-/// operation (see [`set_lighting_command`](Self::set_lighting_command)) and
-/// serves the last one taken. The object doesn't carry commands out: a
-/// command leaves Present_Value, Tracking_Value, In_Progress and the
-/// priority array as they are.
+/// operation (see [`set_lighting_command`](Self::set_lighting_command)),
+/// serves the last one taken and carries it out (#1384): fades and ramps move
+/// Tracking_Value to a new level over time with In_Progress showing which,
+/// steps change the level at once, and the warn operations blink and hold
+/// the level for Egress_Time before relinquishing or turning it off.
+/// Present_Value takes the blink-warn values -1.0, -2.0 and -3.0 as the
+/// three warn commands. Tracking_Value equals Present_Value whenever no fade
+/// or ramp is moving it.
+///
+/// Fades, ramps and egress timers run on the monotonic clock the database
+/// binds; the server's monotonic task advances them and fans their COV out.
+/// With no clock bound they wait on `advance_time_internal`.
+#[derive(Clone)]
 pub struct LightingOutputObject {
     oid: ObjectIdentifier,
     name: String,
     description: String,
     present_value: f32,
-    tracking_value: f32,
     /// The last command written; operation NONE until then.
     lighting_command: BACnetLightingCommand,
     lighting_command_default_priority: u32,
-    /// LightingInProgress enumeration: 0=idle, 1=fade-active, 2=ramp-active, 3=not-controlled, etc.
-    in_progress: u32,
+    /// The fade, ramp or egress in progress, if any.
+    operation: Option<engine::Operation>,
+    /// Blink-warn notifications requested so far, for tests to observe.
+    blink_request_count: u64,
     blink_warn_enable: bool,
+    /// Egress_Time in seconds.
     egress_time: u32,
-    egress_active: bool,
     /// Default_Fade_Time in milliseconds, within 100..=86_400_000.
     default_fade_time: u32,
     /// Default_Ramp_Rate in percent per second, within 0.1..=100.0.
@@ -55,6 +66,10 @@ pub struct LightingOutputObject {
     reliability: Reliability,
     priority_array: [Option<f32>; 16],
     relinquish_default: f32,
+    monotonic_clock: Option<Arc<MonotonicClock>>,
+    deadline_waker: Option<Arc<DeadlineWaker>>,
+    /// The time an object with no clock bound has been advanced to.
+    logical_now: Duration,
 }
 
 impl LightingOutputObject {
@@ -66,13 +81,12 @@ impl LightingOutputObject {
             name: name.into(),
             description: String::new(),
             present_value: 0.0,
-            tracking_value: 0.0,
             lighting_command: BACnetLightingCommand::new(LightingOperation::NONE),
             lighting_command_default_priority: 16,
-            in_progress: 0, // idle
+            operation: None,
+            blink_request_count: 0,
             blink_warn_enable: false,
             egress_time: 0,
-            egress_active: false,
             default_fade_time: *DEFAULT_FADE_TIME_MS.start(),
             default_ramp_rate: 100.0,
             default_step_increment: 1.0,
@@ -82,6 +96,9 @@ impl LightingOutputObject {
             reliability: Reliability::NO_FAULT_DETECTED,
             priority_array: [None; 16],
             relinquish_default: 0.0,
+            monotonic_clock: None,
+            deadline_waker: None,
+            logical_now: Duration::ZERO,
         })
     }
 
@@ -92,13 +109,13 @@ impl LightingOutputObject {
 
     /// Recalculate present-value from the priority array.
     ///
-    /// Tracking_Value moves with it: the object runs no fade or ramp, so
-    /// In_Progress stays IDLE, and while it is IDLE the two are equal
-    /// (Clause 12.54.5).
+    /// Tracking_Value isn't stored: it reads as Present_Value while
+    /// In_Progress is IDLE and as the fade or ramp's current value while one
+    /// runs (Clause 12.54.5), so a new Present_Value shows in it only once
+    /// nothing is moving it.
     fn recalculate_present_value(&mut self) {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);
-        self.tracking_value = self.present_value;
     }
 
     /// Set the Relinquish_Default (#270).
@@ -121,7 +138,8 @@ impl LightingOutputObject {
         self.lighting_command
     }
 
-    /// Set Lighting_Command, as a WriteProperty of the encoded command would.
+    /// Set Lighting_Command and carry the command out, as a WriteProperty of
+    /// the encoded command would.
     ///
     /// The command is checked against its operation (Clause 12.54, Table
     /// 12-67). NONE, a reserved operation (11 to 255) and anything past
@@ -130,11 +148,25 @@ impl LightingOutputObject {
     /// time 100 to 86,400,000 ms, ramp rate and step increment 0.1 to 100.0,
     /// priority 1 to 16. Fields it doesn't use are kept unchecked, and a
     /// proprietary operation (256 to 65,535) has only its priority checked. A
-    /// refusal is VALUE_OUT_OF_RANGE and leaves the property unchanged.
+    /// refusal is VALUE_OUT_OF_RANGE and leaves the object unchanged.
+    ///
+    /// A command taken is stored as written and carried out at its priority,
+    /// or at Lighting_Command_Default_Priority when it has none. A level it
+    /// puts in a priority slot is normalized as a commanded Present_Value is
+    /// (Clause 12.54.4), so a FADE_TO 0.5 fades to 1.0 while Lighting_Command
+    /// still reads 0.5. A proprietary operation is stored and does nothing
+    /// else.
     pub fn set_lighting_command(&mut self, command: BACnetLightingCommand) -> Result<(), Error> {
         command::check(&command)?;
-        self.lighting_command = command;
+        self.take_lighting_command(command);
         Ok(())
+    }
+
+    /// Store a checked command and carry it out now.
+    fn take_lighting_command(&mut self, command: BACnetLightingCommand) {
+        self.lighting_command = command;
+        let now = self.now();
+        self.execute(&command, now);
     }
 
     /// Set Default_Fade_Time, the milliseconds a fade request without its own
@@ -182,9 +214,9 @@ impl LightingOutputObject {
 /// strictly between 0.0 and 1.0. Clause 12.54.4 has a Present_Value write in
 /// that gap taken as 1.0, so such a level comes back as 1.0. 0.0 and levels
 /// from 1.0 to 100.0 come back unchanged. A level below 0.0 or above 100.0,
-/// NaN included, is VALUE_OUT_OF_RANGE. The blink-warn values -1.0 to -3.0
-/// are refused here with the rest until #1384 carries them out. -0.0 is off,
-/// so it comes back as 0.0 rather than keeping its sign on the wire.
+/// NaN included, is VALUE_OUT_OF_RANGE; a Present_Value write tells the
+/// blink-warn values -1.0 to -3.0 apart before it gets here. -0.0 is off, so
+/// it comes back as 0.0 rather than keeping its sign on the wire.
 fn normalized_level(value: f32) -> Result<f32, Error> {
     if !(0.0..=100.0).contains(&value) {
         return Err(common::value_out_of_range_error());
@@ -237,7 +269,7 @@ impl BACnetObject for LightingOutputObject {
                 Ok(PropertyValue::Real(self.present_value))
             }
             p if p == PropertyIdentifier::TRACKING_VALUE => {
-                Ok(PropertyValue::Real(self.tracking_value))
+                Ok(PropertyValue::Real(self.tracking_value_at(self.now())))
             }
             p if p == PropertyIdentifier::LIGHTING_COMMAND => {
                 Ok(command::encode(&self.lighting_command))
@@ -245,9 +277,9 @@ impl BACnetObject for LightingOutputObject {
             p if p == PropertyIdentifier::LIGHTING_COMMAND_DEFAULT_PRIORITY => Ok(
                 PropertyValue::Unsigned(self.lighting_command_default_priority as u64),
             ),
-            p if p == PropertyIdentifier::IN_PROGRESS => {
-                Ok(PropertyValue::Enumerated(self.in_progress))
-            }
+            p if p == PropertyIdentifier::IN_PROGRESS => Ok(PropertyValue::Enumerated(
+                self.in_progress_at(self.now()).to_raw(),
+            )),
             p if p == PropertyIdentifier::BLINK_WARN_ENABLE => {
                 Ok(PropertyValue::Boolean(self.blink_warn_enable))
             }
@@ -255,7 +287,7 @@ impl BACnetObject for LightingOutputObject {
                 Ok(PropertyValue::Unsigned(self.egress_time as u64))
             }
             p if p == PropertyIdentifier::EGRESS_ACTIVE => {
-                Ok(PropertyValue::Boolean(self.egress_active))
+                Ok(PropertyValue::Boolean(self.egress_active()))
             }
             p if p == PropertyIdentifier::PRIORITY_ARRAY => {
                 read_priority_array!(self, array_index, PropertyValue::Real)
@@ -289,23 +321,26 @@ impl BACnetObject for LightingOutputObject {
         value: PropertyValue,
         priority: Option<u8>,
     ) -> Result<(), Error> {
-        // Commands update priority slots only through Present_Value. The
-        // level is normalized before it reaches the slot, so the slot,
+        // A level is normalized before it reaches the slot, so the slot,
         // Present_Value, Tracking_Value and a COV report all see 1.0 for a
-        // write between 0.0 and 1.0.
+        // write between 0.0 and 1.0. -1.0, -2.0 and -3.0 are the warn
+        // commands (Table 12-65) and never reach a slot themselves.
         if property == PropertyIdentifier::PRESENT_VALUE {
-            return write_priority_array!(self, value, priority, |v| {
-                match v {
-                    PropertyValue::Real(f) => normalized_level(f),
-                    _ => Err(common::invalid_data_type_error()),
-                }
-            });
+            let priority = priority.unwrap_or(16);
+            if !(1..=16).contains(&priority) {
+                return Err(common::value_out_of_range_error());
+            }
+            let write = engine::PresentValueWrite::decode(value)?;
+            let now = self.now();
+            self.write_present_value(priority, write, now);
+            return Ok(());
         }
 
         // LIGHTING_COMMAND: a BACnetLightingCommand, checked against its
-        // operation.
+        // operation, then carried out.
         if property == PropertyIdentifier::LIGHTING_COMMAND {
-            self.lighting_command = command::decode_write(value)?;
+            let command = command::decode_write(value)?;
+            self.take_lighting_command(command);
             return Ok(());
         }
 
@@ -405,10 +440,47 @@ impl BACnetObject for LightingOutputObject {
     fn supports_cov(&self) -> bool {
         true
     }
+
+    fn advance_time_internal(&mut self, elapsed: Duration) -> bool {
+        self.logical_now = self.logical_now.saturating_add(elapsed);
+        self.advance_to(self.logical_now)
+    }
+
+    fn bind_monotonic_clock_internal(&mut self, clock: Option<Arc<MonotonicClock>>) {
+        self.monotonic_clock = clock;
+    }
+
+    fn bind_deadline_waker_internal(&mut self, waker: Option<Arc<DeadlineWaker>>) {
+        self.deadline_waker = waker;
+    }
+
+    fn advance_monotonic_time_internal(&mut self, now: Duration) -> bool {
+        self.advance_to(now)
+    }
+
+    fn next_monotonic_deadline_internal(&self) -> Option<Duration> {
+        self.next_deadline()
+    }
+
+    /// A copy that reads as the object does now: its clock stops at this
+    /// instant, so a fade's Tracking_Value in a COV report is the value at
+    /// the moment the report was taken.
+    fn cov_snapshot_internal(&self) -> Option<Box<dyn BACnetObject>> {
+        let mut snapshot = self.clone();
+        snapshot.logical_now = self.now();
+        snapshot.monotonic_clock = None;
+        snapshot.deadline_waker = None;
+        Some(Box::new(snapshot))
+    }
+
+    fn lighting_blink_count_internal(&self) -> u64 {
+        self.blink_request_count
+    }
 }
 
 mod binary;
 mod command;
+mod engine;
 mod metadata;
 pub use binary::BinaryLightingOutputObject;
 
@@ -427,3 +499,9 @@ mod command_tests;
 
 #[cfg(test)]
 mod present_value_tests;
+
+#[cfg(test)]
+mod engine_tests;
+
+#[cfg(test)]
+mod warn_tests;

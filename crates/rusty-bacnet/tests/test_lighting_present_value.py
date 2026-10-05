@@ -3,8 +3,8 @@
 A level above 0.0 and below 1.0, written locally or over the network, is
 stored as 1.0: Present_Value, the priority slot and Tracking_Value all read
 1.0. 0.0 and 1.0 to 100.0 are stored as written, and a level outside 0.0 to
-100.0 is refused with VALUE_OUT_OF_RANGE. A Relinquish_Default in the same
-gap is stored as 1.0 too.
+100.0 is refused with VALUE_OUT_OF_RANGE, but for the warn values -1.0, -2.0
+and -3.0 (#1384). A Relinquish_Default in the same gap is stored as 1.0 too.
 """
 
 from __future__ import annotations
@@ -114,7 +114,8 @@ class LightingPresentValueTests(unittest.IsolatedAsyncioTestCase):
         await self.server.write_property_local(
             LO, PV, PropertyValue.real(0.5), priority=8, source_object=None
         )
-        for level in (-JUST_ABOVE_OFF, -1.0, 100.5):
+        # -1.0, -2.0 and -3.0 are the warn commands (#1384); -1.5 is no value.
+        for level in (-JUST_ABOVE_OFF, -1.5, 100.5):
             with self.subTest(level=level):
                 value = PropertyValue.real(level)
                 with self.assertRaises(BacnetProtocolError) as network:
