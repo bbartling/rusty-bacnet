@@ -195,6 +195,42 @@ pub(crate) fn decode(
 }
 
 impl Element {
+    /// Every element production, each once; a new one goes here too, so
+    /// that [`Self::from_tag`] knows it.
+    const ALL: [Self; 21] = [
+        Self::Destination,
+        Self::PortPermission,
+        Self::ReadAccessSpecification,
+        Self::ReadAccessResult,
+        Self::ActionList,
+        Self::DeviceObjectReference,
+        Self::AuthenticationFactorFormat,
+        Self::StageLimitValue,
+        Self::AccessRule,
+        Self::DeviceObjectPropertyReference,
+        Self::PropertyAccessResult,
+        Self::Recipient,
+        Self::DailySchedule,
+        Self::SpecialEvent,
+        Self::CalendarEntry,
+        Self::DateRange,
+        Self::TimeStamp,
+        Self::CovSubscription,
+        Self::ValueSource,
+        Self::Scale,
+        Self::Prescale,
+    ];
+
+    /// The element whose [`Self::tag`] is `tag`.
+    pub(crate) fn from_tag(tag: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|element| element.tag() == tag)
+    }
+
+    /// Whether `octets` are exactly one element of this production.
+    pub(crate) fn is_one(self, octets: &[u8]) -> bool {
+        self.split(octets).is_some_and(|ends| ends.len() == 1)
+    }
+
     /// The `PropertyValue.tag` of one element.
     pub(crate) fn tag(self) -> &'static str {
         match self {

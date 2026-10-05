@@ -91,7 +91,7 @@ fn device_range(
 /// SC credential paths must be nonempty at construction (ValueError otherwise).
 /// Files are loaded on async entry; invalid TLS configuration raises RuntimeError
 /// before dialing. No system trust or unauthenticated-client fallback is used.
-#[pyclass(name = "BACnetClient")]
+#[pyclass(name = "BACnetClient", module = "rusty_bacnet")]
 pub struct BACnetClient {
     inner: ClientInner,
     transport_type: String,

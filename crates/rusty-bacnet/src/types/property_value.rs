@@ -1,4 +1,8 @@
+use pyo3::types::PyTuple;
+
 use super::constructed_read::Element;
+use super::date::{date_from_value, date_value};
+use super::timestamp::time_value;
 use super::*;
 
 // ---------------------------------------------------------------------------
@@ -17,7 +21,15 @@ use super::*;
 /// ```
 ///
 /// Read results with `.value` (native Python type) and `.tag` (type name).
-#[pyclass(name = "PropertyValue", frozen, from_py_object)]
+///
+/// `copy` and `pickle` rebuild a value through the constructor its `tag`
+/// names (#1500); see `__reduce__`.
+#[pyclass(
+    name = "PropertyValue",
+    module = "rusty_bacnet",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PyPropertyValue {
     /// The value as it travels: what a write of this value encodes.
@@ -79,14 +91,8 @@ fn property_value_to_py(py: Python<'_>, value: &primitives::PropertyValue) -> Py
             dict.set_item("data", PyBytes::new(py, data))?;
             dict.into_any().unbind()
         }
-        primitives::PropertyValue::Date(d) => (d.year, d.month, d.day, d.day_of_week)
-            .into_pyobject(py)?
-            .into_any()
-            .unbind(),
-        primitives::PropertyValue::Time(t) => (t.hour, t.minute, t.second, t.hundredths)
-            .into_pyobject(py)?
-            .into_any()
-            .unbind(),
+        primitives::PropertyValue::Date(d) => date_value(d).into_pyobject(py)?.into_any().unbind(),
+        primitives::PropertyValue::Time(t) => time_value(t).into_pyobject(py)?.into_any().unbind(),
         primitives::PropertyValue::List(elements) => {
             let list = pyo3::types::PyList::empty(py);
             for elem in elements {
@@ -154,20 +160,18 @@ impl PyPropertyValue {
         Self::from_rust(primitives::PropertyValue::ObjectIdentifier(oid.to_rust()))
     }
 
-    /// Create a Date property value.
+    /// Create a Date property value, in the form `.value` reads it back.
     ///
-    /// `year` is the full year (e.g. 2026; 255 for unspecified encodes as 0xFF internally).
+    /// `year` is the full year, 1900..=2154, or 255 for unspecified; any
+    /// other year raises ValueError (#1501).
     /// `month` is 1-12 (or 255 for unspecified).
     /// `day` is 1-31 (or 255 for unspecified).
     /// `day_of_week` is 1=Monday..7=Sunday (or 255 for unspecified).
     #[staticmethod]
-    fn date(year: u16, month: u8, day: u8, day_of_week: u8) -> Self {
-        Self::from_rust(primitives::PropertyValue::Date(primitives::Date {
-            year: year.saturating_sub(1900) as u8,
-            month,
-            day,
-            day_of_week,
-        }))
+    fn date(year: u16, month: u8, day: u8, day_of_week: u8) -> PyResult<Self> {
+        Ok(Self::from_rust(primitives::PropertyValue::Date(
+            date_from_value((year, month, day, day_of_week))?,
+        )))
     }
 
     /// Create a Time property value.
@@ -290,6 +294,89 @@ impl PyPropertyValue {
         self.element.hash(&mut h);
         h.finish()
     }
+
+    /// What `copy` and `pickle` call (#1500): the constructor `tag` names
+    /// and its arguments, taken from the value as stored, so the copy is
+    /// equal. A list passes its items as PropertyValues, keeping each one's
+    /// tag, where `.value` would give `real` and `double` alike as a float.
+    /// A typed constructed element (#1310) rebuilds from its octets as read
+    /// through `_typed_element`: `.value` is decoded from those octets and
+    /// needn't encode back to them.
+    fn __reduce__<'py>(
+        slf: &Bound<'py, Self>,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> {
+        use primitives::PropertyValue as V;
+        let py = slf.py();
+        let this = slf.get();
+        let constructor = match (&this.inner, this.element) {
+            (V::ApplicationData(_), Some(_)) => "_typed_element",
+            (inner, _) => tag(inner),
+        };
+        let arguments = match (&this.inner, this.element) {
+            (V::ApplicationData(octets), Some(element)) => {
+                (element.tag(), PyBytes::new(py, octets)).into_pyobject(py)?
+            }
+            (V::List(items), element) => {
+                // A typed collection's items are all typed elements.
+                let items: Vec<Self> = items
+                    .iter()
+                    .map(|item| match (item, element) {
+                        (V::ApplicationData(_), Some(element)) => {
+                            Self::constructed(item.clone(), element)
+                        }
+                        _ => Self::from_rust(item.clone()),
+                    })
+                    .collect();
+                (items,).into_pyobject(py)?
+            }
+            (V::Null, _) => PyTuple::empty(py),
+            (V::Boolean(value), _) => (*value,).into_pyobject(py)?,
+            (V::Unsigned(value), _) => (*value,).into_pyobject(py)?,
+            (V::Signed(value), _) => (*value,).into_pyobject(py)?,
+            (V::Real(value), _) => (f64::from(*value),).into_pyobject(py)?,
+            (V::Double(value), _) => (*value,).into_pyobject(py)?,
+            (V::CharacterString(value), _) => (value.as_str(),).into_pyobject(py)?,
+            (V::Enumerated(value), _) => (*value,).into_pyobject(py)?,
+            (V::OctetString(octets) | V::ApplicationData(octets), _) => {
+                (PyBytes::new(py, octets),).into_pyobject(py)?
+            }
+            (V::BitString { unused_bits, data }, _) => {
+                (*unused_bits, PyBytes::new(py, data)).into_pyobject(py)?
+            }
+            (V::Date(date), _) => date_value(date).into_pyobject(py)?,
+            (V::Time(time), _) => time_value(time).into_pyobject(py)?,
+            (V::ObjectIdentifier(oid), _) => {
+                (PyObjectIdentifier::from_rust(*oid),).into_pyobject(py)?
+            }
+        };
+        Ok((slf.get_type().getattr(constructor)?, arguments))
+    }
+
+    /// One typed constructed element, tagged `tag`, from the octets a read
+    /// gave it: what the pickles `__reduce__` makes call. Octets that aren't
+    /// exactly one element of that production raise ValueError. `octets` is
+    /// `bytes`, as for `BACnetTimeStamp._from_octets`.
+    #[staticmethod]
+    fn _typed_element(tag: &str, octets: &[u8]) -> PyResult<Self> {
+        let element = Element::from_tag(tag).ok_or_else(|| {
+            // The caller's tag, cut short: it can be any string.
+            let mut shown: String = tag.chars().take(64).collect();
+            if shown.len() < tag.len() {
+                shown.push('…');
+            }
+            PyValueError::new_err(format!("no typed element is tagged {shown:?}"))
+        })?;
+        if !element.is_one(octets) {
+            return Err(PyValueError::new_err(format!(
+                "octets are not exactly one {} element",
+                element.tag()
+            )));
+        }
+        Ok(Self::constructed(
+            primitives::PropertyValue::ApplicationData(octets.to_vec()),
+            element,
+        ))
+    }
 }
 
 /// The tag of a value with no typed constructed form.
@@ -333,7 +420,8 @@ fn repr(value: &primitives::PropertyValue) -> String {
         }
         primitives::PropertyValue::Enumerated(e) => format!("PropertyValue.enumerated({e})"),
         primitives::PropertyValue::Date(d) => {
-            format!("PropertyValue.date({}/{}/{})", d.year, d.month, d.day)
+            let (year, month, day, _) = date_value(d);
+            format!("PropertyValue.date({year}/{month}/{day})")
         }
         primitives::PropertyValue::Time(t) => {
             format!("PropertyValue.time({}:{}:{})", t.hour, t.minute, t.second)

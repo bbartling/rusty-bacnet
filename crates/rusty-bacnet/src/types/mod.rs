@@ -31,6 +31,7 @@ mod audit_projection;
 mod constructed_py;
 mod constructed_read;
 mod cov;
+mod date;
 mod destination;
 mod device;
 mod enums;
@@ -49,6 +50,7 @@ pub(crate) use audit::recipient as audit_recipient_from_py;
 pub(crate) use audit::{audit_log_query_request_from_py, audit_notification_request_from_py};
 pub(crate) use audit_projection::audit_log_query_ack_to_py;
 pub use cov::{PyCovNotification, PyCovNotificationIterator};
+pub(crate) use date::specific_date_time;
 pub(crate) use destination::destinations;
 pub use device::PyDiscoveredDevice;
 pub use enums::*;
@@ -65,6 +67,18 @@ pub(crate) use rpm_wpm::{
 };
 pub(crate) use timestamp::date_time_tuple;
 pub use timestamp::PyBACnetTimeStamp;
+
+/// What `__reduce__` raises for a class with no constructor that doesn't
+/// copy or pickle, because it holds live or receive-time state (#1500).
+/// Without it, pickle protocols 0 and 1 would dump such an object, naming
+/// its `rusty_bacnet` class, and fail only when the pickle is loaded.
+pub(crate) fn not_picklable(object: &Bound<'_, PyAny>) -> PyErr {
+    let name = object
+        .get_type()
+        .qualname()
+        .map_or_else(|_| "object".to_owned(), |name| name.to_string());
+    pyo3::exceptions::PyTypeError::new_err(format!("cannot pickle 'rusty_bacnet.{name}' object"))
+}
 
 // Module registration
 // ---------------------------------------------------------------------------
@@ -126,6 +140,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDiscoveredDevice>()?;
     m.add_class::<PyCovNotification>()?;
     m.add_class::<PyCovNotificationIterator>()?;
+
+    // 255, what an unspecified date or time field holds (#1501).
+    m.add("UNSPECIFIED", date::UNSPECIFIED)?;
 
     Ok(())
 }

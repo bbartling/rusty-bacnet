@@ -5,7 +5,7 @@ use super::*;
 // ---------------------------------------------------------------------------
 
 /// An incoming COV notification from a server.
-#[pyclass(name = "CovNotification", frozen)]
+#[pyclass(name = "CovNotification", module = "rusty_bacnet", frozen)]
 pub struct PyCovNotification {
     inner: ReceivedCOVNotification,
 }
@@ -107,6 +107,12 @@ impl PyCovNotification {
             self.inner.notification.time_remaining
         )
     }
+
+    /// Refuses `copy` and `pickle`: a notification as received, with no
+    /// constructor to rebuild it. See [`super::not_picklable`].
+    fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<()> {
+        Err(super::not_picklable(slf.as_any()))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -114,7 +120,7 @@ impl PyCovNotification {
 // ---------------------------------------------------------------------------
 
 /// Async iterator yielding COV notifications from a broadcast channel.
-#[pyclass(name = "CovNotificationIterator")]
+#[pyclass(name = "CovNotificationIterator", module = "rusty_bacnet")]
 pub struct PyCovNotificationIterator {
     rx: Arc<tokio::sync::Mutex<broadcast::Receiver<ReceivedCOVNotification>>>,
 }
@@ -131,6 +137,12 @@ impl PyCovNotificationIterator {
 impl PyCovNotificationIterator {
     fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
+    }
+
+    /// Refuses `copy` and `pickle`: a live subscription to this client's
+    /// notifications. See [`super::not_picklable`].
+    fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<()> {
+        Err(super::not_picklable(slf.as_any()))
     }
 
     fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {

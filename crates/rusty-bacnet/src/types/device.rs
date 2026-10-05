@@ -5,7 +5,7 @@ use super::*;
 // ---------------------------------------------------------------------------
 
 /// A discovered BACnet device from WhoIs/IAm.
-#[pyclass(name = "DiscoveredDevice", frozen)]
+#[pyclass(name = "DiscoveredDevice", module = "rusty_bacnet", frozen)]
 pub struct PyDiscoveredDevice {
     inner: DiscoveredDevice,
     created: Instant,
@@ -62,6 +62,12 @@ impl PyDiscoveredDevice {
             self.inner.object_identifier.instance_number(),
             self.inner.vendor_id
         )
+    }
+
+    /// Refuses `copy` and `pickle`: `seconds_since_seen` counts from this
+    /// process's clock. See [`super::not_picklable`].
+    fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<()> {
+        Err(super::not_picklable(slf.as_any()))
     }
 }
 

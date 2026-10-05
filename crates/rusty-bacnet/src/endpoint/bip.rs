@@ -113,7 +113,7 @@ impl BipEndpointConfig {
 ///
 /// BIPv6/Ethernet have no endpoint owner: keep the standalone
 /// `BACnetClient`/`BACnetServer` path there.
-#[pyclass(name = "BipEndpoint")]
+#[pyclass(name = "BipEndpoint", module = "rusty_bacnet")]
 pub struct PyBipEndpoint {
     lifecycle: Lifecycle<BipSession, PendingObject>,
     config: BipEndpointConfig,

@@ -65,7 +65,7 @@ use crate::errors::to_py_err;
 /// not the default Annex AB known-UUID replacement behavior or identity proof. The native policy
 /// runs synchronously under the Tokio registry mutex, where attaching the
 /// GIL could deadlock, so no Python callback can be installed there.
-#[pyclass(name = "ScHub")]
+#[pyclass(name = "ScHub", module = "rusty_bacnet")]
 pub struct PyScHub {
     inner: Arc<Mutex<Option<ScHub>>>,
     config: HubConfig,

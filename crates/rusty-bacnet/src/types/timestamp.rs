@@ -1,7 +1,10 @@
 use super::*;
 
+use bacnet_encoding::primitives::{decode_timestamp_choice, encode_timestamp_choice};
 use pyo3::exceptions::PyOverflowError;
 use pyo3::types::{PyBool, PyInt, PyTuple};
+
+use super::date::{date_value, year_octet};
 
 /// Python wrapper for the protocol's lossless `BACnetTimeStamp` CHOICE.
 ///
@@ -9,8 +12,17 @@ use pyo3::types::{PyBool, PyInt, PyTuple};
 /// Date fields accept the complete BACnet pattern domains: month 1..=14,
 /// day 1..=34, day-of-week 1..=7, and 255 for an unspecified field. Time
 /// fields accept their normal ranges or 255 for unspecified. A full year is
-/// 1900..=2154, or 255 for unspecified.
-#[pyclass(name = "BACnetTimeStamp", frozen, from_py_object)]
+/// 1900..=2154, or 255 for unspecified (see [`super::date`]).
+///
+/// `copy` and `pickle` rebuild a timestamp from its CHOICE's octets
+/// (#1500), so one read from a peer with a field outside those ranges
+/// copies as it is.
+#[pyclass(
+    name = "BACnetTimeStamp",
+    module = "rusty_bacnet",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone)]
 pub struct PyBACnetTimeStamp {
     inner: primitives::BACnetTimeStamp,
@@ -60,13 +72,7 @@ fn ranged_or_unspecified(
 
 fn full_year(value: &Bound<'_, PyAny>) -> PyResult<u8> {
     let value = fixed::<u16>(integer(value, "full_year")?, "full_year")?;
-    match value {
-        255 => Ok(primitives::Date::UNSPECIFIED),
-        1900..=2154 => Ok((value - 1900) as u8),
-        _ => Err(PyValueError::new_err(format!(
-            "full_year must be 1900..=2154 or 255 (unspecified), got {value}"
-        ))),
-    }
+    year_octet(value, "full_year")
 }
 
 fn time_parts(
@@ -144,15 +150,6 @@ pub(crate) fn date_time_tuple(
         date_tuple(&pair.get_item(0)?, &format!("{name} date"))?,
         time_tuple(&pair.get_item(1)?, &format!("{name} time"))?,
     ))
-}
-
-fn actual_year(date: &primitives::Date) -> u16 {
-    date.actual_year()
-        .unwrap_or(u16::from(primitives::Date::UNSPECIFIED))
-}
-
-pub(super) fn date_value(date: &primitives::Date) -> (u16, u8, u8, u8) {
-    (actual_year(date), date.month, date.day, date.day_of_week)
 }
 
 pub(super) fn time_value(time: &primitives::Time) -> (u8, u8, u8, u8) {
@@ -247,5 +244,32 @@ impl PyBACnetTimeStamp {
 
     fn __eq__(&self, other: &Self) -> bool {
         self.inner == other.inner
+    }
+
+    /// What `copy` and `pickle` call: `_from_octets` of the CHOICE's
+    /// encoding, which holds every field exactly.
+    fn __reduce__<'py>(
+        slf: &Bound<'py, Self>,
+    ) -> PyResult<(Bound<'py, PyAny>, (Bound<'py, PyBytes>,))> {
+        let mut octets = BytesMut::new();
+        encode_timestamp_choice(&mut octets, &slf.get().inner)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        Ok((
+            slf.get_type().getattr("_from_octets")?,
+            (PyBytes::new(slf.py(), &octets),),
+        ))
+    }
+
+    /// The timestamp `octets`, one encoded CHOICE, hold: what the pickles
+    /// `__reduce__` makes call. Octets that aren't exactly one timestamp
+    /// raise ValueError.
+    #[staticmethod]
+    fn _from_octets(octets: &[u8]) -> PyResult<Self> {
+        match decode_timestamp_choice(octets, 0) {
+            Ok((inner, end)) if end == octets.len() => Ok(Self { inner }),
+            _ => Err(PyValueError::new_err(
+                "octets are not exactly one encoded BACnetTimeStamp",
+            )),
+        }
     }
 }
