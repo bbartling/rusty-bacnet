@@ -590,8 +590,6 @@ fn malformed_reference_shapes_do_not_become_local() {
         PropertyValue::ApplicationData([good.clone(), vec![0x49, 0x01]].concat()),
         // Two references.
         PropertyValue::ApplicationData([good.clone(), good.clone()].concat()),
-        // A property identifier past the 22-bit range.
-        reference_value(target, 4_194_304, None, None),
         // A property identifier past u32.
         PropertyValue::ApplicationData(vec![
             0x0C, 0x00, 0x00, 0x00, 0x03, 0x1D, 0x05, 0x01, 0x00, 0x00, 0x00, 0x55,
@@ -610,14 +608,18 @@ fn malformed_reference_shapes_do_not_become_local() {
         ));
     }
 
-    let framed =
-        ReferenceValueObject::new(Some(reference_value(target, property.to_raw(), None, None)));
-    assert_eq!(
-        super::super::read_object_property_ref(&framed),
-        Ok(super::super::MonitoredReference::local(
-            target, property, None
-        ))
-    );
+    // ASHRAE assigns property identifiers above 4194303 too, such as
+    // Default_Color_Temperature (#887).
+    for property in [property, PropertyIdentifier::DEFAULT_COLOR_TEMPERATURE] {
+        let framed =
+            ReferenceValueObject::new(Some(reference_value(target, property.to_raw(), None, None)));
+        assert_eq!(
+            super::super::read_object_property_ref(&framed),
+            Ok(super::super::MonitoredReference::local(
+                target, property, None
+            ))
+        );
+    }
 }
 
 fn stale_eval_state() -> bacnet_objects::event_enrollment::EventEnrollmentEvalState {
@@ -694,8 +696,18 @@ fn malformed_retarget_does_not_resume_stale_countdown() {
 #[test]
 fn invalid_reference_clears_before_other_property_failure() {
     let target = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap();
-    let mut enrollment =
-        ReferenceValueObject::new(Some(reference_value(target, 4_194_304, None, None)));
+    let PropertyValue::ApplicationData(good) = reference_value(
+        target,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        None,
+        None,
+    ) else {
+        unreachable!()
+    };
+    // The reference cut inside its property identifier.
+    let mut enrollment = ReferenceValueObject::new(Some(PropertyValue::ApplicationData(
+        good[..good.len() - 1].to_vec(),
+    )));
     enrollment
         .event_parameters_readable
         .store(false, Ordering::SeqCst);

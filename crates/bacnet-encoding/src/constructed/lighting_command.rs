@@ -13,8 +13,8 @@ use bacnet_types::enums::LightingOperation;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
-use super::members::{narrow, unsigned_member};
-use super::tagged::{decode_ctx_primitive, decode_ctx_real, decode_optional_ctx, expect_end};
+use super::members::unsigned_field;
+use super::tagged::{decode_ctx_real, decode_optional_ctx, expect_end};
 use crate::primitives;
 
 /// The production name the decode errors carry.
@@ -38,36 +38,6 @@ pub fn encode_lighting_command(buf: &mut BytesMut, value: &BACnetLightingCommand
     }
 }
 
-/// The most contents octets an Unsigned or ENUMERATED field may have when
-/// its first octet is zero. Every field fits in 32 bits, so a longer field
-/// that opens with a zero octet isn't in its shortest form (Clause 20.2.4).
-const MAX_PADDED_OCTETS: usize = 4;
-
-/// Read the Unsigned or ENUMERATED under primitive context tag `tag` at
-/// `offset` and narrow it to `T`. A value too wide for `T` is recorded as
-/// `oversized` and read as zero, so the rest of the structure still gets
-/// checked.
-fn unsigned_field<T: TryFrom<u64> + Default>(
-    data: &[u8],
-    offset: usize,
-    tag: u8,
-    too_wide: &'static str,
-    oversized: &mut Option<&'static str>,
-) -> Result<(T, usize), Error> {
-    let (content, end) = decode_ctx_primitive(data, offset, tag, WHAT)?;
-    if content.len() > MAX_PADDED_OCTETS && content[0] == 0 {
-        return Err(Error::decoding(
-            offset,
-            format!(
-                "{WHAT}: [{tag}] has {} contents octets and a leading zero",
-                content.len()
-            ),
-        ));
-    }
-    let value = unsigned_member(content, end - content.len())?;
-    Ok((narrow(value, too_wide, oversized), end))
-}
-
 /// A decoded command, the offset just past its last field, and the first
 /// field too wide for its type, if any.
 pub(super) type Fields = (BACnetLightingCommand, usize, Option<&'static str>);
@@ -82,6 +52,7 @@ pub(super) fn decode_fields(data: &[u8], offset: usize) -> Result<Fields, Error>
         data,
         offset,
         0,
+        WHAT,
         "operation [0] exceeds 32 bits",
         &mut oversized,
     )?;
@@ -93,6 +64,7 @@ pub(super) fn decode_fields(data: &[u8], offset: usize) -> Result<Fields, Error>
             data,
             at,
             tag,
+            WHAT,
             "fade-time [4] exceeds 32 bits",
             &mut oversized,
         )
@@ -102,6 +74,7 @@ pub(super) fn decode_fields(data: &[u8], offset: usize) -> Result<Fields, Error>
             data,
             at,
             tag,
+            WHAT,
             "priority [5] exceeds an Unsigned8",
             &mut oversized,
         )

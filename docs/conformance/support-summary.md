@@ -102,6 +102,7 @@ Row counts by priority and status are not committed, so concurrent ledger PRs me
 | `BACNET-12-RELINQUISH-DEFAULT-WRITABILITY` | Clause 12.3 Table 12-3 (Analog Output), Clause 12.7 Table 12-8 (Binary Output), Clause 12.8 Table 12-10 (Binary Value), Clause 12.19 Table 12-22 (Multi-state Output), Clause 12.20 Table 12-23 (Multi-state Value), Clause 12.26 Table 12-30 (Access Door), Clause 12.54 Table 12-64 (Lighting Output), Clause 12.55 Table 12-69 (Binary Lighting Output), Clause 12 value object tables; Clause 19 command prioritization | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-BINARY-LIGHTING-OPERATIONS` | Clause 12.55 and Table 12-70, including 12.55.4.1 and 12.55.10.1; Clause 19.2 command prioritization; Clause 21 BACnetBinaryLightingPV | P1 | supported-with-clause-evidence | 0 |
 | `BACNET-12-LIGHTING-OUTPUT-COMMAND` | Clauses 12.54, 15.9.1.3 and 21; Tables 12-64, 12-66 and 12-67 | P1 | in-progress | 2 |
+| `BACNET-12-COLOR-COMMAND` | Addenda 135-2020ca and 135-2020cc; Clauses 15.9.1.3, 21 and 23; Table 23-1 | P1 | in-progress | 1 |
 | `BACNET-12-LIGHTING-OUTPUT-PRESENT-VALUE` | Clauses 12.54, 12.54.4, 12.54.5, 12.54.22 and 15.9.1.3 | P1 | in-progress | 2 |
 | `BACNET-12-REFERENCE-PROPERTY-WRITABILITY` | Clauses 12.5.13, 12.17.12, 12.17.13, 12.17.16, 12.23.6, 20.2.16; Table 12-5, 12-20, 12-27; Clause 21 | P1 | supported-with-clause-evidence | 2 |
 | `BACNET-12-DEVICE-REFERENCE-PROPERTIES` | Clauses 12.5.13, 12.12.8, 12.15.29, 12.16.26, 12.16.27, 12.25.8 and 12.30.11; Clause 21 | P1 | supported-with-clause-evidence | 2 |

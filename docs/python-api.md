@@ -3377,10 +3377,10 @@ lifecycle lock, so they cannot observe a half-published session.
 `members` uses the `read_property_multiple` spec shape,
 `[(object_id, [(property_id, array_index), ...]), ...]`, and the server role
 rebuilds Present_Value from it on every read, one result per member. A member
-with an empty property list, a property identifier above 4194303 (the 22-bit
-field's last value), or one that reports a Group or Global Group's
-Present_Value raises `ValueError` when it is added; the message names the
-member's position and the rule it breaks. As for `read_property_multiple` specs,
+with an empty property list, or one that reports a Group or Global Group's
+Present_Value, raises `ValueError` when it is added; the message names the
+member's position and the rule it breaks. Any property identifier is taken,
+including those ASHRAE assigns above 4194303, such as `DEFAULT_COLOR`. As for `read_property_multiple` specs,
 an array index outside unsigned32 raises `OverflowError` during conversion.
 
 Each owner takes a keyword-only `read_work_limit=256`: the result rows one
