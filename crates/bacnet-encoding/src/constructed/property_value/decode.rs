@@ -164,15 +164,16 @@ fn decode_with_boundaries_detailed(
         )
     })?;
     if !tag.is_context(0) {
+        let kind = misplaced_kind(data, offset, &tag, Some(0));
         return Err(PropertyValueDecodeError::syntax(
             Error::decoding_kind(
-                misplaced_kind(data, offset, &tag, Some(0)),
+                kind,
                 offset,
                 "BACnetPropertyValue property-id expected context tag 0",
             ),
             offset,
             PropertyValueDecodeStage::PropertyIdentifier,
-            misplaced_kind(data, offset, &tag, Some(0)).reject_reason(),
+            kind.reject_reason(),
             None,
             None,
             false,
@@ -314,15 +315,12 @@ fn decode_with_boundaries_detailed(
         )
     })?;
     if !tag.is_opening_tag(2) {
+        let kind = misplaced_kind(data, offset, &tag, Some(2));
         return Err(PropertyValueDecodeError::syntax(
-            Error::decoding_kind(
-                misplaced_kind(data, offset, &tag, Some(2)),
-                offset,
-                "BACnetPropertyValue expected opening tag 2",
-            ),
+            Error::decoding_kind(kind, offset, "BACnetPropertyValue expected opening tag 2"),
             offset,
             PropertyValueDecodeStage::Value,
-            misplaced_kind(data, offset, &tag, Some(2)).reject_reason(),
+            kind.reject_reason(),
             Some(property_identifier),
             array_index,
             true,

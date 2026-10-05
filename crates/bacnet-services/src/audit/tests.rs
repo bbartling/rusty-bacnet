@@ -3,6 +3,7 @@ use bacnet_types::bitstring::{AuditOperationFlags, LogStatus};
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
 use bacnet_types::enums::{
     AuditOperation, BACnetSuccessFilter, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
+    RejectReason,
 };
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bacnet_types::MacAddr;
@@ -16,6 +17,16 @@ use super::{
 
 fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
+}
+
+/// Assert that AuditLogQuery refuses `data` with the Reject `reason`.
+fn assert_rejects(data: &[u8], reason: RejectReason) {
+    let error = AuditLogQueryRequest::decode(data).unwrap_err();
+    assert_eq!(
+        error.reject_reason(),
+        Some(reason),
+        "{data:02X?}: {error:?}"
+    );
 }
 
 fn minimal_by_target(success_filter: BACnetSuccessFilter) -> AuditLogQueryRequest {
@@ -278,10 +289,11 @@ fn success_filter_is_strict_enumerated_and_cannot_be_omitted() {
         .windows(2)
         .position(|bytes| bytes == [0x79, 0x00])
         .unwrap();
+    // A value the enumeration doesn't define is UNDEFINED_ENUMERATION.
     for raw in [3, 16, 255] {
         let mut out_of_range = encoded.to_vec();
         out_of_range[filter_pos + 1] = raw;
-        assert!(AuditLogQueryRequest::decode(&out_of_range).is_err());
+        assert_rejects(&out_of_range, RejectReason::UNDEFINED_ENUMERATION);
     }
 
     // Zero-length, non-canonical leading-zero, and over-wide (>8 octet)
@@ -312,7 +324,7 @@ fn success_filter_is_strict_enumerated_and_cannot_be_omitted() {
         .unwrap();
     let mut out_of_range = encoded.to_vec();
     out_of_range[filter_pos + 1] = 3;
-    assert!(AuditLogQueryRequest::decode(&out_of_range).is_err());
+    assert_rejects(&out_of_range, RejectReason::UNDEFINED_ENUMERATION);
 }
 
 /// Corrected Unsigned64 cursor boundaries (Errata 2024-04-29 item 8):
@@ -416,7 +428,7 @@ fn nested_field_widths_and_priority_range_are_enforced() {
     primitives::encode_ctx_unsigned(&mut bad_priority, 5, 17);
     primitives::encode_ctx_enumerated(&mut bad_priority, 7, 0);
     encode_outer_suffix(&mut bad_priority, 0);
-    assert!(AuditLogQueryRequest::decode(&bad_priority).is_err());
+    assert_rejects(&bad_priority, RejectReason::PARAMETER_OUT_OF_RANGE);
 
     let mut noncanonical_address = BytesMut::new();
     encode_outer_prefix(&mut noncanonical_address, 0);

@@ -778,3 +778,7 @@ pub fn decode_app_character_string(
     let (octets, end) = decode_app_primitive(data, offset, tags::app_tag::CHARACTER_STRING, what)?;
     Ok((primitives::decode_character_string(octets)?, end))
 }
+
+#[cfg(test)]
+#[path = "tagged_frame_tests.rs"]
+mod frame_tests;

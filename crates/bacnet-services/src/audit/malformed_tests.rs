@@ -2,7 +2,9 @@ use super::*;
 use bacnet_encoding::{constructed::encode_recipient, primitives, tags};
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
-use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    AuditOperation, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, RejectReason,
+};
 use bacnet_types::primitives::{BACnetTimeStamp, Date, Time};
 use bacnet_types::MacAddr;
 
@@ -261,7 +263,12 @@ fn target_priority_enforces_inclusive_one_to_sixteen_range() {
         .position(|bytes| bytes == [0xd9, 1])
         .unwrap();
     encoded[priority + 1] = 0;
-    assert!(AuditNotificationRequest::decode(&encoded).is_err());
+    assert_eq!(
+        AuditNotificationRequest::decode(&encoded)
+            .unwrap_err()
+            .reject_reason(),
+        Some(RejectReason::PARAMETER_OUT_OF_RANGE)
+    );
 }
 
 #[test]

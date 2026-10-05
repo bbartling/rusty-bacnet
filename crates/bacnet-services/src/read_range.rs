@@ -19,7 +19,10 @@ fn decode_count(data: &[u8], offset: usize, field: &str) -> Result<(i32, usize),
     let value = i16::try_from(value)
         .map_err(|_| Error::out_of_range(offset, format!("{field} exceeds INTEGER16")))?;
     if value == 0 {
-        return Err(Error::decoding(offset, format!("{field} may not be zero")));
+        return Err(Error::out_of_range(
+            offset,
+            format!("{field} may not be zero"),
+        ));
     }
     Ok((i32::from(value), end))
 }
@@ -201,7 +204,7 @@ impl ReadRangeRequest {
             let (index, end) =
                 decode_ctx_unsigned::<u32>(data, offset, 2, "ReadRange request array-index")?;
             if index == 0 {
-                return Err(Error::decoding(
+                return Err(Error::out_of_range(
                     offset,
                     "ReadRange request array-index may not be zero",
                 ));

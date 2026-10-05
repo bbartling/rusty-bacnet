@@ -18,6 +18,17 @@ fn decode_start(data: &[u8], offset: usize, what: &str) -> Result<(i32, usize), 
     Ok((primitives::decode_signed(octets)?, end))
 }
 
+/// The fault where `what`'s access-method choice, `[0]` or `[1]`, is due at
+/// `offset` and neither opens there: a missing member when the data ends
+/// after the file identifier, any other tag a wrong one.
+fn unknown_access_method(data: &[u8], offset: usize, what: &str) -> Error {
+    if offset >= data.len() {
+        Error::missing(offset, format!("{what}: access method missing"))
+    } else {
+        Error::invalid_tag(offset, format!("{what}: unknown access method"))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AtomicReadFile-Request
 // ---------------------------------------------------------------------------
@@ -150,7 +161,7 @@ impl AtomicReadFileRequest {
             };
             (access, end)
         } else {
-            return Err(Error::decoding(offset, "Unknown file access method"));
+            return Err(unknown_access_method(data, offset, "AtomicReadFile"));
         };
         expect_end(data, end, end, "AtomicReadFile")?;
 
@@ -252,7 +263,7 @@ impl AtomicWriteFileRequest {
             };
             (access, end)
         } else {
-            return Err(Error::decoding(offset, "Unknown file write access method"));
+            return Err(unknown_access_method(data, offset, "AtomicWriteFile"));
         };
         expect_end(data, end, end, "AtomicWriteFile")?;
 

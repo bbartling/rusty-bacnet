@@ -29,6 +29,12 @@ pub use error::WritePropertyMultipleError;
 
 /// The [`DecodingKind`] that draws the Reject reason the cursor gave
 /// `failure` (see [`DecodingKind::reject_reason`]).
+///
+/// A priority outside 1..=16 is [`DecodingKind::OutOfRange`], so a responder
+/// that converts [`WritePropertyMultipleRequest::decode`]'s error rejects it.
+/// This stack's server doesn't: it walks the cursor itself and answers that
+/// priority with an Error, PARAMETER_OUT_OF_RANGE, as it answers
+/// WriteProperty's. Clause 20.1.8 leaves that choice to the implementation.
 fn failure_kind(failure: WritePropertyMultipleFailureKind) -> DecodingKind {
     use RejectReason as R;
     match failure {

@@ -31,7 +31,7 @@ pub(super) fn decode_required_bool(
     let (tag, _) = tags::decode_tag(data, offset).map_err(|error| Error::Reject {
         reason: error
             .reject_reason()
-            .unwrap_or(RejectReason::OTHER)
+            .unwrap_or(RejectReason::INVALID_DATA_ENCODING)
             .to_raw(),
     })?;
     if !tag.is_context(context_tag) {

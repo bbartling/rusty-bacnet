@@ -2,7 +2,7 @@ use bacnet_encoding::constructed::{check_decoded_mac_len, check_encoded_mac_len}
 use bacnet_encoding::{primitives, tags};
 use bacnet_types::bitstring::AuditOperationFlags;
 use bacnet_types::constructed::BACnetAddress;
-use bacnet_types::enums::{BACnetSuccessFilter, PropertyIdentifier};
+use bacnet_types::enums::{BACnetSuccessFilter, PropertyIdentifier, RejectReason};
 use bacnet_types::error::Error;
 use bacnet_types::MacAddr;
 use bytes::BytesMut;
@@ -271,7 +271,7 @@ fn decode_by_target(data: &[u8]) -> Result<BACnetAuditLogQueryParameters, Error>
             "AuditLogQuery by-target target-priority",
         )?;
         if !(1..=16).contains(&priority) {
-            return Err(Error::decoding(
+            return Err(Error::out_of_range(
                 offset,
                 "AuditLogQuery target-priority must be in 1..=16",
             ));
@@ -438,11 +438,12 @@ fn decode_success_filter(
         0 => BACnetSuccessFilter::ALL,
         1 => BACnetSuccessFilter::SUCCESSES_ONLY,
         2 => BACnetSuccessFilter::FAILURES_ONLY,
+        // A value the enumeration doesn't define, as GetEnrollmentSummary
+        // answers its own filters.
         _ => {
-            return Err(Error::decoding(
-                offset,
-                format!("{field} must be a BACnetSuccessFilter 0..=2, got {value}"),
-            ));
+            return Err(Error::Reject {
+                reason: RejectReason::UNDEFINED_ENUMERATION.to_raw(),
+            });
         }
     };
     Ok((filter, end))

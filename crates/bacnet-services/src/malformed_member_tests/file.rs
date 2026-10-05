@@ -226,6 +226,43 @@ fn atomic_write_file_request() {
     check(decoder!(AtomicWriteFileRequest), rows);
 }
 
+/// Where the access-method choice is due, the end of the data is a missing
+/// member, and any tag but an opening `[0]` or `[1]` is the wrong one.
+#[test]
+fn access_method_faults_name_their_reasons() {
+    let cases: &[(&str, Vec<u8>, RejectReason)] = &[
+        (
+            "no access method",
+            FILE_1.to_vec(),
+            RejectReason::MISSING_REQUIRED_PARAMETER,
+        ),
+        (
+            "access method [2]",
+            cat(&[FILE_1, &[0x2E, 0x31, 0x05, 0x21, 0x10, 0x2F]]),
+            RejectReason::INVALID_TAG,
+        ),
+        (
+            "a primitive [0]",
+            cat(&[FILE_1, &[0x09, 0x05]]),
+            RejectReason::INVALID_TAG,
+        ),
+        (
+            "an application Unsigned",
+            cat(&[FILE_1, &[0x21, 0x05]]),
+            RejectReason::INVALID_TAG,
+        ),
+    ];
+    for (name, decode) in [
+        decoder!(AtomicReadFileRequest),
+        decoder!(AtomicWriteFileRequest),
+    ] {
+        for (row, input, reason) in cases {
+            let error = decode(input).expect_err(row);
+            assert_eq!(error.reject_reason(), Some(*reason), "{name} {row}");
+        }
+    }
+}
+
 #[test]
 fn atomic_write_file_ack() {
     let rows: &[Row<'_>] = &[

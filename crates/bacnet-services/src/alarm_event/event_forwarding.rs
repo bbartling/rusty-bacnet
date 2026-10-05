@@ -82,6 +82,16 @@ impl ForwardedEventNotification {
             (_, offset) =
                 decode_ctx_unsigned::<u32>(data, offset, 10, "EventNotification fromState")?;
         } else if notify_type != NotifyType::ACK_NOTIFICATION {
+            if offset < data.len() {
+                let (found, _) = tags::decode_tag(data, offset)?;
+                return Err(misplaced_tag(
+                    data,
+                    &found,
+                    Some(10),
+                    offset,
+                    "EventNotification expected fromState",
+                ));
+            }
             return Err(Error::missing(
                 offset,
                 "EventNotification missing fromState",

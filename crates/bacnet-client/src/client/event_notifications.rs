@@ -97,7 +97,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 warn!(%error, "Failed to decode ConfirmedEventNotification");
                 // The reason names the syntax fault, as the server's does
                 // for any confirmed request (#1446).
-                let reject_reason = error.reject_reason().unwrap_or(RejectReason::OTHER);
+                let reject_reason = error
+                    .reject_reason()
+                    .unwrap_or(RejectReason::INVALID_DATA_ENCODING);
                 Self::send_confirmed_request_reject(
                     network,
                     source_mac,

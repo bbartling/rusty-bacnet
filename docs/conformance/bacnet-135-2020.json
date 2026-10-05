@@ -7070,7 +7070,7 @@
     "DeleteObject and I-Have requests refuse an object identifier or object name under any tag but its application tag; the server rejects such a DeleteObject as INVALID_TAG and deletes nothing.",
     "A fixed-size application-tagged member (an object identifier, REAL, Double, Date or Time) has its length checked before its contents, as the context ones do, in the service readers and in decode_application_value alike.",
     "A DeviceCommunicationControl, ReinitializeDevice, ConfirmedTextMessage, GetEnrollmentSummary, DeleteObject, AtomicReadFile, AtomicWriteFile, CreateObject or list-service request cut short is rejected the same way.",
-    "A confirmed request the decoder refuses is rejected with the reason Error::reject_reason names: TOO_MANY_ARGUMENTS, INVALID_TAG, MISSING_REQUIRED_PARAMETER, INVALID_DATA_ENCODING, PARAMETER_OUT_OF_RANGE, BUFFER_OVERFLOW or OTHER.",
+    "Refused confirmed requests draw the Reject Error::reject_reason names (TOO_MANY_ARGUMENTS, INVALID_TAG, MISSING_REQUIRED_PARAMETER, INVALID_DATA_ENCODING, PARAMETER_OUT_OF_RANGE, BUFFER_OVERFLOW, OTHER); unconfirmed ones are dropped.",
     "A GetAlarmSummary carrying any service-request octet is rejected as TOO_MANY_ARGUMENTS. A Who-Is with only one limit, or with octets its limits leave unread, a limit under another tag included, is dropped."
    ]
   },

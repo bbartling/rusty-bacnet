@@ -12,6 +12,7 @@ use crate::enrollment_summary::GetEnrollmentSummaryRequest;
 use crate::file::AtomicWriteFileRequest;
 use crate::object_mgmt::CreateObjectRequest;
 use crate::read_property::ReadPropertyRequest;
+use crate::read_range::ReadRangeRequest;
 
 /// AV-1 as a `[0]` object identifier.
 const AV_1: [u8; 5] = [0x0C, 0x00, 0x80, 0x00, 0x01];
@@ -156,6 +157,18 @@ fn ranges_lists_and_character_sets_name_their_reasons() {
     let inverted = [0x09, 0x00, 0x4E, 0x09, 0x05, 0x19, 0x01, 0x4F];
     assert_eq!(
         reason(GetEnrollmentSummaryRequest::decode, &inverted),
+        R::PARAMETER_OUT_OF_RANGE
+    );
+    // ReadRange of AV-1's Log_Buffer at array index zero, and by position
+    // with a count of zero.
+    let decode = ReadRangeRequest::decode;
+    let at = |tail: &[u8]| [&AV_1[..], &[0x19, 0x83], tail].concat();
+    assert_eq!(
+        reason(decode, &at(&[0x29, 0x00])),
+        R::PARAMETER_OUT_OF_RANGE
+    );
+    assert_eq!(
+        reason(decode, &at(&[0x3E, 0x21, 0x01, 0x31, 0x00, 0x3F])),
         R::PARAMETER_OUT_OF_RANGE
     );
     // A ConfirmedAuditNotification with no notifications: out of range, as

@@ -726,3 +726,17 @@ fn primitive_notification_fields_require_their_context_tags() {
         }
     }
 }
+
+/// A variant number the decoder doesn't know, reserved or past the last one,
+/// is the wrong tag (#1446).
+#[test]
+fn an_unknown_variant_is_the_wrong_tag() {
+    for data in [&[0x7E, 0x7F][..], &[0xFE, 0x17, 0xFF, 0x17]] {
+        let error = decode_variant(data).unwrap_err();
+        assert_eq!(
+            error.reject_reason(),
+            Some(bacnet_types::enums::RejectReason::INVALID_TAG),
+            "{data:02X?}: {error:?}"
+        );
+    }
+}
