@@ -11,7 +11,8 @@
 //! test can see where each unicast went. The data attributes a frame is sent
 //! with are dropped, as on a data link that cannot carry them, unless
 //! [`LoopbackTransport::carry_data_attributes`] asks for them to reach the
-//! peer.
+//! peer. The link has no broadcast MAC unless
+//! [`LoopbackTransport::set_broadcast_mac`] names one.
 
 use std::sync::{Mutex, PoisonError};
 
@@ -39,6 +40,9 @@ pub struct LoopbackTransport {
     /// Whether the peer gets each frame's data attributes, once
     /// [`Self::carry_data_attributes`] asks for them.
     carries_data_attributes: bool,
+    /// The MAC [`TransportPort::is_broadcast_mac`] recognises, once
+    /// [`Self::set_broadcast_mac`] names one.
+    broadcast_mac: Option<MacAddr>,
 }
 
 impl LoopbackTransport {
@@ -70,6 +74,7 @@ impl LoopbackTransport {
             unicast_destinations: None,
             record_order: Mutex::new(()),
             carries_data_attributes: false,
+            broadcast_mac: None,
         }
     }
 
@@ -105,6 +110,14 @@ impl LoopbackTransport {
     /// sets it on both.
     pub fn carry_data_attributes(&mut self) {
         self.carries_data_attributes = true;
+    }
+
+    /// Report `mac` as this link's broadcast MAC from
+    /// [`is_broadcast_mac`](TransportPort::is_broadcast_mac), as MS/TP
+    /// reports `0xFF` (#1479). Only the answer changes: a unicast to `mac`
+    /// still reaches the peer as one frame, not marked as a broadcast.
+    pub fn set_broadcast_mac(&mut self, mac: impl Into<MacAddr>) {
+        self.broadcast_mac = Some(mac.into());
     }
 
     /// The frame the peer receives for `npdu`.
@@ -206,6 +219,10 @@ impl TransportPort for LoopbackTransport {
 
     fn local_mac(&self) -> &[u8] {
         &self.local_mac
+    }
+
+    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
+        self.broadcast_mac.as_deref() == Some(mac)
     }
 }
 

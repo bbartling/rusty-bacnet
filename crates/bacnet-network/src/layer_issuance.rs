@@ -35,7 +35,10 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// does not establish physical emission or remote receipt. A `destination`
     /// on network 0 or 0xFFFF is an encoding failure: this unicast reaches
     /// one next hop, and a global broadcast goes out through
-    /// [`NetworkLayer::broadcast_global_apdu`] instead (#1380).
+    /// [`NetworkLayer::broadcast_global_apdu`] instead (#1380). A
+    /// `destination` with no DADR is a remote broadcast, which carries only
+    /// an Unconfirmed-Request APDU (Clause 6.3), so any other APDU to it is
+    /// an encoding failure too (#1479).
     ///
     /// Used by server transaction owners whose lifetime ends at local issuance,
     /// independently of the transport future's eventual Result.
@@ -81,6 +84,15 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
             expecting_reply,
             priority,
         } = issued;
+        if let Some(destination) = destination {
+            check_destination(
+                destination.network,
+                "pass no destination (no DNET) for a local peer",
+            )?;
+            if destination.mac_address.is_empty() {
+                check_broadcast_apdu(apdu, "a destination with no DADR (a remote broadcast)")?;
+            }
+        }
         let buf = crate::response_route::encode_response_npdu(
             apdu,
             destination,

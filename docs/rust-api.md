@@ -1634,6 +1634,20 @@ through `broadcast_global_apdu`, with DLEN 0 and the broadcast MAC, so that
 every router on the network can pass it on (Clause 6.3.2); a unicast would
 reach a single router.
 
+A broadcast carries only an Unconfirmed-Request APDU (Clause 6.3). Any other
+PDU type fails with an `Error::Encoding` naming it, before anything is sent,
+from `broadcast_apdu`, `broadcast_global_apdu` and `broadcast_to_network`, and
+from a routed or on-issuance send with an empty DADR (a remote broadcast), in
+every `_with_data_attributes` form too (#1479).
+`send_apdu_routed_via_local_broadcast` names one device, so it refuses an
+empty DADR for every PDU type: a remote network's broadcast goes through
+`broadcast_to_network`. A send naming one device takes any PDU type, even when
+its link DA is the broadcast MAC. `send_apdu` to the MAC the transport reports
+as its broadcast (`TransportPort::is_broadcast_mac`) is a local broadcast too,
+but the layer doesn't ask the transport on every unicast: `BACnetClient`'s
+confirmed requests and the endpoint's egress, which take caller-chosen MACs,
+refuse anything but an Unconfirmed-Request there themselves.
+
 ---
 
 ## bacnet-objects
