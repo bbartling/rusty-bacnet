@@ -246,6 +246,18 @@ impl std::fmt::Debug for MutationAuthorizationContext {
 /// Callbacks can run concurrently and WPM holds the database write lock: do not
 /// block, reenter the server, or perform side effects from a callback.
 ///
+/// A WPM element that an object saves before serving (a Notification
+/// Forwarder's or Notification Class's list, an Access Rights object's rules,
+/// Enable or Accompaniment, an Audit Log's Log_Enable or Buffer_Size) is
+/// decided earlier, under a database read guard, before the server stages its
+/// save to run off the write lock (#1321). It is still decided once, after
+/// that element's own validation and in wire order among such elements, so
+/// ahead of earlier elements no object saves first, and the handler applies
+/// the decision when it reaches the element. So the callback can be asked
+/// about such an element that the request never reaches, because an earlier
+/// element fails for another reason. Decision counters and audit records
+/// cover only the elements the handler reaches.
+///
 /// An inbound WriteGroup reaches the callback once per Channel it would write,
 /// after the change list is decoded and matched to the Channels and before each
 /// write, with no database guard held. The context has no invoke ID and an
@@ -268,7 +280,8 @@ pub struct MutationServiceCounters {
 /// Fixed-shape local telemetry, not a durable audit log; no source history is retained.
 /// New servers start at zero. Each field is independently sampled and saturates at
 /// `u64::MAX`, so snapshots are not atomic aggregates. Counters never affect policy.
-/// WPM counts each element reaching its gate, not requests or an unvisited suffix.
+/// WPM counts each element reaching its gate, not requests or an unvisited suffix,
+/// even one the authorizer was asked about ahead of the handler (#1321).
 /// Pre-gate failures and duplicates do not count. In permissive mode an
 /// absent authorizer allows without decoding, so a later handler failure still counts.
 /// An inbound WriteGroup counts once per Channel write it would make.

@@ -2321,8 +2321,10 @@ bundled server stages every network or `write_local` Recipient_List write
 (WriteProperty, WritePropertyMultiple, AddListElement and RemoveListElement)
 and waits for its save with the database guard dropped. A list that cannot be
 saved is refused with DEVICE / OPERATIONAL_PROBLEM, and the class keeps the
-old one. A WritePropertyMultiple under a `mutation_authorizer`, and
-application code writing through the database, save in place. A staged write
+old one. A WritePropertyMultiple that writes the list more than once stages
+one save of the last (#1423). Application code writing through the database
+saves in place, and a write it makes that the class refuses leaves a staged
+write alone (#1424). A staged write
 its request releases without making (an earlier WritePropertyMultiple attempt
 failed, say) is dropped, and the class saves the list it serves at once. A
 staged write whose request vanished without releasing it (`stop()` aborted
@@ -3457,9 +3459,11 @@ Saves follow the Notification Class's rules (see
 object's own writer thread, and the bundled server stages each WriteProperty,
 WritePropertyMultiple or `write_local` write of the arrays (whole, one
 element, or the size at index 0), of Enable or of Accompaniment, and waits
-for its save with the database guard dropped. A request stages only its
-first such write to an object; a WritePropertyMultiple's later writes to the
-same object save in place. A state that cannot be saved is refused with DEVICE /
+for its save with the database guard dropped. A WritePropertyMultiple's
+several such writes to one object stage one save of the state they leave
+together (#1423): each write takes its own step as the request makes it, and
+a request that stops part way puts storage back to what the object serves. A
+state that cannot be saved is refused with DEVICE /
 OPERATIONAL_PROBLEM, and nothing changes. A staged write that is never made
 puts storage back to the served state on release, after its lifetime, at
 `stop()`, or when the object drops. A saved value wins over the
@@ -4307,15 +4311,19 @@ timestamp and the list's tags, 25 to 33 octets in all (#1197). Each change count
 its encoding and one item's framing, as if it started an item of its own. The
 context also keeps room, at most one notification's worth, for the most its
 untimestamped values have taken in one report since it was last admitted or lost
-a reference. Memory has a ceiling of its own (#1287): counting each change with a
-fixed 32 octets more for the memory it holds besides its values, one context
-never holds more than four notifications of the server's own maximum APDU,
-whatever its subscriber's size, so many tiny changes cannot outgrow it. The
-overhead takes no room in a notification, so with the shortest envelope a
-50-octet subscriber keeps four REAL Present_Value changes, one per notification,
-on a server whose own maximum APDU is 78 octets or more. Near the local maximum
-the ceiling binds first, and the subscription caps (`CovPolicy`) limit how many
-contexts there are, so the history as a whole stays bounded. Only on overflow
+a reference. Memory has a ceiling of its own (#1287), counted in the bytes each
+pending change really takes (#1357): the change itself and, for each value, its
+slots in the change's vectors and its encoded octets. One context's changes never
+take more than four bytes for each octet four notifications of the server's own
+maximum APDU have for items, whatever its subscriber's size, so many tiny changes
+cannot outgrow it: 23,216 bytes at a 1476-octet maximum, some 116 of the smallest
+changes. That memory takes no room in a notification, so with the shortest
+envelope a 50-octet subscriber keeps four REAL Present_Value changes, one per
+notification, on a server whose own maximum APDU is 77 octets or more. Near the
+local maximum the ceiling binds first for small changes, and the subscription
+caps (`CovPolicy`) limit how many contexts there are: under the default 1,024
+subscriptions the histories take about 24 MB at most, besides the changes that
+are never dropped (below). Only on overflow
 of either limit, the last resort, is a change dropped: the oldest of the same
 reference first, then the oldest in the context, never a reference's latest.
 Nor is a reference's change in delivery dropped: once a change sent one value
@@ -5019,6 +5027,14 @@ and a warning naming the objects still saving is logged after 5 s and every
 30 s after that. `stop()` doesn't wait while the application holds the
 database; the objects then settle once it lets go, and put storage back when
 they are dropped.
+Call `stop()` before dropping the server. A server dropped without it in async
+code aborts its tasks and hands its object database to a task that drops it on
+Tokio's blocking pool once those tasks have let go (#1409), so the drop doesn't
+block a runtime worker while the objects' last saves run; nothing waits for
+those saves, though. Storage may still change after the drop returns, as they
+and the put-back of a staged write land, so `stop().await` before building
+another server on the same storage. An application still holding
+`server.database()` drops the last handle itself, best off the runtime as well.
 The target-Audit drain retains the ingress needed for acknowledgments until its
 existing completion/deadline boundary. Cancelling a stop waiter retains cleanup:
 call `stop()` again to join it. Transport cleanup errors retain the owner for retry;
@@ -5131,6 +5147,13 @@ Audit/LifeSafety's fail-closed absence. False or panic returns
 `SERVICES / SERVICE_REQUEST_DENIED` without the denied mutation. WPM authorizes
 each element in order and retains an authorized prefix on later denial or
 malformed input; other covered services authorize once after service decoding.
+A WPM element that an object saves before serving it (a forwarder or Notification
+Class list, an Access Rights rule array, Enable or Accompaniment, an Audit Log's
+Log_Enable or Buffer_Size) is decided before the server stages its save off the
+database lock (#1321): still once, and in wire order among those elements, so
+ahead of earlier elements no object saves first, and possibly for an element the
+request never reaches because an earlier one fails. Counters and audit records
+cover only the elements the handler reaches.
 Callbacks must be fast, nonblocking, and side-effect-free. Context addresses and
 process IDs are claimed, not authenticated identities. DCC/Reinit, Audit/LifeSafety,
 reads, discovery, trusted local writes and unconfirmed services other than WriteGroup
@@ -5516,9 +5539,10 @@ the save in place. The bundled server stages each network or
 it with the guard dropped (on the blocking pool, as for the Audit Log), and the
 write then takes the saved list. A write
 that cannot be saved fails with DEVICE / OPERATIONAL_PROBLEM and leaves the old
-list. WritePropertyMultiple stages too, except under a `mutation_authorizer`,
-which sees each attempt only as the handler reaches it; such an attempt saves
-in place. The operation task's lapse and minute saves coalesce, so a burst
+list. WritePropertyMultiple stages too, its writes to both lists as one save
+(#1423); under a `mutation_authorizer` the server decides each such attempt
+before staging it and stages only those allowed (#1321). The operation task's
+lapse and minute saves coalesce, so a burst
 costs one save of the latest lists; one that fails is logged and retried a
 minute later. `save_counters()` returns a `ForwarderSaveCounters` handle,
 shared with the object, whose `failed_saves()` counts every refused save; take

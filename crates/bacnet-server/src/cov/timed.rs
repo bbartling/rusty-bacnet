@@ -62,16 +62,33 @@
 //! in its reports since it was last admitted or lost a reference; they travel
 //! with the last notification.
 //!
-//! Memory has a ceiling of its own (#1287). Counting each change's item and a
-//! fixed [`CHANGE_OVERHEAD`] for the bookkeeping it holds besides its values,
-//! a context holds no more than the room [`HISTORY_NOTIFICATIONS`]
-//! notifications of the local maximum APDU have, whatever its subscriber's
-//! size, so many tiny changes cannot outgrow it; near the local maximum, the
-//! ceiling binds before the room does. The overhead takes no octets in a
-//! notification, so the room for items leaves it out: charged there, it would
-//! let a 50-octet subscriber keep one REAL Present_Value change where four
-//! notifications carry four. With the subscription caps limiting how many
-//! contexts there are, peers cannot grow this state without limit.
+//! Memory has a ceiling of its own (#1287), counted in the bytes a pending
+//! change really takes (#1357): [`CHANGE_MEMORY`] for the change itself, in
+//! its slot of the history's queue, and for each of its values
+//! [`VALUE_MEMORY`], the value's slots in the change's vectors, plus its
+//! encoded octets on the heap. A context's changes take no more than
+//! [`CEILING_BYTES_PER_OCTET`] bytes for each octet [`HISTORY_NOTIFICATIONS`]
+//! notifications of the local maximum APDU have for items, whatever its
+//! subscriber's size, so many tiny changes cannot outgrow it: 23,216 bytes at
+//! a 1476-octet local maximum, about 116 of the smallest changes (one empty
+//! value each) or 87 REAL Present_Value and Status_Flags changes. A small
+//! change takes eight to thirteen times the bytes in memory that it takes
+//! octets in a notification, and the ratio falls toward one as its values
+//! grow; four bytes an octet keeps about the history #1287 kept when it
+//! charged a fixed 32 octets per change, a quarter of what the smallest
+//! change takes. Near the local maximum the ceiling binds before the room
+//! does for small changes, the room for large ones; a small subscriber's
+//! room binds first. The room counts only octets
+//! that travel in a notification: charged with memory, it would let a
+//! 50-octet subscriber keep one REAL Present_Value change where four
+//! notifications carry four.
+//!
+//! No ceiling spans the table; the subscription caps bound it. Each
+//! COV-multiple reference counts as one subscription, so under the default
+//! global cap of 1,024 there are at most 1,024 contexts, and their pending
+//! changes take at most 1,024 times the ceiling, about 24 MB at a 1476-octet
+//! local maximum, besides the changes eviction may not take, two per
+//! reference at most (below).
 //!
 //! Only on overflow of either limit, the last resort, is a change dropped:
 //! the oldest of the same reference first, then the oldest in the context.
@@ -116,10 +133,19 @@ pub(crate) const HISTORY_NOTIFICATIONS: usize = 4;
 /// Octets of one item's framing: its context-tagged object identifier (5) and
 /// the opening and closing tags of its value list (2).
 pub(crate) const ITEM_FRAMING: usize = 7;
-/// Octets each pending change counts against its context's memory ceiling
-/// beyond its item, for the memory it holds besides its values. The room for
+/// Bytes each pending change counts against its context's memory ceiling for
+/// itself, in its slot of the history's queue (#1357). The room for
 /// notification items does not count it (#1287).
-pub(crate) const CHANGE_OVERHEAD: usize = 32;
+pub(crate) const CHANGE_MEMORY: usize = std::mem::size_of::<TimedChange>();
+/// Bytes each value of a pending change counts against the memory ceiling
+/// besides its encoded octets: the value in the change's vector of values,
+/// and its slot in the vector of positions (#1357).
+pub(crate) const VALUE_MEMORY: usize =
+    std::mem::size_of::<COVNotificationValue>() + std::mem::size_of::<usize>();
+/// Bytes of memory a context's pending changes may take for each octet of
+/// items [`HISTORY_NOTIFICATIONS`] notifications of the local maximum APDU
+/// have (#1357); see the module documentation.
+pub(crate) const CEILING_BYTES_PER_OCTET: usize = 4;
 /// Earliest the deadline backstop acts after a change, and the least spacing
 /// between its attempts on one blocked context.
 const DEADLINE_FLOOR: Duration = Duration::from_secs(1);
@@ -135,8 +161,8 @@ pub(crate) struct TimedChange {
     values: Vec<COVNotificationValue>,
     observation: CovObservation,
     /// Octets the change counts against its context's room for items: its
-    /// encoding and one item's framing. The memory ceiling adds
-    /// [`CHANGE_OVERHEAD`].
+    /// encoding and one item's framing. The memory ceiling counts
+    /// [`memory`](Self::memory) instead.
     octets: usize,
     /// Position of each of `values`, in the same order, among those the change
     /// was captured with: `0..n` at capture. A part of a change sent one value
@@ -232,6 +258,18 @@ impl TimedChange {
         let before = self.octets;
         self.octets = item_octets(&self.values);
         self.octets - before
+    }
+
+    /// Bytes the change counts against its context's memory ceiling:
+    /// [`CHANGE_MEMORY`], and [`VALUE_MEMORY`] and the encoded octets for
+    /// each of its values (#1357).
+    pub(crate) fn memory(&self) -> usize {
+        CHANGE_MEMORY
+            + self
+                .values
+                .iter()
+                .map(|value| VALUE_MEMORY + value.value.len())
+                .sum::<usize>()
     }
 
     /// Capture sequence of the change: its place in capture order across the
@@ -332,18 +370,18 @@ impl ContextTerms {
         (HISTORY_NOTIFICATIONS * self.notification()).saturating_sub(self.reserve)
     }
 
-    /// Octets the context's pending changes may take in memory, as
-    /// [`Held::memory`] counts them: the room [`HISTORY_NOTIFICATIONS`]
-    /// notifications of the local maximum APDU `local` have, whatever the
-    /// subscriber's.
+    /// Bytes the context's pending changes may take in memory, as
+    /// [`Held::memory`] counts them: [`CEILING_BYTES_PER_OCTET`] for each
+    /// octet [`HISTORY_NOTIFICATIONS`] notifications of the local maximum
+    /// APDU `local` have for items, whatever the subscriber's.
     fn ceiling(self, local: usize) -> usize {
-        HISTORY_NOTIFICATIONS * local.saturating_sub(self.envelope)
+        CEILING_BYTES_PER_OCTET * HISTORY_NOTIFICATIONS * local.saturating_sub(self.envelope)
     }
 
     /// Whether the context may hold `held`: within both its room and its
     /// memory ceiling.
     fn holds(self, held: Held, local: usize) -> bool {
-        held.octets <= self.room() && held.memory() <= self.ceiling(local)
+        held.octets <= self.room() && held.memory <= self.ceiling(local)
     }
 }
 
@@ -882,10 +920,14 @@ impl TimedHistories {
             match history.entries.get_mut(at).filter(|e| e.seq == change.seq) {
                 // A change sent one value per notification comes back in
                 // parts, which rejoin as one change (#1090).
-                Some(entry) => added.octets += entry.rejoin(change),
+                Some(entry) => {
+                    let before = entry.memory();
+                    added.octets += entry.rejoin(change);
+                    added.memory += entry.memory() - before;
+                }
                 None => {
                     added.octets += change.octets;
-                    added.changes += 1;
+                    added.memory += change.memory();
                     new_front |= at == 0;
                     history.entries.insert(at, change);
                 }

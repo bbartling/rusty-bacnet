@@ -1,4 +1,5 @@
 mod enrollment_summary_projection;
+mod fold_tests;
 mod lookup;
 mod persistence_tests;
 mod priority;

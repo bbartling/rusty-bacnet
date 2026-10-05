@@ -431,6 +431,10 @@ mod persistence_tests;
 mod staging_tests;
 
 #[cfg(test)]
+#[path = "rights_fold_tests.rs"]
+mod fold_tests;
+
+#[cfg(test)]
 #[path = "rights_accompaniment_tests.rs"]
 mod accompaniment_tests;
 

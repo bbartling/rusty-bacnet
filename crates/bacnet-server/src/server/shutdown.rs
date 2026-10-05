@@ -29,6 +29,14 @@ async fn stop_producer(slot: &mut Option<JoinHandle<()>>) {
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Seal egress, join admitted work, and stop the owned transport.
     ///
+    /// Call it before dropping the server. A server dropped without it in
+    /// async code aborts its tasks and lets the object database go on Tokio's
+    /// blocking pool once they have let go of it (#1409), so the drop returns
+    /// at once, but nothing waits for the objects' last saves. Storage may
+    /// still change after such a drop returns, as those saves and the
+    /// put-back of a staged write (#1363) land, so `stop().await` before
+    /// building another server on the same storage.
+    ///
     /// Once its requests are joined, a write a Notification Forwarder,
     /// Notification Class or Audit Log still holds staged for one of them is
     /// dropped, and stop waits until every save those objects have queued
@@ -177,6 +185,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 }
 
 impl<T: TransportPort> Drop for BACnetServer<T> {
+    /// Seal the server and abort its tasks. In async code the object
+    /// database then drops on Tokio's blocking pool (#1409): the drop returns
+    /// before the objects' last saves land, so storage may still change after
+    /// it. Call [`stop`](BACnetServer::stop) first to wait for them.
     fn drop(&mut self) {
         if let Some(network) = &self.network {
             network.seal_responses();
@@ -191,27 +203,67 @@ impl<T: TransportPort> Drop for BACnetServer<T> {
         }
         self.request_tasks.close();
         self.notification_transactions.close();
-        for task in [
-            &self.dispatch_task,
-            &self.network_number_task,
-            &self.cov_purge_task,
-            &self.fault_detection_task,
-            &self.event_enrollment_task,
-            &self.trend_log_task,
-            &self.schedule_tick_task,
-            &self.intrinsic_reporting_task,
-            &self.binary_lighting_operation_task,
-            &self.cov_revisit_task,
+        let mut tasks: Vec<JoinHandle<()>> = [
+            &mut self.dispatch_task,
+            &mut self.network_number_task,
+            &mut self.cov_purge_task,
+            &mut self.fault_detection_task,
+            &mut self.event_enrollment_task,
+            &mut self.trend_log_task,
+            &mut self.schedule_tick_task,
+            &mut self.intrinsic_reporting_task,
+            &mut self.binary_lighting_operation_task,
+            &mut self.cov_revisit_task,
         ]
         .into_iter()
-        .flatten()
-        {
+        .filter_map(Option::take)
+        .collect();
+        if let Ok(mut timer) = self.dcc_timer.try_lock() {
+            tasks.extend(timer.take());
+        }
+        for task in &tasks {
             task.abort();
         }
-        if let Ok(timer) = self.dcc_timer.try_lock() {
-            if let Some(task) = timer.as_ref() {
-                task.abort();
+        self.let_database_go(tasks);
+    }
+}
+
+impl<T: TransportPort> BACnetServer<T> {
+    /// Let the object database go off the async runtime as the server is
+    /// dropped (#1409).
+    ///
+    /// Dropping the database drops its objects, and a durable object waits
+    /// for the saves it has queued, after putting storage back to the state
+    /// it serves when a write is still staged (#1363). A server dropped in
+    /// async code without `stop()` would block a Tokio worker for as long as
+    /// storage takes. So when a runtime is current, the server's handle goes
+    /// to a task that waits until `tasks`, aborted, and the server's request
+    /// and notification tasks have let go of theirs; then, if nothing else
+    /// holds the database, it is dropped on the blocking pool, as DeleteObject
+    /// drops a removed object. The server's drop returns first, so storage may
+    /// still change after it. An application still holding the database
+    /// drops the last handle itself. With no runtime current, the database
+    /// drops here, as it always has.
+    fn let_database_go(&mut self, tasks: Vec<JoinHandle<()>>) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let db = std::mem::take(&mut self.db);
+        let requests = Arc::clone(&self.request_tasks);
+        let notifications = Arc::clone(&self.notification_transactions);
+        runtime.spawn(async move {
+            for task in tasks {
+                let _ = task.await;
             }
-        }
+            while let Some(result) = requests.join_next().await {
+                super::request_tasks::RequestTasks::observe(Some(result));
+            }
+            while let Some(result) = notifications.join_next().await {
+                NotificationTransactions::observe(Some(result));
+            }
+            if Arc::strong_count(&db) == 1 {
+                drop(tokio::task::spawn_blocking(move || drop(db)));
+            }
+        });
     }
 }

@@ -6,7 +6,9 @@ pub(super) struct BroadcasterState<T: TransportPort> {
     network: SyncMutex<Option<Arc<NetworkLayer<T>>>>,
     requests: Weak<request_tasks::RequestTasks>,
     config: ServerConfig,
-    db: Arc<RwLock<ObjectDatabase>>,
+    /// Weak, so a server dropped without `stop()` is left holding the only
+    /// handle it hands off the runtime (#1409).
+    db: Weak<RwLock<ObjectDatabase>>,
     /// The server's DeviceCommunicationControl state, read before each send.
     comm_state: Arc<CommState>,
     capacity: Arc<Semaphore>,
@@ -28,7 +30,7 @@ impl<T: TransportPort> BroadcasterState<T> {
             network: SyncMutex::new(Some(Arc::clone(network))),
             requests: Arc::downgrade(requests),
             config: config.clone(),
-            db: Arc::clone(db),
+            db: Arc::downgrade(db),
             comm_state: Arc::clone(comm_state),
             capacity: Arc::new(Semaphore::new(32)),
         })
@@ -58,7 +60,7 @@ impl<T: TransportPort + 'static> BroadcasterState<T> {
             .map_err(|_| Error::Encoding("server I-Am broadcast capacity exhausted".into()))?;
         let requests = self.requests.upgrade().ok_or_else(stopped)?;
         let config = self.config.clone();
-        let db = Arc::clone(&self.db);
+        let db = self.db.upgrade().ok_or_else(stopped)?;
         let comm_state = Arc::clone(&self.comm_state);
         let (tx, rx) = oneshot::channel();
         requests.spawn(async move {

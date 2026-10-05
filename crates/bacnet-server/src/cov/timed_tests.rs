@@ -69,10 +69,10 @@ pub(super) fn item_len(payload: usize) -> usize {
     change(0, payload).octets
 }
 
-/// Octets one change of `payload` octets counts against its context's memory
-/// ceiling.
+/// Bytes one change of `payload` octets counts against its context's memory
+/// ceiling (#1357).
 pub(super) fn change_len(payload: usize) -> usize {
-    item_len(payload) + CHANGE_OVERHEAD
+    change(0, payload).memory()
 }
 
 /// Lifetime these tests' contexts are sized with: the longest, so their
@@ -91,7 +91,8 @@ fn apdu_carrying(octets: usize) -> usize {
 /// `payload` octets. The room for items there holds more, so at this size
 /// the ceiling is what binds.
 pub(super) fn apdu_for(n: usize, payload: usize) -> usize {
-    apdu_carrying(n * change_len(payload))
+    let per_octet = CEILING_BYTES_PER_OCTET * HISTORY_NOTIFICATIONS;
+    envelope_len(&context(1), LIFETIME) + (n * change_len(payload)).div_ceil(per_octet)
 }
 
 /// A subscriber's maximum APDU whose room for items holds exactly `n`
