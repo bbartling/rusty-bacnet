@@ -2973,7 +2973,10 @@ reports its end. `stop()` aborts that task with the other request tasks, and
 a run it hadn't started then ends as if none of its writes were made (#1324):
 In_Process FALSE with every command unsuccessful, or a Channel's Write_Status
 FAILED with Reliability PROCESS_ERROR. The call still returns `Ok(())` then,
-since the write was made. Every local write (`write_local`,
+since the write was made. `set_life_safety_operation_expected_local` hands
+its timestamped capture and COV fanout to such a task the same way, so a
+caller dropped once Operation_Expected has changed still notifies its
+subscribers (#1520). Every local write (`write_local`,
 `write_local_encoded`, `set_present_value_local` and the other `*_local`
 setters) must therefore be awaited inside a Tokio runtime: outside one it
 fails with `Error::Encoding` before anything is written.
@@ -5215,7 +5218,9 @@ actuation still requires application-owned idempotency across tracker expiry
 or restart.
 
 Trusted runtime logic can arm or rearm a Life Safety object through
-`BACnetServer::set_life_safety_operation_expected_local`. The lower-level
+`BACnetServer::set_life_safety_operation_expected_local`, awaited inside a
+Tokio runtime like every local write; a caller dropped once the change is
+made still notifies Operation_Expected's subscribers (#1520). The lower-level
 `BACnetObject::set_life_safety_operation_expected_internal` channel also remains
 available to custom database owners. Protocol WriteProperty and
 WritePropertyMultiple cannot forge `Operation_Expected` or `Silenced`.

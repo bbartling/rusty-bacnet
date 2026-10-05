@@ -6,7 +6,8 @@
 //! the change, and a Command or Channel run the write started goes ahead
 //! and reports its end. `stop()` aborts that task with the other request
 //! tasks, so a run it hadn't started ends as if none of its writes were made
-//! (#1324).
+//! (#1324). `set_life_safety_operation_expected_local` hands its
+//! timestamped capture and COV fanout to such a task the same way (#1520).
 //!
 //! Each test holds the COV table for writing, so the work after the commit
 //! parks on it, at the timestamped capture under the write's guard; polls the
@@ -297,5 +298,76 @@ fn a_local_write_outside_a_tokio_runtime_fails_and_writes_nothing() {
     );
     drop(write);
     assert_eq!(runtime.block_on(read_db(&h, target, PV, None)), before);
+    runtime.block_on(h.server.stop()).unwrap();
+}
+
+/// LSP-1, whose Operation_Expected the application rearms.
+fn life_safety_point(db: &mut ObjectDatabase) {
+    db.add(Box::new(
+        bacnet_objects::life_safety::LifeSafetyPointObject::new(1, "LSP-1").unwrap(),
+    ))
+    .unwrap();
+}
+
+fn lsp1() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap()
+}
+
+/// `set_life_safety_operation_expected_local` of SILENCE on `point`.
+fn silence<'a>(h: &'a Harness, point: &'a ObjectIdentifier) -> Write<'a> {
+    Box::pin(
+        h.server
+            .set_life_safety_operation_expected_local(point, LifeSafetyOperation::SILENCE),
+    )
+}
+
+#[tokio::test(start_paused = true)]
+async fn life_safety_rearm_dropped_after_its_change_still_notifies_operation_expected() {
+    let mut h = Harness::start_with(ServerConfig::default(), life_safety_point).await;
+    let expected = PropertyIdentifier::OPERATION_EXPECTED;
+    h.subscribe_specs(false, vec![(lsp1(), vec![(expected, true)])])
+        .await;
+    h.notification().await;
+    h.set_clock(41);
+    let table = Arc::clone(&h.server.cov_table).write_owned().await;
+    // Changed, and dropped where the timestamped capture waits on the table.
+    let point = lsp1();
+    commit_and_drop(&h, silence(&h, &point));
+
+    drop(table);
+    let report = h.notification().await;
+    let rows: Vec<_> = report.list_of_cov_notifications[0]
+        .list_of_values
+        .iter()
+        .filter(|row| row.property_identifier == expected)
+        .collect();
+    let mut value = BytesMut::new();
+    let silence = PropertyValue::Enumerated(LifeSafetyOperation::SILENCE.to_raw());
+    encode_property_value(&mut value, &silence).unwrap();
+    assert_eq!(rows.len(), 1, "{report:?}");
+    assert_eq!(rows[0].value, value.to_vec());
+    assert_eq!(rows[0].time_of_change, Some(time(41)), "{report:?}");
+    h.server.stop().await.unwrap();
+}
+
+#[test]
+fn a_life_safety_rearm_outside_a_tokio_runtime_fails_and_changes_nothing() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let start = Harness::start_with(ServerConfig::default(), life_safety_point);
+    let mut h = runtime.block_on(start);
+    let (point, expected) = (lsp1(), PropertyIdentifier::OPERATION_EXPECTED);
+    let before = runtime.block_on(read_db(&h, point, expected, None));
+    // Polled with no runtime entered, as another executor would poll it.
+    let mut rearm = silence(&h, &point);
+    let polled = rearm.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+    assert!(
+        matches!(polled, Poll::Ready(Err(Error::Encoding(_)))),
+        "{polled:?}"
+    );
+    drop(rearm);
+    assert_eq!(runtime.block_on(read_db(&h, point, expected, None)), before);
     runtime.block_on(h.server.stop()).unwrap();
 }
