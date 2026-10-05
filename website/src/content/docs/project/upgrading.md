@@ -72,6 +72,7 @@ The packaging changed too:
 - Addresses longer than 18 octets are refused by the address codecs, the recipient encoders and You-Are (#1098, #1156, #1200).
 - While DCC disables initiation, the server skips I-Have and `broadcast_i_am()` returns an error; Who-Is still gets an I-Am (#1388).
 - Notifications to a recipient on the local network number go out as local traffic (#1299).
+- Lighting Output carries out its lighting commands: fades and ramps move Tracking_Value over time, steps and STOP act on the priority array, and the warn commands (also Present_Value -1.0 to -3.0) blink and hold for Egress_Time when Blink_Warn_Enable is TRUE. Lighting_Command_Default_Priority refuses 6 (#1384).
 
 ## CLI
 
@@ -113,6 +114,7 @@ Request admission is new: the server caps the requests it works on at once, in t
 
 - Audit Log snapshots from v0.11.0 convert to the new schema on first load (#1233). Keep the backup until the converted log checks out.
 - Custom Audit Log persistence runs on a plain thread with no Tokio context, and a panic fails the save (#1270).
+- Durable saves finish on that writer thread, so a `BACnetServer` dropped without `stop()` returns before storage settles. Call `stop().await` before building another server on the same storage (#1270, #1409).
 - A wildcard BBMD with a persisted BDT finds its own address from that table alone (#952).
 
 ## Verify more than import success
