@@ -12,7 +12,7 @@
 
 use super::{
     unsigned_len, CovSubscriptionKey, DropReason, MultipleContextKey, TimedChange, TimedHistories,
-    TimedHistory, CHANGE_OVERHEAD,
+    TimedHistory,
 };
 
 /// Octets of an unsegmented confirmed request's header: type and flags,
@@ -65,8 +65,9 @@ pub(crate) fn envelope_len(context: &MultipleContextKey, time_remaining: u32) ->
 pub(super) struct Held {
     /// Octets of their items, each as [`TimedChange::octets`] counts it.
     pub(super) octets: usize,
-    /// How many changes.
-    pub(super) changes: usize,
+    /// Bytes they take in memory, each as [`TimedChange::memory`] counts it
+    /// (#1357).
+    pub(super) memory: usize,
 }
 
 impl Held {
@@ -76,20 +77,14 @@ impl Held {
             .into_iter()
             .fold(Self::default(), |held, change| Self {
                 octets: held.octets + change.octets,
-                changes: held.changes + 1,
+                memory: held.memory + change.memory(),
             })
-    }
-
-    /// Octets these changes count against the memory ceiling: their items
-    /// and [`CHANGE_OVERHEAD`] each.
-    pub(super) fn memory(self) -> usize {
-        self.octets + self.changes * CHANGE_OVERHEAD
     }
 
     /// Count `more` changes as well.
     pub(super) fn grow(&mut self, more: Held) {
         self.octets += more.octets;
-        self.changes += more.changes;
+        self.memory += more.memory;
     }
 }
 
@@ -167,11 +162,11 @@ impl TimedHistories {
             return;
         };
         debug_assert!(
-            held.octets >= released.octets && held.changes >= released.changes,
+            held.octets >= released.octets && held.memory >= released.memory,
             "released {released:?} of {held:?}"
         );
         held.octets = held.octets.saturating_sub(released.octets);
-        held.changes = held.changes.saturating_sub(released.changes);
+        held.memory = held.memory.saturating_sub(released.memory);
         if *held == Held::default() {
             self.context_held.remove(context);
         }
@@ -191,7 +186,8 @@ mod tests {
         change, context, dropped, frame, histories, key, seconds, timed_reference,
     };
     use super::super::{
-        value_len, TimedChange, CHANGE_OVERHEAD, HISTORY_NOTIFICATIONS, ITEM_FRAMING,
+        value_len, TimedChange, CEILING_BYTES_PER_OCTET, CHANGE_MEMORY, HISTORY_NOTIFICATIONS,
+        ITEM_FRAMING, VALUE_MEMORY,
     };
     use super::*;
     use crate::cov::{
@@ -321,10 +317,25 @@ mod tests {
     }
 
     /// Changes of `payload` octets: the octets one takes as an item, and
-    /// those it counts against the memory ceiling.
+    /// the bytes it counts against the memory ceiling.
     fn sizes(payload: usize) -> (usize, usize) {
         let items = item_len(&change(0, payload));
-        (items, items + CHANGE_OVERHEAD)
+        (items, change(0, payload).memory())
+    }
+
+    /// #1357: the memory terms are the sizes of what a pending change holds,
+    /// as measured on the 64-bit targets CI builds. A field added to either
+    /// structure makes this fail, so the ceiling's sums get looked at again.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn the_memory_terms_are_the_measured_sizes() {
+        assert_eq!(std::mem::size_of::<TimedChange>(), 144);
+        assert_eq!(std::mem::size_of::<COVNotificationValue>(), 48);
+        assert_eq!((CHANGE_MEMORY, VALUE_MEMORY), (144, 56));
+        // The smallest change, one empty value, and a REAL Present_Value,
+        // whose value takes five octets.
+        assert_eq!(change(0, 0).memory(), 200);
+        assert_eq!(real_present_value(0).memory(), 205);
     }
 
     /// #1287: at the smallest maximum APDU a subscriber can advertise, the
@@ -364,22 +375,26 @@ mod tests {
 
     /// #1287: across subscriber and change sizes, a context keeps as many
     /// changes as fit both its room for items, four notifications of its
-    /// size less its envelope, and its memory ceiling, the room four
-    /// notifications of the local maximum APDU have with [`CHANGE_OVERHEAD`]
-    /// counted per change; never fewer than one, its newest. A subscriber
-    /// as large as this device is held by the ceiling alone.
+    /// size less its envelope, and its memory ceiling, four bytes for each
+    /// octet four notifications of the local maximum APDU have for items,
+    /// each change counted as [`TimedChange::memory`] counts it (#1357);
+    /// never fewer than one, its newest. A subscriber as large as this
+    /// device is held by the ceiling while its changes are small, and by its
+    /// room once a value is large enough to take fewer bytes in memory per
+    /// octet it takes in a notification.
     #[test]
     fn the_bound_keeps_what_fits_both_its_notifications_and_its_memory_ceiling() {
         let (k, small) = (key(1, 1), context(1));
         let envelope = envelope_len(&small, 120);
-        let ceiling = HISTORY_NOTIFICATIONS * (LOCAL - envelope);
+        let ceiling = CEILING_BYTES_PER_OCTET * HISTORY_NOTIFICATIONS * (LOCAL - envelope);
         for subscriber in [50, 128, 206, 480, 1024, 1476] {
             let room = HISTORY_NOTIFICATIONS * (usize::from(subscriber) - envelope);
             for payload in [0, 2, 5, 40, 200, 2000] {
                 let (items, memory) = sizes(payload);
                 let fit = (room / items).min(ceiling / memory).max(1);
                 if usize::from(subscriber) == LOCAL {
-                    assert!(ceiling / memory <= room / items);
+                    let ceiling_binds = ceiling / memory < room / items;
+                    assert_eq!(ceiling_binds, payload <= 40, "payload {payload}");
                 }
                 let counters = Arc::new(AtomicCovCounters::default());
                 let mut h = TimedHistories::new(LOCAL, Arc::clone(&counters));
@@ -403,15 +418,18 @@ mod tests {
     /// subscribers push however many of the smallest changes. Small
     /// contexts keep what four of their notifications carry, far below it;
     /// contexts as large as this device keep what it allows; and none holds
-    /// more, counted with [`CHANGE_OVERHEAD`] per change, than four
-    /// notifications of the local maximum APDU.
+    /// more bytes, counted as each change really takes them (#1357), than
+    /// four for each octet four notifications of the local maximum APDU
+    /// have for items.
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn the_memory_ceiling_caps_every_context_under_many_subscribers() {
         let counters = Arc::new(AtomicCovCounters::default());
         let mut h = TimedHistories::new(LOCAL, Arc::clone(&counters));
-        // The smallest timestamped change: one empty value.
+        // The smallest timestamped change: one empty value, 16 octets as an
+        // item and 200 bytes in memory.
         let (items, memory) = sizes(0);
-        assert_eq!((items, memory), (16, 48));
+        assert_eq!((items, memory), (16, CHANGE_MEMORY + VALUE_MEMORY));
         // 64 contexts of two references each, every other one at 50 octets.
         let contexts: Vec<_> = (1..=64u32)
             .map(|process| (process, (process % 2 == 0).then_some(50u16)))
@@ -431,19 +449,20 @@ mod tests {
         }
         for &(process, subscriber) in &contexts {
             let envelope = envelope_len(&context(process), 120);
-            let ceiling = HISTORY_NOTIFICATIONS * (LOCAL - envelope);
+            let ceiling = CEILING_BYTES_PER_OCTET * HISTORY_NOTIFICATIONS * (LOCAL - envelope);
             let held: usize = (1..=2)
                 .map(|instance| h.drain(&key(process, instance), 1).1.len())
                 .sum();
             assert!(held * memory <= ceiling, "process {process}");
             // A small context fills its 100 octets of items; one as large as
-            // this device, its 5804 octets of memory.
+            // this device, its 23,216 bytes of memory: 116 changes, where a
+            // fixed 32 octets counted per change for bookkeeping kept 120.
             let (expected, fit) = match subscriber {
                 Some(apdu) => (
                     6,
                     HISTORY_NOTIFICATIONS * (usize::from(apdu) - envelope) / items,
                 ),
-                None => (120, ceiling / memory),
+                None => (116, ceiling / memory),
             };
             assert_eq!((held, fit), (expected, expected), "process {process}");
         }

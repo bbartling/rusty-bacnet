@@ -4185,15 +4185,19 @@ timestamp and the list's tags, 25 to 33 octets in all (#1197). Each change count
 its encoding and one item's framing, as if it started an item of its own. The
 context also keeps room, at most one notification's worth, for the most its
 untimestamped values have taken in one report since it was last admitted or lost
-a reference. Memory has a ceiling of its own (#1287): counting each change with a
-fixed 32 octets more for the memory it holds besides its values, one context
-never holds more than four notifications of the server's own maximum APDU,
-whatever its subscriber's size, so many tiny changes cannot outgrow it. The
-overhead takes no room in a notification, so with the shortest envelope a
-50-octet subscriber keeps four REAL Present_Value changes, one per notification,
-on a server whose own maximum APDU is 78 octets or more. Near the local maximum
-the ceiling binds first, and the subscription caps (`CovPolicy`) limit how many
-contexts there are, so the history as a whole stays bounded. Only on overflow
+a reference. Memory has a ceiling of its own (#1287), counted in the bytes each
+pending change really takes (#1357): the change itself and, for each value, its
+slots in the change's vectors and its encoded octets. One context's changes never
+take more than four bytes for each octet four notifications of the server's own
+maximum APDU have for items, whatever its subscriber's size, so many tiny changes
+cannot outgrow it: 23,216 bytes at a 1476-octet maximum, some 116 of the smallest
+changes. That memory takes no room in a notification, so with the shortest
+envelope a 50-octet subscriber keeps four REAL Present_Value changes, one per
+notification, on a server whose own maximum APDU is 77 octets or more. Near the
+local maximum the ceiling binds first for small changes, and the subscription
+caps (`CovPolicy`) limit how many contexts there are: under the default 1,024
+subscriptions the histories take about 24 MB at most, besides the changes that
+are never dropped (below). Only on overflow
 of either limit, the last resort, is a change dropped: the oldest of the same
 reference first, then the oldest in the context, never a reference's latest.
 Nor is a reference's change in delivery dropped: once a change sent one value
