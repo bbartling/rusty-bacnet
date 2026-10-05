@@ -444,10 +444,15 @@ async fn event_enable_dcc_empty_and_unresolved_recipients_preserve_acceptance_wi
             0x40 + index as u8,
         );
         assert!(harness.acknowledged().await);
-        assert!(
-            harness.frames().is_empty(),
-            "case {index} must not fall back"
-        );
+        // The unresolved Device is looked for with a Who-Is (#1368), which
+        // is no notification.
+        let (who_is, notifications): (Vec<_>, Vec<_>) = harness
+            .sent
+            .frames()
+            .into_iter()
+            .partition(super::event_recipient_routing_tests::is_who_is);
+        assert!(notifications.is_empty(), "case {index} must not fall back");
+        assert_eq!(who_is.len(), usize::from(index == 2));
     }
 
     let disable_initiation = Harness::new(

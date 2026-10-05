@@ -58,8 +58,17 @@ pub struct EventNotificationCounters {
     pub recipient_list_too_long: u64,
     /// Device recipients skipped because the server has no current binding
     /// for them: none was configured or observed, or the observed one has
-    /// expired. Both clear once the device's I-Am is observed again or a
-    /// binding is configured.
+    /// expired, and looking for the device found none. Such a recipient's
+    /// notification waits in its device's queue for the I-Am a targeted
+    /// Who-Is asks for (#1368), behind any already waiting there; it counts
+    /// here once when the device stays silent past the APDU timeout (a
+    /// minute at most), or at once when no Who-Is may go out for it (within
+    /// a minute of one that drew nothing, or with 256 devices already being
+    /// looked for) or 1,024 notifications already wait. Both clear once the
+    /// device's I-Am is observed again or a binding is configured. A
+    /// confirmed notification whose observed binding expires before a retry
+    /// ends at that retry, its invoke ID freed, and counts here rather than
+    /// in `confirmed_unanswered` (#1371).
     pub device_recipient_unbound: u64,
     /// Recipients that cannot be routed as configured, so no binding or
     /// retry delivers them: a Device recipient whose identifier is not a

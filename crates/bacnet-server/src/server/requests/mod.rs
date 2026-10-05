@@ -196,7 +196,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             s if s == ConfirmedServiceChoice::READ_PROPERTY => {
                 confirmed_response::read_property_response_observed(
                     db,
-                    Some(cov_table.as_ref()),
+                    Some(services.live_tables()),
                     crate::device_view::DeviceExecution::FullServer,
                     config.registered_network_port,
                     config.read_property_multiple_budget.max_result_elements,
@@ -228,7 +228,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             s if s == ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE => {
                 let result = confirmed_response::read_property_multiple_observed(
                     db,
-                    cov_table,
+                    services.live_tables(),
                     &req.service_request,
                     &mut ack_buf,
                     config.read_property_multiple_budget,
@@ -321,7 +321,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             s if s == ConfirmedServiceChoice::READ_RANGE => {
                 read_range::response(
                     db,
-                    cov_table,
+                    services.live_tables(),
                     &req,
                     config,
                     effective_max_apdu,

@@ -380,6 +380,7 @@ its octets.
 | Global Group | Present_Value | `"property_access_result"` | the member's `DeviceObjectPropertyReference` keys, then `"value"` (shaped as a read of the member) and `"error"` (`(ErrorClass, ErrorCode)`), one of them `None` | none |
 | Device | Audit_Notification_Recipient (one value) | `"recipient"` | an `AuditRecipientInput` mapping | `configure_audit_recipient(...)` |
 | Device | Active_COV_Subscriptions | `"cov_subscription"` | `{"recipient", "process_identifier", "object_identifier", "property_identifier", "property_array_index", "issue_confirmed_notifications", "time_remaining", "cov_increment"}`; `recipient` an `AuditRecipientInput` mapping, `cov_increment` a `float` or `None` | none |
+| Device | Device_Address_Binding | `"address_binding"` | `{"device_identifier", "network_number", "mac_address"}`; `network_number` 0 for a device on this network, `mac_address` its own MAC, not a router's | none |
 | Schedule | Weekly_Schedule | `"daily_schedule"` | one day: `[(time, value), ...]`, `time` an `(hour, minute, second, hundredths)` tuple and `value` a `PropertyValue` | none |
 | Schedule | Exception_Schedule | `"special_event"` | `{"period", "time_values", "priority"}`; `period` a calendar entry mapping or a Calendar's `ObjectIdentifier`, `time_values` as for a day | none |
 | Schedule | Effective_Period (one value) | `"date_range"` | `(start_date, end_date)` | none |
@@ -3151,7 +3152,11 @@ evaluator, the one network reads use, so the result equals what a network
 `read_property` of the same property returns. A Group's Present_Value is
 rebuilt from its members, Device instance `4194303` names this server's
 Device, and the Device's Active_COV_Subscriptions lists the live
-subscriptions. The value takes the [read result](#read-results) shape. An
+subscriptions. Its Device_Address_Binding lists the server's device bindings
+(#1369): each `add_device_binding` and each device whose I-Am arrived in the
+last ten minutes, one `"address_binding"` element each (see the typed
+constructed values below). The value takes the
+[read result](#read-results) shape. An
 unknown object or property raises `BacnetProtocolError` with the error a
 network read gets (`UNKNOWN_OBJECT`, for example). A Group whose member rows
 exceed `rpm_max_result_elements` raises `BacnetAbortError` with
@@ -3399,7 +3404,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `recipient_list_unavailable` | Transitions sent nowhere because reading the class's Recipient_List failed |
 | `recipient_list_invalid` | Transitions sent nowhere because the Recipient_List did not decode as a whole (no decodable prefix is used) |
 | `recipient_list_too_long` | Transitions sent nowhere because a custom class served more than 32 destinations |
-| `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired |
+| `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired, and a targeted Who-Is drew no I-Am within the APDU timeout (or none could go out, within a minute of one that drew nothing); also a confirmed notification ended at a retry because the observed binding had expired by then |
 | `recipient_unroutable` | Matched recipients skipped because they can't be routed as written: a Device identifier that isn't a Device (or a binding unusable on this link), or a MAC on network 65535 |
 | `confirmed_broadcast_recipient` | Matched recipients skipped because they ask for confirmed notifications at a broadcast address, or another group address such as a multicast one, which only unconfirmed requests may use (Clause 6.3) |
 | `confirmed_no_invoke_id` | Confirmed notifications to one recipient not sent because no invoke ID was free |

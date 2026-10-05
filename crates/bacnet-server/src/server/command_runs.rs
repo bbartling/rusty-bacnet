@@ -8,9 +8,11 @@
 //! neither the request that wrote Present_Value nor `write_local` waits for
 //! it, delays included, and `stop` cancels it with the other request work.
 //! Until [`CommandRunner::start`] queues that task, the writer holds the run
-//! in a [`TakenRuns`], so a writer dropped after its commit, `write_local`
-//! under a caller's timeout for one, ends the run instead of leaving its
-//! object busy (#1324).
+//! in a [`TakenRuns`], so a writer dropped after its commit ends the run
+//! instead of leaving its object busy (#1324). `write_local` hands what a
+//! committed write owes, its runs included, to a request task, so its
+//! caller's timeout no longer drops them (#1367); `stop()` aborting that
+//! task does.
 //!
 //! A Command's writes are made one at a time, and a Channel's local members
 //! in delay order beside its remote ones (`crate::command_lists`), each local

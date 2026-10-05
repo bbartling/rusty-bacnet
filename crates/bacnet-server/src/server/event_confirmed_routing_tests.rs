@@ -14,7 +14,7 @@
 use super::device_bindings::{DeviceBindingTable, OBSERVED_BINDING_TTL};
 use super::event_notifications::CommittedIntrinsicTransition;
 use super::event_notifications_tests::local_broadcast_destination;
-use super::event_recipient_routing_tests::{address_recipient, destination_for};
+use super::event_recipient_routing_tests::{address_recipient, destination_for, is_who_is};
 use super::*;
 use crate::server::test_transport::{SendLog, TestTransport, BIP_LOCAL_MAC};
 use bacnet_encoding::constructed::decode_event_notification;
@@ -442,6 +442,7 @@ async fn observed_routed_device_stops_emitting_when_retry_reaches_expiry() {
     harness.distribute().await;
 
     assert_eq!(harness.unicast_frames().len(), 1);
+    assert_eq!(harness.notification_transactions.active_count(), 1);
     tokio::time::advance(Duration::from_secs(1)).await;
     for _ in 0..16 {
         tokio::task::yield_now().await;
@@ -453,6 +454,29 @@ async fn observed_routed_device_stops_emitting_when_retry_reaches_expiry() {
         "an observed route cannot emit at or after its expiry boundary"
     );
     assert!(harness.broadcast_frames().is_empty());
+    // The retry that finds the binding lapsed ends the notification there
+    // (#1371): its invoke ID is free at once, and it counts as a recipient
+    // with no binding, not as one that never answered.
+    assert_eq!(
+        harness.notification_transactions.active_count(),
+        0,
+        "the lease is freed at the retry, not after the last timeout"
+    );
+    let counted = |counters: super::event_suppression::EventNotificationCounters| {
+        (
+            counters.device_recipient_unbound,
+            counters.confirmed_unanswered,
+        )
+    };
+    assert_eq!(counted(harness.suppressions.snapshot()), (1, 0));
+    // Every timeout the notification would have waited out passes: nothing
+    // more is sent or counted.
+    tokio::time::advance(Duration::from_secs(5)).await;
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(harness.unicast_frames().len(), 1);
+    assert_eq!(counted(harness.suppressions.snapshot()), (1, 0));
 }
 
 /// Decode a captured frame into its NPDU and the confirmed request inside.

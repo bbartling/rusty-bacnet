@@ -39,6 +39,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// (`PropertyValue::ApplicationData`). After [`stop`](Self::stop) the
     /// server services no subscriptions, so both properties read as empty lists.
     ///
+    /// The selected Device's `Device_Address_Binding` lists the server's device
+    /// bindings at the time of the read (#1369): each configured
+    /// [`DeviceBinding`] and each device whose I-Am was heard in the last ten
+    /// minutes, in Device instance order, as a `PropertyValue::List` whose
+    /// items are encoded BACnetAddressBindings
+    /// (`PropertyValue::ApplicationData`). A device on this network has
+    /// network number 0. The bindings outlast `stop`, so they still read then.
+    ///
     /// A Group's `Present_Value` is rebuilt from its members, whose rows count
     /// against the ReadPropertyMultiple work limit
     /// ([`ReadPropertyMultipleBudget::max_result_elements`](crate::server::ReadPropertyMultipleBudget))
@@ -70,18 +78,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         reason: AbortReason::OUT_OF_RESOURCES.to_raw(),
                     },
                 })?;
+        use super::requests::confirmed_response::{active_cov_snapshot, address_bindings};
         let live = match plan.live_cov(&db) {
             Some(selection) if self.dispatch_task.is_none() => {
-                Some(crate::cov::active::LiveDeviceCov::stopped(selection))
-            }
-            Some(selection) => Some(
-                super::requests::confirmed_response::active_cov_snapshot(
-                    &db,
-                    &self.cov_table,
-                    selection,
+                let bindings = address_bindings(&self.device_bindings, selection).await;
+                Some(
+                    crate::cov::active::LiveDeviceCov::stopped(selection)
+                        .with_address_bindings(selection, bindings),
                 )
-                .await,
-            ),
+            }
+            Some(selection) => {
+                let tables = super::requests::confirmed_response::LiveTables {
+                    cov: &self.cov_table,
+                    bindings: &self.device_bindings,
+                };
+                Some(active_cov_snapshot(&db, tables, selection).await)
+            }
             None => None,
         };
         let view = view.with_live(live.as_ref());
@@ -101,6 +113,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// path, with its COV, event and audit work. A value read with
     /// [`read_local`](Self::read_local) and encoded therefore writes back, and
     /// any value a network client could write is accepted here.
+    ///
+    /// Like `write_local`, it must be awaited inside a Tokio runtime, failing
+    /// before anything is written outside one, and a caller dropped once the
+    /// write has committed skips none of the work the write owes (#1367).
     pub async fn write_local_encoded(
         &self,
         oid: &ObjectIdentifier,

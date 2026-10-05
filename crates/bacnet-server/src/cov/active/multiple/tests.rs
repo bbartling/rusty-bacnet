@@ -299,6 +299,7 @@ fn live_device_cov_resolves_only_selected_lists() {
             device: device(),
             active: selected_active,
             multiple: selected_multiple,
+            address_bindings: false,
         };
         let entries = table.live_cov_entries(selection, Instant::now());
         for live in [
@@ -312,6 +313,15 @@ fn live_device_cov_resolves_only_selected_lists() {
                 live.resolve(device(), PropertyIdentifier::OBJECT_NAME),
                 None
             );
+            // Device_Address_Binding comes only from what the binding table
+            // gave the request.
+            let bindings = PropertyIdentifier::DEVICE_ADDRESS_BINDING;
+            assert_eq!(live.resolve(device(), bindings), None);
+            let listed = PropertyValue::List(Vec::new());
+            let live = live.with_address_bindings(selection, Some(listed.clone()));
+            assert_eq!(live.resolve(device(), bindings), Some(listed));
+            let other = ObjectIdentifier::new(ObjectType::DEVICE, 99).unwrap();
+            assert_eq!(live.resolve(other, bindings), None);
         }
     }
 }

@@ -152,6 +152,14 @@ impl<T: TransportPort + 'static> RequestServices<T> {
             local_apdu_capacity: self.config.max_apdu_length,
         }
     }
+
+    /// The tables a read samples the Device's server-owned lists from.
+    pub(super) fn live_tables(&self) -> super::requests::confirmed_response::LiveTables<'_> {
+        super::requests::confirmed_response::LiveTables {
+            cov: &self.cov_table,
+            bindings: &self.device_bindings,
+        }
+    }
 }
 
 #[cfg(test)]

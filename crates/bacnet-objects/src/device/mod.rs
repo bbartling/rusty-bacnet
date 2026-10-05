@@ -241,7 +241,8 @@ impl DeviceObject {
             PropertyValue::CharacterString(String::new()),
         );
 
-        // Device_Address_Binding — starts empty; populated as devices are discovered.
+        // Device_Address_Binding: stored empty. A running server serves its
+        // device bindings in place of this value (bacnet-server, #1369).
         properties.insert(
             PropertyIdentifier::DEVICE_ADDRESS_BINDING,
             PropertyValue::List(Vec::new()),

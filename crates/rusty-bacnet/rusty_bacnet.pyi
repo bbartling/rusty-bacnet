@@ -1436,7 +1436,9 @@ class PropertyValue:
       Exception_Schedule (``"special_event"``), Effective_Period
       (``"date_range"``), Date_List (``"calendar_entry"``), timestamps
       (``"timestamp"``: a ``BACnetTimeStamp``), Active_COV_Subscriptions
-      (``"cov_subscription"``), Value_Source and Value_Source_Array
+      (``"cov_subscription"``), Device_Address_Binding
+      (``"address_binding"``: ``device_identifier``, ``network_number`` and
+      ``mac_address``), Value_Source and Value_Source_Array
       (``"value_source"``), and an Accumulator's Scale (``"scale"``: a
       ``float`` or an ``int``) and Prescale (``"prescale"``: ``(multiplier,
       modulo_divide)``). Each element keeps its octets, so the value
@@ -1527,7 +1529,8 @@ class PropertyValue:
         'stage_limit_value', 'access_rule', 'device_object_property_reference',
         'property_access_result', 'recipient', 'daily_schedule',
         'special_event', 'calendar_entry', 'date_range', 'timestamp',
-        'cov_subscription', 'value_source', 'scale', 'prescale'."""
+        'cov_subscription', 'value_source', 'scale', 'prescale',
+        'address_binding'."""
         ...
 
     @property
@@ -3613,7 +3616,12 @@ class BACnetServer:
         The result equals what a network ``read_property`` of the same
         property returns: a Group's Present_Value is rebuilt from its
         members, Device instance 4194303 names this server's Device, and the
-        Device's COV subscription lists are live. An unknown object or
+        Device's COV subscription lists are live. Its Device_Address_Binding
+        is a list with one ``"address_binding"`` element per device binding
+        the server holds (each ``add_device_binding``, and each device whose
+        I-Am it heard in the last ten minutes): a mapping of
+        ``device_identifier``, ``network_number`` (0 on this network) and
+        ``mac_address``. An unknown object or
         property raises ``BacnetProtocolError`` with the network error, and a
         Group whose member rows exceed ``rpm_max_result_elements`` raises
         ``BacnetAbortError`` (reason 9, OUT_OF_RESOURCES).

@@ -4,6 +4,12 @@ use crate::command_lists::TakenRuns;
 use crate::handlers::{WriteCommitObserver, WriteTarget};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_types::constructed::BACnetRecipient;
+use futures_util::FutureExt;
+use tracing::error;
+
+#[path = "local_write_finish.rs"]
+mod finish;
+pub(super) use finish::Committed;
 
 #[cfg(test)]
 #[path = "input_present_value_tests.rs"]
@@ -131,15 +137,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// # Cancellation
     ///
-    /// Dropping the future once the write has committed keeps the write but
-    /// skips the COV and event work not yet done, and a Staging plan the
-    /// write queued is never carried out (#1367). A Command list or Channel
-    /// distribution the write started and hadn't yet handed to its task ends
-    /// as if none of its writes were made (#1324): In_Process FALSE with each
-    /// command unsuccessful, or Write_Status FAILED. It ends at once, or as
-    /// soon as the database is free, without `stop()`. A future dropped
-    /// outside a Tokio runtime while the database is busy can't wait for it:
-    /// a warning is logged and the object stays busy.
+    /// Dropped before the write commits, the future makes no change. Once it
+    /// has committed, the work the write owes (the event pass, the COV
+    /// fanout, a re-evaluated Schedule's target fanout, a Staging plan, and
+    /// the Command or Channel runs it started) runs as a task of its own in
+    /// the server's request task set, which this future only waits for, so
+    /// dropping the future skips none of it (#1367): subscribers hear of the
+    /// change, and a run ends as it would have, reported to its property
+    /// subscribers. `stop()` aborts that task with the other request tasks,
+    /// as it does a request handler: what it hadn't sent by then is not
+    /// sent, and a run it hadn't started ends as if none of its writes were
+    /// made (#1324), In_Process FALSE with each command unsuccessful, or
+    /// Write_Status FAILED. The call still returns `Ok(())` then: the write
+    /// was made. A panic in that work is raised again in the caller, as it
+    /// would be were the work done in place.
+    ///
+    /// The future must be awaited inside a Tokio runtime, which the task is
+    /// spawned onto: outside one it fails with [`Error::Encoding`] before
+    /// anything is written.
     ///
     /// [`WriteProperty`]: bacnet_services::write_property::WritePropertyRequest
     pub async fn write_local(
@@ -192,6 +207,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Safety COV path. The built-in objects run no intrinsic reporting, so
     /// the post-write event pass raises nothing for them.
     ///
+    /// Like [`write_local`](Self::write_local), it must be awaited inside a
+    /// Tokio runtime, failing before anything is written outside one, and a
+    /// caller dropped once the write has committed skips none of the work
+    /// the write owes (#1367).
+    ///
     /// [`BACnetObject::set_present_value_internal`]: bacnet_objects::traits::BACnetObject::set_present_value_internal
     pub async fn set_present_value_local(
         &self,
@@ -220,6 +240,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// change; a SubscribeCOV on the Loop is not, since the Loop's COV report
     /// carries this value without being triggered by it, so its next report
     /// carries the new value. The property stays read-only over the network.
+    ///
+    /// Like [`write_local`](Self::write_local), it must be awaited inside a
+    /// Tokio runtime, failing before anything is written outside one, and a
+    /// caller dropped once the write has committed skips none of the work
+    /// the write owes (#1367).
     pub async fn set_controlled_variable_value_local(
         &self,
         oid: &ObjectIdentifier,
@@ -267,6 +292,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// and staying at it never is. The report has no Status_Flags because the
     /// object has none. The Python binding exposes this as
     /// `BACnetServer.add_averaging_sample_local`.
+    ///
+    /// Like [`write_local`](Self::write_local), it must be awaited inside a
+    /// Tokio runtime, failing before anything is written outside one, and a
+    /// caller dropped once the write has committed skips none of the work
+    /// the write owes (#1367).
     pub async fn add_averaging_sample_local(
         &self,
         oid: &ObjectIdentifier,
@@ -311,6 +341,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// database lock is released; whole-object SubscribeCOV reports don't
     /// carry it. The property stays read-only over the network in service.
     /// The Python binding exposes this as `BACnetServer.set_tracking_value_local`.
+    ///
+    /// Like [`write_local`](Self::write_local), it must be awaited inside a
+    /// Tokio runtime, failing before anything is written outside one, and a
+    /// caller dropped once the write has committed skips none of the work
+    /// the write owes (#1367).
     pub async fn set_tracking_value_local(
         &self,
         oid: &ObjectIdentifier,
@@ -320,6 +355,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .await
     }
 
+    /// Commit the write, then hand what it owes to a task of its own in the
+    /// request task set and wait for that task (#1367). The commit holds the
+    /// database guard to the hand-off with no wait in between, so a caller
+    /// dropped once the write has committed leaves the task running: its
+    /// event pass, COV fanout, Schedule fanout, Staging plan and runs all go
+    /// ahead. `stop()` aborts the task with the other request tasks. With
+    /// no Tokio runtime to run that task on, nothing is written.
     async fn write_local_as(
         &self,
         oid: &ObjectIdentifier,
@@ -327,12 +369,49 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         value: PropertyValue,
         source: Option<crate::LocalCommandSource>,
     ) -> Result<(), Error> {
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| Error::Encoding("Local writes require a Tokio runtime".into()))?;
         self.active_network()?;
-        let runs = self.local_writer().write(oid, write, value, source).await?;
-        if !runs.is_empty() {
-            super::command_runs::CommandRunner::for_server(self).start(runs);
+        let Some(committed) = self
+            .local_writer()
+            .commit(oid, write, value, source)
+            .await?
+        else {
+            return Ok(());
+        };
+        let runner = super::command_runs::CommandRunner::for_server(self);
+        let (done, finished) = oneshot::channel();
+        // A closed set (the server is stopping) drops the task, and with it
+        // the guard and the runs, which then end unsuccessful (#1324).
+        self.request_tasks.spawn_on(
+            async move {
+                let work = std::panic::AssertUnwindSafe(async {
+                    let runs = runner.writer().finish(committed).await;
+                    if !runs.is_empty() {
+                        runner.start(runs);
+                    }
+                });
+                // A panic goes back to the caller. With the caller gone, it
+                // is logged here, as this write's, and goes no further.
+                if let Err(Err(panic)) = done.send(work.catch_unwind().await) {
+                    let message = panic
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                        .unwrap_or("a non-text payload");
+                    error!(
+                        panic = message,
+                        "A local write's post-commit work panicked after its caller went away"
+                    );
+                }
+            },
+            &runtime,
+        );
+        match finished.await {
+            Ok(Err(panic)) => std::panic::resume_unwind(panic),
+            // Done, or aborted by `stop()`: either way the write was made.
+            Ok(Ok(())) | Err(_) => Ok(()),
         }
-        Ok(())
     }
 
     /// Borrow the handles a local write uses, once the caller has checked
@@ -540,7 +619,8 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
     /// changed, for the caller to start. They are taken under the write's
     /// guard and held in a [`TakenRuns`] until then, so dropping this future
     /// part way, after the commit, ends them rather than leaving their
-    /// objects busy (#1324).
+    /// objects busy (#1324). `write_local` runs the two halves itself, the
+    /// second as a task of its own (#1367).
     pub(super) async fn write(
         &self,
         oid: &ObjectIdentifier,
@@ -548,6 +628,24 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
         value: PropertyValue,
         source: Option<crate::LocalCommandSource>,
     ) -> Result<TakenRuns, Error> {
+        match self.commit(oid, write, value, source).await? {
+            Some(committed) => Ok(self.finish(committed).await),
+            None => Ok(TakenRuns::default()),
+        }
+    }
+
+    /// The first half of [`Self::write`]: the checks and the commit, under a
+    /// database guard it keeps. `None` for a write that changed nothing and
+    /// owes nothing more; otherwise the guard and what the write owes, for
+    /// [`Self::finish`]. Nothing here waits once the object has the value,
+    /// so a caller dropped before this returns made no change.
+    pub(super) async fn commit(
+        &self,
+        oid: &ObjectIdentifier,
+        write: LocalWrite<'_>,
+        value: PropertyValue,
+        source: Option<crate::LocalCommandSource>,
+    ) -> Result<Option<Committed>, Error> {
         // Only a property write can carry OBJECT_NAME, so only it needs the name
         // index kept in step.
         let renaming = matches!(
@@ -570,8 +668,10 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             _ => Vec::new(),
         };
         let staged = super::durable_writes::stage(self.db, durable).await;
-        let (exact_changes, staging_plans, mut command_runs, schedule_cov) = {
-            let mut db = self.db.write().await;
+        {
+            // Owned, so the rest of the write can take it to a task of its
+            // own with no wait between the commit and the hand-off (#1367).
+            let mut db = Arc::clone(self.db).write_owned().await;
             let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_oid(&db, *oid);
             if let Err(error) = precheck(&db, oid, write, &value) {
                 // Nothing reached the object: what was staged goes back.
@@ -596,7 +696,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                         number,
                         "WriteGroup skips a Channel no longer in the group with that number"
                     );
-                    return Ok(TakenRuns::default());
+                    return Ok(None);
                 }
                 group_skips_delays =
                     inhibit_delay && super::write_group::allows_delay_inhibit(object);
@@ -773,7 +873,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                     if let Some(audit) = &mut audit {
                         audit.committed(&mut db);
                     }
-                    return Ok(TakenRuns::default());
+                    return Ok(None);
                 }
             }
             if let Err(error) = result {
@@ -798,58 +898,15 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 super::write_group::skip_delays(&mut command_runs, *oid);
             }
             let changes = snapshots.changes(&db, std::slice::from_ref(oid));
-            let capture = {
-                let table = self.cov_table.read().await;
-                if life_safety {
-                    table.timed_capture_exact(&changes)
-                } else {
-                    table.timed_capture(*oid)
-                }
-            };
-            capture.run(&db);
-            let schedule_cov = crate::schedule::reevaluate_written(
-                self.db,
-                &mut db,
-                std::slice::from_ref(oid),
-                self.cov_table,
-            )
-            .await;
-            (changes, staging_plans, command_runs, schedule_cov)
-        };
-
-        BACnetServer::<T>::fire_event_notifications_with_bindings(
-            &self.event_delivery(),
-            self.cov_table,
-            oid,
-        )
-        .await;
-        if life_safety {
-            for change in exact_changes {
-                BACnetServer::<T>::fire_life_safety_cov_notifications(
-                    &self.cov_context(),
-                    &change.object_identifier,
-                    &change.changed_properties,
-                )
-                .await;
-            }
-        } else {
-            BACnetServer::<T>::fire_cov_notifications(&self.cov_context(), oid).await;
+            Ok(Some(Committed {
+                db,
+                oid: *oid,
+                life_safety,
+                changes,
+                staging_plans,
+                command_runs,
+            }))
         }
-        // Targets a written Schedule commanded on re-evaluation.
-        BACnetServer::<T>::fire_post_write_cov_notifications(
-            &self.cov_context(),
-            &schedule_cov.coarse,
-            &schedule_cov.life_safety,
-        )
-        .await;
-        command_runs.extend(schedule_cov.command_runs);
-        BACnetServer::<T>::execute_staging_plans(
-            &self.event_delivery(),
-            &self.cov_context(),
-            staging_plans,
-        )
-        .await;
-        Ok(command_runs)
     }
 }
 

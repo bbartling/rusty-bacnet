@@ -487,6 +487,47 @@ fn who_is_scope_follows_the_last_observation_and_a_fruitless_probe_drops_it() {
     assert_eq!(table.who_is_scope(&device(3)), WhoIsScope::Global);
 }
 
+/// Device_Address_Binding at a given instant (#1369): every configured
+/// binding, and each observation until it is stale, in instance order, with
+/// network 0 for this network and the device's own MAC for a routed one.
+#[test]
+fn address_binding_list_drops_an_observation_once_it_is_stale() {
+    let heard = Instant::now();
+    let stale = heard + OBSERVED_BINDING_TTL;
+    let routed = NpduAddress {
+        network: 100,
+        mac_address: MacAddr::from_slice(FINAL_PEER),
+    };
+    let mut table = DeviceBindingTable::new();
+    table
+        .insert_configured(
+            DeviceBinding::routed(device(5), 200, UPDATED_PEER, ROUTER).unwrap(),
+            no_broadcast,
+        )
+        .unwrap();
+    table.observe_i_am_at(device(3), LOCAL_PEER, None, heard, no_broadcast);
+    table.observe_i_am_at(device(4), ROUTER, Some(&routed), heard, no_broadcast);
+    let binding = |instance, network: u64, mac: &[u8]| {
+        let mut encoded = BytesMut::new();
+        bacnet_encoding::primitives::encode_app_object_id(&mut encoded, &device(instance));
+        bacnet_encoding::primitives::encode_app_unsigned(&mut encoded, network);
+        bacnet_encoding::primitives::encode_app_octet_string(&mut encoded, mac);
+        PropertyValue::ApplicationData(encoded.to_vec())
+    };
+    assert_eq!(
+        table.address_binding_list(stale - Duration::from_nanos(1)),
+        PropertyValue::List(vec![
+            binding(3, 0, LOCAL_PEER),
+            binding(4, 100, FINAL_PEER),
+            binding(5, 200, UPDATED_PEER),
+        ])
+    );
+    assert_eq!(
+        table.address_binding_list(stale),
+        PropertyValue::List(vec![binding(5, 200, UPDATED_PEER)])
+    );
+}
+
 /// The number of the network this device is attached to, and another one.
 const THIS_NETWORK: u16 = 7;
 const REMOTE_NETWORK: u16 = 5;
