@@ -115,7 +115,7 @@ class MsrvScriptTests(unittest.TestCase):
         commands = self.commands()
         self.assertEqual(len(commands), 1)
         self.assertEqual(commands[0]["args"], ["check", "--locked", "-p", "eligible", "-p", "newly-eligible",
-            "--features", "bacnet-transport/sc-tls,bacnet-transport/ipv6,bacnet-client/sc-tls,bacnet-client/ipv6,bacnet-server/sc-tls,bacnet-cli/sc-tls"])
+            "--features", "bacnet-transport/sc-tls,bacnet-transport/ipv6,bacnet-client/sc-tls,bacnet-client/ipv6,bacnet-server/sc-tls,bacnet-cli/sc-tls,bacnet-cli/tui"])
 
     def test_native_sequence_compiler_target_and_nondefault_artifact(self):
         result = self.run_script("--linux-native")
