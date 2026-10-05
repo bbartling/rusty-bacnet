@@ -159,15 +159,32 @@ class ValueCopyPickleTests(unittest.TestCase):
         self.assertEqual(pickle.loads(pickle.dumps(state)), state)
 
     def test_the_rebuild_paths_refuse_what_no_pickle_holds(self) -> None:
-        with self.assertRaises(ValueError):
-            BACnetTimeStamp._from_octets(b"\x19")  # type: ignore[attr-defined]
+        from_octets: Any = BACnetTimeStamp._from_octets  # type: ignore[attr-defined]
+        typed_element: Any = PropertyValue._typed_element  # type: ignore[attr-defined]
         stamp = bytes.fromhex("1900")  # sequence number 0
+        self.assertEqual(from_octets(stamp), BACnetTimeStamp.sequence_number(0))
+        self.assertEqual(typed_element("timestamp", stamp).value,
+                         BACnetTimeStamp.sequence_number(0))
+        for octets in (b"", b"\x19", stamp + stamp):
+            with self.subTest(octets=octets):
+                with self.assertRaises(ValueError):
+                    from_octets(octets)
+                with self.assertRaises(ValueError):
+                    typed_element("timestamp", octets)
         with self.assertRaises(ValueError):
-            BACnetTimeStamp._from_octets(stamp + stamp)  # type: ignore[attr-defined]
-        with self.assertRaises(ValueError):
-            PropertyValue._typed_element("real", stamp)  # type: ignore[attr-defined]
-        with self.assertRaises(ValueError):
-            PropertyValue._typed_element("timestamp", stamp + stamp)  # type: ignore[attr-defined]
+            typed_element("real", stamp)
+        # Both take bytes, what a pickle holds, and nothing else.
+        for wrong in (bytearray(stamp), list(stamp), "1900"):
+            with self.subTest(wrong=type(wrong).__name__):
+                with self.assertRaises(TypeError):
+                    from_octets(wrong)
+                with self.assertRaises(TypeError):
+                    typed_element("timestamp", wrong)
+        # A caller's tag shows in the error cut to 64 characters.
+        with self.assertRaises(ValueError) as raised:
+            typed_element("x" * 10_000, stamp)
+        self.assertIn("x" * 64 + "…", str(raised.exception))
+        self.assertNotIn("x" * 65, str(raised.exception))
 
 
 def frame(apdu: bytes) -> bytes:

@@ -354,18 +354,26 @@ impl PyPropertyValue {
 
     /// One typed constructed element, tagged `tag`, from the octets a read
     /// gave it: what the pickles `__reduce__` makes call. Octets that aren't
-    /// exactly one element of that production raise ValueError.
+    /// exactly one element of that production raise ValueError. `octets` is
+    /// `bytes`, as for `BACnetTimeStamp._from_octets`.
     #[staticmethod]
-    fn _typed_element(tag: &str, octets: Vec<u8>) -> PyResult<Self> {
-        let element = Element::from_tag(tag)
-            .ok_or_else(|| PyValueError::new_err(format!("no typed element is tagged {tag:?}")))?;
-        if !element.is_one(&octets) {
+    fn _typed_element(tag: &str, octets: &[u8]) -> PyResult<Self> {
+        let element = Element::from_tag(tag).ok_or_else(|| {
+            // The caller's tag, cut short: it can be any string.
+            let mut shown: String = tag.chars().take(64).collect();
+            if shown.len() < tag.len() {
+                shown.push('…');
+            }
+            PyValueError::new_err(format!("no typed element is tagged {shown:?}"))
+        })?;
+        if !element.is_one(octets) {
             return Err(PyValueError::new_err(format!(
-                "octets are not exactly one {tag} element"
+                "octets are not exactly one {} element",
+                element.tag()
             )));
         }
         Ok(Self::constructed(
-            primitives::PropertyValue::ApplicationData(octets),
+            primitives::PropertyValue::ApplicationData(octets.to_vec()),
             element,
         ))
     }

@@ -2,15 +2,22 @@
 //!
 //! Python reads and writes a Date as `(year, month, day, day_of_week)` with
 //! the full year, 1900..=2154, and 255 for an unspecified year, the same 255
-//! every other unspecified date or time field holds. No full year is 255, so
-//! the two never meet. A `PropertyValue` date, a `BACnetTimeStamp`, the typed
-//! constructed forms (schedules, calendars, date ranges), the audit log's
-//! records and the time synchronization requests all go through here.
+//! every other unspecified date or time field holds (`rusty_bacnet.UNSPECIFIED`).
+//! No full year is 255, so the two never meet. A `PropertyValue` date, a
+//! `BACnetTimeStamp`, the typed constructed forms (schedules, calendars, date
+//! ranges), the audit log's records and the time synchronization requests
+//! all go through here.
+
+use bacnet_types::calendar::SpecificDate;
 
 use super::*;
 
+/// What any unspecified date or time field reads and writes as in Python,
+/// exported as `rusty_bacnet.UNSPECIFIED`.
+pub(crate) const UNSPECIFIED: u8 = 255;
+
 /// The year an unspecified year reads and writes as.
-pub(crate) const UNSPECIFIED_YEAR: u16 = 255;
+pub(crate) const UNSPECIFIED_YEAR: u16 = UNSPECIFIED as u16;
 
 /// The full year of `date`, or [`UNSPECIFIED_YEAR`].
 pub(crate) fn full_year(date: &primitives::Date) -> u16 {
@@ -47,9 +54,85 @@ pub(crate) fn date_from_value(
     })
 }
 
+/// The date and time a TimeSynchronization or UTCTimeSynchronization request
+/// carries, which set a clock and so must be specific (Clauses 16.7, 16.8,
+/// 20.2.12): a real day in 1900..=2154 with no field unspecified or a
+/// pattern value, its `day_of_week` the day's own weekday (1 = Monday), and
+/// every time field in range. Anything else raises ValueError, before a
+/// request is built.
+pub(crate) fn specific_date_time(
+    date: (u16, u8, u8, u8),
+    (hour, minute, second, hundredths): (u8, u8, u8, u8),
+) -> PyResult<(primitives::Date, primitives::Time)> {
+    let parsed = date_from_value(date)?;
+    let day = SpecificDate::from_date(&parsed).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "date must be a real day in 1900..=2154 with no field unspecified (255) \
+             or a pattern value, got {date:?}"
+        ))
+    })?;
+    if parsed.day_of_week != day.weekday() {
+        return Err(PyValueError::new_err(format!(
+            "day_of_week must be {} (1 = Monday) for {}-{:02}-{:02}, got {}",
+            day.weekday(),
+            day.year(),
+            day.month(),
+            day.day(),
+            parsed.day_of_week
+        )));
+    }
+    let time = primitives::Time {
+        hour,
+        minute,
+        second,
+        hundredths,
+    };
+    if !time.is_specific() {
+        return Err(PyValueError::new_err(format!(
+            "time must be specific: hour 0..=23, minute and second 0..=59, \
+             hundredths 0..=99, got {:?}",
+            (hour, minute, second, hundredths)
+        )));
+    }
+    Ok((parsed, time))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_time_synchronization_takes_only_a_specific_date_and_time() {
+        // 2026-10-05 is a Monday.
+        let noon = (12, 0, 0, 0);
+        let (date, time) = specific_date_time((2026, 10, 5, 1), noon).unwrap();
+        assert_eq!(date_value(&date), (2026, 10, 5, 1));
+        assert_eq!((time.hour, time.hundredths), (12, 0));
+        for date in [
+            (255, 10, 5, 1),    // unspecified year
+            (2026, 255, 5, 1),  // unspecified month
+            (2026, 13, 5, 1),   // odd months
+            (2026, 10, 255, 1), // unspecified day
+            (2026, 10, 32, 1),  // last day
+            (2026, 2, 29, 7),   // no such day
+            (2026, 10, 5, 255), // unspecified weekday
+            (2026, 10, 5, 2),   // the wrong weekday
+        ] {
+            assert!(specific_date_time(date, noon).is_err(), "{date:?}");
+        }
+        for time in [
+            (255, 0, 0, 0),
+            (12, 255, 0, 0),
+            (12, 0, 255, 0),
+            (12, 0, 0, 255),
+            (24, 0, 0, 0),
+        ] {
+            assert!(
+                specific_date_time((2026, 10, 5, 1), time).is_err(),
+                "{time:?}"
+            );
+        }
+    }
 
     #[test]
     fn every_year_octet_has_one_python_year_and_back() {

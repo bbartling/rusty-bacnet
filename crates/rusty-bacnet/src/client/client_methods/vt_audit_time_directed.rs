@@ -305,11 +305,12 @@ impl BACnetClient {
 
     /// Send a TimeSynchronization request (unconfirmed) to a remote device.
     ///
-    /// `date` is `(year, month, day, day_of_week)` where year is the full year
-    /// (e.g. 2026), month 1-12, day 1-31, day_of_week 1=Monday..7=Sunday,
-    /// each 255 for unspecified. A year outside 1900..=2154 that isn't 255
-    /// raises ValueError (#1501).
-    /// `time` is `(hour, minute, second, hundredths)`.
+    /// `date` is `(year, month, day, day_of_week)`: a real day, the full
+    /// year 1900..=2154, month 1-12 and day 1-31, and day_of_week that day's
+    /// own weekday, 1=Monday..7=Sunday. `time` is `(hour, minute, second,
+    /// hundredths)`, each in range. The request sets a clock, so no field
+    /// may be 255 (unspecified) or a pattern value: anything else raises
+    /// ValueError before anything is sent (#1501).
     #[pyo3(signature = (address, date, time))]
     fn time_synchronization<'py>(
         &self,
@@ -319,13 +320,7 @@ impl BACnetClient {
         time: (u8, u8, u8, u8),
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let d = crate::types::date_from_value(date)?;
-        let t = bacnet_types::primitives::Time {
-            hour: time.0,
-            minute: time.1,
-            second: time.2,
-            hundredths: time.3,
-        };
+        let (d, t) = crate::types::specific_date_time(date, time)?;
 
         let future = async move {
             let mac = parse_address(&address)?;
@@ -345,7 +340,8 @@ impl BACnetClient {
 
     /// Send a UTCTimeSynchronization request (unconfirmed) to a remote device.
     ///
-    /// Same argument format as `time_synchronization`.
+    /// Same arguments, and the same specific date and time, as
+    /// `time_synchronization`.
     #[pyo3(signature = (address, date, time))]
     fn utc_time_synchronization<'py>(
         &self,
@@ -355,13 +351,7 @@ impl BACnetClient {
         time: (u8, u8, u8, u8),
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let d = crate::types::date_from_value(date)?;
-        let t = bacnet_types::primitives::Time {
-            hour: time.0,
-            minute: time.1,
-            second: time.2,
-            hundredths: time.3,
-        };
+        let (d, t) = crate::types::specific_date_time(date, time)?;
 
         let future = async move {
             let mac = parse_address(&address)?;

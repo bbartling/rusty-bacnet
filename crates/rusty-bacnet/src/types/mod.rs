@@ -50,7 +50,7 @@ pub(crate) use audit::recipient as audit_recipient_from_py;
 pub(crate) use audit::{audit_log_query_request_from_py, audit_notification_request_from_py};
 pub(crate) use audit_projection::audit_log_query_ack_to_py;
 pub use cov::{PyCovNotification, PyCovNotificationIterator};
-pub(crate) use date::date_from_value;
+pub(crate) use date::specific_date_time;
 pub(crate) use destination::destinations;
 pub use device::PyDiscoveredDevice;
 pub use enums::*;
@@ -140,6 +140,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDiscoveredDevice>()?;
     m.add_class::<PyCovNotification>()?;
     m.add_class::<PyCovNotificationIterator>()?;
+
+    // 255, what an unspecified date or time field holds (#1501).
+    m.add("UNSPECIFIED", date::UNSPECIFIED)?;
 
     Ok(())
 }

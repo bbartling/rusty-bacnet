@@ -2,19 +2,23 @@
 
 A Date reads with its full year, 1900..=2154, whether it is a property
 value, the date of a timestamp or a date in a schedule entry, and an
-unspecified year reads as 255 in all of them, as every other unspecified
-date field does. PropertyValue.date, BACnetTimeStamp.date_time and the time
-synchronization requests take the same years and refuse any other.
+unspecified year reads as 255 (rusty_bacnet.UNSPECIFIED) in all of them, as
+every other unspecified date field does. PropertyValue.date and
+BACnetTimeStamp.date_time take the same years and refuse any other. The time
+synchronization requests set a clock, so they take only a specific date and
+time and send nothing for any other.
 """
 
 from __future__ import annotations
 
 import asyncio
+import datetime
 import socket
 import unittest
 from typing import Any
 
 from rusty_bacnet import (
+    UNSPECIFIED,
     BACnetClient,
     BACnetServer,
     BACnetTimeStamp,
@@ -25,6 +29,7 @@ from rusty_bacnet import (
 )
 
 P = PropertyIdentifier
+NOON = (12, 0, 0, 0)
 DATE_VALUE_1 = ObjectIdentifier(ObjectType.DATE_VALUE, 1)
 AI_1 = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
 SCHED_1 = ObjectIdentifier(ObjectType.SCHEDULE, 1)
@@ -113,18 +118,42 @@ class DateYearTests(unittest.IsolatedAsyncioTestCase):
                                              b"\x0c" + date)
                 self.assertEqual(dates.value, [{"kind": "date", "date": expected}])
 
-    async def test_time_synchronization_sends_the_year_octet(self) -> None:
+    async def test_time_synchronization_sends_only_a_specific_date_and_time(self) -> None:
+        # 2026-10-05 is a Monday (1).
+        refused: list[tuple[Any, Any]] = [
+            ((UNSPECIFIED, 10, 5, 1), NOON),
+            ((2026, UNSPECIFIED, 5, 1), NOON),
+            ((2026, 10, UNSPECIFIED, 1), NOON),
+            ((2026, 10, 5, UNSPECIFIED), NOON),
+            ((2026, 13, 5, 1), NOON),  # the odd months
+            ((2026, 10, 32, 1), NOON),  # day 32, a month-end pattern
+            ((2026, 2, 29, 7), NOON),  # no such day
+            ((2026, 10, 5, 2), NOON),  # a Monday called a Tuesday
+            ((126, 10, 5, 1), NOON),  # a year octet
+            ((1899, 10, 5, 1), NOON),
+            ((2155, 10, 5, 1), NOON),
+            ((2026, 10, 5, 1), (UNSPECIFIED, 0, 0, 0)),
+            ((2026, 10, 5, 1), (12, UNSPECIFIED, 0, 0)),
+            ((2026, 10, 5, 1), (12, 0, UNSPECIFIED, 0)),
+            ((2026, 10, 5, 1), (12, 0, 0, UNSPECIFIED)),
+            ((2026, 10, 5, 1), (24, 0, 0, 0)),
+        ]
         for service, send in ((6, self.client.time_synchronization),
                               (9, self.client.utc_time_synchronization)):
-            for octet, year in YEARS:
+            for date, time in refused:
+                with self.subTest(service=service, date=date, time=time):
+                    with self.assertRaises(ValueError):
+                        send(self.peer.address, date, time)
+            for year in (2026, 1900, 2154):
+                weekday = datetime.date(year, 10, 5).isoweekday()
                 with self.subTest(service=service, year=year):
-                    await send(self.peer.address, (year, 10, 5, 1), (12, 0, 0, 0))
+                    await send(self.peer.address, (year, 10, 5, weekday), (12, 34, 56, 78))
+                    # The first frame since the last one checked: the refused
+                    # calls sent nothing.
                     wire = await self.peer.received()
-                    self.assertTrue(wire.endswith(
-                        bytes([0x10, service, 0xA4, octet, 10, 5, 1, 0xB4, 12, 0, 0, 0])), wire)
-            for year in (0, 126, 1899, 2155):
-                with self.subTest(service=service, year=year), self.assertRaises(ValueError):
-                    send(self.peer.address, (year, 10, 5, 1), (12, 0, 0, 0))
+                    self.assertTrue(wire.endswith(bytes(
+                        [0x10, service, 0xA4, year - 1900, 10, 5, weekday,
+                         0xB4, 12, 34, 56, 78])), wire)
 
 
 class LocalDateYearTests(unittest.IsolatedAsyncioTestCase):
@@ -168,6 +197,14 @@ class DateArgumentTests(unittest.TestCase):
                 for year in (-1, 65_536):
                     with self.assertRaises(OverflowError):
                         build(year)
+
+    def test_unspecified_is_the_255_every_wildcard_field_holds(self) -> None:
+        self.assertEqual(UNSPECIFIED, 255)
+        self.assertEqual(
+            PropertyValue.date(UNSPECIFIED, 12, 25, UNSPECIFIED).value, (255, 12, 25, 255))
+        self.assertEqual(PropertyValue.time(*[UNSPECIFIED] * 4).value, (255,) * 4)
+        stamp = BACnetTimeStamp.date_time((UNSPECIFIED,) * 4, (UNSPECIFIED,) * 4)
+        self.assertEqual(stamp.value, ((255,) * 4, (255,) * 4))
 
 
 if __name__ == "__main__":

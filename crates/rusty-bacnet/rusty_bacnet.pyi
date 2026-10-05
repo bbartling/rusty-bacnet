@@ -8,6 +8,12 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Literal, NotRequired, Optional, TypedDict, Union
 
+UNSPECIFIED: Literal[255]
+"""What an unspecified date or time field holds, the year included: dates
+are ``(year, month, day, day_of_week)`` with the full year, and times
+``(hour, minute, second, hundredths)``. ``datetime.date(255, ...)`` is the
+year 255 AD, not a wildcard."""
+
 
 # ---------------------------------------------------------------------------
 # Enum types
@@ -2061,9 +2067,12 @@ class BACnetClient:
         """Send a TimeSynchronization request (unconfirmed).
 
         ``date`` is ``(year, month, day, day_of_week)``; ``time`` is
-        ``(hour, minute, second, hundredths)``. Year is the full year
-        (1900..2154) or 255 for unspecified; any other year raises
-        ValueError before anything is sent.
+        ``(hour, minute, second, hundredths)``. The request sets a clock, so
+        both must be specific: a real day with the full year (1900..2154),
+        month 1..12, day 1..31 and ``day_of_week`` that day's own weekday
+        (1 = Monday), and every time field in range. A field that is
+        ``UNSPECIFIED`` (255) or a pattern value (an odd month, the last
+        day) raises ValueError before anything is sent.
         """
         ...
 

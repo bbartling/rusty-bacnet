@@ -236,18 +236,25 @@ v.value   # 72.5 (native Python float)
 
 Every date the binding reads or takes is a `(year, month, day, day_of_week)`
 tuple with the full year, 1900 to 2154, and 255 for an unspecified year, the
-same 255 as any other unspecified date or time field (#1501). That holds for
-a `"date"` value, a `BACnetTimeStamp` date-time, the dates in schedules,
-calendars and date ranges, the audit log's records, and the `date` argument
-of `time_synchronization`. A year outside 1900 to 2154 that isn't 255 (the
-year octet 126, say) raises `ValueError`.
+same 255 as any other unspecified date or time field (#1501). The module
+exports it as `rusty_bacnet.UNSPECIFIED`. That holds for a `"date"` value, a
+`BACnetTimeStamp` date-time, the dates in schedules, calendars and date
+ranges, and the audit log's records. A year outside 1900 to 2154 that isn't
+255 (the year octet 126, say) raises `ValueError`. The time synchronization
+requests take only a specific date and time; see
+[Time Synchronization](#time-synchronization).
 
 ```python
+from rusty_bacnet import UNSPECIFIED
 v = PropertyValue.date(2026, 3, 21, 6)
 v.value                                       # (2026, 3, 21, 6)
-PropertyValue.date(255, 12, 25, 255).value    # (255, 12, 25, 255): every Christmas
+PropertyValue.date(UNSPECIFIED, 12, 25, UNSPECIFIED).value  # (255, 12, 25, 255): every Christmas
 BACnetTimeStamp.date_time((2026, 3, 21, 6), (8, 0, 0, 0)).value[0]  # (2026, 3, 21, 6)
 ```
+
+A `datetime.date(255, 12, 25)` is Christmas in the year 255 AD, not a
+wildcard: compare a date's year with `UNSPECIFIED` before building a
+`datetime.date` from it.
 
 ### Integer arguments
 
@@ -407,6 +414,10 @@ import pickle
 value = await client.read_property(address, schedule, PropertyIdentifier.EXCEPTION_SCHEDULE)
 assert pickle.loads(pickle.dumps(value)) == value
 ```
+
+A pickle is for the same rusty-bacnet version that made it: it names the
+classes' private rebuild methods, which may change before 1.0. Don't keep
+pickles across upgrades.
 
 The other classes (`DiscoveredDevice`, `CovNotification`,
 `ScHubCertificateBinding`, and the client, server, endpoint and hub classes)
@@ -911,12 +922,16 @@ await client.time_synchronization(
 )
 ```
 
-The year is the full year, or 255 for unspecified, as [Dates](#dates) gives
-it; any other year raises `ValueError` before anything is sent.
+The request sets the peer's clock, so the date and time must be specific: a
+real day with the full year (1900 to 2154), month 1 to 12, day 1 to 31 and
+`day_of_week` that day's own weekday (1 = Monday), and every time field in
+range. A field that is `UNSPECIFIED` (255) or a pattern value (month 13 for
+odd months, day 32 for a month's end), or a weekday that doesn't match the
+date, raises `ValueError` before anything is sent.
 
 #### `utc_time_synchronization(address, date, time)`
 
-Same format as `time_synchronization`.
+Same arguments and checks as `time_synchronization`.
 
 ---
 
