@@ -3413,8 +3413,24 @@ takes writes like the Loop's variable references: the context-tagged
 `BACnetObjectPropertyReference` in a `PropertyValue::ApplicationData`, with
 the flat list refused as INVALID_DATA_TYPE (#1312). While unset it reads as
 Accumulator 4194303's Present_Value, and writing a reference to instance
-4194303 unsets it (#1417). The object doesn't follow it; the application feeds
-Count with `add_pulses`.
+4194303 unsets it (#1417).
+
+The database judges the reference (`ObjectDatabase::check_input_reference`,
+#1341): Reliability reads CONFIGURATION_ERROR, with Status_Flags FAULT, while
+it names a missing object or a property that doesn't read as an Unsigned or
+INTEGER (an index on a property that isn't an array, or the converter's own
+property, included), and NO_FAULT_DETECTED once it names one that does or is
+unset (Clause 12.23.9). The verdict is taken as a write of the reference
+commits (WriteProperty, WritePropertyMultiple, a CreateObject initial value
+or `write_local`), when the converter is added, and whenever
+`ObjectDatabase::add` or `remove` adds, replaces or removes the object it
+names; the server fans COV out for a converter that changes. While
+Out_Of_Service is TRUE, Reliability keeps its value and the return to service
+applies the latest verdict. A running server also counts from the property
+once a second (`ObjectDatabase::count_pulse_inputs`): each increase over the
+last reading goes into Count as `add_pulses` would, the first reading only
+sets the baseline, and a reading below the last one sets it again. The
+application can still feed Count with `add_pulses`.
 
 #### System (3)
 

@@ -14,6 +14,7 @@ use bacnet_objects::{
 };
 use bacnet_types::{
     calendar::SpecificDate,
+    constructed::BACnetObjectPropertyReference,
     enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P, ServiceSupported},
     error::Error,
     primitives::{ObjectIdentifier, PropertyValue},
@@ -384,6 +385,9 @@ impl BACnetObject for DeviceReadView<'_> {
     }
     fn enrollment_eval_source_internal(&self) -> Option<Option<EventEnrollmentMonitoredSource>> {
         self.object.enrollment_eval_source_internal()
+    }
+    fn input_reference_internal(&self) -> Option<Option<&BACnetObjectPropertyReference>> {
+        self.object.input_reference_internal()
     }
     fn reliability_evaluation_inhibited_internal(&self) -> bool {
         self.object.reliability_evaluation_inhibited_internal()

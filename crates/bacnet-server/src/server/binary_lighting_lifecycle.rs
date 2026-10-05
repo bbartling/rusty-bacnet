@@ -6,11 +6,13 @@ use tokio::time::{Instant, MissedTickBehavior};
 /// Spawn the task that drives every object's monotonic operation deadlines.
 ///
 /// It is generic over objects: each wake first takes the Averaging samples
-/// that are due (#1144), then asks every object to expire what is due
-/// (`advance_monotonic_time_internal`) and to report its next deadline, and
-/// fans COV out for each object that changed once the database guard is
-/// dropped. Binary Lighting Output egress, Access Door pulse relock (#1073)
-/// and Averaging sampling all run on it; the name predates the other two.
+/// that are due (#1144) and counts each Pulse Converter's input from the
+/// property its Input_Reference names (#1341), then asks every object to
+/// expire what is due (`advance_monotonic_time_internal`) and to report its
+/// next deadline, and fans COV out for each object that changed once the
+/// database guard is dropped. Binary Lighting Output egress, Access Door
+/// pulse relock (#1073), Averaging sampling and Pulse Converter counting all
+/// run on it; the name predates the others.
 pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
     fanout: CovFanout<T>,
     monotonic_origin: Instant,
@@ -39,6 +41,9 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
                 // background commit, like a schedule write.
                 let mut sampled = BackgroundCommit::new();
                 for oid in database.sample_due_averaging_objects(now) {
+                    sampled.changed(oid);
+                }
+                for oid in database.count_pulse_inputs() {
                     sampled.changed(oid);
                 }
                 let mut changed = Vec::new();

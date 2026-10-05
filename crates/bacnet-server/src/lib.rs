@@ -12,6 +12,7 @@ pub mod life_safety;
 mod life_safety_cov;
 mod local_device;
 mod local_references;
+mod membership;
 pub mod mutation;
 #[doc(hidden)]
 pub mod network_number;

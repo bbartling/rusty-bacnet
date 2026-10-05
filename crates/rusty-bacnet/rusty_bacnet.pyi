@@ -3309,6 +3309,10 @@ class BACnetServer:
         context-tagged reference; while unset it reads as Accumulator
         4194303's Present_Value, and writing a reference to instance 4194303
         unsets it. A null written to it succeeds and changes nothing.
+        While the reference names a missing object, or a property that isn't
+        an Unsigned or INTEGER, Reliability reads CONFIGURATION_ERROR and
+        Status_Flags FAULT. The running server counts each increase of the
+        named property into Count, once a second.
         """
         ...
 

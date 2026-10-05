@@ -800,6 +800,8 @@ mod notification_transactions_tests;
 #[cfg(test)]
 mod pulse_converter_cov_tests;
 #[cfg(test)]
+mod pulse_converter_reference_tests;
+#[cfg(test)]
 mod rb07_provenance_tests;
 #[cfg(test)]
 mod reference_write_wire_tests;

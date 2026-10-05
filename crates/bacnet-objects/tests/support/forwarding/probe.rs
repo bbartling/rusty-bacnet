@@ -587,6 +587,18 @@ impl BACnetObject for Probe {
             property_array_index: Some(2),
         })
     }
+    fn input_reference_internal(&self) -> Option<Option<&BACnetObjectPropertyReference>> {
+        self.called("input_reference_internal", ());
+        Some(None)
+    }
+    fn set_input_usable_internal(&mut self, usable: bool) -> bool {
+        self.called("set_input_usable_internal", (usable,));
+        true
+    }
+    fn take_input_reading_internal(&mut self, reading: Option<i128>) -> bool {
+        self.called("take_input_reading_internal", (reading,));
+        true
+    }
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
         self.called("audit_log_storage_internal", ());
         self.audit_log.audit_log_storage_internal()

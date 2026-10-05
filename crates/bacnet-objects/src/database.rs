@@ -13,10 +13,14 @@ use crate::traits::{BACnetObject, MonotonicClock};
 
 mod averaging_sampling;
 mod event_log;
+mod input_references;
 mod local_device;
+mod membership;
 mod network_port;
 mod trend_poll;
 pub use local_device::LocalDevice;
+#[doc(hidden)]
+pub use membership::{MembershipWaker, MembershipWork};
 use trend_poll::TrendPollSchedule;
 
 /// A collection of BACnet objects, keyed by ObjectIdentifier.
@@ -43,6 +47,8 @@ pub struct ObjectDatabase {
     /// Source ownership for custom Event Enrollment objects that implement
     /// evaluation state but not the optional object-owned source channel.
     enrollment_eval_sources: HashMap<ObjectIdentifier, EventEnrollmentMonitoredSource>,
+    /// What adding and removing objects left for the server (#1341).
+    membership: membership::MembershipQueue,
 }
 
 /// A non-consuming reservation of the database-local event sequence source.
@@ -86,6 +92,7 @@ impl ObjectDatabase {
             type_index: HashMap::new(),
             invalid_enrollment_eval_state: HashSet::new(),
             enrollment_eval_sources: HashMap::new(),
+            membership: membership::MembershipQueue::default(),
         }
     }
 
@@ -96,6 +103,11 @@ impl ObjectDatabase {
     /// [`check_name_available`](Self::check_name_available) does.
     /// Replacing an object with the same OID is allowed unless an installed
     /// Audit runtime protects its membership. Protection is checked before any binding.
+    ///
+    /// Once the object is in, every Pulse Converter whose Input_Reference
+    /// names it, or the object itself when it is one, has the reference
+    /// judged again (`ObjectDatabase::check_input_reference`); one whose
+    /// Reliability changes is queued for the server's COV fanout.
     pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
         self.check_network_port_membership(&object.object_identifier())?;
         self.check_audit_membership(&object.object_identifier(), true)?;
@@ -130,6 +142,7 @@ impl ObjectDatabase {
                 .or_default()
                 .push(oid);
         }
+        self.membership_changed(oid);
         Ok(())
     }
 
@@ -281,6 +294,8 @@ impl ObjectDatabase {
 
     /// Remove an object by identifier. Installed Audit membership protection
     /// returns an error before removing the object or changing indexes.
+    /// Pulse Converters whose Input_Reference names a removed object have
+    /// the reference judged again, as [`add`](Self::add) does.
     pub fn remove(
         &mut self,
         oid: &ObjectIdentifier,
@@ -314,6 +329,7 @@ impl ObjectDatabase {
                 type_set.retain(|o| o != oid);
             }
             self.audit_membership_changed(*oid, false);
+            self.membership_changed(*oid);
             Ok(Some(obj))
         } else {
             Ok(None)

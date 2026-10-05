@@ -6,6 +6,25 @@
 //! value over Scale_Factor off Count, keeping the old Count in
 //! Count_Before_Change and the time in Count_Change_Time. `add_pulses`
 //! accumulates input and stamps Update_Time.
+//!
+//! Reliability reports whether Input_Reference names a property the object
+//! can count from (Clause 12.23.9): CONFIGURATION_ERROR, and with it the
+//! FAULT flag, while it names one that isn't Unsigned or INTEGER, or one the
+//! object can't reach. Only the database can look at the named object, so it
+//! judges the reference (`ObjectDatabase::check_input_reference`, #1341) and
+//! hands the verdict over through `set_input_usable_internal`. An unset
+//! reference is no fault: the object then stands for the physical input
+//! itself (Clause 12.23.6). While Out_Of_Service is TRUE, Reliability stays
+//! where it was (Clause 12.23.10); the verdict is kept, and the return to
+//! service applies it.
+//!
+//! A running server also counts from the property (Clause 12.23.14 leaves
+//! the means local): once a second the database reads it
+//! (`ObjectDatabase::count_pulse_inputs`) and adds each increase over the
+//! last reading to Count, as `add_pulses` would. The first reading after the
+//! reference is set or becomes readable only sets the baseline, and a
+//! reading below the last one, the source reset or wrapped, sets it again
+//! without counting.
 
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
@@ -39,6 +58,12 @@ pub struct PulseConverterObject {
     count_before_change: u64,
     cov_increment: f32,
     input_reference: Option<BACnetObjectPropertyReference>,
+    /// The database's last verdict on Input_Reference: TRUE when it names a
+    /// property this object can't count from.
+    input_unusable: bool,
+    /// The last reading of the property Input_Reference names, which the
+    /// next reading's increase is counted from.
+    last_input: Option<i128>,
     status_flags: StatusFlags,
     event_state: EventState,
     out_of_service: bool,
@@ -65,6 +90,8 @@ impl PulseConverterObject {
             count_before_change: 0,
             cov_increment: 0.0,
             input_reference: None,
+            input_unusable: false,
+            last_input: None,
             status_flags: StatusFlags::empty(),
             event_state: EventState::NORMAL,
             out_of_service: false,
@@ -81,8 +108,35 @@ impl PulseConverterObject {
     /// Set Input_Reference, the property the input is counted from. A
     /// reference to the reserved instance 4194303 clears it, as a client's
     /// write of the unset form does (#1417).
+    ///
+    /// A database the object is in judges the reference when it is added
+    /// (see the module documentation); a client's write is judged as it
+    /// commits.
     pub fn set_input_reference(&mut self, r: BACnetObjectPropertyReference) {
-        self.input_reference = reference::set_or_unset(r);
+        self.store_input_reference(reference::set_or_unset(r));
+    }
+
+    /// Store Input_Reference. An unset one is no fault, so clearing the
+    /// reference clears a CONFIGURATION_ERROR at once; a new reference keeps
+    /// the last verdict until the database judges it.
+    fn store_input_reference(&mut self, reference: Option<BACnetObjectPropertyReference>) {
+        if reference.is_none() {
+            self.set_input_usable_internal(true);
+        }
+        // Another property starts its own baseline.
+        if reference != self.input_reference {
+            self.last_input = None;
+        }
+        self.input_reference = reference;
+    }
+
+    /// Reliability as the input reference decides it, out of service aside.
+    fn evaluated_reliability(&self) -> Reliability {
+        if self.input_unusable {
+            Reliability::CONFIGURATION_ERROR
+        } else {
+            Reliability::NO_FAULT_DETECTED
+        }
     }
 
     /// The current Count.
@@ -93,8 +147,9 @@ impl PulseConverterObject {
     /// Accumulate `pulses` input pulses into Count (Clause 12.23.14).
     ///
     /// Count is read-only over the network, so this is how the application
-    /// feeds it, whether from a physical input or from the property
-    /// Input_Reference names. A change stamps Update_Time from the Device
+    /// feeds it from a physical input; a running server feeds it from the
+    /// property Input_Reference names (see the module documentation). A
+    /// change stamps Update_Time from the Device
     /// clock (unspecified fields without one). Count keeps accumulating while
     /// Out_Of_Service is TRUE; only Present_Value stops following it. A sum
     /// past the largest Unsigned this object holds, or one that would scale
@@ -244,6 +299,10 @@ impl BACnetObject for PulseConverterObject {
             if self.out_of_service && !was_out_of_service {
                 self.decoupled_present_value = in_service_value;
             }
+            // Back in service, Reliability follows the input reference again.
+            if was_out_of_service && !self.out_of_service {
+                self.reliability = self.evaluated_reliability();
+            }
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
@@ -286,8 +345,8 @@ impl BACnetObject for PulseConverterObject {
             // Input_Reference is BACnetObjectPropertyReference (Table
             // 12-27): its context-tagged members, the unset form clearing it.
             p if p == PropertyIdentifier::INPUT_REFERENCE => {
-                self.input_reference =
-                    reference::decode_reference_write(&value, ReferenceFrame::Bare)?;
+                let reference = reference::decode_reference_write(&value, ReferenceFrame::Bare)?;
+                self.store_input_reference(reference);
                 Ok(())
             }
             _ => Err(crate::common::unhandled_write_error(
@@ -316,6 +375,33 @@ impl BACnetObject for PulseConverterObject {
 
     fn bind_clock_internal(&mut self, clock: Option<Arc<dyn ClockReader>>) {
         self.clock = clock;
+    }
+
+    fn input_reference_internal(&self) -> Option<Option<&BACnetObjectPropertyReference>> {
+        Some(self.input_reference.as_ref())
+    }
+
+    fn set_input_usable_internal(&mut self, usable: bool) -> bool {
+        self.input_unusable = !usable;
+        if self.out_of_service {
+            return false;
+        }
+        let reliability = self.evaluated_reliability();
+        std::mem::replace(&mut self.reliability, reliability) != reliability
+    }
+
+    fn take_input_reading_internal(&mut self, reading: Option<i128>) -> bool {
+        let Some(reading) = reading else {
+            self.last_input = None;
+            return false;
+        };
+        match self.last_input.replace(reading) {
+            Some(last) if reading > last => {
+                let pulses = u64::try_from(reading - last).unwrap_or(u64::MAX);
+                self.add_pulses(pulses).is_ok()
+            }
+            _ => false,
+        }
     }
 }
 

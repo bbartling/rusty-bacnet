@@ -481,6 +481,18 @@ impl BACnetObject for SourceReporter {
         self.wrapped.take_due_averaging_sample_internal(now)
     }
 
+    fn input_reference_internal(&self) -> Option<Option<&BACnetObjectPropertyReference>> {
+        self.wrapped.input_reference_internal()
+    }
+
+    fn set_input_usable_internal(&mut self, usable: bool) -> bool {
+        self.wrapped.set_input_usable_internal(usable)
+    }
+
+    fn take_input_reading_internal(&mut self, reading: Option<i128>) -> bool {
+        self.wrapped.take_input_reading_internal(reading)
+    }
+
     fn audit_log_storage_internal(&self) -> Option<&dyn AuditLogStorage> {
         self.wrapped.audit_log_storage_internal()
     }

@@ -319,6 +319,12 @@ pub(super) fn commit_attempt(
     if applied == Applied::Written && target.property == PropertyIdentifier::OBJECT_NAME {
         db.update_name_index(&target.oid);
     }
+    // A Pulse Converter judges its new Input_Reference against the database
+    // as the write commits, so Reliability reads right at once (#1341). The
+    // written object's own COV pass carries the change.
+    if applied == Applied::Written && target.property == PropertyIdentifier::INPUT_REFERENCE {
+        db.check_input_reference(&target.oid);
+    }
     if let Some(observer) = observer {
         observer.committed(db);
         if applied == Applied::Written {

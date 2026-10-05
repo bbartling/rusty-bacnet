@@ -197,6 +197,9 @@ pub const QUERIES: &[(&str, Query)] = &[
     ("enrollment_eval_source_internal", |o| {
         format!("{:?}", o.enrollment_eval_source_internal())
     }),
+    ("input_reference_internal", |o| {
+        format!("{:?}", o.input_reference_internal())
+    }),
     ("reliability_evaluation_inhibited_internal", |o| {
         o.reliability_evaluation_inhibited_internal().to_string()
     }),
@@ -434,6 +437,12 @@ pub const COMMANDS: &[(&str, Command)] = &[
             "{:?}",
             o.take_due_averaging_sample_internal(Duration::from_secs(42))
         )
+    }),
+    ("set_input_usable_internal", |o| {
+        format!("{:?}", o.set_input_usable_internal(false))
+    }),
+    ("take_input_reading_internal", |o| {
+        format!("{:?}", o.take_input_reading_internal(Some(-41)))
     }),
     ("set_audit_log_parent_internal", |o| {
         let parent = BACnetDeviceObjectReference {

@@ -2334,6 +2334,17 @@ null write cleared them. Treat a reference whose object instance is 4194303
 as unset, and write the unset form (for example the octets a fresh object
 reads) to clear one.
 
+A Pulse Converter checks what its Input_Reference names (#1341). Reliability
+reads CONFIGURATION_ERROR (10), and Status_Flags FAULT, while the reference
+names a missing object or a property that isn't an Unsigned or INTEGER, and
+NO_FAULT_DETECTED once it names one that is, or is unset. The server checks
+it when a peer or `write_property_local` writes the reference and when the
+object it names is created or deleted, and reports the Status_Flags change
+to COV subscribers. While the converter is out of service, Reliability stays
+as it was until it returns. Once a second the running server reads the
+named property and adds each increase over the previous reading to Count; a
+reading lower than the previous one only resets that baseline.
+
 A running server samples an Averaging object's Object_Property_Reference
 itself, every Window_Interval / Window_Samples seconds but never more often
 than every 100 ms, starting one spacing after `start()` and over again after
