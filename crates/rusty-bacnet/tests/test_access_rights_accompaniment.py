@@ -31,7 +31,8 @@ CREDENTIAL = ObjectIdentifier(ObjectType.ACCESS_CREDENTIAL, 5)
 POINT = ObjectIdentifier(ObjectType.ACCESS_POINT, 1)
 
 # A BACnetDeviceObjectReference: the device identifier [0] when present, then
-# the object identifier [1].
+# the object identifier [1]. Writes send these octets, and a read gives the
+# typed reference back (#1344).
 USER_REFERENCE = bytes([0x1C, 0x08, 0xC0, 0x00, 0x03])
 REMOTE_CREDENTIAL_REFERENCE = bytes(
     [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x08, 0x00, 0x00, 0x05]
@@ -74,7 +75,7 @@ class AccompanimentTests(unittest.TestCase):
                 interface="127.0.0.1", port=0, apdu_timeout_ms=2000
             ) as client:
 
-                async def read(instance: int) -> bytes:
+                async def read(instance: int) -> object:
                     value = await client.read_property(
                         address, rights_oid(instance), ACCOMPANIMENT
                     )
@@ -93,8 +94,8 @@ class AccompanimentTests(unittest.TestCase):
                         PropertyValue.application_data(octets),
                     )
 
-                self.assertEqual(await read(1), USER_REFERENCE)
-                self.assertEqual(await read(2), REMOTE_CREDENTIAL_REFERENCE)
+                self.assertEqual(await read(1), USER)
+                self.assertEqual(await read(2), (REMOTE_DEVICE, CREDENTIAL))
 
                 # Without the keyword there is no row to read or write.
                 with self.assertRaises(BacnetProtocolError) as raised:
@@ -106,17 +107,17 @@ class AccompanimentTests(unittest.TestCase):
 
                 # A client rewrites a served one.
                 await write(1, REMOTE_CREDENTIAL_REFERENCE)
-                self.assertEqual(await read(1), REMOTE_CREDENTIAL_REFERENCE)
+                self.assertEqual(await read(1), (REMOTE_DEVICE, CREDENTIAL))
                 # An Access Point is refused, and the reference stays.
                 with self.assertRaises(BacnetProtocolError) as raised:
                     await write(1, POINT_REFERENCE)
                 self.assert_error(raised.exception, ErrorCode.VALUE_OUT_OF_RANGE)
-                self.assertEqual(await read(1), REMOTE_CREDENTIAL_REFERENCE)
+                self.assertEqual(await read(1), (REMOTE_DEVICE, CREDENTIAL))
                 # A NULL succeeds and changes nothing (#1396).
                 await client.write_property(
                     address, rights_oid(1), ACCOMPANIMENT, PropertyValue.null()
                 )
-                self.assertEqual(await read(1), REMOTE_CREDENTIAL_REFERENCE)
+                self.assertEqual(await read(1), (REMOTE_DEVICE, CREDENTIAL))
         finally:
             await server.stop()
 
@@ -174,7 +175,7 @@ class AccompanimentRestartTests(unittest.IsolatedAsyncioTestCase):
                     value = await asyncio.wait_for(
                         server.read_property(rights_oid(1), ACCOMPANIMENT), 3
                     )
-                    self.assertEqual(value.value, REMOTE_CREDENTIAL_REFERENCE, keywords)
+                    self.assertEqual(value.value, (REMOTE_DEVICE, CREDENTIAL), keywords)
                 finally:
                     await server.stop()
 

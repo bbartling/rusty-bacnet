@@ -1114,6 +1114,9 @@ class DeviceObjectPropertyReference(TypedDict):
     ``property_array_index`` outside unsigned32 raise ValueError; wrong types
     raise TypeError. The server reads only its own objects, so a Trend Log
     Multiple member naming another Device logs a failure instead of a value.
+    A read of a Channel's, Schedule's or Trend Log Multiple's member list, or
+    of a Global Group's Group_Members, gives each reference in this form,
+    with every key present.
     """
 
     object_identifier: ObjectIdentifier
@@ -1130,6 +1133,8 @@ class AccessRule(TypedDict):
     (ALWAYS), and a missing or ``None`` ``location`` that it covers every
     access point (ALL). A ``location`` is an Access Point or Access Zone, as
     an ``ObjectIdentifier`` in this device or a ``(device, object)`` pair.
+    A read of Positive_Access_Rules or Negative_Access_Rules gives each
+    rule in this form, with every key present.
     """
 
     enable: bool
@@ -1165,6 +1170,7 @@ class AuditRecipientAddress(TypedDict):
     mac_address: bytes
 
 
+# A read of the Device's Audit_Notification_Recipient gives this form.
 AuditRecipientInput = AuditRecipientDevice | AuditRecipientAddress
 
 
@@ -1341,27 +1347,40 @@ class PropertyValue:
     ``CovNotification`` value and ``BACnetServer.read_property``) keeps every
     element of the value; only broken framing raises:
 
-    - A constructed collection the binding also writes as typed values reads
-      typed: a whole read is a ``list`` of its elements in the typed write's
-      form, and an indexed read one element, tagged with its production.
-      These are Recipient_List (``"destination"``: a ``Destination`` with
-      every key), Port_Filter (``"port_permission"``: ``(port_id,
-      enabled)``), a Group's List_Of_Group_Members
-      (``"read_access_specification"``: ``(object_id, [(property_id,
-      array_index), ...])``) and Present_Value (``"read_access_result"``: a
-      ``ReadAccessResult``), a Command's Action (``"action_list"``: a list of
-      ``ActionCommand`` with every key), Door_Members, Access_Doors and a
-      Staging's Target_References (``"device_object_reference"``: an
-      ``ObjectIdentifier``, or ``(device, object)``), Supported_Formats
-      (``"authentication_factor_format"``: the format type, or
-      ``(format_type, vendor_id, vendor_format)``) and Stages
-      (``"stage_limit_value"``: ``(limit, values, deadband)``). Each element
-      keeps its octets, so the value writes back unchanged. A value that
-      isn't those elements, to the last octet, follows the rules below.
-    - Other context-tagged content (a timestamp, Active_COV_Subscriptions),
-      or content this type has no form for (a UCS-4, DBCS or JIS string,
-      bad UTF-8, an ENUMERATED past 32 bits), is ``application_data``
-      holding the octets exactly as served.
+    - A constructed property with a typed form reads typed. A whole read of
+      a collection is a ``list`` of its elements, an indexed read one
+      element, and a read of a single value that element, tagged with its
+      production. Where the binding also takes the property as a typed
+      value, the form is that value's. The properties and forms (see
+      docs/python-api.md, "Typed constructed values"): Recipient_List
+      (``"destination"``: a ``Destination`` with every key), Port_Filter
+      (``"port_permission"``: ``(port_id, enabled)``), a Group's
+      List_Of_Group_Members (``"read_access_specification"``:
+      ``(object_id, [(property_id, array_index), ...])``) and Present_Value
+      (``"read_access_result"``: a ``ReadAccessResult``), a Command's Action
+      (``"action_list"``: a list of ``ActionCommand`` with every key), the
+      object reference lists and Accompaniment
+      (``"device_object_reference"``: an ``ObjectIdentifier``, or
+      ``(device, object)``), Supported_Formats
+      (``"authentication_factor_format"``), Stages (``"stage_limit_value"``:
+      ``(limit, values, deadband)``), Access Rights rules (``"access_rule"``:
+      an ``AccessRule`` with every key), property reference lists
+      (``"device_object_property_reference"``: a
+      ``DeviceObjectPropertyReference`` with every key), a Global Group's
+      Present_Value (``"property_access_result"``),
+      Audit_Notification_Recipient (``"recipient"``: an
+      ``AuditRecipientInput``), Weekly_Schedule (``"daily_schedule"``),
+      Exception_Schedule (``"special_event"``), Effective_Period
+      (``"date_range"``), Date_List (``"calendar_entry"``), timestamps
+      (``"timestamp"``: a ``BACnetTimeStamp``), Active_COV_Subscriptions
+      (``"cov_subscription"``), and Value_Source and Value_Source_Array
+      (``"value_source"``). Each element keeps its octets, so the value
+      writes back unchanged. A value that isn't those elements, to the last
+      octet, follows the rules below.
+    - Other context-tagged content (a Load Control's shed levels, an Event
+      Enrollment's Event_Parameters), or content this type has no form for
+      (a UCS-4, DBCS or JIS string, bad UTF-8, an ENUMERATED past 32 bits),
+      is ``application_data`` holding the octets exactly as served.
     - A whole read (no ``array_index``) of a property the stack's
       classification table marks as an array or list on that object type
       (every BACnetARRAY and BACnetLIST of the 2020 object tables) is a
@@ -1370,7 +1389,7 @@ class PropertyValue:
       ``list`` in wire order when it holds none or several (a date-time is
       a date and then a time). An indexed read is one element under these
       rules: ``Port_Filter[2]`` is a port_permission, ``Event_Time_Stamps[1]``
-      application_data.
+      a timestamp.
 
     Two values are equal when they carry the same octets and, for a typed
     read, the same element production.
@@ -1427,14 +1446,18 @@ class PropertyValue:
         one typed constructed element: 'destination', 'port_permission',
         'read_access_specification', 'read_access_result', 'action_list',
         'device_object_reference', 'authentication_factor_format',
-        'stage_limit_value'."""
+        'stage_limit_value', 'access_rule', 'device_object_property_reference',
+        'property_access_result', 'recipient', 'daily_schedule',
+        'special_event', 'calendar_entry', 'date_range', 'timestamp',
+        'cov_subscription', 'value_source'."""
         ...
 
     @property
     def value(self) -> Any:
         """The Python-native value (int, float, str, bytes, bool, dict, tuple,
         ObjectIdentifier, list, or None); ``application_data`` is ``bytes``,
-        and a typed constructed element the form its typed write takes."""
+        and a typed constructed element the form its typed write takes, or
+        the form docs/python-api.md gives it."""
         ...
 
     def __repr__(self) -> str: ...
@@ -3178,7 +3201,7 @@ class BACnetServer:
         clients can't add one; once served, clients can write it. A pair
         whose device isn't a Device raises ValueError, and any other object
         type raises BacnetProtocolError with VALUE_OUT_OF_RANGE. A read
-        returns the reference's octets as ``application_data``.
+        gives the reference back in the form the keyword takes.
 
         With ``storage_path``, a rule array, Enable or Accompaniment that a
         client writes is kept in that file across restarts, and wins over the
@@ -3223,8 +3246,8 @@ class BACnetServer:
         identifier raises ValueError, and a reference to anything but an
         Access Credential in ``credentials``, or an Access User in the other
         two, raises BacnetProtocolError with VALUE_OUT_OF_RANGE; either way
-        nothing is registered. A whole read of a list returns the
-        references' octets as ``bytes``, or ``[]`` while it is empty.
+        nothing is registered. A read of a list gives the references back in
+        the forms the keywords take, or ``[]`` while it is empty.
         """
         ...
     def add_access_zone(
@@ -3248,7 +3271,8 @@ class BACnetServer:
         ``door_members``. A pair whose device isn't a Device object
         identifier raises ValueError, and a reference to anything but an
         Access Point raises BacnetProtocolError with VALUE_OUT_OF_RANGE;
-        either way nothing is registered.
+        either way nothing is registered. A read of either list gives the
+        references back in the forms the keywords take.
 
         ``alarm_values`` sets the starting Alarm_Values, the occupancy states
         the zone reports with a CHANGE_OF_STATE alarm after Time_Delay, as

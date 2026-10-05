@@ -6,7 +6,7 @@ import unittest
 
 import rusty_bacnet
 from rusty_bacnet import (
-    BACnetServer, BacnetProtocolError, ObjectIdentifier, ObjectType,
+    BACnetServer, BACnetTimeStamp, BacnetProtocolError, ObjectIdentifier, ObjectType,
     PropertyIdentifier as P, PropertyValue,
 )
 
@@ -45,22 +45,23 @@ class CommandSourceTests(unittest.IsolatedAsyncioTestCase):
                     server.write_property_local(oid, P.PRESENT_VALUE, value)
                 self.assertEqual(await server.read_property(oid, P.PRESENT_VALUE), before)
                 self.assertIsNone(await server.write_property_local(oid, P.PRESENT_VALUE, value, priority=8, source_object=oid))
-                expected = b"\x1e\x1c" + ((kind.to_raw() << 22) | index).to_bytes(4, "big") + b"\x1f"
+                # Value_Source and Last_Command_Time read typed (#1345).
+                expected = oid
                 source = await server.read_property(oid, P.VALUE_SOURCE)
-                self.assertEqual(source.tag, "application_data")
+                self.assertEqual(source.tag, "value_source")
                 self.assertEqual(source.value, expected)
                 self.assertEqual((await server.read_property(oid, P.VALUE_SOURCE_ARRAY, array_index=0)).value, 16)
                 self.assertEqual((await server.read_property(oid, P.VALUE_SOURCE_ARRAY, array_index=8)).value, expected)
-                self.assertEqual((await server.read_property(oid, P.LAST_COMMAND_TIME)).value, b"\x19\x01")
+                self.assertEqual((await server.read_property(oid, P.LAST_COMMAND_TIME)).value, BACnetTimeStamp.sequence_number(1))
                 # Another local initiator has the same Device owner. Correction has no clock tick.
                 await server.write_property_local(oid, P.VALUE_SOURCE, PropertyValue.application_data(b"\x08"), priority=8, source_object=None)
-                self.assertEqual((await server.read_property(oid, P.VALUE_SOURCE)).value, b"\x08")
+                self.assertIsNone((await server.read_property(oid, P.VALUE_SOURCE)).value)
                 for data in (b"\x08\x08", b"\x1e"):
                     with self.assertRaises(BacnetProtocolError):
                         await server.write_property_local(oid, P.VALUE_SOURCE, PropertyValue.application_data(data), priority=8, source_object=None)
                 with self.assertRaises(BacnetProtocolError):
                     await server.write_property_local(oid, P.PRESENT_VALUE, value, source_object=ObjectIdentifier(ObjectType.ANALOG_VALUE, 999))
-                self.assertEqual((await server.read_property(oid, P.VALUE_SOURCE)).value, b"\x08")
-                self.assertEqual((await server.read_property(oid, P.LAST_COMMAND_TIME)).value, b"\x19\x01")
+                self.assertIsNone((await server.read_property(oid, P.VALUE_SOURCE)).value)
+                self.assertEqual((await server.read_property(oid, P.LAST_COMMAND_TIME)).value, BACnetTimeStamp.sequence_number(1))
         finally:
             await server.stop()

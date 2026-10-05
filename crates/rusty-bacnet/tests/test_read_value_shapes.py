@@ -247,7 +247,13 @@ class LocalReadTests(unittest.IsolatedAsyncioTestCase):
                 # The Device's COV subscription list is projected from the live table.
                 await client.subscribe_cov(address, 7, AI_1, confirmed=False, lifetime=None)
                 local = await server.read_property(device, P.ACTIVE_COV_SUBSCRIPTIONS)
-                self.assertEqual(local.tag, "application_data")
+                # Each subscription reads as a mapping (#1345).
+                self.assertEqual(local.tag, "list")
+                [subscription] = local.value
+                self.assertEqual(subscription["process_identifier"], 7)
+                self.assertEqual(subscription["object_identifier"], AI_1)
+                self.assertEqual(subscription["property_identifier"], P.PRESENT_VALUE)
+                self.assertIs(subscription["issue_confirmed_notifications"], False)
                 self.assertEqual(local, await client.read_property(address, device, P.ACTIVE_COV_SUBSCRIPTIONS))
             # An unknown object fails as a network read does.
             with self.assertRaises(BacnetProtocolError) as raised:

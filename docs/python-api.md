@@ -227,7 +227,7 @@ v.value   # 72.5 (native Python float)
 | `"time"` | `tuple(hour, minute, second, hundredths)` |
 | `"list"` | `list` of native Python values |
 | `"application_data"` | `bytes`: the encoded value, octet for octet |
-| `"destination"`, `"port_permission"` and the other element tags of [typed collections](#typed-collections) | the element in the form its typed write takes |
+| `"destination"`, `"port_permission"` and the other element tags of [typed constructed values](#typed-constructed-values) | the element in its typed form |
 
 ### Read results
 
@@ -239,15 +239,17 @@ rule: `BACnetClient.read_property` and `read_property_multiple` (and their
 broken framing (a length past the end, an unmatched opening or closing tag)
 is an error.
 
-- **A typed collection**, one of the constructed lists and arrays in
-  [the table below](#typed-collections), reads in the form its typed write
-  takes: a whole read is a `list` of the elements, and an indexed read one
-  element tagged with its production. A value that doesn't decode as those
-  elements, to the last octet, falls through to the rules below.
+- **A typed constructed value**, one of the constructed properties in
+  [the table below](#typed-constructed-values), reads in its typed form
+  (the form its typed write takes, where the binding has one): a whole read
+  of a list or array is a `list` of the elements, an indexed read one
+  element, and a read of a single value that element, each tagged with its
+  production. A value that doesn't decode as those elements, to the last
+  octet, falls through to the rules below.
 - **Other context-tagged content** comes back as `application_data` whose
-  `.value` holds the octets as served. Constructed values such as
-  Active_COV_Subscriptions, a Load Control's Requested_Shed_Level or a
-  timestamp take this form, as local reads of them always have. Element
+  `.value` holds the octets as served. Constructed values with no typed form,
+  such as a Load Control's Requested_Shed_Level or an Event Enrollment's
+  Event_Parameters, take this form, as local reads of them always have. Element
   boundaries of a constructed list aren't marked in the octets, so the
   binding doesn't split one: decode the octets with the datatype's layout,
   or read single array elements with `array_index`. Writing the value back
@@ -274,8 +276,9 @@ is an error.
 shaped by the same rules: a single application value is bare
 (`Object_List[2]`), an element of a typed collection is that element
 (`Port_Filter[2]` is a `port_permission`), an element of several application
-fields is a `list`, and any other context-tagged element is
-`application_data` (`Event_Time_Stamps[1]`).
+fields is a `list`, an element of a typed array is that element
+(`Event_Time_Stamps[1]` is a `timestamp`), and any other context-tagged
+element is `application_data`.
 
 ```python
 objects = await client.read_property(address, device, PropertyIdentifier.OBJECT_LIST)
@@ -287,15 +290,18 @@ port = await client.read_property(address, nf, PropertyIdentifier.PORT_FILTER, 2
 port.tag, port.value  # ("port_permission", (1, False))
 ```
 
-#### Typed collections
+#### Typed constructed values
 
-These properties hold lists or arrays of constructed elements that the
-binding also takes as typed values, so their reads come back in the same
-form (#1310). A whole read's `.value` is a list of the elements in the shape
-the typed write takes, so a script can usually hand it back to that write. The
-exceptions are a Target_References `(device, object)` pair, which
-`add_staging` refuses because it takes local targets only, and a value the
-object's own checks refuse, which raises as it would if written by hand. An
+These properties hold constructed values, or lists or arrays of them, that
+read back typed (#1310, #1344, #1345). Where the binding also takes the
+property as a typed value, the read comes back in that form, so a script can
+usually hand it back to the write. The exceptions are a Target_References
+`(device, object)` pair, which `add_staging` refuses because it takes local
+targets only, and a value the object's own checks refuse, which raises as it
+would if written by hand. Where it has no typed write, the form is the one
+the table gives. A whole read of a list or array is a list of the elements,
+and a read of a single value (Accompaniment, Audit_Notification_Recipient,
+Effective_Period, Last_Command_Time, Value_Source) the element itself. An
 empty collection is `PropertyValue.list([])`. Each element keeps the octets it
 was read from, so writing the value back (`write_property`,
 `write_property_local`) sends them unchanged. `PropertyValue.list` of
@@ -314,6 +320,26 @@ its octets.
 | Access Door, Access Point, Staging | Door_Members, Access_Doors, Target_References | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` when the reference names a device | `door_members=`, `access_doors=`; `target_references=` takes the `ObjectIdentifier` form only |
 | Credential Data Input | Supported_Formats | `"authentication_factor_format"` | the format type, or `(format_type, vendor_id, vendor_format)` when it has vendor members (a missing one is `None`, which the write also takes) | `add_credential_data_input(supported_formats=...)`, paired with Supported_Format_Classes |
 | Staging | Stages | `"stage_limit_value"` | `(limit, values, deadband)`, `values` a `list[bool]` | `add_staging(stages=...)` |
+| Access Rights | Positive_Access_Rules, Negative_Access_Rules | `"access_rule"` | an `AccessRule` mapping with every key; `None` stands for ALWAYS and ALL | `add_access_rights(positive_access_rules=..., negative_access_rules=...)` |
+| Access Rights | Accompaniment (one value) | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | `add_access_rights(accompaniment=...)` |
+| Access Zone, Access User | Entry_Points, Exit_Points; Credentials, Members, Member_Of | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | `add_access_zone(entry_points=..., exit_points=...)`, `add_access_user(credentials=..., members=..., member_of=...)` |
+| Life Safety Point, Life Safety Zone | Member_Of; Zone_Members | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | none |
+| Global Group, Schedule, Channel, Trend Log Multiple | Group_Members; List_Of_Object_Property_References; Log_DeviceObjectProperty | `"device_object_property_reference"` | a `DeviceObjectPropertyReference` mapping with every key | `add_channel(members=...)`, `add_trend_log_multiple(members=...)` |
+| Global Group | Present_Value | `"property_access_result"` | the member's `DeviceObjectPropertyReference` keys, then `"value"` (shaped as a read of the member) and `"error"` (`(ErrorClass, ErrorCode)`), one of them `None` | none |
+| Device | Audit_Notification_Recipient (one value) | `"recipient"` | an `AuditRecipientInput` mapping | `configure_audit_recipient(...)` |
+| Device | Active_COV_Subscriptions | `"cov_subscription"` | `{"recipient", "process_identifier", "object_identifier", "property_identifier", "property_array_index", "issue_confirmed_notifications", "time_remaining", "cov_increment"}`; `recipient` an `AuditRecipientInput` mapping, `cov_increment` a `float` or `None` | none |
+| Schedule | Weekly_Schedule | `"daily_schedule"` | one day: `[(time, value), ...]`, `time` an `(hour, minute, second, hundredths)` tuple and `value` a `PropertyValue` | none |
+| Schedule | Exception_Schedule | `"special_event"` | `{"period", "time_values", "priority"}`; `period` a calendar entry mapping or a Calendar's `ObjectIdentifier`, `time_values` as for a day | none |
+| Schedule | Effective_Period (one value) | `"date_range"` | `(start_date, end_date)` | none |
+| Calendar | Date_List | `"calendar_entry"` | `{"kind": "date", "date"}`, `{"kind": "date_range", "start_date", "end_date"}` or `{"kind": "week_n_day", "month", "week_of_month", "day_of_week"}` | none |
+| any | Event_Time_Stamps, Command_Time_Array; Last_Command_Time (one value) | `"timestamp"` | a `BACnetTimeStamp` | none |
+| any | Value_Source_Array; Value_Source (one value) | `"value_source"` | `None` (none), an `ObjectIdentifier` or `(device, object)` (an object), or `{"network_number", "mac_address"}` (an address) | none |
+
+A date in these forms is a `(year, month, day, day_of_week)` tuple with the
+full year, as `BACnetTimeStamp` takes it, and 255 in any field left
+unspecified. An Access Rights rule whose specifiers disagree with the
+references it carries, which no typed write makes, has no `AccessRule` form,
+so its array reads as `application_data`.
 
 A Group's Present_Value results, and an `ActionCommand`'s `property_value`,
 are themselves read results: each value is shaped as a read of the property it
@@ -1714,7 +1740,7 @@ change both lists over the network, within the limits Port_Filter's writes
 allow. With `storage_path`, a Recipient_List a client wrote, once saved, wins
 over `recipients`; until a write sets the list, `recipients` applies at every
 start and is not saved. Both lists read back in these forms, each destination
-with every key (see [typed collections](#typed-collections)).
+with every key (see [typed constructed values](#typed-constructed-values)).
 Save failures are counted by
 [`forwarder_save_counters()`](#forwarder_save_counters---dictint-forwardersavecounters).
 
@@ -2287,7 +2313,7 @@ per element, each a list of `ActionCommand` mappings with
 (False when omitted) and `device_identifier`. `action_text` serves
 Action_Text, one text per list. Both are read-only over the network. Action
 reads back as these mappings with every key, the Write_Successful flags
-included (see [typed collections](#typed-collections)). `write_successful` is
+included (see [typed constructed values](#typed-constructed-values)). `write_successful` is
 accepted so such a mapping can be given back, but ignored: only a run sets
 the flag, so every command starts False. A wrong shape or Python
 type raises TypeError, and an unknown or missing key raises ValueError, as
@@ -2592,9 +2618,9 @@ lists the same way: `credentials` names the user's Access Credentials, and
 `members` and `member_of` the Access Users one level below and above it,
 here or in another device. An element of another object type raises
 `BacnetProtocolError` (VALUE_OUT_OF_RANGE).
-A whole read of Entry_Points, Exit_Points, Credentials, Members or
-Member_Of returns the references' octets as `bytes`, or `[]` while the list
-is empty. `supported_formats` takes
+A read of Entry_Points, Exit_Points, Credentials, Members or Member_Of
+gives the references back in the forms the keywords take (#1344), or `[]`
+while the list is empty. `supported_formats` takes
 `(format, format_class)` pairs, a format being a
 BACnetAuthenticationFactorType number or a
 `(format_type, vendor_id, vendor_format)` triple, which a CUSTOM format
@@ -2680,8 +2706,9 @@ access point (ALL). A wrong type raises `TypeError`; an unknown or missing key,
 or a device that isn't a Device, raises `ValueError`; a location naming
 another object type raises `BacnetProtocolError` (VALUE_OUT_OF_RANGE), and so
 does a list of more than 1024 rules (NO_SPACE_TO_WRITE_PROPERTY). Each
-rule reads back as `application_data` holding its BACnetAccessRule octets
-(#1344 tracks reading it as an `AccessRule` mapping).
+rule reads back as an `AccessRule` mapping with every key, `None` standing
+for ALWAYS and ALL, so a read array can be handed back to the keyword
+(#1344).
 
 `enable` (a bool, `True` when omitted) sets Enable, which a peer reads and
 writes as `PropertyIdentifier.LOG_ENABLE` (property 133); `False` disables
@@ -2713,7 +2740,8 @@ server.add_access_rights(
 Without the keyword the object has no Accompaniment row, and a read or write
 of it gets UNKNOWN_PROPERTY. Once served, it is in Property_List and peers
 can write it as `PropertyValue.application_data` holding the reference's
-octets; a read returns those octets the same way. A pair whose device isn't a
+octets; a read gives the reference back in the form the keyword takes
+(#1344). A pair whose device isn't a
 Device raises `ValueError`, and another object type raises
 `BacnetProtocolError` (VALUE_OUT_OF_RANGE), from the keyword or a write.
 
@@ -2772,7 +2800,7 @@ return, each with the next Access_Event_Tag and the Device clock's time, and
 each sends the point's COV report. Supported_Formats,
 Supported_Format_Classes, Door_Members and Access_Doors read as arrays (index
 0 is the size), each reference and format in the form its keyword argument
-takes (see [typed collections](#typed-collections)).
+takes (see [typed constructed values](#typed-constructed-values)).
 
 #### Transportation
 
@@ -2814,7 +2842,7 @@ per member, and each member row counts against `rpm_max_result_elements`; a
 read past it is aborted with OUT_OF_RESOURCES (see [RPM budgets](rpm-budget.md)).
 List_Of_Group_Members reads back in the spec shape, and Present_Value as the
 `read_property_multiple` results of the members (see
-[typed collections](#typed-collections)).
+[typed constructed values](#typed-constructed-values)).
 
 #### Extended Value Types
 

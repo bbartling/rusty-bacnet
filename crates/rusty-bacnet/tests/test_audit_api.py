@@ -680,8 +680,10 @@ class AuditContractArtifactTests(unittest.TestCase):
             try:
                 value = await server.read_property(ObjectIdentifier(ObjectType.DEVICE, 8),
                                                    PropertyIdentifier.AUDIT_NOTIFICATION_RECIPIENT)
-                self.assertEqual(value.tag, "application_data")
-                self.assertEqual(value.value, bytes.fromhex("0c02000009"))
+                # The recipient reads back in the form it was configured in (#1345).
+                self.assertEqual(value.tag, "recipient")
+                self.assertEqual(value.value, {"kind": "device",
+                                               "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
             finally:
                 await server.stop()
             with self.assertRaises(RuntimeError):
@@ -701,7 +703,8 @@ class AuditContractArtifactTests(unittest.TestCase):
             try:
                 value = await server.read_property(ObjectIdentifier(ObjectType.DEVICE, 8),
                                                    PropertyIdentifier.AUDIT_NOTIFICATION_RECIPIENT)
-                self.assertEqual(value.value, bytes.fromhex("1e210065067f000001bac01f"))
+                self.assertEqual(value.value, {"kind": "address", "network_number": 0,
+                                               "mac_address": bytes.fromhex("7f000001bac0")})
             finally:
                 await server.stop()
         asyncio.run(bounded_reporter_test(exercise()))

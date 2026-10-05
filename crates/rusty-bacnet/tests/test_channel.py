@@ -40,15 +40,17 @@ LIST = P.LIST_OF_OBJECT_PROPERTY_REFERENCES
 
 # Write_Status SUCCESSFUL.
 SUCCESSFUL = 2
-# AV-1's Present_Value as a BACnetDeviceObjectPropertyReference with no
-# device: object identifier [0], property identifier [1] (85).
-AV1_PV_REFERENCE = bytes([0x0C, 0x00, 0x80, 0x00, 0x01, 0x19, 0x55])
-# AO-1's Present_Value in the remote Device: object identifier [0], property
-# identifier [1] and device identifier [3] (Device is object type 8).
-REMOTE_AO1_PV_REFERENCE = (
-    bytes([0x0C, 0x00, 0x40, 0x00, 0x01, 0x19, 0x55, 0x3C])
-    + ((8 << 22) | REMOTE_INSTANCE).to_bytes(4, "big")
-)
+
+
+def member(oid: ObjectIdentifier, device: ObjectIdentifier | None = None) -> dict:
+    """A member's Present_Value as a read gives it back (#1345): a
+    DeviceObjectPropertyReference mapping with every key."""
+    return {
+        "object_identifier": oid,
+        "property_identifier": PV,
+        "property_array_index": None,
+        "device_identifier": device,
+    }
 # An application-tagged REAL 72.0, a WriteGroup change-list value.
 REAL_72 = bytes([0x44, 0x42, 0x90, 0x00, 0x00])
 # Seconds the server gets to do what a test waits for. Each wait polls and
@@ -213,7 +215,7 @@ class ChannelMembersTests(unittest.IsolatedAsyncioTestCase):
 
             async def check(client, address, read) -> None:
                 # The member keeps its Device identifier.
-                self.assertEqual(await read(CH1, LIST, 2), REMOTE_AO1_PV_REFERENCE)
+                self.assertEqual(await read(CH1, LIST, 2), member(AO1, REMOTE_DEVICE))
                 await client.write_property(
                     address, CH1, PV, PropertyValue.real(61.0), priority=8
                 )
@@ -279,7 +281,7 @@ class ChannelMembersTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(await read(CH1, P.ALLOW_GROUP_DELAY_INHIBIT), True)
             self.assertEqual(await read(CH0, P.CONTROL_GROUPS), [0])
             # The member naming this Device is stored as the local reference.
-            self.assertEqual(await read(CH1, LIST, 2), AV1_PV_REFERENCE)
+            self.assertEqual(await read(CH1, LIST, 2), member(AV1))
 
             await client.write_group(address, 7, 8, [(11, None, REAL_72)], True)
             await first_seen(self.server, {AO1: 72.0, AV1: 72.0})
@@ -312,8 +314,7 @@ class ChannelWildcardDeviceTests(unittest.IsolatedAsyncioTestCase):
         await server.start()
         try:
             element = (await server.read_property(CH1, LIST, 1)).value
-            device = bytes([0x3C]) + ((8 << 22) | 4_194_303).to_bytes(4, "big")
-            self.assertEqual(element, AV1_PV_REFERENCE + device)
+            self.assertEqual(element, member(AV1, wildcard))
         finally:
             await server.stop()
 

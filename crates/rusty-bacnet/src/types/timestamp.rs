@@ -144,7 +144,7 @@ fn actual_year(date: &primitives::Date) -> u16 {
         .unwrap_or(u16::from(primitives::Date::UNSPECIFIED))
 }
 
-fn date_value(date: &primitives::Date) -> (u16, u8, u8, u8) {
+pub(super) fn date_value(date: &primitives::Date) -> (u16, u8, u8, u8) {
     (actual_year(date), date.month, date.day, date.day_of_week)
 }
 

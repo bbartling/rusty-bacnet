@@ -39,25 +39,10 @@ REMOTE_DEVICE = ObjectIdentifier(ObjectType.DEVICE, 99)
 REMOTE_DOOR = ObjectIdentifier(ObjectType.ACCESS_DOOR, 4)
 LOBBY_POINT = ObjectIdentifier(ObjectType.ACCESS_POINT, 1)
 REMOTE_POINT = ObjectIdentifier(ObjectType.ACCESS_POINT, 4)
-
-# A BACnetDeviceObjectReference: device identifier [0] when present, object
-# identifier [1]. Entry_Points and Exit_Points still read as octets (#1344).
-LOBBY_POINT_REFERENCE = bytes([0x1C, 0x08, 0x40, 0x00, 0x01])
-REMOTE_POINT_REFERENCE = bytes(
-    [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x08, 0x40, 0x00, 0x04]
-)
 BADGE = ObjectIdentifier(ObjectType.ACCESS_CREDENTIAL, 1)
 REMOTE_BADGE = ObjectIdentifier(ObjectType.ACCESS_CREDENTIAL, 4)
 TEAM_MEMBER = ObjectIdentifier(ObjectType.ACCESS_USER, 2)
 REMOTE_TEAM = ObjectIdentifier(ObjectType.ACCESS_USER, 5)
-BADGE_REFERENCE = bytes([0x1C, 0x08, 0x00, 0x00, 0x01])
-REMOTE_BADGE_REFERENCE = bytes(
-    [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x08, 0x00, 0x00, 0x04]
-)
-TEAM_MEMBER_REFERENCE = bytes([0x1C, 0x08, 0xC0, 0x00, 0x02])
-REMOTE_TEAM_REFERENCE = bytes(
-    [0x0C, 0x02, 0x00, 0x00, 0x63, 0x1C, 0x08, 0xC0, 0x00, 0x05]
-)
 
 
 # Each registration method and its keyword-only arguments.
@@ -289,13 +274,14 @@ class AccessControlConfigurationTests(unittest.TestCase):
             zone = ObjectIdentifier(ObjectType.ACCESS_ZONE, 1)
             entry = PropertyIdentifier.ENTRY_POINTS
             exit_ = PropertyIdentifier.EXIT_POINTS
-            # A list of context-tagged references reads back as its octets.
+            # The lists read back in the form the keywords take (#1344).
             self.assertEqual(
                 (await server.read_property(zone, entry)).value,
-                LOBBY_POINT_REFERENCE + REMOTE_POINT_REFERENCE,
+                [LOBBY_POINT, (REMOTE_DEVICE, REMOTE_POINT)],
             )
             self.assertEqual(
-                (await server.read_property(zone, exit_)).value, REMOTE_POINT_REFERENCE
+                (await server.read_property(zone, exit_)).value,
+                [(REMOTE_DEVICE, REMOTE_POINT)],
             )
             bare = ObjectIdentifier(ObjectType.ACCESS_ZONE, 2)
             self.assertEqual((await server.read_property(bare, entry)).value, [])
@@ -336,11 +322,11 @@ class AccessControlConfigurationTests(unittest.TestCase):
         try:
             user = ObjectIdentifier(ObjectType.ACCESS_USER, 1)
             credentials = PropertyIdentifier.CREDENTIALS
-            # A list of context-tagged references reads back as its octets.
+            # The lists read back in the form the keywords take (#1344).
             for property, expected in (
-                (credentials, BADGE_REFERENCE + REMOTE_BADGE_REFERENCE),
-                (PropertyIdentifier.MEMBERS, TEAM_MEMBER_REFERENCE),
-                (PropertyIdentifier.MEMBER_OF, REMOTE_TEAM_REFERENCE),
+                (credentials, [BADGE, (REMOTE_DEVICE, REMOTE_BADGE)]),
+                (PropertyIdentifier.MEMBERS, [TEAM_MEMBER]),
+                (PropertyIdentifier.MEMBER_OF, [(REMOTE_DEVICE, REMOTE_TEAM)]),
             ):
                 self.assertEqual((await server.read_property(user, property)).value, expected)
             # A BACnetLIST takes no index.
