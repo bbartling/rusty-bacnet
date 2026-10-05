@@ -1411,4 +1411,23 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     fn buffer_ready_report_internal(&self) -> Option<BufferReadyReport> {
         None
     }
+
+    /// The local property this object's Event_Algorithm_Inhibit follows, its
+    /// Event_Algorithm_Inhibit_Ref (#1329); `None` while it holds none, and
+    /// for an object without one, which the default is. The database reads
+    /// the property and hands the value over through
+    /// [`follow_event_algorithm_inhibit_internal`](Self::follow_event_algorithm_inhibit_internal).
+    #[doc(hidden)]
+    fn event_algorithm_inhibit_reference_internal(&self) -> Option<BACnetObjectPropertyReference> {
+        None
+    }
+
+    /// Take the value the database read from the property
+    /// [`event_algorithm_inhibit_reference_internal`](Self::event_algorithm_inhibit_reference_internal)
+    /// names as Event_Algorithm_Inhibit; returns whether it changed. The
+    /// default follows nothing.
+    #[doc(hidden)]
+    fn follow_event_algorithm_inhibit_internal(&mut self, _inhibit: bool) -> bool {
+        false
+    }
 }

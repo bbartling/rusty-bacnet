@@ -963,10 +963,14 @@ A rusty-bacnet server names an object created without an Object_Name after
 its type and instance (`ANALOG_INPUT-2`), adding the first free ` (n)` when
 another object holds that name. It also takes a few properties at creation
 that WriteProperty refuses afterwards: Units on an Analog Input or Output,
-and Number_Of_States (1 to 1024) and State_Text written whole on the
-multi-state types. A valid Number_Of_States applies before the other initial
-values, State_Text needs one string per state, and an Alarm_Values entry
-past the count is refused.
+and Number_Of_States (1 to 1024) on the multi-state types. A valid
+Number_Of_States applies before the other initial values, and an
+Alarm_Values entry past the count is refused. State_Text written whole, at
+creation or by a later write, sets Number_Of_States to its number of labels;
+with a Number_Of_States in the same request it has to match it, and a write
+that would leave a state the object holds past the new count is refused
+with VALUE_OUT_OF_RANGE. Writing a count to State_Text at `array_index=0`
+resizes it the same way, adding `State n` labels when it grows.
 
 #### `delete_object(address, object_id)`
 
@@ -1973,6 +1977,15 @@ write Notification_Threshold (and Notification_Class) with
 `write_property_local` or from a peer, and the log's Notification Class
 recipients hear each time that many more records have been collected. Zero,
 the default, reports nothing.
+
+Every object that reports intrinsically also takes Event_Message_Texts_Config
+(three strings, the Message Text of the TO_OFFNORMAL, TO_FAULT and TO_NORMAL
+transitions in place of the server's own; an empty string leaves it) and
+Event_Algorithm_Inhibit, which suspends the event algorithm but not fault
+reporting (#1329). Write them with `write_property_local`; there are no
+`add_*` keyword arguments for them. Event_Algorithm_Inhibit_Ref makes the
+inhibit follow a local Boolean or BinaryPV property, read each time the
+server evaluates the object.
 
 An Audit Log's `storage_path` is application-owned and produces two sibling
 snapshot files with `.slot0` and `.slot1` suffixes. Reuse the same path when

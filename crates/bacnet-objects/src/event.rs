@@ -11,6 +11,7 @@ use bacnet_types::enums::{EventState, EventType, NotifyType, Reliability};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 pub(crate) mod history;
+pub(crate) mod options;
 pub(crate) mod state_reporting;
 
 /// A detected change in event state.
@@ -237,6 +238,19 @@ fn delay_toward(time_delay: u32, time_delay_normal: Option<u32>, target: EventSt
     }
 }
 
+/// What an algorithm proposes while Event_Algorithm_Inhibit is TRUE, once
+/// fault precedence has had its say (Clauses 13.2.2.1 and 13.2.2.1.5): its
+/// own result is ignored and any countdown dropped, so a condition has to
+/// last its whole delay again once the inhibit clears, and an offnormal
+/// state goes back to NORMAL at once. `None` when already NORMAL.
+fn inhibited_target(
+    event_state: EventState,
+    pending: &mut Option<PendingTransition>,
+) -> Option<EventState> {
+    *pending = None;
+    (event_state != EventState::NORMAL).then_some(EventState::NORMAL)
+}
+
 /// What Clause 13.2.2's fault-precedence rule dictates for a single evaluation.
 ///
 /// ASHRAE 135-2020 Clause 13.2.2 assigns normal/offnormal selection to the
@@ -458,7 +472,7 @@ impl OutOfRangeDetector {
         present_value: f32,
         reliability: Reliability,
     ) -> Option<TransitionOutcome> {
-        let outcome = self.propose(present_value, reliability);
+        let outcome = self.propose(present_value, reliability, false);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -470,9 +484,14 @@ impl OutOfRangeDetector {
         &mut self,
         present_value: f32,
         reliability: Reliability,
+        inhibited: bool,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
+        }
+        if inhibited {
+            return inhibited_target(self.event_state, &mut self.pending)
+                .and_then(|target| self.proposal(target));
         }
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
@@ -507,7 +526,7 @@ impl OutOfRangeDetector {
         present_value: f32,
         reliability: Reliability,
     ) -> Option<TransitionOutcome> {
-        let outcome = self.tick_proposal(present_value, reliability);
+        let outcome = self.tick_proposal(present_value, reliability, false);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -519,9 +538,14 @@ impl OutOfRangeDetector {
         &mut self,
         present_value: f32,
         reliability: Reliability,
+        inhibited: bool,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
+        }
+        if inhibited {
+            return inhibited_target(self.event_state, &mut self.pending)
+                .and_then(|target| self.proposal(target));
         }
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
@@ -718,7 +742,7 @@ impl ChangeOfStateDetector {
         present_value: u32,
         reliability: Reliability,
     ) -> Option<TransitionOutcome> {
-        let outcome = self.propose(present_value, reliability);
+        let outcome = self.propose(present_value, reliability, false);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -730,9 +754,14 @@ impl ChangeOfStateDetector {
         &mut self,
         present_value: u32,
         reliability: Reliability,
+        inhibited: bool,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
+        }
+        if inhibited {
+            return inhibited_target(self.event_state, &mut self.pending)
+                .and_then(|target| self.proposal(target));
         }
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
@@ -757,7 +786,7 @@ impl ChangeOfStateDetector {
         present_value: u32,
         reliability: Reliability,
     ) -> Option<TransitionOutcome> {
-        let outcome = self.tick_proposal(present_value, reliability);
+        let outcome = self.tick_proposal(present_value, reliability, false);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -769,9 +798,14 @@ impl ChangeOfStateDetector {
         &mut self,
         present_value: u32,
         reliability: Reliability,
+        inhibited: bool,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
+        }
+        if inhibited {
+            return inhibited_target(self.event_state, &mut self.pending)
+                .and_then(|target| self.proposal(target));
         }
         let desired = self.compute_new_state(present_value);
         if desired == self.event_state {
@@ -922,7 +956,7 @@ impl CommandFailureDetector {
         feedback_value: u32,
         reliability: Reliability,
     ) -> Option<TransitionOutcome> {
-        let outcome = self.propose(present_value, feedback_value, reliability);
+        let outcome = self.propose(present_value, feedback_value, reliability, false);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -935,9 +969,14 @@ impl CommandFailureDetector {
         present_value: u32,
         feedback_value: u32,
         reliability: Reliability,
+        inhibited: bool,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
+        }
+        if inhibited {
+            return inhibited_target(self.event_state, &mut self.pending)
+                .and_then(|target| self.proposal(target));
         }
         let desired = self.compute_new_state(present_value, feedback_value);
         if desired == self.event_state {
@@ -963,7 +1002,7 @@ impl CommandFailureDetector {
         feedback_value: u32,
         reliability: Reliability,
     ) -> Option<TransitionOutcome> {
-        let outcome = self.tick_proposal(present_value, feedback_value, reliability);
+        let outcome = self.tick_proposal(present_value, feedback_value, reliability, false);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -976,9 +1015,14 @@ impl CommandFailureDetector {
         present_value: u32,
         feedback_value: u32,
         reliability: Reliability,
+        inhibited: bool,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
+        }
+        if inhibited {
+            return inhibited_target(self.event_state, &mut self.pending)
+                .and_then(|target| self.proposal(target));
         }
         let desired = self.compute_new_state(present_value, feedback_value);
         if desired == self.event_state {
@@ -1056,6 +1100,8 @@ pub(crate) use state_reporting::impl_change_of_state_reporting;
 
 #[cfg(test)]
 mod fault_tests;
+#[cfg(test)]
+mod inhibit_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

@@ -329,7 +329,7 @@ impl BACnetObject for TrendLogObject {
     fn write_property(
         &mut self,
         property: PropertyIdentifier,
-        _array_index: Option<u32>,
+        array_index: Option<u32>,
         value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
@@ -387,7 +387,7 @@ impl BACnetObject for TrendLogObject {
             return self.write_log_device_object_property(value);
         }
         let total = self.log_buffer.total_record_count();
-        if let Some(result) = self.reporting.write(property, &value, total) {
+        if let Some(result) = self.reporting.write(property, array_index, &value, total) {
             return result;
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
@@ -396,7 +396,7 @@ impl BACnetObject for TrendLogObject {
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
             property,
-            _array_index,
+            array_index,
         ))
     }
 

@@ -36,6 +36,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
 
 use super::history::{EventHistory, EventTransitionState};
+use super::options::ReportingOptions;
 use super::{
     ChangeOfStateDetector, EnrollmentSummaryCapability, EventStateChange, EventTransitionCommit,
     EventTransitionCommitError, TransitionOutcome,
@@ -132,6 +133,12 @@ impl ChangeOfStateReporting {
             }
             return Some(Ok(()));
         }
+        if let Some(result) =
+            self.event_history
+                .write(property, array_index, value, self.event_detection_enable)
+        {
+            return Some(result);
+        }
         write_generic_event_properties!(self, property, value.clone())
     }
 
@@ -155,7 +162,8 @@ impl ChangeOfStateReporting {
         if !self.event_detection_enable {
             return None;
         }
-        self.event_detector.propose(watched, reliability)
+        let inhibited = self.event_history.options.inhibited();
+        self.event_detector.propose(watched, reliability, inhibited)
     }
 
     /// The one-second tick, suspended while detection is off.
@@ -167,7 +175,9 @@ impl ChangeOfStateReporting {
         if !self.event_detection_enable {
             return None;
         }
-        self.event_detector.tick_proposal(watched, reliability)
+        let inhibited = self.event_history.options.inhibited();
+        self.event_detector
+            .tick_proposal(watched, reliability, inhibited)
     }
 
     /// Commit one transition through the shared kernel, then settle the
@@ -215,6 +225,18 @@ impl ChangeOfStateReporting {
             event_type: ChangeOfStateDetector::ALGORITHM,
             last_transition: self.event_history.last_transition(),
         }
+    }
+
+    /// Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair.
+    pub(crate) fn options(&mut self) -> &mut ReportingOptions {
+        &mut self.event_history.options
+    }
+
+    /// The property Event_Algorithm_Inhibit follows, if any.
+    pub(crate) fn inhibit_reference(
+        &self,
+    ) -> Option<bacnet_types::constructed::BACnetObjectPropertyReference> {
+        self.event_history.options.inhibit_reference().cloned()
     }
 }
 
@@ -354,6 +376,16 @@ macro_rules! impl_change_of_state_reporting {
             timestamp: &bacnet_types::primitives::BACnetTimeStamp,
         ) -> Result<Option<$crate::event::EventStateChange>, bacnet_types::error::Error> {
             self.$reporting.acknowledge(event_state, timestamp)
+        }
+
+        fn event_algorithm_inhibit_reference_internal(
+            &self,
+        ) -> Option<bacnet_types::constructed::BACnetObjectPropertyReference> {
+            self.$reporting.inhibit_reference()
+        }
+
+        fn follow_event_algorithm_inhibit_internal(&mut self, inhibit: bool) -> bool {
+            self.$reporting.options().follow(inhibit)
         }
     };
 }

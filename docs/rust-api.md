@@ -1795,23 +1795,42 @@ whole only at creation, and the server gives such a value, sent without an
 array index, to `BACnetObject::initialize_property` instead of the write
 route (#1429). The built-in Analog Input and Analog Output take Units (an
 Enumerated up to 65535). The Multi-state Input, Output and Value take
-Number_Of_States (1 to `multistate::MAX_CREATED_NUMBER_OF_STATES`, 1024),
-which resizes State_Text, and State_Text written whole, which needs one
-CharacterString per state. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
+Number_Of_States (1 to `multistate::MAX_NUMBER_OF_STATES`, 1024),
+which resizes State_Text. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
 if a value the object holds would name a state past it. WriteProperty still
 answers `PROPERTY/WRITE_ACCESS_DENIED` for each. The PICS lists each
 createable type's set.
 
-On these objects the order of the initial values follows one rule: a
-Number_Of_States that passes its own checks (no array index, an Unsigned, 1
-to 1024) is applied before every other initial value, and everything else,
-including a Number_Of_States that fails those checks, is applied in request
-order. So Present_Value, Relinquish_Default, Alarm_Values and State_Text are
-judged against the requested count wherever it stands, and a bad value
-earlier in the list than a bad count is the one named. A refusal always
-names the value's own position: `[Relinquish_Default 2, Number_Of_States 1]`
-is refused at 1, the default being past the one state. With several good
-counts, the last one sets the states.
+State_Text written whole, by WriteProperty, WritePropertyMultiple or a
+CreateObject initial value, sets Number_Of_States to its number of labels
+(#1443), with the same checks: 1 to 1024 labels, and a shrink that would
+leave Present_Value, Relinquish_Default, a Priority_Array command or an
+Alarm_Values entry past the new count is `PROPERTY/VALUE_OUT_OF_RANGE` and
+changes nothing. A Multi-state Output's Feedback_Value doesn't block a
+shrink; past the count it shows as CONFIGURATION_ERROR. Since a whole
+write can resize State_Text, its size at index 0 takes a write as well
+(Clause 12.1.5.1): an Unsigned count with the same checks, which truncates
+State_Text on a shrink and, on a grow, appends the `State {n}` labels a new
+object starts with. A WriteProperty naming Number_Of_States is still
+refused. The metadata gives Number_Of_States
+`PropertyWriteCapability::Through(STATE_TEXT)`, which doesn't count as
+writable, and the PICS keeps its row read-only, marks it "resized through
+STATE_TEXT: a whole write or its size at index 0", and leaves it off the
+creation-only line.
+
+On these objects the order of the initial values follows one rule: the
+values that give the state count are applied before every other initial
+value, and everything else, including a count value that fails its own
+checks (an array index, its datatype, its range), is applied in request
+order. Those values are the request's Number_Of_States, or, when it has
+none, State_Text written whole; with a Number_Of_States, a whole State_Text
+has to label exactly that many states. So Present_Value,
+Relinquish_Default, Alarm_Values and State_Text are judged against the
+requested count wherever it stands, and a bad value earlier in the list than
+a bad count is the one named. A refusal always names the value's own
+position: `[Relinquish_Default 2, Number_Of_States 1]` is refused at 1, the
+default being past the one state. With several good counts, the last one
+sets the states.
 
 A Multi-state Input or Value refuses an Alarm_Values entry past its
 Number_Of_States with `PROPERTY/VALUE_OUT_OF_RANGE` naming the element, over
@@ -2693,7 +2712,41 @@ the Event Logs like any other notification; those logs take no notifications,
 so it can't count toward their own next report. A purge restarts Records_Since_Notification at the BUFFER_PURGED
 record but leaves the threshold counting from Last_Notify_Record;
 Event_Detection_Enable TRUE again restarts both from the current count.
-Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair aren't served.
+While Event_Algorithm_Inhibit is TRUE no report goes out; the records keep
+counting, so one falls due as soon as it clears.
+
+Every object here that reports intrinsically (the analog, binary and
+multi-state families, Access Door, Access Zone and the three logs) also
+serves Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair
+(#1329), all three writable:
+
+- Event_Message_Texts_Config holds one CharacterString per transition,
+  TO_OFFNORMAL, TO_FAULT and TO_NORMAL. A non-empty entry replaces the
+  server's own Message Text for that transition, in the notification and in
+  Event_Message_Texts; an empty one, the default, leaves it. The text goes
+  out as written: the stack defines no substitution codes.
+- Event_Algorithm_Inhibit TRUE stops the event algorithm but not fault
+  detection (Clause 13.2.2.1): no offnormal or normal transition of its own,
+  any time delay under way dropped, and an offnormal object back to NORMAL at
+  once. Once it is FALSE, a condition has to last its whole Time_Delay again.
+  A client writes it while Event_Detection_Enable is TRUE and there is no
+  reference.
+- Event_Algorithm_Inhibit_Ref names a Boolean or BinaryPV property of this
+  device (the datatype has no device member) for the inhibit to follow, and
+  the inhibit is then read-only. The server reads the property, through
+  `ObjectDatabase::follow_event_algorithm_inhibit`, each time it evaluates
+  the object: on a write to it and on the one-second tick, so a change
+  reaches the inhibit within a second. A Boolean TRUE inhibits, and so does
+  ACTIVE read from a property known to hold a BinaryPV: Present_Value,
+  Relinquish_Default, a Priority_Array element, Alarm_Value and
+  Feedback_Value of the binary types, and an Access Credential's
+  Credential_Status. Anything else doesn't, an Event_State of FAULT or a
+  Reliability that reads as Enumerated 1 included, nor does a missing
+  property. Unset, it reads as Binary Value 4194303's Present_Value, and
+  writing that clears it and puts the inhibit back to FALSE.
+- Event_Message_Texts_Config is always three entries: the tables fix its
+  size, so a write at index 0 is `PROPERTY/WRITE_ACCESS_DENIED` (Clause
+  12.1.5.1).
 
 Every Trend Log samples a BACnet property, so its Start_Time, Stop_Time,
 Log_Interval and Log_DeviceObjectProperty are classed required (Table 12-29
@@ -3436,7 +3489,8 @@ CHANGE_OF_STATE algorithm (Clause 12.32). It serves the event rows the
 Multi-state Input does: Time_Delay, Notification_Class, Alarm_Values,
 Event_Enable, Acked_Transitions, Notify_Type, Event_Time_Stamps,
 Event_Message_Texts, Event_Detection_Enable and Time_Delay_Normal, the
-configuration writable over the network. Alarm_Values is a list of
+configuration writable over the network, and the message texts and inhibit
+rows every intrinsic reporter serves (#1329). Alarm_Values is a list of
 BACnetAccessZoneOccupancyState values other than NORMAL (named, or
 proprietary from 64 to 65535; anything else, NORMAL included, is
 VALUE_OUT_OF_RANGE naming the element), which

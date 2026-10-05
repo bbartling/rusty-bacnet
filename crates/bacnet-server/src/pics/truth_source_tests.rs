@@ -639,7 +639,8 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
             .filter(|property| property.access.writable)
             .map(|property| property.property_id)
             .collect::<Vec<_>>();
-        // Each log's BUFFER_READY configuration is writable too (#1347).
+        // Each log's BUFFER_READY configuration is writable too (#1347),
+        // as are the message texts and the inhibit pair (#1329).
         let reporting = [
             PropertyIdentifier::NOTIFICATION_THRESHOLD,
             PropertyIdentifier::NOTIFICATION_CLASS,
@@ -647,12 +648,17 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
             PropertyIdentifier::NOTIFY_TYPE,
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
         ];
+        let options = [
+            PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG,
+            PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF,
+            PropertyIdentifier::EVENT_ALGORITHM_INHIBIT,
+        ];
         assert_eq!(
             writable.len(),
-            expected.len() + reporting.len(),
+            expected.len() + reporting.len() + options.len(),
             "{object_type:?}"
         );
-        for property in expected.iter().chain(&reporting) {
+        for property in expected.iter().chain(&reporting).chain(&options) {
             assert!(writable.contains(property), "{object_type:?} {property:?}");
         }
         // A Trend Log samples a BACnet property, so Table 12-29 footnotes 1
@@ -688,6 +694,26 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
                     "{object_type:?} {property:?}"
                 );
             }
+        }
+        // The three tables require every BUFFER_READY row of a log that
+        // reports intrinsically, as these do, but Event_Message_Texts,
+        // which they only permit (#1485).
+        let read_only = [
+            PropertyIdentifier::RECORDS_SINCE_NOTIFICATION,
+            PropertyIdentifier::LAST_NOTIFY_RECORD,
+            PropertyIdentifier::ACKED_TRANSITIONS,
+            PropertyIdentifier::EVENT_TIME_STAMPS,
+        ];
+        for property in reporting.iter().chain(&read_only) {
+            assert_eq!(
+                optional(*property),
+                Some(false),
+                "{object_type:?} {property:?}"
+            );
+        }
+        let texts = PropertyIdentifier::EVENT_MESSAGE_TEXTS;
+        for property in options.iter().chain([&texts]) {
+            assert_eq!(optional(*property), Some(true), "{object_type:?}");
         }
     }
 }

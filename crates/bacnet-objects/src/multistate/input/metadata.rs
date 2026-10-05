@@ -3,11 +3,12 @@ use std::borrow::Cow;
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
+use crate::event::options::REPORTING_OPTION_METADATA;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
-    PropertyPresenceCondition::IntrinsicReporting,
-    PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
+    PropertyPresenceCondition::{IntrinsicReportingOptional, IntrinsicReportingRequired},
+    PropertyWriteCapability::{Always, ReadOnly, Through, WhenOutOfService},
 };
 
 // Base conformance and implemented writability are independent. Preserve the
@@ -23,49 +24,79 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(
         P::EVENT_DETECTION_ENABLE,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
-    PropertyMetadata::new(P::EVENT_ENABLE, Optional, Some(IntrinsicReporting), Always),
-    PropertyMetadata::new(P::TIME_DELAY, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::EVENT_ENABLE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
+    PropertyMetadata::new(
+        P::TIME_DELAY,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::TIME_DELAY_NORMAL,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingOptional),
         Always,
     ),
-    PropertyMetadata::new(P::NOTIFY_TYPE, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::NOTIFY_TYPE,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(
         P::NOTIFICATION_CLASS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         Always,
     ),
     PropertyMetadata::new(
         P::ACKED_TRANSITIONS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         ReadOnly,
     ),
     PropertyMetadata::new(
         P::EVENT_TIME_STAMPS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingRequired),
         ReadOnly,
     ),
     PropertyMetadata::new(
         P::EVENT_MESSAGE_TEXTS,
         Optional,
-        Some(IntrinsicReporting),
+        Some(IntrinsicReportingOptional),
         ReadOnly,
     ),
+    // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+    REPORTING_OPTION_METADATA[0],
+    REPORTING_OPTION_METADATA[1],
+    REPORTING_OPTION_METADATA[2],
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
-    PropertyMetadata::new(P::NUMBER_OF_STATES, RequiredRead, None, ReadOnly),
+    // No write of its own: State_Text written whole or at index 0 sets it (#1443).
+    PropertyMetadata::new(
+        P::NUMBER_OF_STATES,
+        RequiredRead,
+        None,
+        Through(P::STATE_TEXT),
+    ),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, WhenOutOfService),
     PropertyMetadata::new(P::RELIABILITY_EVALUATION_INHIBIT, Optional, None, Always),
-    // Always denotes the element-write route, not whole-array replacement.
+    // Element writes, and whole or index-0 writes that set Number_Of_States.
     PropertyMetadata::new(P::STATE_TEXT, Optional, None, Always),
-    PropertyMetadata::new(P::ALARM_VALUES, Optional, Some(IntrinsicReporting), Always),
+    PropertyMetadata::new(
+        P::ALARM_VALUES,
+        Optional,
+        Some(IntrinsicReportingRequired),
+        Always,
+    ),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -101,6 +132,18 @@ mod tests {
         );
     }
 
+    /// The event rows the three multi-state tables require of an object
+    /// that reports intrinsically, besides the watched or fed-back value.
+    const INTRINSIC_REQUIRED: [P; 7] = [
+        P::EVENT_DETECTION_ENABLE,
+        P::EVENT_ENABLE,
+        P::TIME_DELAY,
+        P::NOTIFY_TYPE,
+        P::NOTIFICATION_CLASS,
+        P::ACKED_TRANSITIONS,
+        P::EVENT_TIME_STAMPS,
+    ];
+
     #[test]
     fn property_metadata_multistate_exact_sets_legacy_order_and_indexed_list() {
         // Independent fixture: the original MSI list, with per-type insertions
@@ -122,6 +165,9 @@ mod tests {
             P::ACKED_TRANSITIONS,
             P::EVENT_TIME_STAMPS,
             P::EVENT_MESSAGE_TEXTS,
+            P::EVENT_MESSAGE_TEXTS_CONFIG,
+            P::EVENT_ALGORITHM_INHIBIT_REF,
+            P::EVENT_ALGORITHM_INHIBIT,
             P::OUT_OF_SERVICE,
             P::NUMBER_OF_STATES,
             P::RELIABILITY,
@@ -138,7 +184,7 @@ mod tests {
                 P::CURRENT_COMMAND_PRIORITY,
             ];
             let mut expected = base.to_vec();
-            let mut required = vec![
+            let mut requires = vec![
                 P::OBJECT_IDENTIFIER,
                 P::OBJECT_NAME,
                 P::OBJECT_TYPE,
@@ -148,19 +194,31 @@ mod tests {
                 P::OUT_OF_SERVICE,
                 P::NUMBER_OF_STATES,
             ];
+            // Tables 12-21, 12-22 and 12-23 require these of an object that
+            // reports intrinsically (#1485), with the watched or fed-back
+            // value below.
+            requires.extend(INTRINSIC_REQUIRED);
             if commandable {
-                expected.splice(18..18, commands);
+                expected.splice(21..21, commands);
             }
             if output {
                 expected.insert(5, P::FEEDBACK_VALUE);
-                required.extend(commands);
+                requires.extend(commands);
+                requires.push(P::FEEDBACK_VALUE);
             } else {
                 expected.push(P::ALARM_VALUES);
+                requires.push(P::ALARM_VALUES);
             }
             if commandable {
                 expected.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
-                required.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
+                requires.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
             }
+            // Metadata order is the list's.
+            let mut required: Vec<_> = expected
+                .iter()
+                .copied()
+                .filter(|p| requires.contains(p))
+                .collect();
             required.push(P::PROPERTY_LIST);
             assert!(matches!(object.property_metadata(), Cow::Borrowed(_)));
             let original = object.property_metadata().into_owned();
@@ -180,37 +238,30 @@ mod tests {
                 assert!(object.is_createable());
                 for row in &original {
                     let p = row.property_identifier;
-                    let conformance = if output && p == P::PRESENT_VALUE {
-                        RequiredWrite
-                    } else if required.contains(&p)
-                        && ![P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]
-                            .contains(&p)
-                    {
-                        RequiredRead
-                    } else {
-                        Optional
-                    };
-                    assert_eq!(row.conformance, conformance, "{kind:?} {p:?}");
                     let condition = match p {
                         P::VALUE_SOURCE => Some(crate::property_metadata::PropertyPresenceCondition::ValueSourceTracking),
                         P::VALUE_SOURCE_ARRAY | P::LAST_COMMAND_TIME => Some(crate::property_metadata::PropertyPresenceCondition::CommandableValueSourceTracking),
                         P::PRIORITY_ARRAY | P::RELINQUISH_DEFAULT | P::CURRENT_COMMAND_PRIORITY => {
                             (!output).then_some(Commandable)
                         }
-                        P::EVENT_DETECTION_ENABLE
-                        | P::EVENT_ENABLE
-                        | P::TIME_DELAY
-                        | P::TIME_DELAY_NORMAL
-                        | P::NOTIFY_TYPE
-                        | P::NOTIFICATION_CLASS
-                        | P::ACKED_TRANSITIONS
-                        | P::EVENT_TIME_STAMPS
+                        p if INTRINSIC_REQUIRED.contains(&p) => Some(IntrinsicReportingRequired),
+                        P::ALARM_VALUES | P::FEEDBACK_VALUE => Some(IntrinsicReportingRequired),
+                        P::TIME_DELAY_NORMAL
                         | P::EVENT_MESSAGE_TEXTS
-                        | P::ALARM_VALUES
-                        | P::FEEDBACK_VALUE => Some(IntrinsicReporting),
+                        | P::EVENT_MESSAGE_TEXTS_CONFIG
+                        | P::EVENT_ALGORITHM_INHIBIT_REF
+                        | P::EVENT_ALGORITHM_INHIBIT => Some(IntrinsicReportingOptional),
                         _ => None,
                     };
                     assert_eq!(row.presence_condition, condition, "{kind:?} {p:?}");
+                    let conformance = if output && p == P::PRESENT_VALUE {
+                        RequiredWrite
+                    } else if condition.is_none() && required.contains(&p) {
+                        RequiredRead
+                    } else {
+                        Optional
+                    };
+                    assert_eq!(row.conformance, conformance, "{kind:?} {p:?}");
                     assert!(object.read_property(p, None).is_ok(), "{kind:?} {p:?}");
                 }
                 let wire: Vec<_> = expected
@@ -277,6 +328,16 @@ mod tests {
                         None,
                     )
                     .unwrap();
+                // Event_Algorithm_Inhibit takes a write only while detection is
+                // on, which an output doesn't start with (#1329).
+                object
+                    .write_property(
+                        P::EVENT_DETECTION_ENABLE,
+                        None,
+                        PropertyValue::Boolean(true),
+                        None,
+                    )
+                    .unwrap();
                 for row in object.property_metadata().into_owned() {
                     let p = row.property_identifier;
                     let capability = match p {
@@ -285,6 +346,8 @@ mod tests {
                         }
                         P::PRESENT_VALUE if input => WhenOutOfService,
                         P::RELIABILITY => WhenOutOfService,
+                        // Set by a whole State_Text write (#1443).
+                        P::NUMBER_OF_STATES => Through(P::STATE_TEXT),
                         P::OBJECT_NAME
                         | P::DESCRIPTION
                         | P::PRESENT_VALUE
@@ -299,7 +362,10 @@ mod tests {
                         | P::RELIABILITY_EVALUATION_INHIBIT
                         | P::STATE_TEXT
                         | P::ALARM_VALUES
-                        | P::FEEDBACK_VALUE => Always,
+                        | P::FEEDBACK_VALUE
+                        | P::EVENT_MESSAGE_TEXTS_CONFIG
+                        | P::EVENT_ALGORITHM_INHIBIT_REF
+                        | P::EVENT_ALGORITHM_INHIBIT => Always,
                         _ => ReadOnly,
                     };
                     assert_eq!(row.write_capability, capability, "{p:?}");
@@ -343,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn property_metadata_multistate_state_text_is_element_writable_only() {
+    fn property_metadata_multistate_state_text_writes_by_element_or_whole() {
         for mut object in objects() {
             assert!(object.is_array_property(P::STATE_TEXT));
             assert!(!object.is_array_property(P::NUMBER_OF_STATES));
@@ -370,15 +436,17 @@ mod tests {
                 expected[index as usize - 1] = value;
             }
             for (index, value, error) in [
+                // Whole, it sets Number_Of_States, which can't be zero (#1443).
                 (
                     None,
                     PropertyValue::List(vec![]),
-                    ErrorCode::WRITE_ACCESS_DENIED,
+                    ErrorCode::VALUE_OUT_OF_RANGE,
                 ),
+                // The size takes a count (#1443), not a label.
                 (
                     Some(0),
-                    PropertyValue::Unsigned(2),
-                    ErrorCode::INVALID_ARRAY_INDEX,
+                    PropertyValue::CharacterString("x".into()),
+                    ErrorCode::INVALID_DATA_TYPE,
                 ),
                 (
                     Some(4),

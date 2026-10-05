@@ -25,8 +25,10 @@
 //!   p. 179), 12-6 (Binary Input, p. 190), 12-8 (Binary Output, p. 197),
 //!   12-10 (Binary Value, p. 205), 12-21 (Multi-state Input, p. 268),
 //!   12-22 (Multi-state Output, p. 275), 12-23 (Multi-state Value, p. 281).
-//!   The `Optional` + `IntrinsicReporting` modeling below matches that
-//!   conditional-optional classification exactly.
+//!   The `Optional` base code with `IntrinsicReportingRequired` below keeps
+//!   the table code and records the footnote that makes the row required of
+//!   these objects, which all report intrinsically, so RPM REQUIRED and the
+//!   PICS list it (#1485).
 //! - Table 12-14 (Event Enrollment, p. 232) and Table 12-61
 //!   (Alert Enrollment, p. 504) mark Event_Time_Stamps unconditionally
 //!   Required, which the `RequiredRead` rows below match.
@@ -363,7 +365,7 @@ fn audit_event_time_stamps_classification_matches_clause_12() {
     };
 
     // Tables 12-2/3/4, 12-6/8/10, 12-21/22/23: Optional base code with the
-    // intrinsic-reporting condition (see module docs for pages).
+    // condition intrinsic reporting requires (see module docs for pages).
     for object_type in [
         ObjectType::ANALOG_INPUT,
         ObjectType::ANALOG_OUTPUT,
@@ -383,8 +385,12 @@ fn audit_event_time_stamps_classification_matches_clause_12() {
         );
         assert_eq!(
             row.presence_condition,
-            Some(PropertyPresenceCondition::IntrinsicReporting),
+            Some(PropertyPresenceCondition::IntrinsicReportingRequired),
             "{object_type:?} EVENT_TIME_STAMPS must stay intrinsic-reporting conditional"
+        );
+        assert!(
+            row.is_required(),
+            "{object_type:?} EVENT_TIME_STAMPS is required of an intrinsic reporter"
         );
     }
 
